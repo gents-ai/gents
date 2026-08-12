@@ -16,6 +16,9 @@ async fn dispatch_skips_when_schedule_not_in_active_schedules() {
         concurrency: ConcurrencyMode::Serial,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -47,6 +50,9 @@ async fn dispatch_reports_pre_materialized_request_without_materializer_call() {
         concurrency: ConcurrencyMode::Parallel,
         event_vars: serde_json::json!({"trigger_kind": "subagent"}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: Some("child-pre-materialized".to_string()),
         on_result: Box::new(|_| {}),
@@ -82,6 +88,9 @@ async fn dispatch_renders_and_materializes_when_schedule_active() {
         concurrency: ConcurrencyMode::Serial,
         event_vars: serde_json::json!({"fired_at": "2026-04-21T00:00:00Z"}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -119,6 +128,9 @@ async fn dispatch_parallel_materializes_every_intent() {
         concurrency: ConcurrencyMode::Parallel,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -130,6 +142,9 @@ async fn dispatch_parallel_materializes_every_intent() {
         concurrency: ConcurrencyMode::Parallel,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -154,6 +169,84 @@ async fn dispatch_parallel_materializes_every_intent() {
 }
 
 #[tokio::test]
+async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
+    let task = resolved_task("group {{ group.correlation_value }}");
+    let behavior = integration_test_behavior("general");
+    let agent_did = behavior.agent_did().to_string();
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".to_string()),
+        expected_count: Some(2),
+        ..resolved_event_trigger_with_concurrency(
+            "group-trigger",
+            task.clone(),
+            ConcurrencyMode::Parallel,
+        )
+    };
+    let snapshot = Arc::new(
+        ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+            "general".to_string(),
+            vec![behavior],
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .with_event_triggers(
+            HashMap::from([("group-trigger".to_string(), trigger)]),
+            HashSet::new(),
+        )
+        .with_principal(stub_principal())
+        .activate(1, HashMap::new()),
+    );
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    materializer.persist_materialized_group_markers(&agent_did);
+    let engine = Arc::new(TriggerEngine::new(rx, materializer.clone()));
+
+    let make_intent = || FireIntent {
+        trigger_id: Some("group-trigger".to_string()),
+        trigger_kind: TriggerKind::Event,
+        task: task.clone(),
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({"source_doc_id": "result-1"}),
+        doc_vars: Some(serde_json::json!({"_docID": "result-1"})),
+        correlation: Some("run-42".to_string()),
+        group_vars: Some(serde_json::json!({
+            "correlation_value": "run-42",
+            "count": 2,
+        })),
+        trigger_context: None,
+        args_vars: None,
+        pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    };
+
+    let first_engine = engine.clone();
+    let second_engine = engine.clone();
+    let first_intent = make_intent();
+    let second_intent = make_intent();
+    let first = tokio::spawn(async move { first_engine.dispatch(first_intent).await });
+    let second = tokio::spawn(async move { second_engine.dispatch(second_intent).await });
+    let results = [first.await.unwrap(), second.await.unwrap()];
+
+    assert_eq!(materializer.calls().len(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, FireResult::Fired { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, FireResult::Skipped { .. }))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn dispatch_serial_materializes_when_no_inflight() {
     // Serial mode with no in-flight request for the trigger — should fire.
     let task = resolved_task("tick");
@@ -170,6 +263,9 @@ async fn dispatch_serial_materializes_when_no_inflight() {
         concurrency: ConcurrencyMode::Serial,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -207,6 +303,9 @@ async fn dispatch_serial_skips_when_inflight_exists() {
         concurrency: ConcurrencyMode::Serial,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -229,6 +328,60 @@ async fn dispatch_serial_skips_when_inflight_exists() {
 }
 
 #[tokio::test]
+async fn dispatch_serial_scopes_active_requests_by_correlation() {
+    let task = resolved_task("run {{ event.correlation }}");
+    let trigger = ResolvedEventTrigger {
+        correlation_field: Some("run_id".to_string()),
+        ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
+    };
+    let behavior = integration_test_behavior("general");
+    let snapshot = Arc::new(
+        ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+            "general".to_string(),
+            vec![behavior],
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .with_event_triggers(
+            HashMap::from([("event-1".to_string(), trigger)]),
+            HashSet::new(),
+        )
+        .with_principal(stub_principal())
+        .activate(1, HashMap::new()),
+    );
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    materializer.mark_correlated_nonterminal("event-1", TriggerKind::Event, "run-a");
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let make_intent = |correlation: &str| FireIntent {
+        trigger_id: Some("event-1".to_string()),
+        trigger_kind: TriggerKind::Event,
+        task: task.clone(),
+        concurrency: ConcurrencyMode::Serial,
+        event_vars: serde_json::json!({
+            "source_doc_id": format!("doc-{correlation}"),
+            "correlation": correlation,
+        }),
+        doc_vars: Some(serde_json::json!({"run_id": correlation})),
+        correlation: Some(correlation.to_string()),
+        group_vars: None,
+        trigger_context: None,
+        args_vars: None,
+        pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    };
+
+    let same_run = engine.dispatch(make_intent("run-a")).await;
+    let other_run = engine.dispatch(make_intent("run-b")).await;
+
+    assert!(matches!(same_run, FireResult::Skipped { .. }));
+    assert!(matches!(other_run, FireResult::Fired { .. }));
+    assert_eq!(materializer.calls().len(), 1);
+}
+
+#[tokio::test]
 async fn dispatch_latest_only_supersedes_prior_and_fires_new() {
     // LatestOnly with a pre-existing in-flight request for (sched-1, Schedule).
     // Dispatch should: (1) supersede the prior request, (2) materialize the
@@ -248,6 +401,9 @@ async fn dispatch_latest_only_supersedes_prior_and_fires_new() {
         concurrency: ConcurrencyMode::LatestOnly,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -295,6 +451,9 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
         concurrency: ConcurrencyMode::LatestOnly,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -395,6 +554,9 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
         concurrency: ConcurrencyMode::Serial,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(move |r| {
@@ -454,6 +616,9 @@ async fn dispatch_latest_only_serializes_parallel_fires() {
         concurrency: ConcurrencyMode::LatestOnly,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -525,6 +690,9 @@ async fn dispatch_scopes_concurrency_by_the_behaviors_agent_did() {
         concurrency: ConcurrencyMode::Serial,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -542,6 +710,9 @@ async fn dispatch_scopes_concurrency_by_the_behaviors_agent_did() {
         concurrency: ConcurrencyMode::LatestOnly,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),

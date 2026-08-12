@@ -24,6 +24,10 @@ pub(super) fn session_request_create_mutation(
     let escaped_metadata = escape_graphql_string(metadata);
     let escaped_created_at = escape_graphql_string(created_at);
     let execution_origin = execution_origin.as_str();
+    let inherited_trigger_context = crate::lifecycle::inherited_trigger_context_graphql_fields(
+        parent.caused_by_correlation.as_deref(),
+        parent.caused_by_trigger_context.as_deref(),
+    )?;
     Ok(format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -45,7 +49,7 @@ pub(super) fn session_request_create_mutation(
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
                 max_retries: {max_retries},
-                subagent_depth: {subagent_depth}{parent_linkage_fields}
+                subagent_depth: {subagent_depth}{parent_linkage_fields}{inherited_trigger_context}
             }}) {{ _docID }}
         }}"#,
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,

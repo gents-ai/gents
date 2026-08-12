@@ -116,7 +116,15 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
     let task = resolved_task_for_test("task-manual", "general", "manual body");
 
     let request_id = materializer
-        .materialize(&task, None, TriggerKind::Manual, None, "manual body")
+        .materialize(
+            &task,
+            None,
+            TriggerKind::Manual,
+            None,
+            None,
+            None,
+            "manual body",
+        )
         .await
         .expect("Manual materialize should succeed");
 
@@ -205,6 +213,8 @@ async fn production_materializer_persists_event_source_document_lineage() {
             Some("event-trigger"),
             TriggerKind::Event,
             Some("source-doc-exact"),
+            None,
+            None,
             "event body",
         )
         .await
@@ -259,6 +269,8 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
             Some("event-trigger"),
             TriggerKind::Event,
             None,
+            None,
+            None,
             "body",
         )
         .await
@@ -271,6 +283,8 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
             Some("schedule-trigger"),
             TriggerKind::Schedule,
             Some("event-doc-on-schedule"),
+            None,
+            None,
             "body",
         )
         .await
@@ -291,6 +305,8 @@ async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
             &task,
             Some("manual-must-not-have-id"),
             TriggerKind::Manual,
+            None,
+            None,
             None,
             "manual body",
         )
@@ -327,6 +343,9 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
         concurrency: ConcurrencyMode::Parallel,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: Some(serde_json::json!({"name": "Amy"})),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
@@ -377,6 +396,9 @@ async fn dispatch_rejects_manual_intent_with_trigger_id() {
         concurrency: ConcurrencyMode::Parallel,
         event_vars: serde_json::json!({}),
         doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
         args_vars: Some(serde_json::json!({})),
         pre_materialized_request_id: None,
         on_result: Box::new(move |r| {

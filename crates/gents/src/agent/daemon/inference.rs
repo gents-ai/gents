@@ -139,6 +139,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
         let workspace_cwd = request_workspace_cwd(request);
+        let trigger_context = crate::lifecycle::TriggerExecutionContext::parse(
+            request.caused_by_trigger_context.as_deref(),
+        )?;
+        let trigger_correlation = request.caused_by_correlation.clone();
         let deadline_at = request
             .deadline
             .as_deref()
@@ -378,10 +382,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 }
                                 result = await_with_request_deadline(
                                     request_deadline,
-                                    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace(
+                                    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
                                         request_deadline,
                                         request_token.clone(),
                                         workspace_cwd.clone(),
+                                        None,
+                                        trigger_correlation.clone(),
+                                        trigger_context.source_fields.clone(),
+                                        false,
                                         tokio::time::timeout(
                                             liveness_timeout.saturating_add(pending_backoff),
                                             stream.next(),
@@ -800,6 +808,8 @@ mod tests {
             caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
             caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
             caused_by_parent_tool_call_doc_id: Some("parent-tool-call-doc".to_string()),
+            caused_by_correlation: None,
+            caused_by_trigger_context: None,
         }
     }
 

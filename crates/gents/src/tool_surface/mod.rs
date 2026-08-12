@@ -69,6 +69,19 @@ pub struct SelfConfigToolConfig {
 }
 
 impl ToolSurface {
+    pub(crate) fn source_fill_fields(&self) -> std::collections::BTreeSet<String> {
+        self.write_tools
+            .iter()
+            .flat_map(|decl| decl.fields.iter())
+            .filter_map(|field| match &field.fill {
+                Some(crate::document_config::WriteToolFieldFill::SourceField(source)) => {
+                    Some(source.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn host_tools(&self) -> &ToolSet {
         &self.host_tools
     }

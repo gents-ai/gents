@@ -1,0 +1,5 @@
+type ReviewJob {
+  run_id: String @index @immutable
+  repository_path: String
+  focus: String
+}

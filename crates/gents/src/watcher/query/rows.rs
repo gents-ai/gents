@@ -30,6 +30,8 @@ pub(super) struct AgentRequestRow {
     pub(super) caused_by_parent_request_doc_id: Option<String>,
     pub(super) caused_by_parent_tool_call_id: Option<String>,
     pub(super) caused_by_parent_tool_call_doc_id: Option<String>,
+    pub(super) caused_by_correlation: Option<String>,
+    pub(super) caused_by_trigger_context: Option<String>,
     pub(super) status: String,
     pub(super) lifecycle_state: Option<String>,
     pub(super) interrupt_requested_at: Option<String>,
@@ -112,6 +114,8 @@ impl AgentRequestRow {
             caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id,
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
             caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
+            caused_by_correlation: normalize_optional_string(self.caused_by_correlation),
+            caused_by_trigger_context: normalize_optional_string(self.caused_by_trigger_context),
         };
         validate_agent_request_subagent_coherence(&req)?;
         Ok(req)

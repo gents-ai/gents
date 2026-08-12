@@ -1,0 +1,16 @@
+{
+  "surface_id": "review-triage-writes",
+  "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
+  "display_name": "Triage report writes",
+  "enabled": true,
+  "entries": [{
+    "tool_name": "write_triage_report",
+    "collection": "TriageReport",
+    "description": "Create the single final report for a review run.",
+    "fields": [
+      {"name": "run_id", "required": false, "fill": "correlation"},
+      {"name": "high_priority_count", "required": true},
+      {"name": "summary", "required": true}
+    ]
+  }]
+}

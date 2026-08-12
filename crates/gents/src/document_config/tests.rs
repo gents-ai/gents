@@ -171,6 +171,7 @@ fn validate_rejects_write_tool_field_with_empty_name() {
             fields: vec![WriteToolField {
                 name: "  ".to_string(),
                 required: true,
+                fill: None,
             }],
         }]),
         datastore_tool_surface_ids: None,
@@ -222,6 +223,7 @@ fn validate_accepts_well_formed_write_tools() {
                 fields: vec![WriteToolField {
                     name: "title".to_string(),
                     required: true,
+                    fill: None,
                 }],
             },
             WriteToolDecl {
@@ -254,6 +256,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
             fields: vec![WriteToolField {
                 name: "path".to_string(),
                 required: true,
+                fill: None,
             }],
         }]),
         datastore_tool_surface_ids: None,
@@ -333,10 +336,12 @@ fn validate_rejects_duplicate_field_names_within_decl() {
                 WriteToolField {
                     name: "summary".to_string(),
                     required: true,
+                    fill: None,
                 },
                 WriteToolField {
                     name: "summary".to_string(),
                     required: false,
+                    fill: None,
                 },
             ],
         }]),
@@ -539,14 +544,17 @@ async fn tool_selection_document_round_trips_write_tools() {
                 WriteToolField {
                     name: "drift_sig".to_string(),
                     required: true,
+                    fill: None,
                 },
                 WriteToolField {
                     name: "summary".to_string(),
                     required: true,
+                    fill: None,
                 },
                 WriteToolField {
                     name: "target_paths".to_string(),
                     required: false,
+                    fill: None,
                 },
             ],
         }]),
@@ -840,4 +848,49 @@ fn validate_rejects_bare_string_subagent_target() {
         err_msg.contains("SubagentTarget JSON"),
         "error must mention SubagentTarget JSON; got: {err_msg}"
     );
+}
+
+#[test]
+fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
+    let correlation: WriteToolField = serde_json::from_value(serde_json::json!({
+        "name": "run_id",
+        "fill": "correlation"
+    }))
+    .expect("correlation fill");
+    assert_eq!(correlation.fill, Some(WriteToolFieldFill::Correlation));
+
+    let source: WriteToolField = serde_json::from_value(serde_json::json!({
+        "name": "expected_total",
+        "fill": {"source_field": "expected_total"}
+    }))
+    .expect("source-field fill");
+    assert_eq!(
+        source.fill,
+        Some(WriteToolFieldFill::SourceField("expected_total".into()))
+    );
+
+    for invalid in [
+        serde_json::json!({"name": "run_id", "fill": "Correlation"}),
+        serde_json::json!({"name": "run_id", "fill": {"source_field": "run-id"}}),
+        serde_json::json!({"name": "run_id", "fill": {"source_field": "run_id", "extra": true}}),
+    ] {
+        assert!(serde_json::from_value::<WriteToolField>(invalid).is_err());
+    }
+
+    let doc = ToolSelectionDocument {
+        selection_id: "filled-tools".into(),
+        agent_did: "did:test:test".into(),
+        write_tools: Some(vec![WriteToolDecl {
+            tool_name: "write_result".into(),
+            collection: "Result".into(),
+            description: String::new(),
+            fields: vec![WriteToolField {
+                name: "run_id".into(),
+                required: true,
+                fill: Some(WriteToolFieldFill::Correlation),
+            }],
+        }]),
+        ..Default::default()
+    };
+    assert!(doc.validate().is_err());
 }

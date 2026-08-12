@@ -128,6 +128,8 @@ async fn claim_queues_when_earlier_processing_request_exists() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
 
     let mut lifecycle =
@@ -198,6 +200,8 @@ async fn queued_request_interrupt_wins_before_queue_block() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
 
     let mut lifecycle =
@@ -261,6 +265,8 @@ async fn queued_request_valid_until_wins_before_queue_block() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
 
     let mut lifecycle =
@@ -325,6 +331,8 @@ async fn earliest_pending_claim_leaves_later_same_session_pending() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
 
     let mut lifecycle =
@@ -376,6 +384,8 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
     let mut second_lifecycle = RequestLifecycle::new_with_agent_did(
         db.node.clone(),
@@ -410,6 +420,8 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
     let mut first_lifecycle = RequestLifecycle::new_with_agent_did(
         db.node.clone(),
@@ -467,6 +479,8 @@ async fn terminal_earlier_request_allows_later_same_session_claim() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
 
     let mut lifecycle =
@@ -558,6 +572,8 @@ async fn claim_preserves_explicit_behavior_id() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
 
     let mut lifecycle =

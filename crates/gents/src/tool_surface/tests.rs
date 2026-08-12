@@ -709,6 +709,7 @@ async fn write_tools_register_under_declared_names() {
                     fields: vec![WriteToolField {
                         name: "summary".to_string(),
                         required: true,
+                        fill: None,
                     }],
                 },
                 // Malformed: empty collection — must be skipped, not advertised.
@@ -774,6 +775,7 @@ async fn write_tool_colliding_with_builtin_is_not_registered_twice() {
                 fields: vec![WriteToolField {
                     name: "summary".to_string(),
                     required: false,
+                    fill: None,
                 }],
             }],
             ..Default::default()

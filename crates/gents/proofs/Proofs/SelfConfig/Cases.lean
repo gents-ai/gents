@@ -186,6 +186,9 @@ def scenarios : List CaseRow :=
     , target := .eventTrigger, guarded := false, validates := true
     , doc := triggerDoc
     , patch := [ ("filter", some "{\"status\":\"failed\"}")
+               , ("correlation_field", some "run_id")
+               , ("fire_mode", some "per_group")
+               , ("expected_count", some "3")
                , ("enabled", some "true") ] }
   ]
 

@@ -27,6 +27,8 @@ pub(super) async fn load_timeline_request_by_id(
                 interrupt_requested_at
                 caused_by_trigger_id
                 caused_by_trigger_kind
+                caused_by_correlation
+                caused_by_trigger_context
                 caused_by_source_doc_id
                 caused_by_parent_request_id
                 caused_by_parent_request_doc_id
@@ -73,6 +75,8 @@ pub(super) async fn load_timeline_requests_for_session(
                 interrupt_requested_at
                 caused_by_trigger_id
                 caused_by_trigger_kind
+                caused_by_correlation
+                caused_by_trigger_context
                 caused_by_source_doc_id
                 caused_by_parent_request_id
                 caused_by_parent_request_doc_id
@@ -112,6 +116,8 @@ pub(super) async fn load_timeline_child_requests(
                 interrupt_requested_at
                 caused_by_trigger_id
                 caused_by_trigger_kind
+                caused_by_correlation
+                caused_by_trigger_context
                 caused_by_source_doc_id
                 caused_by_parent_request_id
                 caused_by_parent_request_doc_id

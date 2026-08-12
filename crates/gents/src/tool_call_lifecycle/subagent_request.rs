@@ -244,6 +244,23 @@ async fn create_subagent_request_inner(
         escape_graphql_string(&parent_doc_ids.1),
     );
     let metadata_field = selected_skill_metadata_field(&prompt_selection.selected_skill_ids);
+    let runtime_context = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
+    let inherited_context_json = runtime_context
+        .as_ref()
+        .filter(|context| !context.source_fields.is_empty())
+        .map(|context| {
+            serde_json::to_string(&crate::lifecycle::TriggerExecutionContext {
+                version: 1,
+                source_fields: context.source_fields.clone(),
+            })
+        })
+        .transpose()?;
+    let inherited_trigger_context = crate::lifecycle::inherited_trigger_context_graphql_fields(
+        runtime_context
+            .as_ref()
+            .and_then(|context| context.correlation.as_deref()),
+        inherited_context_json.as_deref(),
+    )?;
 
     let deadline_field = deadline
         .map(|d| {
@@ -283,7 +300,8 @@ async fn create_subagent_request_inner(
                 {parent_doc_fields}
                 caused_by_parent_tool_call_id: "{escaped_parent_tool_call_id}",
                 caused_by_trigger_id: "{escaped_parent_tool_call_id}",
-                caused_by_trigger_kind: "subagent"
+                caused_by_trigger_kind: "subagent",
+                {inherited_trigger_context}
             }}) {{ _docID }}
         }}"#,
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,

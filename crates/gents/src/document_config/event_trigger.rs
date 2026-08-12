@@ -169,6 +169,18 @@ pub(crate) struct EventTrigger {
     #[serde(default)]
     pub(crate) concurrency: Option<String>,
     #[serde(default)]
+    pub(crate) correlation_field: Option<String>,
+    #[serde(default)]
+    pub(crate) fire_mode: Option<String>,
+    #[serde(default)]
+    pub(crate) expected_count: Option<i64>,
+    #[serde(default)]
+    pub(crate) expected_count_field: Option<String>,
+    #[serde(default)]
+    pub(crate) group_timeout_secs: Option<i64>,
+    #[serde(default)]
+    pub(crate) group_min_count: Option<i64>,
+    #[serde(default)]
     pub(crate) created_at: Option<String>,
     #[serde(default)]
     pub(crate) updated_at: Option<String>,
@@ -204,6 +216,12 @@ pub(crate) async fn list_event_trigger_records(
                 filter
                 enabled
                 concurrency
+                correlation_field
+                fire_mode
+                expected_count
+                expected_count_field
+                group_timeout_secs
+                group_min_count
                 created_at
                 updated_at
                 last_attempt_at
@@ -246,6 +264,12 @@ pub(crate) async fn load_event_trigger_by_doc_id(
                 filter
                 enabled
                 concurrency
+                correlation_field
+                fire_mode
+                expected_count
+                expected_count_field
+                group_timeout_secs
+                group_min_count
                 created_at
                 updated_at
                 last_attempt_at

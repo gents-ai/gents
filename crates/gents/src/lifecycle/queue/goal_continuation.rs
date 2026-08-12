@@ -57,6 +57,10 @@ pub(crate) async fn enqueue_goal_continuation(
     let escaped_goal_id = escape_graphql_string(goal_id);
     let escaped_parent_request_id = escape_graphql_string(&parent.request_id);
     let escaped_parent_request_doc_id = escape_graphql_string(&parent.doc_id);
+    let inherited_trigger_context = crate::lifecycle::inherited_trigger_context_graphql_fields(
+        parent.caused_by_correlation.as_deref(),
+        parent.caused_by_trigger_context.as_deref(),
+    )?;
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -76,6 +80,7 @@ pub(crate) async fn enqueue_goal_continuation(
                 execution_origin: "scheduled",
                 caused_by_trigger_id: "{escaped_goal_id}",
                 caused_by_trigger_kind: "goal",
+                {inherited_trigger_context}
                 caused_by_parent_request_id: "{escaped_parent_request_id}",
                 caused_by_parent_request_doc_id: "{escaped_parent_request_doc_id}",
                 failure_reason: "",

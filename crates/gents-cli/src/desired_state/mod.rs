@@ -111,6 +111,18 @@ pub(crate) struct DesiredEventTrigger {
     pub(crate) event_kind: String,
     #[serde(default)]
     pub(crate) filter: Option<String>,
+    #[serde(default)]
+    pub(crate) correlation_field: Option<String>,
+    #[serde(default)]
+    pub(crate) fire_mode: Option<String>,
+    #[serde(default)]
+    pub(crate) expected_count: Option<i64>,
+    #[serde(default)]
+    pub(crate) expected_count_field: Option<String>,
+    #[serde(default)]
+    pub(crate) group_timeout_secs: Option<i64>,
+    #[serde(default)]
+    pub(crate) group_min_count: Option<i64>,
     pub(crate) enabled: bool,
     pub(crate) concurrency: String,
 }

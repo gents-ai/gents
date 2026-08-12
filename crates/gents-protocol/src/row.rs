@@ -241,6 +241,10 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub caused_by_trigger_kind: Option<String>,
     #[serde(default)]
+    pub caused_by_correlation: Option<String>,
+    #[serde(default)]
+    pub caused_by_trigger_context: Option<String>,
+    #[serde(default)]
     pub caused_by_parent_request_id: Option<String>,
     #[serde(default)]
     pub failure_reason: Option<String>,
@@ -690,6 +694,18 @@ pub struct EventTriggerRow {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub concurrency: Option<String>,
+    #[serde(default)]
+    pub correlation_field: Option<String>,
+    #[serde(default)]
+    pub fire_mode: Option<String>,
+    #[serde(default)]
+    pub expected_count: Option<i64>,
+    #[serde(default)]
+    pub expected_count_field: Option<String>,
+    #[serde(default)]
+    pub group_timeout_secs: Option<i64>,
+    #[serde(default)]
+    pub group_min_count: Option<i64>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]

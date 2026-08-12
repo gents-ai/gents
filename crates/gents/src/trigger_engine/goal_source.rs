@@ -81,6 +81,10 @@ struct RequestRow {
     caused_by_parent_tool_call_id: Option<String>,
     #[serde(default)]
     caused_by_parent_tool_call_doc_id: Option<String>,
+    #[serde(default)]
+    caused_by_correlation: Option<String>,
+    #[serde(default)]
+    caused_by_trigger_context: Option<String>,
 }
 
 impl RequestRow {
@@ -122,6 +126,8 @@ impl RequestRow {
             caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id,
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
             caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
+            caused_by_correlation: self.caused_by_correlation,
+            caused_by_trigger_context: self.caused_by_trigger_context,
         }
     }
 }
@@ -501,6 +507,9 @@ impl GoalSource {
                 "parent_request_id": parent_request_id,
             }),
             doc_vars: None,
+            correlation: parent.caused_by_correlation.clone(),
+            group_vars: None,
+            trigger_context: parent.caused_by_trigger_context.clone(),
             args_vars: None,
             pre_materialized_request_id: Some(child.request_id),
             on_result: Box::new(move |result| match result {
@@ -541,6 +550,7 @@ impl GoalSource {
                     lifecycle_state created_at deadline subagent_depth
                     caused_by_parent_request_id caused_by_parent_request_doc_id
                     caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
+                    caused_by_correlation caused_by_trigger_context
                 }}
             }}"#
         );

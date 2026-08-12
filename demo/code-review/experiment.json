@@ -1,0 +1,34 @@
+{
+  "name": "code-review",
+  "description": "ReviewJob -> ReviewArea fan-out -> ScanResult fan-in -> one TriageReport",
+  "init": {
+    "inference_url": "${GENTS_REVIEW_ENDPOINT:-http://127.0.0.1:8000/v1}",
+    "model_name": "${GENTS_REVIEW_MODEL:-default}",
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions"
+  },
+  "seed": {
+    "collection": "ReviewJob",
+    "job_id_field": "run_id",
+    "prompt_field": "focus",
+    "fields": {"repository_path": "."}
+  },
+  "default_prompt": "Review this repository for correctness, durability, authorization, and concurrency defects.",
+  "expect": {
+    "trigger_ids": ["review-recon", "review-scan", "review-triage"],
+    "signed_provenance": true,
+    "required_tool_call_trigger_ids": ["review-recon", "review-scan", "review-triage"],
+    "source_edges": [],
+    "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
+    "collection_counts": {"ReviewArea": 1, "ScanResult": 1, "TriageReport": 1},
+    "fan_in": {
+      "member_collection": "ReviewArea",
+      "result_collection": "ScanResult",
+      "report_collection": "TriageReport",
+      "correlation_field": "run_id",
+      "expected_count_field": "expected_total",
+      "consumer_trigger_id": "review-triage"
+    }
+  },
+  "await_timeout_secs": 600
+}

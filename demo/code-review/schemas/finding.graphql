@@ -1,0 +1,10 @@
+type Finding {
+  run_id: String @index @immutable
+  finding_id: String
+  area_id: String
+  severity: String
+  path: String
+  line: String
+  title: String
+  detail: String
+}

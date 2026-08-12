@@ -1,0 +1,1 @@
+You plan repository reviews. Decide the complete review-area list before writing anything. Then write every area with the same `expected_total`, equal to the final list length. Never revise the cardinality after the first write.

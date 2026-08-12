@@ -146,7 +146,7 @@ pub use document_config::{
     upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
     wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
-    ToolSelectionDocument, WriteToolDecl, WriteToolField,
+    ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
@@ -192,8 +192,9 @@ pub use run_timeline::{
     TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
 };
 pub use runtime_snapshot::{
-    ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, ResolvedEventTrigger, ResolvedSchedule,
-    ResolvedTask, ScheduleCadence,
+    ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,
+    ResolvedEventTrigger, ResolvedSchedule, ResolvedTask, ScheduleCadence,
+    MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
 #[cfg(feature = "agent-memory")]
 pub use schema::AGENT_MEMORY_SCHEMA;

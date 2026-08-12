@@ -1259,6 +1259,8 @@ async fn scheduled_materialization_persists_trigger_lineage() {
         trigger_id: Some("sched-1".into()),
         trigger_kind: Some("schedule".into()),
         source_doc_id: None,
+        correlation: None,
+        trigger_context: None,
     };
 
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
@@ -1309,6 +1311,8 @@ async fn serial_skip_does_not_create_request() {
         trigger_id: Some("sched-serial".into()),
         trigger_kind: Some("schedule".into()),
         source_doc_id: None,
+        correlation: None,
+        trigger_context: None,
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1401,6 +1405,8 @@ async fn latest_only_transition_to_superseded() {
         trigger_id: Some("sched-latest".into()),
         trigger_kind: Some("schedule".into()),
         source_doc_id: None,
+        correlation: None,
+        trigger_context: None,
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1480,6 +1486,8 @@ async fn active_runtime_trigger_filters_ignore_input_required() {
         trigger_id: Some("sched-input-required".into()),
         trigger_kind: Some("schedule".into()),
         source_doc_id: None,
+        correlation: None,
+        trigger_context: None,
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1672,6 +1680,8 @@ async fn serial_skip_event_does_not_create_request() {
         trigger_id: Some("trigger-event-serial".into()),
         trigger_kind: Some("event".into()),
         source_doc_id: Some("event-source-serial-doc".into()),
+        correlation: None,
+        trigger_context: None,
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1763,6 +1773,8 @@ async fn latest_only_event_transition_to_superseded() {
         trigger_id: Some("trigger-event-latest".into()),
         trigger_kind: Some("event".into()),
         source_doc_id: Some("event-source-latest-doc".into()),
+        correlation: None,
+        trigger_context: None,
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),

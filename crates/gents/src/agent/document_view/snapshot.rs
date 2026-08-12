@@ -11,8 +11,8 @@ use crate::document_config::{
     default_behavior_id_for_agent, AgentBehavior as AgentBehaviorDocument,
 };
 use crate::runtime_snapshot::{
-    ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot, ResolvedSchedule, ResolvedTask,
-    ScheduleCadence,
+    ConcurrencyMode, EventTriggerFireMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
+    ResolvedSchedule, ResolvedTask, ScheduleCadence, MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
 use crate::schedule_cron::{validate_cron_schedule, CronMissedRunPolicy};
 use crate::tool_surface::ToolSelection;
@@ -466,6 +466,14 @@ fn resolve_schedules(
             unavailable_schedules.insert(schedule_id);
             continue;
         }
+        if task_template_references_group(task.prompt_template.as_deref().unwrap_or_default()) {
+            tracing::warn!(
+                schedule_id = %schedule_id,
+                "schedule quarantined: group.* template scope is only available to per_group event triggers",
+            );
+            unavailable_schedules.insert(schedule_id);
+            continue;
+        }
 
         let cadence = match resolve_schedule_cadence(schedule) {
             Ok(cadence) => cadence,
@@ -636,6 +644,109 @@ fn resolve_event_triggers(
             }
         }
 
+        let fire_mode = match EventTriggerFireMode::parse(trigger.fire_mode.as_deref()) {
+            Some(mode) => mode,
+            None => {
+                tracing::warn!(
+                    trigger_id = %trigger_id,
+                    fire_mode = ?trigger.fire_mode,
+                    "event trigger quarantined: fire_mode must be per_document or per_group",
+                );
+                unavailable_event_triggers.insert(trigger_id);
+                continue;
+            }
+        };
+        if fire_mode != EventTriggerFireMode::PerGroup
+            && task_template_references_group(task.prompt_template.as_deref().unwrap_or_default())
+        {
+            tracing::warn!(
+                trigger_id = %trigger_id,
+                "event trigger quarantined: group.* template scope requires per_group mode",
+            );
+            unavailable_event_triggers.insert(trigger_id);
+            continue;
+        }
+        let correlation_field = trigger
+            .correlation_field
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let expected_count_field = trigger
+            .expected_count_field
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        if correlation_field
+            .as_deref()
+            .into_iter()
+            .chain(expected_count_field.as_deref())
+            .any(|field| crate::graphql::validate_graphql_name(field).is_err())
+        {
+            tracing::warn!(
+                trigger_id = %trigger_id,
+                "event trigger quarantined: correlation/count field is not a GraphQL name",
+            );
+            unavailable_event_triggers.insert(trigger_id);
+            continue;
+        }
+        let expected_count = trigger
+            .expected_count
+            .and_then(|value| usize::try_from(value).ok());
+        let group_timeout_secs = trigger
+            .group_timeout_secs
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0);
+        let group_min_count = trigger
+            .group_min_count
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(1);
+        let group_config_valid = match fire_mode {
+            EventTriggerFireMode::PerDocument => {
+                trigger.expected_count.is_none()
+                    && expected_count_field.is_none()
+                    && trigger.group_timeout_secs.is_none()
+                    && trigger.group_min_count.is_none()
+            }
+            EventTriggerFireMode::PerGroup => {
+                correlation_field.is_some()
+                    && trigger
+                        .expected_count
+                        .is_none_or(|_| expected_count.is_some())
+                    && expected_count
+                        .is_none_or(|count| (1..=MAX_EVENT_TRIGGER_GROUP_DOCS).contains(&count))
+                    && trigger.group_min_count.is_none_or(|_| {
+                        trigger
+                            .group_min_count
+                            .and_then(|value| usize::try_from(value).ok())
+                            .is_some()
+                    })
+                    && group_min_count > 0
+                    && group_min_count <= MAX_EVENT_TRIGGER_GROUP_DOCS
+                    && trigger
+                        .group_min_count
+                        .is_none_or(|_| group_timeout_secs.is_some())
+                    && expected_count.is_none_or(|expected| group_min_count <= expected)
+                    && match (expected_count, expected_count_field.as_ref()) {
+                        (Some(_), None) | (None, Some(_)) => true,
+                        (None, None) => group_timeout_secs.is_some(),
+                        (Some(_), Some(_)) => false,
+                    }
+                    && trigger
+                        .group_timeout_secs
+                        .is_none_or(|_| group_timeout_secs.is_some())
+            }
+        };
+        if !group_config_valid {
+            tracing::warn!(
+                trigger_id = %trigger_id,
+                "event trigger quarantined: invalid per-group cardinality/timeout configuration",
+            );
+            unavailable_event_triggers.insert(trigger_id);
+            continue;
+        }
+
         let resolved_task = ResolvedTask {
             task_id: task.task_id.clone(),
             name: task.name.clone(),
@@ -652,6 +763,12 @@ fn resolve_event_triggers(
             filter: trigger.filter.clone(),
             enabled: true,
             concurrency,
+            fire_mode,
+            correlation_field,
+            expected_count,
+            expected_count_field,
+            group_timeout_secs,
+            group_min_count,
         };
         active_event_triggers.insert(resolved_trigger.trigger_id.clone(), resolved_trigger);
     }
@@ -704,6 +821,13 @@ pub(super) fn behavior_references_ready(
 pub(super) fn non_empty(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn task_template_references_group(template: &str) -> bool {
+    crate::template::parse_template_for_validation(template).is_ok_and(|refs| {
+        refs.iter()
+            .any(|reference| reference.root() == Some("group"))
+    })
 }
 
 fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::skills::Skill {

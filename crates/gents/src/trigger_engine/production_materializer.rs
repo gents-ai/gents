@@ -117,6 +117,8 @@ impl MaterializerHandle for ProductionMaterializer {
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
         source_doc_id: Option<&str>,
+        correlation: Option<&str>,
+        trigger_context: Option<&str>,
         rendered_prompt: &str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>> {
         if matches!(trigger_kind, TriggerKind::Manual) && trigger_id.is_some() {
@@ -134,6 +136,8 @@ impl MaterializerHandle for ProductionMaterializer {
         let rendered_prompt = rendered_prompt.to_string();
         let trigger_id = trigger_id.map(str::to_owned);
         let source_doc_id = source_doc_id.map(str::to_owned);
+        let correlation = correlation.map(str::to_owned);
+        let trigger_context = trigger_context.map(str::to_owned);
         let trigger_kind_str = trigger_kind.as_str().to_owned();
 
         let execution_origin = execution_origin_for_trigger_kind(trigger_kind);
@@ -144,6 +148,8 @@ impl MaterializerHandle for ProductionMaterializer {
                 trigger_id: trigger_id.clone(),
                 trigger_kind: Some(trigger_kind_str),
                 source_doc_id,
+                correlation,
+                trigger_context,
             };
             let conversation_title = task_run_conversation_title(&task_label);
             let enqueued = write_pending_agent_request_with_lineage_and_conversation_title(
@@ -173,11 +179,16 @@ impl MaterializerHandle for ProductionMaterializer {
         agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
+        correlation: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
         let node = self.node.clone();
         let escaped_agent_did = escape_graphql_string(agent_did);
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let trigger_kind_str = trigger_kind.as_str();
+        let correlation_filter = correlation
+            .map(escape_graphql_string)
+            .map(|value| format!(r#", caused_by_correlation: {{ _eq: "{value}" }}"#))
+            .unwrap_or_default();
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
             // Strict tuple match on `(agent_did, caused_by_trigger_id,
@@ -203,7 +214,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         filter: {{
                             agent_did: {{ _eq: "{agent_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
-                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
+                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
                         }}
                     ) {{ _docID lifecycle_state deadline }}
@@ -211,6 +222,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 agent_did = escaped_agent_did,
                 trigger_id = escaped_trigger_id,
                 trigger_kind = trigger_kind_str,
+                correlation_filter = correlation_filter,
             );
             let resp = node.execute(&query).await;
             if resp.has_errors() {
@@ -236,11 +248,16 @@ impl MaterializerHandle for ProductionMaterializer {
         agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
+        correlation: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + '_>> {
         let node = self.node.clone();
         let escaped_agent_did = escape_graphql_string(agent_did);
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let trigger_kind_str = trigger_kind.as_str();
+        let correlation_filter = correlation
+            .map(escape_graphql_string)
+            .map(|value| format!(r#", caused_by_correlation: {{ _eq: "{value}" }}"#))
+            .unwrap_or_default();
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
             let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
@@ -250,7 +267,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         filter: {{
                             agent_did: {{ _eq: "{agent_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
-                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
+                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
                         }},
                         input: {{
@@ -264,6 +281,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 agent_did = escaped_agent_did,
                 trigger_id = escaped_trigger_id,
                 trigger_kind = trigger_kind_str,
+                correlation_filter = correlation_filter,
             );
             let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
                 node.as_ref(),
@@ -288,6 +306,48 @@ impl MaterializerHandle for ProductionMaterializer {
                 );
             }
             Ok(count)
+        })
+    }
+
+    fn has_materialized_group_request(
+        &self,
+        agent_did: &str,
+        trigger_id: &str,
+        trigger_kind: TriggerKind,
+        correlation: &str,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
+        let node = self.node.clone();
+        let agent_did = escape_graphql_string(agent_did);
+        let trigger_id = escape_graphql_string(trigger_id);
+        let trigger_kind = trigger_kind.as_str();
+        let correlation = escape_graphql_string(correlation);
+        Box::pin(async move {
+            let query = format!(
+                r#"query {{
+                    AgentRequest(
+                        filter: {{
+                            agent_did: {{ _eq: "{agent_did}" }},
+                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
+                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
+                            caused_by_correlation: {{ _eq: "{correlation}" }}
+                        }},
+                        limit: 1
+                    ) {{ _docID }}
+                }}"#,
+            );
+            let response = node.execute(&query).await;
+            if response.has_errors() {
+                anyhow::bail!(
+                    "query for materialized event-trigger group failed: {:?}",
+                    response.errors
+                );
+            }
+            Ok(response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentRequest"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|rows| !rows.is_empty()))
         })
     }
 }

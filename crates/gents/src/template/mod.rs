@@ -12,6 +12,7 @@ pub struct TemplateScope {
     pub event: serde_json::Value,
     pub doc: Option<serde_json::Value>,
     pub args: Option<serde_json::Value>,
+    pub group: Option<serde_json::Value>,
     pub node: serde_json::Value,
     pub ctx: serde_json::Value,
 }
@@ -61,6 +62,9 @@ pub fn render_template(template: &str, scope: &TemplateScope) -> Result<String, 
         if let Some(args) = scope.args.clone() {
             ctx.insert("args".to_string(), args);
         }
+        if let Some(group) = scope.group.clone() {
+            ctx.insert("group".to_string(), group);
+        }
         ctx.insert("node".to_string(), scope.node.clone());
         ctx.insert("ctx".to_string(), scope.ctx.clone());
         serde_json::Value::Object(ctx)
@@ -92,6 +96,7 @@ pub fn render_system_prompt(
         event: serde_json::json!({}),
         doc: None,
         args: None,
+        group: None,
         node,
         ctx: serde_json::json!({}),
     };
@@ -109,6 +114,7 @@ pub fn render_request_context_template(
         event: serde_json::json!({}),
         doc: None,
         args: None,
+        group: None,
         node,
         ctx,
     };

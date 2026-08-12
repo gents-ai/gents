@@ -1,0 +1,7 @@
+type ReviewArea {
+  run_id: String @index @immutable
+  area_id: String
+  path: String
+  instructions: String
+  expected_total: String @immutable
+}

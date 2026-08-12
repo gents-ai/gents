@@ -40,6 +40,8 @@ struct AgentRequestRow {
     caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
     caused_by_parent_tool_call_doc_id: Option<String>,
+    caused_by_correlation: Option<String>,
+    caused_by_trigger_context: Option<String>,
 }
 
 pub(crate) async fn resolve_request_doc_id(
@@ -107,6 +109,8 @@ pub(crate) async fn load_agent_request(
                 caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
                 caused_by_parent_tool_call_doc_id
+                caused_by_correlation
+                caused_by_trigger_context
             }}
         }}"#,
         escape_graphql_string(&request_doc_id)
@@ -142,6 +146,8 @@ pub(crate) async fn load_agent_request(
         caused_by_parent_request_doc_id: nonempty(row.caused_by_parent_request_doc_id),
         caused_by_parent_tool_call_id: nonempty(row.caused_by_parent_tool_call_id),
         caused_by_parent_tool_call_doc_id: nonempty(row.caused_by_parent_tool_call_doc_id),
+        caused_by_correlation: nonempty(row.caused_by_correlation),
+        caused_by_trigger_context: nonempty(row.caused_by_trigger_context),
     };
     validate_agent_request_subagent_coherence(&request)?;
     Ok(Some(request))

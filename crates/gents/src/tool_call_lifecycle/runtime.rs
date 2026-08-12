@@ -169,6 +169,8 @@ struct ToolRuntimeScope {
     // tools with per-call budgets (bash) use the background lifetime budget
     // instead of their foreground ceiling when set (#985).
     background: bool,
+    correlation: Option<String>,
+    source_fields: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -178,6 +180,8 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) workspace_cwd: Option<PathBuf>,
     pub(crate) live_output: Option<LiveToolOutputWriter>,
     pub(crate) background: bool,
+    pub(crate) correlation: Option<String>,
+    pub(crate) source_fields: std::collections::BTreeMap<String, String>,
 }
 
 tokio::task_local! {
@@ -203,6 +207,7 @@ where
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn scope_request_tool_execution_with_workspace<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
@@ -232,28 +237,32 @@ pub(crate) async fn scope_request_tool_execution_with_workspace_and_live_output<
 where
     F: Future<Output = T>,
 {
-    TOOL_RUNTIME_SCOPE
-        .scope(
-            ToolRuntimeScope {
-                deadline_at,
-                cancellation_token,
-                workspace_cwd,
-                live_output,
-                background: false,
-            },
-            future,
-        )
-        .await
+    let inherited = current_tool_runtime_context();
+    scope_request_tool_execution_with_trigger_context(
+        deadline_at,
+        cancellation_token,
+        workspace_cwd,
+        live_output,
+        inherited
+            .as_ref()
+            .and_then(|scope| scope.correlation.clone()),
+        inherited
+            .map(|scope| scope.source_fields)
+            .unwrap_or_default(),
+        false,
+        future,
+    )
+    .await
 }
 
-/// Scope for executions spawned through the R6 background bridge: identical
-/// to the foreground scope except tools can observe `background` and apply
-/// the background lifetime budget instead of their foreground ceiling.
-pub(crate) async fn scope_background_tool_execution<F, T>(
+pub(crate) async fn scope_request_tool_execution_with_trigger_context<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
     live_output: Option<LiveToolOutputWriter>,
+    correlation: Option<String>,
+    source_fields: std::collections::BTreeMap<String, String>,
+    background: bool,
     future: F,
 ) -> T
 where
@@ -266,11 +275,45 @@ where
                 cancellation_token,
                 workspace_cwd,
                 live_output,
-                background: true,
+                background,
+                correlation,
+                source_fields,
             },
             future,
         )
         .await
+}
+
+/// Scope for executions spawned through the R6 background bridge: identical
+/// to the foreground scope except tools can observe `background` and apply
+/// the background lifetime budget instead of their foreground ceiling.
+#[cfg(test)]
+pub(crate) async fn scope_background_tool_execution<F, T>(
+    deadline_at: Option<DateTime<Utc>>,
+    cancellation_token: CancellationToken,
+    workspace_cwd: Option<PathBuf>,
+    live_output: Option<LiveToolOutputWriter>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    let inherited = current_tool_runtime_context();
+    scope_request_tool_execution_with_trigger_context(
+        deadline_at,
+        cancellation_token,
+        workspace_cwd,
+        live_output,
+        inherited
+            .as_ref()
+            .and_then(|scope| scope.correlation.clone()),
+        inherited
+            .map(|scope| scope.source_fields)
+            .unwrap_or_default(),
+        true,
+        future,
+    )
+    .await
 }
 
 pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
@@ -283,6 +326,8 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             workspace_cwd: scope.workspace_cwd,
             live_output: scope.live_output,
             background: scope.background,
+            correlation: scope.correlation,
+            source_fields: scope.source_fields,
         })
 }
 
@@ -591,5 +636,47 @@ mod tests {
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn foreground_and_background_scopes_preserve_trigger_fill_context() {
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("expected_total".to_string(), "4".to_string());
+        scope_request_tool_execution_with_trigger_context(
+            None,
+            CancellationToken::new(),
+            None,
+            None,
+            Some("run-7".to_string()),
+            fields.clone(),
+            false,
+            async move {
+                let foreground = current_tool_runtime_context().expect("foreground context");
+                assert_eq!(foreground.correlation.as_deref(), Some("run-7"));
+                assert_eq!(foreground.source_fields, fields);
+
+                scope_background_tool_execution(
+                    None,
+                    CancellationToken::new(),
+                    None,
+                    None,
+                    async {
+                        let background =
+                            current_tool_runtime_context().expect("background context");
+                        assert!(background.background);
+                        assert_eq!(background.correlation.as_deref(), Some("run-7"));
+                        assert_eq!(
+                            background
+                                .source_fields
+                                .get("expected_total")
+                                .map(String::as_str),
+                            Some("4")
+                        );
+                    },
+                )
+                .await;
+            },
+        )
+        .await;
     }
 }

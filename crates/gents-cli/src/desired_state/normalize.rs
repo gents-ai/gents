@@ -84,6 +84,9 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     }
     for trigger in &mut manifest.event_triggers {
         normalize_optional_string(&mut trigger.filter);
+        normalize_optional_string(&mut trigger.correlation_field);
+        normalize_optional_string(&mut trigger.fire_mode);
+        normalize_optional_string(&mut trigger.expected_count_field);
     }
     for binding in &mut manifest.projection_acp_bindings {
         normalize_optional_string(&mut binding.agent_did);

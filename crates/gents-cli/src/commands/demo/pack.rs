@@ -73,6 +73,28 @@ struct PackExpect {
     required_tool_call_trigger_ids: Vec<String>,
     #[serde(default)]
     source_edges: Vec<SourceEdgeExpectation>,
+    #[serde(default)]
+    fan_in: Option<FanInExpectation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FanInExpectation {
+    member_collection: String,
+    result_collection: String,
+    report_collection: String,
+    correlation_field: String,
+    expected_count_field: String,
+    consumer_trigger_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct FanInEvidence {
+    correlation: String,
+    expected_count: usize,
+    member_count: usize,
+    result_count: usize,
+    consumer_request_id: String,
+    report_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -863,6 +885,139 @@ async fn trigger_error(graphql: &str, trigger_id: &str) -> Option<String> {
     )
 }
 
+async fn verify_fan_in(
+    graphql: &str,
+    expected: &FanInExpectation,
+    correlation: &str,
+    agent_did: &str,
+) -> Result<Option<FanInEvidence>> {
+    for collection in [
+        &expected.member_collection,
+        &expected.result_collection,
+        &expected.report_collection,
+    ] {
+        validate_collection_identifier(collection)?;
+    }
+    for field in [&expected.correlation_field, &expected.expected_count_field] {
+        gents::graphql::validate_graphql_name(field)?;
+    }
+
+    let escaped_correlation = escape_graphql_string(correlation);
+    let load_members = |collection: &str| {
+        format!(
+            r#"{{ {collection}(filter: {{ {correlation_field}: {{ _eq: "{escaped_correlation}" }} }}) {{ _docID {correlation_field} {expected_count_field} }} }}"#,
+            correlation_field = expected.correlation_field,
+            expected_count_field = expected.expected_count_field,
+        )
+    };
+    let member_rows = graphql_rows(
+        graphql,
+        &expected.member_collection,
+        &load_members(&expected.member_collection),
+    )
+    .await?;
+    if member_rows.is_empty() {
+        bail!("fan-in produced no {} rows", expected.member_collection);
+    }
+    let expected_count = member_rows.len();
+    for row in &member_rows {
+        let count = row
+            .get(&expected.expected_count_field)
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .or_else(|| value.as_str()?.parse::<usize>().ok())
+            })
+            .context("fan-in member has no valid expected count")?;
+        if count != expected_count {
+            bail!(
+                "fan-in {} rows disagree with closed-set count: row says {}, actual {}",
+                expected.member_collection,
+                count,
+                expected_count
+            );
+        }
+    }
+
+    let result_rows = graphql_rows(
+        graphql,
+        &expected.result_collection,
+        &load_members(&expected.result_collection),
+    )
+    .await?;
+    if result_rows.len() != expected_count {
+        bail!(
+            "fan-in expected {} correlated {} rows, found {}",
+            expected_count,
+            expected.result_collection,
+            result_rows.len()
+        );
+    }
+    for row in &result_rows {
+        let count = row
+            .get(&expected.expected_count_field)
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .or_else(|| value.as_str()?.parse::<usize>().ok())
+            })
+            .context("fan-in result has no valid expected count")?;
+        if count != expected_count {
+            bail!("fan-in result cardinality snapshot drifted");
+        }
+    }
+
+    let request_query = format!(
+        r#"{{ AgentRequest(filter: {{
+            agent_did: {{ _eq: "{}" }},
+            caused_by_trigger_id: {{ _eq: "{}" }},
+            caused_by_trigger_kind: {{ _eq: "event" }},
+            caused_by_correlation: {{ _eq: "{}" }}
+        }}) {{ request_id }} }}"#,
+        escape_graphql_string(agent_did),
+        escape_graphql_string(&expected.consumer_trigger_id),
+        escaped_correlation,
+    );
+    let request_rows = graphql_rows(graphql, "AgentRequest", &request_query).await?;
+    if request_rows.len() != 1 {
+        bail!(
+            "fan-in consumer {} expected exactly one correlated AgentRequest, found {}",
+            expected.consumer_trigger_id,
+            request_rows.len()
+        );
+    }
+    let consumer_request_id = request_rows[0]
+        .get("request_id")
+        .and_then(Value::as_str)
+        .context("fan-in consumer request has no request_id")?
+        .to_string();
+
+    let report_query = format!(
+        r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{escaped_correlation}" }} }}) {{ _docID }} }}"#,
+        collection = expected.report_collection,
+        field = expected.correlation_field,
+    );
+    let report_rows = graphql_rows(graphql, &expected.report_collection, &report_query).await?;
+    if report_rows.len() != 1 {
+        bail!(
+            "fan-in expected exactly one correlated {}, found {}",
+            expected.report_collection,
+            report_rows.len()
+        );
+    }
+
+    Ok(Some(FanInEvidence {
+        correlation: correlation.to_string(),
+        expected_count,
+        member_count: member_rows.len(),
+        result_count: result_rows.len(),
+        consumer_request_id,
+        report_count: report_rows.len(),
+    }))
+}
+
 async fn count_rows(graphql: &str, collection: &str) -> u64 {
     let query = format!("{{ {collection} {{ _docID }} }}");
     post_graphql(graphql, &query)
@@ -1042,6 +1197,10 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         )
         .await
         .context("verifying durable source edges")?;
+        let fan_in = match manifest.expect.fan_in.as_ref() {
+            Some(expected) => verify_fan_in(&graphql, expected, &job_id, &agent_did).await?,
+            None => None,
+        };
         let projection_artifacts = render_projection_artifacts(
             &bin,
             &graphql,
@@ -1056,6 +1215,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             counts,
             provenance,
             source_edges,
+            fan_in,
             projection_artifacts,
             prompt_tokens,
             completion_tokens,
@@ -1070,6 +1230,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         counts,
         provenance,
         source_edges,
+        fan_in,
         projection_artifacts,
         prompt_tokens,
         completion_tokens,
@@ -1137,6 +1298,14 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             "consumer_request_id": edge.consumer_request_id,
             "consumer_request_doc_id": edge.consumer_request_doc_id,
         })).collect::<Vec<_>>(),
+        "fan_in": fan_in.as_ref().map(|evidence| json!({
+            "correlation": evidence.correlation,
+            "expected_count": evidence.expected_count,
+            "member_count": evidence.member_count,
+            "result_count": evidence.result_count,
+            "consumer_request_id": evidence.consumer_request_id,
+            "report_count": evidence.report_count,
+        })),
         "projection_artifacts": projection_artifacts,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
@@ -1276,6 +1445,7 @@ mod tests {
                     consumer_trigger_id: "consumer".to_string(),
                     source_collection: "Source".to_string(),
                 }],
+                fan_in: None,
             },
             await_timeout_secs: 1,
         };

@@ -26,18 +26,34 @@ through the graph**.
 ## Invariant
 
 A trigger may declare a correlation field. Fires, the concurrency gate, and
-completion predicates are evaluated **within** a correlation group, never
-across groups. A trigger with a completion predicate fires exactly once per
-group, with the whole group in template scope, and no agent participates in
-deciding whether the group is complete.
+completion predicates are evaluated **within** the key
+`(target_agent_did, trigger_id, trigger_kind, correlation)`, never across keys.
+A `per_group` trigger materializes at most one request for a well-formed,
+closed group, with the complete projected membership in template scope, and no
+agent participates in deciding whether the group is complete. Under fair
+rescans and successful store operations, a durable eligible group eventually
+materializes that request.
+
+"Complete" necessarily relies on a producer contract: the producer declares
+the final cardinality and creates exactly that many matching documents. A
+barrier cannot know that a producer will not add a late member after declaring
+the set complete. The runtime detects an already-overfull group and fails
+closed, but it cannot retract a request if a producer violates the contract
+after the request has been created. Correlation, expected-count, and
+filter-relevant source fields must also remain stable, and source rows must
+remain durable until the group resolves. Pack schemas mark the correlation and
+expected-count fields `@immutable`; arbitrary external schemas remain subject
+to this documented producer obligation.
 
 ## Decision
 
 Propagate a tag; derive everything else from documents that already exist.
 
-**Zero new collections.** Group state, fired-markers, and turn counts are not
-persisted — they are queries over `AgentRequest` rows that the runtime already
-writes and indexes.
+**Zero new collections.** Membership and successful-fire markers are queries
+over source documents and `AgentRequest` rows. The only in-memory group state
+is timeout bookkeeping, which is reconstructible. Values needed by runtime
+filled write-tool fields are snapshotted on the request as immutable trigger
+execution context; that is per-request lineage, not mutable group state.
 
 ## What already exists
 
@@ -49,8 +65,7 @@ Establishing the baseline, because the design is mostly *composition*:
 | Fan-out | multiple triggers matching one create |
 | Stage edges | `DatastoreToolSurface` → `BoundedWriteTool` → create in a watched collection |
 | Reading a whole group | `defra_query` + `defra_query_collections` allowlist |
-| Group cardinality | DefraDB `_count` (`query-parse/src/query_parse/aggregates.rs`; valid with no field argument) |
-| "Has this already fired?" | `AgentRequest` query on `caused_by_trigger_id` — the gate already runs this exact query |
+| "Has this already fired?" | `AgentRequest` query on trigger lineage — the gate already has the query seam |
 | Whole source doc at fire time | `fetch_source_doc` hydrates `doc_vars` **before** dispatch (`event_source.rs:618`) |
 | Request → source lineage | `caused_by_source_doc_id`, stamped and `@immutable` |
 | Per-request ambient context for tools | `tokio::task_local!` `TOOL_RUNTIME_SCOPE` (`tool_call_lifecycle/runtime.rs:183`), read by `call_tool_managed` |
@@ -71,45 +86,59 @@ Two facts that shaped the design, both verified against the pinned
 
 ## Architecture: the tag spine
 
-Eight hops, each an existing seam:
+The propagation path crosses the durable request boundary. That boundary is
+load-bearing: a task-local created in the event source cannot survive until a
+watcher later claims and runs the request.
 
 ```text
-source doc[correlation_field]
+source doc[correlation_field + selected source-fill fields]
   │  (1) already in doc_vars — zero extra queries
   ▼
-FireIntent.correlation
-  │  (2) mod.rs:46
+FireIntent.correlation + group_vars + trigger_context
+  │  (2) trigger_engine/mod.rs
   ▼
 TriggerLockKey + gate filter
-  │  (3) mod.rs:23   (4) production_materializer.rs:171,234
+  │  (3) trigger_engine/mod.rs   (4) production_materializer.rs
   ▼
-AgentRequest.caused_by_correlation
-  │  (5) lifecycle::TriggerLineage
+AgentRequest.caused_by_correlation + caused_by_trigger_context
+  │  (5) lifecycle::TriggerLineage / materialize.rs
   ▼
-ToolRuntimeScope.correlation
-  │  (6) tool_call_lifecycle/runtime.rs:163 — one more field on the task-local
+watcher::AgentRequest
+  │  (6) watcher load + derived-request inheritance
+  ▼
+ToolRuntimeScope.correlation + source_fields
+  │  (7) daemon scope; preserved by nested/background scopes
   ▼
 BoundedWriteTool stamps declared fill fields
-  │  (7) defra_write/mod.rs:130
+  │  (8) defra_write/mod.rs
   ▼
-next trigger reads it off the source doc      (8) loop closed
+next trigger reads it off the source doc      (9) loop closed
 ```
 
 | # | File | Change |
 | --- | --- | --- |
 | 1 | `trigger_engine/event_source.rs:618` | read `doc_vars[correlation_field]` |
-| 2 | `trigger_engine/mod.rs:46` | `FireIntent.correlation: Option<String>` |
-| 3 | `trigger_engine/mod.rs:23` | `TriggerLockKey` → `(String, String, TriggerKind, Option<String>)` |
+| 2 | `trigger_engine/mod.rs:46` | add correlation, optional `group_vars`, and the snapshotted source-fill context to `FireIntent`; only `group_vars: Some` enables group-marker dedupe |
+| 3 | `trigger_engine/mod.rs:23` | `TriggerLockKey` → `(target_agent_did, trigger_id, TriggerKind, Option<correlation>)`; use weak/pruned lock entries so run ids do not leak memory |
 | 4 | `trigger_engine/production_materializer.rs:171,234` | gate methods take `correlation: Option<&str>`; filters gain `caused_by_correlation: { _eq: … }` **only when `Some`** |
-| 5 | `lifecycle::TriggerLineage` | carries `correlation`; written to the request |
-| 6 | `tool_call_lifecycle/runtime.rs:163` | `ToolRuntimeScope.correlation: Option<String>` |
-| 7 | `defra_write/mod.rs:130` | `build_mutation` stamps fill fields from `current_tool_runtime_context()` |
-| 8 | — | closes at hop 1 for the next trigger |
+| 5 | `lifecycle::TriggerLineage` | carries correlation and versioned trigger context; both are written to the request |
+| 6 | watcher + subagent/internal request materializers | load the immutable lineage into the claimed request; any request explicitly derived from a parent copies correlation/context |
+| 7 | `agent/daemon/inference.rs`, `tool_call_lifecycle/runtime.rs`, background bridge | install and preserve correlation/source fields in every tool execution scope |
+| 8 | `defra_write/mod.rs` | `build_mutation` stamps fill fields from `current_tool_runtime_context()` |
+| 9 | — | closes at hop 1 for the next trigger |
 
-**Backward compatibility is structural.** An `EventTrigger` with no
-`correlation_field` yields `None` at every hop; the gate filter omits its
-clause; behavior is byte-identical to today. This is not a compatibility
-shim — it is the `Option` being `None`.
+**Configuration compatibility remains, storage compatibility does not.** An
+`EventTrigger` with no `correlation_field` yields `None` at every hop; the gate
+filter omits its clause and dispatch behavior is unchanged. However, this is an
+explicit breaking schema cut: existing homes are not upgraded in place.
+
+Update the canonical `AgentRequest` and `EventTrigger` SDL, refresh their
+frozen migration-baseline SDL/version pins, and require operators/developers to
+reinitialize stores. Do not add `PatchVersioned`, `PatchInPlace`, lenses, or
+backfill code for this feature. Startup against a pre-cut store must fail with
+a clear schema-version/reset instruction rather than partially running against
+missing columns. This removes compatibility migration from every PR slice; it
+does not weaken the runtime semantics for newly created rows.
 
 ## Surface
 
@@ -121,31 +150,69 @@ shim — it is the `Option` being `None`.
 | `fire_mode` | `per_document` (default, today's behavior) or `per_group` |
 | `expected_count` | Literal group width — fixed-width fan-out (3 verifiers, 5 judges) |
 | `expected_count_field` | Field on the source doc carrying the width — producer-decided |
-| `expected_count_from` | Collection whose same-tag docs are counted — batch map-reduce (see soundness condition below) |
 | `group_timeout_secs` | Fire with the partial group this long after the group's first-seen |
-| `group_min_count` | Floor for a timeout fire; below it, expire without firing |
+| `group_min_count` | Floor for a timeout fire; below it, keep waiting without firing |
 
-Exactly one of the three `expected_count*` sources may be set, and only under
-`per_group`.
+A `per_group` trigger uses either exactly one of `expected_count` and
+`expected_count_field`, or neither when `group_timeout_secs` is set. The latter
+is a pure-timeout barrier: it never completes early and fires the accumulated
+group with `group.complete == false` when the timeout and minimum are met.
+Count fields are not legal under `per_document`. `expected_count_from` is
+deliberately deferred: its correctness depends on an upstream closed-set
+signal that the current surface does not have, so documenting a producer race
+does not make it a safe primitive to ship.
 
-### `AgentRequest` (existing collection, one new column)
+### `AgentRequest` (existing collection, durable lineage)
 
 ```graphql
 caused_by_correlation: String @index @immutable
+caused_by_trigger_context: String @immutable
 ```
 
-Follows the `caused_by_source_doc_id` precedent exactly: lineage, indexed,
-immutable.
+`caused_by_correlation` follows the `caused_by_source_doc_id` precedent:
+lineage, indexed, immutable. The existing `caused_by_trigger_id` and
+`caused_by_trigger_kind` fields also become immutable because the request row
+cannot be a durable group marker if any part of its key can be rewritten.
+
+`caused_by_trigger_context` is versioned JSON containing only source fields
+referenced by `Fill::SourceField` in the resolved tool surface at
+materialization time:
+
+```json
+{ "version": 1, "source_fields": { "expected_total": "5" } }
+```
+
+It is not indexed and it does not contain the whole source document. Snapshot
+only strings and integral JSON numbers (normalized to canonical strings), cap
+the encoded payload at `MAX_TRIGGER_CONTEXT_BYTES = 16 KiB`, and fail
+materialization if a declared source field is missing, has any other type, or
+causes the payload to exceed the cap. This matches the existing bounded-write
+tool's string-valued contract and makes tool-time fill independent of later
+source-document mutation, deletion, or config changes.
+
+Any subagent, goal continuation, background-completion wakeup, or other
+internal request that is explicitly derived from a parent request inherits
+both fields unchanged. It may stamp its own immediate
+`caused_by_trigger_id/kind` while retaining the graph-run correlation. This
+makes correlation useful across mixed document/subagent execution and prevents
+a child write tool from losing the runtime fill context. Request creation paths
+with no validated parent do not populate these fields from tool arguments or
+other caller-supplied runtime input.
 
 ### `WriteToolField` (no schema change)
 
 `write_tools` and `DatastoreToolSurface.entries` are `[String]` columns of JSON,
-so a new optional key on the decl needs no schema migration.
+so a new optional key on the declaration needs no additional collection field.
 
 ```json
 { "name": "run_id",         "fill": "correlation" }
 { "name": "expected_total", "fill": { "source_field": "expected_total" } }
 ```
+
+The accepted JSON grammar is exactly `null`/absent, the string
+`"correlation"`, or an object with the single key `"source_field"` whose value
+passes the GraphQL field-identifier validator. Unknown strings, keys, or mixed
+objects are rejected at deserialization/validation.
 
 A filled field is:
 
@@ -157,10 +224,13 @@ So the tag cannot be forged, and cannot be forgotten. This is the property that
 makes graphs composable: correlation is a runtime invariant, not prompt
 discipline.
 
-`Fill::SourceField` copies a named field from the *triggering source doc*
-through the agent hop. It exists because the alternative — instructing a model
-to retype `expected_total` on every write — reintroduces exactly the fragility
-the tag removes, for exactly the value a barrier depends on.
+`Fill::SourceField` copies a named string/integer field from the *triggering
+source document snapshot* through the agent hop, using the canonical string
+representation expected by today's bounded-write tool. It exists because the
+alternative — instructing a model to retype `expected_total` on every write —
+reintroduces exactly the fragility the tag removes, for exactly the value a
+barrier depends on. For `per_group`, "triggering source document" means the
+deterministic representative document defined below.
 
 ### Template scope
 
@@ -171,6 +241,17 @@ Beside today's `{{ doc.* }}` / `{{ event.* }}` / `{{ node.* }}` / `{{ ctx.* }}`:
   (projected source docs), `{{ group.complete }}` (`false` on a timeout fire)
   — `per_group` only
 
+`group.docs` is ordered by `_docID` ascending. In `per_group` mode, `doc` and
+`event.source_doc_id` refer to the first document in that order. This gives
+timeout fires and restart recovery the same deterministic singular lineage as
+completion fires; no "last arriving document" exists on a timer tick.
+
+Internally, `FireIntent.group_vars: Option<Value>` and
+`TemplateScope.group: Option<Value>` keep this distinction explicit. A
+correlated `per_document` intent has a correlation value but no group scope;
+it must not be suppressed by the successful-fire marker for an earlier member
+of the same run.
+
 ## Fire semantics
 
 ### Completion is evaluated in the event source, not in `dispatch`
@@ -180,44 +261,103 @@ An incomplete group emits **no `FireIntent` at all**. Routing it through
 `last_status: "skipped"` and bump the trigger's runtime fields, so `fire_count`
 and `last_error` would stop meaning anything operationally.
 
-### Idempotence needs no persisted marker
+The existing `seen_docs` remains keyed by collection and retains its
+forward-only, per-document meaning. Group state is separate and keyed by
+`(trigger_id, correlation)`: filters, expected cardinality, timeouts, and task
+bindings belong to a trigger, not merely to a collection.
 
-Before a group fires, query whether an `AgentRequest` exists with
-`(caused_by_trigger_id, caused_by_correlation)` in **any** lifecycle state.
-Non-empty → do not fire.
+Group reconciliation has three paths:
+
+1. **Startup/config activation:** perform one deterministic, paginated recovery
+   sweep for each active `per_group` trigger. It queries durable source rows and
+   does not depend on a row being "first seen." The ordinary seed still
+   suppresses old documents for `per_document`; the recovery sweep discovers
+   pre-existing groups. Complete groups are eligible immediately and
+   incomplete groups start fresh timeout clocks.
+2. **Steady-state subscription:** hydrate the new source document, identify its
+   trigger/correlation key, and reconcile only that dirty group.
+3. **Loss repair:** the existing collection-level `rescan_tick` discovers new
+   document ids. It marks only correlations containing newly discovered rows
+   dirty. A bounded rotating recovery sweep also revisits old pages so a
+   failed startup page or dropped bookkeeping cannot strand a group.
+
+`SEEN_DOCS_SEED_LIMIT` is not a group-recovery bound. Recovery pagination uses
+a stable ordering and evaluates a group only from a complete membership
+snapshot. For each bounded batch of candidate correlations, load request
+markers with one `_in` query and discard already-marked groups before hydrating
+their full documents; do not load all historical markers into an unbounded
+process cache and do not issue one marker query per historical group.
+
+This makes the steady-state processing cost proportional to new/dirty groups
+plus due timers. The existing rescan still reads collection document ids and
+therefore retains its current linear-in-collection-size I/O cost, but fan-in
+must not multiply that into one full collection scan per trigger per five-second
+tick. Startup and rotating recovery remain linear in historical matching rows;
+large installations need source retention/archival. This implementation targets
+the existing non-catalog event-source scale and records page, row, dirty-group,
+marker-prune, and sweep-duration metrics.
+
+Group membership is the set of source documents that satisfy **both** the
+trigger's existing `filter` and
+`correlation_field == correlation_value`. Counting every same-tag row while
+projecting only filter-matching rows would allow a disjoint route to complete
+the wrong barrier.
+
+### The request row is the persisted resolution marker
+
+Before a group fires, `dispatch` queries whether an `AgentRequest` exists with the full key
+`(target agent_did, caused_by_trigger_id, caused_by_trigger_kind = "event",
+caused_by_correlation)` in **any** lifecycle state. Non-empty means the group
+has already materialized and must not fire again. Correlation values are
+required to be non-empty strings and are escaped with
+`graphql::escape_graphql_string()` at every query site.
+
+This marker query runs only for an intent with `group_vars: Some`; ordinary
+correlated `per_document` intents continue to materialize once per matching
+source document.
 
 This answers the issue's open durability question without storing group state:
-a node restart can neither double-fire a completed group nor lose a pending
-one, because the marker is the durable request row itself. Membership rebuilds
-from the ordinary seed scan.
+a node restart can neither double-materialize a group that already has a
+request nor lose an eligible group, because the marker is the durable request
+row and membership is rebuilt by the explicit group reconciler.
 
-Single-writer safety: the gate is `agent_did`-scoped (#605) and each
-`(did, behavior)` runs on exactly one deployment, so no second node races the
-same group. Within the process, the tag-keyed `TriggerLockKey` covers
-concurrent members.
+The marker check and request creation occur under the same tag-keyed process
+lock for **all** concurrency modes, including `parallel`; `serial`'s active-row
+check and `latest_only`'s supersession also run inside that lock. Lock-map
+entries use weak references or are pruned after use so unique run ids do not
+grow the map forever.
+
+This proves process-local at-most-once under the runtime's single-writer
+deployment invariant: each `(did, behavior)` is active on one deployment. The
+query/create pair is not a database transaction and therefore is not a
+multi-writer uniqueness mechanism. Supporting overlapping deployment handoff
+or active-active execution would require a unique durable group-claim key and
+is out of scope. Liveness also assumes fair rescans and eventually successful
+queries/materialization. State these assumptions in the Lean model rather than
+calling the request-existence query alone an unconditional exactly-once proof.
 
 ### Counting
 
-`_count` over the source collection filtered by the tag. If root-level
-`_count` with a filter does not hold up in practice, the fallback is the
-`limit`-capped `_docID` scan the event source already performs in
-`load_doc_ids_for_collection` — same cost class as the existing rescan.
+Use a bounded `_docID` + expected-field membership projection with the combined
+filter above. The same rows later hydrate `group.docs`, so correctness does not
+depend on DefraDB aggregate syntax. Introduce
+`MAX_EVENT_TRIGGER_GROUP_DOCS = 256`; reject literal counts above it and fail a
+dynamic group closed if its expected or actual count exceeds it. This bounds
+query memory and prompt construction independently of the 1 MiB rendered
+template cap.
 
-### Soundness condition on `expected_count_from`
+`expected_count` must be in `1..=MAX_EVENT_TRIGGER_GROUP_DOCS`.
+`expected_count_field` must be present on every member, be either a JSON
+integer or canonical decimal string, resolve to the same positive value on
+every member, and fall within the same bound. A missing, malformed, zero,
+negative, or inconsistent value is an operational error and emits no
+`FireIntent`.
 
-`expected_count_from` compares `count(source docs with tag)` against
-`count(upstream docs with tag)`. This is **only sound when the upstream set is
-complete before any downstream member can appear.**
-
-Counter-example, and the reason this is called out rather than assumed: if a
-recon stage writes `ReviewArea` docs one at a time, a scan of area 1 can finish
-before area 5 is created. Triage then observes `count(ScanResult) == 1 ==
-count(ReviewArea)` and fires on a partial group.
-
-Use `expected_count_from` only for batch producers whose whole output set lands
-before downstream work starts. For incremental producers use
-`expected_count_field` with `Fill::SourceField` propagation. `config validate`
-cannot detect the difference; the field documentation must carry the warning.
+The group is complete only when `actual_count == expected_count`. An
+`actual_count > expected_count` group fails closed as a producer-contract
+violation; it does not choose an arbitrary subset. Once a request marker
+exists, any later matching source document is likewise logged as a late-member
+contract violation and suppressed.
 
 ### Timeout
 
@@ -226,17 +366,41 @@ restart **restarts the timeout clock**: a partial fire is delayed, never
 duplicated (the idempotence query holds). That is the accepted cost of keeping
 zero persisted group state.
 
-`group_min_count` gates the timeout fire: below the floor the group expires
-silently. Expiry is also in-memory, so a restart re-arms and re-expires — no
-fire either way, so the outcome is unchanged.
+`group_min_count` gates the timeout fire and defaults to 1. Below the floor the
+runtime does not create a permanent "expired" tombstone; it keeps the group
+eligible and fires on the first later reconciliation at which the timeout has
+elapsed and the floor is met. This is the only restart-stable zero-state
+semantics. Permanent silent expiry would require a durable resolution marker
+and is not promised by this design.
+
+After a successful materialization (or discovery of an existing marker), evict
+the group's timeout entry. Query or materialization failures retain the entry
+for retry. Removing or disabling a trigger evicts its entries; re-enabling it
+reconstructs groups and restarts their clocks.
+
+Timeout working state is bounded by
+`MAX_ACTIVE_EVENT_TRIGGER_GROUPS_PER_TRIGGER = 4096`. When a timeout elapses
+below `group_min_count`, remove the group from the active timer set and retain
+only its key, last membership count, and elapsed status in a bounded LRU
+dormant cache capped by
+`MAX_DORMANT_EVENT_TRIGGER_GROUPS_PER_TRIGGER = 4096`. It is not queried on
+every tick. A newly discovered member reactivates and reconciles the group
+immediately; if its dormant entry was evicted (or the process restarted), its
+timeout clock restarts. When the active cap is full, new correlations remain
+discoverable by the rotating sweep and are admitted as slots become available;
+emit a rate-limited degraded-status signal instead of growing memory or
+dropping them permanently.
 
 ### Concurrency gate, with the tag
 
 - `serial` — one in-flight fire per `(trigger, run)`. Concurrent runs no longer
-  drop each other's fires.
+  drop each other's fires. Multiple `per_document` members inside the **same**
+  run retain today's drop-on-busy behavior; this feature does not turn serial
+  into a queue.
 - `latest_only` — supersedes only within the run. Concurrent runs no longer
   cancel each other's work.
-- `parallel` — unchanged.
+- `parallel` — requests still execute in parallel; only the per-key group
+  marker decision/materialization critical section is serialized.
 
 The existing expired-claim carve-out (`row_gates_serial_fire`,
 `production_materializer.rs:87`) is unaffected and composes: a past-deadline
@@ -248,18 +412,27 @@ orphan still does not gate, now scoped to its own run.
 build:
 
 - `fire_mode: per_group` without `correlation_field` → reject
-- more than one of `expected_count` / `expected_count_field` /
-  `expected_count_from` → reject
+- `per_group` without a count source and without `group_timeout_secs` → reject
+- both `expected_count` and `expected_count_field` → reject
 - any `expected_count*` under `per_document` → reject
 - `group_timeout_secs` / `group_min_count` under `per_document` → reject
 - `group_min_count` without `group_timeout_secs` → reject
+- zero-valued counts/timeouts, a literal expected count above
+  `MAX_EVENT_TRIGGER_GROUP_DOCS`, or a literal `group_min_count` above
+  `expected_count` → reject
 - `correlation_field` must pass a field-identifier check — it is interpolated
   into filter fragments, so it gets the same defense class as
   `validate_collection_identifier` (see the GraphQL sharp edge in `CLAUDE.md`)
 - a `WriteToolField` with any `fill` must not be `required` — the model cannot
   supply it
-- live validate: `expected_count_from` names a collection that exists on the
-  node, same class as the existing source-collection probe
+- a `Fill::SourceField` name must pass the GraphQL field-identifier validator
+- a schedule or `per_document` event trigger whose task template references
+  `group.*` → reject; only a `per_group` event trigger provides that scope
+- live validate: `correlation_field` exists on the source collection and is a
+  string field; `expected_count_field`, when configured, exists and is a
+  string or integer field
+- snapshot build repeats the safety checks and quarantines invalid triggers;
+  CLI validation is not a trusted runtime boundary
 
 ### Fail-closed, both directions
 
@@ -267,9 +440,14 @@ build:
   skip the fire; `last_status` / `last_error` name the field. Firing untagged
   would silently rejoin unrelated runs inside the gate, which is the bug being
   fixed.
+- **Tag empty or not a string**, or **expected count missing, malformed,
+  inconsistent, overfull, or over the cap** → emit no intent and record a
+  rate-limited operational error on the trigger.
 - **`fill: correlation` with no ambient tag** (e.g. someone manual-runs the
   behavior) → the write fails with an error naming the trigger, rather than
   quietly creating a document orphaned from every group.
+- **`fill: {source_field: ...}` with no immutable source snapshot** → the write
+  fails; it never queries a mutable source document at tool-call time.
 
 ### Self-config
 
@@ -280,19 +458,33 @@ stamps a tag of its choosing.
 
 ## Proofs
 
-Per the foundation flow, the theorem restatement **is** the specification of
-the fix and lands first.
+Per the foundation flow, the Lean definitions and theorem statements **are**
+the specification of the fix and land first.
 
-- `Proofs/Triggers/Serial.lean`, `Proofs/Triggers/LatestOnly.lean` — today's
-  mutual-exclusion theorems are stated over `(did, trigger, kind)`; they gain a
-  correlation dimension. Restatement, not new obligation.
-- `Proofs/Triggers/Lineage.lean` — the tag joins the stamped lineage.
-- **New obligation: exactly-once per group.** The whole idempotence argument
-  rests on "the request-existence query is a sound fired-marker," and that is
-  worth discharging before the Rust exists.
-- `Proofs/EventDelivery` — `EventSource`'s `EventDeliverySourceContract`
-  (`dedupe_policy: "monotone_once"`, `event_source.rs:737`) becomes
-  monotone-once **per group**; the contract constant must say so.
+- `Proofs/Triggers/Types.lean`, `Serial.lean`, `LatestOnly.lean` — the current
+  Lean `TriggerKey` is only `(trigger_id, kind)` (the Rust query already adds
+  DID scope). Expand the model key to
+  `(target_did, trigger_id, kind, correlation)` and regenerate the trigger
+  conformance vocabulary. This is a model correction plus a correlation
+  dimension, not merely a theorem restatement.
+- `Proofs/Triggers/Lineage.lean` and `Proofs/DurableLineage.lean` — the tag
+  joins stamped lineage and parent-derived requests preserve correlation while
+  retaining their own immediate trigger cause.
+- New `Proofs/TriggerGroups` model and conformance traces:
+  - membership uses `(filter AND correlation)`, not correlation alone;
+  - different correlation keys do not interfere;
+  - marker existence implies no second materialization under the
+    single-writer/locked transition relation;
+  - an eligible durable group with no marker converges to one marker under a
+    fair rescan/materialization assumption;
+  - restart discards clocks and volatile seen state but preserves source rows
+    and request markers, so completed groups remain suppressed and eligible
+    unmarked groups remain discoverable;
+  - overfull/inconsistent groups fail closed.
+- Keep `EventSource`'s existing `EventDeliverySourceContract`
+  `dedupe_policy: "monotone_once"`: it still describes per-document delivery.
+  Group reconciliation is a separate durable projection and should not be
+  hidden by changing the meaning of that existing contract string.
 
 ## Testing
 
@@ -301,14 +493,44 @@ Conformance tests driven from the spec change, plus e2e beside
 
 - Two runs interleaved through one `serial` trigger: no skip and no
   supersession attributable to a different correlation value.
-- `correlation_field` + a count source: fires exactly once per group, after the
-  last member create, with the full group in scope.
+- `correlation_field` + a count source: materializes exactly one request per
+  valid closed group, after the last member create, with the deterministically
+  ordered full group in scope.
+- The same correlation on two different triggers does not merge membership;
+  trigger filters exclude non-members from both count and `group.docs`.
+- Two correlated `per_document` members still materialize two requests; group
+  marker dedupe is never inferred from correlation alone.
+- The same trigger/correlation under a different target DID neither gates nor
+  satisfies the marker lookup.
 - A group that never completes: one fire at `group_timeout_secs` with
-  `group.complete == false`, or expiry without firing below `group_min_count`.
-- Restart mid-group: neither double-fires a group that already fired nor loses
-  one that had not.
-- Triggers without the new fields: byte-identical behavior to today.
+  `group.complete == false` once `group_min_count` is met; no fire while below
+  the floor.
+- A pure-timeout group with no count source never fires early.
+- Thousands of abandoned below-floor groups leave the active timer set after
+  timeout; steady-state ticks do not query each dormant group, memory remains
+  within the configured constants, and a new member reactivates its group.
+- Startup recovery and dropped-event repair are paginated and eventually visit
+  every group; a normal tick does not perform one full collection scan per
+  `per_group` trigger.
+- Restart mid-group: neither double-materializes a group with a request marker
+  nor loses a durable eligible group; the incomplete group's timeout clock
+  restarts.
+- Crash before request creation is retried; crash after request creation is
+  suppressed by the marker.
+- Inconsistent expected fields, overfull groups, missing/empty tags, and group
+  sizes over the cap fail closed.
+- Triggers without the new fields retain today's dispatch semantics.
+- Foreground and background write-tool calls both preserve correlation and
+  source-field fills across the durable request boundary.
+- Subagent/internal child requests inherit immutable correlation/context from
+  their parent, while runtime-created manual roots leave both fields empty.
+- Template validation rejects `group.*` outside a `per_group` event trigger,
+  and every existing `TemplateScope` construction explicitly supplies
+  `group: None`.
 - `config validate` rejects each invalid combination above.
+- A fresh store registers the new canonical `AgentRequest`/`EventTrigger`
+  baseline and pins; a pre-cut store fails with the documented reinitialize
+  instruction. There is no migration/backfill test matrix.
 
 Gate with the full `cargo test -p gents` suite and
 `cargo check --workspace --all-targets`, per `CLAUDE.md`.
@@ -325,11 +547,14 @@ ScanResult        ──►  triage  ──► TriageReport        per_group
 ```
 
 - **recon** partitions the repo into review areas and stamps `expected_total`
-  on each `ReviewArea`.
+  on each `ReviewArea`. Before its first write it must decide the final list and
+  use that one cardinality on every row; this is the producer side of the
+  closed-group contract.
 - **scan** fires once per area, reads code in that area, writes zero or more
-  `Finding` docs and exactly one `ScanResult` sentinel. Its write tools carry
-  `fill: correlation` and `fill: {source_field: "expected_total"}`, so neither
-  value is the model's responsibility.
+  `Finding` docs and exactly one `ScanResult` sentinel. Both write tools stamp
+  `run_id` with `fill: correlation`; the result tool also stamps
+  `expected_total` with `fill: {source_field: "expected_total"}`, so neither
+  barrier input is the scan model's responsibility.
 - **triage** is `per_group` on `ScanResult` with `expected_count_field:
   "expected_total"`, `concurrency: serial`, `correlation_field: "run_id"`. It
   fires once with the whole group and reads the run's findings via
@@ -347,7 +572,12 @@ are not datastore-only agents. `triage` gets `defra_query` scoped to the pack's
 collections and no file tools.
 
 Because the pack runs against this repo, it is tunable in place: real findings
-on real code are the signal that the graph works, not a synthetic fixture.
+on real code are a useful operator signal, not a deterministic test oracle.
+Automated acceptance checks graph structure and durable outputs: N tagged
+`ReviewArea` rows with one consistent expected count, N tagged `ScanResult`
+rows, exactly one correlated triage `AgentRequest`, and one `TriageReport`.
+Finding quality remains a smoke/evaluation criterion because model output is
+not deterministic.
 
 Related, not blocking: `sourcenetwork/defending-code-reference-harness` runs
 the same shape (recon → find → grade → judge), and its judge stage is
@@ -369,32 +599,49 @@ its natural habitat. Adopting this pack shape there is follow-up work.
   making them cheap to bound is deliberately out of scope here.
 - **A `TriggerRun` collection.** Everything it would hold is derivable from
   tagged `AgentRequest` rows.
-- **Persisted group state.** See the timeout tradeoff above — accepted
-  knowingly.
+- **Persisted timeout or permanent-expiry state.** See the timeout/min-count
+  semantics above. Source membership and successful resolution are durable;
+  clocks are not.
+- **Migration of pre-feature stores.** This is an accepted breaking schema cut;
+  existing homes must be reinitialized. No patch step, lens, or data backfill
+  ships with the feature.
 - **`{{ args.* }}` in event-trigger scope.** Unchanged from the predecessor
   design.
 
 ## Slicing
 
-| PR | Contents |
-| --- | --- |
-| **A** | Lean restatement (`Serial`, `LatestOnly`, `Lineage`) + tag spine hops 1–5 + `caused_by_correlation`. Fixes the gate bug alone, with no new fire semantics — independently landable and worth landing first. |
-| **B** | Hops 6–8: `ToolRuntimeScope.correlation`, `fill` on `WriteToolField`, `build_mutation` stamping. Closes the loop so tags survive agent hops. |
-| **C** | `per_group`: the three count sources, timeout / min-count, `{{ group.* }}`, the exactly-once proof, the `EventDelivery` contract update, `config validate` rules. |
-| **D** | `demo/code-review` pack + operator README. |
+Because this is a breaking fresh-store cut, the schema/runtime work lands as
+one PR. Splitting its columns across independently released PRs would require
+multiple resets and would ship stored-but-unused fields. Within that PR, keep
+the foundation order as reviewable commits:
 
-No intermediate that ships a stored-but-unused field: a column that does
-nothing invites drift and silent no-op configs.
+| PR / commit | Contents |
+| --- | --- |
+| **Runtime PR, commit 1** | Expand the Lean trigger key; add `Proofs/TriggerGroups`, durable-lineage obligations, and generated conformance cases. |
+| **Runtime PR, commit 2** | Update all canonical `AgentRequest` / `EventTrigger` SDL fields together and refresh frozen baseline pins. Add no migration step, lens, or backfill. |
+| **Runtime PR, commit 3** | Implement correlation through materialization, run-scoped gate/marker queries, bounded locks, timeline/protocol/CLI projections, immutable trigger context, parent-derived inheritance, runtime scopes, and write-tool fills. |
+| **Runtime PR, commit 4** | Implement `per_group`: combined-filter membership, startup/rotating recovery cursors, dirty-group fast path, batched marker pruning, bounded active/dormant tracking, count and timeout-only modes, deterministic scope, validation, metrics, restart/retry behavior, and e2e tests. Keep the existing EventDelivery contract per-document. |
+| **Demo PR** | `demo/code-review` pack + deterministic graph acceptance checks + operator README. |
+
+The runtime PR is mergeable only as a complete unit: no released intermediate
+contains a stored-but-unused field or a schema/runtime mismatch.
 
 ## Success criteria
 
 - Two runs interleaved through the same graph never interfere.
-- A `per_group` trigger fires exactly once per group with the full group in
-  scope, and no agent computes a count.
+- A valid closed `per_group` input materializes at most one request with the
+  full, deterministically ordered group in scope; under fair successful
+  rescans it materializes one, and no agent computes a count.
 - A group that never completes fires once at timeout with
-  `group.complete == false`, or expires below `group_min_count`.
-- A restart mid-group neither double-fires nor loses a group.
-- Triggers without the new fields behave exactly as today.
+  `group.complete == false` after meeting `group_min_count`, and does not fire
+  while below the floor.
+- Abandoned below-floor groups do not cause unbounded active timers or
+  per-tick queries; later membership can reactivate them.
+- A restart mid-group neither duplicates a materialized group nor loses a
+  durable eligible group; it may delay a timeout by one full timeout window.
+- On a fresh post-cut store, triggers without the new fields behave exactly as
+  today.
 - `config validate` rejects every invalid field combination listed above.
-- `demo/code-review` finds real issues in this repository, with a barrier stage
-  that is a plain agent containing no counting logic.
+- `demo/code-review` proves N correlated area/result rows and one correlated
+  triage request/report, with a barrier stage that is a plain agent containing
+  no counting logic. Real finding quality is evaluated separately.

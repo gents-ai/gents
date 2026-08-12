@@ -1,0 +1,15 @@
+{
+  "trigger_id": "review-triage",
+  "task_id": "review-triage-task",
+  "source_collection": "ScanResult",
+  "event_kind": "created",
+  "filter": null,
+  "correlation_field": "run_id",
+  "fire_mode": "per_group",
+  "expected_count": null,
+  "expected_count_field": "expected_total",
+  "group_timeout_secs": 300,
+  "group_min_count": 1,
+  "enabled": true,
+  "concurrency": "serial"
+}

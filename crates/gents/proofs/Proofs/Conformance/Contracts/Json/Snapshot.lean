@@ -15,6 +15,7 @@ import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
+import Proofs.Conformance.Triggers.Groups
 import Proofs.Conformance.ClientShell.Contracts
 import Proofs.ApplyReconcile.ContractCases
 import Proofs.Conformance.Deviations
@@ -41,6 +42,10 @@ def snapshotJson : String :=
       ++ toString Conformance.TriggerContracts.triggerDispatchCaseCount ++ ","
     ++ "\"trigger_dispatch_cases\":"
       ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
+    ++ "\"trigger_group_case_count\":"
+      ++ toString Conformance.TriggerGroupContracts.triggerGroupCaseCount ++ ","
+    ++ "\"trigger_group_cases\":"
+      ++ Conformance.TriggerGroupContracts.triggerGroupCasesJson ++ ","
     ++ "\"goal_decision_cases\":"
       ++ goalDecisionCasesJson ++ ","
     ++ "\"goal_transition_cases\":"

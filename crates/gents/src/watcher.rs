@@ -42,6 +42,8 @@ pub struct AgentRequest {
     pub caused_by_parent_request_doc_id: Option<String>,
     pub caused_by_parent_tool_call_id: Option<String>,
     pub caused_by_parent_tool_call_doc_id: Option<String>,
+    pub caused_by_correlation: Option<String>,
+    pub caused_by_trigger_context: Option<String>,
 }
 
 pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<()> {

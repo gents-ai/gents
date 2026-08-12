@@ -20,7 +20,7 @@ pub mod subscription_source;
 #[cfg(test)]
 mod tests;
 
-type TriggerLockKey = (String, String, TriggerKind);
+type TriggerLockKey = (String, String, TriggerKind, Option<String>);
 type TriggerLock = Arc<Mutex<()>>;
 type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
 
@@ -50,6 +50,9 @@ pub struct FireIntent {
     pub concurrency: crate::runtime_snapshot::ConcurrencyMode,
     pub event_vars: serde_json::Value,
     pub doc_vars: Option<serde_json::Value>,
+    pub correlation: Option<String>,
+    pub group_vars: Option<serde_json::Value>,
+    pub trigger_context: Option<String>,
     pub args_vars: Option<serde_json::Value>,
     pub pre_materialized_request_id: Option<String>,
     pub on_result: Box<dyn FnOnce(FireResult) + Send>,
@@ -94,6 +97,8 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
         source_doc_id: Option<&str>,
+        correlation: Option<&str>,
+        trigger_context: Option<&str>,
         rendered_prompt: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 
@@ -109,6 +114,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
+        correlation: Option<&str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
     fn supersede_active_runtime_requests_for_trigger(
@@ -116,7 +122,16 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
+        correlation: Option<&str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>;
+
+    fn has_materialized_group_request(
+        &self,
+        agent_did: &str,
+        trigger_id: &str,
+        trigger_kind: TriggerKind,
+        correlation: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 }
 
 /// Scaffolding for the trigger engine.
@@ -244,6 +259,7 @@ impl TriggerEngine {
             event: intent.event_vars.clone(),
             doc: intent.doc_vars.clone(),
             args: intent.args_vars.clone(),
+            group: intent.group_vars.clone(),
             node: node_scope,
             ctx: ctx_scope,
         };
@@ -272,96 +288,155 @@ impl TriggerEngine {
                         })
                 })
         };
-        use crate::runtime_snapshot::ConcurrencyMode;
-        match intent.concurrency {
-            ConcurrencyMode::Parallel => {}
-            ConcurrencyMode::Serial => {
-                if let Some(trigger_id) = intent.trigger_id.as_deref() {
-                    let agent_did = match concurrency_agent_did() {
-                        Ok(did) => did,
-                        Err(reason) => {
-                            let result = FireResult::Errored {
-                                error: format!("concurrency gate: {reason}"),
-                            };
-                            (intent.on_result)(result.clone());
-                            return result;
-                        }
-                    };
-                    match self
-                        .materializer
-                        .has_active_runtime_request_for_trigger(
-                            &agent_did,
-                            trigger_id,
-                            intent.trigger_kind,
-                        )
-                        .await
-                    {
-                        Ok(true) => {
-                            let result = FireResult::Skipped {
-                                reason: "serial: prior fire still in-flight".to_string(),
-                            };
-                            (intent.on_result)(result.clone());
-                            return result;
-                        }
-                        Ok(false) => {}
-                        Err(e) => {
-                            let result = FireResult::Errored {
-                                error: format!("in-flight query: {e}"),
-                            };
-                            (intent.on_result)(result.clone());
-                            return result;
-                        }
-                    }
-                }
+        let Some(trigger_id) = intent.trigger_id.clone() else {
+            return self.materialize_after_lock(intent, rendered).await;
+        };
+        if intent.concurrency == crate::runtime_snapshot::ConcurrencyMode::Parallel
+            && intent.group_vars.is_none()
+        {
+            return self.materialize_after_lock(intent, rendered).await;
+        }
+        let agent_did = match concurrency_agent_did() {
+            Ok(did) => did,
+            Err(reason) => {
+                let result = FireResult::Errored {
+                    error: format!("concurrency gate: {reason}"),
+                };
+                (intent.on_result)(result.clone());
+                return result;
             }
-            ConcurrencyMode::LatestOnly => {
-                if let Some(trigger_id) = intent.trigger_id.as_deref() {
-                    let agent_did = match concurrency_agent_did() {
-                        Ok(did) => did,
-                        Err(reason) => {
-                            let result = FireResult::Errored {
-                                error: format!("concurrency gate: {reason}"),
-                            };
-                            (intent.on_result)(result.clone());
-                            return result;
-                        }
+        };
+        let lock_key = (
+            agent_did.clone(),
+            trigger_id.clone(),
+            intent.trigger_kind,
+            intent.correlation.clone(),
+        );
+        let lock = {
+            let mut map = self.per_trigger_locks.lock().await;
+            map.entry(lock_key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let guard = lock.lock().await;
+
+        if intent.group_vars.is_some() {
+            let Some(correlation) = intent
+                .correlation
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                let result = FireResult::Errored {
+                    error: "per_group intent requires a non-empty correlation".to_string(),
+                };
+                drop(guard);
+                self.prune_trigger_lock(&lock_key, &lock).await;
+                (intent.on_result)(result.clone());
+                return result;
+            };
+            match self
+                .materializer
+                .has_materialized_group_request(
+                    &agent_did,
+                    &trigger_id,
+                    intent.trigger_kind,
+                    correlation,
+                )
+                .await
+            {
+                Ok(true) => {
+                    let result = FireResult::Skipped {
+                        reason: "per_group: request already materialized".to_string(),
                     };
-                    let lock_key = (
-                        agent_did.clone(),
-                        trigger_id.to_owned(),
-                        intent.trigger_kind,
-                    );
-                    let lock = {
-                        let mut map = self.per_trigger_locks.lock().await;
-                        map.entry(lock_key)
-                            .or_insert_with(|| Arc::new(Mutex::new(())))
-                            .clone()
+                    drop(guard);
+                    self.prune_trigger_lock(&lock_key, &lock).await;
+                    (intent.on_result)(result.clone());
+                    return result;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    let result = FireResult::Errored {
+                        error: format!("group marker query: {error}"),
                     };
-                    let _guard = lock.lock().await;
-                    match self
-                        .materializer
-                        .supersede_active_runtime_requests_for_trigger(
-                            &agent_did,
-                            trigger_id,
-                            intent.trigger_kind,
-                        )
-                        .await
-                    {
-                        Ok(_count) => {}
-                        Err(e) => {
-                            let result = FireResult::Errored {
-                                error: format!("supersede: {e}"),
-                            };
-                            (intent.on_result)(result.clone());
-                            return result;
-                        }
-                    }
-                    return self.materialize_after_lock(intent, rendered).await;
+                    drop(guard);
+                    self.prune_trigger_lock(&lock_key, &lock).await;
+                    (intent.on_result)(result.clone());
+                    return result;
                 }
             }
         }
 
-        self.materialize_after_lock(intent, rendered).await
+        use crate::runtime_snapshot::ConcurrencyMode;
+        match intent.concurrency {
+            ConcurrencyMode::Parallel => {}
+            ConcurrencyMode::Serial => match self
+                .materializer
+                .has_active_runtime_request_for_trigger(
+                    &agent_did,
+                    &trigger_id,
+                    intent.trigger_kind,
+                    intent.correlation.as_deref(),
+                )
+                .await
+            {
+                Ok(true) => {
+                    let result = FireResult::Skipped {
+                        reason: "serial: prior fire still in-flight".to_string(),
+                    };
+                    drop(guard);
+                    self.prune_trigger_lock(&lock_key, &lock).await;
+                    (intent.on_result)(result.clone());
+                    return result;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    let result = FireResult::Errored {
+                        error: format!("in-flight query: {error}"),
+                    };
+                    drop(guard);
+                    self.prune_trigger_lock(&lock_key, &lock).await;
+                    (intent.on_result)(result.clone());
+                    return result;
+                }
+            },
+            ConcurrencyMode::LatestOnly => {
+                if let Err(error) = self
+                    .materializer
+                    .supersede_active_runtime_requests_for_trigger(
+                        &agent_did,
+                        &trigger_id,
+                        intent.trigger_kind,
+                        intent.correlation.as_deref(),
+                    )
+                    .await
+                {
+                    let result = FireResult::Errored {
+                        error: format!("supersede: {error}"),
+                    };
+                    drop(guard);
+                    self.prune_trigger_lock(&lock_key, &lock).await;
+                    (intent.on_result)(result.clone());
+                    return result;
+                }
+            }
+        }
+
+        let result = self.materialize_after_lock(intent, rendered).await;
+        drop(guard);
+        self.prune_trigger_lock(&lock_key, &lock).await;
+        result
+    }
+
+    async fn prune_trigger_lock(&self, lock_key: &TriggerLockKey, lock: &TriggerLock) {
+        let mut map = self.per_trigger_locks.lock().await;
+        if Arc::strong_count(&lock) == 2
+            && map
+                .get(lock_key)
+                .is_some_and(|stored| Arc::ptr_eq(stored, lock))
+        {
+            map.remove(lock_key);
+        }
     }
 
     async fn materialize_after_lock(&self, intent: FireIntent, rendered: String) -> FireResult {
@@ -383,6 +458,8 @@ impl TriggerEngine {
                 intent.trigger_id.as_deref(),
                 intent.trigger_kind,
                 source_doc_id.as_deref(),
+                intent.correlation.as_deref(),
+                intent.trigger_context.as_deref(),
                 &rendered,
             )
             .await
@@ -417,6 +494,8 @@ pub async fn run_subagent_source_for_test(
             _trigger_id: Option<&str>,
             _trigger_kind: TriggerKind,
             _source_doc_id: Option<&str>,
+            _correlation: Option<&str>,
+            _trigger_context: Option<&str>,
             _rendered_prompt: &str,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>
         {
@@ -432,6 +511,7 @@ pub async fn run_subagent_source_for_test(
             _agent_did: &str,
             _trigger_id: &str,
             _trigger_kind: TriggerKind,
+            _correlation: Option<&str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
         {
             Box::pin(async { Ok(false) })
@@ -442,9 +522,21 @@ pub async fn run_subagent_source_for_test(
             _agent_did: &str,
             _trigger_id: &str,
             _trigger_kind: TriggerKind,
+            _correlation: Option<&str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>
         {
             Box::pin(async { Ok(0) })
+        }
+
+        fn has_materialized_group_request(
+            &self,
+            _agent_did: &str,
+            _trigger_id: &str,
+            _trigger_kind: TriggerKind,
+            _correlation: &str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
+        {
+            Box::pin(async { Ok(false) })
         }
     }
 

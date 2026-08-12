@@ -1,0 +1,5 @@
+type TriageReport {
+  run_id: String @index @immutable
+  high_priority_count: String
+  summary: String
+}

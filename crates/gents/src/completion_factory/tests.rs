@@ -31,6 +31,8 @@ fn request() -> AgentRequest {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     }
 }
 
@@ -296,6 +298,8 @@ fn request_sampling_overrides_behavior_defaults() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
 
     let sampling = sampling_for_request(defaults, &request);

@@ -16,6 +16,12 @@ fn resolved_event_trigger(
         filter: None,
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerDocument,
+        correlation_field: None,
+        expected_count: None,
+        expected_count_field: None,
+        group_timeout_secs: None,
+        group_min_count: 1,
     }
 }
 
@@ -37,6 +43,12 @@ fn resolved_event_trigger_with_filter(
         filter: Some(filter.to_string()),
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerDocument,
+        correlation_field: None,
+        expected_count: None,
+        expected_count_field: None,
+        group_timeout_secs: None,
+        group_min_count: 1,
     }
 }
 
@@ -243,6 +255,75 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         "fired_at should be a string, got {:?}",
         ev["fired_at"]
     );
+}
+
+#[tokio::test]
+async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_scope() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type GroupMember {
+            run_id: String
+            expected_total: Int
+            kind: String
+            value: String
+        }"#,
+    )
+    .await
+    .expect("group source schema");
+
+    for (run_id, expected, kind, value) in [
+        ("run-a", 2, "include", "second"),
+        ("run-a", 2, "exclude", "must-not-count"),
+        ("run-b", 2, "include", "partial"),
+        ("run-a", 2, "include", "first"),
+    ] {
+        let mutation = format!(
+            r#"mutation {{ create_GroupMember(input: {{
+                run_id: "{run_id}", expected_total: {expected}, kind: "{kind}", value: "{value}"
+            }}) {{ _docID }} }}"#
+        );
+        let response = node.execute(&mutation).await;
+        assert!(!response.has_errors(), "{:#?}", response.errors);
+    }
+
+    let task = ResolvedTask {
+        task_id: "group-task".into(),
+        name: None,
+        behavior_id: "general".into(),
+        prompt_template: "{{ group.correlation_value }} {{ group.count }}".into(),
+        output_schema_ref: None,
+    };
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count_field: Some("expected_total".into()),
+        filter: Some(r#"{ kind: { _eq: "include" } }"#.into()),
+        ..resolved_event_trigger("group-trigger", "GroupMember", task)
+    };
+    let snapshot =
+        snapshot_with_event_triggers(1, HashMap::from([("group-trigger".to_string(), trigger)]));
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node, CancellationToken::new());
+
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("startup recovery timeout")
+        .expect("complete group must be recovered");
+    assert_eq!(intent.correlation.as_deref(), Some("run-a"));
+    assert_eq!(intent.event_vars["correlation"], "run-a");
+    let group = intent.group_vars.expect("group scope");
+    assert_eq!(group["count"], 2);
+    assert_eq!(group["complete"], true);
+    let docs = group["docs"].as_array().expect("group docs");
+    assert_eq!(docs.len(), 2);
+    assert!(docs.iter().all(|doc| doc["kind"] == "include"));
+    let doc_ids = docs
+        .iter()
+        .map(|doc| doc["_docID"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(doc_ids.windows(2).all(|pair| pair[0] < pair[1]));
 }
 
 /// Task 21, Step 1: the filter-probe path must gate the fire on the

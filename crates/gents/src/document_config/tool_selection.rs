@@ -25,10 +25,62 @@ use crate::toolset::{
 /// [`crate::defra_write::BoundedWriteTool`], and `config validate` all agree on
 /// the same canonical identifier (the field name is interpolated verbatim as a
 /// GraphQL input key, so stray whitespace would otherwise corrupt the mutation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteToolFieldFill {
+    Correlation,
+    SourceField(String),
+}
+
+impl serde::Serialize for WriteToolFieldFill {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Correlation => serializer.serialize_str("correlation"),
+            Self::SourceField(field) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("source_field", field)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WriteToolFieldFill {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(value) if value == "correlation" => Ok(Self::Correlation),
+            serde_json::Value::Object(map) if map.len() == 1 => {
+                let field = map
+                    .get("source_field")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        serde::de::Error::custom(
+                            "fill object must contain exactly one string source_field",
+                        )
+                    })?;
+                crate::graphql::validate_graphql_name(field).map_err(serde::de::Error::custom)?;
+                Ok(Self::SourceField(field.to_string()))
+            }
+            _ => Err(serde::de::Error::custom(
+                "fill must be \"correlation\" or {\"source_field\":\"field\"}",
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct WriteToolField {
     pub name: String,
     pub required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<WriteToolFieldFill>,
 }
 
 impl<'de> serde::Deserialize<'de> for WriteToolField {
@@ -41,11 +93,14 @@ impl<'de> serde::Deserialize<'de> for WriteToolField {
             name: String,
             #[serde(default)]
             required: bool,
+            #[serde(default)]
+            fill: Option<WriteToolFieldFill>,
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(WriteToolField {
             name: raw.name.trim().to_string(),
             required: raw.required,
+            fill: raw.fill,
         })
     }
 }
@@ -552,6 +607,22 @@ impl ToolSelectionDocument {
                             decl.tool_name,
                             field.name.trim()
                         ));
+                    }
+                    if field.fill.is_some() && field.required {
+                        return Err(anyhow::anyhow!(
+                            "write_tools[{i}] (tool {:?}) field[{j}] {:?} is runtime-filled and cannot be required",
+                            decl.tool_name,
+                            field.name,
+                        ));
+                    }
+                    if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
+                        crate::graphql::validate_graphql_name(source_field).map_err(|error| {
+                            anyhow::anyhow!(
+                                "write_tools[{i}] (tool {:?}) field[{j}] has invalid source_field {:?}: {error}",
+                                decl.tool_name,
+                                source_field,
+                            )
+                        })?;
                     }
                 }
                 if !seen_tool_names.insert(decl.tool_name.trim()) {

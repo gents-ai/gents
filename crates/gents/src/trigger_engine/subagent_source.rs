@@ -924,6 +924,9 @@ impl SubagentSource {
             concurrency: ConcurrencyMode::Parallel,
             event_vars,
             doc_vars: None,
+            correlation: None,
+            group_vars: None,
+            trigger_context: None,
             args_vars: None,
             pre_materialized_request_id: Some(request_id),
             on_result: Box::new(move |result| match result {
