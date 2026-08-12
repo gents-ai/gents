@@ -21,6 +21,18 @@ export function conflictMarker(labels) {
   return `${MARKER_OPEN}${JSON.stringify([...labels].sort())} -->`;
 }
 
+// Tells a caller whether reconcile() could possibly return a non-null comment
+// for this issue, so it knows whether fetching comment context is worthwhile.
+// Mirrors reconcile()'s clean-condition exactly; kept here so run.mjs never
+// re-derives the rule and risks drifting from it.
+export function requiresCommentContext({ number, labels }) {
+  if (EXEMPT_ISSUES.has(number)) return false;
+  const roadmap = labels.filter((l) => l.startsWith(ROADMAP_PREFIX));
+  if (roadmap.length === 0) return false;
+  if (roadmap.length === 1 && HORIZONS.has(roadmap[0])) return false;
+  return true;
+}
+
 export function reconcile({ number, labels, comments = [] }) {
   const noop = { add: [], remove: [], comment: null };
   if (EXEMPT_ISSUES.has(number)) return noop;

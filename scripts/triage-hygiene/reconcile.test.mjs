@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reconcile, conflictMarker, NEEDS_TRIAGE } from "./reconcile.mjs";
+import { reconcile, conflictMarker, requiresCommentContext, NEEDS_TRIAGE } from "./reconcile.mjs";
 
 const base = { number: 1, labels: [], comments: [] };
 
@@ -99,4 +99,40 @@ test("issue 839 is exempt by number even with no horizon", () => {
 test("a future meta issue is not exempt", () => {
   const r = reconcile({ ...base, number: 2000, labels: ["meta"] });
   assert.deepEqual(r, { add: [NEEDS_TRIAGE], remove: [], comment: null });
+});
+
+test("requiresCommentContext: exactly one valid horizon does not require comments", () => {
+  assert.equal(requiresCommentContext({ number: 1, labels: ["roadmap: next", "bug"] }), false);
+});
+
+test("requiresCommentContext: no roadmap labels at all does not require comments", () => {
+  assert.equal(requiresCommentContext({ number: 1, labels: ["bug"] }), false);
+});
+
+test("requiresCommentContext: exactly one invalid roadmap label requires comments", () => {
+  assert.equal(requiresCommentContext({ number: 1, labels: ["roadmap: soon", "bug"] }), true);
+});
+
+test("requiresCommentContext: two valid horizons requires comments", () => {
+  assert.equal(
+    requiresCommentContext({ number: 1, labels: ["roadmap: now", "roadmap: later"] }),
+    true,
+  );
+});
+
+test("requiresCommentContext: exempt issue 839 with two horizons does not require comments", () => {
+  assert.equal(
+    requiresCommentContext({ number: 839, labels: ["roadmap: now", "roadmap: later"] }),
+    false,
+  );
+});
+
+test("regression: single invalid roadmap label dedupes against a prior conflict comment", () => {
+  const marker = conflictMarker(["roadmap: soon"]);
+  const r = reconcile({
+    ...base,
+    labels: ["roadmap: soon", NEEDS_TRIAGE],
+    comments: [`stale text ${marker} more text`],
+  });
+  assert.equal(r.comment, null);
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { reconcile, NEEDS_TRIAGE } from "./reconcile.mjs";
+import { reconcile, requiresCommentContext, NEEDS_TRIAGE } from "./reconcile.mjs";
 
 const REPO = process.env.GITHUB_REPOSITORY ?? "source-inc/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
@@ -39,12 +39,10 @@ const listOpenIssues = async () => {
 
 const applyTo = async (issue) => {
   const labels = issue.labels.map((l) => (typeof l === "string" ? l : l.name));
-  const horizons = labels.filter((l) => l.startsWith("roadmap:"));
   // Comments are only needed to dedupe conflict notices, so fetch them lazily.
-  const comments =
-    horizons.length >= 2
-      ? (await api(`/repos/${REPO}/issues/${issue.number}/comments?per_page=100`)).map((c) => c.body ?? "")
-      : [];
+  const comments = requiresCommentContext({ number: issue.number, labels })
+    ? (await api(`/repos/${REPO}/issues/${issue.number}/comments?per_page=100`)).map((c) => c.body ?? "")
+    : [];
 
   const plan = reconcile({ number: issue.number, labels, comments });
   if (!plan.add.length && !plan.remove.length && !plan.comment) return false;

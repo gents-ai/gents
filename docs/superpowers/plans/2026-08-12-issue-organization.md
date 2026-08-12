@@ -584,7 +584,7 @@ Pure logic, no I/O, so the rules are testable without touching the API. This is 
 ```javascript
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reconcile, conflictMarker, NEEDS_TRIAGE } from "./reconcile.mjs";
+import { reconcile, conflictMarker, requiresCommentContext, NEEDS_TRIAGE } from "./reconcile.mjs";
 
 const base = { number: 1, labels: [], comments: [] };
 
@@ -684,6 +684,42 @@ test("a future meta issue is not exempt", () => {
   const r = reconcile({ ...base, number: 2000, labels: ["meta"] });
   assert.deepEqual(r, { add: [NEEDS_TRIAGE], remove: [], comment: null });
 });
+
+test("requiresCommentContext: exactly one valid horizon does not require comments", () => {
+  assert.equal(requiresCommentContext({ number: 1, labels: ["roadmap: next", "bug"] }), false);
+});
+
+test("requiresCommentContext: no roadmap labels at all does not require comments", () => {
+  assert.equal(requiresCommentContext({ number: 1, labels: ["bug"] }), false);
+});
+
+test("requiresCommentContext: exactly one invalid roadmap label requires comments", () => {
+  assert.equal(requiresCommentContext({ number: 1, labels: ["roadmap: soon", "bug"] }), true);
+});
+
+test("requiresCommentContext: two valid horizons requires comments", () => {
+  assert.equal(
+    requiresCommentContext({ number: 1, labels: ["roadmap: now", "roadmap: later"] }),
+    true,
+  );
+});
+
+test("requiresCommentContext: exempt issue 839 with two horizons does not require comments", () => {
+  assert.equal(
+    requiresCommentContext({ number: 839, labels: ["roadmap: now", "roadmap: later"] }),
+    false,
+  );
+});
+
+test("regression: single invalid roadmap label dedupes against a prior conflict comment", () => {
+  const marker = conflictMarker(["roadmap: soon"]);
+  const r = reconcile({
+    ...base,
+    labels: ["roadmap: soon", NEEDS_TRIAGE],
+    comments: [`stale text ${marker} more text`],
+  });
+  assert.equal(r.comment, null);
+});
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -718,6 +754,18 @@ const MARKER_OPEN = "<!-- triage-hygiene:conflict:";
 // contain any character including separator characters, so encoding must be injective.
 export function conflictMarker(labels) {
   return `${MARKER_OPEN}${JSON.stringify([...labels].sort())} -->`;
+}
+
+// Tells a caller whether reconcile() could possibly return a non-null comment
+// for this issue, so it knows whether fetching comment context is worthwhile.
+// Mirrors reconcile()'s clean-condition exactly; kept here so run.mjs never
+// re-derives the rule and risks drifting from it.
+export function requiresCommentContext({ number, labels }) {
+  if (EXEMPT_ISSUES.has(number)) return false;
+  const roadmap = labels.filter((l) => l.startsWith(ROADMAP_PREFIX));
+  if (roadmap.length === 0) return false;
+  if (roadmap.length === 1 && HORIZONS.has(roadmap[0])) return false;
+  return true;
 }
 
 export function reconcile({ number, labels, comments = [] }) {
@@ -793,7 +841,7 @@ git commit -m "feat(triage): add pure roadmap-label reconcile logic with tests"
 
 ```javascript
 #!/usr/bin/env node
-import { reconcile, NEEDS_TRIAGE } from "./reconcile.mjs";
+import { reconcile, requiresCommentContext, NEEDS_TRIAGE } from "./reconcile.mjs";
 
 const REPO = process.env.GITHUB_REPOSITORY ?? "source-inc/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
@@ -833,12 +881,10 @@ const listOpenIssues = async () => {
 
 const applyTo = async (issue) => {
   const labels = issue.labels.map((l) => (typeof l === "string" ? l : l.name));
-  const horizons = labels.filter((l) => l.startsWith("roadmap:"));
   // Comments are only needed to dedupe conflict notices, so fetch them lazily.
-  const comments =
-    horizons.length >= 2
-      ? (await api(`/repos/${REPO}/issues/${issue.number}/comments?per_page=100`)).map((c) => c.body ?? "")
-      : [];
+  const comments = requiresCommentContext({ number: issue.number, labels })
+    ? (await api(`/repos/${REPO}/issues/${issue.number}/comments?per_page=100`)).map((c) => c.body ?? "")
+    : [];
 
   const plan = reconcile({ number: issue.number, labels, comments });
   if (!plan.add.length && !plan.remove.length && !plan.comment) return false;
