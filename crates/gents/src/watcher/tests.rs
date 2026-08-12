@@ -29,7 +29,7 @@ fn local_and_relayed_updates_are_both_request_wakeups() {
 }
 
 // ---------------------------------------------------------------------------
-// validate_agent_request_subagent_coherence
+// validate_agent_request
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -40,7 +40,7 @@ fn validate_rejects_mixed_parent_linkage_request_id_only() {
         caused_by_parent_tool_call_id: None,
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_err());
+    assert!(validate_agent_request(&req).is_err());
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn validate_accepts_steering_request_lineage_without_tool_call_link() {
         caused_by_parent_tool_call_id: None,
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+    assert!(validate_agent_request(&req).is_ok());
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn validate_accepts_background_completion_lineage_without_tool_call_link() {
         caused_by_trigger_context: None,
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+    assert!(validate_agent_request(&req).is_ok());
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn validate_accepts_depth_zero_background_completion_control_lineage() {
         caused_by_trigger_context: None,
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+    assert!(validate_agent_request(&req).is_ok());
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn validate_accepts_depth_zero_steering_control_lineage() {
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+    assert!(validate_agent_request(&req).is_ok());
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn validate_rejects_mixed_parent_linkage_tool_call_id_only() {
         caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_err());
+    assert!(validate_agent_request(&req).is_err());
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn validate_rejects_subagent_depth_zero_with_parent_fields() {
         caused_by_parent_tool_call_doc_id: Some("parent-tc-doc-1".to_string()),
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_err());
+    assert!(validate_agent_request(&req).is_err());
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn validate_rejects_logical_parent_without_physical_parent() {
         caused_by_parent_request_doc_id: None,
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_err());
+    assert!(validate_agent_request(&req).is_err());
 }
 
 #[test]
@@ -163,7 +163,34 @@ fn validate_accepts_top_level_request() {
         caused_by_trigger_context: None,
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+    assert!(validate_agent_request(&req).is_ok());
+}
+
+#[test]
+fn validate_rejects_negative_sampling_seed() {
+    let req = AgentRequest {
+        seed: Some(-1),
+        ..base_request()
+    };
+    assert_eq!(
+        validate_agent_request(&req).unwrap_err().to_string(),
+        "agent request seed must be non-negative"
+    );
+}
+
+#[test]
+fn validate_rejects_non_positive_max_total_tokens() {
+    for invalid in [0, -1] {
+        let req = AgentRequest {
+            max_total_tokens: Some(invalid),
+            ..base_request()
+        };
+        assert_eq!(
+            validate_agent_request(&req).unwrap_err().to_string(),
+            "agent request max_total_tokens must be positive",
+            "max_total_tokens={invalid}"
+        );
+    }
 }
 
 #[test]
@@ -176,7 +203,7 @@ fn validate_accepts_subagent_request() {
         caused_by_parent_tool_call_doc_id: Some("parent-tc-doc-1".to_string()),
         ..base_request()
     };
-    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+    assert!(validate_agent_request(&req).is_ok());
 }
 
 #[test]
@@ -192,7 +219,9 @@ fn agent_request_clone() {
         temperature: None,
         top_p: None,
         top_k: None,
+        seed: None,
         max_tokens: None,
+        max_total_tokens: None,
         metadata: None,
         execution_origin: None,
         created_at: "2026-03-12T00:00:00Z".into(),
@@ -260,7 +289,9 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         temperature: None,
         top_p: None,
         top_k: None,
+        seed: None,
         max_tokens: None,
+        max_total_tokens: None,
         metadata: None,
         execution_origin: None,
         created_at: "2026-03-12T00:00:00Z".into(),
@@ -276,7 +307,7 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
 }
 
 // ---------------------------------------------------------------------------
-// Integration tests: validate_agent_request_subagent_coherence wired into
+// Integration tests: validate_agent_request wired into
 // the query path.  These tests write incoherent AgentRequest rows directly
 // into DefraDB and verify that the watcher rejects them at query time.
 // ---------------------------------------------------------------------------

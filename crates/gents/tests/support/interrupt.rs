@@ -13,7 +13,10 @@ use super::{
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
-const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(30);
+// A full conformance run starts many embedded DefraDB nodes in parallel. On a
+// busy CI host, a healthy runtime can spend more than 60 seconds waiting for
+// startup and recovery I/O before it publishes its ready status row.
+pub const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -58,11 +61,13 @@ impl Drop for BootedAgent {
 
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
     let deadline = tokio::time::Instant::now() + TEST_RUNTIME_READY_TIMEOUT;
+    let mut sleep = Duration::from_millis(50);
     loop {
         let snapshot = fetch_runtime_snapshot(node, agent_did).await;
         if let Some(snapshot) = &snapshot {
             if snapshot.process_state == "ready"
                 && snapshot.reconcile_phase == "idle"
+                && snapshot.active_generation >= 1
                 && snapshot.runnable_behavior_count >= 1
             {
                 return;
@@ -73,7 +78,8 @@ pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
             "agent did not reach ready state within {TEST_RUNTIME_READY_TIMEOUT:?}; \
              last runtime snapshot: {snapshot:?}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(sleep).await;
+        sleep = (sleep * 2).min(Duration::from_millis(250));
     }
 }
 

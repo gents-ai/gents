@@ -61,7 +61,10 @@ async fn watch_loaded_subagent_thread(
     let child_thread_id = initial_link.session_id.clone();
     let root_session_id = initial_link.root_session_id.clone();
     let mut projected_request_id = initial_link.latest_request_id.clone();
-    if child_request_is_active(&initial_link.lifecycle_state) {
+    if initial_link
+        .client_projection
+        .is_some_and(|head| head.is_active())
+    {
         let announce_turn = baseline_turn.is_none();
         let options = baseline_turn.map_or_else(
             || TurnStreamOptions::fresh_subagent(root_session_id.clone()),
@@ -147,7 +150,9 @@ async fn project_child_request(
         temperature: None,
         top_p: None,
         top_k: None,
+        seed: None,
         max_tokens: None,
+        max_total_tokens: None,
         metadata: None,
         created_at: link.latest_request_created_at.clone(),
     };
@@ -213,26 +218,4 @@ async fn project_child_request(
             link.session_id, link.latest_request_id
         )
     })
-}
-
-fn child_request_is_active(lifecycle_state: &str) -> bool {
-    matches!(
-        lifecycle_state.trim(),
-        "pending" | "claimed" | "processing" | "inputRequired"
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::child_request_is_active;
-
-    #[test]
-    fn only_nonterminal_child_states_start_resumed_projection() {
-        for state in ["pending", "claimed", "processing", "inputRequired"] {
-            assert!(child_request_is_active(state), "{state}");
-        }
-        for state in ["completed", "failed", "dead", "interrupted"] {
-            assert!(!child_request_is_active(state), "{state}");
-        }
-    }
 }

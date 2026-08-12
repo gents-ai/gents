@@ -58,8 +58,20 @@ use crate::tool_call_lifecycle::runtime::{
 };
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
+mod aggregate_budget;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+use aggregate_budget::AggregateTokenLedger;
+use aggregate_budget::{
+    aggregate_post_charge_action, clamp_request_aggregate_token_budget, AggregatePostChargeAction,
+    AggregateTokenCharge,
+};
+pub(crate) use aggregate_budget::{
+    aggregate_token_budget_exhaustion_message, AggregateTokenBudget,
+    AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX,
+};
 
 /// `(turn_index, attempt, request, assembly_trace)`.
 ///
@@ -161,6 +173,10 @@ pub(crate) struct LoopConfig {
     pub(crate) context_message: Option<Message>,
     pub(crate) temperature: Option<f64>,
     pub(crate) max_tokens: Option<u64>,
+    /// One request-scoped ledger shared by the owned inference loop and every
+    /// nested provider call it admits (notably compaction). `None` preserves
+    /// the unbounded interactive behavior.
+    pub(crate) aggregate_token_budget: Option<AggregateTokenBudget>,
     pub(crate) additional_params: Option<serde_json::Value>,
     pub(crate) structured_output: Option<StructuredOutputConfig>,
     pub(crate) tool_choice: Option<ToolChoice>,
@@ -174,6 +190,18 @@ pub(crate) struct LoopConfig {
     pub(crate) retry_policy: CompletionRetryPolicy,
     pub(crate) deadline: Option<DateTime<Utc>>,
     pub(crate) max_turns: usize,
+}
+
+fn add_usage_saturating(aggregate: &mut Usage, usage: Usage) {
+    aggregate.input_tokens = aggregate.input_tokens.saturating_add(usage.input_tokens);
+    aggregate.output_tokens = aggregate.output_tokens.saturating_add(usage.output_tokens);
+    aggregate.total_tokens = aggregate.total_tokens.saturating_add(usage.total_tokens);
+    aggregate.cached_input_tokens = aggregate
+        .cached_input_tokens
+        .saturating_add(usage.cached_input_tokens);
+    aggregate.cache_creation_input_tokens = aggregate
+        .cache_creation_input_tokens
+        .saturating_add(usage.cache_creation_input_tokens);
 }
 
 /// Assemble the per-request message tail: the optional `<context>` message rides
@@ -241,6 +269,7 @@ where
         let mut new_messages: Vec<Message> =
             assemble_new_messages(config.context_message.clone(), prompt);
         let mut aggregated_usage = Usage::new();
+        let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = 0;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
         // Three in-memory-only transforms can enter these vectors: the rendered
@@ -321,6 +350,14 @@ where
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
                 let mut stream = loop {
+                    // Repair and retry paths can rebuild or reuse the request.
+                    // Re-apply both clamps at the one provider-dispatch
+                    // chokepoint so no attempt escapes either budget.
+                    clamp_request_output_budget(&mut request, &config);
+                    clamp_request_aggregate_token_budget(
+                        &mut request,
+                        aggregate_token_budget.as_ref(),
+                    )?;
                     if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
                         // `history ++ new_messages` is the effective provider
                         // message list: post sanitization, post request-context
@@ -445,6 +482,9 @@ where
             let mut pending_results: Vec<(ToolCall, String, String)> = Vec::new();
             let mut turn_text = String::new();
             let mut saw_stream_item = false;
+            let mut saw_final_usage_event = false;
+            let mut aggregate_budget_exhausted = false;
+            let mut aggregate_usage_failure = None::<String>;
 
             while let Some(item) = stream.next().await {
                 let item = match item {
@@ -547,6 +587,18 @@ where
                                 }
                             }
                         }
+                        if let Some(budget) = aggregate_token_budget.as_ref() {
+                            let ledger = budget.snapshot()?;
+                            Err(StreamingError::Completion(
+                                CompletionError::ProviderError(format!(
+                                    "aggregate_token_usage_missing: limit={}, used={}; \
+                                     provider stream failed after emitting content without a \
+                                     final usage event",
+                                    ledger.limit, ledger.used,
+                                )),
+                            ))?;
+                            unreachable!("Err(..)? above ends the stream");
+                        }
                         match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
                             MidStreamDirective::RetractAndResample { delay } => {
                                 yield LoopStreamItem::TurnRetracted {
@@ -581,6 +633,26 @@ where
                         }
                     }
                     Err(completion_error) => {
+                        if let Some(budget) = aggregate_token_budget.as_ref() {
+                            for item in close_streaming_turn(
+                                &mut new_messages,
+                                &mut accumulator,
+                                stream.message_id.clone(),
+                                pending_results,
+                            ) {
+                                yield item;
+                            }
+                            let ledger = budget.snapshot()?;
+                            Err(StreamingError::Completion(
+                                CompletionError::ProviderError(format!(
+                                    "aggregate_token_usage_missing: limit={}, used={}; \
+                                     provider stream failed after tool effects without a final \
+                                     usage event",
+                                    ledger.limit, ledger.used,
+                                )),
+                            ))?;
+                            unreachable!("Err(..)? above ends the stream");
+                        }
                         let streaming_error = StreamingError::Completion(completion_error);
                         let classified = crate::error::classify_completion_error(&streaming_error);
                         let error_text = streaming_error.to_string();
@@ -737,8 +809,32 @@ where
                     StreamedAssistantContent::ToolCallDelta { .. } => {
                     }
                     StreamedAssistantContent::Final(raw) => {
-                        if let Some(usage) = raw.token_usage() {
-                            aggregated_usage += usage;
+                        saw_final_usage_event = true;
+                        let usage = raw.token_usage();
+                        if let Some(usage) = usage {
+                            add_usage_saturating(&mut aggregated_usage, usage);
+                        }
+                        if let Some(budget) = aggregate_token_budget.as_ref() {
+                            let (charge, ledger) = budget.charge_reported(usage)?;
+                            match charge {
+                                AggregateTokenCharge::Missing => {
+                                    aggregate_usage_failure = Some(format!(
+                                        "aggregate_token_usage_missing: limit={}, used={}; \
+                                         provider completed without a non-zero usage report",
+                                        ledger.limit, ledger.used,
+                                    ));
+                                }
+                                AggregateTokenCharge::Within => {}
+                                AggregateTokenCharge::Exhausted => {
+                                    aggregate_budget_exhausted = true;
+                                }
+                                AggregateTokenCharge::Overrun => {
+                                    aggregate_usage_failure = Some(format!(
+                                        "aggregate_token_budget_overrun: limit={}, observed_used={}",
+                                        ledger.limit, ledger.used,
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
@@ -749,6 +845,72 @@ where
             // ordinary no-output retry path while this attempt remains armed.
             if !saw_stream_item {
                 ensure_rendered_request_was_captured(turn_index, attempt)?;
+            }
+
+            if aggregate_token_budget.is_some() && !saw_final_usage_event {
+                let ledger = aggregate_token_budget
+                    .as_ref()
+                    .expect("configured aggregate token budget remains present")
+                    .snapshot()?;
+                aggregate_usage_failure = Some(format!(
+                    "aggregate_token_usage_missing: limit={}, used={}; \
+                     provider stream ended without a final usage event",
+                    ledger.limit, ledger.used,
+                ));
+            }
+
+            if let Some(reason) = aggregate_usage_failure {
+                for item in close_streaming_turn(
+                    &mut new_messages,
+                    &mut accumulator,
+                    stream.message_id.clone(),
+                    pending_results,
+                ) {
+                    yield item;
+                }
+                Err(StreamingError::Completion(CompletionError::ProviderError(reason)))?;
+                unreachable!("Err(..)? above ends the stream");
+            }
+
+            let structured_output_error = if pending_results.is_empty() {
+                config
+                    .structured_output
+                    .as_ref()
+                    .and_then(|output| (output.validate)(&turn_text).err())
+            } else {
+                None
+            };
+            let terminal_valid = pending_results.is_empty()
+                && !turn_text.trim().is_empty()
+                && structured_output_error.is_none();
+            if aggregate_budget_exhausted
+                && aggregate_post_charge_action(
+                    AggregateTokenCharge::Exhausted,
+                    terminal_valid,
+                )
+                    == AggregatePostChargeAction::Fail
+            {
+                for item in close_streaming_turn(
+                    &mut new_messages,
+                    &mut accumulator,
+                    stream.message_id.clone(),
+                    pending_results,
+                ) {
+                    yield item;
+                }
+                let ledger = aggregate_token_budget
+                    .as_ref()
+                    .expect("exhaustion requires a configured aggregate token budget")
+                    .snapshot()?;
+                let contract_detail = structured_output_error
+                    .as_deref()
+                    .map(|error| format!("; terminal output did not satisfy the structured contract: {error}"))
+                    .unwrap_or_default();
+                Err(StreamingError::Completion(CompletionError::ProviderError(format!(
+                    "{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit={}, used={} after provider call{}",
+                    ledger.limit, ledger.used, contract_detail,
+                ))))?;
+                unreachable!("Err(..)? above ends the stream");
             }
 
             if pending_results.is_empty() && turn_text.trim().is_empty() {
@@ -798,14 +960,6 @@ where
                 }
             }
 
-            let structured_output_error = if pending_results.is_empty() {
-                config
-                    .structured_output
-                    .as_ref()
-                    .and_then(|output| (output.validate)(&turn_text).err())
-            } else {
-                None
-            };
             if let Some(error) = structured_output_error {
                 // The provider completed normally, but the result does not
                 // satisfy the typed contract Rig sent. No tool effect has run,
@@ -1029,13 +1183,14 @@ where
     let mut last_attempt_error: Option<InferenceError> = None;
 
     while let Some(item) = stream.next().await {
-        let item = item.map_err(|error| match last_attempt_error.as_ref() {
-            Some(last_error) => {
-                anyhow::anyhow!(
-                    "one-shot loop stream error after retry failure ({last_error}): {error}"
-                )
+        let item = item.map_err(|error| {
+            let error = anyhow::Error::new(error);
+            match last_attempt_error.as_ref() {
+                Some(last_error) => error.context(format!(
+                    "one-shot loop stream error after retry failure ({last_error})"
+                )),
+                None => error.context("one-shot loop stream error"),
             }
-            None => anyhow::anyhow!("one-shot loop stream error: {error}"),
         })?;
         match item {
             LoopStreamItem::TurnRetracted { .. } => {
@@ -1356,9 +1511,14 @@ async fn build_budgeted_request<M: CompletionModel>(
     let mut compacted = compactor(provider_messages, keep_recent_target)
         .await
         .map_err(|error| {
-            StreamingError::Completion(CompletionError::ProviderError(format!(
-                "per-turn provider-input compaction failed: {error:#}"
-            )))
+            aggregate_token_budget_exhaustion_message(&error).map_or_else(
+                || {
+                    StreamingError::Completion(CompletionError::ProviderError(format!(
+                        "per-turn provider-input compaction failed: {error:#}"
+                    )))
+                },
+                |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),
+            )
         })?;
     let compacted_prompt = compacted.pop().ok_or_else(|| {
         StreamingError::Completion(CompletionError::ProviderError(

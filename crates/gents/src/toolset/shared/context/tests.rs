@@ -1,4 +1,24 @@
-use super::{resolve_default_read_root, ToolContext};
+use super::{resolve_default_read_root, ToolContext, ToolError};
+use crate::tool_call_lifecycle::FailureClass;
+use crate::toolset::{CommandExecutionMode, CommandNetworkMode, CommandPolicyDenial, DenialReason};
+
+#[test]
+fn policy_denial_reaches_dispatch_as_typed_failure() {
+    let denial = CommandPolicyDenial::new(
+        DenialReason::DisabledNetworkUnenforceable,
+        CommandExecutionMode::ReadOnly,
+        CommandNetworkMode::Disabled,
+    );
+    let expected = denial.tool_error_payload();
+
+    match ToolError::policy_denial(denial).into_dispatch_error() {
+        crate::llm::tool::ToolError::ReportedFailure { class, text } => {
+            assert_eq!(class, FailureClass::PolicyDenied);
+            assert_eq!(text, expected);
+        }
+        other => panic!("expected typed policy denial, got {other:?}"),
+    }
+}
 
 #[test]
 fn default_read_root_prefers_current_dir() {

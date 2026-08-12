@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client_protocol::{
-    derive_turn as derive_client_turn, AttemptView, ClientTurnState, RequestLifecycleState,
+    project_attempt, AttemptView, ClientHeadProjection, ClientTurnState, RequestLifecycleState,
     RequestSnapshot, ResponseSnapshot, ResponseStatus,
 };
 use crate::row::{
@@ -28,7 +28,9 @@ pub struct CreateAgentRequestInput<'a> {
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
     pub top_k: Option<i64>,
+    pub seed: Option<i64>,
     pub max_tokens: Option<i64>,
+    pub max_total_tokens: Option<i64>,
     pub metadata: Option<&'a str>,
     pub created_at: &'a str,
     pub caused_by_trigger_id: Option<&'a str>,
@@ -42,9 +44,12 @@ pub struct GraphqlTurnState {
 }
 
 impl GraphqlTurnState {
+    pub fn projected_head(&self) -> Option<ClientHeadProjection> {
+        self.attempt_view().as_ref().map(project_attempt)
+    }
+
     pub fn derived_turn_state(&self) -> Option<ClientTurnState> {
-        let attempt = self.attempt_view()?;
-        derive_client_turn(&[attempt])
+        self.projected_head().map(|head| head.turn_state)
     }
 
     pub fn response_is_durably_complete(&self) -> bool {
@@ -282,7 +287,9 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
         optional_f64_field("temperature", input.temperature),
         optional_f64_field("top_p", input.top_p),
         optional_i64_field("top_k", input.top_k),
+        optional_i64_field("seed", input.seed),
         optional_i64_field("max_tokens", input.max_tokens),
+        optional_i64_field("max_total_tokens", input.max_total_tokens),
         optional_string_field("metadata", input.metadata),
     ]
     .into_iter()
@@ -829,8 +836,10 @@ pub fn turn_state_query(request_id: &str) -> String {
                 top_p
                 top_k
                 max_tokens
+                max_total_tokens
                 metadata
                 lifecycle_state
+                failure_reason
                 interrupt_requested_at
                 valid_until
             }}
@@ -974,12 +983,7 @@ pub fn parse_session_shape_response(
 }
 
 fn graphql_response_status(row: &AgentResponseRow) -> Option<ResponseStatus> {
-    match row.status.as_deref().unwrap_or_default() {
-        "streaming" => Some(ResponseStatus::Streaming),
-        "complete" | "completed" => Some(ResponseStatus::Complete),
-        "error" | "failed" | "failure" => Some(ResponseStatus::Error),
-        _ => None,
-    }
+    ResponseStatus::try_from(row.status.as_deref().unwrap_or_default()).ok()
 }
 
 fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<serde_json::Value> {
@@ -1106,6 +1110,7 @@ mod tests {
         assert!(turn_query.contains("top_k"));
         assert!(turn_query.contains("max_tokens"));
         assert!(turn_query.contains("metadata"));
+        assert!(turn_query.contains("failure_reason"));
         assert!(turn_query.contains("interrupt_requested_at"));
         assert!(turn_query.contains("valid_until"));
         assert!(turn_query.contains("interrupted_at"));
@@ -1146,7 +1151,9 @@ mod tests {
             temperature: Some(0.0),
             top_p: Some(0.95),
             top_k: Some(40),
+            seed: Some(1234),
             max_tokens: Some(512),
+            max_total_tokens: Some(4096),
             metadata: Some(r#"{"run_id":"run-1"}"#),
             created_at: "2026-04-13T12:00:00Z",
             caused_by_trigger_id: None,
@@ -1156,7 +1163,9 @@ mod tests {
         assert!(mutation.contains("temperature: 0"));
         assert!(mutation.contains("top_p: 0.95"));
         assert!(mutation.contains("top_k: 40"));
+        assert!(mutation.contains("seed: 1234"));
         assert!(mutation.contains("max_tokens: 512"));
+        assert!(mutation.contains("max_total_tokens: 4096"));
         assert!(mutation.contains(r#"metadata: "{\"run_id\":\"run-1\"}""#));
     }
 

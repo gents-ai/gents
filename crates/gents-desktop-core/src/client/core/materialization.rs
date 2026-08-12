@@ -464,6 +464,7 @@ mod tests {
             &self,
             _collection_name: &str,
             _doc_ids: Vec<String>,
+            _timeout: Option<Duration>,
         ) -> P2PResult<()> {
             Ok(())
         }
@@ -735,7 +736,9 @@ mod tests {
                 temperature: None,
                 top_p: None,
                 top_k: None,
+                seed: None,
                 max_tokens: None,
+                max_total_tokens: None,
                 metadata: None,
                 status: Some("processing".to_string()),
                 lifecycle_state: Some("processing".to_string()),
@@ -816,7 +819,9 @@ mod tests {
                 temperature: None,
                 top_p: None,
                 top_k: None,
+                seed: None,
                 max_tokens: None,
+                max_total_tokens: None,
                 metadata: None,
                 status: Some("processing".to_string()),
                 lifecycle_state: Some("processing".to_string()),

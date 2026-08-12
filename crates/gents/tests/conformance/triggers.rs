@@ -66,11 +66,10 @@ use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde_json::Value;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::interrupt::{wait_for_runtime_ready, TEST_RUNTIME_READY_TIMEOUT};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
-
-const RUNTIME_SNAPSHOT_WAIT: Duration = Duration::from_secs(60);
 
 async fn register_webhook_event_schema(node: &EmbeddedNode) {
     let sdl = r#"
@@ -541,13 +540,7 @@ async fn boot_agent(db: &crate::support::TestDb, test_name: &str, backend_id: &s
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation >= 1
-            && snapshot.runnable_behavior_count >= 1
-    })
-    .await;
+    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
 
     BootedAgent {
         shutdown_tx,
@@ -566,7 +559,7 @@ async fn wait_for_runtime_snapshot<F>(
 where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + RUNTIME_SNAPSHOT_WAIT;
+    let deadline = tokio::time::Instant::now() + TEST_RUNTIME_READY_TIMEOUT;
     let mut last_snapshot = None;
     let mut sleep = Duration::from_millis(50);
     loop {
@@ -578,8 +571,8 @@ where
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out after {:?} waiting for runtime snapshot for {agent_did}; last_snapshot={last_snapshot:?}",
-            RUNTIME_SNAPSHOT_WAIT,
+            "timed out after {TEST_RUNTIME_READY_TIMEOUT:?} waiting for runtime snapshot for \
+             {agent_did}; last_snapshot={last_snapshot:?}",
         );
         tokio::time::sleep(sleep).await;
         sleep = (sleep * 2).min(Duration::from_millis(250));

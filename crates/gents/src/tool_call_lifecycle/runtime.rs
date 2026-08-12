@@ -84,6 +84,11 @@ impl ToolOutcome {
                 denial: None,
                 text: error.to_string(),
             },
+            Err(ToolError::ReportedFailure { class, text }) => Self::Failed {
+                class,
+                denial: None,
+                text,
+            },
             Err(ToolError::ToolCallError(error)) => Self::from_tool_call_error(&error.to_string()),
         }
     }

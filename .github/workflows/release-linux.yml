@@ -10,7 +10,7 @@ on:
         description: Release version without the v prefix; must match workspace.package.version.
         required: true
         type: string
-        default: "0.10.1"
+        default: "0.11.0"
 
 concurrency:
   group: release-linux-${{ github.ref }}
@@ -22,12 +22,9 @@ permissions:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  # The workspace release profile uses fat LTO + one codegen unit, which holds
-  # the whole dependency graph in memory at link time and OOM-kills the
-  # self-hosted Linux runners. LTO and build parallelism are set per-arch in the
-  # matrix below: workstation-1 (x86_64) has ample RAM and uses ThinLTO; the
-  # sparks (aarch64) serve a resident model and have only a few GB free, so they
-  # disable LTO and cap parallelism.
+  # Keep the workspace's no-LTO/16-CGU release shape explicit on Linux. Cargo
+  # parallelism remains per architecture: workstation-1 (x86_64) has ample
+  # RAM, while the sparks (aarch64) serve a resident model and need a low cap.
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
   RUST_BACKTRACE: "1"
 
@@ -42,8 +39,8 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner_arch: X64
             runner_label: workstation-1
-            # ~228 GB free; ThinLTO links comfortably.
-            release_lto: "thin"
+            # ~228 GB free; use the fast workspace release shape.
+            release_lto: "off"
             cargo_jobs: "8"
             # Build inside Debian 12 (glibc 2.36) so the published artifact
             # runs on the oldest supported x86_64 host (Synology DSM ships
@@ -156,7 +153,9 @@ jobs:
             echo "::error::Expected native ${TARGET_TRIPLE} runner, got ${host_triple}."
             exit 1
           fi
+          build_started_at="$(date +%s)"
           make release-cli
+          echo "GENTS_RELEASE_BUILD_SECONDS=$(($(date +%s) - build_started_at))" >> "${GITHUB_ENV}"
           file target/release/gents
 
       - name: Verify binary
@@ -252,6 +251,20 @@ jobs:
             exit 1
           fi
 
+      - name: Measure release artifact
+        id: measurement
+        env:
+          ARCHIVE_PATH: ${{ steps.package.outputs.tarball }}
+          ARTIFACT_BASENAME: ${{ steps.package.outputs.artifact_basename }}
+          SKIP_BUILD: "1"
+        run: |
+          set -euo pipefail
+          metrics_file="$(dirname "${ARCHIVE_PATH}")/${ARTIFACT_BASENAME}.build-metrics.json"
+          BUILD_ELAPSED_SECONDS="${GENTS_RELEASE_BUILD_SECONDS}" \
+            OUTPUT_JSON="${metrics_file}" \
+            scripts/measure-gents-binary.sh
+          echo "metrics_file=${metrics_file}" >> "${GITHUB_OUTPUT}"
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
@@ -259,6 +272,7 @@ jobs:
           path: |
             ${{ steps.package.outputs.tarball }}
             ${{ steps.package.outputs.checksum_file }}
+            ${{ steps.measurement.outputs.metrics_file }}
           if-no-files-found: error
 
   # Runs on the host (not in the build container) because it needs the gh CLI,
@@ -299,4 +313,4 @@ jobs:
               --notes "gents release artifacts." \
               || gh release view "${GITHUB_REF_NAME}" >/dev/null
           fi
-          gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber
+          gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.build-metrics.json --clobber

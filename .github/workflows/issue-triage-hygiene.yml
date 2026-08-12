@@ -1,0 +1,50 @@
+name: issue-triage-hygiene
+
+on:
+  issues:
+    # `closed` is here so an issue flagged while open can have `needs-triage`
+    # cleared on the way out: the sweep is state=open and would never see it
+    # again. The runner reconciles a closed issue by removing the flag only.
+    types: [opened, reopened, labeled, unlabeled, closed]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  # contents: read is required for actions/checkout; declaring `permissions`
+  # at all drops every scope not listed here.
+  contents: read
+  issues: write
+
+concurrency:
+  # Two kinds of group, because GitHub keeps only the newest PENDING run per
+  # group: a queued run is silently superseded, not failed. With one global
+  # group an issue event at 06:18 would discard the queued 06:17 sweep and a
+  # whole day of reconciliation with it, leaving no red X behind.
+  #
+  # So the sweep (schedule / workflow_dispatch) gets its own group that no
+  # per-issue run can ever land in, and each issue gets its own group keyed by
+  # number: two events on the SAME issue still serialize, while events on
+  # different issues no longer contend. `cancel-in-progress: false` lets a
+  # running job finish its writes rather than being killed mid-write.
+  group: >-
+    triage-hygiene-${{ github.event_name == 'issues'
+    && format('issue-{0}', github.event.issue.number)
+    || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Reconcile roadmap labels
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Absent on schedule/dispatch, which makes run.mjs sweep every open issue.
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: node scripts/triage-hygiene/run.mjs

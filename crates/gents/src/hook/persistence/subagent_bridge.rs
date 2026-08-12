@@ -945,9 +945,6 @@ impl DefraSessionHook {
         cause: CancelCause,
         completion_reason: &str,
     ) -> anyhow::Result<(ToolCallLifecycle, bool)> {
-        self.background_executions
-            .cancel(lifecycle.tool_call_id())
-            .await;
         let won_terminal_compare = if lifecycle.is_running() {
             lifecycle
                 .cancel_during_run_owned(cause, completion_reason)
@@ -955,6 +952,14 @@ impl DefraSessionHook {
         } else {
             false
         };
+        // Persist the explicit cancellation before waking the worker. If the
+        // token fires first, the worker can win the same running-state compare
+        // and replace the user's specific cause with generic `interrupted`.
+        if won_terminal_compare {
+            self.background_executions
+                .cancel(lifecycle.tool_call_id())
+                .await;
+        }
         Ok((lifecycle, won_terminal_compare))
     }
 

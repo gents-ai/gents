@@ -267,7 +267,10 @@ async fn generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance
         .await;
 }
 
-#[tokio::test]
+// This integration fence drives two live runtimes and two P2P nodes. Match the
+// production multi-thread executor so cancellation progress cannot be starved
+// behind a blocking DefraDB operation on the test's coordinator thread.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancel_propagation_cases_drive_production_interrupt() {
     cancel_propagation::cancel_propagation_cases_drive_production_interrupt().await;
 }

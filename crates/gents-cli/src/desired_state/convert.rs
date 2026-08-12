@@ -226,6 +226,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "temperature",
                         "top_p",
                         "top_k",
+                        "seed",
                         "min_p",
                         "frequency_penalty",
                         "presence_penalty",

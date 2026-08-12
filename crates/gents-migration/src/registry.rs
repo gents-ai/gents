@@ -260,6 +260,11 @@ const INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH: &str = r#"[
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
+const INFERENCE_PROFILE_ADD_SEED_PATCH: &str = r#"[
+  {"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"seed","Kind":"Int"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
 /// Frozen baseline SDL set, ordered like
 /// `gents_protocol::schemas::{RUNTIME_ALL, ALL}` and feature-invariant (includes
 /// AgentMemory). Collections with post-cutover changes use frozen local SDL
@@ -346,7 +351,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreiaw4ive4f5oilibkirvgd3sdmbcxbe627szzeh4zieywy3nmshq7e"
+        "bafyreic6nbycwtmqjwtvw65gvdcpgl4hwtnqch3a5iogvgzihckzc74f2a"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
@@ -491,16 +496,27 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
 ];
 
 /// Ordered post-baseline schema evolution chain.
-pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[MigrationStep::PatchVersioned {
-    id: "inference-profile-add-reasoning-effort",
-    collection: gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-    patch: INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH,
-    lens: None,
-    // Authored by applying the inactive patch to the frozen baseline.
-    expected_version: Some("bafyreigiimbcequesxdifamoiiqio2loqn7uco7kt4slp2ws3no4prl25e"),
-    expected_transform: None,
-    expected_state: CollectionExpectation::fields(&["reasoning_effort"]),
-}];
+pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
+    MigrationStep::PatchVersioned {
+        id: "inference-profile-add-reasoning-effort",
+        collection: gents_protocol::schemas::INFERENCE_PROFILE_NAME,
+        patch: INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH,
+        lens: None,
+        // Authored by applying the inactive patch to the frozen baseline.
+        expected_version: Some("bafyreigiimbcequesxdifamoiiqio2loqn7uco7kt4slp2ws3no4prl25e"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&["reasoning_effort"]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "inference-profile-add-seed",
+        collection: gents_protocol::schemas::INFERENCE_PROFILE_NAME,
+        patch: INFERENCE_PROFILE_ADD_SEED_PATCH,
+        lens: None,
+        expected_version: Some("bafyreid4qn3axuic3fced2jp2vpsvjwrn4gisexrp3ri2zkiou3eeinyme"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&["reasoning_effort", "seed"]),
+    },
+];
 
 /// Production registry: frozen baseline plus the ordered migration chain.
 pub static DEFAULT_REGISTRY: Registry<'static> = Registry {

@@ -777,7 +777,7 @@ async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
         ],
     )?;
     assert!(
-        stderr.contains("no key_path or identity_backend"),
+        stderr.contains("has no key_path and unsupported identity_backend"),
         "expected no-key-path/backend error, got:\n{stderr}"
     );
     assert!(

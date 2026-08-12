@@ -307,10 +307,11 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     let parent_session_id = "unmat-bg-session";
     let parent_tool_call_id = "unmat-bg-tc";
     let child_request_id = "unmat-bg-child";
+    let agent_did = running.booted.agent_did.clone();
 
     create_runtime_request(
         db.node.as_ref(),
-        &running.booted.agent_did,
+        &agent_did,
         &running.behavior_id,
         parent_request_id,
         parent_session_id,
@@ -320,6 +321,22 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     wait_for_request_deadline(db.node.as_ref(), parent_request_id).await;
     let parent_request_doc_id =
         crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await;
+
+    create_runtime_request(
+        db.node.as_ref(),
+        &agent_did,
+        &running.behavior_id,
+        "unmat-other-parent",
+        "unmat-other-session",
+        "unrelated parent prompt",
+    )
+    .await;
+    wait_for_request_deadline(db.node.as_ref(), "unmat-other-parent").await;
+
+    // This case exercises bridge-level observability in isolation. Stop the
+    // source before inserting the deliberately unconfigured remote target so
+    // it cannot concurrently reject the synthetic bridge as unauthorized.
+    running.booted.shutdown().await;
 
     let args = serde_json::json!({
         "name": "remote-coder",
@@ -360,14 +377,9 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
 
     let all: ListSubagentsArgs =
         serde_json::from_value(serde_json::json!({ "status": "all" })).unwrap();
-    let resp = handle_list_subagents(
-        db.node.as_ref(),
-        parent_request_id,
-        &running.booted.agent_did,
-        all,
-    )
-    .await
-    .expect("handle_list_subagents must not error");
+    let resp = handle_list_subagents(db.node.as_ref(), parent_request_id, &agent_did, all)
+        .await
+        .expect("handle_list_subagents must not error");
     let entry = resp
         .entries
         .iter()
@@ -394,7 +406,7 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     let resp = handle_list_subagents(
         db.node.as_ref(),
         parent_request_id,
-        &running.booted.agent_did,
+        &agent_did,
         ListSubagentsArgs::default(),
     )
     .await
@@ -440,16 +452,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         other => panic!("expected AwaitingMaterialization, got {other:?}"),
     }
 
-    create_runtime_request(
-        db.node.as_ref(),
-        &running.booted.agent_did,
-        &running.behavior_id,
-        "unmat-other-parent",
-        "unmat-other-session",
-        "unrelated parent prompt",
-    )
-    .await;
-    wait_for_request_deadline(db.node.as_ref(), "unmat-other-parent").await;
     let stranger = handle_read_subagent(
         db.node.as_ref(),
         "unmat-other-parent",
@@ -462,8 +464,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         stranger.is_none(),
         "a non-owning caller must not see the bridge-level handle"
     );
-
-    running.booted.shutdown().await;
 }
 
 #[tokio::test]

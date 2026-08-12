@@ -41,7 +41,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.10.1"
+version = "0.11.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/source-inc/gents"
@@ -53,12 +53,12 @@ bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
-# Pinned to the upstream #1353 head for signed explicit transactions and default
-# node query identity. Its iterative parent-DAG replay remains required on iOS:
+# DefraDB v0.18.0 includes signed explicit transactions and default node query
+# identity. Its iterative parent-DAG replay remains required on iOS:
 # a deep collection history otherwise exhausts even a 32 MiB Tokio worker stack.
-acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
-crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
-defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
+acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
+crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
+defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
 gents-codex-protocol = { path = "crates/gents-codex-protocol" }
@@ -66,12 +66,12 @@ gents-schemas = { path = "crates/gents-schemas" }
 gents-desktop-core = { path = "crates/gents-desktop-core" }
 gents-desktop-bridge = { path = "crates/gents-desktop-bridge" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
-defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae", default-features = false }
-defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
+defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39", default-features = false }
+defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
 dirs = "5"
-events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
+events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
 hostname = "0.4"
-identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
+identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
@@ -79,8 +79,8 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
-query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
+p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
+query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig-core = "0.35.0"
@@ -99,8 +99,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
-lto = true
-codegen-units = 1
+# On the dedicated M4 release host, disabling LTO with 16 CGUs cut a fresh-target
+# CLI build from 836s to 209s. The gzip-9 artifact also shrank 3.5% (27.8 MB to
+# 26.8 MB); only the uncompressed binary grew, from 62.1 MB to 70.7 MB.
+lto = "off"
+codegen-units = 16
 panic = "abort"
 # Shipped binaries stay compact. The macOS release workflow overrides this
 # while linking, extracts a matching dSYM, then strips before signing.
@@ -110,7 +113,7 @@ debug = "line-tables-only"
 
 [profile.dev-install]
 inherits = "release"
-lto = "thin"
+lto = "off"
 codegen-units = 16
 strip = false
 
@@ -118,6 +121,10 @@ strip = false
 opt-level = 1
 
 [profile.test]
+# At opt-level 1 Cargo's implicit `lto = false` still performs local ThinLTO.
+# CI enables incremental compilation on persistent runner target trees; keeping
+# codegen units independent avoids stale ThinLTO imports and shortens links.
+lto = "off"
 opt-level = 1
 debug = 0
 split-debuginfo = "off"
@@ -136,5 +143,3 @@ rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "1ebeeaee3b569b
 # aborting the process when an earlier driver panic poisons their mutex.
 # See third_party/README.md, defradb.rs#1090, and gents#634.
 noq = { path = "third_party/noq" }
-[patch."ssh://git@github.com/sourcenetwork/backbone.git"]
-acp-light-client = { git = "https://github.com/sourcenetwork/backbone.git", rev = "086ddadc98bc55183920aa0fe6bc4d3719e0e5e7" }

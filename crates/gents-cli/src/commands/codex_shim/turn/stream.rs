@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
@@ -6,25 +6,29 @@ use anyhow::{Context, Result};
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
+use gents_protocol::client_protocol::project_persisted_attempt;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use super::super::background::spawn_background_tool_watcher;
 use super::super::bound_behavior::load_bound_context_window;
 use super::super::command_projection::{
+    observed_command_status, observed_mcp_status, observed_patch_status,
     tool_projection_status_with_settled, update_running_background_tools, ToolProjectionStatus,
 };
 use super::super::compaction_projection::decode_gents_compaction_progress;
 use super::super::progress::{
-    content_delta, decode_gents_tool_call_progress, gents_turn_progress_query,
-    response_field_is_blank, terminal_error_message, terminal_turn_status, timestamp_millis,
+    codex_turn_status, content_delta, decode_gents_tool_call_progress, gents_turn_progress_query,
+    response_field_is_blank, terminal_error_message, timestamp_millis,
 };
+use super::super::projection_state::{stabilize_projection_kind, ChildStatus, CollabProjection};
 use super::super::protocol::{
     send_committed_user_message, send_notification, send_thread_status_changed,
 };
 use super::super::store::{hydrate_materialized_response_content, query_node_json};
 use super::super::subagent_projection::{
     attach_subagent_link, is_subagent_control_tool, load_authorized_subagent_threads_for_root,
+    observed_child_status, observed_collab_status, observed_collab_tool,
     SubagentProjectionUpdateFilter,
 };
 use super::super::thread_projection::{
@@ -34,7 +38,7 @@ use super::super::thread_projection::{
 use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
 use super::active::next_steering_request_after;
-use crate::{is_terminal_lifecycle_state, request_diagnostic_hint, SubmittedRequest};
+use crate::{request_diagnostic_hint, SubmittedRequest};
 
 const SUBAGENT_LINK_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -193,8 +197,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
     let mut known_tool_markers: BTreeMap<String, ToolProgressMarker> = BTreeMap::new();
     let mut known_compaction_states: BTreeMap<String, String> = BTreeMap::new();
     let mut known_inference_usage_call_id: Option<String> = None;
-    let mut running_background_tools: BTreeMap<String, codex::CommandExecutionStatus> =
-        BTreeMap::new();
+    let mut running_background_tools = BTreeSet::new();
     let mut updates = state.node.subscribe_updates();
     let mut updates_closed = false;
     let subagent_update_filter = SubagentProjectionUpdateFilter::from_state(state);
@@ -282,8 +285,9 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 .and_then(response_terminal_timestamp)
                 .and_then(timestamp_millis),
         );
-        let projection_settled = is_terminal_lifecycle_state(lifecycle_state)
-            || matches!(response_status, "complete" | "completed" | "error");
+        let client_head = project_persisted_attempt(lifecycle_state, false, Some(response_status));
+        let client_turn_state = client_head.map(|head| head.turn_state);
+        let projection_settled = client_turn_state.is_some_and(|state| state.is_terminal());
 
         let marker = progress_marker(request_row, response_row, tool_rows, inference_call_rows);
         let marker_changed = latest_progress_marker.as_ref() != Some(&marker);
@@ -415,9 +419,11 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             if has_subagent_control {
                 attach_subagent_link(&mut tool, &subagent_links);
             }
-            let projection_status =
+            let observed_projection_status =
                 tool_projection_status_with_settled(&tool, projection_settled, link_settle_expired);
             let previous_status = known_tool_calls.get(&tool.tool_call_key).cloned();
+            let projection_status =
+                stabilize_projection_kind(previous_status.as_ref(), observed_projection_status);
             update_running_background_tools(
                 &mut running_background_tools,
                 &tool,
@@ -462,10 +468,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             .and_then(|row| row.get("failure_reason"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
-        let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
-
-        if (terminal_by_request || terminal_by_response) && !waiting_for_subagent_links {
+        if projection_settled && !waiting_for_subagent_links {
             let mut terminal_response = response_row.cloned().unwrap_or_else(|| {
                 json!({
                     "request_id": current.request_id.clone(),
@@ -521,7 +524,9 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 projection.append_agent_delta(outbound, &delta).await?;
             }
 
-            let turn_status = terminal_turn_status(lifecycle_state, response_status);
+            let turn_status = codex_turn_status(
+                client_turn_state.expect("settled client turn state must be present"),
+            );
             let error_message = if turn_status == codex::TurnStatus::Failed {
                 terminal_error_message(
                     response_status,
@@ -639,7 +644,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 outbound,
                 state,
                 projection.thread_id,
-                projected_thread_status(Some(lifecycle_state), ""),
+                projected_thread_status(client_head, ""),
             )
             .await?;
             spawn_background_tool_watcher(
@@ -793,14 +798,22 @@ fn prime_projection_from_turn(
             }
             codex::ThreadItem::Reasoning { .. } => {}
             codex::ThreadItem::McpToolCall { id, status, .. } => {
-                known_tool_calls.insert(id.clone(), ToolProjectionStatus::Mcp(status.clone()));
+                known_tool_calls.insert(
+                    id.clone(),
+                    ToolProjectionStatus::Mcp(observed_mcp_status(status)),
+                );
             }
             codex::ThreadItem::CommandExecution { id, status, .. } => {
-                known_tool_calls.insert(id.clone(), ToolProjectionStatus::Command(status.clone()));
+                known_tool_calls.insert(
+                    id.clone(),
+                    ToolProjectionStatus::Command(observed_command_status(status)),
+                );
             }
             codex::ThreadItem::FileChange { id, status, .. } => {
-                known_tool_calls
-                    .insert(id.clone(), ToolProjectionStatus::FileChange(status.clone()));
+                known_tool_calls.insert(
+                    id.clone(),
+                    ToolProjectionStatus::FileChange(observed_patch_status(status)),
+                );
             }
             codex::ThreadItem::CollabAgentToolCall {
                 id,
@@ -817,19 +830,16 @@ fn prime_projection_from_turn(
                 let child = agents_states.get(receiver_thread_id);
                 known_tool_calls.insert(
                     id.clone(),
-                    ToolProjectionStatus::Collab(
-                        super::super::subagent_projection::CollabProjection {
-                            status: status.clone(),
-                            tool: tool.clone(),
-                            receiver_thread_id: receiver_thread_id.clone(),
-                            child_model: model.clone(),
-                            child_lifecycle_state: child
-                                .map(|state| collab_lifecycle_state(&state.status))
-                                .unwrap_or("")
-                                .to_string(),
-                            child_failure_reason: child.and_then(|state| state.message.clone()),
-                        },
-                    ),
+                    ToolProjectionStatus::Collab(CollabProjection {
+                        status: observed_collab_status(status),
+                        tool: observed_collab_tool(tool),
+                        receiver_thread_id: receiver_thread_id.clone(),
+                        child_model: model.clone(),
+                        child_status: child
+                            .map(|state| observed_child_status(&state.status))
+                            .unwrap_or(ChildStatus::NotFound),
+                        child_failure_reason: child.and_then(|state| state.message.clone()),
+                    }),
                 );
             }
             codex::ThreadItem::ContextCompaction { id } => {
@@ -868,16 +878,6 @@ fn resumable_reasoning_item(turn: &codex::Turn, preferred_id: &str) -> Option<(S
         };
         (!text.trim().is_empty()).then(|| (id.clone(), text))
     })
-}
-
-fn collab_lifecycle_state(status: &codex::CollabAgentStatus) -> &'static str {
-    match status {
-        codex::CollabAgentStatus::PendingInit => "pending",
-        codex::CollabAgentStatus::Running => "processing",
-        codex::CollabAgentStatus::Completed | codex::CollabAgentStatus::Shutdown => "completed",
-        codex::CollabAgentStatus::Errored | codex::CollabAgentStatus::NotFound => "failed",
-        codex::CollabAgentStatus::Interrupted => "interrupted",
-    }
 }
 
 fn content_delta_from_cursor(cursor: &mut ContentCursor, current: &str) -> String {
@@ -1275,7 +1275,7 @@ async fn finish_interrupted_turn(
     state: &ShimState,
     submitted: &SubmittedRequest,
     projection: &mut TurnProjection<'_>,
-    running_background_tools: BTreeMap<String, codex::CommandExecutionStatus>,
+    running_background_tools: BTreeSet<String>,
 ) -> Result<()> {
     projection
         .finish_turn(&connection.outbound, codex::TurnStatus::Interrupted, None)

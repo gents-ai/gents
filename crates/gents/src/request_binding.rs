@@ -9,7 +9,7 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
-use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
+use crate::watcher::{validate_agent_request, AgentRequest};
 
 #[derive(Debug, Deserialize)]
 struct RequestDocRow {
@@ -30,7 +30,9 @@ struct AgentRequestRow {
     temperature: Option<f64>,
     top_p: Option<f64>,
     top_k: Option<i64>,
+    seed: Option<i64>,
     max_tokens: Option<i64>,
+    max_total_tokens: Option<i64>,
     metadata: Option<String>,
     execution_origin: Option<String>,
     created_at: String,
@@ -99,7 +101,9 @@ pub(crate) async fn load_agent_request(
                 temperature
                 top_p
                 top_k
+                seed
                 max_tokens
+                max_total_tokens
                 metadata
                 execution_origin
                 created_at
@@ -136,7 +140,9 @@ pub(crate) async fn load_agent_request(
         temperature: row.temperature,
         top_p: row.top_p,
         top_k: row.top_k,
+        seed: row.seed,
         max_tokens: row.max_tokens,
+        max_total_tokens: row.max_total_tokens,
         metadata: row.metadata,
         execution_origin: nonempty(row.execution_origin),
         created_at: row.created_at,
@@ -149,7 +155,7 @@ pub(crate) async fn load_agent_request(
         caused_by_correlation: nonempty(row.caused_by_correlation),
         caused_by_trigger_context: nonempty(row.caused_by_trigger_context),
     };
-    validate_agent_request_subagent_coherence(&request)?;
+    validate_agent_request(&request)?;
     Ok(Some(request))
 }
 

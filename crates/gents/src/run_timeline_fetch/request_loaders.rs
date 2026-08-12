@@ -17,6 +17,8 @@ pub(super) async fn load_timeline_request_by_id(
                 behavior_id
                 session_id
                 content
+                seed
+                max_total_tokens
                 metadata
                 status
                 lifecycle_state
@@ -65,6 +67,8 @@ pub(super) async fn load_timeline_requests_for_session(
                 behavior_id
                 session_id
                 content
+                seed
+                max_total_tokens
                 metadata
                 status
                 lifecycle_state
@@ -106,6 +110,8 @@ pub(super) async fn load_timeline_child_requests(
                 behavior_id
                 session_id
                 content
+                seed
+                max_total_tokens
                 metadata
                 status
                 lifecycle_state

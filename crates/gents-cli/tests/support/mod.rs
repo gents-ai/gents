@@ -38,6 +38,45 @@ pub use waits::{
 pub const DEFAULT_MODEL_ENDPOINT: &str = "http://192.168.1.78:8000/v1";
 pub const DEFAULT_MODEL_NAME: &str = "MiniMax-M2.7-NVFP4";
 
+/// Initialize an agent home through `gents init --identity-only` and open its
+/// embedded node with the registered signing identity. Homes assembled without
+/// this fail the CLI's initialized-home check, and their commits would be
+/// unsigned.
+pub async fn initialized_agent_node(
+    cwd: &std::path::Path,
+    agent_home: &std::path::Path,
+    agent_name: &str,
+) -> anyhow::Result<gents::defra_node::EmbeddedNode> {
+    use anyhow::Context as _;
+
+    let home = agent_home.to_str().context("agent home utf8")?;
+    let init = run_init_json(
+        cwd,
+        &[
+            "--identity-only",
+            "--agent-name",
+            agent_name,
+            "--home",
+            home,
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let key_path = init
+        .get("key_path")
+        .and_then(serde_json::Value::as_str)
+        .context("identity-only init output missing key_path")?;
+    let _identity = gents::KeyIdentity::load_or_create(key_path, None)
+        .context("loading initialized agent identity")?;
+
+    gents::defra_node::EmbeddedNode::builder()
+        .data_path(agent_home.join("data"))
+        .with_storage_backend(gents::defra_node::StorageBackend::RocksDb)
+        .with_node_identity_did(&agent_did)
+        .build()
+        .await
+        .context("opening initialized embedded node")
+}
+
 pub fn agent_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
     let agent_did = init
         .get("agent_did")

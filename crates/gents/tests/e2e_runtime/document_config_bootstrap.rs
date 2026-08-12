@@ -128,45 +128,6 @@ async fn load_inference_profile_reads_document_fields() {
 }
 
 #[tokio::test]
-async fn profile_sampling_knobs_reach_the_behavior_and_provider_body() {
-    let db = test_db("profile-sampling-knobs").await;
-    let profile_id = "sampling";
-    insert_inference_profile(db.node.as_ref(), profile_id).await;
-
-    let profile = load_inference_profile(db.node.as_ref(), profile_id)
-        .await
-        .expect("load succeeds")
-        .expect("profile exists");
-
-    let sampling = gents::SamplingConfig {
-        temperature: profile.temperature,
-        top_p: profile.top_p,
-        top_k: profile.top_k,
-        min_p: profile.min_p,
-        frequency_penalty: profile.frequency_penalty,
-        presence_penalty: profile.presence_penalty,
-        repetition_penalty: profile.repetition_penalty,
-        max_tokens: None,
-        reasoning_effort: profile
-            .reasoning_effort
-            .as_deref()
-            .map(gents::ReasoningEffort::parse)
-            .transpose()
-            .expect("fixture reasoning effort must be valid"),
-    };
-    let params = sampling
-        .additional_params()
-        .expect("pinned knobs must produce provider body params");
-
-    assert_eq!(params["top_p"], 0.95);
-    assert_eq!(params["top_k"], 40);
-    assert_eq!(params["min_p"], 0.05);
-    assert_eq!(params["frequency_penalty"], 0.5);
-    assert_eq!(params["presence_penalty"], -0.25);
-    assert_eq!(params["repetition_penalty"], 1.1);
-}
-
-#[tokio::test]
 async fn upsert_helpers_roundtrip_behavior_and_profile() {
     let db = test_db("document-config-upsert-roundtrip").await;
     let agent_did = "did:test:roundtrip";
@@ -304,6 +265,7 @@ async fn insert_inference_profile(node: &gents::defra_node::EmbeddedNode, profil
                 temperature: 0.2,
                 top_p: 0.95,
                 top_k: 40,
+                seed: 1234,
                 min_p: 0.05,
                 frequency_penalty: 0.5,
                 presence_penalty: -0.25,

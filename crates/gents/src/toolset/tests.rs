@@ -1724,7 +1724,38 @@ async fn bash_output_supports_raw_json_escape_hatch() {
 }
 
 #[tokio::test]
-async fn bash_timeout_reports_metadata_instead_of_error() {
+async fn bash_nonzero_exit_is_a_typed_tool_failure_with_metadata() {
+    let root = temp_root("gents-bash-nonzero");
+    let tool = ReadOnlyBashTool::new(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        vec!["false".to_string()],
+    );
+    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+
+    let outcome = crate::tool_call_lifecycle::runtime::call_tool_managed(
+        boxed.as_ref(),
+        serde_json::json!({ "command": "false" }).to_string(),
+    )
+    .await;
+
+    match outcome {
+        crate::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {
+            assert_eq!(
+                class,
+                crate::tool_call_lifecycle::FailureClass::ToolReturnedError
+            );
+            let meta = compact_exec_meta(&text);
+            assert_eq!(meta["ok"], false);
+            assert_eq!(meta["status"], "exit_nonzero");
+            assert_ne!(meta["exit_code"], 0);
+        }
+        other => panic!("nonzero command must be a typed failure, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bash_per_call_timeout_is_a_recoverable_typed_failure_with_metadata() {
     let root = temp_root("gents-bash-timeout");
     let tool = ReadOnlyBashTool::new(
         ToolContext::new(root, false).unwrap(),
@@ -1732,24 +1763,29 @@ async fn bash_timeout_reports_metadata_instead_of_error() {
         vec!["sleep".to_string()],
     );
 
-    let output = crate::llm::tool::Tool::call(
-        &tool,
-        BashArgs {
-            command: "sleep".to_string(),
-            args: vec!["2".to_string()],
-            cwd: None,
-            timeout_secs: Some(1),
-            raw_json: false,
-        },
+    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let outcome = crate::tool_call_lifecycle::runtime::call_tool_managed(
+        boxed.as_ref(),
+        serde_json::json!({
+            "command": "sleep",
+            "args": ["2"],
+            "timeout_secs": 1,
+        })
+        .to_string(),
     )
-    .await
-    .unwrap();
+    .await;
 
-    let meta = compact_exec_meta(&output);
-    assert_eq!(meta["ok"], false);
-    assert_eq!(meta["status"], "timeout");
-    assert_eq!(meta["timed_out"], true);
-    assert!(meta["exit_code"].is_null());
+    match outcome {
+        crate::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {
+            assert_eq!(class, crate::tool_call_lifecycle::FailureClass::External);
+            let meta = compact_exec_meta(&text);
+            assert_eq!(meta["ok"], false);
+            assert_eq!(meta["status"], "timeout");
+            assert_eq!(meta["timed_out"], true);
+            assert!(meta["exit_code"].is_null());
+        }
+        other => panic!("per-call timeout must be a recoverable typed failure, got {other:?}"),
+    }
 }
 
 #[cfg(unix)]
@@ -1800,18 +1836,17 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
     let command =
         "trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
 
-    let call = crate::llm::tool::Tool::call(
-        &tool,
-        BashArgs {
-            command: command.to_string(),
-            args: Vec::new(),
-            cwd: None,
-            timeout_secs: Some(1),
-            raw_json: false,
-        },
+    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let call = crate::tool_call_lifecycle::runtime::call_tool_managed(
+        boxed.as_ref(),
+        serde_json::json!({
+            "command": command,
+            "timeout_secs": 1,
+        })
+        .to_string(),
     );
-    let output = match tokio::time::timeout(Duration::from_secs(4), call).await {
-        Ok(result) => result.unwrap(),
+    let outcome = match tokio::time::timeout(Duration::from_secs(4), call).await {
+        Ok(outcome) => outcome,
         Err(_) => {
             if let Ok(pid) =
                 std::fs::read_to_string(&pid_file).map(|value| value.trim().parse::<i32>().unwrap())
@@ -1822,6 +1857,14 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
             }
             panic!("bash timeout hung while a descendant held its output pipes open");
         }
+    };
+    let crate::tool_call_lifecycle::ToolOutcome::Failed {
+        class: crate::tool_call_lifecycle::FailureClass::External,
+        text: output,
+        ..
+    } = outcome
+    else {
+        panic!("background process-tree timeout must be typed failed, got {outcome:?}");
     };
 
     let meta = compact_exec_meta(&output);
@@ -1874,18 +1917,24 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
         outside.display()
     );
 
-    let output = crate::llm::tool::Tool::call(
-        &tool,
-        BashArgs {
-            command: shell,
-            args: Vec::new(),
-            cwd: None,
-            timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
-            raw_json: false,
-        },
+    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let outcome = crate::tool_call_lifecycle::runtime::call_tool_managed(
+        boxed.as_ref(),
+        serde_json::json!({
+            "command": shell,
+            "timeout_secs": DEFAULT_COMMAND_TIMEOUT_SECS,
+        })
+        .to_string(),
     )
-    .await
-    .unwrap();
+    .await;
+    let crate::tool_call_lifecycle::ToolOutcome::Failed {
+        class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+        text: output,
+        ..
+    } = outcome
+    else {
+        panic!("seatbelt denial must be typed failed, got {outcome:?}");
+    };
 
     let meta = compact_exec_meta(&output);
     assert_eq!(meta["sandbox"], "macos_seatbelt");

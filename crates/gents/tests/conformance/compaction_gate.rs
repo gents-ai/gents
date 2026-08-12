@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::support::fixtures::test_identity;
-use super::support::interrupt::{create_runtime_request, BootedAgent};
+use super::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use super::support::streaming_backend::{MockStreamingBackend, StreamScript};
 
 const GATE_MODEL: &str = "default";
@@ -241,7 +241,7 @@ async fn boot_compaction_gate_agent(db: &support::TestDb, endpoint: &str) -> Boo
     let agent_did = agent.agent_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_gate_runtime_ready(db.node.as_ref(), &agent_did).await;
+    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
 
     BootedAgent::new(shutdown_tx, handle, agent_did)
 }
@@ -445,22 +445,6 @@ async fn upsert_gate_backend(node: &EmbeddedNode, endpoint: &str) {
         "upsert compaction-gate backend failed: {:?}",
         response.errors
     );
-}
-
-async fn wait_for_gate_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
-    let started = std::time::Instant::now();
-    loop {
-        if let Some(snapshot) = support::snapshots::fetch_runtime_snapshot(node, agent_did).await {
-            if snapshot.process_state == "ready" && snapshot.reconcile_phase == "idle" {
-                return;
-            }
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "timed out waiting for compaction-gate runtime to become ready"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
 }
 
 async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) {

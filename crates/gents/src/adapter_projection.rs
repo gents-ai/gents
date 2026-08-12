@@ -131,6 +131,10 @@ pub struct ProjectionProvenance {
     pub source_projection_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_did: Option<String>,
+    /// Always serialized on Gents-authored envelopes; defaulted on ingest so
+    /// external captures and envelopes exported before this field existed
+    /// keep deserializing (the published schema does not require it).
+    #[serde(default)]
     pub source_version_status: ProjectionSourceVersionStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rendered_request_refs: Vec<RenderedRequestProvenanceRef>,

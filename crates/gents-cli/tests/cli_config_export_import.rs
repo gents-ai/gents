@@ -178,6 +178,10 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
     let target_home = tempdir.path().join("target-home");
     fs::create_dir_all(&source_home)?;
     fs::create_dir_all(&target_home)?;
+    run_init_json(
+        &target_home,
+        &["--identity-only", "--agent-name", "cli-import-target"],
+    )?;
 
     let agent_name = format!("cli-import-{}", Uuid::new_v4().simple());
     let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
@@ -327,6 +331,14 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     let reapply_root = tempdir.path().join("reapply-root");
     fs::create_dir_all(&source_home)?;
     fs::create_dir_all(&target_home)?;
+    run_init_json(
+        &source_home,
+        &["--identity-only", "--agent-name", "cli-export-source"],
+    )?;
+    run_init_json(
+        &target_home,
+        &["--identity-only", "--agent-name", "cli-export-target"],
+    )?;
 
     let agent_name = format!("cli-export-apply-{}", Uuid::new_v4().simple());
     let model_name = format!("mock-model-{}", Uuid::new_v4().simple());

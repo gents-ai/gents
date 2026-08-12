@@ -142,10 +142,5 @@ fn attempt_for_request_for_agent(
 }
 
 fn response_status(row: &AgentResponseRow) -> Option<ResponseStatus> {
-    match row.status.as_deref().unwrap_or_default() {
-        "streaming" => Some(ResponseStatus::Streaming),
-        "complete" | "completed" => Some(ResponseStatus::Complete),
-        "error" | "failed" => Some(ResponseStatus::Error),
-        _ => None,
-    }
+    ResponseStatus::try_from(row.status.as_deref().unwrap_or_default()).ok()
 }
