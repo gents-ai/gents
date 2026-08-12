@@ -30,10 +30,10 @@ fn effective_deadline(
 
 /// Text for a managed-exec timeout. When the REQUEST deadline is what
 /// expired, this text never reaches the model: the dispatcher's envelope
-/// shares the same deadline and its `biased` select polls the (already
-/// elapsed) deadline branch before the tool's result, so the call resolves to
-/// `ToolOutcome::TimedOut` deterministically. A per-call cap expiry, by
-/// contrast, is an ordinary model-actionable tool result.
+/// shares the same deadline and resolves an elapsed deadline to
+/// `ToolOutcome::TimedOut`, including when this inner managed boundary wakes
+/// the dispatcher before its sibling deadline sleep. A per-call cap expiry,
+/// by contrast, is an ordinary model-actionable tool result.
 fn fs_runner_timed_out_result(
     tool_name: &str,
     request_deadline: Option<chrono::DateTime<chrono::Utc>>,
