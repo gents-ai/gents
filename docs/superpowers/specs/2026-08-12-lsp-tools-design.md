@@ -1,7 +1,7 @@
 # Native `lsp` tool (design)
 
 **Date:** 2026-08-12
-**Status:** Draft, ready for an implementation plan once this pass is accepted
+**Status:** Accepted. Implementation plan: `docs/superpowers/plans/2026-08-12-lsp-tools.md`
 **Issue:** #1106
 **Branch:** `feat/lsp-tools`
 **Worktree:** `../gents-lsp-tools`
