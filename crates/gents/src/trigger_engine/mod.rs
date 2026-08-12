@@ -306,11 +306,18 @@ impl TriggerEngine {
                 return result;
             }
         };
+        // Correlation scopes concurrency only for an actual group fire. A
+        // per-document trigger may carry correlation for lineage and fills,
+        // but Serial/LatestOnly remain trigger-wide as modeled in Lean.
+        let concurrency_correlation = intent
+            .group_vars
+            .as_ref()
+            .and_then(|_| intent.correlation.clone());
         let lock_key = (
             agent_did.clone(),
             trigger_id.clone(),
             intent.trigger_kind,
-            intent.correlation.clone(),
+            concurrency_correlation.clone(),
         );
         let lock = {
             let mut map = self.per_trigger_locks.lock().await;
@@ -376,7 +383,7 @@ impl TriggerEngine {
                     &agent_did,
                     &trigger_id,
                     intent.trigger_kind,
-                    intent.correlation.as_deref(),
+                    concurrency_correlation.as_deref(),
                 )
                 .await
             {
@@ -407,7 +414,7 @@ impl TriggerEngine {
                         &agent_did,
                         &trigger_id,
                         intent.trigger_kind,
-                        intent.correlation.as_deref(),
+                        concurrency_correlation.as_deref(),
                     )
                     .await
                 {

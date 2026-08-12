@@ -16,12 +16,15 @@
 //! - Task 22: `on_result` callback body for bookkeeping writes.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
@@ -43,6 +46,7 @@ use super::{FireIntent, TriggerKind, TriggerSource};
 const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
 const EVENT_SOURCE_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
+const GROUP_STARTUP_PAGE_BUDGET: usize = 1;
 const MAX_ACTIVE_GROUP_TIMERS: usize = 4096;
 const MAX_DORMANT_GROUP_TIMERS: usize = 4096;
 
@@ -73,9 +77,26 @@ struct GroupTrackingKey {
     correlation: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct GroupTriggerScanFingerprint {
+    source_collection: String,
+    filter: Option<String>,
+    correlation_field: Option<String>,
+}
+
+impl From<&crate::runtime_snapshot::ResolvedEventTrigger> for GroupTriggerScanFingerprint {
+    fn from(trigger: &crate::runtime_snapshot::ResolvedEventTrigger) -> Self {
+        Self {
+            source_collection: trigger.source_collection.clone(),
+            filter: trigger.filter.clone(),
+            correlation_field: trigger.correlation_field.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct GroupTimer {
-    first_seen: Instant,
+    first_seen: DateTime<Utc>,
     last_touched: Instant,
     dormant: bool,
 }
@@ -97,6 +118,9 @@ pub struct EventSource {
     group_timers: Arc<Mutex<HashMap<GroupTrackingKey, GroupTimer>>>,
     group_recovery_cursor: usize,
     group_page_cursors: HashMap<String, String>,
+    group_trigger_fingerprints: HashMap<String, GroupTriggerScanFingerprint>,
+    #[cfg(test)]
+    group_recovery_page_queries: AtomicUsize,
     /// Periodic live rescan that closes the lossy-subscription gap. The
     /// interval is stored on the source so a busy stream of `next_fire()` calls
     /// does not reset the cadence.
@@ -224,6 +248,9 @@ impl EventSource {
             group_timers: Arc::new(Mutex::new(HashMap::new())),
             group_recovery_cursor: 0,
             group_page_cursors: HashMap::new(),
+            group_trigger_fingerprints: HashMap::new(),
+            #[cfg(test)]
+            group_recovery_page_queries: AtomicUsize::new(0),
             rescan_tick: event_source_rescan_tick(EVENT_SOURCE_RESCAN_INTERVAL),
         }
     }
@@ -250,6 +277,11 @@ impl EventSource {
         let mut v: Vec<String> = self.desired_collections.iter().cloned().collect();
         v.sort();
         v
+    }
+
+    #[cfg(test)]
+    pub(crate) fn group_recovery_page_query_count(&self) -> usize {
+        self.group_recovery_page_queries.load(Ordering::Relaxed)
     }
 
     pub(crate) async fn reconcile_subscriptions(&mut self, snapshot: &ActiveRuntimeSnapshot) {
@@ -300,20 +332,47 @@ impl EventSource {
 
         self.desired_collections = desired;
 
-        let active_group_trigger_ids = snapshot
+        let mut group_triggers = snapshot
             .active_event_triggers()
             .values()
             .filter(|trigger| {
                 trigger.fire_mode == crate::runtime_snapshot::EventTriggerFireMode::PerGroup
             })
+            .cloned()
+            .collect::<Vec<_>>();
+        group_triggers.sort_by(|left, right| left.trigger_id.cmp(&right.trigger_id));
+        let active_group_trigger_ids = group_triggers
+            .iter()
             .map(|trigger| trigger.trigger_id.as_str())
+            .collect::<HashSet<_>>();
+        let changed_group_trigger_ids = group_triggers
+            .iter()
+            .filter_map(|trigger| {
+                let fingerprint = GroupTriggerScanFingerprint::from(trigger);
+                (self.group_trigger_fingerprints.get(&trigger.trigger_id) != Some(&fingerprint))
+                    .then(|| trigger.trigger_id.clone())
+            })
             .collect::<HashSet<_>>();
         self.group_timers
             .lock()
             .expect("group_timers mutex poisoned")
-            .retain(|key, _| active_group_trigger_ids.contains(key.trigger_id.as_str()));
-        self.group_page_cursors
-            .retain(|trigger_id, _| active_group_trigger_ids.contains(trigger_id.as_str()));
+            .retain(|key, _| {
+                active_group_trigger_ids.contains(key.trigger_id.as_str())
+                    && !changed_group_trigger_ids.contains(&key.trigger_id)
+            });
+        self.group_page_cursors.retain(|trigger_id, _| {
+            active_group_trigger_ids.contains(trigger_id.as_str())
+                && !changed_group_trigger_ids.contains(trigger_id)
+        });
+        self.group_trigger_fingerprints = group_triggers
+            .iter()
+            .map(|trigger| {
+                (
+                    trigger.trigger_id.clone(),
+                    GroupTriggerScanFingerprint::from(trigger),
+                )
+            })
+            .collect();
 
         for added_collection in &added {
             if let Err(err) = self.seed_seen_docs_for_collection(added_collection).await {
@@ -326,17 +385,26 @@ impl EventSource {
             }
         }
 
-        let mut group_triggers = snapshot
-            .active_event_triggers()
-            .values()
-            .filter(|trigger| {
-                trigger.fire_mode == crate::runtime_snapshot::EventTriggerFireMode::PerGroup
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        group_triggers.sort_by(|left, right| left.trigger_id.cmp(&right.trigger_id));
-        for trigger in group_triggers {
-            let intents = self.recover_trigger_groups(snapshot, &trigger).await;
+        // A snapshot generation bump is not permission to full-scan every
+        // source collection. Admit at most one page of changed group
+        // membership here; the existing rotating sweep eventually covers the
+        // remaining pages and triggers. Unrelated task/config updates do no
+        // startup recovery I/O at all.
+        for trigger in group_triggers
+            .iter()
+            .filter(|trigger| changed_group_trigger_ids.contains(&trigger.trigger_id))
+            .take(GROUP_STARTUP_PAGE_BUDGET)
+        {
+            let mut seen = HashSet::new();
+            let (intents, next_cursor, complete) = self
+                .recover_trigger_group_page(snapshot, trigger, None, &mut seen)
+                .await;
+            if complete {
+                self.group_page_cursors.remove(&trigger.trigger_id);
+            } else if let Some(next_cursor) = next_cursor {
+                self.group_page_cursors
+                    .insert(trigger.trigger_id.clone(), next_cursor);
+            }
             self.pending_intents
                 .lock()
                 .expect("pending_intents mutex poisoned")
@@ -748,46 +816,163 @@ impl EventSource {
         Ok(Some(encoded))
     }
 
-    fn group_timeout_elapsed(
+    pub(super) fn group_state_keys(
+        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        correlation: &str,
+    ) -> (String, String) {
+        let config_bytes = serde_json::to_vec(&GroupTriggerScanFingerprint::from(trigger))
+            .expect("group scan fingerprint is serializable");
+        let trigger_config_key = format!("{:x}", Sha256::digest(config_bytes));
+        let group_bytes = serde_json::to_vec(&(
+            trigger.trigger_id.as_str(),
+            trigger_config_key.as_str(),
+            correlation,
+        ))
+        .expect("group state identity is serializable");
+        let group_key = format!("{:x}", Sha256::digest(group_bytes));
+        (group_key, trigger_config_key)
+    }
+
+    async fn query_group_first_seen(
+        &self,
+        group_key: &str,
+    ) -> anyhow::Result<Option<DateTime<Utc>>> {
+        let group_key = crate::graphql::escape_graphql_string(group_key);
+        let query = format!(
+            r#"query {{
+                EventTriggerGroupState(
+                    filter: {{ group_key: {{ _eq: "{group_key}" }} }},
+                    limit: 1
+                ) {{ first_seen_at }}
+            }}"#,
+        );
+        let response = self.node.execute(&query).await;
+        if response.has_errors() {
+            anyhow::bail!(
+                "EventTriggerGroupState lookup failed: {:?}",
+                response.errors
+            );
+        }
+        let Some(value) = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("EventTriggerGroupState"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("first_seen_at"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Ok(None);
+        };
+        let parsed = DateTime::parse_from_rfc3339(value)
+            .map_err(|error| anyhow::anyhow!("invalid durable group first_seen_at: {error}"))?
+            .with_timezone(&Utc);
+        Ok(Some(parsed))
+    }
+
+    async fn load_or_create_group_first_seen(
+        &self,
+        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
+        correlation: &str,
+    ) -> anyhow::Result<DateTime<Utc>> {
+        let (group_key, trigger_config_key) = Self::group_state_keys(trigger, correlation);
+        if let Some(first_seen) = self.query_group_first_seen(&group_key).await? {
+            return Ok(first_seen);
+        }
+
+        let now = Utc::now();
+        let mutation = format!(
+            r#"mutation {{
+                create_EventTriggerGroupState(input: {{
+                    group_key: "{group_key}"
+                    trigger_id: "{trigger_id}"
+                    correlation: "{correlation}"
+                    trigger_config_key: "{trigger_config_key}"
+                    first_seen_at: "{first_seen_at}"
+                }}) {{ _docID }}
+            }}"#,
+            group_key = crate::graphql::escape_graphql_string(&group_key),
+            trigger_id = crate::graphql::escape_graphql_string(&trigger.trigger_id),
+            correlation = crate::graphql::escape_graphql_string(correlation),
+            trigger_config_key = crate::graphql::escape_graphql_string(&trigger_config_key),
+            first_seen_at = crate::graphql::escape_graphql_string(
+                &now.to_rfc3339_opts(SecondsFormat::Millis, true)
+            ),
+        );
+        let response = self.node.execute(&mutation).await;
+        if !response.has_errors() {
+            return Ok(now);
+        }
+
+        // A concurrent reconciler may have won the unique-key create. Read
+        // the canonical row before treating the mutation error as fatal.
+        if let Some(first_seen) = self.query_group_first_seen(&group_key).await? {
+            return Ok(first_seen);
+        }
+        anyhow::bail!(
+            "EventTriggerGroupState create failed: {:?}",
+            response.errors
+        )
+    }
+
+    async fn group_timeout_elapsed(
         &self,
         key: &GroupTrackingKey,
+        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
         timeout: Duration,
         reactivate: bool,
-    ) -> bool {
-        let now = Instant::now();
+    ) -> anyhow::Result<bool> {
+        let now_instant = Instant::now();
+        let cached = {
+            let mut timers = self
+                .group_timers
+                .lock()
+                .expect("group_timers mutex poisoned");
+            timers.get_mut(key).map(|timer| {
+                timer.last_touched = now_instant;
+                if reactivate {
+                    timer.dormant = false;
+                }
+                timer.first_seen
+            })
+        };
+        let first_seen = match cached {
+            Some(first_seen) => first_seen,
+            None => {
+                self.load_or_create_group_first_seen(trigger, &key.correlation)
+                    .await?
+            }
+        };
+        let timed_out = Utc::now()
+            .signed_duration_since(first_seen)
+            .to_std()
+            .is_ok_and(|elapsed| elapsed >= timeout);
+
         let mut timers = self
             .group_timers
             .lock()
             .expect("group_timers mutex poisoned");
-        if let Some(timer) = timers.get_mut(key) {
-            timer.last_touched = now;
-            if reactivate {
-                timer.dormant = false;
-            }
-            return now.duration_since(timer.first_seen) >= timeout;
+        if timers.contains_key(key) {
+            return Ok(timed_out);
         }
         let active_count = timers
             .iter()
             .filter(|(existing, timer)| existing.trigger_id == key.trigger_id && !timer.dormant)
             .count();
-        if active_count >= MAX_ACTIVE_GROUP_TIMERS {
-            tracing::warn!(
-                trigger_id = %key.trigger_id,
-                correlation = %key.correlation,
-                limit = MAX_ACTIVE_GROUP_TIMERS,
-                "event-trigger active timeout group cap reached; recovery sweep will retry",
+        if active_count < MAX_ACTIVE_GROUP_TIMERS {
+            timers.insert(
+                key.clone(),
+                GroupTimer {
+                    first_seen,
+                    last_touched: now_instant,
+                    dormant: false,
+                },
             );
-            return false;
         }
-        timers.insert(
-            key.clone(),
-            GroupTimer {
-                first_seen: now,
-                last_touched: now,
-                dormant: false,
-            },
-        );
-        false
+        // The cap bounds only the in-memory cache. Overflow groups use the
+        // durable clock on each fair rotating sweep, so capacity pressure
+        // cannot strand an otherwise eligible timeout fire.
+        Ok(timed_out)
     }
 
     fn mark_group_dormant(&self, key: &GroupTrackingKey) {
@@ -881,9 +1066,25 @@ impl EventSource {
             trigger_id: trigger.trigger_id.clone(),
             correlation: correlation.to_string(),
         };
-        let timed_out = trigger.group_timeout_secs.is_some_and(|seconds| {
-            self.group_timeout_elapsed(&key, Duration::from_secs(seconds), reactivate)
-        });
+        let timed_out = if let Some(seconds) = trigger.group_timeout_secs {
+            match self
+                .group_timeout_elapsed(&key, trigger, Duration::from_secs(seconds), reactivate)
+                .await
+            {
+                Ok(timed_out) => timed_out,
+                Err(error) => {
+                    tracing::warn!(
+                        trigger_id = %trigger.trigger_id,
+                        %correlation,
+                        %error,
+                        "event-trigger durable group clock failed; failing closed",
+                    );
+                    return None;
+                }
+            }
+        } else {
+            false
+        };
         if !group_candidate_eligible(
             docs.len(),
             expected,
@@ -1041,6 +1242,9 @@ impl EventSource {
         cursor: Option<&str>,
         seen_correlations: &mut HashSet<String>,
     ) -> (Vec<FireIntent>, Option<String>, bool) {
+        #[cfg(test)]
+        self.group_recovery_page_queries
+            .fetch_add(1, Ordering::Relaxed);
         let started = Instant::now();
         let Some(correlation_field) = trigger.correlation_field.as_deref() else {
             return (Vec::new(), None, true);
@@ -1150,30 +1354,9 @@ impl EventSource {
         (intents, next_cursor, row_count < GROUP_RECOVERY_PAGE_SIZE)
     }
 
-    async fn recover_trigger_groups(
-        &self,
-        snapshot: &ActiveRuntimeSnapshot,
-        trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
-    ) -> Vec<FireIntent> {
-        let mut cursor = None;
-        let mut seen = HashSet::new();
-        let mut intents = Vec::new();
-        loop {
-            let (page_intents, next_cursor, complete) = self
-                .recover_trigger_group_page(snapshot, trigger, cursor.as_deref(), &mut seen)
-                .await;
-            intents.extend(page_intents);
-            if complete || next_cursor == cursor {
-                break;
-            }
-            cursor = next_cursor;
-        }
-        intents
-    }
-
     async fn reconcile_due_and_rotating_groups(&mut self) -> Option<FireIntent> {
         let snapshot = self.snapshot_rx.borrow().clone();
-        let now = Instant::now();
+        let now = Utc::now();
         let due = {
             let timers = self
                 .group_timers
@@ -1185,7 +1368,10 @@ impl EventSource {
                 .filter_map(|(key, timer)| {
                     let trigger = snapshot.active_event_triggers().get(&key.trigger_id)?;
                     let timeout = Duration::from_secs(trigger.group_timeout_secs?);
-                    (now.duration_since(timer.first_seen) >= timeout).then(|| key.clone())
+                    now.signed_duration_since(timer.first_seen)
+                        .to_std()
+                        .is_ok_and(|elapsed| elapsed >= timeout)
+                        .then(|| key.clone())
                 })
                 .collect::<Vec<_>>()
         };

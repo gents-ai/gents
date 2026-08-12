@@ -109,6 +109,23 @@ fn parse_template_for_validation_collects_event_and_doc_paths() {
 }
 
 #[test]
+fn parse_template_for_validation_collects_group_paths() {
+    let template = "{{ group.correlation_value }}{% if group.complete %}complete{% endif %}";
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![
+            VariableRef {
+                path: vec!["group".to_string(), "correlation_value".to_string()],
+            },
+            VariableRef {
+                path: vec!["group".to_string(), "complete".to_string()],
+            },
+        ]
+    );
+}
+
+#[test]
 fn parse_template_for_validation_ignores_unrelated_identifiers() {
     let refs = parse_template_for_validation("hello {{ user.name }} world").unwrap();
     assert!(refs.is_empty());

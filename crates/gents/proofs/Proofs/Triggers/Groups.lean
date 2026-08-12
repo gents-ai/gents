@@ -50,6 +50,45 @@ structure MarkerState where
   materialized : List CorrelatedTriggerKey
   deriving DecidableEq, Repr
 
+/-!
+Timeout eligibility reads an immutable durable first-seen clock.  The process
+cache may contain the same value or be absent after restart/capacity eviction;
+absence falls back to the durable value and cannot change the deadline.
+-/
+
+structure TimeoutObservation where
+  durableFirstSeen : Nat
+  cachedFirstSeen : Option Nat
+  deriving DecidableEq, Repr
+
+def TimeoutObservation.observedFirstSeen (observation : TimeoutObservation) : Nat :=
+  observation.cachedFirstSeen.getD observation.durableFirstSeen
+
+def TimeoutObservation.elapsed
+    (observation : TimeoutObservation) (now timeout : Nat) : Bool :=
+  observation.observedFirstSeen + timeout <= now
+
+def TimeoutObservation.evictCache (observation : TimeoutObservation) : TimeoutObservation :=
+  { observation with cachedFirstSeen := none }
+
+theorem timeout_cache_eviction_preserves_deadline
+    (observation : TimeoutObservation)
+    (hConsistent : observation.cachedFirstSeen = none ∨
+      observation.cachedFirstSeen = some observation.durableFirstSeen)
+    (now timeout : Nat) :
+    observation.evictCache.elapsed now timeout = observation.elapsed now timeout := by
+  rcases hConsistent with hMissing | hPresent
+  · simp [TimeoutObservation.evictCache, TimeoutObservation.elapsed,
+      TimeoutObservation.observedFirstSeen, hMissing]
+  · simp [TimeoutObservation.evictCache, TimeoutObservation.elapsed,
+      TimeoutObservation.observedFirstSeen, hPresent]
+
+theorem timeout_restart_preserves_deadline
+    (firstSeen now timeout : Nat) :
+    (TimeoutObservation.mk firstSeen none).elapsed now timeout =
+      (TimeoutObservation.mk firstSeen (some firstSeen)).elapsed now timeout := by
+  simp [TimeoutObservation.elapsed, TimeoutObservation.observedFirstSeen]
+
 def MarkerState.has (state : MarkerState) (key : CorrelatedTriggerKey) : Bool :=
   state.materialized.contains key
 

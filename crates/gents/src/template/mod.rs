@@ -382,7 +382,7 @@ fn utf8_char_len(first: u8) -> usize {
 }
 
 fn is_tracked_root(ident: &str) -> bool {
-    matches!(ident, "event" | "doc" | "args" | "node" | "ctx")
+    matches!(ident, "event" | "doc" | "args" | "group" | "node" | "ctx")
 }
 
 fn is_ident_start(c: u8) -> bool {

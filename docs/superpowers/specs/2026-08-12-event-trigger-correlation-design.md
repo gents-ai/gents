@@ -1,4 +1,4 @@
-# Event-trigger correlation: run-scoped gates and fan-in (design)
+# Event-trigger correlation and fan-in (design)
 
 Issue: #1096. Predecessors: `2026-08-07-event-trigger-graph-experiments-design.md`
 (document-pipeline DAGs), `2026-08-07-datastore-tool-surface-design.md`
@@ -47,13 +47,15 @@ to this documented producer obligation.
 
 ## Decision
 
-Propagate a tag; derive everything else from documents that already exist.
+Propagate a tag; derive membership and resolution from documents that already
+exist.
 
-**Zero new collections.** Membership and successful-fire markers are queries
-over source documents and `AgentRequest` rows. The only in-memory group state
-is timeout bookkeeping, which is reconstructible. Values needed by runtime
-filled write-tool fields are snapshotted on the request as immutable trigger
-execution context; that is per-request lineage, not mutable group state.
+Membership and successful-fire markers are queries over source documents and
+`AgentRequest` rows. One internal `EventTriggerGroupState` collection persists
+the first-seen clock for timeout groups; it is not a membership snapshot or a
+fired marker. Values needed by runtime-filled write-tool fields are snapshotted
+on the request as immutable trigger execution context; that is per-request
+lineage, not mutable group state.
 
 ## What already exists
 
@@ -268,12 +270,13 @@ bindings belong to a trigger, not merely to a collection.
 
 Group reconciliation has three paths:
 
-1. **Startup/config activation:** perform one deterministic, paginated recovery
-   sweep for each active `per_group` trigger. It queries durable source rows and
-   does not depend on a row being "first seen." The ordinary seed still
-   suppresses old documents for `per_document`; the recovery sweep discovers
-   pre-existing groups. Complete groups are eligible immediately and
-   incomplete groups start fresh timeout clocks.
+1. **Startup/config activation:** admit at most one deterministic recovery page
+   across triggers whose membership fingerprint (`source_collection`,
+   `filter`, `correlation_field`) is new or changed. Unrelated snapshot
+   generation bumps perform no group-recovery query. The ordinary seed still
+   suppresses old documents for `per_document`; the rotating sweep discovers
+   the remaining pre-existing groups. Complete groups are eligible immediately
+   and incomplete groups load or create their durable first-seen clocks.
 2. **Steady-state subscription:** hydrate the new source document, identify its
    trigger/correlation key, and reconcile only that dirty group.
 3. **Loss repair:** the existing collection-level `rescan_tick` discovers new
@@ -288,14 +291,15 @@ markers with one `_in` query and discard already-marked groups before hydrating
 their full documents; do not load all historical markers into an unbounded
 process cache and do not issue one marker query per historical group.
 
-This makes the steady-state processing cost proportional to new/dirty groups
-plus due timers. The existing rescan still reads collection document ids and
-therefore retains its current linear-in-collection-size I/O cost, but fan-in
-must not multiply that into one full collection scan per trigger per five-second
-tick. Startup and rotating recovery remain linear in historical matching rows;
-large installations need source retention/archival. This implementation targets
-the existing non-catalog event-source scale and records page, row, dirty-group,
-marker-prune, and sweep-duration metrics.
+This makes the steady-state processing cost proportional to new/dirty groups,
+due cached timers, and one rotating recovery page. The existing rescan still
+reads collection document ids and therefore retains its current
+linear-in-collection-size I/O cost, but fan-in does not multiply that into a
+full collection scan per trigger or generation bump. A complete rotating cycle
+remains linear in historical matching rows; large installations need source
+retention/archival. This implementation targets the existing non-catalog
+event-source scale and records page, row, dirty-group, marker-prune, and
+sweep-duration metrics.
 
 Group membership is the set of source documents that satisfy **both** the
 trigger's existing `filter` and
@@ -316,10 +320,12 @@ This marker query runs only for an intent with `group_vars: Some`; ordinary
 correlated `per_document` intents continue to materialize once per matching
 source document.
 
-This answers the issue's open durability question without storing group state:
-a node restart can neither double-materialize a group that already has a
-request nor lose an eligible group, because the marker is the durable request
-row and membership is rebuilt by the explicit group reconciler.
+This answers the issue's resolution-durability question without a separate
+fired marker: a node restart can neither double-materialize a group that
+already has a request nor lose an eligible group, because the marker is the
+durable request row and membership is rebuilt by the explicit group reconciler.
+`EventTriggerGroupState` affects timeout liveness only and is never consulted
+for the already-fired decision.
 
 The marker check and request creation occur under the same tag-keyed process
 lock for **all** concurrency modes, including `parallel`; `serial`'s active-row
@@ -361,50 +367,55 @@ contract violation and suppressed.
 
 ### Timeout
 
-Rides the existing 5s `rescan_tick`. Group first-seen is in-memory, so a
-restart **restarts the timeout clock**: a partial fire is delayed, never
-duplicated (the idempotence query holds). That is the accepted cost of keeping
-zero persisted group state.
+Rides the existing 5s `rescan_tick`. The runtime loads or creates one immutable
+`EventTriggerGroupState.first_seen_at` row keyed by a digest of trigger id,
+membership fingerprint, and correlation. The in-memory timer is only a bounded
+cache, so restart and cache pressure preserve the timeout deadline. Changing
+the source collection, filter, or correlation field creates a fresh clock;
+task and count-policy changes retain the original first-seen instant.
 
 `group_min_count` gates the timeout fire and defaults to 1. Below the floor the
 runtime does not create a permanent "expired" tombstone; it keeps the group
 eligible and fires on the first later reconciliation at which the timeout has
-elapsed and the floor is met. This is the only restart-stable zero-state
-semantics. Permanent silent expiry would require a durable resolution marker
-and is not promised by this design.
+elapsed and the floor is met. Permanent silent expiry would require a durable
+resolution marker and is not promised by this design.
 
 After a successful materialization (or discovery of an existing marker), evict
-the group's timeout entry. Query or materialization failures retain the entry
-for retry. Removing or disabling a trigger evicts its entries; re-enabling it
-reconstructs groups and restarts their clocks.
+the group's in-memory timeout entry. Query or materialization failures retain
+the cache entry for retry. Removing or disabling a trigger evicts cache entries;
+re-enabling it reloads the durable clock.
 
 Timeout working state is bounded by
 `MAX_ACTIVE_EVENT_TRIGGER_GROUPS_PER_TRIGGER = 4096`. When a timeout elapses
-below `group_min_count`, remove the group from the active timer set and retain
-only its key, last membership count, and elapsed status in a bounded LRU
-dormant cache capped by
+below `group_min_count`, mark the cached timer dormant so due-timer processing
+does not query it repeatedly. Dormant entries are retained in a bounded LRU
+cache capped by
 `MAX_DORMANT_EVENT_TRIGGER_GROUPS_PER_TRIGGER = 4096`. It is not queried on
 every tick. A newly discovered member reactivates and reconciles the group
-immediately; if its dormant entry was evicted (or the process restarted), its
-timeout clock restarts. When the active cap is full, new correlations remain
-discoverable by the rotating sweep and are admitted as slots become available;
-emit a rate-limited degraded-status signal instead of growing memory or
-dropping them permanently.
+immediately. When the active cache is full, new correlations remain
+discoverable by the rotating sweep and consult their durable clock without
+entering the cache; capacity pressure can add database reads but cannot strand
+an eligible timeout fire.
+
+Clock rows are append-only in this release, so durable storage grows by one
+small row per distinct timeout correlation. The runtime never scans that
+collection: it performs an indexed key lookup only for an unresolved group,
+and AgentRequest marker pruning prevents lookups for resolved groups. Retention
+or compaction of historical clock rows is follow-up operational work.
 
 ### Concurrency gate, with the tag
 
-- `serial` — one in-flight fire per `(trigger, run)`. Concurrent runs no longer
-  drop each other's fires. Multiple `per_document` members inside the **same**
-  run retain today's drop-on-busy behavior; this feature does not turn serial
-  into a queue.
-- `latest_only` — supersedes only within the run. Concurrent runs no longer
-  cancel each other's work.
+- `serial` — trigger-wide for `per_document`, matching the Lean concurrency
+  model even when correlation is carried for lineage/fills; per `(trigger,
+  run)` for `per_group`.
+- `latest_only` — supersedes trigger-wide for `per_document`; supersedes only
+  within the run for `per_group`.
 - `parallel` — requests still execute in parallel; only the per-key group
   marker decision/materialization critical section is serialized.
 
 The existing expired-claim carve-out (`row_gates_serial_fire`,
 `production_materializer.rs:87`) is unaffected and composes: a past-deadline
-orphan still does not gate, now scoped to its own run.
+orphan still does not gate, scoped according to the fire mode above.
 
 ## Validation
 
@@ -599,9 +610,9 @@ its natural habitat. Adopting this pack shape there is follow-up work.
   making them cheap to bound is deliberately out of scope here.
 - **A `TriggerRun` collection.** Everything it would hold is derivable from
   tagged `AgentRequest` rows.
-- **Persisted timeout or permanent-expiry state.** See the timeout/min-count
-  semantics above. Source membership and successful resolution are durable;
-  clocks are not.
+- **Permanent-expiry state.** See the timeout/min-count semantics above. Source
+  membership, first-seen clocks, and successful resolution are durable; a
+  below-floor timeout does not permanently close the group.
 - **Migration of pre-feature stores.** This is an accepted breaking schema cut;
   existing homes must be reinitialized. No patch step, lens, or data backfill
   ships with the feature.
@@ -618,8 +629,8 @@ the foundation order as reviewable commits:
 | PR / commit | Contents |
 | --- | --- |
 | **Runtime PR, commit 1** | Expand the Lean trigger key; add `Proofs/TriggerGroups`, durable-lineage obligations, and generated conformance cases. |
-| **Runtime PR, commit 2** | Update all canonical `AgentRequest` / `EventTrigger` SDL fields together and refresh frozen baseline pins. Add no migration step, lens, or backfill. |
-| **Runtime PR, commit 3** | Implement correlation through materialization, run-scoped gate/marker queries, bounded locks, timeline/protocol/CLI projections, immutable trigger context, parent-derived inheritance, runtime scopes, and write-tool fills. |
+| **Runtime PR, commit 2** | Update all canonical `AgentRequest` / `EventTrigger` SDL fields, add the internal `EventTriggerGroupState` clock collection, and refresh frozen baseline pins. Add no migration step, lens, or backfill. |
+| **Runtime PR, commit 3** | Implement correlation through materialization, fire-mode-scoped gate/marker queries, bounded locks, timeline/protocol/CLI projections, immutable trigger context, parent-derived inheritance, runtime scopes, and write-tool fills. |
 | **Runtime PR, commit 4** | Implement `per_group`: combined-filter membership, startup/rotating recovery cursors, dirty-group fast path, batched marker pruning, bounded active/dormant tracking, count and timeout-only modes, deterministic scope, validation, metrics, restart/retry behavior, and e2e tests. Keep the existing EventDelivery contract per-document. |
 | **Demo PR** | `demo/code-review` pack + deterministic graph acceptance checks + operator README. |
 
@@ -638,7 +649,7 @@ contains a stored-but-unused field or a schema/runtime mismatch.
 - Abandoned below-floor groups do not cause unbounded active timers or
   per-tick queries; later membership can reactivate them.
 - A restart mid-group neither duplicates a materialized group nor loses a
-  durable eligible group; it may delay a timeout by one full timeout window.
+  durable eligible group or restarts its timeout deadline.
 - On a fresh post-cut store, triggers without the new fields behave exactly as
   today.
 - `config validate` rejects every invalid field combination listed above.

@@ -328,10 +328,66 @@ async fn dispatch_serial_skips_when_inflight_exists() {
 }
 
 #[tokio::test]
-async fn dispatch_serial_scopes_active_requests_by_correlation() {
+async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
     let task = resolved_task("run {{ event.correlation }}");
     let trigger = ResolvedEventTrigger {
         correlation_field: Some("run_id".to_string()),
+        ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
+    };
+    let behavior = integration_test_behavior("general");
+    let snapshot = Arc::new(
+        ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+            "general".to_string(),
+            vec![behavior],
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .with_event_triggers(
+            HashMap::from([("event-1".to_string(), trigger)]),
+            HashSet::new(),
+        )
+        .with_principal(stub_principal())
+        .activate(1, HashMap::new()),
+    );
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    materializer.mark_nonterminal("event-1", TriggerKind::Event);
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let make_intent = |correlation: &str| FireIntent {
+        trigger_id: Some("event-1".to_string()),
+        trigger_kind: TriggerKind::Event,
+        task: task.clone(),
+        concurrency: ConcurrencyMode::Serial,
+        event_vars: serde_json::json!({
+            "source_doc_id": format!("doc-{correlation}"),
+            "correlation": correlation,
+        }),
+        doc_vars: Some(serde_json::json!({"run_id": correlation})),
+        correlation: Some(correlation.to_string()),
+        group_vars: None,
+        trigger_context: None,
+        args_vars: None,
+        pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    };
+
+    let same_run = engine.dispatch(make_intent("run-a")).await;
+    let other_run = engine.dispatch(make_intent("run-b")).await;
+
+    assert!(matches!(same_run, FireResult::Skipped { .. }));
+    assert!(matches!(other_run, FireResult::Skipped { .. }));
+    assert!(materializer.calls().is_empty());
+}
+
+#[tokio::test]
+async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
+    let task = resolved_task("run {{ group.correlation_value }}");
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".to_string()),
+        expected_count: Some(2),
         ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
     };
     let behavior = integration_test_behavior("general");
@@ -366,7 +422,12 @@ async fn dispatch_serial_scopes_active_requests_by_correlation() {
         }),
         doc_vars: Some(serde_json::json!({"run_id": correlation})),
         correlation: Some(correlation.to_string()),
-        group_vars: None,
+        group_vars: Some(serde_json::json!({
+            "correlation_value": correlation,
+            "count": 2,
+            "docs": [],
+            "complete": true,
+        })),
         trigger_context: None,
         args_vars: None,
         pre_materialized_request_id: None,

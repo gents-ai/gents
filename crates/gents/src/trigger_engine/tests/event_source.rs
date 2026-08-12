@@ -326,6 +326,172 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
     assert!(doc_ids.windows(2).all(|pair| pair[0] < pair[1]));
 }
 
+#[tokio::test]
+async fn per_group_timeout_uses_durable_first_seen_clock() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type DurableGroupMember {
+            run_id: String
+            value: String
+        }"#,
+    )
+    .await
+    .expect("group source schema");
+    let response = node
+        .execute(
+            r#"mutation {
+                create_DurableGroupMember(input: { run_id: "run-old", value: "partial" }) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let task = resolved_task("{{ group.correlation_value }} {{ group.complete }}");
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count: Some(2),
+        group_timeout_secs: Some(60),
+        group_min_count: 1,
+        ..resolved_event_trigger("durable-group-trigger", "DurableGroupMember", task)
+    };
+    let (group_key, trigger_config_key) = EventSource::group_state_keys(&trigger, "run-old");
+    let first_seen_at =
+        (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339_opts(SecondsFormat::Millis, true);
+    let mutation = format!(
+        r#"mutation {{
+            create_EventTriggerGroupState(input: {{
+                group_key: "{}"
+                trigger_id: "durable-group-trigger"
+                correlation: "run-old"
+                trigger_config_key: "{}"
+                first_seen_at: "{}"
+            }}) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&group_key),
+        escape_graphql_string(&trigger_config_key),
+        escape_graphql_string(&first_seen_at),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("durable-group-trigger".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node, CancellationToken::new());
+
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("durably elapsed timeout recovery")
+        .expect("partial group above the floor must fire");
+    assert_eq!(intent.correlation.as_deref(), Some("run-old"));
+    assert_eq!(intent.group_vars.as_ref().unwrap()["complete"], false);
+}
+
+#[test]
+fn group_state_identity_changes_only_with_membership_definition() {
+    let task = resolved_task("first prompt");
+    let mut trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count: Some(2),
+        ..resolved_event_trigger("group-trigger", "GroupMember", task)
+    };
+    let initial = EventSource::group_state_keys(&trigger, "run-a");
+
+    trigger.task.prompt_template = "changed prompt".into();
+    trigger.expected_count = Some(3);
+    assert_eq!(
+        EventSource::group_state_keys(&trigger, "run-a"),
+        initial,
+        "task and policy changes must not restart a group's first-seen clock",
+    );
+
+    trigger.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
+    assert_ne!(
+        EventSource::group_state_keys(&trigger, "run-a"),
+        initial,
+        "membership filter changes must use fresh recovery state",
+    );
+}
+
+#[tokio::test]
+async fn generation_bump_recovers_only_when_group_membership_definition_changes() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type RecoveryFingerprintMember {
+            run_id: String
+            kind: String
+        }"#,
+    )
+    .await
+    .expect("group source schema");
+
+    let task = resolved_task("first prompt");
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count: Some(2),
+        ..resolved_event_trigger("fingerprint-trigger", "RecoveryFingerprintMember", task)
+    };
+    let second_trigger = ResolvedEventTrigger {
+        trigger_id: "fingerprint-trigger-2".into(),
+        ..trigger.clone()
+    };
+    let snapshot_one = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            ("fingerprint-trigger".to_string(), trigger.clone()),
+            ("fingerprint-trigger-2".to_string(), second_trigger.clone()),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot_one.clone());
+    let mut source = EventSource::new(rx, node, CancellationToken::new());
+    source.reconcile_subscriptions(snapshot_one.as_ref()).await;
+    assert_eq!(source.group_recovery_page_query_count(), 1);
+
+    let mut task_only_change = trigger.clone();
+    task_only_change.task.prompt_template = "second prompt".into();
+    let snapshot_two = snapshot_with_event_triggers(
+        2,
+        HashMap::from([
+            ("fingerprint-trigger".to_string(), task_only_change),
+            ("fingerprint-trigger-2".to_string(), second_trigger.clone()),
+        ]),
+    );
+    source.reconcile_subscriptions(snapshot_two.as_ref()).await;
+    assert_eq!(
+        source.group_recovery_page_query_count(),
+        1,
+        "an unrelated snapshot generation bump must not launch recovery I/O",
+    );
+
+    let mut membership_change = trigger;
+    membership_change.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
+    let snapshot_three = snapshot_with_event_triggers(
+        3,
+        HashMap::from([
+            ("fingerprint-trigger".to_string(), membership_change),
+            ("fingerprint-trigger-2".to_string(), second_trigger),
+        ]),
+    );
+    source
+        .reconcile_subscriptions(snapshot_three.as_ref())
+        .await;
+    assert_eq!(
+        source.group_recovery_page_query_count(),
+        2,
+        "a membership-definition change must restart bounded recovery",
+    );
+}
+
 /// Task 21, Step 1: the filter-probe path must gate the fire on the
 /// trigger's operator-authored filter. With `filter: { kind: { _eq: "signup" }}`
 /// live on the trigger:

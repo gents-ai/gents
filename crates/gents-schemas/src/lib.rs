@@ -55,6 +55,9 @@ pub const SCHEDULE_NAME: &str = "Schedule";
 pub const SCHEDULE: &str = include_str!("../schemas/agent/schedule.graphql");
 pub const EVENT_TRIGGER_NAME: &str = "EventTrigger";
 pub const EVENT_TRIGGER: &str = include_str!("../schemas/agent/event_trigger.graphql");
+pub const EVENT_TRIGGER_GROUP_STATE_NAME: &str = "EventTriggerGroupState";
+pub const EVENT_TRIGGER_GROUP_STATE: &str =
+    include_str!("../schemas/agent/event_trigger_group_state.graphql");
 pub const PEER_PAIRING_DESIRED_NAME: &str = "PeerPairingDesired";
 pub const PEER_PAIRING_DESIRED: &str =
     include_str!("../schemas/agent/peer_pairing_desired.graphql");
@@ -117,6 +120,7 @@ pub const ALL: &[&str] = &[
     TASK,
     SCHEDULE,
     EVENT_TRIGGER,
+    EVENT_TRIGGER_GROUP_STATE,
     PEER_PAIRING_DESIRED,
     DATA_PLANE_PAIRING_DESIRED,
     PEER_PAIRING_APPLIED,
@@ -158,6 +162,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     TASK_NAME,
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,
+    EVENT_TRIGGER_GROUP_STATE_NAME,
     PEER_PAIRING_DESIRED_NAME,
     DATA_PLANE_PAIRING_DESIRED_NAME,
     PEER_PAIRING_APPLIED_NAME,
@@ -194,6 +199,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     TASK_NAME,
     SCHEDULE_NAME,
     EVENT_TRIGGER_NAME,
+    EVENT_TRIGGER_GROUP_STATE_NAME,
 ];
 
 #[cfg(test)]
