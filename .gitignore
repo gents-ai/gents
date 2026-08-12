@@ -4,6 +4,7 @@
 /crates/gents/proofs/build
 /demo/home/
 /demo/*.log
+/demo/*/runs/
 /vendor/
 
 # TLA+ tooling and TLC state output
