@@ -115,6 +115,22 @@ impl BackgroundCompletionObserver {
                 );
             }
         }
+        let wake_redrive = crate::RequestLifecycle::redrive_failed_background_wakeups(
+            self.node.as_ref(),
+            &self.local_did,
+        )
+        .await?;
+        if !wake_redrive.is_noop() {
+            tracing::debug!(
+                redriven = wake_redrive.redriven,
+                already_redriven = wake_redrive.already_redriven,
+                coalesced = wake_redrive.coalesced,
+                ineligible = wake_redrive.ineligible,
+                failed = wake_redrive.failed,
+                scanned = wake_redrive.scanned,
+                "redrove failed background-completion wakes"
+            );
+        }
         let unclaimed =
             reconcile_unclaimed_cross_deployment_spawns(self.node.clone(), &self.local_did).await?;
         if !unclaimed.is_empty() {

@@ -532,7 +532,7 @@ async fn wait_for_background_theorem_child_lifecycle_state(
 
 pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 22);
+    assert_eq!(cases.len(), 26);
 
     let names = cases
         .iter()
@@ -549,6 +549,10 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
             "background_recovery_running_live_parent_to_cancelled",
             "background_completion_source_writes_canonical_key",
             "terminal_completion_message_precedes_claimed_continuation",
+            "failed_background_wake_with_budget_redrives",
+            "failed_background_wake_exhausted_budget_stops",
+            "generic_scheduled_failure_is_not_background_redrive",
+            "non_latest_background_wake_does_not_redrive",
             "legacy_subagent_completion_source_aliases_canonical_key",
             "list_processes_same_requester_next_turn_authorized",
             "read_process_same_requester_next_turn_authorized",
@@ -634,6 +638,28 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
         lean_r6_backgrounding_case("legacy_subagent_completion_source_aliases_canonical_key");
     assert_eq!(legacy.queue_source.as_deref(), Some("subagent_completion"));
     assert_eq!(legacy.queue_key.as_deref(), canonical.queue_key.as_deref());
+
+    let redrive = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
+    assert!(redrive.legal);
+    assert_eq!(redrive.group, "completion_redrive");
+    assert_eq!(redrive.action, "redrive_failed_background_wake");
+    assert_eq!(redrive.retry_count, Some(1));
+    assert_eq!(redrive.max_retries, Some(3));
+    assert_eq!(redrive.post_retry_count, Some(2));
+    assert_eq!(redrive.is_latest, Some(true));
+
+    let exhausted = lean_r6_backgrounding_case("failed_background_wake_exhausted_budget_stops");
+    assert!(!exhausted.legal);
+    assert_eq!(exhausted.retry_count, exhausted.max_retries);
+    assert_eq!(exhausted.post_retry_count, None);
+
+    let generic = lean_r6_backgrounding_case("generic_scheduled_failure_is_not_background_redrive");
+    assert!(!generic.legal);
+    assert_eq!(generic.queue_source.as_deref(), Some("user"));
+
+    let non_latest = lean_r6_backgrounding_case("non_latest_background_wake_does_not_redrive");
+    assert!(!non_latest.legal);
+    assert_eq!(non_latest.is_latest, Some(false));
 
     for case in cases.iter().filter(|case| case.group == "native_lifecycle") {
         drive_r6_native_lifecycle_case(case).await;

@@ -165,6 +165,14 @@ pub(crate) struct LeanR6BackgroundingCase {
     pub(crate) error_code: Option<String>,
     pub(crate) queue_source: Option<String>,
     pub(crate) queue_key: Option<String>,
+    #[serde(default)]
+    pub(crate) retry_count: Option<usize>,
+    #[serde(default)]
+    pub(crate) max_retries: Option<usize>,
+    #[serde(default)]
+    pub(crate) post_retry_count: Option<usize>,
+    #[serde(default)]
+    pub(crate) is_latest: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -715,6 +715,14 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
                     "recovered stuck requests"
                 );
             }
+            if report.background_wakes_redriven > 0 {
+                recovered_any = true;
+                tracing::info!(
+                    agent_did = %agent_did,
+                    count = report.background_wakes_redriven,
+                    "redrove failed background-completion wakes"
+                );
+            }
             if report.responses_recovered > 0 {
                 recovered_any = true;
                 tracing::info!(
