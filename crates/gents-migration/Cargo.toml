@@ -9,7 +9,7 @@ build = "build.rs"
 
 [dependencies]
 anyhow.workspace = true
-defra-node.workspace = true
+defra-node = { workspace = true, features = ["native", "wasmtime-runtime"] }
 gents-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
