@@ -106,7 +106,10 @@ fn reject_self_config_keys(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-pub fn apply_overrides(mut catalog: Vec<CatalogServer>, doc: &LspConfigDocument) -> Vec<CatalogServer> {
+pub fn apply_overrides(
+    mut catalog: Vec<CatalogServer>,
+    doc: &LspConfigDocument,
+) -> Vec<CatalogServer> {
     let Some(overrides) = &doc.servers else {
         return catalog;
     };

@@ -4,13 +4,17 @@ use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::shared::{ToolContext, ToolError};
 
 use super::auth::LspAction;
-use super::catalog::{primary_for_file, CatalogServer};
+use super::catalog::{family_eligible, marker_matches, primary_for_file, CatalogServer};
 use super::client::LspClient;
-use super::edits::{
-    apply_workspace_edit, redact_outside_root, resolve_inbound_path, walk_uris,
-};
-use super::encoding::{offset_to_position, PositionEncoding};
+use super::edits::{apply_workspace_edit, redact_outside_root, resolve_inbound_path, walk_uris};
+use super::encoding::offset_to_position;
 use super::pool::LspLease;
+
+pub(crate) const MAX_DIAGNOSTICS: usize = 50;
+pub(crate) const MAX_WORKSPACE_SYMBOLS: usize = 200;
+pub(crate) const MAX_REFERENCES: usize = 50;
+pub(crate) const MAX_RENAME_PAIRS: usize = 1_000;
+pub(crate) const MAX_GLOB_TARGETS: usize = 20;
 
 pub const READ_REQUEST_METHODS: &[&str] = &[
     "textDocument/hover",
@@ -66,7 +70,7 @@ pub async fn dispatch(
         }
         action => {
             let lease = lease.ok_or_else(|| unavailable("no language server"))?;
-            run_file_action(context, lease.client(), servers, action, &req).await
+            run_file_action(context, lease.client(), config, servers, action, &req).await
         }
     }
 }
@@ -74,6 +78,7 @@ pub async fn dispatch(
 async fn run_file_action(
     context: &ToolContext,
     client: &LspClient,
+    config: &super::LspToolConfig,
     servers: &[CatalogServer],
     action: LspAction,
     req: &ActionRequest,
@@ -88,9 +93,13 @@ async fn run_file_action(
     if file == "*" {
         return workspace_action(context, client, action, req).await;
     }
+    if looks_like_glob(file) {
+        return glob_action(context, client, config, servers, action, file).await;
+    }
     let path = resolve_inbound_path(context, file).map_err(|err| policy(err))?;
-    let text = std::fs::read_to_string(&path)
-        .map_err(|err| ToolError::reported_failure(FailureClass::ArgumentInvalid, err.to_string()))?;
+    let text = std::fs::read_to_string(&path).map_err(|err| {
+        ToolError::reported_failure(FailureClass::ArgumentInvalid, err.to_string())
+    })?;
     let uri = format!("file://{}", path.display());
     let _ = client
         .notify(
@@ -114,11 +123,9 @@ async fn run_file_action(
         req.symbol.as_deref().unwrap_or(""),
     )
     .or_else(|| {
-        req.symbol.as_ref().map(|_| {
-            super::encoding::LspPosition {
-                line: req.line.unwrap_or(1).saturating_sub(1),
-                character: 0,
-            }
+        req.symbol.as_ref().map(|_| super::encoding::LspPosition {
+            line: req.line.unwrap_or(1).saturating_sub(1),
+            character: 0,
         })
     });
     let method = match action {
@@ -150,6 +157,19 @@ async fn run_file_action(
             .ok_or_else(|| arg_invalid("new_name required"))?;
         params["newName"] = json!(name);
     }
+    if matches!(action, LspAction::RenameFile) {
+        let dest = req
+            .new_name
+            .as_deref()
+            .ok_or_else(|| arg_invalid("new_name required for rename_file"))?;
+        let dest_path = resolve_inbound_path(context, dest).map_err(policy)?;
+        params = json!({
+            "files": [{
+                "oldUri": uri,
+                "newUri": format!("file://{}", dest_path.display())
+            }]
+        });
+    }
     let result = client
         .request(method, params)
         .await
@@ -172,9 +192,27 @@ async fn run_file_action(
             result.clone()
         };
         let applied = apply_workspace_edit(context, client, &edit).await?;
+        if matches!(action, LspAction::RenameFile) {
+            if let Some(dest) = req.new_name.as_deref() {
+                if let Ok(dest_path) = resolve_inbound_path(context, dest) {
+                    if path.exists() && path != dest_path {
+                        if let Some(parent) = dest_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::rename(&path, &dest_path);
+                    }
+                }
+            }
+        }
         return Ok(format!("Applied edit to {applied} file(s)"));
     }
-    Ok(truncate_model_output(format_result(context, action, result)))
+    let mut output = truncate_model_output(format_result(context, action, result));
+    if matches!(action, LspAction::Diagnostics) {
+        if let Some(linter) = run_linter_diagnostics(config, servers, &path).await {
+            output = format!("{output}\n{linter}");
+        }
+    }
+    Ok(output)
 }
 
 async fn workspace_action(
@@ -194,9 +232,7 @@ async fn workspace_action(
                 .await
                 .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
             Ok(truncate_model_output(format_result(
-                context,
-                action,
-                result,
+                context, action, result,
             )))
         }
         LspAction::Diagnostics => {
@@ -204,14 +240,18 @@ async fn workspace_action(
                 .request("workspace/diagnostic", json!({ "identifier": "gents" }))
                 .await
             {
-                Ok(result) => Ok(truncate_model_output(format_result(context, action, result))),
+                Ok(result) => Ok(truncate_model_output(format_result(
+                    context, action, result,
+                ))),
                 Err(_) => Ok(
                     "workspace diagnostics require workspace/diagnostic; pass a file or glob"
                         .into(),
                 ),
             }
         }
-        _ => Err(arg_invalid("file: * is only valid for diagnostics, symbols, or reload")),
+        _ => Err(arg_invalid(
+            "file: * is only valid for diagnostics, symbols, or reload",
+        )),
     }
 }
 
@@ -225,9 +265,7 @@ async fn raw_request(
         .as_deref()
         .ok_or_else(|| arg_invalid("query (method) required for request"))?;
     if method == "workspace/executeCommand" {
-        return Err(arg_invalid(
-            "workspace/executeCommand is not supported",
-        ));
+        return Err(arg_invalid("workspace/executeCommand is not supported"));
     }
     if !READ_REQUEST_METHODS.contains(&method) {
         return Err(arg_invalid(format!("unknown request method {method}")));
@@ -244,7 +282,9 @@ async fn raw_request(
         .request(method, params)
         .await
         .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
-    Ok(truncate_model_output(format_result(context, req.action, result)))
+    Ok(truncate_model_output(format_result(
+        context, req.action, result,
+    )))
 }
 
 fn validate_payload_uris(context: &ToolContext, params: &Value) -> Result<(), ToolError> {
@@ -263,9 +303,7 @@ fn extract_code_action_edit(result: &Value) -> Result<Value, ToolError> {
         result
     };
     if action.get("command").is_some() && action.get("edit").is_none() {
-        return Err(arg_invalid(
-            "bare Command code actions are not executed",
-        ));
+        return Err(arg_invalid("bare Command code actions are not executed"));
     }
     action
         .get("edit")
@@ -294,9 +332,16 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
         return flatten_hover(contents);
     }
     if let Some(arr) = result.as_array() {
+        let cap = match action {
+            LspAction::Diagnostics => MAX_DIAGNOSTICS,
+            LspAction::Symbols => MAX_WORKSPACE_SYMBOLS,
+            LspAction::References => MAX_REFERENCES,
+            LspAction::Rename | LspAction::RenameFile => MAX_RENAME_PAIRS,
+            _ => usize::MAX,
+        };
         let mut lines = Vec::new();
         let mut omitted = 0usize;
-        for item in arr {
+        for item in arr.iter().take(cap) {
             if let Some(uri) = item
                 .pointer("/uri")
                 .or_else(|| item.pointer("/targetUri"))
@@ -322,7 +367,9 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
             return format!("omitted {omitted} location(s) outside the allowed workspace");
         }
         if omitted > 0 {
-            lines.push(format!("omitted {omitted} location(s) outside the allowed workspace"));
+            lines.push(format!(
+                "omitted {omitted} location(s) outside the allowed workspace"
+            ));
         }
         return if lines.is_empty() {
             "No result".into()
@@ -351,6 +398,124 @@ fn language_id(servers: &[CatalogServer], path: &std::path::Path) -> String {
                 .map(|e| e.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "plaintext".into())
         })
+}
+
+fn looks_like_glob(file: &str) -> bool {
+    file.contains('*') || file.contains('?') || file.contains('{') || file.contains('[')
+}
+
+async fn glob_action(
+    context: &ToolContext,
+    client: &LspClient,
+    config: &super::LspToolConfig,
+    servers: &[CatalogServer],
+    action: LspAction,
+    pattern: &str,
+) -> Result<String, ToolError> {
+    if !matches!(action, LspAction::Diagnostics) {
+        return Err(arg_invalid("globs are only valid for diagnostics"));
+    }
+    let runner = crate::toolset::native_runner::NativeFsRunner::new(context);
+    let paths = runner
+        .glob_paths(pattern, MAX_GLOB_TARGETS)
+        .await
+        .unwrap_or_default();
+    if paths.is_empty() {
+        return Ok("no files matched the diagnostic glob".into());
+    }
+    let mut sections = Vec::new();
+    for path in paths.into_iter().take(MAX_GLOB_TARGETS) {
+        let display = context.display_path(&path);
+        let uri = format!("file://{}", path.display());
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = client
+            .notify(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": language_id(servers, &path),
+                        "version": 1,
+                        "text": text
+                    }
+                }),
+            )
+            .await;
+        let result = client
+            .request(
+                "textDocument/diagnostic",
+                json!({ "textDocument": { "uri": uri } }),
+            )
+            .await
+            .unwrap_or(Value::Null);
+        let mut section = format!("{display}:\n{}", format_result(context, action, result));
+        if let Some(linter) = run_linter_diagnostics(config, servers, &path).await {
+            section = format!("{section}\n{linter}");
+        }
+        sections.push(section);
+    }
+    Ok(truncate_model_output(sections.join("\n")))
+}
+
+async fn run_linter_diagnostics(
+    config: &super::LspToolConfig,
+    servers: &[CatalogServer],
+    path: &std::path::Path,
+) -> Option<String> {
+    let linter = servers.iter().find(|server| {
+        server.is_linter
+            && marker_matches(&config.workspace, &server.root_markers)
+            && family_eligible(server, &config.workspace)
+            && super::catalog::file_type_matches(server, path)
+    })?;
+    let argv = match linter.name.as_str() {
+        "biome" => vec![
+            linter.command.clone(),
+            "check".into(),
+            "--reporter=json".into(),
+            path.to_string_lossy().into_owned(),
+        ],
+        "swiftlint" => vec![
+            linter.command.clone(),
+            "lint".into(),
+            "--quiet".into(),
+            path.to_string_lossy().into_owned(),
+        ],
+        _ => return None,
+    };
+    let (program, rest, env, _sandbox) = crate::toolset::prepare_managed_command(
+        &config.workspace,
+        &argv[0],
+        &argv[1..],
+        &config.constraints,
+    )
+    .ok()?;
+    let mut full = vec![program.to_string_lossy().into_owned()];
+    full.extend(rest);
+    let outcome = crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
+        argv: full,
+        cwd: config.workspace.clone(),
+        deadline_at: None,
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        max_output_bytes: 64 * 1024,
+        stdin: Vec::new(),
+        environment: Some(env),
+        tool_name: Some("lsp".into()),
+        live_output: None,
+    })
+    .await;
+    match outcome {
+        crate::managed_exec::ManagedExecOutcome::Exited { stdout, .. } => {
+            let text = String::from_utf8_lossy(&stdout);
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(format!("{}: {trimmed}", linter.name))
+            }
+        }
+        _ => None,
+    }
 }
 
 fn status_text(ready: Vec<String>, servers: &[CatalogServer]) -> String {

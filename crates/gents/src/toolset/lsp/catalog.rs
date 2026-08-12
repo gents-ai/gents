@@ -70,9 +70,10 @@ fn glob_one_level(root: &Path, pattern: &str) -> bool {
 
 pub fn family_eligible(server: &CatalogServer, root: &Path) -> bool {
     match server.name.as_str() {
-        "typescript-language-server" => {
-            !marker_matches(root, &["deno.json".into(), "deno.jsonc".into(), "deno.lock".into()])
-        }
+        "typescript-language-server" => !marker_matches(
+            root,
+            &["deno.json".into(), "deno.jsonc".into(), "deno.lock".into()],
+        ),
         "denols" => marker_matches(root, &server.root_markers),
         _ => true,
     }
@@ -94,11 +95,26 @@ pub fn primary_for_file<'a>(
         .iter()
         .filter(|s| !s.is_linter)
         .filter(|s| {
-            s.file_types.iter().any(|ft| {
-                ft.eq_ignore_ascii_case(&ext) || ft.eq_ignore_ascii_case(&name)
-            })
+            s.file_types
+                .iter()
+                .any(|ft| ft.eq_ignore_ascii_case(&ext) || ft.eq_ignore_ascii_case(&name))
         })
         .collect();
     matches.sort_by_key(|s| (s.priority, s.name.as_str()));
     matches.first().copied()
+}
+
+pub fn file_type_matches(server: &CatalogServer, file: &Path) -> bool {
+    let ext = file
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    server
+        .file_types
+        .iter()
+        .any(|ft| ft.eq_ignore_ascii_case(&ext) || ft.eq_ignore_ascii_case(&name))
 }

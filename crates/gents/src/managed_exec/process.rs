@@ -88,15 +88,14 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     };
 
     let pid = child.pgid();
-    let _active =
-        pid.map(|pid| {
-            ActiveExecGuard::insert(
-                pid,
-                program.clone(),
-                request.tool_name.clone(),
-                ManagedExecKind::ForegroundCommand,
-            )
-        });
+    let _active = pid.map(|pid| {
+        ActiveExecGuard::insert(
+            pid,
+            program.clone(),
+            request.tool_name.clone(),
+            ManagedExecKind::ForegroundCommand,
+        )
+    });
 
     if !request.stdin.is_empty() {
         if let Some(mut stdin) = child.inner.stdin.take() {
@@ -228,15 +227,14 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     };
 
     let pid = child.pid();
-    let _active =
-        pid.map(|pid| {
-            ActiveExecGuard::insert(
-                pid,
-                program.clone(),
-                request.tool_name.clone(),
-                ManagedExecKind::ForegroundCommand,
-            )
-        });
+    let _active = pid.map(|pid| {
+        ActiveExecGuard::insert(
+            pid,
+            program.clone(),
+            request.tool_name.clone(),
+            ManagedExecKind::ForegroundCommand,
+        )
+    });
 
     if !request.stdin.is_empty() {
         if let Some(mut stdin) = child.inner.stdin.take() {
@@ -421,10 +419,18 @@ pub(crate) async fn spawn_managed_process(
         });
     }
 
-    let mut child = command.spawn().map(ManagedChild::new).map_err(|error| error.to_string())?;
+    let mut child = command
+        .spawn()
+        .map(ManagedChild::new)
+        .map_err(|error| error.to_string())?;
     let pid = child.pgid();
     let guard = pid.map(|pid| {
-        ActiveExecGuard::insert(pid, program.clone(), request.tool_name.clone(), request.kind)
+        ActiveExecGuard::insert(
+            pid,
+            program.clone(),
+            request.tool_name.clone(),
+            request.kind,
+        )
     });
     Ok(ManagedProcess {
         stdin: child.inner.stdin.take(),
@@ -457,7 +463,12 @@ pub(crate) async fn spawn_managed_process(
     let mut child = ManagedChildJob::spawn(&mut command).map_err(|error| error.to_string())?;
     let pid = child.pid();
     let guard = pid.map(|pid| {
-        ActiveExecGuard::insert(pid, program.clone(), request.tool_name.clone(), request.kind)
+        ActiveExecGuard::insert(
+            pid,
+            program.clone(),
+            request.tool_name.clone(),
+            request.kind,
+        )
     });
     Ok(ManagedProcess {
         stdin: child.inner.stdin.take(),

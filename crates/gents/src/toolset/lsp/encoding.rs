@@ -11,14 +11,22 @@ pub struct LspPosition {
 }
 
 pub fn negotiate(server_encodings: &[String]) -> PositionEncoding {
-    if server_encodings.iter().any(|e| e.eq_ignore_ascii_case("utf-8")) {
+    if server_encodings
+        .iter()
+        .any(|e| e.eq_ignore_ascii_case("utf-8"))
+    {
         PositionEncoding::Utf8
     } else {
         PositionEncoding::Utf16
     }
 }
 
-pub fn offset_to_position(text: &str, encoding: PositionEncoding, line_1: u32, symbol: &str) -> Option<LspPosition> {
+pub fn offset_to_position(
+    text: &str,
+    encoding: PositionEncoding,
+    line_1: u32,
+    symbol: &str,
+) -> Option<LspPosition> {
     let line = text.lines().nth(line_1.saturating_sub(1) as usize)?;
     let byte = line.find(symbol)?;
     let character = match encoding {
@@ -54,8 +62,8 @@ mod tests {
     #[test]
     fn utf16_emoji_column() {
         let line = "hi 😀 there";
-        let pos = offset_to_position(&format!("{line}\n"), PositionEncoding::Utf16, 1, "there")
-            .unwrap();
+        let pos =
+            offset_to_position(&format!("{line}\n"), PositionEncoding::Utf16, 1, "there").unwrap();
         // "hi " = 3, emoji = 2 UTF-16 units, space = 1 → 6
         assert_eq!(pos.character, 6);
         assert_eq!(

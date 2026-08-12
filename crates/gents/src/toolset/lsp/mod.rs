@@ -7,18 +7,20 @@ mod config;
 mod edits;
 mod encoding;
 mod pool;
-mod writethrough;
 #[cfg(test)]
 mod tests;
+mod writethrough;
 
 pub use admit::admit_command;
 pub use auth::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
 };
-pub use catalog::{builtin_catalog, family_eligible, marker_matches, primary_for_file, CatalogServer};
+pub use catalog::{
+    builtin_catalog, family_eligible, marker_matches, primary_for_file, CatalogServer,
+};
 pub use config::LspConfigDocument;
 pub use pool::{LspPool, PoolKey};
-pub use writethrough::LspWritethrough;
+pub use writethrough::{LspWritethrough, MutationKind};
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -199,10 +201,11 @@ impl Tool for LspTool {
                 .or_else(|| detected.iter().find(|s| !s.is_linter))
                 .cloned();
             if let Some(server) = server {
-                let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-                    .and_then(|scope| scope.session_id)
-                    .filter(|id| !id.is_empty())
-                    .unwrap_or_else(|| self.config.session_id.clone());
+                let session_id =
+                    crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                        .and_then(|scope| scope.session_id)
+                        .filter(|id| !id.is_empty())
+                        .unwrap_or_else(|| self.config.session_id.clone());
                 let key = PoolKey {
                     session_id,
                     behavior_id: self.config.behavior_id.clone(),

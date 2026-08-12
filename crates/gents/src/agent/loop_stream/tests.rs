@@ -3323,8 +3323,14 @@ async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
     // Truncated mid-string: escape-only repair cannot complete it, so it stays
     // UnparseableArgs and dispatch types it `Failed(ArgumentInvalid)` carrying
     // the model-facing notice — not the tool output.
-    let result =
-        super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string(), None, None).await;
+    let result = super::dispatch_tool(
+        &tools,
+        "strict",
+        r#"{"body":"cut off"#.to_string(),
+        None,
+        None,
+    )
+    .await;
     match &result {
         crate::tool_call_lifecycle::ToolOutcome::Failed {
             class,

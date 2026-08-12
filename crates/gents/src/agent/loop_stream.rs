@@ -53,8 +53,8 @@ use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
 use crate::tool_call_lifecycle::runtime::{
-    current_tool_runtime_context, deadline_remaining,
-    scope_request_tool_execution_with_session, ToolOutcome,
+    current_tool_runtime_context, deadline_remaining, scope_request_tool_execution_with_session,
+    ToolOutcome,
 };
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 

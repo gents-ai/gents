@@ -113,8 +113,6 @@ mod coverage;
 mod directory_projection;
 #[path = "conformance/event_delivery.rs"]
 mod event_delivery;
-#[path = "conformance/lsp.rs"]
-mod lsp;
 #[path = "conformance/fleet.rs"]
 mod fleet;
 #[path = "conformance/goals.rs"]
@@ -123,6 +121,8 @@ mod goals;
 mod inference_call;
 #[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
+#[path = "conformance/lsp.rs"]
+mod lsp;
 #[path = "conformance/managed_exec.rs"]
 mod managed_exec;
 #[path = "conformance/mcp_health.rs"]

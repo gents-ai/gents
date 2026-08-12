@@ -354,19 +354,23 @@ impl BehaviorToolConfig {
                     .read_root()
                     .map(ToOwned::to_owned)
                     .or_else(|| {
-                        self.host_tools.native_tools().iter().find_map(|tool| match tool {
-                            crate::toolset::NativeTool::WriteFile { root }
-                            | crate::toolset::NativeTool::EditFile { root }
-                            | crate::toolset::NativeTool::BashUnrestricted { root, .. } => {
-                                Some(root.clone())
-                            }
-                            _ => None,
-                        })
+                        self.host_tools
+                            .native_tools()
+                            .iter()
+                            .find_map(|tool| match tool {
+                                crate::toolset::NativeTool::WriteFile { root }
+                                | crate::toolset::NativeTool::EditFile { root }
+                                | crate::toolset::NativeTool::BashUnrestricted { root, .. } => {
+                                    Some(root.clone())
+                                }
+                                _ => None,
+                            })
                     })
                     .unwrap_or_else(|| std::path::PathBuf::from("."));
-                let overlay = doc.network_mode.as_deref().and_then(|mode| {
-                    crate::toolset::CommandNetworkMode::parse(mode).ok()
-                });
+                let overlay = doc
+                    .network_mode
+                    .as_deref()
+                    .and_then(|mode| crate::toolset::CommandNetworkMode::parse(mode).ok());
                 let constraints = crate::toolset::lsp::constraints_from_effective_policy(
                     &effective_policy,
                     overlay,

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::toolset::denial::DenialReason;
 use crate::toolset::admit_host_executable;
+use crate::toolset::denial::DenialReason;
 
 /// Admit a language-server command: host PATH or an absolute path outside the
 /// tool root. Never workspace-local bins. Returns the canonical executable.
@@ -32,7 +32,8 @@ mod tests {
     #[test]
     fn host_path_binary_is_admitted() {
         let root = tempfile::tempdir().unwrap();
-        let admitted = admit_command("true", root.path()).or_else(|_| admit_command("/bin/true", root.path()));
+        let admitted =
+            admit_command("true", root.path()).or_else(|_| admit_command("/bin/true", root.path()));
         assert!(admitted.is_ok(), "{admitted:?}");
         let path = admitted.unwrap();
         assert!(!path.starts_with(root.path()));

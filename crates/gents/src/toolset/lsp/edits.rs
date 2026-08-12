@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::tool_call_lifecycle::FailureClass;
 use super::super::file_tools::{content_hash, file_mutation_lock_for};
+use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::shared::{ToolContext, ToolError};
 
 use super::client::LspClient;
@@ -15,6 +15,7 @@ pub struct PreparedEdit {
     pub new_bytes: Vec<u8>,
     pub expected_hash: Option<String>,
     pub version: Option<i64>,
+    pub rename_from: Option<PathBuf>,
 }
 
 pub fn prepare_workspace_edit(
@@ -42,12 +43,12 @@ pub fn prepare_workspace_edit(
                         .ok_or_else(|| "rename missing newUri".to_string())?;
                     let old_path = resolve_inbound_path(context, old)?;
                     let new_path = resolve_inbound_path(context, new)?;
-                    let bytes = std::fs::read(&old_path).map_err(|err| err.to_string())?;
                     prepared.push(PreparedEdit {
                         path: new_path,
-                        new_bytes: bytes,
+                        new_bytes: Vec::new(),
                         expected_hash: None,
                         version: None,
+                        rename_from: Some(old_path),
                     });
                     continue;
                 }
@@ -78,19 +79,44 @@ pub async fn apply_workspace_edit(
     edit: &Value,
 ) -> Result<usize, ToolError> {
     let encoding = client.position_encoding().await;
-    let prepared = prepare_workspace_edit(context, edit, encoding).map_err(|err| {
-        ToolError::reported_failure(FailureClass::PolicyDenied, err)
-    })?;
+    let prepared = prepare_workspace_edit(context, edit, encoding)
+        .map_err(|err| ToolError::reported_failure(FailureClass::PolicyDenied, err))?;
     if prepared.is_empty() {
         return Ok(0);
     }
-    let mut keys: Vec<_> = prepared.iter().map(|edit| edit.path.clone()).collect();
+    let _guards = acquire_mutation_locks(&prepared).await;
+    apply_prepared_with_held_locks(context, client, &prepared).await
+}
+
+pub async fn acquire_mutation_locks(
+    prepared: &[PreparedEdit],
+) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+    let mut keys: Vec<PathBuf> = prepared
+        .iter()
+        .flat_map(|edit| {
+            let mut paths = vec![edit.path.clone()];
+            if let Some(from) = &edit.rename_from {
+                paths.push(from.clone());
+            }
+            paths
+        })
+        .collect();
     keys.sort();
+    keys.dedup();
     let mut guards = Vec::new();
     for path in &keys {
         guards.push(file_mutation_lock_for(path).lock_owned().await);
     }
-    for edit in &prepared {
+    guards
+}
+
+pub async fn apply_prepared_with_held_locks(
+    context: &ToolContext,
+    client: &LspClient,
+    prepared: &[PreparedEdit],
+) -> Result<usize, ToolError> {
+    let mut applied = 0usize;
+    for edit in prepared {
         if let Some(expected) = &edit.expected_hash {
             let current = std::fs::read(&edit.path).map_err(|err| {
                 ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
@@ -111,7 +137,10 @@ pub async fn apply_workspace_edit(
                 if tracked != version {
                     return Err(ToolError::reported_failure(
                         FailureClass::ArgumentInvalid,
-                        format!("document version mismatch for {}", context.display_path(&edit.path)),
+                        format!(
+                            "document version mismatch for {}",
+                            context.display_path(&edit.path)
+                        ),
                     ));
                 }
             }
@@ -121,12 +150,18 @@ pub async fn apply_workspace_edit(
                 ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
             })?;
         }
-        std::fs::write(&edit.path, &edit.new_bytes).map_err(|err| {
-            ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
-        })?;
+        if let Some(from) = &edit.rename_from {
+            std::fs::rename(from, &edit.path).map_err(|err| {
+                ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
+            })?;
+        } else {
+            std::fs::write(&edit.path, &edit.new_bytes).map_err(|err| {
+                ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())
+            })?;
+        }
+        applied += 1;
     }
-    drop(guards);
-    Ok(prepared.len())
+    Ok(applied)
 }
 
 pub fn walk_uris(value: &Value) -> Vec<String> {
@@ -175,6 +210,7 @@ fn prepare_uri(
         new_bytes: new_text.into_bytes(),
         expected_hash: Some(content_hash(original.as_bytes())),
         version: None,
+        rename_from: None,
     })
 }
 
@@ -227,7 +263,11 @@ fn apply_text_edits(
     Ok(out)
 }
 
-fn lsp_offset(text: &str, pos: Option<&Value>, encoding: PositionEncoding) -> Result<usize, String> {
+fn lsp_offset(
+    text: &str,
+    pos: Option<&Value>,
+    encoding: PositionEncoding,
+) -> Result<usize, String> {
     let pos = pos.ok_or_else(|| "missing position".to_string())?;
     let line = pos.get("line").and_then(Value::as_u64).unwrap_or(0) as usize;
     let character = pos.get("character").and_then(Value::as_u64).unwrap_or(0) as u32;
@@ -242,7 +282,10 @@ fn lsp_offset(text: &str, pos: Option<&Value>, encoding: PositionEncoding) -> Re
     Ok(text.len())
 }
 
-pub fn resolve_inbound_path(context: &ToolContext, file: &str) -> Result<std::path::PathBuf, String> {
+pub fn resolve_inbound_path(
+    context: &ToolContext,
+    file: &str,
+) -> Result<std::path::PathBuf, String> {
     let path = if let Some(rest) = file.strip_prefix("file://") {
         rest
     } else {

@@ -45,6 +45,9 @@ pub use denial::CommandPolicyDenial;
 pub(crate) use denial::DenialReason;
 pub(crate) use goal::build_goal_tools;
 pub(crate) use goal::{GetGoalArgs, UpdateGoalArgs};
+pub use lsp::{
+    lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
+};
 #[cfg(feature = "agent-memory")]
 pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
 pub(crate) use orchestration::{build_orchestration_tools, orchestration_tool_names};
@@ -52,14 +55,11 @@ pub use session_history::{
     build_session_history_tool, load_session_history_snapshot, SessionHistoryRow,
     SessionHistorySnapshot, SESSION_HISTORY_TOOL_NAME,
 };
-pub(crate) use shared::parse_argv_prefixes;
 pub(crate) use shared::build_shell_env;
+pub(crate) use shared::parse_argv_prefixes;
+pub(crate) use shared::{admit_host_executable, prepare_managed_command};
 pub use shared::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
-};
-pub(crate) use shared::{admit_host_executable, prepare_managed_command};
-pub use lsp::{
-    lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
 };
 
 pub(crate) fn default_read_only_command_policy() -> CommandExecutionPolicy {

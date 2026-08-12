@@ -15,6 +15,15 @@ use super::edit_match::{self, EditOutcome, EditRequest, MatchMode, Operation};
 use super::native_runner::NativeFsRunner;
 use super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
 
+fn merge_optional_notes(left: Option<String>, right: Option<String>) -> Option<String> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+    }
+}
+
 pub(crate) fn content_hash(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("sha256:{:x}", Sha256::digest(bytes))
@@ -500,9 +509,24 @@ impl Tool for WriteFileTool {
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&path, args.content.as_bytes()).await?;
+        let mut bytes_written = args.content.len();
+        let mut written_hash = content_hash(args.content.as_bytes());
+        let mut note = None;
+        if let Some(writethrough) = &self.writethrough {
+            note = writethrough
+                .after_mutation_under_lock(&path, crate::toolset::lsp::MutationKind::Write)
+                .await;
+            if let Ok(bytes) = tokio::fs::read(&path).await {
+                bytes_written = bytes.len();
+                written_hash = content_hash(&bytes);
+            }
+        }
         drop(_guard);
         if let Some(writethrough) = &self.writethrough {
-            let _ = writethrough.after_mutation(&path).await;
+            let diag = writethrough
+                .diagnostics_after_unlock(&path, crate::toolset::lsp::MutationKind::Write)
+                .await;
+            note = merge_optional_notes(note, diag);
         }
 
         let output = WriteFileOutput {
@@ -514,18 +538,24 @@ impl Tool for WriteFileTool {
                 returned_count: 0,
                 total_count: Some(0),
                 truncated: false,
-                bytes_written: args.content.len(),
+                bytes_written,
                 created,
-                content_hash: content_hash(args.content.as_bytes()),
+                content_hash: written_hash,
             },
         };
 
+        let mut body = format!(
+            "write_file: wrote {} bytes to {}",
+            output.metadata.bytes_written, output.metadata.path
+        );
+        if let Some(note) = note.filter(|note| !note.is_empty()) {
+            body.push('\n');
+            body.push_str(&note);
+        }
+
         Ok(render_tool_output(
             &output.metadata,
-            format!(
-                "write_file: wrote {} bytes to {}",
-                output.metadata.bytes_written, output.metadata.path
-            ),
+            body,
             &output,
             args.raw_json,
         )?)
@@ -666,6 +696,7 @@ impl Tool for EditFileTool {
                 let post_text =
                     edit_match::restore_content(&result, normalized.ending, normalized.had_bom);
                 let post_edit_hash = content_hash(post_text.as_bytes());
+                let mut edit_note = None;
                 if !args.dry_run {
                     tokio::fs::write(&path, post_text.as_bytes()).await?;
                     let verify = tokio::fs::read(&path).await?;
@@ -675,9 +706,23 @@ impl Tool for EditFileTool {
                         )
                         .into());
                     }
+                    if let Some(writethrough) = &self.writethrough {
+                        edit_note = writethrough
+                            .after_mutation_under_lock(
+                                &path,
+                                crate::toolset::lsp::MutationKind::Edit,
+                            )
+                            .await;
+                    }
                     drop(_guard);
                     if let Some(writethrough) = &self.writethrough {
-                        let _ = writethrough.after_mutation(&path).await;
+                        let diag = writethrough
+                            .diagnostics_after_unlock(
+                                &path,
+                                crate::toolset::lsp::MutationKind::Edit,
+                            )
+                            .await;
+                        edit_note = merge_optional_notes(edit_note, diag);
                     }
                 }
                 let output = EditFileOutput {
@@ -705,16 +750,21 @@ impl Tool for EditFileTool {
                 } else {
                     "edited"
                 };
+                let mut body = format!(
+                    "edit_file: {verb} {} ({} replacement{}, strategy {})\n{}",
+                    output.metadata.path,
+                    replacements,
+                    if replacements != 1 { "s" } else { "" },
+                    output.metadata.match_strategy,
+                    output.diff,
+                );
+                if let Some(note) = edit_note.filter(|note| !note.is_empty()) {
+                    body.push('\n');
+                    body.push_str(&note);
+                }
                 Ok(render_tool_output(
                     &output.metadata,
-                    format!(
-                        "edit_file: {verb} {} ({} replacement{}, strategy {})\n{}",
-                        output.metadata.path,
-                        replacements,
-                        if replacements != 1 { "s" } else { "" },
-                        output.metadata.match_strategy,
-                        output.diff,
-                    ),
+                    body,
                     &output,
                     args.raw_json,
                 )?)

@@ -191,12 +191,12 @@ pub(crate) fn admit_host_executable(
     if trimmed.is_empty() {
         return Err(DenialReason::WorkspaceExecutable);
     }
-    let candidate = if trimmed.contains('/') || trimmed.contains('\\') || Path::new(trimmed).is_absolute()
-    {
-        PathBuf::from(trimmed)
-    } else {
-        which_on_host_path(trimmed).ok_or(DenialReason::WorkspaceExecutable)?
-    };
+    let candidate =
+        if trimmed.contains('/') || trimmed.contains('\\') || Path::new(trimmed).is_absolute() {
+            PathBuf::from(trimmed)
+        } else {
+            which_on_host_path(trimmed).ok_or(DenialReason::WorkspaceExecutable)?
+        };
     let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
     let root = std::fs::canonicalize(tool_root).unwrap_or_else(|_| tool_root.to_path_buf());
     if canonical.starts_with(&root) {
@@ -225,8 +225,7 @@ pub(crate) fn prepare_managed_command(
     command: &str,
     args: &[String],
     constraints: &CommandConstraints,
-) -> std::result::Result<(PathBuf, Vec<String>, HashMap<String, String>, &'static str), ToolError>
-{
+) -> std::result::Result<(PathBuf, Vec<String>, HashMap<String, String>, &'static str), ToolError> {
     let admitted = admit_host_executable(command, root)
         .map_err(|reason| policy_denial(&constraints.to_spawn_policy(), reason))?;
     let mut validate_policy = constraints.to_spawn_policy();
@@ -236,18 +235,9 @@ pub(crate) fn prepare_managed_command(
     }
     validate_command_policy(command, args, &validate_policy)?;
     let spawn_policy = constraints.to_spawn_policy();
-    let (program, argv, sandbox) = sandboxed_command_for_policy(
-        root,
-        &admitted.to_string_lossy(),
-        args,
-        &spawn_policy,
-    )?;
-    Ok((
-        PathBuf::from(program),
-        argv,
-        build_shell_env(),
-        sandbox,
-    ))
+    let (program, argv, sandbox) =
+        sandboxed_command_for_policy(root, &admitted.to_string_lossy(), args, &spawn_policy)?;
+    Ok((PathBuf::from(program), argv, build_shell_env(), sandbox))
 }
 
 pub(crate) async fn run_command(

@@ -226,9 +226,7 @@ impl LspClient {
     }
 
     pub async fn cancel(&self, id: i64) {
-        let _ = self
-            .notify("$/cancelRequest", json!({ "id": id }))
-            .await;
+        let _ = self.notify("$/cancelRequest", json!({ "id": id })).await;
     }
 
     pub async fn shutdown_exit(&self) {
@@ -255,7 +253,10 @@ async fn write_message(stdin: &mut ChildStdin, value: &Value) -> Result<(), Stri
         .write_all(header.as_bytes())
         .await
         .map_err(|err| err.to_string())?;
-    stdin.write_all(&body).await.map_err(|err| err.to_string())?;
+    stdin
+        .write_all(&body)
+        .await
+        .map_err(|err| err.to_string())?;
     stdin.flush().await.map_err(|err| err.to_string())
 }
 

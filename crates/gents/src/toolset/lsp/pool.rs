@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{Mutex, Notify};
 
@@ -14,6 +14,8 @@ use super::LspToolConfig;
 
 const MAX_PER_SESSION: usize = 4;
 const MAX_GLOBAL: usize = 16;
+const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
+pub(crate) const INIT_BACKOFF: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PoolKey {
@@ -35,6 +37,7 @@ struct PoolEntry {
     state: EntryState,
     leases: Arc<AtomicUsize>,
     last_used: Instant,
+    idle_timeout: Duration,
     client: Option<Arc<LspClient>>,
     ready: Arc<Notify>,
     start_error: Option<String>,
@@ -43,6 +46,7 @@ struct PoolEntry {
 pub(crate) struct LspLease {
     client: Arc<LspClient>,
     leases: Arc<AtomicUsize>,
+    slot: Arc<Mutex<PoolEntry>>,
 }
 
 impl LspLease {
@@ -53,18 +57,93 @@ impl LspLease {
 
 impl Drop for LspLease {
     fn drop(&mut self) {
-        self.leases.fetch_sub(1, Ordering::SeqCst);
+        let prev = self.leases.fetch_sub(1, Ordering::SeqCst);
+        if prev == 1 {
+            let slot = self.slot.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    complete_retirement_if_idle(slot).await;
+                });
+            }
+        }
     }
 }
 
-#[derive(Clone, Default)]
+async fn complete_retirement_if_idle(slot: Arc<Mutex<PoolEntry>>) {
+    let client = {
+        let mut entry = slot.lock().await;
+        if entry.state == EntryState::Retiring && entry.leases.load(Ordering::SeqCst) == 0 {
+            entry.client.take()
+        } else {
+            None
+        }
+    };
+    if let Some(client) = client {
+        client.shutdown_exit().await;
+    }
+}
+
+#[derive(Clone)]
 pub struct LspPool {
     inner: Arc<Mutex<HashMap<PoolKey, Arc<Mutex<PoolEntry>>>>>,
+    failed: Arc<Mutex<HashMap<PoolKey, (String, Instant)>>>,
+    sweep_started: Arc<AtomicBool>,
+}
+
+impl Default for LspPool {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            failed: Arc::new(Mutex::new(HashMap::new())),
+            sweep_started: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 impl LspPool {
     pub fn new() -> Self {
-        Self::default()
+        let pool = Self::default();
+        pool.try_spawn_sweeper();
+        pool
+    }
+
+    fn try_spawn_sweeper(&self) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        if self.sweep_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let pool = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SWEEP_INTERVAL);
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                pool.sweep_idle().await;
+            }
+        });
+    }
+
+    pub(crate) async fn sweep_idle(&self) {
+        let now = Instant::now();
+        let victims: Vec<PoolKey> = {
+            let map = self.inner.lock().await;
+            let mut keys = Vec::new();
+            for (key, slot) in map.iter() {
+                let entry = slot.lock().await;
+                if entry.state == EntryState::Ready
+                    && entry.leases.load(Ordering::SeqCst) == 0
+                    && now.duration_since(entry.last_used) >= entry.idle_timeout
+                {
+                    keys.push(key.clone());
+                }
+            }
+            keys
+        };
+        for key in victims {
+            self.retire(&key).await;
+        }
     }
 
     pub(crate) async fn get_ready(&self, key: &PoolKey) -> Option<LspLease> {
@@ -81,6 +160,7 @@ impl LspPool {
         Some(LspLease {
             client,
             leases: entry.leases.clone(),
+            slot: slot.clone(),
         })
     }
 
@@ -90,6 +170,17 @@ impl LspPool {
         server: &CatalogServer,
         config: &LspToolConfig,
     ) -> Result<LspLease, String> {
+        self.try_spawn_sweeper();
+        {
+            let mut failed = self.failed.lock().await;
+            if let Some((error, at)) = failed.get(&key) {
+                if at.elapsed() < INIT_BACKOFF {
+                    return Err(error.clone());
+                }
+                failed.remove(&key);
+            }
+        }
+
         let (slot, starter) = {
             let mut map = self.inner.lock().await;
             if let Some(existing) = map.get(&key) {
@@ -102,6 +193,7 @@ impl LspPool {
                     state: EntryState::Starting,
                     leases: Arc::new(AtomicUsize::new(0)),
                     last_used: Instant::now(),
+                    idle_timeout: config.idle_timeout,
                     client: None,
                     ready: Arc::new(Notify::new()),
                     start_error: None,
@@ -121,6 +213,7 @@ impl LspPool {
                         return Ok(LspLease {
                             client,
                             leases: entry.leases.clone(),
+                            slot: slot.clone(),
                         });
                     }
                 }
@@ -141,24 +234,34 @@ impl LspPool {
         match started {
             Ok(client) => {
                 let client = Arc::new(client);
-                let mut entry = slot.lock().await;
-                entry.client = Some(client.clone());
-                entry.state = EntryState::Ready;
-                entry.last_used = Instant::now();
-                entry.leases.fetch_add(1, Ordering::SeqCst);
-                entry.ready.notify_waiters();
+                let leases = {
+                    let mut entry = slot.lock().await;
+                    entry.client = Some(client.clone());
+                    entry.state = EntryState::Ready;
+                    entry.last_used = Instant::now();
+                    entry.idle_timeout = config.idle_timeout;
+                    entry.leases.fetch_add(1, Ordering::SeqCst);
+                    entry.ready.notify_waiters();
+                    entry.leases.clone()
+                };
                 Ok(LspLease {
                     client,
-                    leases: entry.leases.clone(),
+                    leases,
+                    slot,
                 })
             }
             Err(error) => {
-                let mut entry = slot.lock().await;
-                entry.start_error = Some(error.clone());
-                entry.state = EntryState::Retiring;
-                entry.ready.notify_waiters();
-                drop(entry);
+                {
+                    let mut entry = slot.lock().await;
+                    entry.start_error = Some(error.clone());
+                    entry.state = EntryState::Retiring;
+                    entry.ready.notify_waiters();
+                }
                 self.inner.lock().await.remove(&key);
+                self.failed
+                    .lock()
+                    .await
+                    .insert(key, (error.clone(), Instant::now()));
                 Err(error)
             }
         }
@@ -188,7 +291,10 @@ impl LspPool {
         })
         .await?;
         let client = LspClient::start(process, server.name.clone(), config, server)?;
-        client.initialize().await?;
+        if let Err(error) = client.initialize().await {
+            client.shutdown_exit().await;
+            return Err(error);
+        }
         Ok(client)
     }
 
@@ -222,8 +328,11 @@ impl LspPool {
             if let Some(slot) = map.remove(&key) {
                 let mut entry = slot.lock().await;
                 entry.state = EntryState::Retiring;
-                if let Some(client) = entry.client.take() {
-                    client.shutdown_exit().await;
+                if entry.leases.load(Ordering::SeqCst) == 0 {
+                    if let Some(client) = entry.client.take() {
+                        drop(entry);
+                        client.shutdown_exit().await;
+                    }
                 }
             }
             return true;
@@ -239,8 +348,10 @@ impl LspPool {
         if let Some(slot) = slot {
             let mut entry = slot.lock().await;
             entry.state = EntryState::Retiring;
+            entry.ready.notify_waiters();
             if entry.leases.load(Ordering::SeqCst) == 0 {
                 if let Some(client) = entry.client.take() {
+                    drop(entry);
                     client.shutdown_exit().await;
                 }
             }
@@ -258,6 +369,10 @@ impl LspPool {
         for key in keys {
             self.retire(&key).await;
         }
+        self.failed
+            .lock()
+            .await
+            .retain(|key, _| key.session_id != session_id);
     }
 
     pub async fn shutdown(&self) {
@@ -268,6 +383,7 @@ impl LspPool {
         for key in keys {
             self.retire(&key).await;
         }
+        self.failed.lock().await.clear();
     }
 
     pub async fn has_ready(&self, key: &PoolKey) -> bool {
@@ -305,5 +421,31 @@ impl LspPool {
             }
         }
         names
+    }
+
+    #[cfg(test)]
+    pub async fn expire_init_backoffs(&self) {
+        let mut failed = self.failed.lock().await;
+        for (_, at) in failed.values_mut() {
+            *at = Instant::now()
+                .checked_sub(INIT_BACKOFF + Duration::from_secs(1))
+                .unwrap_or_else(Instant::now);
+        }
+    }
+
+    #[cfg(test)]
+    pub async fn force_last_used(&self, key: &PoolKey, used: Instant) {
+        let map = self.inner.lock().await;
+        if let Some(slot) = map.get(key) {
+            slot.lock().await.last_used = used;
+        }
+    }
+
+    #[cfg(test)]
+    pub async fn force_idle_timeout(&self, key: &PoolKey, timeout: Duration) {
+        let map = self.inner.lock().await;
+        if let Some(slot) = map.get(key) {
+            slot.lock().await.idle_timeout = timeout;
+        }
     }
 }

@@ -2,17 +2,17 @@ mod command;
 mod context;
 mod filesystem;
 
+pub(crate) use command::build_shell_env;
 pub(crate) use command::parse_argv_prefixes;
+pub(crate) use command::{admit_host_executable, prepare_managed_command};
 #[cfg(test)]
 pub(super) use command::{
     build_shell_env_from_vars, select_sandbox_for_policy, validate_read_only_command,
 };
 pub(super) use command::{run_command, validate_command_policy};
-pub(crate) use command::build_shell_env;
 pub use command::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
 };
-pub(crate) use command::{admit_host_executable, prepare_managed_command};
 pub(super) use context::{ToolContext, ToolError};
 pub(super) use filesystem::{cap_output, render_file_contents};
 

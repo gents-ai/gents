@@ -534,10 +534,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ));
     }
     if !snapshot.lsp_action_cases.is_empty() {
-        emitted.insert((
-            "lsp_action_cases".to_string(),
-            "LspActionCases".to_string(),
-        ));
+        emitted.insert(("lsp_action_cases".to_string(), "LspActionCases".to_string()));
     }
     if !snapshot.self_config_field_tables.is_empty() {
         emitted.insert((

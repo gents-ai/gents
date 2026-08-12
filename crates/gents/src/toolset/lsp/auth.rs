@@ -67,11 +67,7 @@ pub fn lsp_action_authorized(lsp: bool, file: FileToolMode, action: LspAction) -
     lsp_advertised(lsp, file) && (!action.mutates() || matches!(file, FileToolMode::ReadWrite))
 }
 
-pub fn lsp_apply_authorized(
-    lsp: bool,
-    file: FileToolMode,
-    src: LspMutationSource,
-) -> bool {
+pub fn lsp_apply_authorized(lsp: bool, file: FileToolMode, src: LspMutationSource) -> bool {
     lsp_advertised(lsp, file)
         && matches!(file, FileToolMode::ReadWrite)
         && matches!(src, LspMutationSource::ForegroundReturnedEdit)
