@@ -3126,3 +3126,41 @@ fn load_pipeline_two_stage_fixture_with_surface() {
         "pipeline fixture surface wiring must be valid: {errors:?}"
     );
 }
+
+#[test]
+fn load_background_continuation_demo_with_local_background_target() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/background-continuation");
+    let (manifest, report) = load_manifest_root(&root);
+    assert!(
+        report.errors.is_empty(),
+        "background-continuation pack must load without errors: {:?}",
+        report.errors
+    );
+    let manifest = manifest.expect("background-continuation pack must produce a manifest");
+    assert_eq!(report.counts.agent_behaviors, 2);
+    assert_eq!(report.counts.tool_selections, 2);
+    let parent = manifest
+        .tool_selections
+        .iter()
+        .find(|selection| selection.selection_id == "background-parent-tools")
+        .expect("background parent tool selection");
+    assert!(parent.subagent_spawn_enabled);
+    assert!(parent.subagent_background_enabled);
+    assert_eq!(
+        parent.subagent_default_await_mode.as_deref(),
+        Some("background")
+    );
+    assert_eq!(parent.subagent_targets.len(), 1);
+    let target = gents::SubagentTarget::parse(&parent.subagent_targets[0])
+        .expect("pack target must be structured JSON");
+    assert_eq!(target.name, "worker");
+    assert_eq!(target.behavior_id, "background-worker");
+    assert_eq!(target.agent_did, parent.agent_did);
+
+    let mut errors = Vec::new();
+    validate_manifest(&manifest, &mut errors);
+    assert!(
+        errors.is_empty(),
+        "background-continuation pack wiring must validate: {errors:?}"
+    );
+}

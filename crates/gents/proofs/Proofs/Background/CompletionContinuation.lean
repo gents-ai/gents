@@ -575,4 +575,149 @@ theorem canonical_failed_snapshot_retains_unacknowledged_notification :
       failedSnapshotFixture.attemptedBindings = [attemptedBindingFixture] := by
   native_decide
 
+/-! ## Crash-boundary recovery
+
+Acknowledgement is not a second mutable protocol step.  It is a projection of
+the durable claim snapshot and the recovered request terminal state.  This
+closes the four crash boundaries in the delivery protocol: before claim there
+is no attempted snapshot to acknowledge; an inference failure retains the
+snapshot for bounded redrive; a committed successful response repairs the
+request to completed; and a crash while a reader projects acknowledgement
+cannot create a partially acknowledged state.
+-/
+
+inductive DeliveryCrashPoint where
+  | beforeClaim
+  | duringInference
+  | afterResponsePersistence
+  | duringAcknowledgement
+  deriving DecidableEq, Repr
+
+structure WakeRecoveryProjection where
+  requestState : RequestState
+  attemptedBindings : List NotificationBinding
+  acknowledgedBindings : List NotificationBinding
+  retryEligible : Bool
+  deriving DecidableEq, Repr
+
+inductive DurableResponseState where
+  | absent
+  | completed
+  | failed
+  deriving DecidableEq, Repr
+
+structure WakeRecoveryInput where
+  requestState : RequestState
+  claimSnapshot : Option WakeAttemptSnapshot
+  responseState : DurableResponseState
+  deriving DecidableEq, Repr
+
+def attemptedFromSnapshot : Option WakeAttemptSnapshot → List NotificationBinding
+  | none => []
+  | some snapshot => snapshot.attemptedBindings
+
+/-- Recovery is computed only from durable facts.  A committed response wins
+over a stale processing request; otherwise a durable claim snapshot proves an
+attempt occurred and remains retryable.  With neither fact, the pending wake
+is still unconsumed. -/
+def recoverWakeDelivery (input : WakeRecoveryInput) : WakeRecoveryProjection :=
+  let attempted := attemptedFromSnapshot input.claimSnapshot
+  match input.responseState with
+  | .completed =>
+      { requestState := .completed
+      , attemptedBindings := attempted
+      , acknowledgedBindings := attempted
+      , retryEligible := false
+      }
+  | .failed =>
+      { requestState := .failed
+      , attemptedBindings := attempted
+      , acknowledgedBindings := []
+      , retryEligible := input.claimSnapshot.isSome
+      }
+  | .absent =>
+      match input.claimSnapshot with
+      | none =>
+          { requestState := .pending
+          , attemptedBindings := []
+          , acknowledgedBindings := []
+          , retryEligible := false
+          }
+      | some snapshot =>
+          { requestState := .failed
+          , attemptedBindings := snapshot.attemptedBindings
+          , acknowledgedBindings := []
+          , retryEligible := true
+          }
+
+def deliveryCrashInput : DeliveryCrashPoint → WakeRecoveryInput
+  | .beforeClaim =>
+      { requestState := .pending
+      , claimSnapshot := none
+      , responseState := .absent
+      }
+  | .duringInference =>
+      { requestState := .processing
+      , claimSnapshot := some failedSnapshotFixture
+      , responseState := .absent
+      }
+  | .afterResponsePersistence =>
+      { requestState := .processing
+      , claimSnapshot := some completedSnapshotFixture
+      , responseState := .completed
+      }
+  | .duringAcknowledgement =>
+      { requestState := .completed
+      , claimSnapshot := some completedSnapshotFixture
+      , responseState := .completed
+      }
+
+def recoverDeliveryCrash (point : DeliveryCrashPoint) : WakeRecoveryProjection :=
+  recoverWakeDelivery (deliveryCrashInput point)
+
+def deliveryCrashRecoveryAccepted : DeliveryCrashPoint → Bool
+  | .beforeClaim =>
+      decide
+        (recoverDeliveryCrash .beforeClaim =
+          { requestState := .pending
+          , attemptedBindings := []
+          , acknowledgedBindings := []
+          , retryEligible := false
+          })
+  | .duringInference =>
+      let recovered := recoverDeliveryCrash .duringInference
+      decide
+        (recovered.requestState = .failed ∧
+         recovered.attemptedBindings = [attemptedBindingFixture] ∧
+         recovered.acknowledgedBindings = [] ∧
+         recovered.retryEligible = true)
+  | .afterResponsePersistence =>
+      let recovered := recoverDeliveryCrash .afterResponsePersistence
+      decide
+        (recovered.requestState = .completed ∧
+         recovered.acknowledgedBindings = recovered.attemptedBindings ∧
+         recovered.retryEligible = false)
+  | .duringAcknowledgement =>
+      let recovered := recoverDeliveryCrash .duringAcknowledgement
+      decide
+        (recovered.requestState = .completed ∧
+         recovered.acknowledgedBindings = recovered.attemptedBindings ∧
+         recovered.retryEligible = false)
+
+theorem restart_before_claim_preserves_pending_delivery :
+    deliveryCrashRecoveryAccepted .beforeClaim = true := by
+  native_decide
+
+theorem inference_failure_retains_snapshot_for_redrive :
+    deliveryCrashRecoveryAccepted .duringInference = true := by
+  native_decide
+
+theorem committed_response_recovers_exact_acknowledgement :
+    deliveryCrashRecoveryAccepted .afterResponsePersistence = true := by
+  native_decide
+
+theorem acknowledgement_projection_has_no_partial_crash_state :
+    deliveryCrashRecoveryAccepted .duringAcknowledgement = true := by
+  native_decide
+
 end BackgroundCompletion

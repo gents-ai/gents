@@ -1,0 +1,33 @@
+{
+  "selection_id": "background-parent-tools",
+  "agent_did": "did:key:zBackgroundContinuationPlaceholder00000000000000000000",
+  "display_name": "Background subagent orchestration only",
+  "enable_file_tools": false,
+  "file_tools_mode": "Off",
+  "file_tool_root": null,
+  "enable_bash": false,
+  "bash_mode": "Off",
+  "cli_tool_names": [],
+  "enable_meta_tools": false,
+  "allowed_mcp_service_ids": [],
+  "enable_memory": false,
+  "enable_session_history_tool": false,
+  "enable_context_budget": false,
+  "enable_defra_query": false,
+  "defra_query_collections": [],
+  "subagent_targets": [
+    "{\"name\":\"worker\",\"agent_did\":\"did:key:zBackgroundContinuationPlaceholder00000000000000000000\",\"behavior_id\":\"background-worker\",\"description\":\"Returns one concise analysis result\"}"
+  ],
+  "write_tools": [],
+  "datastore_tool_surface_ids": [],
+  "subagent_spawn_enabled": true,
+  "orchestration_enabled": false,
+  "subagent_steering_enabled": false,
+  "subagent_background_enabled": true,
+  "subagent_default_await_mode": "background",
+  "subagent_allow_cross_deployment": false,
+  "enable_self_config": false,
+  "self_config_categories": [],
+  "self_config_no_lockout": false,
+  "self_config_dry_run": false
+}

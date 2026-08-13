@@ -190,7 +190,7 @@ def boundaries : List Boundary :=
     , domain := "SessionRecovery"
     , subject := "client retry surface"
     , statement :=
-        "Generated SessionRecovery cases permit DB-backed client retry/reissue only for an interactive predecessor and deny automated origins. Canonical background-completion wakes are no longer an unmodelled exception: Proofs.Background.CompletionContinuation defines their narrower bounded redrive and aged-admission capabilities, R6 emits both, and the server owns the transactional retry/restart implementation. Other goal, schedule, and event recovery remains server-owned and is not authorized by the interactive retry theorem."
+        "Generated SessionRecovery cases permit DB-backed client retry/reissue only for an interactive predecessor and deny automated origins. Canonical background-completion wakes are no longer an unmodelled exception: Proofs.Background.CompletionContinuation defines their narrower bounded redrive, aged-admission, exact claim-snapshot acknowledgement, and durable crash recovery before claim, during inference, after response persistence, and during acknowledgement projection. R6 emits each boundary and the server owns the transactional retry/restart implementation. Other goal, schedule, and event recovery remains server-owned and is not authorized by the interactive retry theorem."
     , acceptedFollowUp :=
         some "Add distinct server-owned contracts before widening autonomous reissue to goal, generic schedule, or event origins."
     }

@@ -1,0 +1,5 @@
+type BackgroundContinuationJob @branchable {
+  job_id: String @index(unique: true)
+  prompt: String
+  suite: String @index
+}

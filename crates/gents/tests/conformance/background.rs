@@ -534,7 +534,7 @@ async fn wait_for_background_theorem_child_lifecycle_state(
 
 pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 30);
+    assert_eq!(cases.len(), 34);
 
     let names = cases
         .iter()
@@ -559,6 +559,10 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
             "fresh_background_wake_preserves_fifo",
             "completed_wake_acknowledges_exact_claim_snapshot",
             "failed_wake_retains_claim_snapshot_unacknowledged",
+            "restart_before_claim_preserves_pending_notification",
+            "inference_failure_retains_snapshot_for_bounded_redrive",
+            "response_persisted_before_crash_recovers_completed_ack",
+            "acknowledgement_projection_restart_is_atomic",
             "legacy_subagent_completion_source_aliases_canonical_key",
             "list_processes_same_requester_next_turn_authorized",
             "read_process_same_requester_next_turn_authorized",
@@ -704,6 +708,53 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
         Some("attempted=1,acknowledged=0")
     );
     assert_eq!(retained.reason.as_deref(), Some("failed_unacknowledged"));
+
+    let before_claim =
+        lean_r6_backgrounding_case("restart_before_claim_preserves_pending_notification");
+    assert!(before_claim.legal);
+    assert_eq!(before_claim.group, "completion_failure_boundary");
+    assert_eq!(before_claim.action, "restart_before_claim");
+    assert_eq!(before_claim.terminal_state, "pending");
+    assert_eq!(
+        before_claim.result.as_deref(),
+        Some("attempted=0,acknowledged=0")
+    );
+    assert_eq!(before_claim.reason.as_deref(), Some("pending_reclaim"));
+
+    let during_inference =
+        lean_r6_backgrounding_case("inference_failure_retains_snapshot_for_bounded_redrive");
+    assert!(during_inference.legal);
+    assert_eq!(during_inference.action, "fail_during_inference");
+    assert_eq!(during_inference.terminal_state, "failed");
+    assert_eq!(
+        during_inference.result.as_deref(),
+        Some("attempted=1,acknowledged=0")
+    );
+    assert_eq!(during_inference.reason.as_deref(), Some("bounded_retry"));
+
+    let after_response =
+        lean_r6_backgrounding_case("response_persisted_before_crash_recovers_completed_ack");
+    assert!(after_response.legal);
+    assert_eq!(after_response.action, "recover_after_response_persistence");
+    assert_eq!(after_response.terminal_state, "completed");
+    assert_eq!(
+        after_response.result.as_deref(),
+        Some("attempted=1,acknowledged=1")
+    );
+    assert_eq!(
+        after_response.reason.as_deref(),
+        Some("recovered_completed_ack")
+    );
+
+    let during_ack = lean_r6_backgrounding_case("acknowledgement_projection_restart_is_atomic");
+    assert!(during_ack.legal);
+    assert_eq!(during_ack.action, "project_acknowledgement_after_restart");
+    assert_eq!(during_ack.terminal_state, "completed");
+    assert_eq!(
+        during_ack.result.as_deref(),
+        Some("attempted=1,acknowledged=1")
+    );
+    assert_eq!(during_ack.reason.as_deref(), Some("atomic_ack_projection"));
 
     for case in cases.iter().filter(|case| case.group == "native_lifecycle") {
         drive_r6_native_lifecycle_case(case).await;

@@ -1,0 +1,9 @@
+{
+  "trigger_id": "background-parent",
+  "task_id": "background-parent-task",
+  "source_collection": "BackgroundContinuationJob",
+  "event_kind": "created",
+  "filter": null,
+  "enabled": true,
+  "concurrency": "parallel"
+}

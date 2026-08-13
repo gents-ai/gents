@@ -20,6 +20,38 @@ fn background_hints(parent: &AgentRequest) -> QueueHints {
     }
 }
 
+fn wake_agent_request(
+    parent: &AgentRequest,
+    doc_id: &str,
+    request_id: &str,
+    hints: &QueueHints,
+) -> AgentRequest {
+    AgentRequest {
+        doc_id: doc_id.to_string(),
+        request_id: request_id.to_string(),
+        agent_did: parent.agent_did.clone(),
+        requester_did: parent.requester_did.clone(),
+        behavior_id: parent.behavior_id.clone(),
+        session_id: parent.session_id.clone(),
+        content: "review notifications".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        seed: None,
+        max_tokens: None,
+        max_total_tokens: None,
+        metadata: Some(queue_metadata_json(hints)),
+        execution_origin: Some("scheduled".to_string()),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: Some(parent.request_id.clone()),
+        caused_by_parent_request_doc_id: Some(parent.doc_id.clone()),
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+    }
+}
+
 #[tokio::test]
 async fn notification_is_atomically_bound_to_coalesced_wake() {
     let db = test_db("atomic-background-notification").await;
@@ -202,6 +234,162 @@ async fn concurrent_notifications_converge_to_one_pending_wake() {
 }
 
 #[tokio::test]
+async fn restart_before_claim_preserves_pending_input_until_the_wake_completes() {
+    let TestDb { node, _tempdir } = test_db("background-restart-before-claim").await;
+    let node = std::sync::Arc::new(node);
+    let parent = root_parent("background-restart-before-claim-session");
+    let hints = background_hints(&parent);
+    let enqueued = enqueue_background_completion_with_message(
+        node.as_ref(),
+        &parent,
+        "restart-safe notification",
+        "background-completion-notification:restart-before-claim:tool",
+        "review notifications",
+        hints.clone(),
+    )
+    .await
+    .unwrap();
+
+    let recovery = crate::RequestLifecycle::recover_all(node.as_ref(), TEST_AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(recovery.background_wakes_redriven, 0);
+    let before = crate::load_background_completion_diagnostics(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        TEST_AGENT_DID,
+    )
+    .await
+    .unwrap();
+    assert_eq!(before.pending_notifications, 1);
+    assert_eq!(before.acknowledged_notifications, 0);
+    assert_eq!(before.epochs[0].state, "pending");
+
+    let request = wake_agent_request(
+        &parent,
+        &enqueued.request.doc_id,
+        &enqueued.request.request_id,
+        &hints,
+    );
+    let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        TEST_BEHAVIOR_ID,
+        TEST_AGENT_DID,
+        request,
+        60,
+        ExecutionOrigin::Scheduled,
+        "backend-test",
+    );
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+    lifecycle.complete().await.unwrap();
+
+    let after = crate::load_background_completion_diagnostics(
+        &crate::config_client::ConfigAccess::Local(node),
+        TEST_AGENT_DID,
+    )
+    .await
+    .unwrap();
+    assert_eq!(after.pending_notifications, 0);
+    assert_eq!(after.acknowledged_notifications, 1);
+    assert_eq!(after.epochs[0].state, "acknowledged");
+}
+
+#[tokio::test]
+async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
+    let TestDb { node, _tempdir } = test_db("background-response-repair-ack").await;
+    let node = std::sync::Arc::new(node);
+    let parent = root_parent("background-response-repair-ack-session");
+    let hints = background_hints(&parent);
+    let enqueued = enqueue_background_completion_with_message(
+        node.as_ref(),
+        &parent,
+        "response-persisted notification",
+        "background-completion-notification:response-persisted:tool",
+        "review notifications",
+        hints.clone(),
+    )
+    .await
+    .unwrap();
+    let request = wake_agent_request(
+        &parent,
+        &enqueued.request.doc_id,
+        &enqueued.request.request_id,
+        &hints,
+    );
+    let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        TEST_BEHAVIOR_ID,
+        TEST_AGENT_DID,
+        request,
+        60,
+        ExecutionOrigin::Scheduled,
+        "backend-test",
+    );
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+    lifecycle.begin_execution().await.unwrap();
+
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentResponse(input: {{
+                    response_key: "{}", request_id: "{}", request_doc_id: "{}",
+                    agent_did: "{TEST_AGENT_DID}", behavior_id: "{TEST_BEHAVIOR_ID}",
+                    session_id: "{}", content: "integrated notification",
+                    status: "complete", token_count: 1, progress_seq: 1,
+                    created_at: "2026-08-12T00:00:00Z",
+                    completed_at: "2026-08-12T00:00:01Z"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&enqueued.request.request_id),
+            escape_graphql_string(&enqueued.request.request_id),
+            escape_graphql_string(&enqueued.request.doc_id),
+            escape_graphql_string(&parent.session_id),
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "persist terminal response: {:?}",
+        response.errors
+    );
+
+    let first_repair =
+        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), TEST_AGENT_DID)
+            .await
+            .unwrap();
+    assert_eq!(first_repair.repaired, 1);
+    let first = crate::load_background_completion_diagnostics(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        TEST_AGENT_DID,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.pending_notifications, 0);
+    assert_eq!(first.acknowledged_notifications, 1);
+    assert_eq!(first.epochs[0].state, "acknowledged");
+
+    let second_repair =
+        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), TEST_AGENT_DID)
+            .await
+            .unwrap();
+    assert_eq!(second_repair.repaired, 0);
+    let second = crate::load_background_completion_diagnostics(
+        &crate::config_client::ConfigAccess::Local(node),
+        TEST_AGENT_DID,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        second, first,
+        "acknowledgement projection must be restart-idempotent"
+    );
+}
+
+#[tokio::test]
 async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     let TestDb { node, _tempdir } = test_db("background-successor-ack").await;
     let node = std::sync::Arc::new(node);
@@ -217,30 +405,12 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     )
     .await
     .unwrap();
-    let first_request = AgentRequest {
-        doc_id: first.request.doc_id.clone(),
-        request_id: first.request.request_id.clone(),
-        agent_did: parent.agent_did.clone(),
-        requester_did: parent.requester_did.clone(),
-        behavior_id: parent.behavior_id.clone(),
-        session_id: parent.session_id.clone(),
-        content: "review notifications".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: Some(queue_metadata_json(&hints)),
-        execution_origin: Some("scheduled".to_string()),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        subagent_depth: 0,
-        caused_by_parent_request_id: Some(parent.request_id.clone()),
-        caused_by_parent_request_doc_id: Some(parent.doc_id.clone()),
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-    };
+    let first_request = wake_agent_request(
+        &parent,
+        &first.request.doc_id,
+        &first.request.request_id,
+        &hints,
+    );
     let mut first_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         TEST_BEHAVIOR_ID,
@@ -272,30 +442,12 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         .await
         .unwrap();
 
-    let second_request = AgentRequest {
-        doc_id: second.request.doc_id.clone(),
-        request_id: second.request.request_id.clone(),
-        agent_did: parent.agent_did.clone(),
-        requester_did: parent.requester_did.clone(),
-        behavior_id: parent.behavior_id.clone(),
-        session_id: parent.session_id.clone(),
-        content: "review notifications".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: Some(queue_metadata_json(&hints)),
-        execution_origin: Some("scheduled".to_string()),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        deadline: None,
-        subagent_depth: 0,
-        caused_by_parent_request_id: Some(parent.request_id.clone()),
-        caused_by_parent_request_doc_id: Some(parent.doc_id.clone()),
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-    };
+    let second_request = wake_agent_request(
+        &parent,
+        &second.request.doc_id,
+        &second.request.request_id,
+        &hints,
+    );
     let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         TEST_BEHAVIOR_ID,

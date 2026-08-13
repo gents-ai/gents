@@ -2908,6 +2908,38 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     assert_eq!(projected_reasoning, live_child_reasoning);
     assert_eq!(projected_started_at_ms, child_started_at_ms);
 
+    // End the parent turn while the child response is still streaming. From
+    // this point onward the connection-scoped root and loaded-child watchers,
+    // rather than the parent turn stream, own the native card and child deltas.
+    let unresolved_tool_call_key = format!("{parent_thread_id}:unresolved-spawn");
+    let unresolved_completed_at_ms = seed_unresolved_completed_subagent_tool(
+        &graphql,
+        &agent_did,
+        &parent_request_id,
+        &parent_thread_id,
+        &unresolved_tool_call_key,
+    )
+    .await?;
+    update_request_lifecycle(&graphql, &parent_request_id, "failed").await?;
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        read_mcp_tool_completion(
+            &mut ws,
+            &unresolved_tool_call_key,
+            unresolved_completed_at_ms,
+        ),
+    )
+    .await
+    .context("timed out waiting for terminal unresolved subagent MCP fallback")??;
+
+    let parent_failed = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_thread_status_changed(&mut ws, &parent_thread_id),
+    )
+    .await
+    .context("timed out waiting for failed root thread status")??;
+    assert_eq!(parent_failed, codex::ThreadStatus::SystemError);
+
     let reasoning_tail = " then checks the durable result";
     update_streaming_response_reasoning(
         &graphql,
@@ -2941,38 +2973,6 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     .context("timed out waiting for reasoning completion at the final reset-tail window")??;
     assert_eq!(completed_reasoning, durable_reasoning);
     assert_eq!(projected_materialized_at_ms, child_materialized_at_ms);
-
-    // End the parent turn before the child settles. From this point onward the
-    // connection-scoped root watcher, rather than the parent turn stream, owns
-    // the spawn-card lifecycle update.
-    let unresolved_tool_call_key = format!("{parent_thread_id}:unresolved-spawn");
-    let unresolved_completed_at_ms = seed_unresolved_completed_subagent_tool(
-        &graphql,
-        &agent_did,
-        &parent_request_id,
-        &parent_thread_id,
-        &unresolved_tool_call_key,
-    )
-    .await?;
-    update_request_lifecycle(&graphql, &parent_request_id, "failed").await?;
-    tokio::time::timeout(
-        Duration::from_secs(15),
-        read_mcp_tool_completion(
-            &mut ws,
-            &unresolved_tool_call_key,
-            unresolved_completed_at_ms,
-        ),
-    )
-    .await
-    .context("timed out waiting for terminal unresolved subagent MCP fallback")??;
-
-    let parent_failed = tokio::time::timeout(
-        Duration::from_secs(15),
-        read_thread_status_changed(&mut ws, &parent_thread_id),
-    )
-    .await
-    .context("timed out waiting for failed root thread status")??;
-    assert_eq!(parent_failed, codex::ThreadStatus::SystemError);
 
     let child_completed_at_ms =
         finalize_child_response_after_materialization(&graphql, &child_request_id).await?;

@@ -214,6 +214,37 @@ def r6WakeAcknowledgementCase
     (some SessionQueue.QueueSource.backgroundCompletion.toDefraDB)
     (some "background_completion:900")
 
+def deliveryCrashAction : BackgroundCompletion.DeliveryCrashPoint → String
+  | .beforeClaim => "restart_before_claim"
+  | .duringInference => "fail_during_inference"
+  | .afterResponsePersistence => "recover_after_response_persistence"
+  | .duringAcknowledgement => "project_acknowledgement_after_restart"
+
+def deliveryCrashReason : BackgroundCompletion.DeliveryCrashPoint → String
+  | .beforeClaim => "pending_reclaim"
+  | .duringInference => "bounded_retry"
+  | .afterResponsePersistence => "recovered_completed_ack"
+  | .duringAcknowledgement => "atomic_ack_projection"
+
+def r6WakeFailureBoundaryCase
+    (name : String)
+    (point : BackgroundCompletion.DeliveryCrashPoint) :
+    R6BackgroundingCase :=
+  let recovered := BackgroundCompletion.recoverDeliveryCrash point
+  r6Case
+    name
+    "completion_failure_boundary"
+    (deliveryCrashAction point)
+    (BackgroundCompletion.deliveryCrashRecoveryAccepted point)
+    recovered.attemptedBindings.length
+    recovered.requestState.toDefraDB
+    (some ("attempted=" ++ toString recovered.attemptedBindings.length ++
+      ",acknowledged=" ++ toString recovered.acknowledgedBindings.length))
+    (some (deliveryCrashReason point))
+    none
+    (some SessionQueue.QueueSource.backgroundCompletion.toDefraDB)
+    (some "background_completion:900")
+
 def r6LegacyQueueAliasCase : R6BackgroundingCase :=
   let legacy := "subagent_completion"
   let parsed := SessionQueue.QueueSource.fromDefraDB? legacy
@@ -314,6 +345,18 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6WakeAcknowledgementCase
       "failed_wake_retains_claim_snapshot_unacknowledged"
       BackgroundCompletion.failedSnapshotFixture
+  , r6WakeFailureBoundaryCase
+      "restart_before_claim_preserves_pending_notification"
+      .beforeClaim
+  , r6WakeFailureBoundaryCase
+      "inference_failure_retains_snapshot_for_bounded_redrive"
+      .duringInference
+  , r6WakeFailureBoundaryCase
+      "response_persisted_before_crash_recovers_completed_ack"
+      .afterResponsePersistence
+  , r6WakeFailureBoundaryCase
+      "acknowledgement_projection_restart_is_atomic"
+      .duringAcknowledgement
   , r6LegacyQueueAliasCase
   , r6ProcessControlCase
       "list_processes_same_requester_next_turn_authorized"
@@ -426,6 +469,18 @@ theorem r6BackgroundingCases_pinned :
           some "background_completion:900")
       , ("failed_wake_retains_claim_snapshot_unacknowledged", true,
           "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("restart_before_claim_preserves_pending_notification", true,
+          "background", none, "pending", some "background_completion",
+          some "background_completion:900")
+      , ("inference_failure_retains_snapshot_for_bounded_redrive", true,
+          "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("response_persisted_before_crash_recovers_completed_ack", true,
+          "background", none, "completed", some "background_completion",
+          some "background_completion:900")
+      , ("acknowledgement_projection_restart_is_atomic", true,
+          "background", none, "completed", some "background_completion",
           some "background_completion:900")
       , ("legacy_subagent_completion_source_aliases_canonical_key", true,
           "background", none, "completed", some "subagent_completion",

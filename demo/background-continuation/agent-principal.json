@@ -1,0 +1,6 @@
+{
+  "agent_did": "did:key:zBackgroundContinuationPlaceholder00000000000000000000",
+  "display_name": "Background Continuation Demo",
+  "default_behavior_id": "background-parent",
+  "enabled": true
+}
