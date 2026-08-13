@@ -18,20 +18,33 @@ Clippy, detects the technologies touched by the diff, chooses exactly four disti
 review lenses, and stamps one closed `expected_total`. This produces four
 concurrent scanner agents, selected by detected review lens rather than by
 directory. Scanners report only evidenced Critical/Major candidates and each
-writes exactly one sentinel. The verification trigger groups those sentinels
+writes exactly one sentinel. The verification trigger groups all four sentinels
 without a counting inference call, fires once with deterministic `group.docs`
 ordering, and writes exactly one confirmed/refuted verdict for every candidate.
-Final triage consumes the closed ledger and publishes only confirmed findings.
+Its timeout floor is also four, so a slow scanner can delay verification but can
+never burn the durable group marker with a partial ledger. Final triage consumes
+the closed ledger and publishes only confirmed findings.
 
 The scan write tools hide `run_id` and `expected_total` from model input.
 `fill: correlation` stamps the run, while
 `fill: {"source_field":"expected_total"}` copies the immutable source snapshot
 persisted on the scan request. The pack declares a `write` principal ceiling.
-Recon, verification, and triage receive read-only file tools plus unrestricted,
-network-enabled shell commands rooted at `${GENTS_REVIEW_ROOT:-.}`; scanners
-receive only their evidence packet and schema-generated write tools. This keeps
-the parallel stage bounded while later verification still rereads the source.
-DefraDB reads and writes remain stage-specific.
+Recon receives read-only file tools plus a network-disabled, workspace-write
+shell rooted at `${GENTS_REVIEW_ROOT:-.}` so Cargo and Git can produce the
+deterministic baseline. Verification receives read-only file/search tools, its
+bounded CandidateFinding query, and schema-generated verdict tools; triage
+receives read-only files, its FindingVerdict query, and report tools. Neither
+later stage has a shell or network access. Scanners receive only their evidence
+packet and schema-generated write tools. DefraDB reads and writes remain
+stage-specific.
+
+The verify-to-triage edge intentionally is not a second group barrier. A single
+verifier owns the complete candidate set, writes every `FindingVerdict`, and
+then writes `VerificationSummary` as its final tool call. That completion record
+triggers triage per document. The runner independently checks the exact
+candidate-to-verdict bijection and summary count balance, so a verifier that
+violates the write-last contract fails acceptance instead of publishing a
+plausible but incomplete review.
 
 The default uses `GLM-5.2` on workstation-2 for recon, verification, and final
 triage, with DeepSeek V4 Flash on workstation-1 for the four-request parallel

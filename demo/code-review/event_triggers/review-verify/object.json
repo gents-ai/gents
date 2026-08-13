@@ -9,7 +9,7 @@
   "expected_count": null,
   "expected_count_field": "expected_total",
   "group_timeout_secs": 300,
-  "group_min_count": 1,
+  "group_min_count": 4,
   "enabled": true,
   "concurrency": "serial"
 }

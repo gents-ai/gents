@@ -8,6 +8,7 @@ Call `defra_query` for `CandidateFinding` with `run_id == "{{ group.correlation_
 2. Read the complete enclosing function, impl, or module and relevant callers/usages.
 3. Check traits, derives, cfg gates, error propagation, crate edition, and the actual dependency API where relevant.
 4. Refute claims already caught by the deterministic baseline, contradicted by surrounding behavior, based only on style, or lacking a concrete failing execution path.
+5. For retry/resource claims, read the documented recovery contract and nearby cadence/batch bounds. Retry of failed, unmarked work is not duplicate durable work unless a non-idempotent effect can demonstrably repeat before its marker.
 
 This is a bounded verification pass, not open-ended repository exploration. After the
 candidate query, use at most three repository inspection tool calls per candidate:

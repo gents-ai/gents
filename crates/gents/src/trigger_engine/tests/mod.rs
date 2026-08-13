@@ -637,6 +637,7 @@ mod dispatch;
 mod dispatch_contract;
 mod event_source;
 mod manual_source;
+mod production_materializer;
 mod schedule_source;
 
 #[tokio::test]

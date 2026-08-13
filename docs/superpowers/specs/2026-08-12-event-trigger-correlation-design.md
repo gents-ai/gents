@@ -488,12 +488,14 @@ stamps a tag of its choosing.
 Per the foundation flow, the Lean definitions and theorem statements **are**
 the specification of the fix and land first.
 
-- `Proofs/Triggers/Types.lean`, `Serial.lean`, `LatestOnly.lean` — the current
-  Lean `TriggerKey` is only `(trigger_id, kind)` (the Rust query already adds
-  DID scope). Expand the model key to
-  `(target_did, trigger_id, kind, correlation)` and regenerate the trigger
-  conformance vocabulary. This is a model correction plus a correlation
-  dimension, not merely a theorem restatement.
+- `Proofs/Triggers/Types.lean`, `Serial.lean`, `LatestOnly.lean` retain the
+  request-lifecycle model's trigger-wide `(trigger_id, kind)` abstraction.
+  `Proofs/Triggers/Groups.lean` models the production gate identity explicitly:
+  target DID + trigger id + kind for `per_document`, with correlation added for
+  `per_group`. The existing lifecycle preservation theorems therefore remain
+  trigger-wide; the group model proves that different correlations share that
+  scope only in `per_document` mode. Rust dispatch and embedded-node materializer
+  tests are the conformance fence for selecting and persisting those scopes.
 - `Proofs/Triggers/Lineage.lean` and `Proofs/DurableLineage.lean` — the tag
   joins stamped lineage and parent-derived requests preserve correlation while
   retaining their own immediate trigger cause.

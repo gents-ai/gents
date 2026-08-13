@@ -3,13 +3,14 @@ import Proofs.Triggers.Types
 /-!
 Run-scoped event-trigger fan-in.
 
-This model is deliberately separate from the older concurrency model's
-`TriggerKey`, which abstracts the pre-correlation runtime.  A group marker is
-identified by every persisted discriminator used by production: target DID,
-trigger id, trigger kind, and correlation.  `reconcile` models the
-single-writer, query-then-create critical section.  Store visibility and fair
-rescans remain explicit environment assumptions rather than being smuggled
-into an "exactly once" claim.
+This model is deliberately separate from the older request-lifecycle
+concurrency model's `TriggerKey`, which abstracts the pre-correlation runtime.
+It does model the runtime's gate identity: per-document concurrency is scoped
+to target DID + trigger id + kind, while per-group concurrency adds correlation.
+A group marker is identified by every persisted discriminator used by
+production. `reconcile` models the single-writer, query-then-create critical
+section. Store visibility and fair rescans remain explicit environment
+assumptions rather than being smuggled into an "exactly once" claim.
 -/
 
 namespace Triggers.Groups
@@ -20,6 +21,42 @@ structure CorrelatedTriggerKey where
   triggerKind : TriggerKind
   correlation : String
   deriving DecidableEq, Repr
+
+structure TriggerWideKey where
+  targetAgentDid : String
+  triggerId : String
+  triggerKind : TriggerKind
+  deriving DecidableEq, Repr
+
+inductive FireMode where
+  | perDocument
+  | perGroup
+  deriving DecidableEq, Repr
+
+inductive ConcurrencyGateKey where
+  | triggerWide (key : TriggerWideKey)
+  | correlated (key : CorrelatedTriggerKey)
+  deriving DecidableEq, Repr
+
+def CorrelatedTriggerKey.triggerWide (key : CorrelatedTriggerKey) : TriggerWideKey :=
+  { targetAgentDid := key.targetAgentDid
+  , triggerId := key.triggerId
+  , triggerKind := key.triggerKind
+  }
+
+def concurrencyGateKey
+    (mode : FireMode) (key : CorrelatedTriggerKey) : ConcurrencyGateKey :=
+  match mode with
+  | .perDocument => .triggerWide key.triggerWide
+  | .perGroup => .correlated key
+
+@[simp] theorem per_document_concurrency_is_trigger_wide
+    (key : CorrelatedTriggerKey) :
+    concurrencyGateKey .perDocument key = .triggerWide key.triggerWide := rfl
+
+@[simp] theorem per_group_concurrency_is_correlation_scoped
+    (key : CorrelatedTriggerKey) :
+    concurrencyGateKey .perGroup key = .correlated key := rfl
 
 structure Candidate where
   key : CorrelatedTriggerKey
@@ -148,6 +185,24 @@ theorem different_correlation_is_different_key
     left ≠ right := by
   intro hEq
   exact h (congrArg CorrelatedTriggerKey.correlation hEq)
+
+theorem per_document_correlation_does_not_change_concurrency_scope
+    (left right : CorrelatedTriggerKey)
+    (hDid : left.targetAgentDid = right.targetAgentDid)
+    (hId : left.triggerId = right.triggerId)
+    (hKind : left.triggerKind = right.triggerKind) :
+    concurrencyGateKey .perDocument left = concurrencyGateKey .perDocument right := by
+  cases left
+  cases right
+  simp_all [concurrencyGateKey, CorrelatedTriggerKey.triggerWide]
+
+theorem per_group_different_correlation_is_different_concurrency_scope
+    (left right : CorrelatedTriggerKey)
+    (h : left.correlation ≠ right.correlation) :
+    concurrencyGateKey .perGroup left ≠ concurrencyGateKey .perGroup right := by
+  intro hScope
+  have hKey : left = right := ConcurrencyGateKey.correlated.inj hScope
+  exact h (congrArg CorrelatedTriggerKey.correlation hKey)
 
 /--
 Liveness is conditional: if a fair rescan eventually presents a durable,
