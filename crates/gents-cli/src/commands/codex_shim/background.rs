@@ -281,6 +281,7 @@ mod tests {
                 fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
                 pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
                 child_thread_streams: Arc::new(Mutex::new(BTreeMap::new())),
+                root_continuation_streams: Arc::new(Mutex::new(BTreeMap::new())),
             },
             outbound_rx,
         )

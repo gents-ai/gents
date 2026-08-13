@@ -387,6 +387,11 @@ structure R6BackgroundingCase where
   errorCode : Option String
   queueSource : Option String
   queueKey : Option String
+  retryCount : Option Nat := none
+  maxRetries : Option Nat := none
+  postRetryCount : Option Nat := none
+  retryDelaySeconds : Option Nat := none
+  isLatest : Option Bool := none
   deriving Repr
 
 structure R5CrossDeploymentCase where

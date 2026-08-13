@@ -176,6 +176,12 @@ pub(crate) async fn render_prometheus_metrics(
     let data = load_metrics_query_data(graphql, local_agent_did).await?;
     let data = with_local_native_executors(data);
     let inference_metrics = load_inference_metrics_query_data(graphql).await?;
+    let background_completion = gents::load_background_completion_diagnostics(
+        &gents::config_client::ConfigAccess::Graphql(graphql.to_string()),
+        local_agent_did,
+    )
+    .await
+    .ok();
 
     let mut lines = Vec::new();
     push_metric_prelude(
@@ -416,10 +422,87 @@ pub(crate) async fn render_prometheus_metrics(
     );
 
     render_inference_metrics(&mut lines, &inference_metrics);
+    render_background_completion_metrics(
+        &mut lines,
+        local_agent_did,
+        background_completion.as_ref(),
+    );
     render_p2p_metrics(&mut lines, p2p);
 
     lines.push(String::new());
     Ok(lines.join("\n"))
+}
+
+fn render_background_completion_metrics(
+    lines: &mut Vec<String>,
+    agent_did: &str,
+    diagnostics: Option<&gents::BackgroundCompletionDiagnostics>,
+) {
+    let labels = [("agent_did", agent_did.to_string())];
+    push_metric_prelude(
+        lines,
+        "gents_background_completion_diagnostics_available",
+        "1 when durable background-completion delivery diagnostics were available to this scrape.",
+    );
+    push_metric_sample(
+        lines,
+        "gents_background_completion_diagnostics_available",
+        &labels,
+        i64::from(diagnostics.is_some()),
+    );
+    let Some(diagnostics) = diagnostics else {
+        return;
+    };
+    for (name, help, value) in [
+        (
+            "gents_background_completion_pending_notifications",
+            "Durable background-completion notifications not yet acknowledged by a successful continuation snapshot.",
+            diagnostics.pending_notifications as i64,
+        ),
+        (
+            "gents_background_completion_acknowledged_notifications",
+            "Durable background-completion notifications acknowledged by a successful continuation snapshot.",
+            diagnostics.acknowledged_notifications as i64,
+        ),
+        (
+            "gents_background_completion_stranded_notifications",
+            "Unacknowledged background-completion notifications with no retryable continuation remaining.",
+            diagnostics.stranded_notifications as i64,
+        ),
+        (
+            "gents_background_completion_oldest_pending_age_seconds",
+            "Age in seconds of the oldest unacknowledged background-completion notification epoch.",
+            diagnostics.oldest_pending_age_seconds.unwrap_or(0),
+        ),
+        (
+            "gents_background_completion_scan_truncated",
+            "1 when the bounded durable diagnostics scan reached its wake or notification row limit.",
+            i64::from(diagnostics.scan_truncated),
+        ),
+    ] {
+        push_metric_prelude(lines, name, help);
+        push_metric_sample(lines, name, &labels, value);
+    }
+    push_metric_prelude(
+        lines,
+        "gents_background_completion_epochs",
+        "Background-completion continuation epochs grouped by durable delivery state.",
+    );
+    let mut epochs_by_state = BTreeMap::<&str, i64>::new();
+    for epoch in &diagnostics.epochs {
+        *epochs_by_state.entry(epoch.state.as_str()).or_default() += 1;
+    }
+    for (state, count) in epochs_by_state {
+        push_metric_sample(
+            lines,
+            "gents_background_completion_epochs",
+            &[
+                ("agent_did", agent_did.to_string()),
+                ("state", state.to_string()),
+            ],
+            count,
+        );
+    }
 }
 
 fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>) {
@@ -1372,6 +1455,56 @@ mod tests {
         ));
         assert!(!rendered
             .contains(r#"gents_backend_last_probe_seconds{backend_id="unprobed-unknown"}"#));
+    }
+
+    #[test]
+    fn background_completion_metrics_surface_pending_and_stranded_delivery() {
+        let mut lines = Vec::new();
+        render_background_completion_metrics(
+            &mut lines,
+            "did:agent:amy",
+            Some(&gents::BackgroundCompletionDiagnostics {
+                scanned_wakes: 1,
+                scanned_notifications: 10,
+                scan_truncated: false,
+                pending_notifications: 3,
+                acknowledged_notifications: 7,
+                stranded_notifications: 2,
+                oldest_pending_age_seconds: Some(41),
+                epochs: vec![gents::BackgroundCompletionEpochDiagnostic {
+                    root_request_id: "wake-1".to_string(),
+                    active_request_id: "wake-1".to_string(),
+                    session_id: "session-1".to_string(),
+                    coalescing_key: "background_completion:parent".to_string(),
+                    state: "exhausted".to_string(),
+                    attempt_count: 4,
+                    retry_count: 3,
+                    max_retries: 3,
+                    input_through_sequence: Some(12),
+                    notification_count: 2,
+                    acknowledged_notification_count: 0,
+                    attempted_notification_keys: vec!["notification-1".to_string()],
+                    acknowledged_notification_keys: Vec::new(),
+                    pending_notification_keys: vec!["notification-1".to_string()],
+                    pending_age_seconds: Some(41),
+                    last_failure: Some("provider failed".to_string()),
+                    next_retry_at: None,
+                    created_at: None,
+                    claimed_at: None,
+                    terminalized_at: None,
+                }],
+            }),
+        );
+        let rendered = lines.join("\n");
+        assert!(rendered.contains(
+            r#"gents_background_completion_pending_notifications{agent_did="did:agent:amy"} 3"#
+        ));
+        assert!(rendered.contains(
+            r#"gents_background_completion_stranded_notifications{agent_did="did:agent:amy"} 2"#
+        ));
+        assert!(rendered.contains(
+            r#"gents_background_completion_epochs{agent_did="did:agent:amy",state="exhausted"} 1"#
+        ));
     }
 
     #[test]

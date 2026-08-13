@@ -534,7 +534,7 @@ async fn wait_for_background_theorem_child_lifecycle_state(
 
 pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 22);
+    assert_eq!(cases.len(), 34);
 
     let names = cases
         .iter()
@@ -551,6 +551,18 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
             "background_recovery_running_live_parent_to_cancelled",
             "background_completion_source_writes_canonical_key",
             "terminal_completion_message_precedes_claimed_continuation",
+            "failed_background_wake_with_budget_redrives",
+            "failed_background_wake_exhausted_budget_stops",
+            "generic_scheduled_failure_is_not_background_redrive",
+            "non_latest_background_wake_does_not_redrive",
+            "aged_background_wake_precedes_new_descendant",
+            "fresh_background_wake_preserves_fifo",
+            "completed_wake_acknowledges_exact_claim_snapshot",
+            "failed_wake_retains_claim_snapshot_unacknowledged",
+            "restart_before_claim_preserves_pending_notification",
+            "inference_failure_retains_snapshot_for_bounded_redrive",
+            "response_persisted_before_crash_recovers_completed_ack",
+            "acknowledgement_projection_restart_is_atomic",
             "legacy_subagent_completion_source_aliases_canonical_key",
             "list_processes_same_requester_next_turn_authorized",
             "read_process_same_requester_next_turn_authorized",
@@ -636,6 +648,113 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
         lean_r6_backgrounding_case("legacy_subagent_completion_source_aliases_canonical_key");
     assert_eq!(legacy.queue_source.as_deref(), Some("subagent_completion"));
     assert_eq!(legacy.queue_key.as_deref(), canonical.queue_key.as_deref());
+
+    let redrive = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
+    assert!(redrive.legal);
+    assert_eq!(redrive.group, "completion_redrive");
+    assert_eq!(redrive.action, "redrive_failed_background_wake");
+    assert_eq!(redrive.retry_count, Some(1));
+    assert_eq!(redrive.max_retries, Some(3));
+    assert_eq!(redrive.post_retry_count, Some(2));
+    assert_eq!(redrive.retry_delay_seconds, Some(10));
+    assert_eq!(
+        gents::lifecycle::background_wake_retry_delay(redrive.retry_count.unwrap() as i64)
+            .num_seconds(),
+        redrive.retry_delay_seconds.unwrap() as i64
+    );
+    assert_eq!(redrive.is_latest, Some(true));
+
+    let exhausted = lean_r6_backgrounding_case("failed_background_wake_exhausted_budget_stops");
+    assert!(!exhausted.legal);
+    assert_eq!(exhausted.retry_count, exhausted.max_retries);
+    assert_eq!(exhausted.post_retry_count, None);
+
+    let generic = lean_r6_backgrounding_case("generic_scheduled_failure_is_not_background_redrive");
+    assert!(!generic.legal);
+    assert_eq!(generic.queue_source.as_deref(), Some("user"));
+
+    let non_latest = lean_r6_backgrounding_case("non_latest_background_wake_does_not_redrive");
+    assert!(!non_latest.legal);
+    assert_eq!(non_latest.is_latest, Some(false));
+
+    let aged = lean_r6_backgrounding_case("aged_background_wake_precedes_new_descendant");
+    assert!(aged.legal);
+    assert_eq!(aged.group, "completion_admission");
+    assert_eq!(aged.action, "rank_pending_background_wake");
+    assert_eq!(aged.reason.as_deref(), Some("aged_priority"));
+
+    let fresh = lean_r6_backgrounding_case("fresh_background_wake_preserves_fifo");
+    assert!(!fresh.legal);
+    assert_eq!(fresh.group, "completion_admission");
+    assert_eq!(fresh.reason.as_deref(), Some("fifo"));
+
+    let acknowledged =
+        lean_r6_backgrounding_case("completed_wake_acknowledges_exact_claim_snapshot");
+    assert!(acknowledged.legal);
+    assert_eq!(acknowledged.group, "completion_acknowledgement");
+    assert_eq!(acknowledged.terminal_state, "completed");
+    assert_eq!(
+        acknowledged.result.as_deref(),
+        Some("attempted=1,acknowledged=1")
+    );
+    assert_eq!(acknowledged.reason.as_deref(), Some("completed_ack"));
+
+    let retained = lean_r6_backgrounding_case("failed_wake_retains_claim_snapshot_unacknowledged");
+    assert!(retained.legal);
+    assert_eq!(retained.group, "completion_acknowledgement");
+    assert_eq!(retained.terminal_state, "failed");
+    assert_eq!(
+        retained.result.as_deref(),
+        Some("attempted=1,acknowledged=0")
+    );
+    assert_eq!(retained.reason.as_deref(), Some("failed_unacknowledged"));
+
+    let before_claim =
+        lean_r6_backgrounding_case("restart_before_claim_preserves_pending_notification");
+    assert!(before_claim.legal);
+    assert_eq!(before_claim.group, "completion_failure_boundary");
+    assert_eq!(before_claim.action, "restart_before_claim");
+    assert_eq!(before_claim.terminal_state, "pending");
+    assert_eq!(
+        before_claim.result.as_deref(),
+        Some("attempted=0,acknowledged=0")
+    );
+    assert_eq!(before_claim.reason.as_deref(), Some("pending_reclaim"));
+
+    let during_inference =
+        lean_r6_backgrounding_case("inference_failure_retains_snapshot_for_bounded_redrive");
+    assert!(during_inference.legal);
+    assert_eq!(during_inference.action, "fail_during_inference");
+    assert_eq!(during_inference.terminal_state, "failed");
+    assert_eq!(
+        during_inference.result.as_deref(),
+        Some("attempted=1,acknowledged=0")
+    );
+    assert_eq!(during_inference.reason.as_deref(), Some("bounded_retry"));
+
+    let after_response =
+        lean_r6_backgrounding_case("response_persisted_before_crash_recovers_completed_ack");
+    assert!(after_response.legal);
+    assert_eq!(after_response.action, "recover_after_response_persistence");
+    assert_eq!(after_response.terminal_state, "completed");
+    assert_eq!(
+        after_response.result.as_deref(),
+        Some("attempted=1,acknowledged=1")
+    );
+    assert_eq!(
+        after_response.reason.as_deref(),
+        Some("recovered_completed_ack")
+    );
+
+    let during_ack = lean_r6_backgrounding_case("acknowledgement_projection_restart_is_atomic");
+    assert!(during_ack.legal);
+    assert_eq!(during_ack.action, "project_acknowledgement_after_restart");
+    assert_eq!(during_ack.terminal_state, "completed");
+    assert_eq!(
+        during_ack.result.as_deref(),
+        Some("attempted=1,acknowledged=1")
+    );
+    assert_eq!(during_ack.reason.as_deref(), Some("atomic_ack_projection"));
 
     for case in cases.iter().filter(|case| case.group == "native_lifecycle") {
         drive_r6_native_lifecycle_case(case).await;

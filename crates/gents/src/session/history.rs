@@ -5,11 +5,22 @@ use gents_protocol::transcript::decode_persisted_message;
 use serde_json::Value;
 
 pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<Message>> {
+    load_history_through_sequence(node, session_id, None).await
+}
+
+pub(crate) async fn load_history_through_sequence(
+    node: &EmbeddedNode,
+    session_id: &str,
+    through_sequence: Option<u32>,
+) -> Result<Vec<Message>> {
     let escaped_session_id = escape_graphql_string(session_id);
+    let sequence_filter = through_sequence
+        .map(|sequence| format!(", sequence: {{ _le: {sequence} }}"))
+        .unwrap_or_default();
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{sequence_filter} }},
                 order: {{ sequence: ASC }}
             ) {{
                 sequence
@@ -23,8 +34,9 @@ pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<M
     let resp = execute_query_timed(node, &query, "load_history").await;
     if resp.has_errors() {
         anyhow::bail!(
-            "loading history for session_id={}: {:?}",
+            "loading history for session_id={} through_sequence={:?}: {:?}",
             session_id,
+            through_sequence,
             resp.errors
         );
     }
@@ -44,7 +56,7 @@ pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<M
     }
 
     tracing::Span::current().record("history_message_count", history.len() as i64);
-    tracing::debug!(session_id = %session_id, count = history.len(), "loaded history");
+    tracing::debug!(session_id = %session_id, ?through_sequence, count = history.len(), "loaded history");
     Ok(history)
 }
 

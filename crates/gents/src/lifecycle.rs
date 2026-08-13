@@ -7,6 +7,8 @@ use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session;
 use crate::watcher::AgentRequest;
 
+mod background_wake_recovery;
+pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 mod claim;
 mod lookup;
 pub mod manual;
@@ -319,6 +321,7 @@ pub struct RequestLifecycle {
     progress_seq: u32,
     deadline_duration_secs: u64,
     claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
+    background_completion_input_through_sequence: Option<u32>,
     state: LocalLifecycleState,
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -337,11 +340,19 @@ impl RequestLifecycle {
     pub fn valid_until_at_claim_for_test(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.valid_until_at_claim
     }
+
+    /// Last transcript sequence owned by this background-completion attempt
+    /// at its atomic claim boundary. Messages appended for a successor epoch
+    /// must not enter this attempt's provider input.
+    pub(crate) fn background_completion_input_through_sequence(&self) -> Option<u32> {
+        self.background_completion_input_through_sequence
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct RecoveryReport {
     pub requests_recovered: usize,
+    pub background_wakes_redriven: usize,
     pub responses_recovered: usize,
     pub conversations_recovered: usize,
     pub conversations_failed: usize,
@@ -354,6 +365,23 @@ pub struct TerminalRepairReport {
     pub repaired: usize,
     pub awaiting_outcome: usize,
     pub failed: usize,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BackgroundWakeRedriveReport {
+    pub scanned: usize,
+    pub redriven: usize,
+    pub deferred: usize,
+    pub already_redriven: usize,
+    pub coalesced: usize,
+    pub ineligible: usize,
+    pub failed: usize,
+}
+
+impl BackgroundWakeRedriveReport {
+    pub fn is_noop(&self) -> bool {
+        self.redriven == 0
+    }
 }
 
 impl TerminalRepairReport {

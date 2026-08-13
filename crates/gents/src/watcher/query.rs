@@ -119,7 +119,7 @@ impl DefraWatcher {
             }
         }
 
-        claimable_pending_rows_from_rows(rows)
+        prioritize_aged_background_wakes(claimable_pending_rows_from_rows(rows), chrono::Utc::now())
             .into_iter()
             .map(AgentRequestRow::into_agent_request)
             .collect()
@@ -262,7 +262,22 @@ pub(crate) fn agent_request_from_mutation_response(
 fn claimable_pending_rows(
     data: Option<&serde_json::Value>,
 ) -> anyhow::Result<Vec<AgentRequestRow>> {
-    Ok(claimable_pending_rows_from_rows(active_runtime_rows(data)?))
+    Ok(prioritize_aged_background_wakes(
+        claimable_pending_rows_from_rows(active_runtime_rows(data)?),
+        chrono::Utc::now(),
+    ))
+}
+
+fn prioritize_aged_background_wakes(
+    mut rows: Vec<AgentRequestRow>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<AgentRequestRow> {
+    // The query is already FIFO. Stable partitioning preserves that order
+    // within both classes while preventing an old completion wake from being
+    // perpetually overtaken by ordinary work. Once selected, the wake has at
+    // most the bounded executor queue and active workers ahead of it.
+    rows.sort_by_key(|row| !row.is_aged_background_completion_wakeup(now));
+    rows
 }
 
 fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequestRow> {
@@ -315,7 +330,113 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
 
 #[cfg(test)]
 mod tests {
-    use super::claimable_pending_rows;
+    use super::{
+        active_runtime_rows, claimable_pending_rows, claimable_pending_rows_from_rows,
+        prioritize_aged_background_wakes,
+    };
+
+    fn versioned_wake_metadata(session_id: &str) -> String {
+        serde_json::json!({
+            "queue": {
+                "source": "background_completion",
+                "policy": "coalesce",
+                "key": format!("background_completion:{session_id}"),
+                "queued_after_request_id": "parent"
+            },
+            "background_completion_wake_version": 1
+        })
+        .to_string()
+    }
+
+    fn pending_row(
+        request_id: &str,
+        session_id: &str,
+        created_at: &str,
+        metadata: Option<String>,
+        execution_origin: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "_docID": format!("doc-{request_id}"),
+            "request_id": request_id,
+            "agent_did": "did:agent:1",
+            "behavior_id": "default",
+            "session_id": session_id,
+            "content": "work",
+            "metadata": metadata,
+            "execution_origin": execution_origin,
+            "created_at": created_at,
+            "status": "pending",
+            "lifecycle_state": "pending"
+        })
+    }
+
+    #[test]
+    fn aged_completion_wake_moves_ahead_of_older_descendant() {
+        let witness = crate::lean_vocab_test::lean_r6_backgrounding_case(
+            "aged_background_wake_precedes_new_descendant",
+        );
+        assert!(witness.legal);
+        assert_eq!(witness.reason.as_deref(), Some("aged_priority"));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T22:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let data = serde_json::json!({
+            "AgentRequest": [
+                pending_row(
+                    "older-descendant",
+                    "descendant-session",
+                    "2026-08-12T21:00:00Z",
+                    None,
+                    "interactive",
+                ),
+                pending_row(
+                    "aged-wake",
+                    "parent-session",
+                    "2026-08-12T21:59:30Z",
+                    Some(versioned_wake_metadata("parent-session")),
+                    "scheduled",
+                )
+            ]
+        });
+        let rows = claimable_pending_rows_from_rows(active_runtime_rows(Some(&data)).unwrap());
+        let ranked = prioritize_aged_background_wakes(rows, now);
+        assert_eq!(ranked[0].request_id, "aged-wake");
+        assert_eq!(ranked[1].request_id, "older-descendant");
+    }
+
+    #[test]
+    fn fresh_completion_wake_preserves_fifo() {
+        let witness = crate::lean_vocab_test::lean_r6_backgrounding_case(
+            "fresh_background_wake_preserves_fifo",
+        );
+        assert!(!witness.legal);
+        assert_eq!(witness.reason.as_deref(), Some("fifo"));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T22:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let data = serde_json::json!({
+            "AgentRequest": [
+                pending_row(
+                    "older-descendant",
+                    "descendant-session",
+                    "2026-08-12T21:59:00Z",
+                    None,
+                    "interactive",
+                ),
+                pending_row(
+                    "fresh-wake",
+                    "parent-session",
+                    "2026-08-12T21:59:31Z",
+                    Some(versioned_wake_metadata("parent-session")),
+                    "scheduled",
+                )
+            ]
+        });
+        let rows = claimable_pending_rows_from_rows(active_runtime_rows(Some(&data)).unwrap());
+        let ranked = prioritize_aged_background_wakes(rows, now);
+        assert_eq!(ranked[0].request_id, "older-descendant");
+        assert_eq!(ranked[1].request_id, "fresh-wake");
+    }
 
     #[test]
     fn processing_legacy_wake_does_not_block_interactive_request() {

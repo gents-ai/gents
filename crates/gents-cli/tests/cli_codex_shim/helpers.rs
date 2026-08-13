@@ -1018,6 +1018,59 @@ pub(super) async fn update_request_lifecycle(
     Ok(())
 }
 
+pub(super) async fn seed_background_completion_wake(
+    graphql: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    session_id: &str,
+) -> Result<String> {
+    let request_id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let metadata = serde_json::to_string(&json!({
+        "queue": {
+            "source": "background_completion",
+            "policy": "coalesce",
+            "key": format!("background_completion:{session_id}"),
+            "queued_after_request_id": null
+        },
+        "background_completion_wake_version": 1
+    }))?;
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "{content}",
+                metadata: "{metadata}",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "scheduled",
+                failure_reason: "",
+                created_at: "{now}",
+                retry_count: 0,
+                max_retries: 3,
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#,
+        request_id = escape_graphql_string(&request_id),
+        agent_did = escape_graphql_string(agent_did),
+        behavior_id = escape_graphql_string(behavior_id),
+        session_id = escape_graphql_string(session_id),
+        content =
+            escape_graphql_string(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT),
+        metadata = escape_graphql_string(&metadata),
+        now = escape_graphql_string(&now),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok(request_id)
+}
+
 pub(super) fn require_command(name: &str) -> Result<()> {
     if which(name).is_some() {
         Ok(())

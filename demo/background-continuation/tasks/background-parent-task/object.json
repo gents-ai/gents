@@ -1,0 +1,9 @@
+{
+  "task_id": "background-parent-task",
+  "name": "background-parent-task",
+  "description": null,
+  "behavior_id": "background-parent",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

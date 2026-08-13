@@ -151,6 +151,100 @@ def r6CompletionContinuationCase : R6BackgroundingCase :=
     (some wake.source.toDefraDB)
     (wake.queueKey.map fun key => wake.source.toDefraDB ++ ":" ++ toString key)
 
+def r6FailedWakeRedriveCase
+    (name : String)
+    (wake : BackgroundCompletion.FailedWake) : R6BackgroundingCase :=
+  let post := BackgroundCompletion.redriveWake? wake
+  let legal := post.isSome
+  { r6Case
+      name
+      "completion_redrive"
+      "redrive_failed_background_wake"
+      legal
+      1
+      wake.ctx.state.toDefraDB
+      (if legal then some "successor_created" else none)
+      (if legal then some "bounded_retry" else some "ineligible")
+      none
+      (some wake.source.toDefraDB)
+      (wake.queueKey.map fun key => wake.source.toDefraDB ++ ":" ++ toString key) with
+      retryCount := some wake.ctx.retryCount
+      maxRetries := some wake.ctx.maxRetries
+      postRetryCount := post.map (·.retryCount)
+      retryDelaySeconds := if legal then some (BackgroundCompletion.wakeRetryDelaySeconds wake.ctx.retryCount) else none
+      isLatest := some wake.ctx.isLatest
+  }
+
+def r6WakeAdmissionCase
+    (name : String)
+    (wake other : BackgroundCompletion.AdmissionCandidate) :
+    R6BackgroundingCase :=
+  let admitted := BackgroundCompletion.servesBefore wake other
+  r6Case
+    name
+    "completion_admission"
+    "rank_pending_background_wake"
+    admitted
+    1
+    "pending"
+    none
+    (if admitted then some "aged_priority" else some "fifo")
+    none
+    (some wake.source.toDefraDB)
+    (some (wake.source.toDefraDB ++ ":900"))
+
+def r6WakeAcknowledgementCase
+    (name : String)
+    (snapshot : BackgroundCompletion.WakeAttemptSnapshot) :
+    R6BackgroundingCase :=
+  let attempted := snapshot.attemptedBindings
+  let acknowledged := snapshot.acknowledgedBindings
+  let completed := snapshot.terminalState = .completed
+  r6Case
+    name
+    "completion_acknowledgement"
+    "snapshot_notification_bindings"
+    (decide (if completed then acknowledged = attempted else acknowledged = []))
+    attempted.length
+    snapshot.terminalState.toDefraDB
+    (some ("attempted=" ++ toString attempted.length ++
+      ",acknowledged=" ++ toString acknowledged.length))
+    (if completed then some "completed_ack" else some "failed_unacknowledged")
+    none
+    (some SessionQueue.QueueSource.backgroundCompletion.toDefraDB)
+    (some "background_completion:900")
+
+def deliveryCrashAction : BackgroundCompletion.DeliveryCrashPoint → String
+  | .beforeClaim => "restart_before_claim"
+  | .duringInference => "fail_during_inference"
+  | .afterResponsePersistence => "recover_after_response_persistence"
+  | .duringAcknowledgement => "project_acknowledgement_after_restart"
+
+def deliveryCrashReason : BackgroundCompletion.DeliveryCrashPoint → String
+  | .beforeClaim => "pending_reclaim"
+  | .duringInference => "bounded_retry"
+  | .afterResponsePersistence => "recovered_completed_ack"
+  | .duringAcknowledgement => "atomic_ack_projection"
+
+def r6WakeFailureBoundaryCase
+    (name : String)
+    (point : BackgroundCompletion.DeliveryCrashPoint) :
+    R6BackgroundingCase :=
+  let recovered := BackgroundCompletion.recoverDeliveryCrash point
+  r6Case
+    name
+    "completion_failure_boundary"
+    (deliveryCrashAction point)
+    (BackgroundCompletion.deliveryCrashRecoveryAccepted point)
+    recovered.attemptedBindings.length
+    recovered.requestState.toDefraDB
+    (some ("attempted=" ++ toString recovered.attemptedBindings.length ++
+      ",acknowledged=" ++ toString recovered.acknowledgedBindings.length))
+    (some (deliveryCrashReason point))
+    none
+    (some SessionQueue.QueueSource.backgroundCompletion.toDefraDB)
+    (some "background_completion:900")
+
 def r6LegacyQueueAliasCase : R6BackgroundingCase :=
   let legacy := "subagent_completion"
   let parsed := SessionQueue.QueueSource.fromDefraDB? legacy
@@ -225,6 +319,44 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6RestartCase
   , r6CompletionQueueCase
   , r6CompletionContinuationCase
+  , r6FailedWakeRedriveCase
+      "failed_background_wake_with_budget_redrives"
+      (BackgroundCompletion.failedWakeFixture (retryCount := 1))
+  , r6FailedWakeRedriveCase
+      "failed_background_wake_exhausted_budget_stops"
+      (BackgroundCompletion.failedWakeFixture (retryCount := 3))
+  , r6FailedWakeRedriveCase
+      "generic_scheduled_failure_is_not_background_redrive"
+      (BackgroundCompletion.failedWakeFixture (source := .user))
+  , r6FailedWakeRedriveCase
+      "non_latest_background_wake_does_not_redrive"
+      (BackgroundCompletion.failedWakeFixture (isLatest := false))
+  , r6WakeAdmissionCase
+      "aged_background_wake_precedes_new_descendant"
+      BackgroundCompletion.agedWakeFixture
+      BackgroundCompletion.descendantFixture
+  , r6WakeAdmissionCase
+      "fresh_background_wake_preserves_fifo"
+      BackgroundCompletion.freshWakeFixture
+      BackgroundCompletion.descendantFixture
+  , r6WakeAcknowledgementCase
+      "completed_wake_acknowledges_exact_claim_snapshot"
+      BackgroundCompletion.completedSnapshotFixture
+  , r6WakeAcknowledgementCase
+      "failed_wake_retains_claim_snapshot_unacknowledged"
+      BackgroundCompletion.failedSnapshotFixture
+  , r6WakeFailureBoundaryCase
+      "restart_before_claim_preserves_pending_notification"
+      .beforeClaim
+  , r6WakeFailureBoundaryCase
+      "inference_failure_retains_snapshot_for_bounded_redrive"
+      .duringInference
+  , r6WakeFailureBoundaryCase
+      "response_persisted_before_crash_recovers_completed_ack"
+      .afterResponsePersistence
+  , r6WakeFailureBoundaryCase
+      "acknowledgement_projection_restart_is_atomic"
+      .duringAcknowledgement
   , r6LegacyQueueAliasCase
   , r6ProcessControlCase
       "list_processes_same_requester_next_turn_authorized"
@@ -313,6 +445,41 @@ theorem r6BackgroundingCases_pinned :
           "background", none, "completed", some "background_completion",
           some "background_completion:900")
       , ("terminal_completion_message_precedes_claimed_continuation", true,
+          "background", none, "completed", some "background_completion",
+          some "background_completion:900")
+      , ("failed_background_wake_with_budget_redrives", true,
+          "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("failed_background_wake_exhausted_budget_stops", false,
+          "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("generic_scheduled_failure_is_not_background_redrive", false,
+          "background", none, "failed", some "user", some "user:900")
+      , ("non_latest_background_wake_does_not_redrive", false,
+          "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("aged_background_wake_precedes_new_descendant", true,
+          "background", none, "pending", some "background_completion",
+          some "background_completion:900")
+      , ("fresh_background_wake_preserves_fifo", false,
+          "background", none, "pending", some "background_completion",
+          some "background_completion:900")
+      , ("completed_wake_acknowledges_exact_claim_snapshot", true,
+          "background", none, "completed", some "background_completion",
+          some "background_completion:900")
+      , ("failed_wake_retains_claim_snapshot_unacknowledged", true,
+          "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("restart_before_claim_preserves_pending_notification", true,
+          "background", none, "pending", some "background_completion",
+          some "background_completion:900")
+      , ("inference_failure_retains_snapshot_for_bounded_redrive", true,
+          "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("response_persisted_before_crash_recovers_completed_ack", true,
+          "background", none, "completed", some "background_completion",
+          some "background_completion:900")
+      , ("acknowledgement_projection_restart_is_atomic", true,
           "background", none, "completed", some "background_completion",
           some "background_completion:900")
       , ("legacy_subagent_completion_source_aliases_canonical_key", true,

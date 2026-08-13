@@ -14,6 +14,7 @@ use super::command_projection::{
     file_change_item, tool_projection_status_with_settled, ToolProjectionStatus,
 };
 use super::compaction_projection::context_compaction_item;
+use super::continuation_stream::is_background_completion_metadata;
 use super::progress::{
     codex_turn_status, decode_gents_tool_call_progress, gents_tool_item, terminal_error_message,
     GentsToolCallProgress,
@@ -432,6 +433,7 @@ fn steering_parent_id(request: &RequestRow) -> Option<String> {
 
 fn is_codex_visible_request(request: &RequestRow) -> bool {
     request.metadata.contains("\"codex_shim\"")
+        || is_background_completion_metadata(Some(&request.metadata))
         || request
             .execution_origin
             .trim()
@@ -604,7 +606,9 @@ fn append_request_items(
             .then_with(|| left.started_at.cmp(&right.started_at))
     });
 
-    if !request.content.trim().is_empty() {
+    if !request.content.trim().is_empty()
+        && !is_background_completion_metadata(Some(&request.metadata))
+    {
         items.push(codex::ThreadItem::UserMessage {
             id: format!("gents-user-{}", request.request_id),
             content: vec![codex::UserInput::Text {
@@ -966,6 +970,52 @@ mod tests {
         assert_eq!(
             turn_status(&request, Some(&response)),
             codex::TurnStatus::Completed
+        );
+    }
+
+    #[test]
+    fn background_completion_wake_is_visible_without_rendering_internal_prompt() {
+        let record = CodexThreadRecord {
+            session_id: "thread-1".to_string(),
+            cwd: PathBuf::from("/tmp/project"),
+            archived: false,
+            loaded: true,
+            memory_mode: "disabled".to_string(),
+            name: String::new(),
+            settings_json: "{}".to_string(),
+            git_info: None,
+            projection_started: None,
+            conversation: None,
+            subagent: None,
+        };
+        let request = RequestRow {
+            request_id: "wake-1".to_string(),
+            content: gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: "completed".to_string(),
+            failure_reason: String::new(),
+            created_at: None,
+            terminalized_at: None,
+            metadata: r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"},"background_completion_wake_version":1}"#.to_string(),
+            execution_origin: "scheduled".to_string(),
+        };
+
+        assert!(is_codex_visible_request(&request));
+        let mut items = Vec::new();
+        append_request_items(
+            &record,
+            &mut items,
+            &request,
+            None,
+            Vec::new(),
+            &[],
+            &BTreeMap::new(),
+        );
+        assert!(
+            !items
+                .iter()
+                .any(|item| matches!(item, codex::ThreadItem::UserMessage { .. })),
+            "the scheduler's control prompt must not appear as user-authored input"
         );
     }
 

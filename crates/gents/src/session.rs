@@ -35,6 +35,7 @@ pub use fork::{
     GraphqlExecutor, HttpGraphqlExecutor,
 };
 pub use history::load_history;
+pub(crate) use history::load_history_through_sequence;
 #[allow(unused_imports)]
 pub(crate) use history::{
     append_message_once_with_key_and_requester_did, append_message_with_requester_did,

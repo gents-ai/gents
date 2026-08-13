@@ -28,6 +28,7 @@ mod child_stream;
 mod command_projection;
 mod compaction_projection;
 mod compat;
+mod continuation_stream;
 mod handlers;
 mod history_projection;
 mod host_runtime;
@@ -101,15 +102,24 @@ struct ConnectionState {
     fuzzy_file_search_sessions: Arc<Mutex<BTreeMap<String, Vec<String>>>>,
     pending_steering_inputs: Arc<Mutex<BTreeMap<String, Vec<codex::UserInput>>>>,
     child_thread_streams: Arc<Mutex<BTreeMap<String, ChildThreadStreamControl>>>,
+    root_continuation_streams: Arc<Mutex<BTreeMap<String, RootContinuationStreamControl>>>,
 }
 
 #[derive(Clone, Debug)]
 struct TurnStreamControl {
+    stream_id: String,
+    owner_id: Option<String>,
     cancel_tx: watch::Sender<bool>,
 }
 
 #[derive(Clone, Debug)]
 struct ChildThreadStreamControl {
+    watcher_id: String,
+    abort_handle: tokio::task::AbortHandle,
+}
+
+#[derive(Clone, Debug)]
+struct RootContinuationStreamControl {
     watcher_id: String,
     abort_handle: tokio::task::AbortHandle,
 }
@@ -324,6 +334,7 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
         fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
         pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
         child_thread_streams: Arc::new(Mutex::new(BTreeMap::new())),
+        root_continuation_streams: Arc::new(Mutex::new(BTreeMap::new())),
     };
 
     while let Some(message) = receiver.next().await {
@@ -366,6 +377,7 @@ async fn handle_socket(socket: WebSocket, state: ShimState) {
     connection.fuzzy_file_search_sessions.lock().await.clear();
     connection.pending_steering_inputs.lock().await.clear();
     connection.stop_all_child_streams().await;
+    connection.stop_all_root_continuation_streams().await;
     writer.abort();
 }
 
@@ -482,6 +494,69 @@ impl ShimState {
 }
 
 impl ConnectionState {
+    async fn has_turn_stream(&self, thread_id: &str, turn_id: &str) -> bool {
+        self.turn_streams
+            .lock()
+            .await
+            .contains_key(&format!("{thread_id}:{turn_id}"))
+    }
+
+    async fn replace_root_continuation_stream(
+        &self,
+        thread_id: String,
+        watcher_id: String,
+        abort_handle: tokio::task::AbortHandle,
+    ) {
+        let previous = self.root_continuation_streams.lock().await.insert(
+            thread_id,
+            RootContinuationStreamControl {
+                watcher_id,
+                abort_handle,
+            },
+        );
+        if let Some(previous) = previous {
+            self.clear_turn_streams_owned_by(&previous.watcher_id).await;
+            previous.abort_handle.abort();
+        }
+    }
+
+    async fn clear_turn_streams_owned_by(&self, owner_id: &str) {
+        self.turn_streams
+            .lock()
+            .await
+            .retain(|_, control| control.owner_id.as_deref() != Some(owner_id));
+    }
+
+    async fn clear_root_continuation_stream_if_current(&self, thread_id: &str, watcher_id: &str) {
+        let mut streams = self.root_continuation_streams.lock().await;
+        if streams
+            .get(thread_id)
+            .is_some_and(|control| control.watcher_id == watcher_id)
+        {
+            streams.remove(thread_id);
+        }
+    }
+
+    async fn stop_root_continuation_stream(&self, thread_id: &str) {
+        if let Some(control) = self
+            .root_continuation_streams
+            .lock()
+            .await
+            .remove(thread_id)
+        {
+            self.clear_turn_streams_owned_by(&control.watcher_id).await;
+            control.abort_handle.abort();
+        }
+    }
+
+    async fn stop_all_root_continuation_streams(&self) {
+        let controls = std::mem::take(&mut *self.root_continuation_streams.lock().await);
+        for control in controls.into_values() {
+            self.clear_turn_streams_owned_by(&control.watcher_id).await;
+            control.abort_handle.abort();
+        }
+    }
+
     async fn replace_child_stream(
         &self,
         thread_id: String,
@@ -537,9 +612,28 @@ impl ConnectionState {
 
 #[cfg(test)]
 mod tests {
-    use super::{request_is_authorized, validate_bind_security, CodexSidecar, DEFAULT_MEMORY_MODE};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use super::{
+        request_is_authorized, validate_bind_security, CodexSidecar, ConnectionState,
+        DEFAULT_MEMORY_MODE,
+    };
     use axum::http::header::AUTHORIZATION;
     use axum::http::{HeaderMap, HeaderValue};
+    use tokio::sync::{mpsc, watch, Mutex};
+
+    fn test_connection() -> ConnectionState {
+        let (outbound, _outbound_rx) = mpsc::unbounded_channel::<String>();
+        ConnectionState {
+            outbound,
+            turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
+            fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+            pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+            child_thread_streams: Arc::new(Mutex::new(BTreeMap::new())),
+            root_continuation_streams: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
 
     #[test]
     fn memory_mode_defaults_to_disabled_for_unknown_thread() {
@@ -577,5 +671,66 @@ mod tests {
         assert!(validate_bind_security("192.0.2.10".parse().unwrap(), None).is_err());
         assert!(validate_bind_security("192.0.2.10".parse().unwrap(), Some("secret")).is_ok());
         assert!(validate_bind_security("0.0.0.0".parse().unwrap(), Some("secret")).is_err());
+    }
+
+    #[tokio::test]
+    async fn replacing_root_watcher_clears_only_its_owned_turn_generation() {
+        let connection = test_connection();
+        let old_task = tokio::spawn(std::future::pending::<()>());
+        connection
+            .replace_root_continuation_stream(
+                "thread-1".to_string(),
+                "watcher-old".to_string(),
+                old_task.abort_handle(),
+            )
+            .await;
+
+        let (interactive_tx, _) = watch::channel(false);
+        let interactive = super::turn::install_stream_control(
+            &connection,
+            "thread-1".to_string(),
+            "interactive".to_string(),
+            None,
+            interactive_tx,
+        )
+        .await;
+        let (old_tx, _) = watch::channel(false);
+        let old = super::turn::install_stream_control(
+            &connection,
+            "thread-1".to_string(),
+            "wake-1".to_string(),
+            Some("watcher-old"),
+            old_tx,
+        )
+        .await;
+        let (new_tx, _) = watch::channel(false);
+        let new = super::turn::install_stream_control(
+            &connection,
+            "thread-1".to_string(),
+            "wake-1".to_string(),
+            Some("watcher-new"),
+            new_tx,
+        )
+        .await;
+
+        let new_task = tokio::spawn(std::future::pending::<()>());
+        connection
+            .replace_root_continuation_stream(
+                "thread-1".to_string(),
+                "watcher-new".to_string(),
+                new_task.abort_handle(),
+            )
+            .await;
+        drop(old);
+
+        assert!(connection.has_turn_stream("thread-1", "interactive").await);
+        assert!(connection.has_turn_stream("thread-1", "wake-1").await);
+
+        connection.stop_root_continuation_stream("thread-1").await;
+        assert!(connection.has_turn_stream("thread-1", "interactive").await);
+        assert!(!connection.has_turn_stream("thread-1", "wake-1").await);
+
+        interactive.clear().await;
+        new.clear().await;
     }
 }

@@ -1,0 +1,12 @@
+{
+  "profile_id": "background-profile",
+  "display_name": "Background continuation demo",
+  "context_window": 131072,
+  "max_output_tokens": 4096,
+  "max_turns": 8,
+  "temperature": 0.1,
+  "top_p": null,
+  "top_k": null,
+  "min_p": null,
+  "frequency_penalty": null
+}

@@ -52,6 +52,10 @@ pub struct RunTimeline {
     pub inference_calls: Vec<TimelineInferenceCallRow>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rendered_request_refs: Vec<TimelineRenderedRequestRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_completions: Vec<crate::BackgroundCompletionEpochDiagnostic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_completion_diagnostics_error: Option<String>,
     pub events: Vec<RunTimelineEvent>,
 }
 
@@ -827,6 +831,8 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         child_request_ids,
         inference_calls,
         rendered_request_refs: rows.rendered_request_refs,
+        background_completions: Vec::new(),
+        background_completion_diagnostics_error: None,
         events,
     }
 }

@@ -1,4 +1,5 @@
 import Proofs.Session.Properties.Executable
+import Proofs.Request
 import Proofs.ToolExecution.State
 import Proofs.Transcript.State
 
@@ -269,6 +270,454 @@ def canonicalWaitOrderingAccepted : Bool :=
 
 theorem canonical_wait_call_precedes_completion_notification :
     canonicalWaitOrderingAccepted = true := by
+  native_decide
+
+/-! ## Bounded failed-wake redrive
+
+Completion notifications remain durable when the scheduled continuation that
+was supposed to consume them fails.  The daemon may therefore create one
+fresh continuation attempt, but only for the canonical coalesced background
+queue shape and only while the persisted retry budget remains open.  This is a
+separate capability from the interactive client retry modeled by
+`SessionRecovery`: a generic scheduled request is not retryable merely because
+it was scheduled.
+-/
+
+structure FailedWake where
+  ctx : RequestContext
+  source : SessionQueue.QueueSource
+  policy : SessionQueue.QueuePolicy
+  queueKey : Option SessionId
+
+def CanRedriveWake (wake : FailedWake) : Prop :=
+  wake.ctx.state = .failed ∧
+    wake.ctx.admission = .released ∧
+    wake.ctx.origin = .scheduled ∧
+    wake.ctx.isLatest = true ∧
+    wake.ctx.retryCount < wake.ctx.maxRetries ∧
+    wake.source = .backgroundCompletion ∧
+    wake.policy = .coalesce ∧
+    wake.queueKey.isSome
+
+instance (wake : FailedWake) : Decidable (CanRedriveWake wake) := by
+  unfold CanRedriveWake
+  infer_instance
+
+def redrivenWakeContext (ctx : RequestContext) : RequestContext :=
+  { state := .pending
+  , origin := .scheduled
+  , backend := ctx.backend
+  , admission := .released
+  , deadline := ctx.currentTime + 1
+  , claimTime := ctx.currentTime
+  , currentTime := ctx.currentTime
+  , retryCount := ctx.retryCount + 1
+  , maxRetries := ctx.maxRetries
+  , progressSeq := 0
+  , messageSeq := 0
+  , isLatest := true
+  , persistence := .uncommitted
+  }
+
+def redriveWake? (wake : FailedWake) : Option RequestContext :=
+  if _h : CanRedriveWake wake then
+    some (redrivenWakeContext wake.ctx)
+  else
+    none
+
+theorem redriveWake?_bounded
+    {wake : FailedWake}
+    {post : RequestContext}
+    (h_redrive : redriveWake? wake = some post) :
+    post.state = .pending ∧
+      post.origin = .scheduled ∧
+      post.backend = wake.ctx.backend ∧
+      post.retryCount = wake.ctx.retryCount + 1 ∧
+      post.retryCount ≤ post.maxRetries := by
+  simp [redriveWake?] at h_redrive
+  rcases h_redrive with ⟨h_can, rfl⟩
+  rcases h_can with ⟨_, _, _, _, h_budget, _, _, _⟩
+  simp [redrivenWakeContext, Nat.succ_le_of_lt h_budget]
+
+def failedWakeFixture
+    (state : RequestState := .failed)
+    (origin : ExecutionOrigin := .scheduled)
+    (retryCount : Nat := 0)
+    (maxRetries : Nat := 3)
+    (isLatest : Bool := true)
+    (source : SessionQueue.QueueSource := .backgroundCompletion)
+    (policy : SessionQueue.QueuePolicy := .coalesce)
+    (queueKey : Option SessionId := some 900) : FailedWake :=
+  { ctx :=
+      { state := state
+      , origin := origin
+      , backend := { val := "background-wake-backend" }
+      , admission := .released
+      , deadline := 1
+      , claimTime := 0
+      , currentTime := 10
+      , retryCount := retryCount
+      , maxRetries := maxRetries
+      , progressSeq := 0
+      , messageSeq := 0
+      , isLatest := isLatest
+      , persistence := .committed
+      }
+  , source := source
+  , policy := policy
+  , queueKey := queueKey
+  }
+
+def canonicalFailedWakeRedriveAccepted : Bool :=
+  match redriveWake? (failedWakeFixture (retryCount := 1)) with
+  | none => false
+  | some post =>
+      decide
+        (post.state = .pending ∧
+         post.origin = .scheduled ∧
+         post.retryCount = 2 ∧
+         post.maxRetries = 3)
+
+theorem canonical_failed_wake_redrive_is_bounded :
+    canonicalFailedWakeRedriveAccepted = true := by
+  native_decide
+
+def wakeRetryBaseSeconds : Nat := 5
+def wakeRetryMaxSeconds : Nat := 60
+
+def wakeRetryDelaySeconds (retryCount : Nat) : Nat :=
+  min wakeRetryMaxSeconds (wakeRetryBaseSeconds * 2 ^ retryCount)
+
+theorem wake_retry_delay_positive (retryCount : Nat) :
+    0 < wakeRetryDelaySeconds retryCount := by
+  have hpow : 0 < 2 ^ retryCount :=
+    Nat.pow_pos_iff.mpr (Or.inl (by decide))
+  simp [wakeRetryDelaySeconds, wakeRetryMaxSeconds, wakeRetryBaseSeconds, hpow]
+
+theorem wake_retry_delay_bounded (retryCount : Nat) :
+    wakeRetryDelaySeconds retryCount ≤ wakeRetryMaxSeconds := by
+  simp [wakeRetryDelaySeconds]
+
+def canonicalWakeRetryDelayAccepted : Bool :=
+  decide
+    (wakeRetryDelaySeconds 0 = 5 ∧
+     wakeRetryDelaySeconds 1 = 10 ∧
+     wakeRetryDelaySeconds 4 = 60 ∧
+     wakeRetryDelaySeconds 20 = 60)
+
+theorem canonical_wake_retry_backoff_is_bounded :
+    canonicalWakeRetryDelayAccepted = true := by
+  native_decide
+
+/-! ## Aged wake admission
+
+The watcher preserves FIFO until a background-completion wake reaches the
+aging threshold.  Once aged, it precedes ordinary descendant work at the
+bounded behavior-executor queue.  This is the runtime's weak-fairness
+assumption made executable: an ongoing descendant storm may fill the finite
+queue ahead of a wake, but new descendants cannot continue overtaking it.
+-/
+
+def completionWakeAgingThresholdSeconds : Nat := 30
+
+structure AdmissionCandidate where
+  requestId : RequestId
+  ageSeconds : Nat
+  source : SessionQueue.QueueSource
+  deriving DecidableEq, Repr
+
+def AdmissionCandidate.isAgedCompletionWake
+    (candidate : AdmissionCandidate) : Bool :=
+  candidate.source = .backgroundCompletion &&
+    completionWakeAgingThresholdSeconds ≤ candidate.ageSeconds
+
+def admissionPriority (candidate : AdmissionCandidate) : Nat :=
+  if candidate.isAgedCompletionWake then 0 else 1
+
+def servesBefore
+    (left right : AdmissionCandidate) : Bool :=
+  admissionPriority left < admissionPriority right
+
+theorem aged_completion_wake_precedes_descendant
+    (wake descendant : AdmissionCandidate)
+    (h_wake_source : wake.source = .backgroundCompletion)
+    (h_wake_age : completionWakeAgingThresholdSeconds ≤ wake.ageSeconds)
+    (h_descendant_source : descendant.source ≠ .backgroundCompletion) :
+    servesBefore wake descendant = true := by
+  simp [servesBefore, admissionPriority,
+    AdmissionCandidate.isAgedCompletionWake, h_wake_source, h_wake_age,
+    h_descendant_source]
+
+theorem fresh_completion_wake_preserves_fifo_priority
+    (wake : AdmissionCandidate)
+    (h_wake_source : wake.source = .backgroundCompletion)
+    (h_wake_age : wake.ageSeconds < completionWakeAgingThresholdSeconds) :
+    admissionPriority wake = 1 := by
+  simp [admissionPriority, AdmissionCandidate.isAgedCompletionWake,
+    h_wake_source, Nat.not_le.mpr h_wake_age]
+
+/-- The behavior executor admits only a finite predecessor set.  Once an aged
+wake is selected ahead of new descendants, its remaining wait is bounded by
+the already-running workers plus the fixed dispatcher queue. -/
+def predecessorBound (executorCapacity queueCapacity : Nat) : Nat :=
+  executorCapacity + queueCapacity
+
+theorem aged_wake_predecessors_bounded
+    (executorCapacity queueCapacity predecessors : Nat)
+    (h_bounded : predecessors ≤ executorCapacity + queueCapacity) :
+    predecessors ≤ predecessorBound executorCapacity queueCapacity := by
+  simpa [predecessorBound] using h_bounded
+
+def agedWakeFixture : AdmissionCandidate :=
+  { requestId := 901
+  , ageSeconds := completionWakeAgingThresholdSeconds
+  , source := .backgroundCompletion
+  }
+
+def descendantFixture : AdmissionCandidate :=
+  { requestId := 902
+  , ageSeconds := 0
+  , source := .user
+  }
+
+def freshWakeFixture : AdmissionCandidate :=
+  { requestId := 903
+  , ageSeconds := completionWakeAgingThresholdSeconds - 1
+  , source := .backgroundCompletion
+  }
+
+theorem canonical_aged_wake_admission_accepted :
+    servesBefore agedWakeFixture descendantFixture = true := by
+  native_decide
+
+theorem canonical_fresh_wake_does_not_bypass_fifo :
+    servesBefore freshWakeFixture descendantFixture = false := by
+  native_decide
+
+/-! ## Attempt snapshots and acknowledgement
+
+Each notification message is durably bound to the wake request created or
+reused by the atomic enqueue transaction.  Claim snapshots the transcript's
+last sequence in the same transaction that changes the wake from pending to
+claimed.  A later notification is therefore owned by a successor epoch and
+cannot enter the active attempt's provider input.  Successful terminalization
+acknowledges exactly the attempted bindings; failure retains them for redrive.
+-/
+
+structure NotificationBinding where
+  messageId : Transcript.MessageId
+  sequence : Nat
+  wakeRequestId : RequestId
+  deriving DecidableEq, Repr
+
+structure WakeAttemptSnapshot where
+  wakeRequestId : RequestId
+  throughSequence : Nat
+  bindings : List NotificationBinding
+  terminalState : RequestState
+  deriving DecidableEq, Repr
+
+def WakeAttemptSnapshot.attemptedBindings
+    (snapshot : WakeAttemptSnapshot) : List NotificationBinding :=
+  snapshot.bindings.filter fun binding =>
+    binding.wakeRequestId = snapshot.wakeRequestId &&
+      binding.sequence ≤ snapshot.throughSequence
+
+def WakeAttemptSnapshot.acknowledgedBindings
+    (snapshot : WakeAttemptSnapshot) : List NotificationBinding :=
+  if snapshot.terminalState = .completed then snapshot.attemptedBindings else []
+
+theorem successor_binding_after_cutoff_not_attempted
+    (snapshot : WakeAttemptSnapshot)
+    (binding : NotificationBinding)
+    (h_after : snapshot.throughSequence < binding.sequence) :
+    binding ∉ snapshot.attemptedBindings := by
+  simp [WakeAttemptSnapshot.attemptedBindings, Nat.not_le.mpr h_after]
+
+theorem completed_attempt_acknowledges_exact_snapshot
+    (snapshot : WakeAttemptSnapshot)
+    (h_completed : snapshot.terminalState = .completed) :
+    snapshot.acknowledgedBindings = snapshot.attemptedBindings := by
+  simp [WakeAttemptSnapshot.acknowledgedBindings, h_completed]
+
+theorem failed_attempt_acknowledges_nothing
+    (snapshot : WakeAttemptSnapshot)
+    (h_failed : snapshot.terminalState = .failed) :
+    snapshot.acknowledgedBindings = [] := by
+  simp [WakeAttemptSnapshot.acknowledgedBindings, h_failed]
+
+def attemptedBindingFixture : NotificationBinding :=
+  { messageId := 41, sequence := 4, wakeRequestId := 901 }
+
+def successorBindingFixture : NotificationBinding :=
+  { messageId := 42, sequence := 6, wakeRequestId := 902 }
+
+def completedSnapshotFixture : WakeAttemptSnapshot :=
+  { wakeRequestId := 901
+  , throughSequence := 5
+  , bindings := [attemptedBindingFixture, successorBindingFixture]
+  , terminalState := .completed
+  }
+
+def failedSnapshotFixture : WakeAttemptSnapshot :=
+  { completedSnapshotFixture with terminalState := .failed }
+
+theorem canonical_completed_snapshot_acknowledges_owned_notification :
+    completedSnapshotFixture.acknowledgedBindings = [attemptedBindingFixture] := by
+  native_decide
+
+theorem canonical_successor_notification_excluded_from_active_snapshot :
+    successorBindingFixture ∉ completedSnapshotFixture.attemptedBindings := by
+  native_decide
+
+theorem canonical_failed_snapshot_retains_unacknowledged_notification :
+    failedSnapshotFixture.acknowledgedBindings = [] ∧
+      failedSnapshotFixture.attemptedBindings = [attemptedBindingFixture] := by
+  native_decide
+
+/-! ## Crash-boundary recovery
+
+Acknowledgement is not a second mutable protocol step.  It is a projection of
+the durable claim snapshot and the recovered request terminal state.  This
+closes the four crash boundaries in the delivery protocol: before claim there
+is no attempted snapshot to acknowledge; an inference failure retains the
+snapshot for bounded redrive; a committed successful response repairs the
+request to completed; and a crash while a reader projects acknowledgement
+cannot create a partially acknowledged state.
+-/
+
+inductive DeliveryCrashPoint where
+  | beforeClaim
+  | duringInference
+  | afterResponsePersistence
+  | duringAcknowledgement
+  deriving DecidableEq, Repr
+
+structure WakeRecoveryProjection where
+  requestState : RequestState
+  attemptedBindings : List NotificationBinding
+  acknowledgedBindings : List NotificationBinding
+  retryEligible : Bool
+  deriving DecidableEq, Repr
+
+inductive DurableResponseState where
+  | absent
+  | completed
+  | failed
+  deriving DecidableEq, Repr
+
+structure WakeRecoveryInput where
+  requestState : RequestState
+  claimSnapshot : Option WakeAttemptSnapshot
+  responseState : DurableResponseState
+  deriving DecidableEq, Repr
+
+def attemptedFromSnapshot : Option WakeAttemptSnapshot → List NotificationBinding
+  | none => []
+  | some snapshot => snapshot.attemptedBindings
+
+/-- Recovery is computed only from durable facts.  A committed response wins
+over a stale processing request; otherwise a durable claim snapshot proves an
+attempt occurred and remains retryable.  With neither fact, the pending wake
+is still unconsumed. -/
+def recoverWakeDelivery (input : WakeRecoveryInput) : WakeRecoveryProjection :=
+  let attempted := attemptedFromSnapshot input.claimSnapshot
+  match input.responseState with
+  | .completed =>
+      { requestState := .completed
+      , attemptedBindings := attempted
+      , acknowledgedBindings := attempted
+      , retryEligible := false
+      }
+  | .failed =>
+      { requestState := .failed
+      , attemptedBindings := attempted
+      , acknowledgedBindings := []
+      , retryEligible := input.claimSnapshot.isSome
+      }
+  | .absent =>
+      match input.claimSnapshot with
+      | none =>
+          { requestState := .pending
+          , attemptedBindings := []
+          , acknowledgedBindings := []
+          , retryEligible := false
+          }
+      | some snapshot =>
+          { requestState := .failed
+          , attemptedBindings := snapshot.attemptedBindings
+          , acknowledgedBindings := []
+          , retryEligible := true
+          }
+
+def deliveryCrashInput : DeliveryCrashPoint → WakeRecoveryInput
+  | .beforeClaim =>
+      { requestState := .pending
+      , claimSnapshot := none
+      , responseState := .absent
+      }
+  | .duringInference =>
+      { requestState := .processing
+      , claimSnapshot := some failedSnapshotFixture
+      , responseState := .absent
+      }
+  | .afterResponsePersistence =>
+      { requestState := .processing
+      , claimSnapshot := some completedSnapshotFixture
+      , responseState := .completed
+      }
+  | .duringAcknowledgement =>
+      { requestState := .completed
+      , claimSnapshot := some completedSnapshotFixture
+      , responseState := .completed
+      }
+
+def recoverDeliveryCrash (point : DeliveryCrashPoint) : WakeRecoveryProjection :=
+  recoverWakeDelivery (deliveryCrashInput point)
+
+def deliveryCrashRecoveryAccepted : DeliveryCrashPoint → Bool
+  | .beforeClaim =>
+      decide
+        (recoverDeliveryCrash .beforeClaim =
+          { requestState := .pending
+          , attemptedBindings := []
+          , acknowledgedBindings := []
+          , retryEligible := false
+          })
+  | .duringInference =>
+      let recovered := recoverDeliveryCrash .duringInference
+      decide
+        (recovered.requestState = .failed ∧
+         recovered.attemptedBindings = [attemptedBindingFixture] ∧
+         recovered.acknowledgedBindings = [] ∧
+         recovered.retryEligible = true)
+  | .afterResponsePersistence =>
+      let recovered := recoverDeliveryCrash .afterResponsePersistence
+      decide
+        (recovered.requestState = .completed ∧
+         recovered.acknowledgedBindings = recovered.attemptedBindings ∧
+         recovered.retryEligible = false)
+  | .duringAcknowledgement =>
+      let recovered := recoverDeliveryCrash .duringAcknowledgement
+      decide
+        (recovered.requestState = .completed ∧
+         recovered.acknowledgedBindings = recovered.attemptedBindings ∧
+         recovered.retryEligible = false)
+
+theorem restart_before_claim_preserves_pending_delivery :
+    deliveryCrashRecoveryAccepted .beforeClaim = true := by
+  native_decide
+
+theorem inference_failure_retains_snapshot_for_redrive :
+    deliveryCrashRecoveryAccepted .duringInference = true := by
+  native_decide
+
+theorem committed_response_recovers_exact_acknowledgement :
+    deliveryCrashRecoveryAccepted .afterResponsePersistence = true := by
+  native_decide
+
+theorem acknowledgement_projection_has_no_partial_crash_state :
+    deliveryCrashRecoveryAccepted .duringAcknowledgement = true := by
   native_decide
 
 end BackgroundCompletion

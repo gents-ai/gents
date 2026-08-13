@@ -37,6 +37,253 @@ struct NotificationDeliveryRow {
     completion_notification_delivered_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct BackgroundWakeRetryRow {
+    request_id: String,
+    status: String,
+    lifecycle_state: String,
+    execution_origin: String,
+    retry_parent_request: String,
+    retry_root_request: String,
+    retry_count: i64,
+    max_retries: i64,
+    metadata: String,
+    deadline: Option<String>,
+    valid_until: Option<String>,
+}
+
+#[tokio::test]
+async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
+    let db = test_db("lifecycle-background-wake-redrive").await;
+    let metadata = serde_json::json!({
+        "queue": {
+            "source": "background_completion",
+            "policy": "coalesce",
+            "key": "background_completion:wake-redrive-session",
+            "queued_after_request_id": "foreground-parent"
+        },
+        "background_completion_wake_version": 1
+    })
+    .to_string();
+    let escaped_metadata = gents::graphql::escape_graphql_string(&metadata);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "failed-wake",
+                agent_did: "{AGENT_DID}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "wake-redrive-session",
+                retry_parent_request: "",
+                retry_root_request: "failed-wake",
+                superseded_by_request: "",
+                content: "continue after background completion",
+                metadata: "{escaped_metadata}",
+                status: "error",
+                lifecycle_state: "failed",
+                backend_id: "{BACKEND_ID}",
+                execution_origin: "scheduled",
+                failure_reason: "backend admission failed",
+                terminalized_at: "2026-08-12T00:00:00Z",
+                terminal_redrive_attempts: 0,
+                created_at: "2026-08-12T00:00:00Z",
+                deadline: "2026-08-12T00:00:01Z",
+                retry_count: 1,
+                max_retries: 3,
+                valid_until: "2026-08-12T00:00:01Z",
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create failed wake: {:?}",
+        response.errors
+    );
+    upsert_conversation(
+        &db.node,
+        "wake-redrive-session",
+        "failed-wake",
+        "continue after background completion",
+        "active",
+    )
+    .await;
+
+    let (first, concurrent) = tokio::join!(
+        RequestLifecycle::redrive_failed_background_wakeups(&db.node, AGENT_DID),
+        RequestLifecycle::redrive_failed_background_wakeups(&db.node, AGENT_DID),
+    );
+    let first = first.expect("first concurrent redrive");
+    let concurrent = concurrent.expect("second concurrent redrive");
+    assert_eq!(first.scanned, 1);
+    assert_eq!(concurrent.scanned, 1);
+    assert_eq!(first.redriven + concurrent.redriven, 1);
+    assert_eq!(first.already_redriven + concurrent.already_redriven, 1);
+    assert_eq!(first.failed + concurrent.failed, 0);
+
+    let rows = background_wake_retry_rows(&db.node, "wake-redrive-session").await;
+    assert_eq!(rows.len(), 2);
+    let successor = rows
+        .iter()
+        .find(|row| row.request_id != "failed-wake")
+        .expect("retry successor");
+    assert_eq!(successor.status, "pending");
+    assert_eq!(successor.lifecycle_state, "pending");
+    assert_eq!(successor.execution_origin, "scheduled");
+    assert_eq!(successor.retry_parent_request, "failed-wake");
+    assert_eq!(successor.retry_root_request, "failed-wake");
+    assert_eq!(successor.retry_count, 2);
+    assert_eq!(successor.max_retries, 3);
+    assert_eq!(successor.metadata, metadata);
+    assert_eq!(successor.deadline, None);
+    assert_eq!(successor.valid_until, None);
+
+    let second = RequestLifecycle::redrive_failed_background_wakeups(&db.node, AGENT_DID)
+        .await
+        .expect("repeat redrive");
+    assert_eq!(second.redriven, 0);
+    assert_eq!(second.already_redriven, 1);
+    assert_eq!(
+        background_wake_retry_rows(&db.node, "wake-redrive-session")
+            .await
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn failed_background_wake_waits_for_persisted_backoff() {
+    let db = test_db("lifecycle-background-wake-backoff").await;
+    let session_id = "wake-backoff-session";
+    let metadata = serde_json::json!({
+        "queue": {
+            "source": "background_completion",
+            "policy": "coalesce",
+            "key": format!("background_completion:{session_id}"),
+            "queued_after_request_id": "foreground-parent"
+        },
+        "background_completion_wake_version": 1
+    })
+    .to_string();
+    let escaped_metadata = gents::graphql::escape_graphql_string(&metadata);
+    let terminalized_at = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "failed-wake-backoff", agent_did: "{AGENT_DID}",
+                behavior_id: "{AGENT_NAME}", session_id: "{session_id}",
+                retry_parent_request: "", retry_root_request: "failed-wake-backoff",
+                superseded_by_request: "", content: "continue", metadata: "{escaped_metadata}",
+                status: "error", lifecycle_state: "failed", backend_id: "{BACKEND_ID}",
+                execution_origin: "scheduled", failure_reason: "provider failed",
+                terminalized_at: "{terminalized_at}", terminal_redrive_attempts: 0,
+                created_at: "{terminalized_at}", retry_count: 1, max_retries: 3,
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create failed wake: {:?}",
+        response.errors
+    );
+    upsert_conversation(
+        &db.node,
+        session_id,
+        "failed-wake-backoff",
+        "continue",
+        "active",
+    )
+    .await;
+    let message = format!(
+        r#"mutation {{
+            create_AgentMessage(input: {{
+                message_key: "background-completion-notification:child-backoff:subagent",
+                session_id: "{session_id}", agent_did: "{AGENT_DID}",
+                request_id: "failed-wake-backoff", sequence: 1, role: "user",
+                content: "child finished", timestamp: "{terminalized_at}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&message).await;
+    assert!(
+        !response.has_errors(),
+        "create completion notification: {:?}",
+        response.errors
+    );
+
+    let report = RequestLifecycle::redrive_failed_background_wakeups(&db.node, AGENT_DID)
+        .await
+        .expect("deferred redrive sweep");
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.deferred, 1);
+    assert_eq!(report.redriven, 0);
+    assert_eq!(
+        background_wake_retry_rows(&db.node, session_id).await.len(),
+        1
+    );
+    let diagnostics = gents::load_background_completion_diagnostics(
+        &gents::config_client::ConfigAccess::Local(db.node.clone()),
+        AGENT_DID,
+    )
+    .await
+    .expect("load persisted completion diagnostics");
+    assert_eq!(diagnostics.pending_notifications, 1);
+    assert_eq!(diagnostics.stranded_notifications, 0);
+    assert_eq!(diagnostics.epochs.len(), 1);
+    assert_eq!(diagnostics.epochs[0].state, "retry_backoff");
+    assert_eq!(diagnostics.epochs[0].attempt_count, 2);
+    assert!(diagnostics.epochs[0].next_retry_at.is_some());
+
+    upsert_conversation(
+        &db.node,
+        session_id,
+        "later-interactive-request",
+        "new user turn",
+        "active",
+    )
+    .await;
+    let displaced = gents::load_background_completion_diagnostics(
+        &gents::config_client::ConfigAccess::Local(db.node.clone()),
+        AGENT_DID,
+    )
+    .await
+    .expect("load displaced completion diagnostics");
+    assert_eq!(displaced.pending_notifications, 1);
+    assert_eq!(displaced.stranded_notifications, 1);
+    assert_eq!(displaced.epochs[0].state, "retry_ineligible_not_latest");
+    assert_eq!(displaced.epochs[0].next_retry_at, None);
+}
+
+async fn background_wake_retry_rows(
+    node: &gents::defra_node::EmbeddedNode,
+    session_id: &str,
+) -> Vec<BackgroundWakeRetryRow> {
+    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let response = node
+        .execute(&format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                    order: {{ created_at: ASC }}
+                ) {{
+                    request_id status lifecycle_state execution_origin
+                    retry_parent_request retry_root_request retry_count max_retries
+                    metadata deadline valid_until
+                }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "fetch background wake retries: {:?}",
+        response.errors
+    );
+    serde_json::from_value(response.data.expect("wake retry data")["AgentRequest"].clone())
+        .expect("decode wake retry rows")
+}
+
 async fn mark_request_interrupted(node: &gents::defra_node::EmbeddedNode, doc_id: &str) {
     let mutation = format!(
         r#"mutation {{

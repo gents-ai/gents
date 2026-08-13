@@ -114,6 +114,31 @@ impl<'a> ConfigApplyTxn<'a> {
         }
     }
 
+    /// Execute against an embedded transaction while preserving the native
+    /// response envelope, including composite-version metadata. Runtime
+    /// lifecycle transitions need that exact commit identity; converting to
+    /// JSON would discard the typed version join used by rendered-request
+    /// capture. HTTP config-apply callers intentionally cannot use this seam.
+    pub(crate) async fn execute_local_response(
+        &self,
+        query: &str,
+    ) -> Result<defra_node::QueryResponse> {
+        let TxnBackend::Local {
+            node,
+            handle,
+            identity,
+        } = &self.backend
+        else {
+            anyhow::bail!("native transaction responses require embedded access");
+        };
+        let request = QueryRequest::new(query).with_identity(identity.clone());
+        let response = node.execute_request_in_txn(request, handle).await;
+        if response.has_errors() {
+            anyhow::bail!("graphql returned errors: {:?}", response.errors);
+        }
+        Ok(response)
+    }
+
     /// Commit the transaction. Apply is durable after this returns Ok.
     pub async fn commit(self) -> Result<()> {
         match self.backend {

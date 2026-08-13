@@ -1,0 +1,18 @@
+{
+  "behavior_id": "background-worker",
+  "agent_did": "did:key:zBackgroundContinuationPlaceholder00000000000000000000",
+  "display_name": "Background worker",
+  "description": null,
+  "summary": null,
+  "system_prompt": "./system_prompt.md",
+  "request_context_template": null,
+  "backend_id": "background-deepseek",
+  "model_name": "${GENTS_EXP_MODEL:-d4f}",
+  "tool_selection_id": "background-worker-tools",
+  "inference_profile_id": "background-profile",
+  "compaction_strategy": null,
+  "compaction_threshold": null,
+  "enabled": true,
+  "skill_refs": [],
+  "skill_excludes": []
+}

@@ -87,6 +87,8 @@ struct PackExpect {
     fan_in: Option<FanInExpectation>,
     #[serde(default)]
     prompt_tool_contracts: Vec<PromptToolContract>,
+    #[serde(default)]
+    background_completion: Option<BackgroundCompletionExpectation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +141,38 @@ struct FanInEvidence {
     decision_count: Option<usize>,
     verification_summary_count: Option<usize>,
     final_consumer_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BackgroundCompletionExpectation {
+    min_completed_subagent_requests: usize,
+    min_completed_wakes: usize,
+    min_acknowledged_notifications: usize,
+    #[serde(default)]
+    max_pending_notifications: usize,
+    #[serde(default)]
+    max_stranded_notifications: usize,
+}
+
+#[derive(Debug, Clone)]
+struct BackgroundCompletionEvidence {
+    completed_subagent_request_ids: Vec<String>,
+    failed_subagent_request_ids: Vec<String>,
+    completed_wake_request_ids: Vec<String>,
+    pending_notifications: usize,
+    acknowledged_notifications: usize,
+    stranded_notifications: usize,
+    diagnostics: Value,
+}
+
+impl BackgroundCompletionEvidence {
+    fn satisfies(&self, expected: &BackgroundCompletionExpectation) -> bool {
+        self.completed_subagent_request_ids.len() >= expected.min_completed_subagent_requests
+            && self.completed_wake_request_ids.len() >= expected.min_completed_wakes
+            && self.acknowledged_notifications >= expected.min_acknowledged_notifications
+            && self.pending_notifications <= expected.max_pending_notifications
+            && self.stranded_notifications <= expected.max_stranded_notifications
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -386,6 +420,14 @@ fn validate_manifest(manifest: &PackManifest) -> Result<()> {
         }
         if *count == 0 {
             bail!("expect.trigger_request_counts[{trigger_id}] must be greater than zero");
+        }
+    }
+    if let Some(expected) = &manifest.expect.background_completion {
+        if expected.min_completed_subagent_requests == 0
+            || expected.min_completed_wakes == 0
+            || expected.min_acknowledged_notifications == 0
+        {
+            bail!("expect.background_completion minimums must all be greater than zero");
         }
     }
     Ok(())
@@ -1621,6 +1663,155 @@ async fn token_totals(graphql: &str) -> (u64, u64) {
     })
 }
 
+fn usize_field(value: &Value, pointer: &str) -> Result<usize> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .with_context(|| format!("status output has no integer {pointer}"))
+}
+
+async fn load_background_completion_evidence(
+    bin: &Path,
+    home: &Path,
+    graphql: &str,
+    agent_did: &str,
+) -> Result<BackgroundCompletionEvidence> {
+    let status = run_cli_json(
+        bin,
+        &[
+            "status".to_string(),
+            "--home".to_string(),
+            path_arg(home),
+            "--graphql".to_string(),
+            graphql.to_string(),
+            "--agent-did".to_string(),
+            agent_did.to_string(),
+        ],
+    )
+    .await
+    .context("loading background-completion status")?;
+    let diagnostics = status
+        .get("background_completion")
+        .cloned()
+        .context("status output has no background_completion diagnostics")?;
+    if diagnostics.get("state").and_then(Value::as_str) == Some("unavailable") {
+        bail!(
+            "background-completion diagnostics unavailable: {}",
+            diagnostics
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        );
+    }
+
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{
+                request_id lifecycle_state execution_origin subagent_depth metadata
+            }}
+        }}"#,
+        escape_graphql_string(agent_did),
+    );
+    let rows = graphql_rows(graphql, "AgentRequest", &query).await?;
+    let mut completed_subagent_request_ids = Vec::new();
+    let mut failed_subagent_request_ids = Vec::new();
+    let mut completed_wake_request_ids = Vec::new();
+    for row in rows {
+        let request_id = row
+            .get("request_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let lifecycle_state = row
+            .get("lifecycle_state")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let subagent_depth = row
+            .get("subagent_depth")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        if subagent_depth > 0 {
+            match lifecycle_state {
+                "completed" => completed_subagent_request_ids.push(request_id.to_string()),
+                "failed" | "dead" | "interrupted" => {
+                    failed_subagent_request_ids.push(request_id.to_string())
+                }
+                _ => {}
+            }
+        }
+        if row.get("execution_origin").and_then(Value::as_str) == Some("scheduled")
+            && gents::lifecycle::is_background_completion_request(
+                row.get("metadata").and_then(Value::as_str),
+            )
+            && lifecycle_state == "completed"
+        {
+            completed_wake_request_ids.push(request_id.to_string());
+        }
+    }
+    completed_subagent_request_ids.sort();
+    failed_subagent_request_ids.sort();
+    completed_wake_request_ids.sort();
+
+    Ok(BackgroundCompletionEvidence {
+        completed_subagent_request_ids,
+        failed_subagent_request_ids,
+        completed_wake_request_ids,
+        pending_notifications: usize_field(&diagnostics, "/pending_notifications")?,
+        acknowledged_notifications: usize_field(&diagnostics, "/acknowledged_notifications")?,
+        stranded_notifications: usize_field(&diagnostics, "/stranded_notifications")?,
+        diagnostics,
+    })
+}
+
+async fn await_background_completion(
+    bin: &Path,
+    home: &Path,
+    graphql: &str,
+    agent_did: &str,
+    expected: &BackgroundCompletionExpectation,
+    deadline: Duration,
+) -> Result<BackgroundCompletionEvidence> {
+    let started = Instant::now();
+    let mut last = None;
+    loop {
+        match load_background_completion_evidence(bin, home, graphql, agent_did).await {
+            Ok(evidence) => {
+                if evidence.stranded_notifications > expected.max_stranded_notifications {
+                    bail!(
+                        "background completion stranded {} notification(s), expected at most {}: {:?}",
+                        evidence.stranded_notifications,
+                        expected.max_stranded_notifications,
+                        evidence.diagnostics
+                    );
+                }
+                if evidence.failed_subagent_request_ids.len()
+                    + evidence.completed_subagent_request_ids.len()
+                    >= expected.min_completed_subagent_requests
+                    && evidence.completed_subagent_request_ids.len()
+                        < expected.min_completed_subagent_requests
+                {
+                    bail!(
+                        "background subagents terminalized unsuccessfully: {:?}",
+                        evidence.failed_subagent_request_ids
+                    );
+                }
+                if evidence.satisfies(expected) {
+                    return Ok(evidence);
+                }
+                last = Some(evidence);
+            }
+            Err(error) => tracing::debug!(%error, "background-completion demo evidence not ready"),
+        }
+        if started.elapsed() >= deadline {
+            bail!(
+                "timed out after {}s waiting for background completion; last evidence: {last:?}",
+                deadline.as_secs()
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
 /// Timestamped so `runs/` sorts chronologically and two runs never collide.
 fn default_job_id() -> String {
     let secs = std::time::SystemTime::now()
@@ -1735,6 +1926,24 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         )
         .await?;
 
+        let background_completion = match &manifest.expect.background_completion {
+            Some(expected) => {
+                println!("background waiting for durable subagent completion acknowledgement…");
+                Some(
+                    await_background_completion(
+                        &bin,
+                        &home,
+                        &graphql,
+                        &agent_did,
+                        expected,
+                        Duration::from_secs(manifest.await_timeout_secs),
+                    )
+                    .await?,
+                )
+            }
+            None => None,
+        };
+
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
         for collection in manifest.expect.collection_counts.keys() {
             counts.insert(collection.clone(), count_rows(&graphql, collection).await);
@@ -1776,17 +1985,29 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             Some(expected) => verify_fan_in(&graphql, expected, &job_id, &agent_did).await?,
             None => None,
         };
+        let mut projection_requests = stages.clone();
+        if let Some(evidence) = &background_completion {
+            projection_requests.extend(evidence.completed_wake_request_ids.iter().map(
+                |request_id| StageResult {
+                    trigger_id: "background_completion".to_string(),
+                    request_id: request_id.clone(),
+                    lifecycle_state: "completed".to_string(),
+                    caused_by_source_doc_id: None,
+                },
+            ));
+        }
         let projection_artifacts = render_projection_artifacts(
             &bin,
             &graphql,
             &run_dir,
-            &stages,
+            &projection_requests,
             &manifest.expect.projections,
         )
         .await?;
         let (prompt_tokens, completion_tokens) = token_totals(&graphql).await;
         Ok::<_, anyhow::Error>((
             stages,
+            background_completion,
             counts,
             provenance,
             source_edges,
@@ -1802,6 +2023,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
 
     let (
         stages,
+        background_completion,
         counts,
         provenance,
         source_edges,
@@ -1851,6 +2073,15 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             "lifecycle_state": s.lifecycle_state,
             "caused_by_source_doc_id": s.caused_by_source_doc_id,
         })).collect::<Vec<_>>(),
+        "background_completion": background_completion.as_ref().map(|evidence| json!({
+            "completed_subagent_request_ids": evidence.completed_subagent_request_ids,
+            "failed_subagent_request_ids": evidence.failed_subagent_request_ids,
+            "completed_wake_request_ids": evidence.completed_wake_request_ids,
+            "pending_notifications": evidence.pending_notifications,
+            "acknowledged_notifications": evidence.acknowledged_notifications,
+            "stranded_notifications": evidence.stranded_notifications,
+            "diagnostics": evidence.diagnostics,
+        })),
         "collection_counts": counts,
         "provenance": provenance.iter().map(|evidence| json!({
             "request_id": evidence.request_id,
@@ -1907,6 +2138,16 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     }
     for (collection, actual) in &counts {
         println!("  {collection:<12} {actual} document(s)");
+    }
+    if let Some(evidence) = &background_completion {
+        println!(
+            "  background   {} child request(s), {} wake(s), {} acknowledged, {} pending, {} stranded",
+            evidence.completed_subagent_request_ids.len(),
+            evidence.completed_wake_request_ids.len(),
+            evidence.acknowledged_notifications,
+            evidence.pending_notifications,
+            evidence.stranded_notifications,
+        );
     }
     println!(
         "  tokens       {prompt_tokens} prompt + {completion_tokens} completion in {}s",
@@ -2031,6 +2272,7 @@ mod tests {
                 }],
                 fan_in: None,
                 prompt_tool_contracts: Vec::new(),
+                background_completion: None,
             },
             await_timeout_secs: 1,
         };
@@ -2090,5 +2332,34 @@ mod tests {
         let query = stage_requests_query("exp-stage1", None);
         assert!(query.contains(r#"caused_by_trigger_id: { _eq: "exp-stage1" }"#));
         assert!(!query.contains("caused_by_correlation"));
+    }
+
+    #[test]
+    fn background_completion_expectation_requires_the_whole_delivery_path() {
+        let expected = BackgroundCompletionExpectation {
+            min_completed_subagent_requests: 2,
+            min_completed_wakes: 1,
+            min_acknowledged_notifications: 2,
+            max_pending_notifications: 0,
+            max_stranded_notifications: 0,
+        };
+        let complete = BackgroundCompletionEvidence {
+            completed_subagent_request_ids: vec!["child-1".into(), "child-2".into()],
+            failed_subagent_request_ids: Vec::new(),
+            completed_wake_request_ids: vec!["wake-1".into()],
+            pending_notifications: 0,
+            acknowledged_notifications: 2,
+            stranded_notifications: 0,
+            diagnostics: Value::Null,
+        };
+        assert!(complete.satisfies(&expected));
+
+        let mut pending = complete.clone();
+        pending.pending_notifications = 1;
+        assert!(!pending.satisfies(&expected));
+
+        let mut missing_wake = complete;
+        missing_wake.completed_wake_request_ids.clear();
+        assert!(!missing_wake.satisfies(&expected));
     }
 }

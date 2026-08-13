@@ -317,7 +317,12 @@ def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
     ++ "\"reason\":" ++ jsonOptionalString witness.reason ++ ","
     ++ "\"error_code\":" ++ jsonOptionalString witness.errorCode ++ ","
     ++ "\"queue_source\":" ++ jsonOptionalString witness.queueSource ++ ","
-    ++ "\"queue_key\":" ++ jsonOptionalString witness.queueKey
+    ++ "\"queue_key\":" ++ jsonOptionalString witness.queueKey ++ ","
+    ++ "\"retry_count\":" ++ jsonOptionalNat witness.retryCount ++ ","
+    ++ "\"max_retries\":" ++ jsonOptionalNat witness.maxRetries ++ ","
+    ++ "\"post_retry_count\":" ++ jsonOptionalNat witness.postRetryCount ++ ","
+    ++ "\"retry_delay_seconds\":" ++ jsonOptionalNat witness.retryDelaySeconds ++ ","
+    ++ "\"is_latest\":" ++ jsonOptionalBool witness.isLatest
     ++ "}"
 
 def r5CrossDeploymentCaseJson (witness : R5CrossDeploymentCase) : String :=
