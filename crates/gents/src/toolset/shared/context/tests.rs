@@ -84,6 +84,26 @@ fn base_outside_root_falls_back_to_root() {
     let _ = std::fs::remove_dir_all(outside);
 }
 
+#[cfg(unix)]
+#[test]
+fn allow_create_rejects_a_dangling_symlink_leaf() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("not-created-yet");
+    symlink(&target, root.path().join("notes.txt")).unwrap();
+    let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
+
+    let error = context
+        .resolve_path_allow_create("notes.txt")
+        .expect_err("a dangling symlink must not be treated as a creatable leaf");
+    assert!(
+        error.to_string().contains("canonicalizing path ancestor"),
+        "{error:#}"
+    );
+}
+
 #[tokio::test]
 async fn request_runtime_workspace_overrides_static_base() {
     let root =

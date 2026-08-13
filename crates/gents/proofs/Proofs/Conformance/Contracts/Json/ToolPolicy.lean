@@ -29,6 +29,7 @@ def surfaceViewJson (v : SurfaceView) : String :=
     ++ "\"orchestration\":" ++ boolJson v.orchestration ++ ","
     ++ "\"cross_deployment\":" ++ boolJson v.crossDeployment ++ ","
     ++ "\"skills\":" ++ boolJson v.skills ++ ","
+    ++ "\"lsp\":" ++ boolJson v.lsp ++ ","
     ++ "\"bash_mode\":" ++ toString v.bashMode ++ ","
     ++ "\"bash_net\":" ++ toString v.bashNet ++ ","
     ++ "\"bash_sandbox\":" ++ boolJson v.bashSandbox ++ ","

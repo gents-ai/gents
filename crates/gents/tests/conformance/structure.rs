@@ -89,6 +89,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         ("ToolExecution", Module("conformance/tool_execution.rs")),
         ("ToolPolicy", Module("conformance/tool_policy.rs")),
+        ("Lsp", Module("conformance/lsp.rs")),
         ("Transcript", Module("conformance/transcript.rs")),
         ("Triggers", Module("conformance/triggers.rs")),
         ("Workflow", Module("workflow_conformance.rs")),

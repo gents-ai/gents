@@ -185,6 +185,8 @@ pub(crate) fn manifest_from_export_bundle(
                         "self_config_categories",
                         "self_config_no_lockout",
                         "self_config_dry_run",
+                        "enable_lsp",
+                        "lsp_config",
                     ],
                 )
             })

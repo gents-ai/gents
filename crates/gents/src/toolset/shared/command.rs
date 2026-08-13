@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -17,8 +17,22 @@ const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 #[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const CORE_ENV_VARS: &[&str] = &[
-    "PATH", "SHELL", "TMPDIR", "TEMP", "TMP", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME",
+    "PATH",
+    "SHELL",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
     "USER",
+    "RUSTUP_HOME",
+    "CARGO_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "SDKROOT",
+    "DEVELOPER_DIR",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -78,6 +92,23 @@ impl CommandNetworkMode {
 
     fn allows_network(self) -> bool {
         !matches!(self, Self::Disabled)
+    }
+
+    /// More restrictive mode wins: Disabled < Inherit < Enabled.
+    pub fn meet(self, other: Self) -> Self {
+        if self.rank() <= other.rank() {
+            self
+        } else {
+            other
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Disabled => 0,
+            Self::Inherit => 1,
+            Self::Enabled => 2,
+        }
     }
 }
 
@@ -155,6 +186,230 @@ impl CommandExecutionPolicy {
         self.network_mode = network_mode;
         self
     }
+}
+
+/// Bash-independent spawn constraints projected from the effective policy meet.
+/// Ignores `bash.tool` and the read-only command allowlist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandConstraints {
+    pub allowed_argv_prefixes: Vec<Vec<String>>,
+    pub forbidden_argv_prefixes: Vec<Vec<String>>,
+    pub network_mode: CommandNetworkMode,
+    pub execution_mode: CommandExecutionMode,
+    /// Seatbelt vs none. Never `ReadOnly`. Hashed into the LSP config digest.
+    pub sandbox: CommandExecutionMode,
+    pub deny_all_argv: bool,
+}
+
+impl CommandConstraints {
+    pub fn to_spawn_policy(&self) -> CommandExecutionPolicy {
+        CommandExecutionPolicy {
+            mode: self.sandbox,
+            allowed_argv_prefixes: self.allowed_argv_prefixes.clone(),
+            forbidden_argv_prefixes: self.forbidden_argv_prefixes.clone(),
+            network_mode: self.network_mode,
+            read_only_allowlist: Vec::new(),
+            deny_all_argv: self.deny_all_argv,
+        }
+    }
+}
+
+/// Platform default for an omitted `lsp_config.network_mode`.
+pub fn default_lsp_network_mode() -> CommandNetworkMode {
+    if workspace_write_sandbox_enforced() {
+        CommandNetworkMode::Disabled
+    } else {
+        CommandNetworkMode::Inherit
+    }
+}
+
+/// Seatbelt vs none for an LSP spawn. `ReadOnly` (bash Off) uses the platform
+/// default: macOS `workspace_write`, elsewhere `Unrestricted`.
+pub fn lsp_sandbox_for_effective(execution_mode: CommandExecutionMode) -> CommandExecutionMode {
+    match execution_mode {
+        CommandExecutionMode::WorkspaceWrite => CommandExecutionMode::WorkspaceWrite,
+        CommandExecutionMode::Unrestricted => CommandExecutionMode::Unrestricted,
+        CommandExecutionMode::ReadOnly => {
+            if workspace_write_sandbox_enforced() {
+                CommandExecutionMode::WorkspaceWrite
+            } else {
+                CommandExecutionMode::Unrestricted
+            }
+        }
+    }
+}
+
+/// PATH lookup + canonicalize. Never admits a path under `tool_root`.
+pub(crate) fn admit_host_executable(
+    command: &str,
+    tool_root: &Path,
+) -> std::result::Result<PathBuf, crate::toolset::denial::DenialReason> {
+    use crate::toolset::denial::DenialReason;
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err(DenialReason::WorkspaceExecutable);
+    }
+    let candidate =
+        if trimmed.contains('/') || trimmed.contains('\\') || Path::new(trimmed).is_absolute() {
+            PathBuf::from(trimmed)
+        } else {
+            which_on_host_path(trimmed).ok_or(DenialReason::WorkspaceExecutable)?
+        };
+    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+    let root = std::fs::canonicalize(tool_root).unwrap_or_else(|_| tool_root.to_path_buf());
+    if canonical.starts_with(&root) {
+        return Err(DenialReason::WorkspaceExecutable);
+    }
+    if !canonical.is_file() {
+        return Err(DenialReason::WorkspaceExecutable);
+    }
+    resolve_rustup_proxy_path(trimmed, canonical, &root).ok_or(DenialReason::WorkspaceExecutable)
+}
+
+/// rustup shims in `~/.cargo/bin` canonicalize to the `rustup` binary. An LSP
+/// workspace tempdir has no rust-toolchain.toml, so that shim exits before
+/// initialize. Resolve rust-analyzer from rustup's on-disk selection state so
+/// admission remains side-effect free and the spawned/digested path is the
+/// actual host toolchain binary, never a PATH lookup or helper subprocess.
+fn resolve_rustup_proxy_path(
+    requested: &str,
+    admitted: PathBuf,
+    tool_root: &Path,
+) -> Option<PathBuf> {
+    let Some(name) = Path::new(requested)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.trim_end_matches(".exe"))
+    else {
+        return Some(admitted);
+    };
+    if name != "rust-analyzer"
+        || admitted
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.trim_end_matches(".exe"))
+            != Some("rustup")
+    {
+        return Some(admitted);
+    }
+
+    let rustup_home = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".rustup")))?;
+    let settings = read_toml(&rustup_home.join("settings.toml"));
+    let channel = std::env::var("RUSTUP_TOOLCHAIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| rustup_override_channel(settings.as_ref(), tool_root))
+        .or_else(|| rust_toolchain_file_channel(tool_root))
+        .or_else(|| {
+            settings
+                .as_ref()?
+                .get("default_toolchain")?
+                .as_str()
+                .map(ToOwned::to_owned)
+        })?;
+    let toolchains = rustup_home.join("toolchains");
+    let exact = toolchains.join(&channel);
+    let toolchain = if exact.is_dir() {
+        exact
+    } else {
+        let mut matches = std::fs::read_dir(&toolchains)
+            .ok()?
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|value| value.starts_with(&format!("{channel}-")))
+            })
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        matches.sort();
+        matches.pop()?
+    };
+    let executable = toolchain.join("bin").join(if cfg!(windows) {
+        "rust-analyzer.exe"
+    } else {
+        name
+    });
+    let canonical = std::fs::canonicalize(executable).ok()?;
+    (!canonical.starts_with(tool_root) && canonical.is_file()).then_some(canonical)
+}
+
+fn read_toml(path: &Path) -> Option<toml::Value> {
+    std::fs::read_to_string(path).ok()?.parse().ok()
+}
+
+fn rustup_override_channel(settings: Option<&toml::Value>, tool_root: &Path) -> Option<String> {
+    let overrides = settings?.get("overrides")?.as_table()?;
+    tool_root.ancestors().find_map(|directory| {
+        let key = directory.to_string_lossy();
+        overrides
+            .get(key.as_ref())
+            .and_then(toml::Value::as_str)
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn rust_toolchain_file_channel(tool_root: &Path) -> Option<String> {
+    for directory in tool_root.ancestors() {
+        let toml_path = directory.join("rust-toolchain.toml");
+        if toml_path.is_file() {
+            return read_toml(&toml_path)?
+                .get("toolchain")?
+                .get("channel")?
+                .as_str()
+                .map(ToOwned::to_owned);
+        }
+        let legacy = directory.join("rust-toolchain");
+        if legacy.is_file() {
+            let raw = std::fs::read_to_string(&legacy).ok()?;
+            if let Ok(parsed) = raw.parse::<toml::Value>() {
+                return parsed
+                    .get("toolchain")?
+                    .get("channel")?
+                    .as_str()
+                    .map(ToOwned::to_owned);
+            }
+            let channel = raw.lines().next()?.trim();
+            return (!channel.is_empty()).then(|| channel.to_string());
+        }
+    }
+    None
+}
+
+fn which_on_host_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Shared PATH / prefix / network / sandbox preparation for bash and LSP.
+pub(crate) fn prepare_managed_command(
+    root: &Path,
+    command: &str,
+    args: &[String],
+    constraints: &CommandConstraints,
+) -> std::result::Result<(PathBuf, Vec<String>, HashMap<String, String>, &'static str), ToolError> {
+    let admitted = admit_host_executable(command, root)
+        .map_err(|reason| policy_denial(&constraints.to_spawn_policy(), reason))?;
+    let spawn_policy = constraints.to_spawn_policy();
+    validate_command_policy_with_resolved_executable(
+        command,
+        args,
+        &admitted.to_string_lossy(),
+        &spawn_policy,
+    )?;
+    let (program, argv, sandbox) =
+        sandboxed_command_for_policy(root, &admitted.to_string_lossy(), args, &spawn_policy)?;
+    Ok((PathBuf::from(program), argv, build_shell_env(), sandbox))
 }
 
 pub(crate) async fn run_command(
@@ -315,11 +570,40 @@ pub(crate) fn validate_command_policy(
     args: &[String],
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<(), ToolError> {
+    validate_command_policy_inner(command, args, None, policy)
+}
+
+fn validate_command_policy_with_resolved_executable(
+    command: &str,
+    args: &[String],
+    resolved_command: &str,
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    validate_command_policy_inner(command, args, Some(resolved_command), policy)
+}
+
+fn validate_command_policy_inner(
+    command: &str,
+    args: &[String],
+    resolved_command: Option<&str>,
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
     let argv = std::iter::once(command.to_string())
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
+    let resolved_argv = resolved_command.map(|resolved| {
+        std::iter::once(resolved.to_string())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>()
+    });
 
-    if let Some(prefix) = first_matching_prefix(&argv, &policy.forbidden_argv_prefixes) {
+    if let Some(prefix) =
+        first_matching_prefix(&argv, &policy.forbidden_argv_prefixes).or_else(|| {
+            resolved_argv
+                .as_ref()
+                .and_then(|argv| first_matching_prefix(argv, &policy.forbidden_argv_prefixes))
+        })
+    {
         return Err(policy_denial(
             policy,
             DenialReason::ForbiddenPrefix {
@@ -335,8 +619,11 @@ pub(crate) fn validate_command_policy(
         ));
     }
 
-    let allowed_prefix_matched =
-        first_matching_prefix(&argv, &policy.allowed_argv_prefixes).is_some();
+    let allowed_prefix_matched = first_matching_prefix(&argv, &policy.allowed_argv_prefixes)
+        .is_some()
+        || resolved_argv.as_ref().is_some_and(|argv| {
+            first_matching_prefix(argv, &policy.allowed_argv_prefixes).is_some()
+        });
     if !policy.allowed_argv_prefixes.is_empty() && !allowed_prefix_matched {
         return Err(policy_denial(
             policy,
@@ -523,7 +810,10 @@ fn executable_name_lookup_key(raw: &str) -> Option<String> {
 
 fn is_secret_env_name(key: &str) -> bool {
     let key = key.to_ascii_uppercase();
-    key.contains("KEY") || key.contains("SECRET") || key.contains("TOKEN")
+    key.contains("KEY")
+        || key.contains("SECRET")
+        || key.contains("TOKEN")
+        || key.contains("PASSWORD")
 }
 
 fn validate_network_mode(
@@ -595,12 +885,12 @@ pub(in crate::toolset) fn select_sandbox_for_policy(
 }
 
 #[cfg(target_os = "macos")]
-fn workspace_write_sandbox_enforced() -> bool {
+pub(crate) fn workspace_write_sandbox_enforced() -> bool {
     Path::new(SANDBOX_EXEC).exists()
 }
 
 #[cfg(not(target_os = "macos"))]
-fn workspace_write_sandbox_enforced() -> bool {
+pub(crate) fn workspace_write_sandbox_enforced() -> bool {
     false
 }
 

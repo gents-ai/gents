@@ -172,6 +172,7 @@ impl DefraSessionHook {
                     cancellation_token.clone(),
                     workspace_cwd,
                     Some(live_output_writer),
+                    Some(execution_session_id.clone()),
                     correlation,
                     source_fields,
                     true,

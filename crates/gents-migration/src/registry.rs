@@ -320,6 +320,17 @@ const AGENT_REQUEST_ADD_BACKGROUND_COMPLETION_SNAPSHOT_PATCH: &str = r#"[
   {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"background_completion_notification_keys_json","Kind":"String"}},
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
+
+// Frozen at the migration cutover. Live `gents_protocol::schemas::TOOL_SELECTION`
+// may grow fields; those belong in DEFAULT_STEPS so existing stores keep a
+// known lineage instead of silently changing roots.
+const TOOL_SELECTION_BASELINE_SDL: &str = include_str!("baseline/tool_selection.graphql");
+
+const TOOL_SELECTION_ADD_LSP_FIELDS_PATCH: &str = r#"[
+  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_lsp","Kind":"Boolean"}},
+  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"lsp_config","Kind":"String"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
 /// Frozen baseline SDL set, ordered like
 /// `gents_protocol::schemas::{RUNTIME_ALL, ALL}` and feature-invariant (includes
 /// AgentMemory). Collections with post-cutover changes use frozen local SDL
@@ -365,7 +376,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SELECTION_NAME,
-        gents_protocol::schemas::TOOL_SELECTION,
+        TOOL_SELECTION_BASELINE_SDL,
         "bafyreie4seb5qunpvokrmvdumozlefwovchlc3arpwr7afldydpfyeozfy"
     ),
     baseline_entry!(
@@ -587,6 +598,16 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
             "background_completion_input_through_sequence",
             "background_completion_notification_keys_json",
         ]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "tool-selection-add-lsp-fields",
+        collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
+        patch: TOOL_SELECTION_ADD_LSP_FIELDS_PATCH,
+        lens: None,
+        // Authored by applying the inactive patch to the frozen ToolSelection baseline.
+        expected_version: Some("bafyreibzvuogmrsg7z5mz2mlnmb2f5avdas54a35fpoghu2bbwyt4fiame"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&["enable_lsp", "lsp_config"]),
     },
 ];
 

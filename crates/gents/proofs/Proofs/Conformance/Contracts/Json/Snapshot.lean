@@ -4,6 +4,7 @@ import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
 import Proofs.Conformance.Contracts.Json.ToolPolicy
+import Proofs.Conformance.Contracts.Json.Lsp
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
@@ -69,6 +70,8 @@ def snapshotJson : String :=
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
+    ++ "\"lsp_action_cases\":"
+      ++ lspActionCasesJson ++ ","
     ++ "\"self_config_field_tables\":"
       ++ selfConfigFieldTablesJson ++ ","
     ++ "\"self_config_cases\":"

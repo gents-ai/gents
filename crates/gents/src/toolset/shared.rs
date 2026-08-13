@@ -3,12 +3,18 @@ mod context;
 mod filesystem;
 
 pub(crate) use command::parse_argv_prefixes;
+pub(crate) use command::{
+    admit_host_executable, default_lsp_network_mode, lsp_sandbox_for_effective,
+    prepare_managed_command,
+};
 #[cfg(test)]
 pub(super) use command::{
     build_shell_env_from_vars, select_sandbox_for_policy, validate_read_only_command,
 };
 pub(super) use command::{run_command, validate_command_policy};
-pub use command::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
+pub use command::{
+    CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
+};
 pub(super) use context::{ToolContext, ToolError};
 pub(super) use filesystem::{cap_output, render_file_contents};
 

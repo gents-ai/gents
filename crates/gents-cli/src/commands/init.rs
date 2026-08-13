@@ -758,6 +758,8 @@ pub(crate) fn tool_selection_for_package(
         self_config_categories: None,
         self_config_no_lockout: None,
         self_config_dry_run: None,
+        enable_lsp: None,
+        lsp_config: None,
     }
 }
 

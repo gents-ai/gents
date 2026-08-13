@@ -58,6 +58,7 @@ structure Surface where
   orchestration : Bool
   crossDeployment : Bool
   skills : Bool
+  lsp : Bool
   cliTools : EndpointScope ToolId (Finset String)
   mcpServices : EndpointScope ToolId Unit
   defraCollections : EndpointScope ToolId Unit

@@ -514,6 +514,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_tool_policy_cases_match_lean_composition")
       "tool-policy" [Surface.operatorUi, Surface.agentFacing]
   , tagged (consumerCoverage
+      "lsp_action_cases"
+      "LspActionCases"
+      "conformance::generated_lsp_action_cases_match_rust_authorization")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "self_config_field_tables"
       "SelfConfigFieldTables"
       "conformance::self_config_field_tables_match_lean_contract")

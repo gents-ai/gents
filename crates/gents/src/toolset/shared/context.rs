@@ -218,7 +218,27 @@ fn normalize_for_creation(path: &Path) -> Result<PathBuf> {
             _ => normalized.push(component.as_os_str()),
         }
     }
-    Ok(normalized)
+    // Canonicalize the nearest filesystem entry, then append the missing
+    // suffix. `symlink_metadata` deliberately does not follow the final link:
+    // a dangling symlink is an existing entry whose canonicalization must
+    // fail, rather than a creatable leaf that a later write could follow.
+    let mut ancestor = normalized.as_path();
+    let mut suffix = Vec::new();
+    while std::fs::symlink_metadata(ancestor).is_err() {
+        let name = ancestor
+            .file_name()
+            .ok_or_else(|| anyhow!("path has no existing ancestor: {}", path.display()))?;
+        suffix.push(name.to_os_string());
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| anyhow!("path has no existing ancestor: {}", path.display()))?;
+    }
+    let mut resolved = std::fs::canonicalize(ancestor)
+        .with_context(|| format!("canonicalizing path ancestor {}", ancestor.display()))?;
+    for component in suffix.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
 }
 
 fn resolve_base_dir(root: &Path, base: Option<PathBuf>) -> Result<PathBuf> {

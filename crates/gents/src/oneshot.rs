@@ -44,6 +44,7 @@ pub async fn run_openai_oneshot_with_tools(
     let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface, &allowed_targets);
     let preamble = prompt_builder.preamble().to_string();
 
+    let lsp_pool = tool_runtime.lsp_pool.clone();
     let mut tools = tool_surface.build_tools(&tool_runtime)?;
     tools.extend(extra_tools);
     let tools = Arc::new(tools);
@@ -81,6 +82,7 @@ pub async fn run_openai_oneshot_with_tools(
                     preamble,
                     tools,
                     background_tool_registry,
+                    lsp_pool.clone(),
                     client,
                 )
                 .await
@@ -110,6 +112,7 @@ pub async fn run_openai_oneshot_with_tools(
                     preamble,
                     tools,
                     background_tool_registry,
+                    lsp_pool.clone(),
                     client,
                 )
                 .await
@@ -136,6 +139,7 @@ pub async fn run_openai_oneshot_with_tools(
                 preamble,
                 tools,
                 background_tool_registry,
+                lsp_pool.clone(),
                 client,
             )
             .await
@@ -161,6 +165,7 @@ pub async fn run_openai_oneshot_with_tools(
                 preamble,
                 tools,
                 background_tool_registry,
+                lsp_pool.clone(),
                 client,
             )
             .await
@@ -186,6 +191,7 @@ pub async fn run_openai_oneshot_with_tools(
                     preamble,
                     tools,
                     background_tool_registry,
+                    lsp_pool.clone(),
                     client,
                 )
                 .await
@@ -205,6 +211,7 @@ pub async fn run_openai_oneshot_with_tools(
                     preamble,
                     tools,
                     background_tool_registry,
+                    lsp_pool.clone(),
                     client,
                 )
                 .await
@@ -221,6 +228,7 @@ async fn run_oneshot_with_completion_client<C>(
     preamble: String,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     background_tool_registry: BackgroundToolRegistry,
+    lsp_pool: crate::toolset::lsp::LspPool,
     client: C,
 ) -> Result<OneshotRunResult>
 where
@@ -244,6 +252,7 @@ where
         tools,
         config,
         background_tool_registry,
+        lsp_pool,
     )
     .await
 }
@@ -258,6 +267,7 @@ async fn run_oneshot_owned<M: CompletionModel + 'static>(
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: crate::agent::loop_stream::LoopConfig,
     background_tool_registry: BackgroundToolRegistry,
+    lsp_pool: crate::toolset::lsp::LspPool,
 ) -> Result<OneshotRunResult>
 where
     M::StreamingResponse: 'static,
@@ -310,6 +320,11 @@ where
 
     let session_id = hook.session_id().await;
     let close_result = hook.close().await;
+    if let Some(id) = session_id.as_deref() {
+        lsp_pool.close_session(id).await;
+    } else {
+        lsp_pool.shutdown().await;
+    }
 
     match response {
         Ok(response_text) => {

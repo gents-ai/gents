@@ -121,6 +121,8 @@ mod goals;
 mod inference_call;
 #[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
+#[path = "conformance/lsp.rs"]
+mod lsp;
 #[path = "conformance/managed_exec.rs"]
 mod managed_exec;
 #[path = "conformance/mcp_health.rs"]
@@ -340,6 +342,11 @@ fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
 #[test]
 fn generated_tool_policy_cases_match_lean_composition() {
     tool_policy::generated_tool_policy_cases_match_lean_composition();
+}
+
+#[test]
+fn generated_lsp_action_cases_match_rust_authorization() {
+    lsp::generated_lsp_action_cases_match_rust_authorization();
 }
 
 #[test]

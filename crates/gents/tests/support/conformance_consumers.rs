@@ -169,6 +169,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_tool_policy_cases_match_lean_composition",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_lsp_action_cases_match_rust_authorization",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_lsp_action_cases_match_rust_authorization",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::self_config_field_tables_match_lean_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",

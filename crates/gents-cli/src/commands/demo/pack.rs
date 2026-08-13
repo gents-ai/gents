@@ -16,7 +16,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::fleet::{spawn_server_with_args, wait_http, wait_runtime_ready};
+use super::fleet::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
 use super::util::{path_arg, run_cli_json};
 use crate::cli::args::DemoRunArgs;
 use crate::desired_state::interpolate::interpolate;
@@ -53,10 +53,23 @@ struct PackInit {
     backend_preset: Option<String>,
     #[serde(default)]
     openai_wire_api: Option<String>,
+    /// `gents init --tool-root`. Required for readonly/write/yolo when not
+    /// inferable. Relative paths resolve against the process cwd.
+    #[serde(default)]
+    tool_root: Option<String>,
+    /// Environment variable receiving the canonical tool root while the
+    /// child applies the pack. This keeps pack interpolation aligned with
+    /// the root passed to `gents init`.
+    #[serde(default)]
+    tool_root_env_var: Option<String>,
+    /// Files or directories that must exist under the resolved tool root.
+    /// Packs use this to fail fast when invoked from the wrong checkout.
+    #[serde(default)]
+    tool_root_markers: Vec<String>,
 }
 
 fn default_tool_package() -> String {
-    "readonly".to_string()
+    "minimal".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +102,22 @@ struct PackExpect {
     prompt_tool_contracts: Vec<PromptToolContract>,
     #[serde(default)]
     background_completion: Option<BackgroundCompletionExpectation>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCallExpectation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallExpectation {
+    trigger_id: String,
+    tool_name: String,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    result_contains: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -408,12 +437,7 @@ fn validate_manifest(manifest: &PackManifest) -> Result<()> {
     if !manifest.expect.source_edges.is_empty() && !manifest.expect.signed_provenance {
         bail!("expect.source_edges requires expect.signed_provenance=true");
     }
-    if !matches!(
-        manifest.init.tool_package.as_str(),
-        "minimal" | "introspection" | "readonly" | "write" | "yolo"
-    ) {
-        bail!("init.tool_package must be minimal, introspection, readonly, write, or yolo");
-    }
+    validate_tool_package(&manifest.init.tool_package)?;
     for (trigger_id, count) in &manifest.expect.trigger_request_counts {
         if !manifest.expect.trigger_ids.contains(trigger_id) {
             bail!("expect.trigger_request_counts names unknown trigger {trigger_id}");
@@ -430,7 +454,72 @@ fn validate_manifest(manifest: &PackManifest) -> Result<()> {
             bail!("expect.background_completion minimums must all be greater than zero");
         }
     }
+    if tool_package_needs_root(&manifest.init.tool_package)
+        && manifest
+            .init
+            .tool_root
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+    {
+        bail!(
+            "init.tool_package={} requires init.tool_root (a read-only/write ceiling needs a workspace root)",
+            manifest.init.tool_package
+        );
+    }
     Ok(())
+}
+
+fn validate_tool_package(package: &str) -> Result<()> {
+    match package {
+        "minimal" | "introspection" | "readonly" | "write" | "yolo" => Ok(()),
+        other => bail!("unknown init.tool_package {other}"),
+    }
+}
+
+fn tool_package_needs_root(package: &str) -> bool {
+    matches!(package, "readonly" | "write" | "yolo")
+}
+
+fn resolve_pack_tool_root(
+    pack: &Path,
+    declared: Option<&str>,
+    markers: &[String],
+) -> Result<PathBuf> {
+    let raw = declared.map(str::trim).filter(|value| !value.is_empty());
+    let path = match raw {
+        Some(raw) => {
+            let path = PathBuf::from(raw);
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir()
+                    .context("resolving init.tool_root against the process cwd")?
+                    .join(path)
+            }
+        }
+        None => pack.join("../.."),
+    };
+    let root = path
+        .canonicalize()
+        .with_context(|| format!("resolving pack tool root {}", path.display()))?;
+    if !root.is_dir() {
+        bail!("pack tool root is not a directory: {}", root.display());
+    }
+    let missing = markers
+        .iter()
+        .filter(|marker| !root.join(marker).exists())
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        bail!(
+            "pack tool root {} is missing required marker(s): {}",
+            root.display(),
+            missing.join(", ")
+        );
+    }
+    Ok(root)
 }
 
 pub(crate) async fn list(root: &Path) -> Result<()> {
@@ -586,6 +675,106 @@ struct SourceEdgeEvidence {
     consumer_trigger_id: String,
     consumer_request_id: String,
     consumer_request_doc_id: String,
+}
+
+async fn verify_tool_call_expectations(
+    graphql: &str,
+    stages: &[StageResult],
+    expectations: &[ToolCallExpectation],
+) -> Result<()> {
+    for expected in expectations {
+        let matching_stages = stages
+            .iter()
+            .filter(|stage| stage.trigger_id == expected.trigger_id)
+            .collect::<Vec<_>>();
+        if matching_stages.is_empty() {
+            return Err(anyhow::anyhow!(
+                "tool call expectation references unknown trigger {}",
+                expected.trigger_id
+            ));
+        }
+        let mut all_rows = Vec::new();
+        let mut matched = false;
+        for stage in matching_stages {
+            let escaped = escape_graphql_string(&stage.request_id);
+            let query = format!(
+                r#"{{
+                AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
+                    tool_name
+                    status
+                    lifecycle_state
+                    args
+                    result
+                }}
+            }}"#
+            );
+            let rows = graphql_rows(graphql, "AgentToolCall", &query).await?;
+            matched |= rows.iter().any(|row| tool_call_matches(row, expected));
+            all_rows.extend(rows);
+        }
+        if !matched {
+            bail!(
+                "no completed {} call for {} matched action={:?} file={:?} symbol={:?} result_contains={:?}; rows={all_rows:?}",
+                expected.tool_name,
+                expected.trigger_id,
+                expected.action,
+                expected.file,
+                expected.symbol,
+                expected.result_contains
+            );
+        }
+    }
+    Ok(())
+}
+
+fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
+    if row.get("tool_name").and_then(Value::as_str) != Some(expected.tool_name.as_str()) {
+        return false;
+    }
+    let completed = row.get("lifecycle_state").and_then(Value::as_str) == Some("completed");
+    if !completed {
+        return false;
+    }
+    let parsed = row
+        .get("args")
+        .and_then(Value::as_str)
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+    for (field, expected_value) in [
+        ("action", expected.action.as_deref()),
+        ("file", expected.file.as_deref()),
+        ("symbol", expected.symbol.as_deref()),
+    ] {
+        let Some(expected_value) = expected_value else {
+            continue;
+        };
+        let Some(actual) = parsed
+            .as_ref()
+            .and_then(|value| value.get(field))
+            .and_then(Value::as_str)
+        else {
+            return false;
+        };
+        let matches = if field == "file" {
+            gents::toolset::result_path_matches(expected_value, actual)
+        } else {
+            actual == expected_value
+        };
+        if !matches {
+            return false;
+        }
+    }
+    let result = row.get("result").and_then(Value::as_str).unwrap_or("");
+    if result_looks_failed(result) {
+        return false;
+    }
+    expected
+        .result_contains
+        .iter()
+        .all(|needle| result.contains(needle))
+}
+
+fn result_looks_failed(result: &str) -> bool {
+    gents::toolset::result_looks_failed(result)
 }
 
 async fn graphql_rows(graphql: &str, field: &str, query: &str) -> Result<Vec<Value>> {
@@ -1857,6 +2046,25 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     println!("endpoint {}", manifest.init.inference_url);
     println!("model    {}", manifest.init.model_name);
 
+    let tool_root = if tool_package_needs_root(&manifest.init.tool_package) {
+        Some(resolve_pack_tool_root(
+            &pack,
+            manifest.init.tool_root.as_deref(),
+            &manifest.init.tool_root_markers,
+        )?)
+    } else {
+        None
+    };
+    if let Some(root) = tool_root.as_ref() {
+        println!(
+            "tool     {} @ {}",
+            manifest.init.tool_package,
+            root.display()
+        );
+    } else {
+        println!("tool     {}", manifest.init.tool_package);
+    }
+
     let mut init_args: Vec<String> = vec![
         "init".into(),
         "--home".into(),
@@ -1869,6 +2077,10 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         "--tool-package".into(),
         manifest.init.tool_package.clone(),
     ];
+    if let Some(root) = tool_root.as_ref() {
+        init_args.push("--tool-root".into());
+        init_args.push(path_arg(root));
+    }
     if let Some(preset) = manifest.init.backend_preset.as_deref() {
         init_args.push("--backend-preset".into());
         init_args.push(preset.into());
@@ -1893,7 +2105,15 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     let log = run_dir.join("server.log");
     let started = Instant::now();
 
-    let mut server = spawn_server_with_pack(&bin, &home, port, &log, &pack)?;
+    let mut server = spawn_server_with_pack(
+        &bin,
+        &home,
+        port,
+        &log,
+        &pack,
+        tool_root.as_deref(),
+        manifest.init.tool_root_env_var.as_deref(),
+    )?;
     let outcome = async {
         wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
@@ -2004,6 +2224,9 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             &manifest.expect.projections,
         )
         .await?;
+        verify_tool_call_expectations(&graphql, &stages, &manifest.expect.tool_calls)
+            .await
+            .context("verifying persisted tool calls")?;
         let (prompt_tokens, completion_tokens) = token_totals(&graphql).await;
         Ok::<_, anyhow::Error>((
             stages,
@@ -2177,9 +2400,15 @@ fn spawn_server_with_pack(
     port: u16,
     log: &Path,
     pack: &Path,
+    tool_root: Option<&Path>,
+    tool_root_env_var: Option<&str>,
 ) -> Result<tokio::process::Child> {
     let root = path_arg(pack);
-    spawn_server_with_args(bin, home, port, log, &["--apply-root", &root])
+    let environment = tool_root
+        .zip(tool_root_env_var)
+        .map(|(path, name)| vec![(name, path.to_string_lossy().into_owned())])
+        .unwrap_or_default();
+    spawn_server_with_args_and_env(bin, home, port, log, &["--apply-root", &root], &environment)
 }
 
 #[cfg(test)]
@@ -2245,10 +2474,13 @@ mod tests {
             init: PackInit {
                 inference_url: "http://127.0.0.1:8080".to_string(),
                 model_name: "test".to_string(),
-                tool_package: "readonly".to_string(),
+                tool_package: "minimal".to_string(),
                 api_key_env_var: None,
                 backend_preset: None,
                 openai_wire_api: None,
+                tool_root: None,
+                tool_root_env_var: None,
+                tool_root_markers: Vec::new(),
             },
             seed: PackSeed {
                 collection: "Source".to_string(),
@@ -2273,6 +2505,7 @@ mod tests {
                 fan_in: None,
                 prompt_tool_contracts: Vec::new(),
                 background_completion: None,
+                tool_calls: Vec::new(),
             },
             await_timeout_secs: 1,
         };
@@ -2292,6 +2525,30 @@ mod tests {
             manifest.expect.trigger_request_counts.get("review-scan"),
             Some(&4)
         );
+    }
+
+    #[test]
+    fn every_checked_in_demo_pack_loads() {
+        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
+        let mut packs = std::fs::read_dir(&demo)
+            .expect("read demo directory")
+            .map(|entry| entry.expect("read demo entry").path())
+            .filter(|path| path.join("experiment.json").is_file())
+            .collect::<Vec<_>>();
+        packs.sort();
+        assert!(!packs.is_empty(), "expected checked-in demo packs");
+        for pack in packs {
+            load_manifest(&pack)
+                .unwrap_or_else(|error| panic!("{} should load: {error:#}", pack.display()));
+        }
+    }
+
+    #[test]
+    fn omitted_tool_package_keeps_the_minimal_ceiling() {
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
+        let manifest = load_manifest(&pack).expect("pipeline pack should load");
+        assert_eq!(manifest.init.tool_package, "minimal");
+        assert!(manifest.init.tool_root.is_none());
     }
 
     #[test]
@@ -2361,5 +2618,185 @@ mod tests {
         let mut missing_wake = complete;
         missing_wake.completed_wake_request_ids.clear();
         assert!(!missing_wake.satisfies(&expected));
+    }
+
+    #[test]
+    fn lsp_rust_pack_declares_readonly_ceiling_and_tool_calls() {
+        let pack = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/lsp-rust");
+        let manifest = load_manifest(&pack).expect("demo/lsp-rust experiment.json");
+        assert_eq!(manifest.init.tool_package, "readonly");
+        assert!(manifest
+            .init
+            .tool_root
+            .as_deref()
+            .is_some_and(|root| !root.is_empty()));
+        assert_eq!(
+            manifest.init.tool_root_env_var.as_deref(),
+            Some("GENTS_LSP_WORKSPACE")
+        );
+        assert!(manifest
+            .expect
+            .tool_calls
+            .iter()
+            .any(|call| call.tool_name == "lsp" && call.action.as_deref() == Some("hover")));
+        assert!(manifest
+            .expect
+            .tool_calls
+            .iter()
+            .any(|call| call.result_contains.iter().any(|n| n == "FileToolMode")));
+        for (file, symbol, result_needle) in [
+            (
+                "crates/gents/src/toolset/shared/command.rs",
+                "meet",
+                "Disabled",
+            ),
+            (
+                "crates/gents/src/toolset/lsp/auth.rs",
+                "lsp_advertised",
+                "FileToolMode",
+            ),
+        ] {
+            assert!(manifest.expect.tool_calls.iter().any(|call| {
+                call.tool_name == "lsp"
+                    && call.action.as_deref() == Some("hover")
+                    && call.file.as_deref() == Some(file)
+                    && call.symbol.as_deref() == Some(symbol)
+                    && call
+                        .result_contains
+                        .iter()
+                        .any(|needle| needle == result_needle)
+            }));
+        }
+    }
+
+    #[test]
+    fn pack_tool_root_requires_declared_markers() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        let markers = vec!["Cargo.toml".to_string(), "crates/gents".to_string()];
+        let error =
+            resolve_pack_tool_root(root.path(), Some(root.path().to_str().unwrap()), &markers)
+                .unwrap_err();
+        assert!(error.to_string().contains("crates/gents"), "{error}");
+
+        std::fs::create_dir_all(root.path().join("crates/gents")).unwrap();
+        let resolved =
+            resolve_pack_tool_root(root.path(), Some(root.path().to_str().unwrap()), &markers)
+                .unwrap();
+        assert_eq!(resolved, std::fs::canonicalize(root.path()).unwrap());
+    }
+
+    #[test]
+    fn readonly_pack_requires_tool_root() {
+        let mut manifest = PackManifest {
+            name: "lsp".into(),
+            description: String::new(),
+            init: PackInit {
+                inference_url: "http://127.0.0.1:8080".into(),
+                model_name: "test".into(),
+                api_key_env_var: None,
+                backend_preset: None,
+                openai_wire_api: None,
+                tool_package: "readonly".into(),
+                tool_root: None,
+                tool_root_env_var: None,
+                tool_root_markers: Vec::new(),
+            },
+            seed: PackSeed {
+                collection: "Job".into(),
+                job_id_field: "job_id".into(),
+                prompt_field: "prompt".into(),
+                fields: BTreeMap::new(),
+            },
+            default_prompt: String::new(),
+            expect: PackExpect {
+                trigger_ids: Vec::new(),
+                trigger_request_counts: BTreeMap::new(),
+                collection_counts: BTreeMap::new(),
+                projections: Vec::new(),
+                signed_provenance: false,
+                required_tool_call_trigger_ids: Vec::new(),
+                source_edges: Vec::new(),
+                fan_in: None,
+                prompt_tool_contracts: Vec::new(),
+                background_completion: None,
+                tool_calls: Vec::new(),
+            },
+            await_timeout_secs: 1,
+        };
+        let error = validate_manifest(&manifest).expect_err("readonly needs tool_root");
+        assert!(error.to_string().contains("tool_root"), "{error}");
+        manifest.init.tool_root = Some(".".into());
+        validate_manifest(&manifest).expect("declared tool_root is enough");
+    }
+
+    #[test]
+    fn tool_call_match_requires_completed_action_and_needles() {
+        let expected = ToolCallExpectation {
+            trigger_id: "lsp-hover".into(),
+            tool_name: "lsp".into(),
+            action: Some("hover".into()),
+            file: Some("src/auth.rs".into()),
+            symbol: None,
+            result_contains: vec!["FileToolMode".into()],
+        };
+        let ok = json!({
+            "tool_name": "lsp",
+            "status": "completed",
+            "lifecycle_state": "completed",
+            "args": "{\"action\":\"hover\",\"file\":\"src/auth.rs\"}",
+            "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
+        });
+        assert!(tool_call_matches(&ok, &expected));
+        let status_only = json!({
+            "tool_name": "lsp",
+            "status": "completed",
+            "lifecycle_state": "completed",
+            "args": "{\"action\":\"status\"}",
+            "result": "Language servers: rust-analyzer (ready)"
+        });
+        assert!(!tool_call_matches(&status_only, &expected));
+        let empty_hover = json!({
+            "tool_name": "lsp",
+            "status": "completed",
+            "lifecycle_state": "completed",
+            "args": "{\"action\":\"hover\"}",
+            "result": "No hover information"
+        });
+        assert!(!tool_call_matches(&empty_hover, &expected));
+        let wrong_file = json!({
+            "tool_name": "lsp",
+            "status": "completed",
+            "lifecycle_state": "completed",
+            "args": "{\"action\":\"hover\",\"file\":\"src/other.rs\"}",
+            "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
+        });
+        assert!(!tool_call_matches(&wrong_file, &expected));
+        let empty_symbols = json!({
+            "tool_name": "lsp",
+            "status": "completed",
+            "lifecycle_state": "completed",
+            "args": "{\"action\":\"symbols\",\"file\":\"src/auth.rs\"}",
+            "result": "No result"
+        });
+        assert!(!tool_call_matches(
+            &empty_symbols,
+            &ToolCallExpectation {
+                trigger_id: "lsp-hover".into(),
+                tool_name: "lsp".into(),
+                action: Some("symbols".into()),
+                file: Some("src/auth.rs".into()),
+                symbol: None,
+                result_contains: Vec::new(),
+            }
+        ));
+        let failed_lifecycle = json!({
+            "tool_name": "lsp",
+            "status": "completed",
+            "lifecycle_state": "failed",
+            "args": "{\"action\":\"hover\",\"file\":\"src/auth.rs\"}",
+            "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
+        });
+        assert!(!tool_call_matches(&failed_lifecycle, &expected));
     }
 }

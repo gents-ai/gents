@@ -61,17 +61,44 @@ fn fs_runner_timed_out_error(
 }
 
 #[derive(Clone)]
-pub(super) struct NativeFsRunner {
+pub(crate) struct NativeFsRunner {
     root: PathBuf,
     base: PathBuf,
 }
 
 impl NativeFsRunner {
-    pub(super) fn new(context: &ToolContext) -> Self {
+    pub(crate) fn new(context: &ToolContext) -> Self {
         Self {
             root: context.root().to_path_buf(),
             base: context.base().to_path_buf(),
         }
+    }
+
+    /// Typed glob helper for LSP diagnostics. Returns resolved paths, not
+    /// model-facing GlobTool text. `raw_json` is an internal decode seam.
+    pub(crate) async fn glob_paths(
+        &self,
+        pattern: &str,
+        max_matches: usize,
+    ) -> Result<Vec<PathBuf>, ToolError> {
+        // The runner renders matches relative to its effective request base,
+        // which may be a workspace_cwd below the tool root. Capture that same
+        // base for decoding instead of incorrectly rebasing paths at root.
+        let base = self.effective_base();
+        let raw = self
+            .run(
+                NativeFsRunnerRequest::Glob(gents_fs_runner::protocol::GlobArgs {
+                    pattern: pattern.to_string(),
+                    path: None,
+                    max_matches,
+                    raw_json: true,
+                    max_entries_visited: None,
+                    max_wall_ms: None,
+                }),
+                "lsp",
+            )
+            .await?;
+        Ok(parse_glob_match_paths(&raw, &base))
     }
 
     pub(super) async fn run(
@@ -304,6 +331,28 @@ fn decode_runner_response(stdout: &[u8]) -> Result<NativeFsRunnerResponse, ToolE
     serde_json::from_slice(stdout)
         .context("decoding native filesystem runner response")
         .map_err(Into::into)
+}
+
+pub(crate) fn parse_glob_match_paths(raw: &str, base: &Path) -> Vec<PathBuf> {
+    let value: serde_json::Value = serde_json::from_str(raw).unwrap_or(serde_json::Value::Null);
+    value
+        .get("matches")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("path").and_then(serde_json::Value::as_str))
+                .map(|rel| {
+                    let candidate = PathBuf::from(rel);
+                    if candidate.is_absolute() {
+                        candidate
+                    } else {
+                        base.join(rel)
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn truncate_error_preview(text: &str) -> String {

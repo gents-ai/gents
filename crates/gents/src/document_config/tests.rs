@@ -384,6 +384,7 @@ fn reserved_names_cover_native_and_meta_tools() {
     }
     assert!(is_reserved_builtin_tool_name("bash"));
     assert!(is_reserved_builtin_tool_name("bash_unrestricted"));
+    assert!(is_reserved_builtin_tool_name("lsp"));
 
     for meta in crate::meta_tools::META_TOOL_NAMES {
         assert!(
@@ -461,6 +462,38 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
             "AgentRequest".to_string(),
             "AgentResponse".to_string()
         ])
+    );
+}
+
+#[tokio::test]
+async fn tool_selection_update_can_clear_lsp_config() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let mut doc = ToolSelectionDocument {
+        selection_id: "lsp-config-clear".to_string(),
+        agent_did: "did:key:z-lsp-config-clear".to_string(),
+        enable_lsp: Some(true),
+        lsp_config: Some(r#"{"idle_timeout_ms":1000}"#.to_string()),
+        ..Default::default()
+    };
+    upsert_tool_selection(&node, &doc).await.unwrap();
+    let loaded = load_tool_selection(&node, &doc.selection_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.lsp_config, doc.lsp_config);
+
+    doc.lsp_config = None;
+    upsert_tool_selection(&node, &doc).await.unwrap();
+    let cleared = load_tool_selection(&node, &doc.selection_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        cleared.lsp_config.as_deref().is_none_or(str::is_empty),
+        "removing lsp_config from desired state must clear the stored override: {:?}",
+        cleared.lsp_config
     );
 }
 

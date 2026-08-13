@@ -1,0 +1,4 @@
+type LspDemoJob {
+  job_id: String
+  prompt: String
+}

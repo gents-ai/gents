@@ -181,6 +181,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         "edit_file",
         "bash",
         "bash_unrestricted",
+        "lsp",
     ];
     const SUBAGENT_TOOL_NAMES: &[&str] = &[
         SPAWN_SUBAGENT_TOOL_NAME,
@@ -396,6 +397,10 @@ pub struct ToolSelectionDocument {
     pub self_config_no_lockout: Option<bool>,
     /// Opt-in guardrail: `get_my_config` accepts a patch preview.
     pub self_config_dry_run: Option<bool>,
+    /// Optional language-server tool. Default false; never backfill true.
+    pub enable_lsp: Option<bool>,
+    /// Operator JSON for lsp flags and per-catalog overrides.
+    pub lsp_config: Option<String>,
 }
 
 /// Canonical per-principal id for the seeded `wide-open` preset. Prefixed with
@@ -701,6 +706,8 @@ pub(crate) async fn load_tool_selection_record(
                 self_config_categories
                 self_config_no_lockout
                 self_config_dry_run
+                enable_lsp
+                lsp_config
             }}
         }}"#
     );
@@ -766,6 +773,8 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 self_config_categories
                 self_config_no_lockout
                 self_config_dry_run
+                enable_lsp
+                lsp_config
             }}
         }}"#
     );
@@ -831,6 +840,8 @@ pub(crate) async fn list_tool_selection_records(
                 self_config_categories
                 self_config_no_lockout
                 self_config_dry_run
+                enable_lsp
+                lsp_config
             }}
         }}"#
     );
@@ -1042,6 +1053,10 @@ pub async fn upsert_tool_selection(
             "self_config_dry_run",
             selection.self_config_dry_run,
         ),
+        graphql_fields::graphql_optional_bool_field("enable_lsp", selection.enable_lsp),
+        // Optional strings in desired state are authoritative: omission clears
+        // an older operator value instead of silently preserving it.
+        graphql_fields::graphql_string_field("lsp_config", selection.lsp_config.as_deref()),
         Some(format!(
             r#"updated_at: "{}""#,
             escape_graphql_string(&mint_recreate_identity_timestamp())
@@ -1182,6 +1197,8 @@ pub async fn upsert_tool_selection(
             "self_config_dry_run",
             selection.self_config_dry_run,
         ),
+        graphql_fields::graphql_optional_bool_field("enable_lsp", selection.enable_lsp),
+        graphql_fields::graphql_string_field("lsp_config", selection.lsp_config.as_deref()),
     ]
     .into_iter()
     .flatten()

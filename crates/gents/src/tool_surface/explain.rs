@@ -376,6 +376,16 @@ fn explain_builtin_reads(
     } else {
         builder.exclude("self_config", crate::self_config::GET_MY_CONFIG_TOOL_NAME);
     }
+
+    if surface.lsp.is_some() {
+        builder.include_many("lsp", [crate::toolset::lsp::LSP_TOOL_NAME.to_string()]);
+        builder.warn(
+            "lsp_host_exec",
+            "enable_lsp starts host language-server processes (and their descendants) for the built-in catalog. Enabling the tools self-config category can activate any detected catalog server. Off macOS the server is unsandboxed and may write outside the tool root.",
+        );
+    } else {
+        builder.exclude("lsp", crate::toolset::lsp::LSP_TOOL_NAME);
+    }
 }
 
 fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {

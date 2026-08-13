@@ -56,6 +56,7 @@ inductive DenialReason where
   | disabledNetworkUnenforceable
   | disabledNetworkCommand (command : String)
   | workspaceWriteSandboxUnavailable
+  | workspaceExecutable
   deriving DecidableEq, Repr
 
 namespace DenialReason
@@ -71,6 +72,7 @@ def toContract : DenialReason → String
   | .disabledNetworkUnenforceable => "disabledNetworkUnenforceable"
   | .disabledNetworkCommand _ => "disabledNetworkCommand"
   | .workspaceWriteSandboxUnavailable => "workspaceWriteSandboxUnavailable"
+  | .workspaceExecutable => "workspaceExecutable"
 
 def matchedPrefix? : DenialReason → Option (List String)
   | .forbiddenPrefix matched => some matched

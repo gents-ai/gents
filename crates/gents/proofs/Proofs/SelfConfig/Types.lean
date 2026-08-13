@@ -85,7 +85,8 @@ def allFields : Target → List FieldKey
       , "enable_defra_query", "defra_query_collections", "write_tools"
       , "datastore_tool_surface_ids"
       , "enable_self_config", "self_config_categories"
-      , "self_config_no_lockout", "self_config_dry_run", "updated_at" ]
+      , "self_config_no_lockout", "self_config_dry_run", "enable_lsp"
+      , "lsp_config", "updated_at" ]
   | .inferenceProfile =>
       [ "profile_id", "display_name", "context_window", "max_output_tokens"
       , "max_turns", "temperature", "top_p", "top_k", "seed", "min_p", "frequency_penalty", "presence_penalty", "repetition_penalty", "reasoning_effort", "stream_batch_ms"
@@ -135,7 +136,7 @@ def writableFields : Target → List FieldKey
       , "enable_session_history_tool", "enable_context_budget"
       , "enable_defra_query", "defra_query_collections", "enable_self_config"
       , "self_config_categories", "self_config_no_lockout"
-      , "self_config_dry_run" ]
+      , "self_config_dry_run", "enable_lsp", "lsp_config" ]
   | .inferenceProfile =>
       [ "display_name", "context_window", "max_output_tokens", "max_turns"
       , "temperature", "top_p", "top_k", "seed", "min_p", "frequency_penalty", "presence_penalty", "repetition_penalty", "reasoning_effort", "stream_batch_ms", "stream_liveness_timeout_secs"

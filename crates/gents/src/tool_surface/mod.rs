@@ -57,6 +57,7 @@ pub struct ToolSurface {
     pub(super) write_tools: Vec<WriteToolDecl>,
     pub(super) enable_skills: bool,
     pub(super) self_config: SelfConfigToolConfig,
+    pub(super) lsp: Option<crate::toolset::lsp::LspToolConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -163,6 +164,9 @@ impl ToolSurface {
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
+        if self.lsp.is_some() {
+            names.push(crate::toolset::lsp::LSP_TOOL_NAME.to_string());
+        }
         if self.include_meta_tools {
             names.push(crate::goal::GET_GOAL_TOOL_NAME.to_string());
             names.push(crate::goal::UPDATE_GOAL_TOOL_NAME.to_string());
@@ -178,8 +182,18 @@ impl ToolSurface {
         build::dedupe_strings(names)
     }
 
+    #[cfg(test)]
+    pub(crate) fn lsp_config(&self) -> Option<&crate::toolset::lsp::LspToolConfig> {
+        self.lsp.as_ref()
+    }
+
     pub fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
-        let mut tools = self.host_tools.build_native_tools()?;
+        let writethrough = self.lsp.as_ref().map(|config| {
+            crate::toolset::lsp::LspWritethrough::new(runtime.lsp_pool.clone(), config.clone())
+        });
+        let mut tools = self
+            .host_tools
+            .build_native_tools_with_writethrough(writethrough)?;
         if self.include_meta_tools {
             tools.extend(build_meta_tools(
                 runtime.node.clone(),
@@ -224,6 +238,12 @@ impl ToolSurface {
                 runtime.node.clone(),
                 self.defra_query_scope.clone(),
             ));
+        }
+        if let Some(lsp) = &self.lsp {
+            tools.push(Box::new(crate::toolset::lsp::LspTool::new(
+                lsp.clone(),
+                runtime.lsp_pool.clone(),
+            )?));
         }
         if self.include_meta_tools {
             tools.extend(build_goal_tools());

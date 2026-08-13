@@ -58,5 +58,12 @@ type ToolSelection @branchable {
     # Opt-in guardrail: get_my_config accepts a patch preview (diff without
     # committing).
     self_config_dry_run: Boolean
+    # Optional language-server tool. Default false; never backfill true.
+    enable_lsp: Boolean
+    # Trusted-operator JSON for lsp flags and built-in-catalog overrides. It
+    # cannot replace a catalog server's top-level command/args, but settings or
+    # init options may influence child commands run by that server. Self-config
+    # is restricted to the non-executable subset.
+    lsp_config: String
     updated_at: DateTime @index(direction: DESC)
 }

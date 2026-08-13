@@ -560,6 +560,8 @@ mod tests {
             self_config_categories: Vec::new(),
             self_config_no_lockout: false,
             self_config_dry_run: false,
+            enable_lsp: false,
+            lsp_config: None,
         }
     }
 

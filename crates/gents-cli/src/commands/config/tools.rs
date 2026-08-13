@@ -194,6 +194,8 @@ fn tool_selection_command_plan(args: &ToolSelectionUpsertArgs) -> Result<ToolSel
         self_config_categories: None,
         self_config_no_lockout: None,
         self_config_dry_run: None,
+        enable_lsp: None,
+        lsp_config: None,
     };
     selection.validate()?;
     Ok(ToolSelectionCommandPlan {

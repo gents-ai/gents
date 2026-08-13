@@ -55,6 +55,17 @@ pub(super) fn spawn_server_with_args(
     log: &Path,
     extra: &[&str],
 ) -> Result<Child> {
+    spawn_server_with_args_and_env(bin, home, port, log, extra, &[])
+}
+
+pub(super) fn spawn_server_with_args_and_env(
+    bin: &Path,
+    home: &Path,
+    port: u16,
+    log: &Path,
+    extra: &[&str],
+    environment: &[(&str, String)],
+) -> Result<Child> {
     let file = std::fs::File::create(log).with_context(|| format!("creating {}", log.display()))?;
     let errfile = file.try_clone()?;
     let mut cmd = Command::new(bin);
@@ -75,6 +86,7 @@ pub(super) fn spawn_server_with_args(
         "disabled",
     ]);
     cmd.args(extra);
+    cmd.envs(environment.iter().map(|(key, value)| (*key, value)));
     cmd.env("GENTS_OPENAI_CHAT_COMPLETIONS", "1");
     cmd.env("GENTS_REGISTRY_HEARTBEAT_MS", "1000");
     cmd.env("GENTS_PAIRING_SWEEP_MS", "1000");

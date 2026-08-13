@@ -24,6 +24,7 @@ import Proofs.Client
 import Proofs.ClientShell
 import Proofs.CommandPolicy
 import Proofs.ToolPolicy
+import Proofs.Lsp
 import Proofs.ToolExecution
 import Proofs.CompletionRetry
 import Proofs.ManagedExec

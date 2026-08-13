@@ -1050,7 +1050,8 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     // The production dispatcher's own unknown-tool result, against an empty
     // tool surface.
     let dispatched =
-        crate::agent::loop_stream::dispatch_tool(&[], "ghost_tool", "{}".to_string(), None).await;
+        crate::agent::loop_stream::dispatch_tool(&[], "ghost_tool", "{}".to_string(), None, None)
+            .await;
 
     let _ = hook
         .on_tool_result("ghost_tool", None, "internal-unknown", "{}", &dispatched)

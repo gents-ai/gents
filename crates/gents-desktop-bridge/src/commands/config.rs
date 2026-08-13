@@ -380,6 +380,8 @@ pub async fn save_tool_selection_config(
             self_config_categories: Vec::new(),
             self_config_no_lockout: None,
             self_config_dry_run: None,
+            enable_lsp: None,
+            lsp_config: None,
             enable_file_tools: Some(false),
             file_tools_mode: None,
             file_tool_root: None,

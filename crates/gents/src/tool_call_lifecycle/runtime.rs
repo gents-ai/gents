@@ -169,6 +169,7 @@ struct ToolRuntimeScope {
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
+    session_id: Option<String>,
     live_output: Option<LiveToolOutputWriter>,
     // True only for executions spawned through the R6 background bridge;
     // tools with per-call budgets (bash) use the background lifetime budget
@@ -183,6 +184,7 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) deadline_at: Option<DateTime<Utc>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) workspace_cwd: Option<PathBuf>,
+    pub(crate) session_id: Option<String>,
     pub(crate) live_output: Option<LiveToolOutputWriter>,
     pub(crate) background: bool,
     pub(crate) correlation: Option<String>,
@@ -222,42 +224,48 @@ pub(crate) async fn scope_request_tool_execution_with_workspace<F, T>(
 where
     F: Future<Output = T>,
 {
-    scope_request_tool_execution_with_workspace_and_live_output(
+    scope_request_tool_execution_with_session(
         deadline_at,
         cancellation_token,
         workspace_cwd,
         None,
+        current_tool_runtime_context().and_then(|scope| scope.session_id),
         future,
     )
     .await
 }
 
-pub(crate) async fn scope_request_tool_execution_with_workspace_and_live_output<F, T>(
+pub(crate) async fn scope_request_tool_execution_with_session<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
     live_output: Option<LiveToolOutputWriter>,
+    session_id: Option<String>,
     future: F,
 ) -> T
 where
     F: Future<Output = T>,
 {
     let inherited = current_tool_runtime_context();
-    scope_request_tool_execution_with_trigger_context(
-        deadline_at,
-        cancellation_token,
-        workspace_cwd,
-        live_output,
-        inherited
-            .as_ref()
-            .and_then(|scope| scope.correlation.clone()),
-        inherited
-            .map(|scope| scope.source_fields)
-            .unwrap_or_default(),
-        false,
-        future,
-    )
-    .await
+    TOOL_RUNTIME_SCOPE
+        .scope(
+            ToolRuntimeScope {
+                deadline_at,
+                cancellation_token,
+                workspace_cwd,
+                session_id,
+                live_output,
+                background: false,
+                correlation: inherited
+                    .as_ref()
+                    .and_then(|scope| scope.correlation.clone()),
+                source_fields: inherited
+                    .map(|scope| scope.source_fields)
+                    .unwrap_or_default(),
+            },
+            future,
+        )
+        .await
 }
 
 pub(crate) async fn scope_request_tool_execution_with_trigger_context<F, T>(
@@ -265,6 +273,7 @@ pub(crate) async fn scope_request_tool_execution_with_trigger_context<F, T>(
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
     live_output: Option<LiveToolOutputWriter>,
+    session_id: Option<String>,
     correlation: Option<String>,
     source_fields: std::collections::BTreeMap<String, String>,
     background: bool,
@@ -279,6 +288,7 @@ where
                 deadline_at,
                 cancellation_token,
                 workspace_cwd,
+                session_id,
                 live_output,
                 background,
                 correlation,
@@ -311,6 +321,9 @@ where
         live_output,
         inherited
             .as_ref()
+            .and_then(|scope| scope.session_id.clone()),
+        inherited
+            .as_ref()
             .and_then(|scope| scope.correlation.clone()),
         inherited
             .map(|scope| scope.source_fields)
@@ -329,6 +342,7 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             deadline_at: scope.deadline_at,
             cancellation_token: scope.cancellation_token,
             workspace_cwd: scope.workspace_cwd,
+            session_id: scope.session_id,
             live_output: scope.live_output,
             background: scope.background,
             correlation: scope.correlation,
@@ -661,11 +675,13 @@ mod tests {
             CancellationToken::new(),
             None,
             None,
+            Some("session-7".to_string()),
             Some("run-7".to_string()),
             fields.clone(),
             false,
             async move {
                 let foreground = current_tool_runtime_context().expect("foreground context");
+                assert_eq!(foreground.session_id.as_deref(), Some("session-7"));
                 assert_eq!(foreground.correlation.as_deref(), Some("run-7"));
                 assert_eq!(foreground.source_fields, fields);
 
@@ -678,6 +694,7 @@ mod tests {
                         let background =
                             current_tool_runtime_context().expect("background context");
                         assert!(background.background);
+                        assert_eq!(background.session_id.as_deref(), Some("session-7"));
                         assert_eq!(background.correlation.as_deref(), Some("run-7"));
                         assert_eq!(
                             background
@@ -692,5 +709,30 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn explicit_session_survives_a_spawned_background_task_boundary() {
+        let observed = tokio::spawn(async {
+            scope_request_tool_execution_with_trigger_context(
+                None,
+                CancellationToken::new(),
+                None,
+                None,
+                Some("background-session".into()),
+                None,
+                std::collections::BTreeMap::new(),
+                true,
+                async {
+                    current_tool_runtime_context()
+                        .and_then(|scope| scope.session_id)
+                        .expect("background session id")
+                },
+            )
+            .await
+        })
+        .await
+        .unwrap();
+        assert_eq!(observed, "background-session");
     }
 }

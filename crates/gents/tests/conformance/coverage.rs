@@ -533,6 +533,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ToolPolicyCases".to_string(),
         ));
     }
+    if !snapshot.lsp_action_cases.is_empty() {
+        emitted.insert(("lsp_action_cases".to_string(), "LspActionCases".to_string()));
+    }
     if !snapshot.self_config_field_tables.is_empty() {
         emitted.insert((
             "self_config_field_tables".to_string(),
@@ -1027,6 +1030,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "runtime_cases",
         "apply_reconcile_cases",
         "tool_policy_cases",
+        "lsp_action_cases",
         "self_config_field_tables",
         "self_config_cases",
         "session_recovery_cases",
