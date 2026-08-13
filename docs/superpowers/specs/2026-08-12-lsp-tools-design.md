@@ -202,6 +202,14 @@ the **host PATH** to a canonical path that is **not** under the tool
 root. After admission, spawn that **canonical path**, not the original
 bare name. `config_digest` hashes the canonical path.
 
+Rustup proxies are not an exception to that rule. When a host
+`rust-analyzer` entry canonicalizes to `rustup`, resolve the selected
+toolchain from rustup's on-disk selection state (`RUSTUP_TOOLCHAIN`, directory
+override, nearest `rust-toolchain[.toml]`, then the default toolchain) and
+admit/spawn/hash the selected `toolchains/.../bin/rust-analyzer`. Do not run
+`rustup which` outside managed execution and do not spawn the proxy as the
+`rustup` CLI.
+
 Family rules (first eligible by `priority`, then catalog order):
 
 | Family | Rule |
@@ -681,7 +689,8 @@ allowlist (scalars + per-server `disabled` / `priority` /
   denied.
 - Constraints come from `static_policy` after meet; a ceiling prefix /
   network / sandbox change flips the digest. Spawn uses the canonical
-  path.
+  path. A rustup proxy resolves to the selected canonical toolchain binary
+  without a helper subprocess.
 - `enable_lsp` default false; operator `lsp_config` may include
   `settings`; self-config patch of `settings` / `command` / `args`
   rejected.
@@ -711,7 +720,9 @@ allowlist (scalars + per-server `disabled` / `priority` /
 
 No live rust-analyzer in required CI. Operator-run proof is
 `demo/lsp-rust` plus the ignored `e2e_live::lsp_live` test
-(`GENTS_LIVE_LSP=1`).
+(`GENTS_LIVE_LSP=1`). Both must assert useful, file-specific document-symbol
+results, the corresponding file/symbol-specific hovers, and Ready status;
+merely completing a tool call or returning `No result` is not acceptance.
 
 ## Implementation sketch
 

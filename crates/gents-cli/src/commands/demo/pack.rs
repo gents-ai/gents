@@ -104,6 +104,10 @@ struct ToolCallExpectation {
     #[serde(default)]
     action: Option<String>,
     #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
     result_contains: Vec<String>,
 }
 
@@ -673,10 +677,12 @@ async fn verify_tool_call_expectations(
         let matched = rows.iter().any(|row| tool_call_matches(row, expected));
         if !matched {
             bail!(
-                "no completed {} call for {} matched action={:?} result_contains={:?}; rows={rows:?}",
+                "no completed {} call for {} matched action={:?} file={:?} symbol={:?} result_contains={:?}; rows={rows:?}",
                 expected.tool_name,
                 expected.trigger_id,
                 expected.action,
+                expected.file,
+                expected.symbol,
                 expected.result_contains
             );
         }
@@ -693,16 +699,21 @@ fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
     if !completed {
         return false;
     }
-    if let Some(action) = expected.action.as_deref() {
-        let parsed = row
-            .get("args")
-            .and_then(Value::as_str)
-            .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-        if parsed
-            .as_ref()
-            .and_then(|value| value.get("action"))
-            .and_then(Value::as_str)
-            != Some(action)
+    let parsed = row
+        .get("args")
+        .and_then(Value::as_str)
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+    for (field, expected_value) in [
+        ("action", expected.action.as_deref()),
+        ("file", expected.file.as_deref()),
+        ("symbol", expected.symbol.as_deref()),
+    ] {
+        if expected_value.is_some()
+            && parsed
+                .as_ref()
+                .and_then(|value| value.get(field))
+                .and_then(Value::as_str)
+                != expected_value
         {
             return false;
         }
@@ -718,12 +729,19 @@ fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
 }
 
 fn result_looks_failed(result: &str) -> bool {
-    result.contains("error")
-        || result.contains("failed")
-        || result.contains("unavailable")
-        || result.contains("stdout closed")
-        || result.contains("timed out")
-        || result.contains("No hover information")
+    let trimmed = result.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    trimmed.is_empty()
+        || matches!(
+            lower.as_str(),
+            "no result" | "no symbols found" | "no hover information" | "no definition found"
+        )
+        || lower.starts_with("error:")
+        || lower.starts_with("lsp error")
+        || lower.starts_with("failed")
+        || lower.starts_with("unavailable")
+        || lower.contains("stdout closed")
+        || lower.contains("timed out")
 }
 
 async fn graphql_rows(graphql: &str, field: &str, query: &str) -> Result<Vec<Value>> {
@@ -2551,6 +2569,17 @@ mod tests {
             .tool_calls
             .iter()
             .any(|call| call.result_contains.iter().any(|n| n == "FileToolMode")));
+        for (file, symbol) in [
+            ("crates/gents/src/toolset/shared/command.rs", "meet"),
+            ("crates/gents/src/toolset/lsp/auth.rs", "lsp_advertised"),
+        ] {
+            assert!(manifest.expect.tool_calls.iter().any(|call| {
+                call.tool_name == "lsp"
+                    && call.action.as_deref() == Some("symbols")
+                    && call.file.as_deref() == Some(file)
+                    && call.result_contains.iter().any(|needle| needle == symbol)
+            }));
+        }
     }
 
     #[test]
@@ -2600,6 +2629,8 @@ mod tests {
             trigger_id: "lsp-hover".into(),
             tool_name: "lsp".into(),
             action: Some("hover".into()),
+            file: Some("src/auth.rs".into()),
+            symbol: None,
             result_contains: vec!["FileToolMode".into()],
         };
         let ok = json!({
@@ -2623,5 +2654,29 @@ mod tests {
             "result": "No hover information"
         });
         assert!(!tool_call_matches(&empty_hover, &expected));
+        let wrong_file = json!({
+            "tool_name": "lsp",
+            "status": "completed",
+            "args": "{\"action\":\"hover\",\"file\":\"src/other.rs\"}",
+            "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
+        });
+        assert!(!tool_call_matches(&wrong_file, &expected));
+        let empty_symbols = json!({
+            "tool_name": "lsp",
+            "status": "completed",
+            "args": "{\"action\":\"symbols\",\"file\":\"src/auth.rs\"}",
+            "result": "No result"
+        });
+        assert!(!tool_call_matches(
+            &empty_symbols,
+            &ToolCallExpectation {
+                trigger_id: "lsp-hover".into(),
+                tool_name: "lsp".into(),
+                action: Some("symbols".into()),
+                file: Some("src/auth.rs".into()),
+                symbol: None,
+                result_contains: Vec::new(),
+            }
+        ));
     }
 }

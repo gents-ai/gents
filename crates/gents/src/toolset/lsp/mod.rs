@@ -131,7 +131,7 @@ impl Tool for LspTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: LSP_TOOL_NAME.to_string(),
-            description: "Language-server intelligence: hover, definition, references, diagnostics, symbols, rename, and code actions. Lines are 1-indexed. Prefer lsp over text search for cross-file symbols. reload retires the current snapshot's clients without starting replacements. workspace/executeCommand is never sent.".into(),
+            description: "Symbol-aware code intelligence from language servers. Position actions accept file + 1-indexed line + symbol; when line is omitted, Gents searches the file for symbol. symbols with a file lists document symbols; file=\"*\" + query searches the workspace. Prefer lsp over text search for definitions, references, renames, and code actions because it follows shadowing and cross-file callsites. status never starts a server: call a server-backed action first, then status in a later tool turn if you need to verify ready. reload retires the current snapshot's clients without starting replacements. workspace/executeCommand is never sent.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {

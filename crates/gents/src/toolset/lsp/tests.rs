@@ -1006,6 +1006,24 @@ async fn rust_analyzer_starts_and_reports_ready() {
         vec![server.clone()],
     );
     let tool = LspTool::new(config, LspPool::new()).unwrap();
+    let symbols = tool
+        .call(LspArgs {
+            action: "symbols".into(),
+            file: Some("src/lib.rs".into()),
+            line: None,
+            symbol: None,
+            query: None,
+            new_name: None,
+            apply: None,
+            payload: None,
+            timeout: Some(40),
+        })
+        .await
+        .expect("rust-analyzer must return document symbols after cold start");
+    assert!(
+        symbols.contains("add") && !symbols.contains("No symbols found"),
+        "document symbols must include add, got: {symbols}"
+    );
     let hover = tool
         .call(LspArgs {
             action: "hover".into(),
@@ -1072,6 +1090,30 @@ async fn rust_analyzer_hover_on_gents_crate() {
         LspPool::new(),
     )
     .unwrap();
+
+    for (file, symbol) in [
+        ("src/toolset/lsp/auth.rs", "lsp_advertised"),
+        ("src/toolset/shared/command.rs", "meet"),
+    ] {
+        let symbols = tool
+            .call(LspArgs {
+                action: "symbols".into(),
+                file: Some(file.into()),
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: Some(60),
+            })
+            .await
+            .unwrap_or_else(|err| panic!("document symbols for {file}: {err}"));
+        assert!(
+            symbols.contains(symbol) && !symbols.contains("No symbols found"),
+            "document symbols for {file} must include {symbol}, got: {symbols}"
+        );
+    }
 
     let advertised = tool
         .call(LspArgs {
@@ -1424,10 +1466,12 @@ fn explicit_disabled_under_unrestricted_sandbox_is_unenforceable() {
         sandbox: CommandExecutionMode::Unrestricted,
         deny_all_argv: false,
     };
-    let err = crate::toolset::prepare_managed_command(root.path(), "true", &[], &constraints)
-        .or_else(|_| {
-            crate::toolset::prepare_managed_command(root.path(), "/bin/true", &[], &constraints)
-        })
+    let command = if crate::toolset::admit_host_executable("true", root.path()).is_ok() {
+        "true"
+    } else {
+        "/bin/true"
+    };
+    let err = crate::toolset::prepare_managed_command(root.path(), command, &[], &constraints)
         .unwrap_err();
     assert!(
         err.to_string().to_lowercase().contains("disabled")

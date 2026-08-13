@@ -195,7 +195,13 @@ async fn run_file_action(
             }]
         });
     }
-    let retry_empty = matches!(action, LspAction::Hover | LspAction::Definition);
+    // Cold-started project servers can acknowledge initialize before their
+    // first document index is queryable. A null documentSymbol response is
+    // transient in that window just like a null hover/definition response.
+    let retry_empty = matches!(
+        action,
+        LspAction::Hover | LspAction::Definition | LspAction::Symbols
+    );
     let result = match request_maybe_retry(
         client,
         method,
@@ -502,6 +508,7 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
         return match action {
             LspAction::Hover => "No hover information".into(),
             LspAction::Definition => "No definition found".into(),
+            LspAction::Symbols => "No symbols found".into(),
             _ => "No result".into(),
         };
     }
@@ -740,7 +747,10 @@ fn status_text(ready: Vec<String>, servers: &[CatalogServer]) -> String {
     if names.is_empty() {
         "No language servers configured for this project".into()
     } else {
-        format!("Language servers: {}", names.join(", "))
+        format!(
+            "Language servers: {}\nNote: status never starts a server. Run a server-backed action first, then call status again in a later tool turn to verify ready.",
+            names.join(", ")
+        )
     }
 }
 

@@ -38,4 +38,38 @@ mod tests {
         let path = admitted.unwrap();
         assert!(!path.starts_with(root.path()));
     }
+
+    #[test]
+    fn rustup_proxy_admits_the_selected_toolchain_binary() {
+        let Some(proxy) = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("rust-analyzer"))
+                .find(|candidate| candidate.is_file())
+        }) else {
+            return;
+        };
+        let proxy_target = std::fs::canonicalize(&proxy).unwrap_or(proxy);
+        if proxy_target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.trim_end_matches(".exe"))
+            != Some("rustup")
+        {
+            return;
+        }
+
+        let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let admitted = admit_command("rust-analyzer", &workspace)
+            .expect("installed rustup rust-analyzer proxy must resolve without executing a helper");
+        assert!(admitted.is_file(), "{}", admitted.display());
+        assert_ne!(admitted, proxy_target);
+        assert_eq!(
+            admitted.file_name().and_then(|name| name.to_str()),
+            Some(if cfg!(windows) {
+                "rust-analyzer.exe"
+            } else {
+                "rust-analyzer"
+            })
+        );
+    }
 }

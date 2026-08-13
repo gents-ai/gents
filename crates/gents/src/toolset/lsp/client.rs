@@ -146,6 +146,20 @@ impl LspClient {
                 "textDocument": {
                     "hover": { "contentFormat": ["plaintext", "markdown"] },
                     "definition": { "linkSupport": true },
+                    "typeDefinition": { "linkSupport": true },
+                    "implementation": { "linkSupport": true },
+                    "references": { "dynamicRegistration": false },
+                    "documentSymbol": {
+                        "dynamicRegistration": false,
+                        "hierarchicalDocumentSymbolSupport": true,
+                        "symbolKind": {
+                            "valueSet": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]
+                        }
+                    },
+                    "rename": {
+                        "dynamicRegistration": false,
+                        "prepareSupport": true
+                    },
                     "synchronization": { "didSave": true }
                 },
                 "general": {
@@ -206,20 +220,22 @@ impl LspClient {
     }
 
     async fn wait_for_rust_analyzer(&self, budget: Duration) {
+        const MINIMUM_SETTLE: Duration = Duration::from_secs(2);
         let deadline = Instant::now() + budget;
+        let started = Instant::now();
         let poll = Duration::from_millis(200);
         let status_timeout = Duration::from_millis(1_000);
         let mut seen_workspace = false;
         while Instant::now() < deadline {
-            if self.is_quiescent().await && self.progress.lock().await.is_empty() {
-                return;
-            }
             match self
                 .request_with_timeout("rust-analyzer/analyzerStatus", json!({}), status_timeout)
                 .await
             {
                 Ok(Value::String(status)) if !status.starts_with("No workspaces") => {
-                    if seen_workspace {
+                    if seen_workspace
+                        && started.elapsed() >= MINIMUM_SETTLE
+                        && self.progress.lock().await.is_empty()
+                    {
                         return;
                     }
                     seen_workspace = true;

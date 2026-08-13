@@ -88,6 +88,22 @@ fn pack_system_prompt() -> String {
         .expect("pack system prompt")
 }
 
+struct CurrentDirGuard(PathBuf);
+
+impl CurrentDirGuard {
+    fn set(path: &std::path::Path) -> Self {
+        let original = std::env::current_dir().expect("current directory");
+        std::env::set_current_dir(path).expect("set live LSP workspace cwd");
+        Self(original)
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.0).expect("restore current directory after live LSP test");
+    }
+}
+
 #[derive(Deserialize, Debug)]
 struct ToolCallRow {
     tool_name: Option<String>,
@@ -142,7 +158,11 @@ async fn lsp_live_model_uses_rust_analyzer() {
     );
 
     let workspace = repo_root();
-    std::env::set_current_dir(&workspace).expect("chdir to Gents repo root");
+    // The document runtime resolves its initial host-tool root from cwd before
+    // the persisted selection is reconciled. This ignored qualification runs
+    // with --test-threads=1; restore cwd on every exit so it cannot poison a
+    // subsequent ignored live test in the same process.
+    let _cwd = CurrentDirGuard::set(&workspace);
 
     let db = test_db("lsp-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("lsp-live"));
@@ -216,11 +236,20 @@ async fn lsp_live_model_uses_rust_analyzer() {
         "model must persist at least one lsp tool call; calls: {:?}",
         summarize_calls(calls.iter())
     );
+    let meet_symbols = find_useful_action_for_file(&lsp_calls, "symbols", MEET_FILE, "meet");
+    let meet_symbols_text = meet_symbols.result.as_deref().unwrap_or("");
     assert!(
-        lsp_calls
-            .iter()
-            .any(|call| call_completed(call) && action_of(call).as_deref() == Some("symbols")),
-        "pack prompt requires action=symbols before hover; lsp calls: {:?}",
+        !result_is_error(meet_symbols) && meet_symbols_text.contains("meet"),
+        "document symbols for {MEET_FILE} must include meet; got:\n{meet_symbols_text}\nall: {:?}",
+        summarize_calls(lsp_calls.iter().copied())
+    );
+    let advertised_symbols =
+        find_useful_action_for_file(&lsp_calls, "symbols", ADVERTISED_FILE, "lsp_advertised");
+    let advertised_symbols_text = advertised_symbols.result.as_deref().unwrap_or("");
+    assert!(
+        !result_is_error(advertised_symbols)
+            && advertised_symbols_text.contains("lsp_advertised"),
+        "document symbols for {ADVERTISED_FILE} must include lsp_advertised; got:\n{advertised_symbols_text}\nall: {:?}",
         summarize_calls(lsp_calls.iter().copied())
     );
 
@@ -281,6 +310,33 @@ fn find_hover<'a>(calls: &'a [&ToolCallRow], file: &str, symbol: &str) -> &'a To
         })
 }
 
+fn find_useful_action_for_file<'a>(
+    calls: &'a [&ToolCallRow],
+    action: &str,
+    file: &str,
+    result_contains: &str,
+) -> &'a ToolCallRow {
+    calls
+        .iter()
+        .copied()
+        .find(|call| {
+            call_completed(call)
+                && action_of(call).as_deref() == Some(action)
+                && file_of(call).is_some_and(|path| path.ends_with(file) || path.contains(file))
+                && !result_is_error(call)
+                && call
+                    .result
+                    .as_deref()
+                    .is_some_and(|result| result.contains(result_contains))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "need a useful completed {action} call on {file} containing {result_contains}; lsp calls: {:?}",
+                summarize_calls(calls.iter().copied())
+            )
+        })
+}
+
 fn call_completed(call: &ToolCallRow) -> bool {
     call.status.as_deref() == Some("completed")
         || call.lifecycle_state.as_deref() == Some("completed")
@@ -312,13 +368,18 @@ fn symbol_of(call: &ToolCallRow) -> Option<String> {
 }
 
 fn result_is_error(call: &ToolCallRow) -> bool {
-    let result = call.result.as_deref().unwrap_or("");
-    result.contains("error")
-        || result.contains("failed")
-        || result.contains("unavailable")
-        || result.contains("stdout closed")
-        || result.contains("timed out")
-        || result.contains("No hover information")
+    let result = call.result.as_deref().unwrap_or("").trim();
+    let lower = result.to_ascii_lowercase();
+    result.is_empty()
+        || matches!(
+            lower.as_str(),
+            "no result" | "no symbols found" | "no hover information" | "no definition found"
+        )
+        || lower.contains("error")
+        || lower.contains("failed")
+        || lower.contains("unavailable")
+        || lower.contains("stdout closed")
+        || lower.contains("timed out")
 }
 
 fn summarize_calls<'a>(

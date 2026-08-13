@@ -263,53 +263,121 @@ pub(crate) fn admit_host_executable(
     if !canonical.is_file() {
         return Err(DenialReason::WorkspaceExecutable);
     }
-    Ok(resolve_rustup_proxy(trimmed, canonical, &root))
+    resolve_rustup_proxy_path(trimmed, canonical, &root).ok_or(DenialReason::WorkspaceExecutable)
 }
 
 /// rustup shims in `~/.cargo/bin` canonicalize to the `rustup` binary. An LSP
 /// workspace tempdir has no rust-toolchain.toml, so that shim exits before
-/// initialize. Prefer `rustup which <requested>` when it points at a host binary.
-///
-/// The helper is the already-admitted host `rustup`, never a PATH lookup
-/// that could run a workspace-local fake.
-fn resolve_rustup_proxy(requested: &str, admitted: PathBuf, tool_root: &Path) -> PathBuf {
+/// initialize. Resolve rust-analyzer from rustup's on-disk selection state so
+/// admission remains side-effect free and the spawned/digested path is the
+/// actual host toolchain binary, never a PATH lookup or helper subprocess.
+fn resolve_rustup_proxy_path(
+    requested: &str,
+    admitted: PathBuf,
+    tool_root: &Path,
+) -> Option<PathBuf> {
     let Some(name) = Path::new(requested)
         .file_name()
         .and_then(|name| name.to_str())
+        .map(|name| name.trim_end_matches(".exe"))
     else {
-        return admitted;
+        return Some(admitted);
     };
-    let Some(rustup) = admitted_host_binary("rustup", tool_root) else {
-        return admitted;
+    if name != "rust-analyzer"
+        || admitted
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.trim_end_matches(".exe"))
+            != Some("rustup")
+    {
+        return Some(admitted);
+    }
+
+    let rustup_home = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".rustup")))?;
+    let settings = read_toml(&rustup_home.join("settings.toml"));
+    let channel = std::env::var("RUSTUP_TOOLCHAIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| rustup_override_channel(settings.as_ref(), tool_root))
+        .or_else(|| rust_toolchain_file_channel(tool_root))
+        .or_else(|| {
+            settings
+                .as_ref()?
+                .get("default_toolchain")?
+                .as_str()
+                .map(ToOwned::to_owned)
+        })?;
+    let toolchains = rustup_home.join("toolchains");
+    let exact = toolchains.join(&channel);
+    let toolchain = if exact.is_dir() {
+        exact
+    } else {
+        let mut matches = std::fs::read_dir(&toolchains)
+            .ok()?
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|value| value.starts_with(&format!("{channel}-")))
+            })
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        matches.sort();
+        matches.pop()?
     };
-    let Ok(output) = std::process::Command::new(&rustup)
-        .args(["which", name])
-        .output()
-    else {
-        return admitted;
-    };
-    if !output.status.success() {
-        return admitted;
-    }
-    let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if resolved.is_empty() {
-        return admitted;
-    }
-    let canonical = std::fs::canonicalize(&resolved).unwrap_or_else(|_| PathBuf::from(resolved));
-    if canonical.starts_with(tool_root) || !canonical.is_file() {
-        return admitted;
-    }
-    canonical
+    let executable = toolchain.join("bin").join(if cfg!(windows) {
+        "rust-analyzer.exe"
+    } else {
+        name
+    });
+    let canonical = std::fs::canonicalize(executable).ok()?;
+    (!canonical.starts_with(tool_root) && canonical.is_file()).then_some(canonical)
 }
 
-fn admitted_host_binary(name: &str, tool_root: &Path) -> Option<PathBuf> {
-    let candidate = which_on_host_path(name)?;
-    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
-    if canonical.starts_with(tool_root) || !canonical.is_file() {
-        None
-    } else {
-        Some(canonical)
+fn read_toml(path: &Path) -> Option<toml::Value> {
+    std::fs::read_to_string(path).ok()?.parse().ok()
+}
+
+fn rustup_override_channel(settings: Option<&toml::Value>, tool_root: &Path) -> Option<String> {
+    let overrides = settings?.get("overrides")?.as_table()?;
+    tool_root.ancestors().find_map(|directory| {
+        let key = directory.to_string_lossy();
+        overrides
+            .get(key.as_ref())
+            .and_then(toml::Value::as_str)
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn rust_toolchain_file_channel(tool_root: &Path) -> Option<String> {
+    for directory in tool_root.ancestors() {
+        let toml_path = directory.join("rust-toolchain.toml");
+        if toml_path.is_file() {
+            return read_toml(&toml_path)?
+                .get("toolchain")?
+                .get("channel")?
+                .as_str()
+                .map(ToOwned::to_owned);
+        }
+        let legacy = directory.join("rust-toolchain");
+        if legacy.is_file() {
+            let raw = std::fs::read_to_string(&legacy).ok()?;
+            if let Ok(parsed) = raw.parse::<toml::Value>() {
+                return parsed
+                    .get("toolchain")?
+                    .get("channel")?
+                    .as_str()
+                    .map(ToOwned::to_owned);
+            }
+            let channel = raw.lines().next()?.trim();
+            return (!channel.is_empty()).then(|| channel.to_string());
+        }
     }
+    None
 }
 
 fn which_on_host_path(name: &str) -> Option<PathBuf> {
