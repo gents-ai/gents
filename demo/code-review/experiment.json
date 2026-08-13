@@ -1,6 +1,6 @@
 {
   "name": "code-review",
-  "description": "Four-stage Rust review: pre-scan -> lens swarm -> adversarial verification -> triage",
+  "description": "Four-stage Gents PR review: pre-scan -> lens swarm -> adversarial verification -> triage",
   "init": {
     "inference_url": "${GENTS_REVIEW_COORDINATOR_ENDPOINT:-http://100.87.27.25:8000/v1}",
     "model_name": "${GENTS_REVIEW_COORDINATOR_MODEL:-GLM-5.2}",
@@ -15,12 +15,26 @@
     "collection": "ReviewJob",
     "job_id_field": "run_id",
     "prompt_field": "focus",
-    "fields": {"repository_path": "${GENTS_REVIEW_ROOT:-.}"}
+    "fields": {
+      "repository_path": "${GENTS_REVIEW_ROOT:-.}",
+      "base_ref": "${GENTS_REVIEW_BASE_REF:-origin/main}",
+      "head_ref": "${GENTS_REVIEW_HEAD_REF:-HEAD}",
+      "lens_count": "${GENTS_REVIEW_LENS_COUNT:-auto}",
+      "lens_min": "${GENTS_REVIEW_MIN_LENSES:-4}",
+      "lens_max": "${GENTS_REVIEW_MAX_LENSES:-12}",
+      "pr_number": "${GENTS_REVIEW_PR_NUMBER:-}"
+    }
   },
-  "default_prompt": "Review this repository for correctness, durability, authorization, and concurrency defects.",
+  "default_prompt": "${GENTS_REVIEW_PROMPT:-Review the PR diff for merge-blocking correctness, durability, authorization, concurrency, and provider-boundary defects.}",
   "expect": {
     "trigger_ids": ["review-recon", "review-scan", "review-verify", "review-triage"],
-    "trigger_request_counts": {"review-scan": 4},
+    "trigger_request_count_sources": {
+      "review-scan": {
+        "collection": "ReviewArea",
+        "correlation_field": "run_id",
+        "expected_count_field": "expected_total"
+      }
+    },
     "signed_provenance": true,
     "required_tool_call_trigger_ids": ["review-recon", "review-scan", "review-verify", "review-triage"],
     "prompt_tool_contracts": [
@@ -45,13 +59,27 @@
     ],
     "source_edges": [],
     "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
-    "collection_counts": {"ReviewArea": 4, "ScanResult": 4, "VerificationSummary": 1, "TriageReport": 1},
+    "collection_counts": {"ReviewArea": 1, "ScanResult": 1, "VerificationSummary": 1, "TriageReport": 1},
+    "result_documents": [
+      {
+        "collection": "TriageReport",
+        "correlation_field": "run_id",
+        "fields": ["high_priority_count", "confirmed_count", "refuted_count", "summary"]
+      },
+      {
+        "collection": "Finding",
+        "correlation_field": "run_id",
+        "fields": ["finding_id", "area_id", "severity", "confidence", "path", "line", "title", "detail", "verdict", "evidence", "verification"]
+      }
+    ],
     "fan_in": {
       "member_collection": "ReviewArea",
       "result_collection": "ScanResult",
       "report_collection": "TriageReport",
       "correlation_field": "run_id",
       "expected_count_field": "expected_total",
+      "min_expected_count": ${GENTS_REVIEW_MIN_LENSES:-4},
+      "max_expected_count": ${GENTS_REVIEW_MAX_LENSES:-12},
       "consumer_trigger_id": "review-verify",
       "member_required_fields": ["area_id", "repository_path", "lens", "baseline", "instructions"],
       "verification": {

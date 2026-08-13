@@ -13,6 +13,7 @@
         {"name": "finding_id", "required": true},
         {"name": "area_id", "required": true},
         {"name": "severity", "required": true},
+        {"name": "confidence", "required": true},
         {"name": "path", "required": true},
         {"name": "line", "required": false},
         {"name": "title", "required": true},

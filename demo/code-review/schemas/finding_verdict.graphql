@@ -3,6 +3,7 @@ type FindingVerdict {
   finding_id: String @index(unique: true) @immutable
   area_id: String
   severity: String
+  confidence: String
   path: String
   line: String
   title: String

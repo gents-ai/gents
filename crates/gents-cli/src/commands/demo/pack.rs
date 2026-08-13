@@ -87,6 +87,8 @@ struct PackExpect {
     #[serde(default)]
     trigger_request_counts: BTreeMap<String, usize>,
     #[serde(default)]
+    trigger_request_count_sources: BTreeMap<String, TriggerRequestCountSource>,
+    #[serde(default)]
     collection_counts: BTreeMap<String, u64>,
     #[serde(default)]
     projections: Vec<String>,
@@ -104,6 +106,22 @@ struct PackExpect {
     background_completion: Option<BackgroundCompletionExpectation>,
     #[serde(default)]
     tool_calls: Vec<ToolCallExpectation>,
+    #[serde(default)]
+    result_documents: Vec<ResultDocumentExpectation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TriggerRequestCountSource {
+    collection: String,
+    correlation_field: String,
+    expected_count_field: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResultDocumentExpectation {
+    collection: String,
+    correlation_field: String,
+    fields: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,6 +153,10 @@ struct FanInExpectation {
     report_collection: String,
     correlation_field: String,
     expected_count_field: String,
+    #[serde(default)]
+    min_expected_count: Option<usize>,
+    #[serde(default)]
+    max_expected_count: Option<usize>,
     consumer_trigger_id: String,
     #[serde(default)]
     member_required_fields: Vec<String>,
@@ -250,9 +272,16 @@ fn load_manifest(pack: &Path) -> Result<PackManifest> {
 
 fn read_pack_json(path: &Path) -> Result<Value> {
     let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("reading prompt/tool contract document {}", path.display()))?;
-    serde_json::from_str(&raw)
-        .with_context(|| format!("parsing prompt/tool contract document {}", path.display()))
+        .with_context(|| format!("reading pack document {}", path.display()))?;
+    let expanded = interpolate(&raw).map_err(|missing| {
+        anyhow::anyhow!(
+            "{} references unset environment variable(s): {}",
+            path.display(),
+            missing.join(", ")
+        )
+    })?;
+    serde_json::from_str(&expanded)
+        .with_context(|| format!("parsing pack document {}", path.display()))
 }
 
 fn required_json_string<'a>(value: &'a Value, field: &str, path: &Path) -> Result<&'a str> {
@@ -438,12 +467,58 @@ fn validate_manifest(manifest: &PackManifest) -> Result<()> {
         bail!("expect.source_edges requires expect.signed_provenance=true");
     }
     validate_tool_package(&manifest.init.tool_package)?;
+    let mut result_collections = BTreeSet::new();
+    for result in &manifest.expect.result_documents {
+        validate_collection_identifier(&result.collection)?;
+        gents::graphql::validate_graphql_name(&result.correlation_field)?;
+        if result.fields.is_empty() {
+            bail!(
+                "expect.result_documents entry for {} must select at least one field",
+                result.collection
+            );
+        }
+        for field in &result.fields {
+            gents::graphql::validate_graphql_name(field)?;
+        }
+        if !result_collections.insert(&result.collection) {
+            bail!(
+                "expect.result_documents contains duplicate collection {}",
+                result.collection
+            );
+        }
+    }
     for (trigger_id, count) in &manifest.expect.trigger_request_counts {
         if !manifest.expect.trigger_ids.contains(trigger_id) {
             bail!("expect.trigger_request_counts names unknown trigger {trigger_id}");
         }
         if *count == 0 {
             bail!("expect.trigger_request_counts[{trigger_id}] must be greater than zero");
+        }
+    }
+    for (trigger_id, source) in &manifest.expect.trigger_request_count_sources {
+        if !manifest.expect.trigger_ids.contains(trigger_id) {
+            bail!("expect.trigger_request_count_sources names unknown trigger {trigger_id}");
+        }
+        if manifest
+            .expect
+            .trigger_request_counts
+            .contains_key(trigger_id)
+        {
+            bail!("trigger {trigger_id} has both a fixed request count and a request count source");
+        }
+        validate_collection_identifier(&source.collection)?;
+        gents::graphql::validate_graphql_name(&source.correlation_field)?;
+        gents::graphql::validate_graphql_name(&source.expected_count_field)?;
+    }
+    if let Some(fan_in) = &manifest.expect.fan_in {
+        if fan_in.min_expected_count == Some(0) || fan_in.max_expected_count == Some(0) {
+            bail!("expect.fan_in count bounds must be greater than zero");
+        }
+        if matches!(
+            (fan_in.min_expected_count, fan_in.max_expected_count),
+            (Some(minimum), Some(maximum)) if minimum > maximum
+        ) {
+            bail!("expect.fan_in minimum count cannot exceed its maximum count");
         }
     }
     if let Some(expected) = &manifest.expect.background_completion {
@@ -789,6 +864,27 @@ async fn graphql_rows(graphql: &str, field: &str, query: &str) -> Result<Vec<Val
         .and_then(Value::as_array)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("GraphQL {field} query returned no row array"))
+}
+
+async fn load_result_documents(
+    graphql: &str,
+    expected: &[ResultDocumentExpectation],
+    correlation: &str,
+) -> Result<BTreeMap<String, Vec<Value>>> {
+    let mut documents = BTreeMap::new();
+    let correlation = escape_graphql_string(correlation);
+    for result in expected {
+        let projection = result.fields.join(" ");
+        let query = format!(
+            r#"{{ {collection}(filter: {{ {correlation_field}: {{ _eq: "{correlation}" }} }}) {{ _docID {projection} }} }}"#,
+            collection = result.collection,
+            correlation_field = result.correlation_field,
+        );
+        let mut rows = graphql_rows(graphql, &result.collection, &query).await?;
+        rows.sort_by_key(Value::to_string);
+        documents.insert(result.collection.clone(), rows);
+    }
+    Ok(documents)
 }
 
 async fn composite_commits(graphql: &str, doc_id: &str) -> Result<Vec<Value>> {
@@ -1273,10 +1369,66 @@ async fn render_projection_artifacts(
     Ok(artifacts)
 }
 
+async fn sourced_trigger_request_count(
+    graphql: &str,
+    source: &TriggerRequestCountSource,
+    correlation: &str,
+) -> Result<Option<usize>> {
+    let correlation = escape_graphql_string(correlation);
+    let query = format!(
+        r#"{{ {collection}(filter: {{ {correlation_field}: {{ _eq: "{correlation}" }} }}) {{ {expected_count_field} }} }}"#,
+        collection = source.collection,
+        correlation_field = source.correlation_field,
+        expected_count_field = source.expected_count_field,
+    );
+    let rows = graphql_rows(graphql, &source.collection, &query).await?;
+    let mut expected = None;
+    for row in rows {
+        let value = row.get(&source.expected_count_field).with_context(|| {
+            format!(
+                "{} row omitted expected count field {}",
+                source.collection, source.expected_count_field
+            )
+        })?;
+        let count = match value {
+            Value::Number(number) => number
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok()),
+            Value::String(value)
+                if !value.is_empty()
+                    && value.bytes().all(|byte| byte.is_ascii_digit())
+                    && (value == "0" || !value.starts_with('0')) =>
+            {
+                value.parse::<usize>().ok()
+            }
+            _ => None,
+        }
+        .filter(|count| (1..=gents::MAX_EVENT_TRIGGER_GROUP_DOCS).contains(count))
+        .with_context(|| {
+            format!(
+                "{}.{} must be a canonical positive integer <= {}",
+                source.collection,
+                source.expected_count_field,
+                gents::MAX_EVENT_TRIGGER_GROUP_DOCS
+            )
+        })?;
+        if expected.is_some_and(|prior| prior != count) {
+            bail!(
+                "{}.{} is inconsistent for correlation {correlation}",
+                source.collection,
+                source.expected_count_field
+            );
+        }
+        expected = Some(count);
+    }
+    Ok(expected)
+}
+
 async fn await_stages(
     graphql: &str,
     trigger_ids: &[String],
     trigger_request_counts: &BTreeMap<String, usize>,
+    trigger_request_count_sources: &BTreeMap<String, TriggerRequestCountSource>,
     correlation: &str,
     deadline: Duration,
 ) -> Result<Vec<StageResult>> {
@@ -1284,8 +1436,15 @@ async fn await_stages(
     let started = Instant::now();
     loop {
         let mut done: Vec<StageResult> = Vec::new();
+        let mut resolved_counts = BTreeMap::new();
         for trigger_id in trigger_ids {
-            let expected_count = trigger_request_counts.get(trigger_id).copied().unwrap_or(1);
+            let expected_count = if let Some(source) = trigger_request_count_sources.get(trigger_id)
+            {
+                sourced_trigger_request_count(graphql, source, correlation).await?
+            } else {
+                Some(trigger_request_counts.get(trigger_id).copied().unwrap_or(1))
+            };
+            resolved_counts.insert(trigger_id, expected_count);
             let query = stage_requests_query(
                 trigger_id,
                 correlated_trigger_ids
@@ -1298,10 +1457,11 @@ async fn await_stages(
             let Some(rows) = resp.pointer("/data/AgentRequest").and_then(Value::as_array) else {
                 continue;
             };
-            if rows.len() > expected_count {
+            if expected_count.is_some_and(|expected_count| rows.len() > expected_count) {
                 bail!(
-                    "trigger {trigger_id} materialized {} requests for correlation {correlation}; expected {expected_count}",
-                    rows.len()
+                    "trigger {trigger_id} materialized {} requests for correlation {correlation}; expected {}",
+                    rows.len(),
+                    expected_count.expect("guard establishes expected count")
                 );
             }
             for row in rows {
@@ -1333,18 +1493,21 @@ async fn await_stages(
                 }
             }
         }
-        let expected_total = trigger_ids
-            .iter()
-            .map(|trigger_id| trigger_request_counts.get(trigger_id).copied().unwrap_or(1))
+        let all_counts_resolved = resolved_counts.values().all(Option::is_some);
+        let expected_total = resolved_counts
+            .values()
+            .filter_map(|count| *count)
             .sum::<usize>();
-        if done.len() == expected_total {
+        if all_counts_resolved && done.len() == expected_total {
             return Ok(done);
         }
         // A trigger that fired and failed to materialize will never retry:
         // created/first-seen means the source document is already marked seen.
         // Surface its own last_error instead of waiting out the deadline.
         for trigger_id in trigger_ids {
-            let expected_count = trigger_request_counts.get(trigger_id).copied().unwrap_or(1);
+            let Some(expected_count) = resolved_counts.get(trigger_id).copied().flatten() else {
+                continue;
+            };
             if done
                 .iter()
                 .filter(|stage| &stage.trigger_id == trigger_id)
@@ -1495,6 +1658,28 @@ async fn verify_fan_in(
         bail!("fan-in produced no {} rows", expected.member_collection);
     }
     let expected_count = member_rows.len();
+    if expected
+        .min_expected_count
+        .is_some_and(|minimum| expected_count < minimum)
+    {
+        bail!(
+            "fan-in chose {expected_count} members, below minimum {}",
+            expected
+                .min_expected_count
+                .expect("guard establishes minimum")
+        );
+    }
+    if expected
+        .max_expected_count
+        .is_some_and(|maximum| expected_count > maximum)
+    {
+        bail!(
+            "fan-in chose {expected_count} members, above maximum {}",
+            expected
+                .max_expected_count
+                .expect("guard establishes maximum")
+        );
+    }
     for row in &member_rows {
         let count = row
             .get(&expected.expected_count_field)
@@ -2141,6 +2326,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             &graphql,
             &manifest.expect.trigger_ids,
             &manifest.expect.trigger_request_counts,
+            &manifest.expect.trigger_request_count_sources,
             &job_id,
             Duration::from_secs(manifest.await_timeout_secs),
         )
@@ -2227,6 +2413,10 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         verify_tool_call_expectations(&graphql, &stages, &manifest.expect.tool_calls)
             .await
             .context("verifying persisted tool calls")?;
+        let result_documents =
+            load_result_documents(&graphql, &manifest.expect.result_documents, &job_id)
+                .await
+                .context("loading configured result documents")?;
         let (prompt_tokens, completion_tokens) = token_totals(&graphql).await;
         Ok::<_, anyhow::Error>((
             stages,
@@ -2236,6 +2426,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             source_edges,
             fan_in,
             projection_artifacts,
+            result_documents,
             prompt_tokens,
             completion_tokens,
         ))
@@ -2252,6 +2443,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         source_edges,
         fan_in,
         projection_artifacts,
+        result_documents,
         prompt_tokens,
         completion_tokens,
     ) = match outcome {
@@ -2264,6 +2456,14 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     };
 
     let elapsed = started.elapsed();
+    let result_path = if result_documents.is_empty() {
+        None
+    } else {
+        let path = run_dir.join("results.json");
+        let text = serde_json::to_string_pretty(&result_documents)?;
+        std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+        Some(path)
+    };
     let mut failures: Vec<String> = Vec::new();
     for stage in &stages {
         if stage.lifecycle_state != "completed" {
@@ -2342,6 +2542,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             "final_consumer_request_id": evidence.final_consumer_request_id,
         })),
         "projection_artifacts": projection_artifacts,
+        "result_artifact": result_path.as_ref().map(|path| path_arg(path)),
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "ok": failures.is_empty(),
@@ -2377,6 +2578,9 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         elapsed.as_secs()
     );
     println!("  artifacts    {}", meta_path.display());
+    if let Some(path) = &result_path {
+        println!("  results      {}", path.display());
+    }
     if owned_home && !args.keep_home {
         std::fs::remove_dir_all(&home).ok();
     } else {
@@ -2492,6 +2696,7 @@ mod tests {
             expect: PackExpect {
                 trigger_ids: Vec::new(),
                 trigger_request_counts: BTreeMap::new(),
+                trigger_request_count_sources: BTreeMap::new(),
                 collection_counts: BTreeMap::new(),
                 projections: Vec::new(),
                 signed_provenance: false,
@@ -2506,6 +2711,7 @@ mod tests {
                 prompt_tool_contracts: Vec::new(),
                 background_completion: None,
                 tool_calls: Vec::new(),
+                result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
         };
@@ -2521,10 +2727,62 @@ mod tests {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/code-review");
         let manifest = load_manifest(&pack).expect("code-review pack should load");
         assert_eq!(manifest.expect.prompt_tool_contracts.len(), 4);
+        assert_eq!(manifest.expect.result_documents.len(), 2);
+        let scan_count_source = manifest
+            .expect
+            .trigger_request_count_sources
+            .get("review-scan")
+            .expect("review-scan count source");
+        assert_eq!(scan_count_source.collection, "ReviewArea");
+        assert_eq!(scan_count_source.correlation_field, "run_id");
+        assert_eq!(scan_count_source.expected_count_field, "expected_total");
         assert_eq!(
-            manifest.expect.trigger_request_counts.get("review-scan"),
-            Some(&4)
+            manifest.seed.fields.get("lens_count").map(String::as_str),
+            Some("auto")
         );
+        let verify_trigger = read_pack_json(
+            &pack
+                .join("event_triggers")
+                .join("review-verify")
+                .join("object.json"),
+        )
+        .expect("review-verify trigger");
+        assert!(verify_trigger
+            .get("group_min_count")
+            .is_some_and(Value::is_null));
+        for selection in [
+            "review-recon-tools",
+            "review-scan-tools",
+            "review-verify-tools",
+        ] {
+            let document = read_pack_json(
+                &pack
+                    .join("tool-selections")
+                    .join(selection)
+                    .join("object.json"),
+            )
+            .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
+            assert_eq!(
+                document.get("enable_lsp").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                document.get("bash_mode").and_then(Value::as_str),
+                Some("Unrestricted")
+            );
+            assert_eq!(
+                document.get("command_network_mode").and_then(Value::as_str),
+                Some("enabled")
+            );
+            assert!(document
+                .get("backgroundable_tool_names")
+                .and_then(Value::as_array)
+                .is_some_and(|names| {
+                    names
+                        .iter()
+                        .any(|name| name.as_str() == Some("bash_unrestricted"))
+                }));
+        }
     }
 
     #[test]
@@ -2712,6 +2970,7 @@ mod tests {
             expect: PackExpect {
                 trigger_ids: Vec::new(),
                 trigger_request_counts: BTreeMap::new(),
+                trigger_request_count_sources: BTreeMap::new(),
                 collection_counts: BTreeMap::new(),
                 projections: Vec::new(),
                 signed_provenance: false,
@@ -2721,6 +2980,7 @@ mod tests {
                 prompt_tool_contracts: Vec::new(),
                 background_completion: None,
                 tool_calls: Vec::new(),
+                result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
         };

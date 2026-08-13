@@ -7,6 +7,17 @@ NPM ?= npm
 DESKTOP_DIR := apps/gents-desktop
 PROOFS_DIR := crates/gents/proofs
 FUZZ_TIME ?= 30s
+REVIEW_ROOT ?= $(CURDIR)
+REVIEW_BASE ?= origin/main
+REVIEW_HEAD ?= HEAD
+REVIEW_PROMPT ?= Review the PR diff for merge-blocking correctness, durability, authorization, concurrency, and provider-boundary defects.
+REVIEW_LENSES ?= auto
+REVIEW_MIN_LENSES ?= 4
+REVIEW_MAX_LENSES ?= 12
+REVIEW_PR ?= auto
+REVIEW_PORT ?= 19191
+REVIEW_JOB_ID ?=
+REVIEW_KEEP_HOME ?=
 
 .DEFAULT_GOAL := help
 
@@ -65,6 +76,15 @@ help:
 	@echo "  make live-agent            Run ignored live runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
+	@echo "Review:"
+	@echo "  make review                Review REVIEW_BASE...REVIEW_HEAD in REVIEW_ROOT"
+	@echo "    REVIEW_PROMPT='...'       Override the review focus"
+	@echo "    REVIEW_LENSES=auto        Let recon choose the review-lens count"
+	@echo "    REVIEW_MIN_LENSES=4       Set the automatic lower bound"
+	@echo "    REVIEW_MAX_LENSES=12      Set the automatic upper bound"
+	@echo "    REVIEW_PR=auto            Discover the current branch's GitHub PR"
+	@echo "    REVIEW_KEEP_HOME=1        Keep the generated runtime home"
+	@echo
 	@echo "Worktrees:"
 	@echo "  make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]"
 	@echo "                             Create a worktree with target/ and proofs/.lake"
@@ -81,6 +101,35 @@ build:
 
 build-cli:
 	$(CARGO) build -p gents-cli
+
+.PHONY: review
+review:
+	@test -d "$(REVIEW_ROOT)" || { echo "REVIEW_ROOT is not a directory: $(REVIEW_ROOT)" >&2; exit 2; }
+	@case "$(REVIEW_LENSES)" in auto) ;; ''|*[!0-9]*) echo "REVIEW_LENSES must be auto or a positive integer: $(REVIEW_LENSES)" >&2; exit 2;; *) test "$(REVIEW_LENSES)" -gt 0 || { echo "REVIEW_LENSES must be greater than zero" >&2; exit 2; };; esac
+	@case "$(REVIEW_MIN_LENSES)" in ''|*[!0-9]*) echo "REVIEW_MIN_LENSES must be a positive integer: $(REVIEW_MIN_LENSES)" >&2; exit 2;; esac
+	@case "$(REVIEW_MAX_LENSES)" in ''|*[!0-9]*) echo "REVIEW_MAX_LENSES must be a positive integer: $(REVIEW_MAX_LENSES)" >&2; exit 2;; esac
+	@test "$(REVIEW_MIN_LENSES)" -gt 0 && test "$(REVIEW_MAX_LENSES)" -ge "$(REVIEW_MIN_LENSES)" || { echo "review lens bounds must satisfy 0 < REVIEW_MIN_LENSES <= REVIEW_MAX_LENSES" >&2; exit 2; }
+	@cd "$(REVIEW_ROOT)" && git rev-parse --verify "$(REVIEW_BASE)^{commit}" >/dev/null || { echo "REVIEW_BASE is not a commit: $(REVIEW_BASE)" >&2; exit 2; }
+	@cd "$(REVIEW_ROOT)" && git rev-parse --verify "$(REVIEW_HEAD)^{commit}" >/dev/null || { echo "REVIEW_HEAD is not a commit: $(REVIEW_HEAD)" >&2; exit 2; }
+	@if test -n "$(REVIEW_PR)" && test "$(REVIEW_PR)" != auto; then command -v gh >/dev/null 2>&1 || { echo "REVIEW_PR requires gh on PATH" >&2; exit 2; }; cd "$(REVIEW_ROOT)" && gh pr view "$(REVIEW_PR)" --json number >/dev/null || exit 2; fi
+	@command -v rust-analyzer >/dev/null 2>&1 || echo "warning: rust-analyzer not found on PATH; review will fall back to file/search tools" >&2
+	@review_pr="$(REVIEW_PR)"; \
+	if test "$$review_pr" = auto; then \
+		if command -v gh >/dev/null 2>&1; then review_pr=$$(cd "$(REVIEW_ROOT)" && gh pr view --json number --jq .number 2>/dev/null || true); else review_pr=; fi; \
+	fi; \
+	if test -n "$$review_pr"; then echo "reviewing GitHub PR $$review_pr"; else echo "no GitHub PR detected; reviewing the local ref diff"; fi; \
+	GENTS_REVIEW_ROOT="$(abspath $(REVIEW_ROOT))" \
+	GENTS_REVIEW_BASE_REF="$(REVIEW_BASE)" \
+	GENTS_REVIEW_HEAD_REF="$(REVIEW_HEAD)" \
+	GENTS_REVIEW_PROMPT="$(REVIEW_PROMPT)" \
+	GENTS_REVIEW_LENS_COUNT="$(REVIEW_LENSES)" \
+	GENTS_REVIEW_MIN_LENSES="$(REVIEW_MIN_LENSES)" \
+	GENTS_REVIEW_MAX_LENSES="$(REVIEW_MAX_LENSES)" \
+	GENTS_REVIEW_PR_NUMBER="$$review_pr" \
+	$(CARGO) run -p gents-cli -- demo run "$(CURDIR)/demo/code-review" \
+		--http-port "$(REVIEW_PORT)" \
+		$(if $(REVIEW_JOB_ID),--job-id "$(REVIEW_JOB_ID)",) \
+		$(if $(REVIEW_KEEP_HOME),--keep-home,)
 
 build-cli-headless:
 	$(CARGO) build -p gents-cli --no-default-features
