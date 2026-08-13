@@ -12,6 +12,8 @@ use super::queue::{parse_queue_hints, QueuePolicy, QueueSource};
 use super::{BackgroundWakeRedriveReport, RequestLifecycle};
 
 const BACKGROUND_WAKE_REDRIVE_BATCH_LIMIT: usize = 64;
+const BACKGROUND_WAKE_RETRY_BASE_SECONDS: i64 = 5;
+const BACKGROUND_WAKE_RETRY_MAX_SECONDS: i64 = 60;
 
 #[derive(Debug, Clone, Deserialize)]
 struct FailedWakeRow {
@@ -37,6 +39,7 @@ struct FailedWakeRow {
     subagent_depth: Option<u32>,
     retry_count: i64,
     max_retries: i64,
+    terminalized_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +129,10 @@ impl RequestLifecycle {
                 report.coalesced += 1;
                 continue;
             }
+            if !retry_is_due(&candidate, chrono::Utc::now()) {
+                report.deferred += 1;
+                continue;
+            }
             eligible.push(candidate);
         }
 
@@ -181,6 +188,7 @@ async fn load_candidates(
                     retry_root_request content temperature top_p top_k seed max_tokens
                     max_total_tokens metadata backend_id caused_by_parent_request_id
                     caused_by_parent_request_doc_id subagent_depth retry_count max_retries
+                    terminalized_at
                 }}
                 successors: AgentRequest(filter: {{
                     agent_did: {{ _eq: "{agent_did}" }},
@@ -227,6 +235,33 @@ fn eligible_queue_key(candidate: &FailedWakeRow) -> Option<String> {
         return None;
     }
     automated_queue_key(&hints)
+}
+
+pub fn background_wake_retry_delay(retry_count: i64) -> chrono::Duration {
+    let exponent = u32::try_from(retry_count.max(0))
+        .unwrap_or(u32::MAX)
+        .min(30);
+    let multiplier = 1_i64.checked_shl(exponent).unwrap_or(i64::MAX);
+    chrono::Duration::seconds(
+        BACKGROUND_WAKE_RETRY_BASE_SECONDS
+            .saturating_mul(multiplier)
+            .min(BACKGROUND_WAKE_RETRY_MAX_SECONDS),
+    )
+}
+
+pub fn background_wake_next_retry_at(
+    terminalized_at: Option<&str>,
+    retry_count: i64,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let terminalized_at = chrono::DateTime::parse_from_rfc3339(terminalized_at?)
+        .ok()?
+        .with_timezone(&chrono::Utc);
+    Some(terminalized_at + background_wake_retry_delay(retry_count))
+}
+
+fn retry_is_due(candidate: &FailedWakeRow, now: chrono::DateTime<chrono::Utc>) -> bool {
+    background_wake_next_retry_at(candidate.terminalized_at.as_deref(), candidate.retry_count)
+        .is_none_or(|next_retry_at| next_retry_at <= now)
 }
 
 async fn redrive_one(node: &EmbeddedNode, candidate: &FailedWakeRow) -> Result<RedriveOutcome> {

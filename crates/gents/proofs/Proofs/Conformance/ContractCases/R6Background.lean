@@ -171,8 +171,48 @@ def r6FailedWakeRedriveCase
       retryCount := some wake.ctx.retryCount
       maxRetries := some wake.ctx.maxRetries
       postRetryCount := post.map (·.retryCount)
+      retryDelaySeconds := if legal then some (BackgroundCompletion.wakeRetryDelaySeconds wake.ctx.retryCount) else none
       isLatest := some wake.ctx.isLatest
   }
+
+def r6WakeAdmissionCase
+    (name : String)
+    (wake other : BackgroundCompletion.AdmissionCandidate) :
+    R6BackgroundingCase :=
+  let admitted := BackgroundCompletion.servesBefore wake other
+  r6Case
+    name
+    "completion_admission"
+    "rank_pending_background_wake"
+    admitted
+    1
+    "pending"
+    none
+    (if admitted then some "aged_priority" else some "fifo")
+    none
+    (some wake.source.toDefraDB)
+    (some (wake.source.toDefraDB ++ ":900"))
+
+def r6WakeAcknowledgementCase
+    (name : String)
+    (snapshot : BackgroundCompletion.WakeAttemptSnapshot) :
+    R6BackgroundingCase :=
+  let attempted := snapshot.attemptedBindings
+  let acknowledged := snapshot.acknowledgedBindings
+  let completed := snapshot.terminalState = .completed
+  r6Case
+    name
+    "completion_acknowledgement"
+    "snapshot_notification_bindings"
+    (decide (if completed then acknowledged = attempted else acknowledged = []))
+    attempted.length
+    snapshot.terminalState.toDefraDB
+    (some ("attempted=" ++ toString attempted.length ++
+      ",acknowledged=" ++ toString acknowledged.length))
+    (if completed then some "completed_ack" else some "failed_unacknowledged")
+    none
+    (some SessionQueue.QueueSource.backgroundCompletion.toDefraDB)
+    (some "background_completion:900")
 
 def r6LegacyQueueAliasCase : R6BackgroundingCase :=
   let legacy := "subagent_completion"
@@ -260,6 +300,20 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6FailedWakeRedriveCase
       "non_latest_background_wake_does_not_redrive"
       (BackgroundCompletion.failedWakeFixture (isLatest := false))
+  , r6WakeAdmissionCase
+      "aged_background_wake_precedes_new_descendant"
+      BackgroundCompletion.agedWakeFixture
+      BackgroundCompletion.descendantFixture
+  , r6WakeAdmissionCase
+      "fresh_background_wake_preserves_fifo"
+      BackgroundCompletion.freshWakeFixture
+      BackgroundCompletion.descendantFixture
+  , r6WakeAcknowledgementCase
+      "completed_wake_acknowledges_exact_claim_snapshot"
+      BackgroundCompletion.completedSnapshotFixture
+  , r6WakeAcknowledgementCase
+      "failed_wake_retains_claim_snapshot_unacknowledged"
+      BackgroundCompletion.failedSnapshotFixture
   , r6LegacyQueueAliasCase
   , r6ProcessControlCase
       "list_processes_same_requester_next_turn_authorized"
@@ -359,6 +413,18 @@ theorem r6BackgroundingCases_pinned :
       , ("generic_scheduled_failure_is_not_background_redrive", false,
           "background", none, "failed", some "user", some "user:900")
       , ("non_latest_background_wake_does_not_redrive", false,
+          "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("aged_background_wake_precedes_new_descendant", true,
+          "background", none, "pending", some "background_completion",
+          some "background_completion:900")
+      , ("fresh_background_wake_preserves_fifo", false,
+          "background", none, "pending", some "background_completion",
+          some "background_completion:900")
+      , ("completed_wake_acknowledges_exact_claim_snapshot", true,
+          "background", none, "completed", some "background_completion",
+          some "background_completion:900")
+      , ("failed_wake_retains_claim_snapshot_unacknowledged", true,
           "background", none, "failed", some "background_completion",
           some "background_completion:900")
       , ("legacy_subagent_completion_source_aliases_canonical_key", true,

@@ -306,6 +306,7 @@ impl RequestLifecycle {
             progress_seq: 0,
             deadline_duration_secs,
             claimed_deadline_at: None,
+            background_completion_input_through_sequence: None,
             state: LocalLifecycleState::Pending,
             valid_until_at_claim: None,
         }
@@ -461,6 +462,7 @@ impl RequestLifecycle {
             progress_seq: 0,
             deadline_duration_secs,
             claimed_deadline_at: Some(deadline_at),
+            background_completion_input_through_sequence: None,
             state: LocalLifecycleState::Claimed,
             valid_until_at_claim: None,
         })

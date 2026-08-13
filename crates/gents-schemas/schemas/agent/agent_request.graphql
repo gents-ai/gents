@@ -32,6 +32,8 @@ type AgentRequest @branchable {
     terminal_redrive_attempts: Int @index
     created_at: String @index
     claimed_at: String
+    background_completion_input_through_sequence: Int
+    background_completion_notification_keys_json: String
     deadline: String
     retry_count: Int
     max_retries: Int

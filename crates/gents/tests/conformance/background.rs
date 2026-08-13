@@ -534,7 +534,7 @@ async fn wait_for_background_theorem_child_lifecycle_state(
 
 pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 26);
+    assert_eq!(cases.len(), 30);
 
     let names = cases
         .iter()
@@ -555,6 +555,10 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
             "failed_background_wake_exhausted_budget_stops",
             "generic_scheduled_failure_is_not_background_redrive",
             "non_latest_background_wake_does_not_redrive",
+            "aged_background_wake_precedes_new_descendant",
+            "fresh_background_wake_preserves_fifo",
+            "completed_wake_acknowledges_exact_claim_snapshot",
+            "failed_wake_retains_claim_snapshot_unacknowledged",
             "legacy_subagent_completion_source_aliases_canonical_key",
             "list_processes_same_requester_next_turn_authorized",
             "read_process_same_requester_next_turn_authorized",
@@ -648,6 +652,12 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
     assert_eq!(redrive.retry_count, Some(1));
     assert_eq!(redrive.max_retries, Some(3));
     assert_eq!(redrive.post_retry_count, Some(2));
+    assert_eq!(redrive.retry_delay_seconds, Some(10));
+    assert_eq!(
+        gents::lifecycle::background_wake_retry_delay(redrive.retry_count.unwrap() as i64)
+            .num_seconds(),
+        redrive.retry_delay_seconds.unwrap() as i64
+    );
     assert_eq!(redrive.is_latest, Some(true));
 
     let exhausted = lean_r6_backgrounding_case("failed_background_wake_exhausted_budget_stops");
@@ -662,6 +672,38 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
     let non_latest = lean_r6_backgrounding_case("non_latest_background_wake_does_not_redrive");
     assert!(!non_latest.legal);
     assert_eq!(non_latest.is_latest, Some(false));
+
+    let aged = lean_r6_backgrounding_case("aged_background_wake_precedes_new_descendant");
+    assert!(aged.legal);
+    assert_eq!(aged.group, "completion_admission");
+    assert_eq!(aged.action, "rank_pending_background_wake");
+    assert_eq!(aged.reason.as_deref(), Some("aged_priority"));
+
+    let fresh = lean_r6_backgrounding_case("fresh_background_wake_preserves_fifo");
+    assert!(!fresh.legal);
+    assert_eq!(fresh.group, "completion_admission");
+    assert_eq!(fresh.reason.as_deref(), Some("fifo"));
+
+    let acknowledged =
+        lean_r6_backgrounding_case("completed_wake_acknowledges_exact_claim_snapshot");
+    assert!(acknowledged.legal);
+    assert_eq!(acknowledged.group, "completion_acknowledgement");
+    assert_eq!(acknowledged.terminal_state, "completed");
+    assert_eq!(
+        acknowledged.result.as_deref(),
+        Some("attempted=1,acknowledged=1")
+    );
+    assert_eq!(acknowledged.reason.as_deref(), Some("completed_ack"));
+
+    let retained = lean_r6_backgrounding_case("failed_wake_retains_claim_snapshot_unacknowledged");
+    assert!(retained.legal);
+    assert_eq!(retained.group, "completion_acknowledgement");
+    assert_eq!(retained.terminal_state, "failed");
+    assert_eq!(
+        retained.result.as_deref(),
+        Some("attempted=1,acknowledged=0")
+    );
+    assert_eq!(retained.reason.as_deref(), Some("failed_unacknowledged"));
 
     for case in cases.iter().filter(|case| case.group == "native_lifecycle") {
         drive_r6_native_lifecycle_case(case).await;

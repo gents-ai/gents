@@ -20,9 +20,29 @@ use crate::run_timeline::{
 use gents_protocol::graphql::graphql_rows_from_response;
 
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
-    Ok(build_run_timeline(
-        load_run_timeline_rows(access, request_id).await?,
-    ))
+    let mut timeline = build_run_timeline(load_run_timeline_rows(access, request_id).await?);
+    if let Some(agent_did) = timeline.agent_did.as_deref() {
+        match crate::load_background_completion_diagnostics(access, agent_did).await {
+            Ok(diagnostics) => {
+                timeline.background_completions = diagnostics
+                    .epochs
+                    .into_iter()
+                    .filter(|epoch| {
+                        timeline
+                            .session_id
+                            .as_deref()
+                            .is_some_and(|session_id| epoch.session_id == session_id)
+                            || epoch.root_request_id == timeline.request_id
+                            || epoch.active_request_id == timeline.request_id
+                    })
+                    .collect();
+            }
+            Err(error) => {
+                timeline.background_completion_diagnostics_error = Some(error.to_string());
+            }
+        }
+    }
+    Ok(timeline)
 }
 
 pub async fn load_run_timeline_rows(

@@ -123,6 +123,7 @@ impl BackgroundCompletionObserver {
         if !wake_redrive.is_noop() {
             tracing::debug!(
                 redriven = wake_redrive.redriven,
+                deferred = wake_redrive.deferred,
                 already_redriven = wake_redrive.already_redriven,
                 coalesced = wake_redrive.coalesced,
                 ineligible = wake_redrive.ineligible,

@@ -63,6 +63,18 @@ pub(crate) async fn load_runtime_status_output(
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
     let p2p_status = crate::commands::p2p::load_live_http_p2p_status(home, graphql).await;
+    let background_completion = match gents::load_background_completion_diagnostics(
+        &ConfigAccess::Graphql(graphql.to_string()),
+        agent_did,
+    )
+    .await
+    {
+        Ok(diagnostics) => serde_json::to_value(diagnostics).unwrap_or(Value::Null),
+        Err(error) => json!({
+            "state": "unavailable",
+            "error": error.to_string(),
+        }),
+    };
     let mut output = json!({
         "home": home_dir,
         "graphql": graphql,
@@ -71,6 +83,7 @@ pub(crate) async fn load_runtime_status_output(
         "runtime": runtime_row,
         "liveness": liveness_value,
         "p2p": p2p_status,
+        "background_completion": background_completion,
         "behavior_readiness": if unavailable_behaviors.is_empty() { "ready" } else { "degraded" },
         "unavailable_behaviors": unavailable_behaviors,
     });

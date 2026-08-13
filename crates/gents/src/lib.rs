@@ -11,6 +11,7 @@ pub mod backend_health;
 pub mod backend_provider;
 pub mod backend_registry;
 pub mod background_completion;
+mod background_completion_diagnostics;
 pub(crate) mod background_tools;
 pub mod chatgpt_codex;
 pub mod chatgpt_oauth_refresh;
@@ -131,6 +132,10 @@ pub use backend_health::{
 };
 pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
 pub use backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};
+pub use background_completion_diagnostics::{
+    load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
+    BackgroundCompletionEpochDiagnostic,
+};
 pub use compaction::CompactionStrategy;
 pub use config::{
     AgentBehavior, ReasoningEffort, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
@@ -169,10 +174,10 @@ pub use identity::{
 };
 pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
 pub use lifecycle::{
-    task_run_conversation_title, write_manual_agent_request,
-    write_manual_agent_request_with_conversation_title, BackgroundWakeRedriveReport,
-    RecoveryReport, RequestLifecycle, TerminalRedriveReport, TerminalRepairReport,
-    TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
+    background_wake_next_retry_at, background_wake_retry_delay, task_run_conversation_title,
+    write_manual_agent_request, write_manual_agent_request_with_conversation_title,
+    BackgroundWakeRedriveReport, RecoveryReport, RequestLifecycle, TerminalRedriveReport,
+    TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
 };
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;

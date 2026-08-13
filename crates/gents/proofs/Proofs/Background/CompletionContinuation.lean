@@ -382,4 +382,197 @@ theorem canonical_failed_wake_redrive_is_bounded :
     canonicalFailedWakeRedriveAccepted = true := by
   native_decide
 
+def wakeRetryBaseSeconds : Nat := 5
+def wakeRetryMaxSeconds : Nat := 60
+
+def wakeRetryDelaySeconds (retryCount : Nat) : Nat :=
+  min wakeRetryMaxSeconds (wakeRetryBaseSeconds * 2 ^ retryCount)
+
+theorem wake_retry_delay_positive (retryCount : Nat) :
+    0 < wakeRetryDelaySeconds retryCount := by
+  have hpow : 0 < 2 ^ retryCount :=
+    Nat.pow_pos_iff.mpr (Or.inl (by decide))
+  simp [wakeRetryDelaySeconds, wakeRetryMaxSeconds, wakeRetryBaseSeconds, hpow]
+
+theorem wake_retry_delay_bounded (retryCount : Nat) :
+    wakeRetryDelaySeconds retryCount ≤ wakeRetryMaxSeconds := by
+  simp [wakeRetryDelaySeconds]
+
+def canonicalWakeRetryDelayAccepted : Bool :=
+  decide
+    (wakeRetryDelaySeconds 0 = 5 ∧
+     wakeRetryDelaySeconds 1 = 10 ∧
+     wakeRetryDelaySeconds 4 = 60 ∧
+     wakeRetryDelaySeconds 20 = 60)
+
+theorem canonical_wake_retry_backoff_is_bounded :
+    canonicalWakeRetryDelayAccepted = true := by
+  native_decide
+
+/-! ## Aged wake admission
+
+The watcher preserves FIFO until a background-completion wake reaches the
+aging threshold.  Once aged, it precedes ordinary descendant work at the
+bounded behavior-executor queue.  This is the runtime's weak-fairness
+assumption made executable: an ongoing descendant storm may fill the finite
+queue ahead of a wake, but new descendants cannot continue overtaking it.
+-/
+
+def completionWakeAgingThresholdSeconds : Nat := 30
+
+structure AdmissionCandidate where
+  requestId : RequestId
+  ageSeconds : Nat
+  source : SessionQueue.QueueSource
+  deriving DecidableEq, Repr
+
+def AdmissionCandidate.isAgedCompletionWake
+    (candidate : AdmissionCandidate) : Bool :=
+  candidate.source = .backgroundCompletion &&
+    completionWakeAgingThresholdSeconds ≤ candidate.ageSeconds
+
+def admissionPriority (candidate : AdmissionCandidate) : Nat :=
+  if candidate.isAgedCompletionWake then 0 else 1
+
+def servesBefore
+    (left right : AdmissionCandidate) : Bool :=
+  admissionPriority left < admissionPriority right
+
+theorem aged_completion_wake_precedes_descendant
+    (wake descendant : AdmissionCandidate)
+    (h_wake_source : wake.source = .backgroundCompletion)
+    (h_wake_age : completionWakeAgingThresholdSeconds ≤ wake.ageSeconds)
+    (h_descendant_source : descendant.source ≠ .backgroundCompletion) :
+    servesBefore wake descendant = true := by
+  simp [servesBefore, admissionPriority,
+    AdmissionCandidate.isAgedCompletionWake, h_wake_source, h_wake_age,
+    h_descendant_source]
+
+theorem fresh_completion_wake_preserves_fifo_priority
+    (wake : AdmissionCandidate)
+    (h_wake_source : wake.source = .backgroundCompletion)
+    (h_wake_age : wake.ageSeconds < completionWakeAgingThresholdSeconds) :
+    admissionPriority wake = 1 := by
+  simp [admissionPriority, AdmissionCandidate.isAgedCompletionWake,
+    h_wake_source, Nat.not_le.mpr h_wake_age]
+
+/-- The behavior executor admits only a finite predecessor set.  Once an aged
+wake is selected ahead of new descendants, its remaining wait is bounded by
+the already-running workers plus the fixed dispatcher queue. -/
+def predecessorBound (executorCapacity queueCapacity : Nat) : Nat :=
+  executorCapacity + queueCapacity
+
+theorem aged_wake_predecessors_bounded
+    (executorCapacity queueCapacity predecessors : Nat)
+    (h_bounded : predecessors ≤ executorCapacity + queueCapacity) :
+    predecessors ≤ predecessorBound executorCapacity queueCapacity := by
+  simpa [predecessorBound] using h_bounded
+
+def agedWakeFixture : AdmissionCandidate :=
+  { requestId := 901
+  , ageSeconds := completionWakeAgingThresholdSeconds
+  , source := .backgroundCompletion
+  }
+
+def descendantFixture : AdmissionCandidate :=
+  { requestId := 902
+  , ageSeconds := 0
+  , source := .user
+  }
+
+def freshWakeFixture : AdmissionCandidate :=
+  { requestId := 903
+  , ageSeconds := completionWakeAgingThresholdSeconds - 1
+  , source := .backgroundCompletion
+  }
+
+theorem canonical_aged_wake_admission_accepted :
+    servesBefore agedWakeFixture descendantFixture = true := by
+  native_decide
+
+theorem canonical_fresh_wake_does_not_bypass_fifo :
+    servesBefore freshWakeFixture descendantFixture = false := by
+  native_decide
+
+/-! ## Attempt snapshots and acknowledgement
+
+Each notification message is durably bound to the wake request created or
+reused by the atomic enqueue transaction.  Claim snapshots the transcript's
+last sequence in the same transaction that changes the wake from pending to
+claimed.  A later notification is therefore owned by a successor epoch and
+cannot enter the active attempt's provider input.  Successful terminalization
+acknowledges exactly the attempted bindings; failure retains them for redrive.
+-/
+
+structure NotificationBinding where
+  messageId : Transcript.MessageId
+  sequence : Nat
+  wakeRequestId : RequestId
+  deriving DecidableEq, Repr
+
+structure WakeAttemptSnapshot where
+  wakeRequestId : RequestId
+  throughSequence : Nat
+  bindings : List NotificationBinding
+  terminalState : RequestState
+  deriving DecidableEq, Repr
+
+def WakeAttemptSnapshot.attemptedBindings
+    (snapshot : WakeAttemptSnapshot) : List NotificationBinding :=
+  snapshot.bindings.filter fun binding =>
+    binding.wakeRequestId = snapshot.wakeRequestId &&
+      binding.sequence ≤ snapshot.throughSequence
+
+def WakeAttemptSnapshot.acknowledgedBindings
+    (snapshot : WakeAttemptSnapshot) : List NotificationBinding :=
+  if snapshot.terminalState = .completed then snapshot.attemptedBindings else []
+
+theorem successor_binding_after_cutoff_not_attempted
+    (snapshot : WakeAttemptSnapshot)
+    (binding : NotificationBinding)
+    (h_after : snapshot.throughSequence < binding.sequence) :
+    binding ∉ snapshot.attemptedBindings := by
+  simp [WakeAttemptSnapshot.attemptedBindings, Nat.not_le.mpr h_after]
+
+theorem completed_attempt_acknowledges_exact_snapshot
+    (snapshot : WakeAttemptSnapshot)
+    (h_completed : snapshot.terminalState = .completed) :
+    snapshot.acknowledgedBindings = snapshot.attemptedBindings := by
+  simp [WakeAttemptSnapshot.acknowledgedBindings, h_completed]
+
+theorem failed_attempt_acknowledges_nothing
+    (snapshot : WakeAttemptSnapshot)
+    (h_failed : snapshot.terminalState = .failed) :
+    snapshot.acknowledgedBindings = [] := by
+  simp [WakeAttemptSnapshot.acknowledgedBindings, h_failed]
+
+def attemptedBindingFixture : NotificationBinding :=
+  { messageId := 41, sequence := 4, wakeRequestId := 901 }
+
+def successorBindingFixture : NotificationBinding :=
+  { messageId := 42, sequence := 6, wakeRequestId := 902 }
+
+def completedSnapshotFixture : WakeAttemptSnapshot :=
+  { wakeRequestId := 901
+  , throughSequence := 5
+  , bindings := [attemptedBindingFixture, successorBindingFixture]
+  , terminalState := .completed
+  }
+
+def failedSnapshotFixture : WakeAttemptSnapshot :=
+  { completedSnapshotFixture with terminalState := .failed }
+
+theorem canonical_completed_snapshot_acknowledges_owned_notification :
+    completedSnapshotFixture.acknowledgedBindings = [attemptedBindingFixture] := by
+  native_decide
+
+theorem canonical_successor_notification_excluded_from_active_snapshot :
+    successorBindingFixture ∉ completedSnapshotFixture.attemptedBindings := by
+  native_decide
+
+theorem canonical_failed_snapshot_retains_unacknowledged_notification :
+    failedSnapshotFixture.acknowledgedBindings = [] ∧
+      failedSnapshotFixture.attemptedBindings = [attemptedBindingFixture] := by
+  native_decide
+
 end BackgroundCompletion

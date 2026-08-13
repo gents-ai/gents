@@ -390,6 +390,7 @@ structure R6BackgroundingCase where
   retryCount : Option Nat := none
   maxRetries : Option Nat := none
   postRetryCount : Option Nat := none
+  retryDelaySeconds : Option Nat := none
   isLatest : Option Bool := none
   deriving Repr
 

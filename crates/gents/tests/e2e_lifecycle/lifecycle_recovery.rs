@@ -151,6 +151,92 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     );
 }
 
+#[tokio::test]
+async fn failed_background_wake_waits_for_persisted_backoff() {
+    let db = test_db("lifecycle-background-wake-backoff").await;
+    let session_id = "wake-backoff-session";
+    let metadata = serde_json::json!({
+        "queue": {
+            "source": "background_completion",
+            "policy": "coalesce",
+            "key": format!("background_completion:{session_id}"),
+            "queued_after_request_id": "foreground-parent"
+        },
+        "background_completion_wake_version": 1
+    })
+    .to_string();
+    let escaped_metadata = gents::graphql::escape_graphql_string(&metadata);
+    let terminalized_at = chrono::Utc::now().to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "failed-wake-backoff", agent_did: "{AGENT_DID}",
+                behavior_id: "{AGENT_NAME}", session_id: "{session_id}",
+                retry_parent_request: "", retry_root_request: "failed-wake-backoff",
+                superseded_by_request: "", content: "continue", metadata: "{escaped_metadata}",
+                status: "error", lifecycle_state: "failed", backend_id: "{BACKEND_ID}",
+                execution_origin: "scheduled", failure_reason: "provider failed",
+                terminalized_at: "{terminalized_at}", terminal_redrive_attempts: 0,
+                created_at: "{terminalized_at}", retry_count: 1, max_retries: 3,
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create failed wake: {:?}",
+        response.errors
+    );
+    upsert_conversation(
+        &db.node,
+        session_id,
+        "failed-wake-backoff",
+        "continue",
+        "active",
+    )
+    .await;
+    let message = format!(
+        r#"mutation {{
+            create_AgentMessage(input: {{
+                message_key: "background-completion-notification:child-backoff:subagent",
+                session_id: "{session_id}", agent_did: "{AGENT_DID}",
+                request_id: "failed-wake-backoff", sequence: 1, role: "user",
+                content: "child finished", timestamp: "{terminalized_at}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&message).await;
+    assert!(
+        !response.has_errors(),
+        "create completion notification: {:?}",
+        response.errors
+    );
+
+    let report = RequestLifecycle::redrive_failed_background_wakeups(&db.node, AGENT_DID)
+        .await
+        .expect("deferred redrive sweep");
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.deferred, 1);
+    assert_eq!(report.redriven, 0);
+    assert_eq!(
+        background_wake_retry_rows(&db.node, session_id).await.len(),
+        1
+    );
+    let diagnostics = gents::load_background_completion_diagnostics(
+        &gents::config_client::ConfigAccess::Local(db.node.clone()),
+        AGENT_DID,
+    )
+    .await
+    .expect("load persisted completion diagnostics");
+    assert_eq!(diagnostics.pending_notifications, 1);
+    assert_eq!(diagnostics.stranded_notifications, 0);
+    assert_eq!(diagnostics.epochs.len(), 1);
+    assert_eq!(diagnostics.epochs[0].state, "retry_backoff");
+    assert_eq!(diagnostics.epochs[0].attempt_count, 2);
+    assert!(diagnostics.epochs[0].next_retry_at.is_some());
+}
+
 async fn background_wake_retry_rows(
     node: &gents::defra_node::EmbeddedNode,
     session_id: &str,

@@ -200,3 +200,133 @@ async fn concurrent_notifications_converge_to_one_pending_wake() {
         .collect::<std::collections::BTreeSet<_>>();
     assert!(actual.is_subset(&persisted_bindings));
 }
+
+#[tokio::test]
+async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
+    let TestDb { node, _tempdir } = test_db("background-successor-ack").await;
+    let node = std::sync::Arc::new(node);
+    let parent = root_parent("background-successor-ack-session");
+    let hints = background_hints(&parent);
+    let first = enqueue_background_completion_with_message(
+        node.as_ref(),
+        &parent,
+        "first notification",
+        "background-completion-notification:successor-first:tool",
+        "review notifications",
+        hints.clone(),
+    )
+    .await
+    .unwrap();
+    let first_request = AgentRequest {
+        doc_id: first.request.doc_id.clone(),
+        request_id: first.request.request_id.clone(),
+        agent_did: parent.agent_did.clone(),
+        requester_did: parent.requester_did.clone(),
+        behavior_id: parent.behavior_id.clone(),
+        session_id: parent.session_id.clone(),
+        content: "review notifications".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        seed: None,
+        max_tokens: None,
+        max_total_tokens: None,
+        metadata: Some(queue_metadata_json(&hints)),
+        execution_origin: Some("scheduled".to_string()),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: Some(parent.request_id.clone()),
+        caused_by_parent_request_doc_id: Some(parent.doc_id.clone()),
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+    };
+    let mut first_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        TEST_BEHAVIOR_ID,
+        TEST_AGENT_DID,
+        first_request,
+        60,
+        ExecutionOrigin::Scheduled,
+        "backend-test",
+    );
+    assert_eq!(
+        first_lifecycle.claim_with_identity().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+
+    let second = enqueue_background_completion_with_message(
+        node.as_ref(),
+        &parent,
+        "second notification",
+        "background-completion-notification:successor-second:tool",
+        "review notifications",
+        hints.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(second.created_request);
+    assert_ne!(first.request.doc_id, second.request.doc_id);
+    first_lifecycle
+        .fail_with_reason("injected provider failure")
+        .await
+        .unwrap();
+
+    let second_request = AgentRequest {
+        doc_id: second.request.doc_id.clone(),
+        request_id: second.request.request_id.clone(),
+        agent_did: parent.agent_did.clone(),
+        requester_did: parent.requester_did.clone(),
+        behavior_id: parent.behavior_id.clone(),
+        session_id: parent.session_id.clone(),
+        content: "review notifications".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        seed: None,
+        max_tokens: None,
+        max_total_tokens: None,
+        metadata: Some(queue_metadata_json(&hints)),
+        execution_origin: Some("scheduled".to_string()),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        deadline: None,
+        subagent_depth: 0,
+        caused_by_parent_request_id: Some(parent.request_id.clone()),
+        caused_by_parent_request_doc_id: Some(parent.doc_id.clone()),
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+    };
+    let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        TEST_BEHAVIOR_ID,
+        TEST_AGENT_DID,
+        second_request,
+        60,
+        ExecutionOrigin::Scheduled,
+        "backend-test",
+    );
+    assert_eq!(
+        second_lifecycle.claim_with_identity().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+    second_lifecycle.complete().await.unwrap();
+
+    let access = crate::config_client::ConfigAccess::Local(node);
+    let diagnostics = crate::load_background_completion_diagnostics(&access, TEST_AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(diagnostics.pending_notifications, 0);
+    assert_eq!(diagnostics.acknowledged_notifications, 2);
+    assert_eq!(diagnostics.stranded_notifications, 0);
+    let first_epoch = diagnostics
+        .epochs
+        .iter()
+        .find(|epoch| epoch.root_request_id == first.request.request_id)
+        .unwrap();
+    assert_eq!(first_epoch.state, "acknowledged_by_successor");
+    let timeline = crate::run_timeline_fetch::load_run_timeline(&access, &first.request.request_id)
+        .await
+        .unwrap();
+    assert_eq!(timeline.background_completions.len(), 2);
+    assert!(timeline.background_completion_diagnostics_error.is_none());
+}

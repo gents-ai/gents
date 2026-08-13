@@ -50,7 +50,7 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         MigrationStep::PatchVersioned { collection, .. }
             if *collection == gents_protocol::schemas::INFERENCE_PROFILE_NAME
     )));
-    assert!(!versioned_collections.contains(gents_protocol::schemas::AGENT_REQUEST_NAME));
+    assert!(versioned_collections.contains(gents_protocol::schemas::AGENT_REQUEST_NAME));
 }
 
 async fn fresh_node() -> Arc<EmbeddedNode> {
@@ -195,7 +195,7 @@ async fn inference_profile_migrations_preserve_existing_document() {
 }
 
 #[tokio::test]
-async fn agent_request_sampling_and_budget_migrations_preserve_existing_document() {
+async fn agent_request_additive_migrations_preserve_existing_document() {
     let node = fresh_node().await;
     let baseline = gents_migration::DEFAULT_BASELINE
         .iter()
@@ -228,6 +228,8 @@ async fn agent_request_sampling_and_budget_migrations_preserve_existing_document
         .execute(
             r#"{ AgentRequest(filter: {request_id: {_eq: "existing-request"}}) {
                 request_id content seed max_total_tokens
+                background_completion_input_through_sequence
+                background_completion_notification_keys_json
             } }"#,
         )
         .await;
@@ -247,6 +249,8 @@ async fn agent_request_sampling_and_budget_migrations_preserve_existing_document
     assert_eq!(rows[0]["content"], "hello");
     assert!(rows[0]["seed"].is_null());
     assert!(rows[0]["max_total_tokens"].is_null());
+    assert!(rows[0]["background_completion_input_through_sequence"].is_null());
+    assert!(rows[0]["background_completion_notification_keys_json"].is_null());
 
     node.shutdown().await;
 }

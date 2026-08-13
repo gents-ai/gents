@@ -1,5 +1,117 @@
 use super::*;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct BackgroundCompletionClaimSnapshot {
+    through_sequence: Option<u32>,
+    notification_keys: Vec<String>,
+}
+
+impl BackgroundCompletionClaimSnapshot {
+    fn mutation_fields(&self) -> String {
+        let through_sequence = self
+            .through_sequence
+            .map(|sequence| format!("background_completion_input_through_sequence: {sequence},"))
+            .unwrap_or_default();
+        let keys_json = serde_json::to_string(&self.notification_keys)
+            .expect("background completion notification keys serialize");
+        format!(
+            r#"{through_sequence}
+                background_completion_notification_keys_json: "{}","#,
+            escape_graphql_string(&keys_json)
+        )
+    }
+}
+
+async fn claim_background_completion_with_snapshot<F>(
+    node: &EmbeddedNode,
+    session_id: &str,
+    build_mutation: F,
+) -> Result<(defra_node::QueryResponse, BackgroundCompletionClaimSnapshot)>
+where
+    F: Fn(&str) -> String,
+{
+    let session_id = escape_graphql_string(session_id);
+    let snapshot_query = format!(
+        r#"{{
+            all_messages: AgentMessage(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ sequence: DESC }},
+                limit: 1
+            ) {{ sequence }}
+            notifications: AgentMessage(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    message_key: {{ _like: "background-completion-notification:%" }}
+                }},
+                order: {{ sequence: ASC }}
+            ) {{ sequence message_key }}
+        }}"#
+    );
+    let mut last_error = None;
+    for retry_index in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
+        let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+        let attempt = async {
+            let snapshot = txn.execute_local_response(&snapshot_query).await?;
+            let through_sequence = snapshot
+                .data
+                .as_ref()
+                .and_then(|data| data.get("all_messages"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("sequence"))
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|sequence| u32::try_from(sequence).ok());
+            let notification_keys = snapshot
+                .data
+                .as_ref()
+                .and_then(|data| data.get("notifications"))
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|row| {
+                    row.get("sequence")
+                        .and_then(serde_json::Value::as_u64)
+                        .zip(through_sequence.map(u64::from))
+                        .is_some_and(|(sequence, cutoff)| sequence <= cutoff)
+                })
+                .filter_map(|row| row.get("message_key").and_then(serde_json::Value::as_str))
+                .map(ToOwned::to_owned)
+                .collect();
+            let snapshot = BackgroundCompletionClaimSnapshot {
+                through_sequence,
+                notification_keys,
+            };
+            let mutation = build_mutation(&snapshot.mutation_fields());
+            let claimed = txn.execute_local_response(&mutation).await?;
+            Ok::<_, anyhow::Error>((claimed, snapshot))
+        }
+        .await;
+        let result = match attempt {
+            Ok(claimed) => txn.commit().await.map(|()| claimed),
+            Err(error) => {
+                let _ = txn.discard().await;
+                Err(error)
+            }
+        };
+        match result {
+            Ok(claimed) => return Ok(claimed),
+            Err(error)
+                if retry_index < crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES
+                    && crate::graphql::is_defradb_transaction_conflict_text(
+                        &error.to_string().to_ascii_lowercase(),
+                    ) =>
+            {
+                let backoff = crate::graphql::defradb_conflict_retry_backoff(retry_index);
+                last_error = Some(error);
+                tokio::time::sleep(backoff).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("background-completion claim transaction exhausted")))
+}
+
 fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
@@ -253,8 +365,9 @@ impl RequestLifecycle {
         let execution_origin = self.execution_origin.as_str();
         let request_fields = crate::watcher::AGENT_REQUEST_FIELDS;
 
-        let mutation = format!(
-            r#"mutation {{
+        let build_mutation = |background_completion_snapshot_fields: &str| {
+            format!(
+                r#"mutation {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
@@ -268,6 +381,7 @@ impl RequestLifecycle {
                         backend_id: "{escaped_backend_id}",
                         execution_origin: "{execution_origin}",
                         claimed_at: "{escaped_claimed_at}",
+                        {background_completion_snapshot_fields}
                         deadline: "{escaped_deadline}"
                     }}
                 ) {{{request_fields}
@@ -278,11 +392,28 @@ impl RequestLifecycle {
                     _version {{ cid height fieldName }}
                 }}
             }}"#,
-            lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
-        );
+                lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
+            )
+        };
 
-        let resp =
-            session::execute_mutation_with_retry(&self.node, &mutation, "claim_request").await?;
+        let is_background_completion =
+            crate::lifecycle::is_background_completion_request(self.request.metadata.as_deref());
+        let (resp, background_completion_input_through_sequence) = if is_background_completion {
+            let (response, snapshot) = claim_background_completion_with_snapshot(
+                self.node.as_ref(),
+                &self.request.session_id,
+                &build_mutation,
+            )
+            .await?;
+            (response, snapshot.through_sequence)
+        } else {
+            let mutation = build_mutation("");
+            (
+                session::execute_mutation_with_retry(&self.node, &mutation, "claim_request")
+                    .await?,
+                None,
+            )
+        };
 
         // The mutation response is the only response that can carry the exact
         // commit produced by this claim. Do not fall back to a post-update
@@ -321,6 +452,8 @@ impl RequestLifecycle {
 
         self.state = LocalLifecycleState::Claimed;
         self.claimed_deadline_at = Some(deadline_at);
+        self.background_completion_input_through_sequence =
+            background_completion_input_through_sequence;
         self.valid_until_at_claim = valid_until_at_claim;
 
         Ok(ClaimOutcome::Claimed)
@@ -562,6 +695,140 @@ mod tests {
         assert_eq!(
             second_lifecycle.claim_with_identity().await.unwrap(),
             ClaimOutcome::Queued
+        );
+    }
+
+    #[tokio::test]
+    async fn background_claim_snapshots_transcript_before_successor_input() {
+        let node = test_node().await;
+        let session_id = "background-claim-snapshot";
+        let mut request = insert_pending_request(
+            node.as_ref(),
+            "background-wake-1",
+            session_id,
+            "2026-08-12T22:00:00Z",
+        )
+        .await;
+        let metadata =
+            crate::lifecycle::queue::queue_metadata_json(&crate::lifecycle::queue::QueueHints {
+                source: crate::lifecycle::queue::QueueSource::BackgroundCompletion,
+                policy: crate::lifecycle::queue::QueuePolicy::Coalesce,
+                key: Some(format!("background_completion:{session_id}")),
+                queued_after_request_id: Some("parent-request".to_string()),
+                interrupted_request_id: None,
+            });
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{}" }} }},
+                    input: {{ metadata: "{}", execution_origin: "scheduled" }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&request.doc_id),
+            escape_graphql_string(&metadata),
+        );
+        session::execute_mutation_with_retry(node.as_ref(), &mutation, "mark_background_wake")
+            .await
+            .unwrap();
+        request.metadata = Some(metadata);
+        request.execution_origin = Some("scheduled".to_string());
+
+        session::append_message_once_with_key_and_requester_did(
+            node.as_ref(),
+            session_id,
+            TEST_AGENT_DID,
+            None,
+            "user",
+            "first notification",
+            None,
+            Some(&request.request_id),
+            Some(&request.doc_id),
+            "background-completion-notification:child-1:subagent",
+            Some(1),
+        )
+        .await
+        .unwrap();
+        session::save_message(
+            node.as_ref(),
+            session_id,
+            TEST_AGENT_DID,
+            2,
+            "assistant",
+            "prior response",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let request_doc_id = request.doc_id.clone();
+        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            TEST_BEHAVIOR_ID,
+            TEST_AGENT_DID,
+            request,
+            60,
+            ExecutionOrigin::Scheduled,
+            TEST_BACKEND_ID,
+        );
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        );
+        assert_eq!(
+            lifecycle.background_completion_input_through_sequence(),
+            Some(2)
+        );
+        let snapshot = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
+                    background_completion_input_through_sequence
+                    background_completion_notification_keys_json
+                }} }}"#,
+                escape_graphql_string(&request_doc_id)
+            ))
+            .await;
+        assert!(
+            !snapshot.has_errors(),
+            "snapshot query: {:?}",
+            snapshot.errors
+        );
+        let row = &snapshot.data.as_ref().unwrap()["AgentRequest"][0];
+        assert_eq!(
+            row["background_completion_input_through_sequence"].as_i64(),
+            Some(2)
+        );
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(
+                row["background_completion_notification_keys_json"]
+                    .as_str()
+                    .unwrap()
+            )
+            .unwrap(),
+            vec!["background-completion-notification:child-1:subagent"]
+        );
+
+        session::save_message(
+            node.as_ref(),
+            session_id,
+            TEST_AGENT_DID,
+            3,
+            "user",
+            "successor notification",
+            None,
+        )
+        .await
+        .unwrap();
+        let history = session::load_history_through_sequence(
+            node.as_ref(),
+            session_id,
+            lifecycle.background_completion_input_through_sequence(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            history.len(),
+            2,
+            "successor input must stay out of this attempt"
         );
     }
 }

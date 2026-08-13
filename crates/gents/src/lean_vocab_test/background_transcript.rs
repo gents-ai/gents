@@ -172,6 +172,8 @@ pub(crate) struct LeanR6BackgroundingCase {
     #[serde(default)]
     pub(crate) post_retry_count: Option<usize>,
     #[serde(default)]
+    pub(crate) retry_delay_seconds: Option<usize>,
+    #[serde(default)]
     pub(crate) is_latest: Option<bool>,
 }
 

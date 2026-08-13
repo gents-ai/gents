@@ -1,5 +1,8 @@
 use super::*;
 
+pub(super) const BACKGROUND_COMPLETION_AGING_THRESHOLD: chrono::Duration =
+    chrono::Duration::seconds(30);
+
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
@@ -92,6 +95,24 @@ impl AgentRequestRow {
             self.execution_origin.as_deref(),
             self.metadata.as_deref(),
         )
+    }
+
+    pub(super) fn is_aged_background_completion_wakeup(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        if self.execution_origin.as_deref() != Some("scheduled")
+            || !crate::lifecycle::queue::is_automated_wakeup(self.metadata.as_deref())
+            || self.is_deprecated_background_completion_wakeup()
+        {
+            return false;
+        }
+        chrono::DateTime::parse_from_rfc3339(&self.created_at)
+            .map(|created_at| {
+                now.signed_duration_since(created_at.with_timezone(&chrono::Utc))
+                    >= BACKGROUND_COMPLETION_AGING_THRESHOLD
+            })
+            .unwrap_or(false)
     }
 
     pub(super) fn into_agent_request(self) -> anyhow::Result<AgentRequest> {

@@ -15,8 +15,8 @@ mod query;
 mod tests;
 
 use cooldown::{
-    mark_processed, prune_processed_requests, request_is_cooling_down,
-    take_next_eligible_pending_request, GOSSIP_FALLBACK_POLL, PROCESSED_REQUEST_COOLDOWN,
+    prune_processed_requests, take_next_eligible_pending_request, GOSSIP_FALLBACK_POLL,
+    PROCESSED_REQUEST_COOLDOWN,
 };
 pub(crate) use query::{agent_request_from_mutation_response, AGENT_REQUEST_FIELDS};
 
@@ -212,39 +212,12 @@ impl Watcher for DefraWatcher {
                 );
             }
 
-            match self.try_fetch_request(doc_id).await {
-                Ok(Some(request)) => {
-                    if is_deprecated_background_completion_wakeup(&request) {
-                        continue;
-                    }
-                    let now = Instant::now();
-                    if request_is_cooling_down(
-                        &mut self.processed_request_ids,
-                        &request.request_id,
-                        now,
-                    ) {
-                        tracing::debug!(
-                            request_id = %request.request_id,
-                            doc_id = %doc_id,
-                            cooldown_secs = PROCESSED_REQUEST_COOLDOWN.as_secs(),
-                            "skipping cooling-down P2P request"
-                        );
-                        continue;
-                    }
-                    tracing::info!(
-                        request_id = %request.request_id,
-                        session_id = %request.session_id,
-                        "new agent request detected via P2P"
-                    );
-                    mark_processed(&mut self.processed_request_ids, &request.request_id, now);
-                    return Some(Ok(request));
-                }
-                Ok(None) => continue,
-                Err(e) => {
-                    tracing::error!(error = %e, doc_id = %doc_id, "failed to query agent request");
-                    return Some(Err(e));
-                }
-            }
+            // An event is a rescan signal, not permission to bypass the
+            // durable queue. Fetching this doc directly allowed a stream of
+            // newly-created descendants to overtake an older completion wake
+            // in another session. The next loop iteration performs the global
+            // FIFO + aged-wake scan and still benefits from immediate gossip.
+            continue;
         }
     }
 }

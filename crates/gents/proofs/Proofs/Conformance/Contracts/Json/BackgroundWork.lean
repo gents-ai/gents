@@ -321,6 +321,7 @@ def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
     ++ "\"retry_count\":" ++ jsonOptionalNat witness.retryCount ++ ","
     ++ "\"max_retries\":" ++ jsonOptionalNat witness.maxRetries ++ ","
     ++ "\"post_retry_count\":" ++ jsonOptionalNat witness.postRetryCount ++ ","
+    ++ "\"retry_delay_seconds\":" ++ jsonOptionalNat witness.retryDelaySeconds ++ ","
     ++ "\"is_latest\":" ++ jsonOptionalBool witness.isLatest
     ++ "}"
 

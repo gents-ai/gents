@@ -298,7 +298,9 @@ async fn project_background_continuation(
         temperature: None,
         top_p: None,
         top_k: None,
+        seed: None,
         max_tokens: None,
+        max_total_tokens: None,
         metadata: request.metadata,
         created_at: request.created_at,
     };
