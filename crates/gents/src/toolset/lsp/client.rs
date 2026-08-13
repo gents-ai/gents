@@ -31,11 +31,13 @@ pub(crate) struct LspClient {
     init_options: Option<Value>,
     settings: Option<Value>,
     versions: Mutex<HashMap<String, i64>>,
+    document_hashes: Mutex<HashMap<String, String>>,
     initialize_timeout: Duration,
     diagnostics: Arc<Mutex<HashMap<String, Value>>>,
     language_ids: Mutex<HashMap<String, String>>,
     server_status: Arc<Mutex<Option<ServerStatus>>>,
     progress: Arc<Mutex<HashSet<String>>>,
+    alive: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,10 +66,12 @@ impl LspClient {
         let server_status_reader = server_status.clone();
         let progress: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let progress_reader = progress.clone();
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive_reader = alive.clone();
         let workspace = config.workspace.clone();
         let settings = server.settings.clone();
         let reader = tokio::spawn(async move {
-            if let Err(error) = read_loop(
+            let result = read_loop(
                 stdout,
                 ReaderShared {
                     pending: pending_reader.clone(),
@@ -79,8 +83,9 @@ impl LspClient {
                     progress: progress_reader,
                 },
             )
-            .await
-            {
+            .await;
+            alive_reader.store(false, Ordering::SeqCst);
+            if let Err(error) = result {
                 tracing::warn!(%error, "lsp reader exited");
                 fail_pending(&pending_reader, &error).await;
             }
@@ -110,6 +115,7 @@ impl LspClient {
             init_options: server.init_options.clone(),
             settings: server.settings.clone(),
             versions: Mutex::new(HashMap::new()),
+            document_hashes: Mutex::new(HashMap::new()),
             initialize_timeout: server
                 .warmup_timeout_ms
                 .map(Duration::from_millis)
@@ -120,6 +126,7 @@ impl LspClient {
             language_ids: Mutex::new(HashMap::new()),
             server_status,
             progress,
+            alive,
         })
     }
 
@@ -278,29 +285,52 @@ impl LspClient {
         language_id: &str,
         text: &str,
     ) -> Result<(), String> {
-        {
-            let versions = self.versions.lock().await;
-            if versions.contains_key(uri) {
+        let hash = crate::toolset::file_tools::content_hash(text.as_bytes());
+        if self.versions.lock().await.contains_key(uri) {
+            if self.document_hashes.lock().await.get(uri) == Some(&hash) {
                 return Ok(());
             }
+            self.sync_document(uri, language_id, text).await?;
+            return Ok(());
         }
+        self.open_document(uri, language_id, text, hash).await
+    }
+
+    async fn open_document(
+        &self,
+        uri: &str,
+        language_id: &str,
+        text: &str,
+        hash: String,
+    ) -> Result<(), String> {
         self.language_ids
             .lock()
             .await
             .insert(uri.to_string(), language_id.to_string());
         self.track_open(uri, 1).await;
-        self.notify(
-            "textDocument/didOpen",
-            json!({
-                "textDocument": {
-                    "uri": uri,
-                    "languageId": language_id,
-                    "version": 1,
-                    "text": text
-                }
-            }),
-        )
-        .await
+        let opened = self
+            .notify(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": language_id,
+                        "version": 1,
+                        "text": text
+                    }
+                }),
+            )
+            .await;
+        if opened.is_ok() {
+            self.document_hashes
+                .lock()
+                .await
+                .insert(uri.to_string(), hash);
+        } else {
+            self.versions.lock().await.remove(uri);
+            self.language_ids.lock().await.remove(uri);
+        }
+        opened
     }
 
     pub async fn sync_document(
@@ -316,7 +346,8 @@ impl LspClient {
                 *current
             } else {
                 drop(versions);
-                self.ensure_open(uri, language_id, text).await?;
+                let hash = crate::toolset::file_tools::content_hash(text.as_bytes());
+                self.open_document(uri, language_id, text, hash).await?;
                 return Ok(1);
             }
         };
@@ -328,12 +359,17 @@ impl LspClient {
             }),
         )
         .await?;
+        self.document_hashes.lock().await.insert(
+            uri.to_string(),
+            crate::toolset::file_tools::content_hash(text.as_bytes()),
+        );
         Ok(version)
     }
 
     pub async fn close_document(&self, uri: &str) {
         if self.versions.lock().await.remove(uri).is_some() {
             self.language_ids.lock().await.remove(uri);
+            self.document_hashes.lock().await.remove(uri);
             let _ = self
                 .notify(
                     "textDocument/didClose",
@@ -355,6 +391,10 @@ impl LspClient {
         self.capabilities.lock().await.clone()
     }
 
+    pub(crate) fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
         self.request_with_timeout(method, params, REQUEST_TIMEOUT)
             .await
@@ -366,6 +406,9 @@ impl LspClient {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, String> {
+        if !self.is_alive() {
+            return Err("language server has exited".into());
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         {
@@ -442,6 +485,7 @@ impl LspClient {
         }
         let _ = self.request("shutdown", Value::Null).await;
         let _ = self.notify("exit", Value::Null).await;
+        self.alive.store(false, Ordering::SeqCst);
         let mut process = self.process.lock().await;
         process.terminate().await;
         self.reader.abort();

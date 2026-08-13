@@ -110,6 +110,42 @@ fn advertised_only_when_enabled_and_file_tools_on() {
 }
 
 #[test]
+fn primary_routing_uses_file_type_then_priority_with_catalog_order_ties() {
+    let mut first = fixture_server(FIXTURE_PY.into());
+    first.name = "first".into();
+    first.file_types = vec![".ts".into()];
+    first.priority = 20;
+    let mut preferred = first.clone();
+    preferred.name = "preferred".into();
+    preferred.priority = 10;
+    let mut unrelated = first.clone();
+    unrelated.name = "rust".into();
+    unrelated.file_types = vec![".rs".into()];
+    unrelated.priority = 1;
+    let servers = vec![first, preferred.clone(), unrelated];
+
+    assert_eq!(
+        super::catalog::primary_for_file(&servers, std::path::Path::new("src/app.ts"))
+            .map(|server| server.name.as_str()),
+        Some("preferred")
+    );
+    assert_eq!(
+        super::catalog::primary_for_workspace(&servers).map(|server| server.name.as_str()),
+        Some("rust")
+    );
+
+    let mut tied = preferred;
+    tied.name = "later-tie".into();
+    let tied_servers = vec![servers[1].clone(), tied];
+    assert_eq!(
+        super::catalog::primary_for_file(&tied_servers, std::path::Path::new("src/app.ts"))
+            .map(|server| server.name.as_str()),
+        Some("preferred"),
+        "equal priority keeps catalog order"
+    );
+}
+
+#[test]
 fn tool_surface_includes_lsp_when_policy_allows() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -406,6 +442,62 @@ fn workspace_edit_rename_allows_a_new_destination() {
         prepared[0].rename_from.as_deref(),
         Some(canonical_root.join("old.rs").as_path())
     );
+}
+
+#[tokio::test]
+async fn workspace_edit_preflights_every_file_before_writing_any_file() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.rs");
+    let stale = root.path().join("stale.rs");
+    std::fs::write(&first, "fn first() {}\n").unwrap();
+    std::fs::write(&stale, "fn stale() {}\n").unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let server = fixture_server(FIXTURE_PY.into());
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadWrite,
+        "s-atomic-preflight",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id: "s-atomic-preflight".into(),
+        behavior_id: "b1".into(),
+        workspace_root: root.path().to_path_buf(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    let pool = LspPool::new();
+    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let prepared = vec![
+        super::edits::PreparedEdit {
+            path: std::fs::canonicalize(&first).unwrap(),
+            new_bytes: b"fn rewritten() {}\n".to_vec(),
+            expected_hash: Some(crate::toolset::file_tools::content_hash(b"fn first() {}\n")),
+            version: None,
+            rename_from: None,
+        },
+        super::edits::PreparedEdit {
+            path: std::fs::canonicalize(&stale).unwrap(),
+            new_bytes: b"fn also_rewritten() {}\n".to_vec(),
+            expected_hash: Some("not-the-current-hash".into()),
+            version: None,
+            rename_from: None,
+        },
+    ];
+    let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
+    let _guards = super::edits::acquire_mutation_locks(&prepared).await;
+    let error = super::edits::apply_prepared_with_held_locks(&context, lease.client(), &prepared)
+        .await
+        .expect_err("stale later file must reject the whole edit before writes");
+    assert!(error.to_string().contains("changed between preflight"));
+    assert_eq!(std::fs::read_to_string(first).unwrap(), "fn first() {}\n");
 }
 
 #[test]
@@ -919,6 +1011,42 @@ async fn simultaneous_first_calls_share_one_process() {
 }
 
 #[tokio::test]
+async fn resolved_executable_path_is_subject_to_command_prefix_policy() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let server = fixture_server(FIXTURE_PY.into());
+    let admitted = super::admit::admit_command(&server.command, root.path()).unwrap();
+    let mut config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        "s-resolved-prefix",
+        vec![server.clone()],
+    );
+    config.constraints.forbidden_argv_prefixes = vec![vec![admitted.to_string_lossy().into()]];
+    config.digest = config_digest(&config.workspace, &config.servers, &config.constraints);
+    let key = PoolKey {
+        session_id: "s-resolved-prefix".into(),
+        behavior_id: "b1".into(),
+        workspace_root: root.path().to_path_buf(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    let error = match LspPool::new().get_or_start(key, &server, &config).await {
+        Ok(_) => panic!("absolute-path prefix must constrain a catalog bare command"),
+        Err(error) => error,
+    };
+    assert!(error.to_ascii_lowercase().contains("forbidden"), "{error}");
+}
+
+#[tokio::test]
 async fn semantic_retry_handles_empty_arrays_with_one_total_budget() {
     if !python3_available() {
         return;
@@ -1003,17 +1131,137 @@ while True:
         lease.client(),
         "workspace/symbol",
         serde_json::json!({"query":"missing"}),
-        std::time::Duration::from_millis(250),
+        std::time::Duration::from_secs(5),
         true,
     )
     .await
     .expect("empty result at deadline is a semantic empty response");
     assert!(empty.is_null() || empty.as_array().is_some_and(Vec::is_empty));
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(1),
-        "the timeout must bound the whole retry loop: {:?}",
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "genuinely empty results must stop after the bounded retry count: {:?}",
         started.elapsed()
     );
+}
+
+#[tokio::test]
+async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("lib.rs");
+    std::fs::write(&path, "fn before() {}\n").unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let server = fixture_server(FIXTURE_PY.into());
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        "s-resync",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id: "s-resync".into(),
+        behavior_id: "b1".into(),
+        workspace_root: root.path().to_path_buf(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    let pool = LspPool::new();
+    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let uri = super::uri::path_to_file_uri(&path);
+    lease
+        .client()
+        .ensure_open(&uri, "rust", "fn before() {}\n")
+        .await
+        .unwrap();
+    lease
+        .client()
+        .ensure_open(&uri, "rust", "fn after() {}\n")
+        .await
+        .unwrap();
+    assert_eq!(lease.client().tracked_version(&uri).await, Some(2));
+}
+
+#[tokio::test]
+async fn exited_server_is_evicted_and_restarted_on_the_next_action() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let counter = root.path().join("starts.txt");
+    let fixture = format!(
+        r#"
+import json, sys
+open({counter:?}, "a").write("x\n")
+def read():
+    headers = {{}}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b'\r\n', b'\n'):
+            break
+        key, _, value = line.decode().partition(':')
+        headers[key.strip().lower()] = value.strip()
+    n = int(headers.get('content-length', '0'))
+    return json.loads(sys.stdin.buffer.read(n) or b'null')
+def write(obj):
+    body = json.dumps(obj).encode()
+    sys.stdout.buffer.write(f'Content-Length: {{len(body)}}\r\n\r\n'.encode())
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+while True:
+    msg = read()
+    if msg is None:
+        break
+    method = msg.get('method')
+    if method == 'initialize':
+        write({{"jsonrpc":"2.0","id":msg.get('id'),"result":{{"capabilities":{{}}}}}})
+    elif method == 'initialized':
+        break
+"#
+    );
+    let server = fixture_server(fixture);
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        "s-restart",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id: "s-restart".into(),
+        behavior_id: "b1".into(),
+        workspace_root: root.path().to_path_buf(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    let pool = LspPool::new();
+    let first = pool
+        .get_or_start(key.clone(), &server, &config)
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while first.client().is_alive() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("fixture server should exit");
+    drop(first);
+    let _second = pool.get_or_start(key, &server, &config).await.unwrap();
+    let starts = std::fs::read_to_string(counter).unwrap();
+    assert_eq!(starts.lines().count(), 2, "{starts:?}");
 }
 
 #[tokio::test]

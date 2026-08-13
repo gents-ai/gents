@@ -158,7 +158,7 @@ pub fn primary_for_file<'a>(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let mut matches: Vec<&CatalogServer> = servers
+    servers
         .iter()
         .filter(|s| !s.is_linter)
         .filter(|s| {
@@ -166,9 +166,14 @@ pub fn primary_for_file<'a>(
                 .iter()
                 .any(|ft| ft.eq_ignore_ascii_case(&ext) || ft.eq_ignore_ascii_case(&name))
         })
-        .collect();
-    matches.sort_by_key(|s| (s.priority, s.name.as_str()));
-    matches.first().copied()
+        .min_by_key(|s| s.priority)
+}
+
+pub fn primary_for_workspace(servers: &[CatalogServer]) -> Option<&CatalogServer> {
+    servers
+        .iter()
+        .filter(|server| !server.is_linter)
+        .min_by_key(|server| server.priority)
 }
 
 pub fn file_type_matches(server: &CatalogServer, file: &Path) -> bool {

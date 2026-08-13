@@ -232,6 +232,11 @@ impl LspPool {
             return None;
         }
         let client = entry.client.clone()?;
+        if !client.is_alive() {
+            drop(entry);
+            self.retire(key).await;
+            return None;
+        }
         entry.leases.fetch_add(1, Ordering::SeqCst);
         entry.last_used = Instant::now();
         Some(LspLease {
@@ -260,12 +265,31 @@ impl LspPool {
 
         let (slot, starter, evicted) = {
             let mut map = self.inner.lock().await;
-            if let Some(existing) = map.get(&key) {
-                (existing.clone(), false, Vec::new())
+            let mut evicted = Vec::new();
+            let mut reusable = None;
+            if let Some(existing) = map.get(&key).cloned() {
+                let dead = {
+                    let entry = existing.lock().await;
+                    entry.state == EntryState::Ready
+                        && entry
+                            .client
+                            .as_ref()
+                            .is_some_and(|client| !client.is_alive())
+                };
+                if dead {
+                    map.remove(&key);
+                    evicted.push(existing);
+                } else {
+                    reusable = Some(existing);
+                }
+            }
+            if let Some(existing) = reusable {
+                (existing, false, evicted)
             } else {
-                let Some(evicted) = self.take_eviction_victims(&mut map, &key).await else {
+                let Some(cap_victims) = self.take_eviction_victims(&mut map, &key).await else {
                     return Err("language-server client cap reached".into());
                 };
+                evicted.extend(cap_victims);
                 let slot = Arc::new(Mutex::new(PoolEntry {
                     state: EntryState::Starting,
                     leases: Arc::new(AtomicUsize::new(0)),
@@ -522,6 +546,16 @@ impl LspPool {
                 let entry = slot.lock().await;
                 let state = match entry.state {
                     EntryState::Starting => PoolServerState::Starting,
+                    EntryState::Ready
+                        if entry
+                            .client
+                            .as_ref()
+                            .is_some_and(|client| !client.is_alive()) =>
+                    {
+                        PoolServerState::Failed(
+                            "language server exited; next action restarts it".into(),
+                        )
+                    }
                     EntryState::Ready => PoolServerState::Ready,
                     EntryState::Retiring => PoolServerState::Retiring,
                 };

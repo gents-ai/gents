@@ -218,13 +218,13 @@ fn normalize_for_creation(path: &Path) -> Result<PathBuf> {
             _ => normalized.push(component.as_os_str()),
         }
     }
-    // Canonicalize the nearest existing ancestor, then append the missing
-    // suffix. This preserves allow-create semantics while resolving symlinked
-    // platform prefixes such as macOS `/var` -> `/private/var` and prevents a
-    // missing child beneath an in-root symlink from bypassing the root check.
+    // Canonicalize the nearest filesystem entry, then append the missing
+    // suffix. `symlink_metadata` deliberately does not follow the final link:
+    // a dangling symlink is an existing entry whose canonicalization must
+    // fail, rather than a creatable leaf that a later write could follow.
     let mut ancestor = normalized.as_path();
     let mut suffix = Vec::new();
-    while !ancestor.exists() {
+    while std::fs::symlink_metadata(ancestor).is_err() {
         let name = ancestor
             .file_name()
             .ok_or_else(|| anyhow!("path has no existing ancestor: {}", path.display()))?;

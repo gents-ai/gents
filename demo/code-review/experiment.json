@@ -6,6 +6,7 @@
     "model_name": "${GENTS_REVIEW_COORDINATOR_MODEL:-GLM-5.2}",
     "tool_package": "write",
     "tool_root": "${GENTS_REVIEW_ROOT:-.}",
+    "tool_root_env_var": "GENTS_REVIEW_ROOT",
     "tool_root_markers": ["Cargo.toml", "crates/gents"],
     "backend_preset": "vllm",
     "openai_wire_api": "chat-completions"

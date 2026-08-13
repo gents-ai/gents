@@ -190,6 +190,7 @@ async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_
         tokio_util::sync::CancellationToken::new(),
         None,
         None,
+        None,
         Some("run-42".to_string()),
         source_fields,
         false,

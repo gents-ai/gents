@@ -8,6 +8,7 @@
     "openai_wire_api": "chat-completions",
     "tool_package": "readonly",
     "tool_root": "${GENTS_LSP_WORKSPACE:-.}",
+    "tool_root_env_var": "GENTS_LSP_WORKSPACE",
     "tool_root_markers": ["Cargo.toml", "crates/gents"]
   },
   "seed": {

@@ -293,6 +293,7 @@ pub(crate) async fn scope_request_tool_execution_with_trigger_context<F, T>(
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
     live_output: Option<LiveToolOutputWriter>,
+    session_id: Option<String>,
     correlation: Option<String>,
     source_fields: std::collections::BTreeMap<String, String>,
     background: bool,
@@ -301,7 +302,6 @@ pub(crate) async fn scope_request_tool_execution_with_trigger_context<F, T>(
 where
     F: Future<Output = T>,
 {
-    let session_id = current_tool_runtime_context().and_then(|scope| scope.session_id);
     TOOL_RUNTIME_SCOPE
         .scope(
             ToolRuntimeScope {
@@ -339,6 +339,9 @@ where
         cancellation_token,
         workspace_cwd,
         live_output,
+        inherited
+            .as_ref()
+            .and_then(|scope| scope.session_id.clone()),
         inherited
             .as_ref()
             .and_then(|scope| scope.correlation.clone()),
@@ -692,11 +695,13 @@ mod tests {
             CancellationToken::new(),
             None,
             None,
+            Some("session-7".to_string()),
             Some("run-7".to_string()),
             fields.clone(),
             false,
             async move {
                 let foreground = current_tool_runtime_context().expect("foreground context");
+                assert_eq!(foreground.session_id.as_deref(), Some("session-7"));
                 assert_eq!(foreground.correlation.as_deref(), Some("run-7"));
                 assert_eq!(foreground.source_fields, fields);
 
@@ -709,6 +714,7 @@ mod tests {
                         let background =
                             current_tool_runtime_context().expect("background context");
                         assert!(background.background);
+                        assert_eq!(background.session_id.as_deref(), Some("session-7"));
                         assert_eq!(background.correlation.as_deref(), Some("run-7"));
                         assert_eq!(
                             background
@@ -723,5 +729,30 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn explicit_session_survives_a_spawned_background_task_boundary() {
+        let observed = tokio::spawn(async {
+            scope_request_tool_execution_with_trigger_context(
+                None,
+                CancellationToken::new(),
+                None,
+                None,
+                Some("background-session".into()),
+                None,
+                std::collections::BTreeMap::new(),
+                true,
+                async {
+                    current_tool_runtime_context()
+                        .and_then(|scope| scope.session_id)
+                        .expect("background session id")
+                },
+            )
+            .await
+        })
+        .await
+        .unwrap();
+        assert_eq!(observed, "background-session");
     }
 }

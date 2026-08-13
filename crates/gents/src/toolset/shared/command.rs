@@ -401,7 +401,12 @@ pub(crate) fn prepare_managed_command(
     let admitted = admit_host_executable(command, root)
         .map_err(|reason| policy_denial(&constraints.to_spawn_policy(), reason))?;
     let spawn_policy = constraints.to_spawn_policy();
-    validate_command_policy(command, args, &spawn_policy)?;
+    validate_command_policy_with_resolved_executable(
+        command,
+        args,
+        &admitted.to_string_lossy(),
+        &spawn_policy,
+    )?;
     let (program, argv, sandbox) =
         sandboxed_command_for_policy(root, &admitted.to_string_lossy(), args, &spawn_policy)?;
     Ok((PathBuf::from(program), argv, build_shell_env(), sandbox))
@@ -565,11 +570,40 @@ pub(crate) fn validate_command_policy(
     args: &[String],
     policy: &CommandExecutionPolicy,
 ) -> std::result::Result<(), ToolError> {
+    validate_command_policy_inner(command, args, None, policy)
+}
+
+fn validate_command_policy_with_resolved_executable(
+    command: &str,
+    args: &[String],
+    resolved_command: &str,
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
+    validate_command_policy_inner(command, args, Some(resolved_command), policy)
+}
+
+fn validate_command_policy_inner(
+    command: &str,
+    args: &[String],
+    resolved_command: Option<&str>,
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(), ToolError> {
     let argv = std::iter::once(command.to_string())
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
+    let resolved_argv = resolved_command.map(|resolved| {
+        std::iter::once(resolved.to_string())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>()
+    });
 
-    if let Some(prefix) = first_matching_prefix(&argv, &policy.forbidden_argv_prefixes) {
+    if let Some(prefix) =
+        first_matching_prefix(&argv, &policy.forbidden_argv_prefixes).or_else(|| {
+            resolved_argv
+                .as_ref()
+                .and_then(|argv| first_matching_prefix(argv, &policy.forbidden_argv_prefixes))
+        })
+    {
         return Err(policy_denial(
             policy,
             DenialReason::ForbiddenPrefix {
@@ -585,8 +619,11 @@ pub(crate) fn validate_command_policy(
         ));
     }
 
-    let allowed_prefix_matched =
-        first_matching_prefix(&argv, &policy.allowed_argv_prefixes).is_some();
+    let allowed_prefix_matched = first_matching_prefix(&argv, &policy.allowed_argv_prefixes)
+        .is_some()
+        || resolved_argv.as_ref().is_some_and(|argv| {
+            first_matching_prefix(argv, &policy.allowed_argv_prefixes).is_some()
+        });
     if !policy.allowed_argv_prefixes.is_empty() && !allowed_prefix_matched {
         return Err(policy_denial(
             policy,

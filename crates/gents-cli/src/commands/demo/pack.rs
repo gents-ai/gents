@@ -57,6 +57,11 @@ struct PackInit {
     /// inferable. Relative paths resolve against the process cwd.
     #[serde(default)]
     tool_root: Option<String>,
+    /// Environment variable receiving the canonical tool root while the
+    /// child applies the pack. This keeps pack interpolation aligned with
+    /// the root passed to `gents init`.
+    #[serde(default)]
+    tool_root_env_var: Option<String>,
     /// Files or directories that must exist under the resolved tool root.
     /// Packs use this to fail fast when invoked from the wrong checkout.
     #[serde(default)]
@@ -64,7 +69,7 @@ struct PackInit {
 }
 
 fn default_tool_package() -> String {
-    "readonly".to_string()
+    "minimal".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -678,18 +683,22 @@ async fn verify_tool_call_expectations(
     expectations: &[ToolCallExpectation],
 ) -> Result<()> {
     for expected in expectations {
-        let stage = stages
+        let matching_stages = stages
             .iter()
-            .find(|stage| stage.trigger_id == expected.trigger_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tool call expectation references unknown trigger {}",
-                    expected.trigger_id
-                )
-            })?;
-        let escaped = escape_graphql_string(&stage.request_id);
-        let query = format!(
-            r#"{{
+            .filter(|stage| stage.trigger_id == expected.trigger_id)
+            .collect::<Vec<_>>();
+        if matching_stages.is_empty() {
+            return Err(anyhow::anyhow!(
+                "tool call expectation references unknown trigger {}",
+                expected.trigger_id
+            ));
+        }
+        let mut all_rows = Vec::new();
+        let mut matched = false;
+        for stage in matching_stages {
+            let escaped = escape_graphql_string(&stage.request_id);
+            let query = format!(
+                r#"{{
                 AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
                     tool_name
                     status
@@ -698,12 +707,14 @@ async fn verify_tool_call_expectations(
                     result
                 }}
             }}"#
-        );
-        let rows = graphql_rows(graphql, "AgentToolCall", &query).await?;
-        let matched = rows.iter().any(|row| tool_call_matches(row, expected));
+            );
+            let rows = graphql_rows(graphql, "AgentToolCall", &query).await?;
+            matched |= rows.iter().any(|row| tool_call_matches(row, expected));
+            all_rows.extend(rows);
+        }
         if !matched {
             bail!(
-                "no completed {} call for {} matched action={:?} file={:?} symbol={:?} result_contains={:?}; rows={rows:?}",
+                "no completed {} call for {} matched action={:?} file={:?} symbol={:?} result_contains={:?}; rows={all_rows:?}",
                 expected.tool_name,
                 expected.trigger_id,
                 expected.action,
@@ -720,8 +731,7 @@ fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
     if row.get("tool_name").and_then(Value::as_str) != Some(expected.tool_name.as_str()) {
         return false;
     }
-    let completed = row.get("status").and_then(Value::as_str) == Some("completed")
-        || row.get("lifecycle_state").and_then(Value::as_str) == Some("completed");
+    let completed = row.get("lifecycle_state").and_then(Value::as_str) == Some("completed");
     if !completed {
         return false;
     }
@@ -2095,7 +2105,15 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     let log = run_dir.join("server.log");
     let started = Instant::now();
 
-    let mut server = spawn_server_with_pack(&bin, &home, port, &log, &pack, tool_root.as_deref())?;
+    let mut server = spawn_server_with_pack(
+        &bin,
+        &home,
+        port,
+        &log,
+        &pack,
+        tool_root.as_deref(),
+        manifest.init.tool_root_env_var.as_deref(),
+    )?;
     let outcome = async {
         wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
@@ -2383,10 +2401,12 @@ fn spawn_server_with_pack(
     log: &Path,
     pack: &Path,
     tool_root: Option<&Path>,
+    tool_root_env_var: Option<&str>,
 ) -> Result<tokio::process::Child> {
     let root = path_arg(pack);
     let environment = tool_root
-        .map(|path| vec![("GENTS_LSP_WORKSPACE", path.to_string_lossy().into_owned())])
+        .zip(tool_root_env_var)
+        .map(|(path, name)| vec![(name, path.to_string_lossy().into_owned())])
         .unwrap_or_default();
     spawn_server_with_args_and_env(bin, home, port, log, &["--apply-root", &root], &environment)
 }
@@ -2459,6 +2479,7 @@ mod tests {
                 backend_preset: None,
                 openai_wire_api: None,
                 tool_root: None,
+                tool_root_env_var: None,
                 tool_root_markers: Vec::new(),
             },
             seed: PackSeed {
@@ -2504,6 +2525,30 @@ mod tests {
             manifest.expect.trigger_request_counts.get("review-scan"),
             Some(&4)
         );
+    }
+
+    #[test]
+    fn every_checked_in_demo_pack_loads() {
+        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
+        let mut packs = std::fs::read_dir(&demo)
+            .expect("read demo directory")
+            .map(|entry| entry.expect("read demo entry").path())
+            .filter(|path| path.join("experiment.json").is_file())
+            .collect::<Vec<_>>();
+        packs.sort();
+        assert!(!packs.is_empty(), "expected checked-in demo packs");
+        for pack in packs {
+            load_manifest(&pack)
+                .unwrap_or_else(|error| panic!("{} should load: {error:#}", pack.display()));
+        }
+    }
+
+    #[test]
+    fn omitted_tool_package_keeps_the_minimal_ceiling() {
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
+        let manifest = load_manifest(&pack).expect("pipeline pack should load");
+        assert_eq!(manifest.init.tool_package, "minimal");
+        assert!(manifest.init.tool_root.is_none());
     }
 
     #[test]
@@ -2585,6 +2630,10 @@ mod tests {
             .tool_root
             .as_deref()
             .is_some_and(|root| !root.is_empty()));
+        assert_eq!(
+            manifest.init.tool_root_env_var.as_deref(),
+            Some("GENTS_LSP_WORKSPACE")
+        );
         assert!(manifest
             .expect
             .tool_calls
@@ -2638,6 +2687,7 @@ mod tests {
                 openai_wire_api: None,
                 tool_package: "readonly".into(),
                 tool_root: None,
+                tool_root_env_var: None,
                 tool_root_markers: Vec::new(),
             },
             seed: PackSeed {
@@ -2680,6 +2730,7 @@ mod tests {
         let ok = json!({
             "tool_name": "lsp",
             "status": "completed",
+            "lifecycle_state": "completed",
             "args": "{\"action\":\"hover\",\"file\":\"src/auth.rs\"}",
             "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
         });
@@ -2687,6 +2738,7 @@ mod tests {
         let status_only = json!({
             "tool_name": "lsp",
             "status": "completed",
+            "lifecycle_state": "completed",
             "args": "{\"action\":\"status\"}",
             "result": "Language servers: rust-analyzer (ready)"
         });
@@ -2694,6 +2746,7 @@ mod tests {
         let empty_hover = json!({
             "tool_name": "lsp",
             "status": "completed",
+            "lifecycle_state": "completed",
             "args": "{\"action\":\"hover\"}",
             "result": "No hover information"
         });
@@ -2701,6 +2754,7 @@ mod tests {
         let wrong_file = json!({
             "tool_name": "lsp",
             "status": "completed",
+            "lifecycle_state": "completed",
             "args": "{\"action\":\"hover\",\"file\":\"src/other.rs\"}",
             "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
         });
@@ -2708,6 +2762,7 @@ mod tests {
         let empty_symbols = json!({
             "tool_name": "lsp",
             "status": "completed",
+            "lifecycle_state": "completed",
             "args": "{\"action\":\"symbols\",\"file\":\"src/auth.rs\"}",
             "result": "No result"
         });
@@ -2722,5 +2777,13 @@ mod tests {
                 result_contains: Vec::new(),
             }
         ));
+        let failed_lifecycle = json!({
+            "tool_name": "lsp",
+            "status": "completed",
+            "lifecycle_state": "failed",
+            "args": "{\"action\":\"hover\",\"file\":\"src/auth.rs\"}",
+            "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
+        });
+        assert!(!tool_call_matches(&failed_lifecycle, &expected));
     }
 }

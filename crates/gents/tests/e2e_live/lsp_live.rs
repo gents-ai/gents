@@ -266,12 +266,18 @@ async fn lsp_live_model_uses_rust_analyzer() {
         Duration::from_secs(10),
     )
     .await;
+    let lower_answer = unscripted_answer.to_ascii_lowercase();
+    let reports_rank_order = match (
+        lower_answer.find("disabled"),
+        lower_answer.find("inherit"),
+        lower_answer.find("enabled"),
+    ) {
+        (Some(disabled), Some(inherit), Some(enabled)) => disabled < inherit && inherit < enabled,
+        _ => false,
+    };
     assert!(
-        unscripted_answer.contains("Disabled")
-            && unscripted_answer.contains("Inherit")
-            && unscripted_answer.contains("Enabled")
-            && (unscripted_answer.to_ascii_lowercase().contains("restrict")
-                || unscripted_answer.to_ascii_lowercase().contains("wins")),
+        reports_rank_order
+            && (lower_answer.contains("restrict") || lower_answer.contains("wins")),
         "unscripted answer must report that the more restrictive mode wins in Disabled < Inherit < Enabled order; got:\n{unscripted_answer}"
     );
 
@@ -396,8 +402,19 @@ fn find_useful_action_for_file<'a>(
 }
 
 fn call_completed(call: &ToolCallRow) -> bool {
-    call.status.as_deref() == Some("completed")
-        || call.lifecycle_state.as_deref() == Some("completed")
+    call.lifecycle_state.as_deref() == Some("completed")
+}
+
+#[test]
+fn completed_persistence_status_does_not_mask_a_failed_lifecycle() {
+    let failed = ToolCallRow {
+        tool_name: Some("lsp".into()),
+        status: Some("completed".into()),
+        lifecycle_state: Some("failed".into()),
+        args: Some(r#"{"action":"hover"}"#.into()),
+        result: Some("policy denied".into()),
+    };
+    assert!(!call_completed(&failed));
 }
 
 fn args_json(call: &ToolCallRow) -> Option<serde_json::Value> {

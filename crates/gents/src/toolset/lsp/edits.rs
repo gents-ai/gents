@@ -115,7 +115,10 @@ pub async fn apply_prepared_with_held_locks(
     client: &LspClient,
     prepared: &[PreparedEdit],
 ) -> Result<usize, ToolError> {
-    let mut applied = 0usize;
+    // Validate the entire edit set while all mutation locks are held before
+    // performing the first write. This is not an OS-level transaction, but a
+    // stale hash/version in a later file must never leave earlier files
+    // rewritten.
     for edit in prepared {
         if let Some(expected) = &edit.expected_hash {
             let current = std::fs::read(&edit.path).map_err(|err| {
@@ -145,6 +148,10 @@ pub async fn apply_prepared_with_held_locks(
                 }
             }
         }
+    }
+
+    let mut applied = 0usize;
+    for edit in prepared {
         if let Some(parent) = edit.path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| {
                 ToolError::reported_failure(FailureClass::ToolReturnedError, err.to_string())

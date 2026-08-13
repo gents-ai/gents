@@ -260,8 +260,34 @@ impl Tool for LspTool {
             catalog::detect_admitted_servers(&self.config.workspace, &self.config.servers);
         let lease = if action.may_cold_start() {
             let file = args.file.as_deref().unwrap_or("");
-            let path = if file.is_empty() || file == "*" || file.contains(['*', '?', '{', '[']) {
+            let is_glob = file.contains(['*', '?', '{', '[']);
+            let path = if file.is_empty() || file == "*" {
                 None
+            } else if is_glob {
+                let paths = crate::toolset::native_runner::NativeFsRunner::new(&self.context)
+                    .glob_paths(file, actions::MAX_GLOB_TARGETS)
+                    .await
+                    .unwrap_or_default();
+                if paths.is_empty() {
+                    return Ok("no files matched the diagnostic glob".into());
+                }
+                let primary_names = paths
+                    .iter()
+                    .filter_map(|path| primary_for_file(&detected, path))
+                    .map(|server| server.name.as_str())
+                    .collect::<std::collections::BTreeSet<_>>();
+                if primary_names.len() > 1 {
+                    return Err(ToolError::reported_failure(
+                        FailureClass::ArgumentInvalid,
+                        "diagnostic glob spans multiple language servers; split it by file type"
+                            .into(),
+                    ));
+                }
+                paths
+                    .iter()
+                    .find(|path| primary_for_file(&detected, path).is_some())
+                    .cloned()
+                    .or_else(|| paths.into_iter().next())
             } else {
                 Some(
                     edits::resolve_inbound_path(&self.context, file).map_err(|err| {
@@ -271,7 +297,7 @@ impl Tool for LspTool {
             };
             let server = match path.as_ref() {
                 Some(path) => primary_for_file(&detected, path).cloned(),
-                None => detected.iter().find(|server| !server.is_linter).cloned(),
+                None => catalog::primary_for_workspace(&detected).cloned(),
             };
             if let Some(server) = server {
                 let session_id =

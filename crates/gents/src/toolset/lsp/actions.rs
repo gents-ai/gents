@@ -86,11 +86,11 @@ pub async fn dispatch(
             ))
         }
         LspAction::Capabilities => {
-            let lease = lease.ok_or_else(|| unavailable("no language server"))?;
+            let lease = lease.ok_or_else(|| unavailable_for_config(config))?;
             Ok(lease.client().capabilities().await.to_string())
         }
         action => {
-            let lease = lease.ok_or_else(|| unavailable("no language server"))?;
+            let lease = lease.ok_or_else(|| unavailable_for_config(config))?;
             run_file_action(context, lease.client(), config, servers, action, &req).await
         }
     }
@@ -132,7 +132,10 @@ async fn run_file_action(
     })?;
     let uri = super::uri::path_to_file_uri(&path);
     let lang = language_id(servers, &path);
-    let _ = client.ensure_open(&uri, &lang, &text).await;
+    client
+        .ensure_open(&uri, &lang, &text)
+        .await
+        .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
     let encoding = client.position_encoding().await;
     let pos = position_for_symbol(
         &text,
@@ -436,17 +439,16 @@ pub(crate) async fn request_maybe_retry(
     timeout: std::time::Duration,
     retry_empty: bool,
 ) -> Result<Value, String> {
+    const MAX_EMPTY_ATTEMPTS: usize = 3;
     let deadline = std::time::Instant::now() + timeout;
-    let mut first = true;
-    loop {
-        if !first {
+    for attempt in 0..MAX_EMPTY_ATTEMPTS {
+        if attempt > 0 {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
                 return Ok(Value::Null);
             }
             tokio::time::sleep(remaining.min(std::time::Duration::from_millis(400))).await;
         }
-        first = false;
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             return Ok(Value::Null);
@@ -454,10 +456,11 @@ pub(crate) async fn request_maybe_retry(
         let result = client
             .request_with_timeout(method, params.clone(), remaining)
             .await?;
-        if !retry_empty || !semantic_result_is_empty(&result) {
+        if !retry_empty || !semantic_result_is_empty(&result) || attempt + 1 == MAX_EMPTY_ATTEMPTS {
             return Ok(result);
         }
     }
+    unreachable!("bounded retry loop always returns")
 }
 
 fn semantic_result_is_empty(result: &Value) -> bool {
@@ -864,13 +867,23 @@ async fn glob_action(
         return Ok("no files matched the diagnostic glob".into());
     }
     let mut sections = Vec::new();
-    for path in paths.into_iter().take(MAX_GLOB_TARGETS) {
+    let selected_server = servers
+        .iter()
+        .find(|server| server.name == client.server_name);
+    for path in paths
+        .into_iter()
+        .filter(|path| {
+            selected_server.is_none_or(|server| super::catalog::file_type_matches(server, path))
+        })
+        .take(MAX_GLOB_TARGETS)
+    {
         let display = context.display_path(&path);
         let uri = super::uri::path_to_file_uri(&path);
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let _ = client
+        client
             .ensure_open(&uri, &language_id(servers, &path), &text)
-            .await;
+            .await
+            .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
         let result = client
             .request(
                 "textDocument/diagnostic",
@@ -883,6 +896,9 @@ async fn glob_action(
             section = format!("{section}\n{linter}");
         }
         sections.push(section);
+    }
+    if sections.is_empty() {
+        return Ok("no files matched the selected language server".into());
     }
     Ok(truncate_model_output(sections.join("\n")))
 }
@@ -1009,4 +1025,12 @@ fn policy(text: impl Into<String>) -> ToolError {
 
 fn unavailable(text: impl Into<String>) -> ToolError {
     ToolError::reported_failure(FailureClass::ServiceUnavailable, text.into())
+}
+
+fn unavailable_for_config(config: &super::LspToolConfig) -> ToolError {
+    unavailable(super::catalog::unavailable_servers_message(
+        &config.workspace,
+        &config.servers,
+        None,
+    ))
 }

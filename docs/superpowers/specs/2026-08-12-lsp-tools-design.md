@@ -382,8 +382,8 @@ holds the path lock (non-reentrant `tokio::sync::Mutex`):
 1. `prepare` — parse, reject non-`file:`, resolve URIs through
    `ToolContext`, validate ranges, compute lock keys and new bytes.
 2. `acquire` — take `file_mutation_lock_for` in sorted order.
-3. `apply_with_held_locks` — hash/version check, write, no further
-   acquire.
+3. `apply_with_held_locks` — hash/version check **every prepared file
+   before the first write**, then write, with no further acquire.
 
 Format-on-write calls `prepare` then `apply_with_held_locks` on the
 locks it already owns. The ordinary rename path calls all three.
@@ -409,6 +409,8 @@ generation retirement — one rule):
 - LRU considers **zero-lease `Ready` entries only**.
 - If every candidate is `Starting` or leased, return
   `serviceUnavailable`. Do not kill an active request.
+- EOF or a reader failure makes a `Ready` client ineligible immediately;
+  the next server-backed action evicts it and starts a replacement.
 
 `reload` (file or `*`) retires entries whose key matches the current
 `(session_id, behavior_id, workspace_root, config_digest)` — not every
@@ -488,9 +490,10 @@ URI-shaped field in it is validated the same way. Unknown methods are
 `argumentInvalid`.
 
 Cold-start semantic navigation retries `null` and empty-array responses
-for the indexing window. The user-supplied tool timeout bounds the whole
-retry loop, not each individual attempt. Empty diagnostics remain a
-successful clean result.
+at most three times during the indexing window. The user-supplied tool
+timeout bounds the whole retry loop, not each individual attempt. This
+keeps a genuinely empty result from consuming the full 20–300 second
+budget. Empty diagnostics remain a successful clean result.
 
 ### 12. Client capabilities
 
@@ -535,6 +538,9 @@ the same capped message-bearing representation before location redaction.
 - Overlapping ranges on one file → `argumentInvalid`.
 - Tracked documents (we have a `didOpen` version): the edit's `version`
   must match.
+- Before a file action, compare the disk content hash to the last
+  `didOpen` / `didChange` payload and send a full-content `didChange` when
+  an out-of-band edit made the tracked buffer stale.
 - Unversioned files (server never opened them): validate ranges against
   **current** bytes under the lock; then write.
 - The `content_hash` check protects the interval between preflight and
@@ -583,7 +589,8 @@ to scrape.
 
 Add `session_id` (and, for the pool key, `behavior_id`) to
 `ToolRuntimeScope` — the existing task-local. Dispatchers already have
-both.
+both. Background dispatch captures `session_id` before `tokio::spawn` and
+passes it explicitly into the spawned task's runtime scope.
 
 `LspPool` is host-owned on `ToolRuntimeContext`. The owner that holds
 the pool calls `LspPool::close_session` / `shutdown` (section 9). Idle /
@@ -722,7 +729,9 @@ allowlist (scalars + per-server `disabled` / `priority` /
 - Inbound bare path / URI → validate through `ToolContext` or reject the
   scheme. Edit URI → no writes. Read-output URI → redact + complete.
 - Rename destinations use create-target resolution, including
-  server-returned rename document changes.
+  server-returned rename document changes. Create-target resolution uses
+  `symlink_metadata` for the nearest entry so a dangling symlink is never
+  mistaken for a missing creatable leaf.
 - ReadOnly `request` rejects verbatim `payload` and unknown shapes.
 - Format-on-write does not deadlock; diagnostics wait is off the lock.
 - Hash check: documents the preflight-to-write window only.

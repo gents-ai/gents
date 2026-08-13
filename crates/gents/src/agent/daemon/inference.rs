@@ -394,6 +394,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                         request_token.clone(),
                                         workspace_cwd.clone(),
                                         None,
+                                        Some(session_id.clone()),
                                         trigger_correlation.clone(),
                                         trigger_context.source_fields.clone(),
                                         false,
