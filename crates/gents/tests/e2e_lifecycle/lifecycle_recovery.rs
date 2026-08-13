@@ -235,6 +235,25 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     assert_eq!(diagnostics.epochs[0].state, "retry_backoff");
     assert_eq!(diagnostics.epochs[0].attempt_count, 2);
     assert!(diagnostics.epochs[0].next_retry_at.is_some());
+
+    upsert_conversation(
+        &db.node,
+        session_id,
+        "later-interactive-request",
+        "new user turn",
+        "active",
+    )
+    .await;
+    let displaced = gents::load_background_completion_diagnostics(
+        &gents::config_client::ConfigAccess::Local(db.node.clone()),
+        AGENT_DID,
+    )
+    .await
+    .expect("load displaced completion diagnostics");
+    assert_eq!(displaced.pending_notifications, 1);
+    assert_eq!(displaced.stranded_notifications, 1);
+    assert_eq!(displaced.epochs[0].state, "retry_ineligible_not_latest");
+    assert_eq!(displaced.epochs[0].next_retry_at, None);
 }
 
 async fn background_wake_retry_rows(

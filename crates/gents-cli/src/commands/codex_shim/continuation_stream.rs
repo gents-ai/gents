@@ -25,8 +25,7 @@ use super::subagent_projection::{
 };
 use super::thread_projection::CodexThreadRecord;
 use super::turn::{
-    clear_stream_control_if_current, codex_turn_id_for_request, install_stream_control,
-    stream_gents_turn, TurnStreamOptions,
+    codex_turn_id_for_request, install_stream_control, stream_gents_turn, TurnStreamOptions,
 };
 use super::turn_projection::TurnProjection;
 use super::{ConnectionState, ShimState};
@@ -74,6 +73,7 @@ pub(super) async fn ensure_loaded_root_continuation_stream(
             &task_connection,
             &task_state,
             &task_thread_id,
+            &task_watcher_id,
             baseline_turns,
         )
         .await;
@@ -84,6 +84,9 @@ pub(super) async fn ensure_loaded_root_continuation_stream(
                 "Codex shim root continuation projection stopped"
             );
         }
+        task_connection
+            .clear_turn_streams_owned_by(&task_watcher_id)
+            .await;
         task_connection
             .clear_root_continuation_stream_if_current(&task_thread_id, &task_watcher_id)
             .await;
@@ -97,6 +100,7 @@ async fn watch_loaded_root_continuations(
     connection: &ConnectionState,
     state: &ShimState,
     thread_id: &str,
+    watcher_id: &str,
     baseline_turns: Option<Vec<codex::Turn>>,
 ) -> Result<()> {
     let suppress_existing_terminal = baseline_turns.is_none();
@@ -149,7 +153,9 @@ async fn watch_loaded_root_continuations(
             }
 
             let baseline_turn = baseline_turns.remove(&request.request_id);
-            if baseline_turn.is_some() && request_is_terminal(lifecycle_state) {
+            if baseline_turn_is_terminal(baseline_turn.as_ref())
+                && request_is_terminal(lifecycle_state)
+            {
                 observed.insert(request.request_id);
                 continue;
             }
@@ -159,7 +165,8 @@ async fn watch_loaded_root_continuations(
             }
 
             observed.insert(request.request_id.clone());
-            project_background_continuation(connection, state, request, baseline_turn).await?;
+            project_background_continuation(connection, state, watcher_id, request, baseline_turn)
+                .await?;
             projected_request = true;
         }
         initialized = true;
@@ -257,6 +264,7 @@ async fn project_child_lifecycle_update(
 async fn project_background_continuation(
     connection: &ConnectionState,
     state: &ShimState,
+    watcher_id: &str,
     request: BackgroundContinuationRequest,
     baseline_turn: Option<codex::Turn>,
 ) -> Result<()> {
@@ -311,10 +319,11 @@ async fn project_background_continuation(
         |turn| TurnStreamOptions::resumed_background_completion(request.session_id.clone(), turn),
     );
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    install_stream_control(
+    let stream_registration = install_stream_control(
         connection,
         request.session_id.clone(),
         turn_id.clone(),
+        Some(watcher_id),
         cancel_tx,
     )
     .await;
@@ -333,7 +342,7 @@ async fn project_background_continuation(
             submitted.request_id, submitted.session_id
         )
     });
-    clear_stream_control_if_current(connection, &request.session_id, &turn_id).await;
+    stream_registration.clear().await;
     match result {
         Ok(()) => Ok(()),
         Err(error) => {
@@ -436,11 +445,17 @@ fn request_is_terminal(lifecycle_state: &str) -> bool {
     )
 }
 
+fn baseline_turn_is_terminal(turn: Option<&codex::Turn>) -> bool {
+    turn.is_some_and(|turn| turn.status != codex::TurnStatus::InProgress)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        continuation_request_has_started, is_background_completion_metadata, request_is_terminal,
+        baseline_turn_is_terminal, continuation_request_has_started,
+        is_background_completion_metadata, request_is_terminal, turn_value_with_timing,
     };
+    use gents_codex_protocol as codex;
 
     #[test]
     fn recognizes_canonical_and_legacy_background_completion_sources() {
@@ -466,5 +481,21 @@ mod tests {
         assert!(continuation_request_has_started("processing"));
         assert!(request_is_terminal("completed"));
         assert!(request_is_terminal("interrupted"));
+    }
+
+    #[test]
+    fn in_progress_resume_baseline_still_requires_terminal_projection() {
+        let mut turn = turn_value_with_timing(
+            "wake-1",
+            codex::TurnStatus::InProgress,
+            Vec::new(),
+            None,
+            None,
+            None,
+        );
+        assert!(!baseline_turn_is_terminal(Some(&turn)));
+        turn.status = codex::TurnStatus::Completed;
+        assert!(baseline_turn_is_terminal(Some(&turn)));
+        assert!(!baseline_turn_is_terminal(None));
     }
 }

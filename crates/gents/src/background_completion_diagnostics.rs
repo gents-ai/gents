@@ -80,6 +80,31 @@ struct NotificationRow {
     request_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ConversationRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    session_id: String,
+    latest_request_id: String,
+    updated_at: String,
+    title: String,
+    preview_text: String,
+}
+
+impl ConversationRow {
+    fn rank(&self) -> (String, usize, String) {
+        let richness = [
+            self.title.trim(),
+            self.preview_text.trim(),
+            self.latest_request_id.trim(),
+        ]
+        .iter()
+        .filter(|field| !field.is_empty())
+        .count();
+        (self.updated_at.clone(), richness, self.doc_id.clone())
+    }
+}
+
 /// Load the durable completion-delivery state shown by operator status
 /// surfaces. Each epoch is one canonical coalescing wake plus its bounded
 /// retry descendants; notifications are considered acknowledged only after
@@ -107,6 +132,11 @@ pub async fn load_background_completion_diagnostics(
                 }}, order: {{ timestamp: DESC }}, limit: {NOTIFICATION_SCAN_LIMIT}) {{
                     message_key request_id
                 }}
+                conversations: AgentConversation(filter: {{
+                    agent_did: {{ _eq: "{agent_did}" }}
+                }}) {{
+                    _docID session_id latest_request_id updated_at title preview_text
+                }}
             }}"#
         ))
         .await?;
@@ -125,12 +155,19 @@ pub async fn load_background_completion_diagnostics(
             .unwrap_or_else(|| serde_json::json!([])),
     )
     .context("decoding background completion notifications")?;
-    Ok(summarize(wakes, notifications, Utc::now()))
+    let conversations: Vec<ConversationRow> = serde_json::from_value(
+        data.get("conversations")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .context("decoding background completion conversations")?;
+    Ok(summarize(wakes, notifications, conversations, Utc::now()))
 }
 
 fn summarize(
     wakes: Vec<WakeRow>,
     notifications: Vec<NotificationRow>,
+    conversations: Vec<ConversationRow>,
     now: DateTime<Utc>,
 ) -> BackgroundCompletionDiagnostics {
     let scanned_wakes = wakes.len();
@@ -208,6 +245,21 @@ fn summarize(
             .or_default()
             .push(wake);
     }
+    let mut conversations_by_session = BTreeMap::<String, Vec<ConversationRow>>::new();
+    for conversation in conversations {
+        conversations_by_session
+            .entry(conversation.session_id.clone())
+            .or_default()
+            .push(conversation);
+    }
+    let latest_request_by_session = conversations_by_session
+        .into_iter()
+        .filter_map(|(session_id, mut rows)| {
+            rows.sort_by(|left, right| right.rank().cmp(&left.rank()));
+            rows.first()
+                .map(|row| (session_id, row.latest_request_id.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
 
     let mut diagnostics = BackgroundCompletionDiagnostics {
         scanned_wakes,
@@ -248,7 +300,10 @@ fn summarize(
         let retry_count = latest.retry_count.unwrap_or_default().max(0);
         let max_retries = latest.max_retries.unwrap_or_default().max(0);
         let latest_failed = request_failed(latest);
-        let next_retry = (latest_failed && retry_count < max_retries)
+        let retry_is_latest = latest_request_by_session
+            .get(&latest.session_id)
+            .is_some_and(|request_id| request_id == &latest.request_id);
+        let next_retry = (latest_failed && retry_count < max_retries && retry_is_latest)
             .then(|| {
                 crate::background_wake_next_retry_at(latest.terminalized_at.as_deref(), retry_count)
             })
@@ -265,13 +320,18 @@ fn summarize(
             "pending"
         } else if latest_failed && retry_count >= max_retries {
             "exhausted"
+        } else if latest_failed && !retry_is_latest {
+            "retry_ineligible_not_latest"
         } else if latest_failed {
             "retry_backoff"
         } else {
             "terminal_unacknowledged"
         };
         let stranded = pending_notification_count > 0
-            && matches!(state, "exhausted" | "terminal_unacknowledged");
+            && matches!(
+                state,
+                "exhausted" | "retry_ineligible_not_latest" | "terminal_unacknowledged"
+            );
 
         diagnostics.pending_notifications += pending_notification_count;
         diagnostics.acknowledged_notifications += acknowledged_notification_count;
@@ -437,6 +497,17 @@ mod tests {
         }
     }
 
+    fn conversation(latest_request_id: &str) -> ConversationRow {
+        ConversationRow {
+            doc_id: "conversation-1".to_string(),
+            session_id: "session-1".to_string(),
+            latest_request_id: latest_request_id.to_string(),
+            updated_at: "2026-08-12T00:00:06Z".to_string(),
+            title: String::new(),
+            preview_text: String::new(),
+        }
+    }
+
     #[test]
     fn failed_epoch_surfaces_backoff_and_unacknowledged_notification() {
         let now = DateTime::parse_from_rfc3339("2026-08-12T00:00:06Z")
@@ -445,6 +516,7 @@ mod tests {
         let diagnostics = summarize(
             vec![wake("wake-1", None, "failed", 0, 3)],
             vec![notification("wake-1", "child-1")],
+            vec![conversation("wake-1")],
             now,
         );
 
@@ -473,6 +545,7 @@ mod tests {
                 wake("wake-2", Some("wake-1"), "completed", 1, 3),
             ],
             vec![notification("wake-1", "child-1")],
+            vec![conversation("wake-2")],
             now,
         );
 
@@ -494,6 +567,7 @@ mod tests {
         let diagnostics = summarize(
             vec![wake("wake-1", None, "failed", 3, 3)],
             vec![notification("wake-1", "child-1")],
+            vec![conversation("wake-1")],
             now,
         );
 
@@ -522,6 +596,7 @@ mod tests {
                 notification("wake-1", "child-1"),
                 notification("wake-2", "child-2"),
             ],
+            vec![conversation("wake-2")],
             now,
         );
 
@@ -535,5 +610,25 @@ mod tests {
         assert_eq!(first.state, "acknowledged_by_successor");
         assert_eq!(first.acknowledged_notification_count, 1);
         assert!(first.pending_notification_keys.is_empty());
+    }
+
+    #[test]
+    fn failed_wake_displaced_by_later_turn_is_stranded_not_retrying() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:01:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let diagnostics = summarize(
+            vec![wake("wake-1", None, "failed", 0, 3)],
+            vec![notification("wake-1", "child-1")],
+            vec![conversation("later-interactive-request")],
+            now,
+        );
+
+        assert_eq!(diagnostics.pending_notifications, 1);
+        assert_eq!(diagnostics.stranded_notifications, 1);
+        let epoch = &diagnostics.epochs[0];
+        assert_eq!(epoch.state, "retry_ineligible_not_latest");
+        assert_eq!(epoch.next_retry_at, None);
+        assert_eq!(epoch.pending_notification_keys.len(), 1);
     }
 }

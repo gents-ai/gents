@@ -44,24 +44,93 @@ pub(in crate::commands::codex_shim) async fn install_stream_control(
     connection: &ConnectionState,
     thread_id: String,
     turn_id: String,
+    owner_id: Option<&str>,
     cancel_tx: watch::Sender<bool>,
-) {
+) -> TurnStreamRegistration {
+    let stream_id = uuid::Uuid::new_v4().to_string();
     connection.turn_streams.lock().await.insert(
         stream_key(&thread_id, &turn_id),
-        TurnStreamControl { cancel_tx },
+        TurnStreamControl {
+            stream_id: stream_id.clone(),
+            owner_id: owner_id.map(ToOwned::to_owned),
+            cancel_tx,
+        },
     );
+    TurnStreamRegistration {
+        connection: connection.clone(),
+        thread_id,
+        turn_id,
+        stream_id,
+        armed: true,
+    }
 }
 
-pub(in crate::commands::codex_shim) async fn clear_stream_control_if_current(
+async fn clear_stream_control_if_current(
     connection: &ConnectionState,
     thread_id: &str,
     turn_id: &str,
+    stream_id: &str,
 ) {
-    connection
-        .turn_streams
-        .lock()
-        .await
-        .remove(&stream_key(thread_id, turn_id));
+    let key = stream_key(thread_id, turn_id);
+    let mut streams = connection.turn_streams.lock().await;
+    if streams
+        .get(&key)
+        .is_some_and(|control| control.stream_id == stream_id)
+    {
+        streams.remove(&key);
+    }
+}
+
+/// Owns one generation of a turn-stream control. Tokio abort drops the
+/// streaming future, so Drop must arrange cleanup as well as the normal path.
+/// The generation id prevents an old task from erasing its replacement.
+pub(in crate::commands::codex_shim) struct TurnStreamRegistration {
+    connection: ConnectionState,
+    thread_id: String,
+    turn_id: String,
+    stream_id: String,
+    armed: bool,
+}
+
+impl TurnStreamRegistration {
+    pub(in crate::commands::codex_shim) async fn clear(mut self) {
+        clear_stream_control_if_current(
+            &self.connection,
+            &self.thread_id,
+            &self.turn_id,
+            &self.stream_id,
+        )
+        .await;
+        self.armed = false;
+    }
+}
+
+impl Drop for TurnStreamRegistration {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let connection = self.connection.clone();
+        let thread_id = self.thread_id.clone();
+        let turn_id = self.turn_id.clone();
+        let stream_id = self.stream_id.clone();
+        if let Ok(mut streams) = connection.turn_streams.try_lock() {
+            let key = stream_key(&thread_id, &turn_id);
+            if streams
+                .get(&key)
+                .is_some_and(|control| control.stream_id == stream_id)
+            {
+                streams.remove(&key);
+            }
+            return;
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                clear_stream_control_if_current(&connection, &thread_id, &turn_id, &stream_id)
+                    .await;
+            });
+        }
+    }
 }
 
 pub(super) fn cancel_abandoned_steering_request(state: &ShimState, request_id: String) {

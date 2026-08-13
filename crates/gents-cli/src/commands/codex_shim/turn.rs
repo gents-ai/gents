@@ -9,9 +9,7 @@ use tokio::sync::watch;
 pub(super) use active::interrupt_active_turn;
 
 use active::{cancel_abandoned_steering_request, load_active_codex_turn};
-pub(super) use active::{
-    clear_stream_control_if_current, codex_turn_id_for_request, install_stream_control,
-};
+pub(super) use active::{codex_turn_id_for_request, install_stream_control};
 pub(super) use stream::{stream_gents_turn, TurnStreamOptions};
 use submission::create_agent_request_with_retry;
 
@@ -98,7 +96,14 @@ pub(super) async fn start_gents_turn(
         None,
     );
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    install_stream_control(connection, thread_id.clone(), turn_id.clone(), cancel_tx).await;
+    let stream_registration = install_stream_control(
+        connection,
+        thread_id.clone(),
+        turn_id.clone(),
+        None,
+        cancel_tx,
+    )
+    .await;
 
     if let Err(err) = send_result(
         &connection.outbound,
@@ -109,7 +114,7 @@ pub(super) async fn start_gents_turn(
     )
     .await
     {
-        clear_stream_control_if_current(connection, &thread_id, &turn_id).await;
+        stream_registration.clear().await;
         return Err(err);
     }
 
@@ -176,7 +181,7 @@ pub(super) async fn start_gents_turn(
         }
     };
 
-    clear_stream_control_if_current(connection, &thread_id, &turn_id).await;
+    stream_registration.clear().await;
     result
 }
 
