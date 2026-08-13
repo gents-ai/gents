@@ -42,6 +42,8 @@ fn wake_agent_request(
         max_total_tokens: None,
         metadata: Some(queue_metadata_json(hints)),
         execution_origin: Some("scheduled".to_string()),
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
         subagent_depth: 0,
