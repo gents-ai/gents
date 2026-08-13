@@ -199,7 +199,7 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
         latest_request_id: request_id,
     };
 
-    write_conversation_doc(
+    let write_result = write_conversation_doc(
         node,
         existing
             .as_ref()
@@ -207,7 +207,58 @@ pub(crate) async fn upsert_conversation_from_request_with_identity_and_title(
         &fields,
         "upsert_conversation_from_request",
     )
-    .await
+    .await;
+
+    match write_result {
+        Ok(()) => Ok(()),
+        Err(create_error) if existing.is_none() => {
+            // Materialization and the request worker can both observe a fresh
+            // request before either has created its conversation row. The
+            // unique session_id index chooses one winner; recover the loser as
+            // an update instead of failing an otherwise runnable request.
+            let Some(winner) = load_conversation_document(node, session_id).await? else {
+                return Err(create_error);
+            };
+            let resolved_behavior_id =
+                resolve_behavior_id(Some(&winner), behavior_id, "AgentConversation")?;
+            let (title, title_source) = existing_title_state(Some(&winner), title_override);
+            let resolved_status = if winner.latest_request_id == request_id
+                && status == "pending"
+                && winner.status != "pending"
+            {
+                winner.status.as_str()
+            } else {
+                status
+            };
+            let fields = ConversationFields {
+                session_id,
+                agent_name,
+                agent_did,
+                requester_did,
+                behavior_id: &resolved_behavior_id,
+                title: &title,
+                title_source: &title_source,
+                preview_text: &preview,
+                status: resolved_status,
+                created_at: &winner.created_at,
+                updated_at: &now,
+                latest_request_id: request_id,
+            };
+            tracing::debug!(
+                session_id,
+                conversation_doc_id = %winner.doc_id,
+                "recovering conversation create race through canonical document"
+            );
+            write_conversation_doc(
+                node,
+                Some(&winner.doc_id),
+                &fields,
+                "upsert_conversation_from_request_after_create_race",
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) async fn update_conversation_status_if_latest_with_identity(

@@ -147,6 +147,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         }),
         doc: None,
         args: Some(args_value),
+        group: None,
         node: node_scope,
         ctx: ctx_scope,
     };

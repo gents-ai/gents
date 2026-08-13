@@ -105,6 +105,8 @@ impl BackgroundTheoremChildRequestRow {
             caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id,
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
             caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
+            caused_by_correlation: None,
+            caused_by_trigger_context: None,
         }
     }
 }

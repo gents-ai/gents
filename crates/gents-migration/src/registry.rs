@@ -255,53 +255,6 @@ type InferenceProfile {
 }
 "#;
 
-// Frozen at the 1087 provenance cutover (live AgentRequest from that branch,
-// before seed / max_total_tokens). New request fields advance through
-// DEFAULT_STEPS so existing stores keep a known lineage.
-const AGENT_REQUEST_BASELINE_SDL: &str = r#"
-type AgentRequest @branchable {
-    request_id: String @index
-    agent_did: String @index @immutable
-    requester_did: String @index @immutable
-    behavior_id: String @index
-    session_id: String @index
-    retry_parent_request: String
-    retry_parent_request_doc_id: String @index @immutable
-    retry_root_request: String
-    retry_key: String @index(unique: true) @immutable
-    superseded_by_request: String
-    superseded_by_request_doc_id: String @index
-    content: String
-    temperature: Float
-    top_p: Float
-    top_k: Int
-    max_tokens: Int
-    metadata: String
-    status: String @index
-    lifecycle_state: String @index
-    backend_id: String @index
-    execution_origin: String
-    caused_by_trigger_id: String @index
-    caused_by_trigger_kind: String @index
-    caused_by_source_doc_id: String @index @immutable
-    failure_reason: String
-    terminalized_at: String @index
-    terminal_redrive_attempts: Int @index
-    created_at: String @index
-    claimed_at: String
-    deadline: String
-    retry_count: Int
-    max_retries: Int
-    interrupt_requested_at: String
-    valid_until: String
-    subagent_depth: Int
-    caused_by_parent_request_id: String @index
-    caused_by_parent_request_doc_id: String @index @immutable
-    caused_by_parent_tool_call_id: String @index
-    caused_by_parent_tool_call_doc_id: String @index @immutable
-}
-"#;
-
 const INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH: &str = r#"[
   {"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"reasoning_effort","Kind":"String"}},
   {"op":"replace","path":"/IsActive","value":false}
@@ -309,16 +262,6 @@ const INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH: &str = r#"[
 
 const INFERENCE_PROFILE_ADD_SEED_PATCH: &str = r#"[
   {"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"seed","Kind":"Int"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const AGENT_REQUEST_ADD_SEED_PATCH: &str = r#"[
-  {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"seed","Kind":"Int"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const AGENT_REQUEST_ADD_MAX_TOTAL_TOKENS_PATCH: &str = r#"[
-  {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"max_total_tokens","Kind":"Int"}},
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
@@ -407,9 +350,8 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
-        AGENT_REQUEST_BASELINE_SDL,
-        // Same root pin as 1087's live AgentRequest (baseline is that SDL).
-        "bafyreigk6dk2fv33a2cguirrafuxaghlcs5ucwoqpxokfckcn5km5wlf3a"
+        gents_protocol::schemas::AGENT_REQUEST,
+        "bafyreic6nbycwtmqjwtvw65gvdcpgl4hwtnqch3a5iogvgzihckzc74f2a"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
@@ -474,7 +416,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::EVENT_TRIGGER_NAME,
         gents_protocol::schemas::EVENT_TRIGGER,
-        "bafyreih4b54rbekqry2nwymuppgil7v2ldmxirim5upv7nbjkvxjhihnwi"
+        "bafyreidtnxrndbqf7bkw7nzydp45hxgutjewh5w3ug2naxx3f4oudsnymq"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE_NAME,
+        gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
+        "bafyreierekkunke7pqlclttwsv3iugbxqq37fz4zstkfxxuju2d7htxhly"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SERVICE_REGISTRY_NAME,
@@ -573,25 +520,6 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         expected_version: Some("bafyreid4qn3axuic3fced2jp2vpsvjwrn4gisexrp3ri2zkiou3eeinyme"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["reasoning_effort", "seed"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "agent-request-add-seed",
-        collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
-        patch: AGENT_REQUEST_ADD_SEED_PATCH,
-        lens: None,
-        // Authored against the 1087 AgentRequest baseline (physical doc_id edges).
-        expected_version: Some("bafyreiad77dcqzv325ooveypjj32l7qrkpltizvqtsphhdgehoz5igwwye"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["seed"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "agent-request-add-max-total-tokens",
-        collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
-        patch: AGENT_REQUEST_ADD_MAX_TOTAL_TOKENS_PATCH,
-        lens: None,
-        expected_version: Some("bafyreic32bvie4zcjcaeqycfxcwxls6qgv5o6xivkd7tksz4rlb4xvnfqe"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["seed", "max_total_tokens"]),
     },
 ];
 

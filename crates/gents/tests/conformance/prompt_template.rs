@@ -7,6 +7,7 @@ fn scope(now: &str) -> TemplateScope {
         event: serde_json::json!({}),
         doc: None,
         args: None,
+        group: None,
         node: serde_json::json!({
             "node_did": "did:key:zNODE",
             "behavior_id": "policy_agent",

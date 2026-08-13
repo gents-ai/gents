@@ -1683,18 +1683,22 @@ fn finding_decl() -> crate::document_config::WriteToolDecl {
             crate::document_config::WriteToolField {
                 name: "job_id".to_string(),
                 required: true,
+                fill: None,
             },
             crate::document_config::WriteToolField {
                 name: "finding_id".to_string(),
                 required: true,
+                fill: None,
             },
             crate::document_config::WriteToolField {
                 name: "content".to_string(),
                 required: true,
+                fill: None,
             },
             crate::document_config::WriteToolField {
                 name: "stage".to_string(),
                 required: true,
+                fill: None,
             },
         ],
     }

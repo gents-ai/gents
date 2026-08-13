@@ -104,6 +104,10 @@ pub struct TimelineRequestRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caused_by_trigger_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caused_by_correlation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caused_by_trigger_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caused_by_source_doc_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caused_by_parent_request_id: Option<String>,
@@ -445,6 +449,10 @@ pub struct TimelineRequestEvent {
     pub caused_by_trigger_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caused_by_trigger_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caused_by_correlation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caused_by_trigger_context: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caused_by_source_doc_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -961,6 +969,8 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
         parent_tool_call_id: request.caused_by_parent_tool_call_id.clone(),
         caused_by_trigger_id: request.caused_by_trigger_id.clone(),
         caused_by_trigger_kind: request.caused_by_trigger_kind.clone(),
+        caused_by_correlation: request.caused_by_correlation.clone(),
+        caused_by_trigger_context: request.caused_by_trigger_context.clone(),
         caused_by_source_doc_id: request.caused_by_source_doc_id.clone(),
         agent_did: request.agent_did.clone(),
         behavior_id: request.behavior_id.clone(),

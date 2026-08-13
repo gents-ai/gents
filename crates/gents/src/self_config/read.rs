@@ -158,6 +158,12 @@ impl SelfConfigCore {
                         source_collection
                         event_kind
                         filter
+                        correlation_field
+                        fire_mode
+                        expected_count
+                        expected_count_field
+                        group_timeout_secs
+                        group_min_count
                         enabled
                         concurrency
                     }}

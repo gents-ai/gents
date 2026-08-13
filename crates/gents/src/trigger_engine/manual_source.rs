@@ -60,6 +60,9 @@ impl ManualTriggerHandle {
                 "trigger_kind": "manual",
             }),
             doc_vars: None,
+            correlation: None,
+            group_vars: None,
+            trigger_context: None,
             args_vars: Some(args),
             pre_materialized_request_id: None,
             on_result: Box::new(move |result| {

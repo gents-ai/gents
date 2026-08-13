@@ -121,6 +121,65 @@ pub struct TriggerLineage {
     pub trigger_id: Option<String>,
     pub trigger_kind: Option<String>,
     pub source_doc_id: Option<String>,
+    pub correlation: Option<String>,
+    pub trigger_context: Option<String>,
+}
+
+pub const MAX_TRIGGER_CONTEXT_BYTES: usize = 16 * 1024;
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct TriggerExecutionContext {
+    pub version: u8,
+    #[serde(default)]
+    pub source_fields: std::collections::BTreeMap<String, String>,
+}
+
+impl TriggerExecutionContext {
+    pub fn parse(value: Option<&str>) -> anyhow::Result<Self> {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(Self::default());
+        };
+        if value.len() > MAX_TRIGGER_CONTEXT_BYTES {
+            anyhow::bail!("trigger execution context exceeds {MAX_TRIGGER_CONTEXT_BYTES} bytes");
+        }
+        let context: Self = serde_json::from_str(value)?;
+        if context.version != 1 {
+            anyhow::bail!(
+                "unsupported trigger execution context version {}",
+                context.version
+            );
+        }
+        Ok(context)
+    }
+}
+
+pub(crate) fn inherited_trigger_context_graphql_fields(
+    correlation: Option<&str>,
+    trigger_context: Option<&str>,
+) -> anyhow::Result<String> {
+    let correlation = correlation
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!(
+                "\n                caused_by_correlation: \"{}\",",
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
+    let trigger_context = trigger_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            TriggerExecutionContext::parse(Some(value))?;
+            Ok::<_, anyhow::Error>(format!(
+                "\n                caused_by_trigger_context: \"{}\",",
+                escape_graphql_string(value)
+            ))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(format!("{correlation}{trigger_context}"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

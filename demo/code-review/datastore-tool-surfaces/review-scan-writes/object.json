@@ -1,0 +1,35 @@
+{
+  "surface_id": "review-scan-writes",
+  "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
+  "display_name": "Finding and scan-result writes",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_candidate_finding",
+      "collection": "CandidateFinding",
+      "description": "Record one evidenced Critical/Major candidate for adversarial verification.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "finding_id", "required": true},
+        {"name": "area_id", "required": true},
+        {"name": "severity", "required": true},
+        {"name": "path", "required": true},
+        {"name": "line", "required": false},
+        {"name": "title", "required": true},
+        {"name": "detail", "required": true},
+        {"name": "evidence", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_scan_result",
+      "collection": "ScanResult",
+      "description": "Signal that one review area has finished scanning.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "area_id", "required": true},
+        {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}},
+        {"name": "summary", "required": true}
+      ]
+    }
+  ]
+}

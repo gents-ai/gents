@@ -99,6 +99,22 @@ def transitionCases : List TransitionCase :=
     , action := .rescanTick
     , post   := mkWorld [doc "a"] [doc "a", doc "z"] [] []
     }
+  ,
+    { name   := "handle_ready_trigger_preserves_pending_sibling"
+    , pre    :=
+        mkWorld
+          [doc "trigger-ready:doc-a", doc "trigger-pending:doc-a"]
+          [doc "trigger-ready:doc-a", doc "trigger-pending:doc-a"]
+          []
+          []
+    , action := .handle (doc "trigger-ready:doc-a")
+    , post   :=
+        mkWorld
+          [doc "trigger-ready:doc-a", doc "trigger-pending:doc-a"]
+          [doc "trigger-pending:doc-a"]
+          [doc "trigger-ready:doc-a"]
+          [doc "trigger-ready:doc-a"]
+    }
   ]
 
 def transitionCaseCount : Nat := transitionCases.length

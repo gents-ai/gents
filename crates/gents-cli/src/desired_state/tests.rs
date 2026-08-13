@@ -518,6 +518,12 @@ fn sample_event_trigger() -> DesiredEventTrigger {
         source_collection: "CustomerSignup".into(),
         event_kind: "created".into(),
         filter: None,
+        correlation_field: None,
+        fire_mode: None,
+        expected_count: None,
+        expected_count_field: None,
+        group_timeout_secs: None,
+        group_min_count: None,
         enabled: true,
         concurrency: "serial".into(),
     }
@@ -1780,6 +1786,7 @@ fn validate_rejects_write_tool_with_empty_field_name() {
         fields: vec![WriteToolField {
             name: "   ".to_string(),
             required: true,
+            fill: None,
         }],
     })];
     manifest.tool_selections.push(sel);
@@ -1837,10 +1844,12 @@ fn validate_accepts_well_formed_write_tools() {
             WriteToolField {
                 name: "title".to_string(),
                 required: true,
+                fill: None,
             },
             WriteToolField {
                 name: "detail".to_string(),
                 required: false,
+                fill: None,
             },
         ],
     })];
@@ -1866,6 +1875,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
         fields: vec![WriteToolField {
             name: "path".to_string(),
             required: true,
+            fill: None,
         }],
     })];
     manifest.tool_selections.push(sel);
@@ -1917,10 +1927,12 @@ fn validate_rejects_duplicate_write_tool_field_name() {
             WriteToolField {
                 name: "summary".to_string(),
                 required: true,
+                fill: None,
             },
             WriteToolField {
                 name: "summary".to_string(),
                 required: false,
+                fill: None,
             },
         ],
     })];
@@ -2239,6 +2251,12 @@ fn sample_event_trigger_for(trigger_id: &str, task_id: &str) -> DesiredEventTrig
         source_collection: "CustomerSignup".to_string(),
         event_kind: "created".to_string(),
         filter: None,
+        correlation_field: None,
+        fire_mode: None,
+        expected_count: None,
+        expected_count_field: None,
+        group_timeout_secs: None,
+        group_min_count: None,
         enabled: true,
         concurrency: "serial".to_string(),
     }

@@ -28,15 +28,18 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         .collect::<Vec<_>>();
 
     assert_eq!(actual.len(), expected.len());
+    let versioned_collections = gents_migration::DEFAULT_STEPS
+        .iter()
+        .filter_map(|step| match step {
+            MigrationStep::PatchVersioned { collection, .. } => Some(*collection),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     for ((actual_name, actual_sdl), (expected_name, expected_sdl)) in
         actual.iter().zip(expected.iter())
     {
         assert_eq!(actual_name, expected_name);
-        if matches!(
-            *actual_name,
-            gents_protocol::schemas::INFERENCE_PROFILE_NAME
-                | gents_protocol::schemas::AGENT_REQUEST_NAME
-        ) {
+        if versioned_collections.contains(actual_name) {
             assert_ne!(actual_sdl, expected_sdl, "changed schema must be frozen");
         } else {
             assert_eq!(actual_sdl, expected_sdl, "baseline drift for {actual_name}");
@@ -47,11 +50,7 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         MigrationStep::PatchVersioned { collection, .. }
             if *collection == gents_protocol::schemas::INFERENCE_PROFILE_NAME
     )));
-    assert!(gents_migration::DEFAULT_STEPS.iter().any(|step| matches!(
-        step,
-        MigrationStep::PatchVersioned { collection, .. }
-            if *collection == gents_protocol::schemas::AGENT_REQUEST_NAME
-    )));
+    assert!(!versioned_collections.contains(gents_protocol::schemas::AGENT_REQUEST_NAME));
 }
 
 async fn fresh_node() -> Arc<EmbeddedNode> {

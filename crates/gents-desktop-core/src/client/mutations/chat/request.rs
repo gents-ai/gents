@@ -1559,6 +1559,8 @@ mod tests {
             execution_origin: Some(case.pre_origin.clone()),
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
+            caused_by_correlation: None,
+            caused_by_trigger_context: None,
             caused_by_parent_request_id: None,
             failure_reason: Some(String::new()),
             terminalized_at: None,

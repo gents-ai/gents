@@ -6,6 +6,7 @@ fn renders_event_var() {
         event: serde_json::json!({"fired_at": "2026-04-21T00:00:00Z", "trigger_kind": "schedule"}),
         doc: None,
         args: None,
+        group: None,
         node: serde_json::json!({}),
         ctx: serde_json::json!({}),
     };
@@ -19,6 +20,7 @@ fn strict_undefined_errors_on_missing_var() {
         event: serde_json::json!({}),
         doc: None,
         args: None,
+        group: None,
         node: serde_json::json!({}),
         ctx: serde_json::json!({}),
     };
@@ -32,6 +34,7 @@ fn renders_args_var_when_scope_has_args() {
         event: serde_json::json!({"trigger_kind": "manual"}),
         doc: None,
         args: Some(serde_json::json!({"name": "Amy", "count": 3})),
+        group: None,
         node: serde_json::json!({}),
         ctx: serde_json::json!({}),
     };
@@ -45,6 +48,7 @@ fn errors_on_missing_args_key() {
         event: serde_json::json!({}),
         doc: None,
         args: Some(serde_json::json!({})), // args present but empty
+        group: None,
         node: serde_json::json!({}),
         ctx: serde_json::json!({}),
     };
@@ -60,6 +64,7 @@ fn enforces_rendered_size_cap() {
         event: serde_json::json!({"big": big}),
         doc: None,
         args: None,
+        group: None,
         node: serde_json::json!({}),
         ctx: serde_json::json!({}),
     };
@@ -74,6 +79,7 @@ fn enforces_template_size_cap() {
         event: serde_json::json!({}),
         doc: None,
         args: None,
+        group: None,
         node: serde_json::json!({}),
         ctx: serde_json::json!({}),
     };
@@ -97,6 +103,23 @@ fn parse_template_for_validation_collects_event_and_doc_paths() {
                     "customer".to_string(),
                     "name".to_string(),
                 ],
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_template_for_validation_collects_group_paths() {
+    let template = "{{ group.correlation_value }}{% if group.complete %}complete{% endif %}";
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![
+            VariableRef {
+                path: vec!["group".to_string(), "correlation_value".to_string()],
+            },
+            VariableRef {
+                path: vec!["group".to_string(), "complete".to_string()],
             },
         ]
     );

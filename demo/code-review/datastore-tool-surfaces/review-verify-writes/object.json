@@ -1,0 +1,38 @@
+{
+  "surface_id": "review-verify-writes",
+  "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
+  "display_name": "Verification decision writes",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_finding_verdict",
+      "collection": "FindingVerdict",
+      "description": "Persist one confirmed or refuted decision for a candidate finding.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "finding_id", "required": true},
+        {"name": "area_id", "required": true},
+        {"name": "severity", "required": true},
+        {"name": "path", "required": true},
+        {"name": "line", "required": false},
+        {"name": "title", "required": true},
+        {"name": "detail", "required": true},
+        {"name": "verdict", "required": true},
+        {"name": "evidence", "required": true},
+        {"name": "verification", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_verification_summary",
+      "collection": "VerificationSummary",
+      "description": "Close the verification ledger and trigger final triage.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "candidate_count", "required": true},
+        {"name": "confirmed_count", "required": true},
+        {"name": "refuted_count", "required": true},
+        {"name": "summary", "required": true}
+      ]
+    }
+  ]
+}

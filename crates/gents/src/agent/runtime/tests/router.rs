@@ -77,6 +77,8 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
             caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
             caused_by_parent_tool_call_doc_id: None,
+            caused_by_correlation: None,
+            caused_by_trigger_context: None,
         }))
         .await
         .unwrap();

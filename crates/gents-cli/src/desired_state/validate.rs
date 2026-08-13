@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
 use gents::template::{
@@ -123,6 +123,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
 
     let mut behavior_ids = BTreeSet::new();
     let mut backend_ids = BTreeSet::new();
+    let mut backend_models = HashMap::<String, BTreeSet<String>>::new();
     let mut tool_selection_ids = BTreeSet::new();
 
     let mut surface_ids = BTreeSet::new();
@@ -163,6 +164,19 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             errors.push(format!(
                 "duplicate backend_id in inference-backends.json: {backend_id}"
             ));
+        }
+
+        if !backend_id.is_empty() {
+            backend_models.insert(
+                backend_id.to_string(),
+                backend
+                    .models
+                    .iter()
+                    .map(|model| model.trim())
+                    .filter(|model| !model.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            );
         }
 
         if backend.endpoint.trim().is_empty() {
@@ -452,6 +466,16 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                     "behavior {} references missing backend_id {}",
                     behavior.behavior_id, backend_id
                 ));
+            } else if let Some(model_name) = non_empty(&behavior.model_name) {
+                let advertised = backend_models
+                    .get(backend_id)
+                    .expect("known backend has a model entry");
+                if !advertised.is_empty() && !advertised.contains(model_name) {
+                    errors.push(format!(
+                        "behavior {} selects model {} which backend {} does not advertise",
+                        behavior.behavior_id, model_name, backend_id
+                    ));
+                }
             }
         }
 
@@ -643,7 +667,9 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                         let mut reported: BTreeSet<&str> = BTreeSet::new();
                         for var in &refs {
                             if let Some(root) = var.root() {
-                                if (root == "doc" || root == "args") && reported.insert(root) {
+                                if (root == "doc" || root == "args" || root == "group")
+                                    && reported.insert(root)
+                                {
                                     errors.push(format!(
                                         "schedule {} prompt template references forbidden scope: {}; schedule scope only permits event.*, node.*, and ctx.now",
                                         schedule.schedule_id,
@@ -690,6 +716,13 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 "event_trigger {} in event-triggers manifest must contain a non-empty source_collection",
                 trig.trigger_id
             ));
+        } else if let Err(error) =
+            gents::graphql::validate_collection_identifier(trig.source_collection.trim())
+        {
+            errors.push(format!(
+                "event_trigger {} has invalid source_collection {:?}: {}",
+                trig.trigger_id, trig.source_collection, error
+            ));
         }
 
         if trig.event_kind != "created" {
@@ -705,6 +738,116 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 "event_trigger {} in event-triggers manifest has unknown concurrency {}; expected parallel|serial|latest_only",
                 trig.trigger_id, other
             )),
+        }
+
+        let fire_mode = trig
+            .fire_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("per_document");
+        if !matches!(fire_mode, "per_document" | "per_group") {
+            errors.push(format!(
+                "event_trigger {} has unknown fire_mode {:?}; expected per_document|per_group",
+                trig.trigger_id, fire_mode
+            ));
+        }
+        for (label, field) in [
+            ("correlation_field", trig.correlation_field.as_deref()),
+            ("expected_count_field", trig.expected_count_field.as_deref()),
+        ] {
+            if let Some(field) = field.map(str::trim).filter(|value| !value.is_empty()) {
+                if let Err(error) = gents::graphql::validate_graphql_name(field) {
+                    errors.push(format!(
+                        "event_trigger {} has invalid {} {:?}: {}",
+                        trig.trigger_id, label, field, error
+                    ));
+                }
+            }
+        }
+        let has_correlation = trig
+            .correlation_field
+            .as_deref()
+            .is_some_and(|field| !field.trim().is_empty());
+        let has_expected_field = trig
+            .expected_count_field
+            .as_deref()
+            .is_some_and(|field| !field.trim().is_empty());
+        let has_timeout = trig.group_timeout_secs.is_some();
+        if trig
+            .expected_count
+            .is_some_and(|count| count <= 0 || count as usize > gents::MAX_EVENT_TRIGGER_GROUP_DOCS)
+        {
+            errors.push(format!(
+                "event_trigger {} expected_count must be in 1..={}",
+                trig.trigger_id,
+                gents::MAX_EVENT_TRIGGER_GROUP_DOCS
+            ));
+        }
+        if trig.group_timeout_secs.is_some_and(|seconds| seconds <= 0) {
+            errors.push(format!(
+                "event_trigger {} group_timeout_secs must be positive",
+                trig.trigger_id
+            ));
+        }
+        if trig
+            .group_min_count
+            .is_some_and(|count| count <= 0 || count as usize > gents::MAX_EVENT_TRIGGER_GROUP_DOCS)
+        {
+            errors.push(format!(
+                "event_trigger {} group_min_count must be in 1..={}",
+                trig.trigger_id,
+                gents::MAX_EVENT_TRIGGER_GROUP_DOCS
+            ));
+        }
+        if trig.group_min_count.is_some() && !has_timeout {
+            errors.push(format!(
+                "event_trigger {} group_min_count requires group_timeout_secs",
+                trig.trigger_id
+            ));
+        }
+        if let (Some(minimum), Some(expected)) = (trig.group_min_count, trig.expected_count) {
+            if minimum > expected {
+                errors.push(format!(
+                    "event_trigger {} group_min_count cannot exceed expected_count",
+                    trig.trigger_id
+                ));
+            }
+        }
+        match fire_mode {
+            "per_document" => {
+                if trig.expected_count.is_some()
+                    || has_expected_field
+                    || has_timeout
+                    || trig.group_min_count.is_some()
+                {
+                    errors.push(format!(
+                        "event_trigger {} per_document mode cannot configure group count or timeout fields",
+                        trig.trigger_id
+                    ));
+                }
+            }
+            "per_group" => {
+                if !has_correlation {
+                    errors.push(format!(
+                        "event_trigger {} per_group mode requires correlation_field",
+                        trig.trigger_id
+                    ));
+                }
+                if trig.expected_count.is_some() && has_expected_field {
+                    errors.push(format!(
+                        "event_trigger {} must configure only one of expected_count or expected_count_field",
+                        trig.trigger_id
+                    ));
+                }
+                if trig.expected_count.is_none() && !has_expected_field && !has_timeout {
+                    errors.push(format!(
+                        "event_trigger {} per_group mode requires a count source or group_timeout_secs",
+                        trig.trigger_id
+                    ));
+                }
+            }
+            _ => {}
         }
 
         if !task_id.is_empty() && !manifest.tasks.iter().any(|t| t.task_id == task_id) {
@@ -724,6 +867,15 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                                 if root == "args" && reported.insert("args") {
                                     errors.push(format!(
                                         "event_trigger {} prompt template references forbidden scope: args; event scope only permits event.*, doc.*, node.*, and ctx.now",
+                                        trig.trigger_id
+                                    ));
+                                }
+                                if root == "group"
+                                    && fire_mode != "per_group"
+                                    && reported.insert("group")
+                                {
+                                    errors.push(format!(
+                                        "event_trigger {} prompt template references group.* outside per_group mode",
                                         trig.trigger_id
                                     ));
                                 }
@@ -1076,12 +1228,15 @@ pub(crate) async fn validate_manifest_against_live(
             .filter(|v| v.root() == Some("doc"))
             .map(|v| v.path.clone())
             .collect();
-        if doc_paths.is_empty() {
+        if doc_paths.is_empty()
+            && trig.correlation_field.is_none()
+            && trig.expected_count_field.is_none()
+        {
             continue;
         }
 
         let introspect = format!(
-            r#"query {{ __type(name: "{name}") {{ fields {{ name }} }} }}"#,
+            r#"query {{ __type(name: "{name}") {{ fields {{ name type {{ name kind }} }} }} }}"#,
             name = source_collection,
         );
         let response = match access.execute(&introspect).await {
@@ -1110,6 +1265,51 @@ pub(crate) async fn validate_manifest_against_live(
             .iter()
             .filter_map(|f| f.get("name").and_then(|n| n.as_str()))
             .collect();
+        let field_types: HashMap<&str, &str> = fields
+            .iter()
+            .filter_map(|field| {
+                Some((
+                    field.get("name")?.as_str()?,
+                    field.get("type")?.get("name")?.as_str()?,
+                ))
+            })
+            .collect();
+        if let Some(field) = trig
+            .correlation_field
+            .as_deref()
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+        {
+            match field_types.get(field).copied() {
+                Some("String") => {}
+                Some(actual) => errors.push(format!(
+                    "event_trigger {} correlation_field {} must be String, found {}",
+                    trigger_id, field, actual
+                )),
+                None => errors.push(format!(
+                    "event_trigger {} correlation_field {} does not exist on {}",
+                    trigger_id, field, source_collection
+                )),
+            }
+        }
+        if let Some(field) = trig
+            .expected_count_field
+            .as_deref()
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+        {
+            match field_types.get(field).copied() {
+                Some("String" | "Int") => {}
+                Some(actual) => errors.push(format!(
+                    "event_trigger {} expected_count_field {} must be String or Int, found {}",
+                    trigger_id, field, actual
+                )),
+                None => errors.push(format!(
+                    "event_trigger {} expected_count_field {} does not exist on {}",
+                    trigger_id, field, source_collection
+                )),
+            }
+        }
         let mut reported: BTreeSet<String> = BTreeSet::new();
         for path in &doc_paths {
             let Some(first) = path.get(1).map(String::as_str) else {
@@ -1549,6 +1749,35 @@ mod tests {
         let mut errors = Vec::new();
         validate_manifest(&manifest, &mut errors);
         errors
+    }
+
+    #[test]
+    fn behavior_model_must_be_advertised_by_its_backend() {
+        let mut manifest = manifest(None, None);
+        manifest
+            .inference_backends
+            .push(super::super::DesiredInferenceBackend {
+                backend_id: "reviewers".to_string(),
+                name: "Reviewers".to_string(),
+                provider_kind: Default::default(),
+                openai_wire_api: None,
+                endpoint: "http://127.0.0.1:8000/v1".to_string(),
+                api_key: None,
+                api_key_env_var: None,
+                max_concurrent: 4,
+                max_queue_depth: 8,
+                enabled: true,
+                models: vec!["d4f".to_string()],
+            });
+        manifest.agent_behaviors[0].backend_id = Some("reviewers".to_string());
+        manifest.agent_behaviors[0].model_name = Some("GLM-5.2".to_string());
+
+        let errors = validate_errors(manifest);
+        assert!(errors.iter().any(|error| {
+            error.contains(
+                "behavior default selects model GLM-5.2 which backend reviewers does not advertise",
+            )
+        }));
     }
 
     fn manifest_with_reasoning_effort(reasoning_effort: Option<&str>) -> DesiredStateManifest {

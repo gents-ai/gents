@@ -31,6 +31,8 @@ async fn scheduled_fire_persists_trigger_lineage_on_agent_request() {
         trigger_id: Some("sched-e2e".to_string()),
         trigger_kind: Some("schedule".to_string()),
         source_doc_id: None,
+        correlation: None,
+        trigger_context: None,
     };
 
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(

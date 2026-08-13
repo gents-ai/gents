@@ -828,6 +828,12 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
         filter: None,
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
+        fire_mode: gents::EventTriggerFireMode::PerDocument,
+        correlation_field: None,
+        expected_count: None,
+        expected_count_field: None,
+        group_timeout_secs: None,
+        group_min_count: 1,
     };
     active_snapshot(
         HashMap::from([(trigger.trigger_id.clone(), trigger)]),

@@ -56,8 +56,36 @@ fn trigger_lineage_graphql_fields(trigger_lineage: &TriggerLineage) -> Result<St
             )
         })
         .unwrap_or_default();
+    let caused_by_correlation_field = trigger_lineage
+        .correlation
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!(
+                r#"
+                    caused_by_correlation: "{}","#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
+    let caused_by_trigger_context_field = trigger_lineage
+        .trigger_context
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            crate::lifecycle::TriggerExecutionContext::parse(Some(value))?;
+            Ok::<_, anyhow::Error>(format!(
+                r#"
+                    caused_by_trigger_context: "{}","#,
+                escape_graphql_string(value)
+            ))
+        })
+        .transpose()?
+        .unwrap_or_default();
     Ok(format!(
-        "{caused_by_trigger_id_field}{caused_by_trigger_kind_field}{caused_by_source_doc_id_field}"
+        "{caused_by_trigger_id_field}{caused_by_trigger_kind_field}{caused_by_source_doc_id_field}{caused_by_correlation_field}{caused_by_trigger_context_field}"
     ))
 }
 
@@ -403,6 +431,8 @@ impl RequestLifecycle {
             caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
             caused_by_parent_tool_call_doc_id: None,
+            caused_by_correlation: None,
+            caused_by_trigger_context: None,
         };
 
         session::upsert_conversation_from_request_with_identity(

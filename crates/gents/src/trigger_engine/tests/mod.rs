@@ -21,7 +21,8 @@ use crate::graphql::escape_graphql_string;
 use crate::identity::{AgentPrincipal, KeyIdentity};
 use crate::lean_vocab_test::{
     assert_lean_to_defradb_vocabulary_matches, lean_trigger_dispatch_case_count,
-    lean_trigger_dispatch_cases, LeanTriggerDispatchCase, LeanTriggerKeyContract, LeanVocabulary,
+    lean_trigger_dispatch_cases, lean_trigger_group_case_count, lean_trigger_group_cases,
+    LeanTriggerDispatchCase, LeanTriggerKeyContract, LeanVocabulary,
 };
 use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
@@ -43,6 +44,8 @@ type MaterializeCall = (Option<String>, TriggerKind, String);
 type SupersedeCall = (String, TriggerKind);
 
 type NonterminalRequests = Arc<Mutex<HashMap<(String, TriggerKind), Vec<String>>>>;
+type CorrelatedNonterminalRequests =
+    Arc<Mutex<HashMap<(String, TriggerKind, String), Vec<String>>>>;
 
 /// Build a minimal `Arc<AgentPrincipal>` for tests that need to satisfy the
 /// principal invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
@@ -110,6 +113,7 @@ struct SpyMaterializer {
     materialize_source_doc_ids: Arc<Mutex<Vec<Option<String>>>>,
     next_request_id: AtomicUsize,
     nonterminal_for: NonterminalRequests,
+    correlated_nonterminal_for: CorrelatedNonterminalRequests,
     /// DIDs the engine passed to the concurrency gate / supersede, in call
     /// order. The gate's DID scope is the subject of #605.
     gate_dids: Arc<Mutex<Vec<String>>>,
@@ -118,6 +122,8 @@ struct SpyMaterializer {
     superseded_request_ids: Arc<Mutex<Vec<String>>>,
     materialize_delay: Mutex<Option<Duration>>,
     materialize_gate: Mutex<Option<MaterializeGate>>,
+    group_markers: Arc<Mutex<HashSet<(String, String, TriggerKind, String)>>>,
+    persist_group_markers_for_did: Mutex<Option<String>>,
     track_materialized_nonterminal: AtomicBool,
 }
 
@@ -128,12 +134,15 @@ impl SpyMaterializer {
             materialize_source_doc_ids: Arc::new(Mutex::new(Vec::new())),
             next_request_id: AtomicUsize::new(0),
             nonterminal_for: Arc::new(Mutex::new(HashMap::new())),
+            correlated_nonterminal_for: Arc::new(Mutex::new(HashMap::new())),
             gate_dids: Arc::new(Mutex::new(Vec::new())),
             supersede_dids: Arc::new(Mutex::new(Vec::new())),
             supersede_calls: Arc::new(Mutex::new(Vec::new())),
             superseded_request_ids: Arc::new(Mutex::new(Vec::new())),
             materialize_delay: Mutex::new(None),
             materialize_gate: Mutex::new(None),
+            group_markers: Arc::new(Mutex::new(HashSet::new())),
+            persist_group_markers_for_did: Mutex::new(None),
             track_materialized_nonterminal: AtomicBool::new(false),
         })
     }
@@ -196,6 +205,20 @@ impl SpyMaterializer {
             .push(request_id.into());
     }
 
+    fn mark_correlated_nonterminal(
+        &self,
+        trigger_id: &str,
+        trigger_kind: TriggerKind,
+        correlation: &str,
+    ) {
+        self.correlated_nonterminal_for
+            .lock()
+            .unwrap()
+            .entry((trigger_id.to_owned(), trigger_kind, correlation.to_owned()))
+            .or_default()
+            .push(format!("spy-correlated-{correlation}"));
+    }
+
     /// Make successful materializations increment the in-flight tuple count.
     /// The Lean-generated conformance cases use this to compare post-dispatch
     /// non-terminal counts; ordinary unit tests keep the older explicit
@@ -220,6 +243,27 @@ impl SpyMaterializer {
             release,
         });
     }
+
+    fn mark_group_materialized(
+        &self,
+        agent_did: &str,
+        trigger_id: &str,
+        trigger_kind: TriggerKind,
+        correlation: &str,
+    ) {
+        self.group_markers.lock().unwrap().insert((
+            agent_did.to_string(),
+            trigger_id.to_string(),
+            trigger_kind,
+            correlation.to_string(),
+        ));
+    }
+
+    /// Mirror the production invariant that a successful group materialization
+    /// immediately makes the AgentRequest visible as the durable group marker.
+    fn persist_materialized_group_markers(&self, agent_did: &str) {
+        *self.persist_group_markers_for_did.lock().unwrap() = Some(agent_did.to_string());
+    }
 }
 
 impl MaterializerHandle for SpyMaterializer {
@@ -229,6 +273,8 @@ impl MaterializerHandle for SpyMaterializer {
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
         source_doc_id: Option<&str>,
+        correlation: Option<&str>,
+        _trigger_context: Option<&str>,
         rendered_prompt: &str,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
         let entry = (
@@ -241,12 +287,20 @@ impl MaterializerHandle for SpyMaterializer {
         let source_doc_id = source_doc_id.map(str::to_owned);
         let nonterminal_for = self.nonterminal_for.clone();
         let nonterminal_key = trigger_id.map(|id| (id.to_owned(), trigger_kind));
+        let correlated_nonterminal_for = self.correlated_nonterminal_for.clone();
+        let correlated_nonterminal_key = trigger_id
+            .zip(correlation)
+            .map(|(id, correlation)| (id.to_owned(), trigger_kind, correlation.to_owned()));
         let track_materialized_nonterminal =
             self.track_materialized_nonterminal.load(Ordering::SeqCst);
         let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
         let request_id = format!("req-{id}");
         let delay = *self.materialize_delay.lock().unwrap();
         let gate = self.materialize_gate.lock().unwrap().clone();
+        let marker_did = self.persist_group_markers_for_did.lock().unwrap().clone();
+        let group_markers = self.group_markers.clone();
+        let marker_trigger_id = trigger_id.map(str::to_owned);
+        let marker_correlation = correlation.map(str::to_owned);
         Box::pin(async move {
             if let Some(gate) = gate {
                 let _ = gate.entered_tx.send(());
@@ -257,8 +311,27 @@ impl MaterializerHandle for SpyMaterializer {
             }
             calls.lock().unwrap().push(entry);
             source_doc_ids.lock().unwrap().push(source_doc_id);
+            if let (Some(agent_did), Some(trigger_id), Some(correlation)) =
+                (marker_did, marker_trigger_id, marker_correlation)
+            {
+                group_markers.lock().unwrap().insert((
+                    agent_did,
+                    trigger_id,
+                    trigger_kind,
+                    correlation,
+                ));
+            }
             if let (true, Some(key)) = (track_materialized_nonterminal, nonterminal_key) {
                 nonterminal_for
+                    .lock()
+                    .unwrap()
+                    .entry(key)
+                    .or_default()
+                    .push(request_id.clone());
+            }
+            if let (true, Some(key)) = (track_materialized_nonterminal, correlated_nonterminal_key)
+            {
+                correlated_nonterminal_for
                     .lock()
                     .unwrap()
                     .entry(key)
@@ -274,19 +347,29 @@ impl MaterializerHandle for SpyMaterializer {
         agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
+        correlation: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
         let set = self.nonterminal_for.clone();
+        let correlated_set = self.correlated_nonterminal_for.clone();
         let gate_dids = self.gate_dids.clone();
         let agent_did = agent_did.to_owned();
         let key = (trigger_id.to_owned(), trigger_kind);
+        let correlated_key = correlation
+            .map(|correlation| (trigger_id.to_owned(), trigger_kind, correlation.to_owned()));
         Box::pin(async move {
             gate_dids.lock().unwrap().push(agent_did);
-            Ok(set
-                .lock()
-                .unwrap()
-                .get(&key)
-                .map(|request_ids| !request_ids.is_empty())
-                .unwrap_or(false))
+            Ok(match correlated_key {
+                Some(key) => correlated_set
+                    .lock()
+                    .unwrap()
+                    .get(&key)
+                    .is_some_and(|request_ids| !request_ids.is_empty()),
+                None => set
+                    .lock()
+                    .unwrap()
+                    .get(&key)
+                    .is_some_and(|request_ids| !request_ids.is_empty()),
+            })
         })
     }
 
@@ -295,23 +378,51 @@ impl MaterializerHandle for SpyMaterializer {
         agent_did: &str,
         trigger_id: &str,
         trigger_kind: TriggerKind,
+        correlation: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
         let nonterm = self.nonterminal_for.clone();
+        let correlated_nonterm = self.correlated_nonterminal_for.clone();
         let supersede_calls = self.supersede_calls.clone();
         let supersede_dids = self.supersede_dids.clone();
         let superseded_request_ids = self.superseded_request_ids.clone();
         let agent_did = agent_did.to_owned();
         let key = (trigger_id.to_owned(), trigger_kind);
+        let correlated_key = correlation
+            .map(|correlation| (trigger_id.to_owned(), trigger_kind, correlation.to_owned()));
         Box::pin(async move {
             supersede_dids.lock().unwrap().push(agent_did);
             supersede_calls.lock().unwrap().push(key.clone());
             // Mirror a real terminal transition: the tuple is no longer
             // in-flight after supersede.
-            let removed = nonterm.lock().unwrap().remove(&key).unwrap_or_default();
+            let removed = match correlated_key {
+                Some(key) => correlated_nonterm
+                    .lock()
+                    .unwrap()
+                    .remove(&key)
+                    .unwrap_or_default(),
+                None => nonterm.lock().unwrap().remove(&key).unwrap_or_default(),
+            };
             let count = removed.len();
             superseded_request_ids.lock().unwrap().extend(removed);
             Ok(count)
         })
+    }
+
+    fn has_materialized_group_request(
+        &self,
+        agent_did: &str,
+        trigger_id: &str,
+        trigger_kind: TriggerKind,
+        correlation: &str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
+        let markers = self.group_markers.clone();
+        let key = (
+            agent_did.to_string(),
+            trigger_id.to_string(),
+            trigger_kind,
+            correlation.to_string(),
+        );
+        Box::pin(async move { Ok(markers.lock().unwrap().contains(&key)) })
     }
 }
 
@@ -385,6 +496,12 @@ fn resolved_event_trigger_with_concurrency(
         filter: None,
         enabled: true,
         concurrency,
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerDocument,
+        correlation_field: None,
+        expected_count: None,
+        expected_count_field: None,
+        group_timeout_secs: None,
+        group_min_count: 1,
     }
 }
 
@@ -520,9 +637,15 @@ mod dispatch;
 mod dispatch_contract;
 mod event_source;
 mod manual_source;
+mod production_materializer;
 mod schedule_source;
 
 #[tokio::test]
 async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
     dispatch_contract::trigger_engine_dispatch_matches_lean_generated_contract_cases().await;
+}
+
+#[tokio::test]
+async fn trigger_group_reconciliation_matches_lean_generated_contract_cases() {
+    dispatch_contract::trigger_group_reconciliation_matches_lean_generated_contract_cases().await;
 }

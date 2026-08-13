@@ -16,6 +16,12 @@ fn resolved_event_trigger(
         filter: None,
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerDocument,
+        correlation_field: None,
+        expected_count: None,
+        expected_count_field: None,
+        group_timeout_secs: None,
+        group_min_count: 1,
     }
 }
 
@@ -37,6 +43,12 @@ fn resolved_event_trigger_with_filter(
         filter: Some(filter.to_string()),
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerDocument,
+        correlation_field: None,
+        expected_count: None,
+        expected_count_field: None,
+        group_timeout_secs: None,
+        group_min_count: 1,
     }
 }
 
@@ -242,6 +254,553 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         ev["fired_at"].is_string(),
         "fired_at should be a string, got {:?}",
         ev["fired_at"]
+    );
+}
+
+#[tokio::test]
+async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_scope() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type GroupMember {
+            run_id: String
+            expected_total: Int
+            kind: String
+            value: String
+        }"#,
+    )
+    .await
+    .expect("group source schema");
+
+    for (run_id, expected, kind, value) in [
+        ("run-a", 2, "include", "second"),
+        ("run-a", 2, "exclude", "must-not-count"),
+        ("run-b", 2, "include", "partial"),
+        ("run-a", 2, "include", "first"),
+    ] {
+        let mutation = format!(
+            r#"mutation {{ create_GroupMember(input: {{
+                run_id: "{run_id}", expected_total: {expected}, kind: "{kind}", value: "{value}"
+            }}) {{ _docID }} }}"#
+        );
+        let response = node.execute(&mutation).await;
+        assert!(!response.has_errors(), "{:#?}", response.errors);
+    }
+
+    let task = ResolvedTask {
+        task_id: "group-task".into(),
+        name: None,
+        behavior_id: "general".into(),
+        prompt_template: "{{ group.correlation_value }} {{ group.count }}".into(),
+        output_schema_ref: None,
+    };
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count_field: Some("expected_total".into()),
+        filter: Some(r#"{ kind: { _eq: "include" } }"#.into()),
+        ..resolved_event_trigger("group-trigger", "GroupMember", task)
+    };
+    let snapshot =
+        snapshot_with_event_triggers(1, HashMap::from([("group-trigger".to_string(), trigger)]));
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node, CancellationToken::new());
+
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("startup recovery timeout")
+        .expect("complete group must be recovered");
+    assert_eq!(intent.correlation.as_deref(), Some("run-a"));
+    assert_eq!(intent.event_vars["correlation"], "run-a");
+    let group = intent.group_vars.expect("group scope");
+    assert_eq!(group["count"], 2);
+    assert_eq!(group["complete"], true);
+    let docs = group["docs"].as_array().expect("group docs");
+    assert_eq!(docs.len(), 2);
+    assert!(docs.iter().all(|doc| doc["kind"] == "include"));
+    let doc_ids = docs
+        .iter()
+        .map(|doc| doc["_docID"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(doc_ids.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[tokio::test]
+async fn per_group_timeout_uses_durable_first_seen_clock() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type DurableGroupMember {
+            run_id: String
+            value: String
+        }"#,
+    )
+    .await
+    .expect("group source schema");
+    let response = node
+        .execute(
+            r#"mutation {
+                create_DurableGroupMember(input: { run_id: "run-old", value: "partial" }) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let task = resolved_task("{{ group.correlation_value }} {{ group.complete }}");
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count: Some(2),
+        group_timeout_secs: Some(60),
+        group_min_count: 1,
+        ..resolved_event_trigger("durable-group-trigger", "DurableGroupMember", task)
+    };
+    let (group_key, trigger_config_key) = EventSource::group_state_keys(&trigger, "run-old");
+    let first_seen_at =
+        (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339_opts(SecondsFormat::Millis, true);
+    let mutation = format!(
+        r#"mutation {{
+            create_EventTriggerGroupState(input: {{
+                group_key: "{}"
+                trigger_id: "durable-group-trigger"
+                correlation: "run-old"
+                trigger_config_key: "{}"
+                first_seen_at: "{}"
+            }}) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&group_key),
+        escape_graphql_string(&trigger_config_key),
+        escape_graphql_string(&first_seen_at),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("durable-group-trigger".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node, CancellationToken::new());
+
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("durably elapsed timeout recovery")
+        .expect("partial group above the floor must fire");
+    assert_eq!(intent.correlation.as_deref(), Some("run-old"));
+    assert_eq!(intent.group_vars.as_ref().unwrap()["complete"], false);
+}
+
+#[tokio::test]
+async fn correlation_populated_after_create_remains_eligible_for_delivery() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type DeferredCorrelationMember {
+            run_id: String @index
+            value: String
+        }"#,
+    )
+    .await
+    .expect("deferred correlation source schema");
+
+    let response = node
+        .execute(
+            r#"mutation {
+                create_DeferredCorrelationMember(input: { value: "created-first" }) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+    let lookup = node
+        .execute(r#"query { DeferredCorrelationMember { _docID } }"#)
+        .await;
+    assert!(!lookup.has_errors(), "{:#?}", lookup.errors);
+    let doc_id = lookup
+        .data
+        .as_ref()
+        .and_then(|data| data.get("DeferredCorrelationMember"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .expect("created document id")
+        .to_string();
+
+    let trigger = ResolvedEventTrigger {
+        correlation_field: Some("run_id".into()),
+        ..resolved_event_trigger(
+            "deferred-correlation-trigger",
+            "DeferredCorrelationMember",
+            resolved_task("{{ event.correlation }}"),
+        )
+    };
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("deferred-correlation-trigger".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+
+    // Startup sees the row, but must not consume it while its declared
+    // correlation is absent. A producer may populate that field in a
+    // follow-up mutation.
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+    let mutation = format!(
+        r#"mutation {{
+            update_DeferredCorrelationMember(
+                docID: "{}",
+                input: {{ run_id: "run-late" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&doc_id),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("follow-up correlation update timed out")
+        .expect("follow-up correlation update must deliver the created document");
+    assert_eq!(intent.correlation.as_deref(), Some("run-late"));
+    assert_eq!(intent.event_vars["source_doc_id"], doc_id);
+}
+
+#[tokio::test]
+async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type MixedCorrelationMember {
+            run_id: String @index
+            value: String
+        }"#,
+    )
+    .await
+    .expect("mixed correlation source schema");
+
+    let ready = resolved_event_trigger(
+        "trigger-a-ready",
+        "MixedCorrelationMember",
+        resolved_task("ready"),
+    );
+    let pending = ResolvedEventTrigger {
+        correlation_field: Some("run_id".into()),
+        ..resolved_event_trigger(
+            "trigger-z-pending",
+            "MixedCorrelationMember",
+            resolved_task("{{ event.correlation }}"),
+        )
+    };
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            (ready.trigger_id.clone(), ready),
+            (pending.trigger_id.clone(), pending),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let response = node
+        .execute(
+            r#"mutation {
+                create_MixedCorrelationMember(input: { value: "created-first" }) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+    let lookup = node
+        .execute(r#"query { MixedCorrelationMember { _docID } }"#)
+        .await;
+    assert!(!lookup.has_errors(), "{:#?}", lookup.errors);
+    let doc_id = lookup.data.as_ref().unwrap()["MixedCorrelationMember"][0]["_docID"]
+        .as_str()
+        .expect("created document id")
+        .to_string();
+
+    let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("ready sibling delivery timed out")
+        .expect("ready sibling must not be blocked by missing correlation");
+    assert_eq!(first.trigger_id.as_deref(), Some("trigger-a-ready"));
+
+    let mutation = format!(
+        r#"mutation {{
+            update_MixedCorrelationMember(
+                docID: "{}",
+                input: {{ run_id: "run-late" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&doc_id),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let second = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("deferred sibling delivery timed out")
+        .expect("deferred sibling must become eligible when correlation arrives");
+    assert_eq!(second.trigger_id.as_deref(), Some("trigger-z-pending"));
+    assert_eq!(second.correlation.as_deref(), Some("run-late"));
+}
+
+#[tokio::test]
+async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type SeededMixedCorrelationMember {
+            run_id: String @index
+            value: String
+        }"#,
+    )
+    .await
+    .expect("seeded mixed correlation source schema");
+    let response = node
+        .execute(
+            r#"mutation {
+                create_SeededMixedCorrelationMember(input: { value: "pre-existing" }) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+    let lookup = node
+        .execute(r#"query { SeededMixedCorrelationMember { _docID } }"#)
+        .await;
+    assert!(!lookup.has_errors(), "{:#?}", lookup.errors);
+    let doc_id = lookup.data.as_ref().unwrap()["SeededMixedCorrelationMember"][0]["_docID"]
+        .as_str()
+        .expect("created document id")
+        .to_string();
+
+    let ready = resolved_event_trigger(
+        "trigger-a-ready",
+        "SeededMixedCorrelationMember",
+        resolved_task("ready"),
+    );
+    let pending = ResolvedEventTrigger {
+        correlation_field: Some("run_id".into()),
+        ..resolved_event_trigger(
+            "trigger-z-pending",
+            "SeededMixedCorrelationMember",
+            resolved_task("{{ event.correlation }}"),
+        )
+    };
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            (ready.trigger_id.clone(), ready),
+            (pending.trigger_id.clone(), pending),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let mutation = format!(
+        r#"mutation {{
+            update_SeededMixedCorrelationMember(
+                docID: "{}",
+                input: {{ run_id: "run-seeded-late" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&doc_id),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("deferred seeded delivery timed out")
+        .expect("only the correlation-incomplete trigger should remain eligible");
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-z-pending"));
+    assert_eq!(intent.correlation.as_deref(), Some("run-seeded-late"));
+}
+
+#[tokio::test]
+async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type QuiescedGroupMember {
+            run_id: String @index
+            value: String
+        }"#,
+    )
+    .await
+    .expect("quiesced group source schema");
+    for value in ["one", "two"] {
+        let mutation = format!(
+            r#"mutation {{
+                create_QuiescedGroupMember(input: {{ run_id: "run-overfull", value: "{value}" }}) {{
+                    _docID
+                }}
+            }}"#,
+        );
+        let response = node.execute(&mutation).await;
+        assert!(!response.has_errors(), "{:#?}", response.errors);
+    }
+
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count: Some(1),
+        ..resolved_event_trigger(
+            "quiesced-group-trigger",
+            "QuiescedGroupMember",
+            resolved_task("{{ group.count }}"),
+        )
+    };
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("quiesced-group-trigger".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut first_source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    first_source
+        .reconcile_subscriptions(snapshot.as_ref())
+        .await;
+    assert_eq!(first_source.group_membership_query_count(), 1);
+
+    let response = node
+        .execute(
+            r#"query {
+                EventTriggerGroupState(
+                    filter: { trigger_id: { _eq: "quiesced-group-trigger" } }
+                ) { quiesced_at quiesced_reason }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("EventTriggerGroupState"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .expect("durable group state");
+    assert!(row.get("quiesced_at").is_some_and(|value| !value.is_null()));
+    assert!(row["quiesced_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("exceeds expected count")));
+
+    // A fresh source has no process-local timer state. Its bounded startup
+    // sweep must prune the durable quiescence marker before issuing another
+    // full membership query for the permanently invalid group.
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut restarted_source = EventSource::new(rx, node, CancellationToken::new());
+    restarted_source
+        .reconcile_subscriptions(snapshot.as_ref())
+        .await;
+    assert_eq!(restarted_source.group_membership_query_count(), 0);
+}
+
+#[test]
+fn group_state_identity_changes_only_with_membership_definition() {
+    let task = resolved_task("first prompt");
+    let mut trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count: Some(2),
+        ..resolved_event_trigger("group-trigger", "GroupMember", task)
+    };
+    let initial = EventSource::group_state_keys(&trigger, "run-a");
+
+    trigger.task.prompt_template = "changed prompt".into();
+    trigger.expected_count = Some(3);
+    assert_eq!(
+        EventSource::group_state_keys(&trigger, "run-a"),
+        initial,
+        "task and policy changes must not restart a group's first-seen clock",
+    );
+
+    trigger.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
+    assert_ne!(
+        EventSource::group_state_keys(&trigger, "run-a"),
+        initial,
+        "membership filter changes must use fresh recovery state",
+    );
+}
+
+#[tokio::test]
+async fn generation_bump_recovers_only_when_group_membership_definition_changes() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type RecoveryFingerprintMember {
+            run_id: String
+            kind: String
+        }"#,
+    )
+    .await
+    .expect("group source schema");
+
+    let task = resolved_task("first prompt");
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count: Some(2),
+        ..resolved_event_trigger("fingerprint-trigger", "RecoveryFingerprintMember", task)
+    };
+    let second_trigger = ResolvedEventTrigger {
+        trigger_id: "fingerprint-trigger-2".into(),
+        ..trigger.clone()
+    };
+    let snapshot_one = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            ("fingerprint-trigger".to_string(), trigger.clone()),
+            ("fingerprint-trigger-2".to_string(), second_trigger.clone()),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot_one.clone());
+    let mut source = EventSource::new(rx, node, CancellationToken::new());
+    source.reconcile_subscriptions(snapshot_one.as_ref()).await;
+    assert_eq!(source.group_recovery_page_query_count(), 1);
+
+    let mut task_only_change = trigger.clone();
+    task_only_change.task.prompt_template = "second prompt".into();
+    let snapshot_two = snapshot_with_event_triggers(
+        2,
+        HashMap::from([
+            ("fingerprint-trigger".to_string(), task_only_change),
+            ("fingerprint-trigger-2".to_string(), second_trigger.clone()),
+        ]),
+    );
+    source.reconcile_subscriptions(snapshot_two.as_ref()).await;
+    assert_eq!(
+        source.group_recovery_page_query_count(),
+        1,
+        "an unrelated snapshot generation bump must not launch recovery I/O",
+    );
+
+    let mut membership_change = trigger;
+    membership_change.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
+    let snapshot_three = snapshot_with_event_triggers(
+        3,
+        HashMap::from([
+            ("fingerprint-trigger".to_string(), membership_change),
+            ("fingerprint-trigger-2".to_string(), second_trigger),
+        ]),
+    );
+    source
+        .reconcile_subscriptions(snapshot_three.as_ref())
+        .await;
+    assert_eq!(
+        source.group_recovery_page_query_count(),
+        2,
+        "a membership-definition change must restart bounded recovery",
     );
 }
 

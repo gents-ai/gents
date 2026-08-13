@@ -1065,6 +1065,12 @@ fn desired_event_trigger(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredEve
         source_collection: "Task".to_string(),
         event_kind: "created".to_string(),
         filter: Some(doc.content.clone()),
+        correlation_field: None,
+        fire_mode: None,
+        expected_count: None,
+        expected_count_field: None,
+        group_timeout_secs: None,
+        group_min_count: None,
         enabled: true,
         concurrency: "serial".to_string(),
     }

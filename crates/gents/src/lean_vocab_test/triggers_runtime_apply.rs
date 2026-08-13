@@ -29,6 +29,29 @@ pub(crate) struct LeanTriggerDispatchCase {
     pub(crate) request_count_after: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCorrelatedTriggerKeyContract {
+    pub(crate) target_agent_did: String,
+    pub(crate) trigger_id: String,
+    pub(crate) trigger_kind: String,
+    pub(crate) correlation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanTriggerGroupCase {
+    pub(crate) name: String,
+    pub(crate) candidate: LeanCorrelatedTriggerKeyContract,
+    pub(crate) actual_count: usize,
+    pub(crate) expected_count: Option<usize>,
+    pub(crate) minimum_count: usize,
+    pub(crate) timed_out: bool,
+    pub(crate) well_formed: bool,
+    pub(crate) prior_markers: Vec<LeanCorrelatedTriggerKeyContract>,
+    pub(crate) eligible: bool,
+    pub(crate) materialized: bool,
+    pub(crate) marker_count_after: usize,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanRuntimeReconcileCase {
     pub(crate) name: String,

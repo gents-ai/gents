@@ -100,6 +100,24 @@ pub enum ConcurrencyMode {
     LatestOnly,
 }
 
+pub const MAX_EVENT_TRIGGER_GROUP_DOCS: usize = 256;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EventTriggerFireMode {
+    PerDocument,
+    PerGroup,
+}
+
+impl EventTriggerFireMode {
+    pub(crate) fn parse(value: Option<&str>) -> Option<Self> {
+        match value.map(str::trim).filter(|value| !value.is_empty()) {
+            None | Some("per_document") => Some(Self::PerDocument),
+            Some("per_group") => Some(Self::PerGroup),
+            Some(_) => None,
+        }
+    }
+}
+
 impl ConcurrencyMode {
     pub(crate) fn parse(s: &str) -> Option<Self> {
         match s {
@@ -123,6 +141,12 @@ pub struct ResolvedEventTrigger {
     #[allow(dead_code)]
     pub enabled: bool,
     pub concurrency: ConcurrencyMode,
+    pub fire_mode: EventTriggerFireMode,
+    pub correlation_field: Option<String>,
+    pub expected_count: Option<usize>,
+    pub expected_count_field: Option<String>,
+    pub group_timeout_secs: Option<u64>,
+    pub group_min_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -345,8 +369,6 @@ impl ActiveRuntimeSnapshot {
         &self.active_tasks
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn tool_surface(&self, behavior_id: &str) -> Option<&Arc<ToolSurface>> {
         self.tool_surfaces.get(behavior_id)
     }

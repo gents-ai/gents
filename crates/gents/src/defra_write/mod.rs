@@ -37,7 +37,7 @@ use anyhow::{anyhow, bail, Result};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
-use crate::document_config::WriteToolDecl;
+use crate::document_config::{WriteToolDecl, WriteToolFieldFill};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
@@ -99,17 +99,23 @@ impl BoundedWriteTool {
         self.ensure_well_formed()?;
 
         for key in args.keys() {
-            let declared = self.decl.fields.iter().any(|f| &f.name == key);
-            if !declared {
+            let field = self.decl.fields.iter().find(|field| &field.name == key);
+            if field.is_none() {
                 bail!(
                     "field `{key}` not permitted by tool `{}`",
+                    self.decl.tool_name
+                );
+            }
+            if field.is_some_and(|field| field.fill.is_some()) {
+                bail!(
+                    "field `{key}` is runtime-filled and must not be supplied to tool `{}`",
                     self.decl.tool_name
                 );
             }
         }
 
         for field in &self.decl.fields {
-            if field.required && !args.contains_key(&field.name) {
+            if field.fill.is_none() && field.required && !args.contains_key(&field.name) {
                 bail!(
                     "required field `{}` missing for tool `{}`",
                     field.name,
@@ -120,8 +126,46 @@ impl BoundedWriteTool {
 
         let mut input_parts = Vec::new();
         for field in &self.decl.fields {
-            let Some(value) = args.get(&field.name) else {
-                continue;
+            let filled;
+            let value = match &field.fill {
+                None => {
+                    let Some(value) = args.get(&field.name) else {
+                        continue;
+                    };
+                    value
+                }
+                Some(fill) => {
+                    let runtime =
+                        crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                            .ok_or_else(|| {
+                                anyhow!(
+                            "runtime-filled field `{}` requires an AgentRequest trigger context",
+                            field.name
+                        )
+                            })?;
+                    let value = match fill {
+                        WriteToolFieldFill::Correlation => runtime
+                            .correlation
+                            .filter(|value| !value.trim().is_empty())
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "runtime-filled field `{}` requires a non-empty correlation",
+                                    field.name
+                                )
+                            })?,
+                        WriteToolFieldFill::SourceField(source_field) => runtime
+                            .source_fields
+                            .get(source_field)
+                            .cloned()
+                            .ok_or_else(|| anyhow!(
+                                "runtime-filled field `{}` requires source field `{}` in trigger context",
+                                field.name,
+                                source_field
+                            ))?,
+                    };
+                    filled = Value::String(value);
+                    &filled
+                }
             };
             let raw = match value {
                 Value::String(s) => s.clone(),
@@ -155,6 +199,9 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
         let mut properties = Map::new();
         let mut required = Vec::new();
         for field in &self.decl.fields {
+            if field.fill.is_some() {
+                continue;
+            }
             properties.insert(
                 field.name.clone(),
                 json!({

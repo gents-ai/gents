@@ -1,5 +1,114 @@
 use super::*;
 
+pub(super) async fn trigger_group_reconciliation_matches_lean_generated_contract_cases() {
+    let cases = lean_trigger_group_cases();
+    assert_eq!(cases.len(), lean_trigger_group_case_count());
+    assert!(!cases.is_empty());
+
+    for case in cases {
+        assert_eq!(
+            crate::trigger_engine::event_source::group_candidate_eligible(
+                case.actual_count,
+                case.expected_count,
+                case.minimum_count,
+                case.timed_out,
+                case.well_formed,
+            ),
+            case.eligible,
+            "Lean case {} eligibility drifted",
+            case.name,
+        );
+
+        if !case.eligible {
+            assert_eq!(case.marker_count_after, case.prior_markers.len());
+            continue;
+        }
+
+        let created = case.marker_count_after > case.prior_markers.len();
+
+        let behavior = integration_test_behavior("general");
+        let actual_target_did = behavior.agent_did().to_string();
+        let task = resolved_task(&format!("group case {}", case.name));
+        let trigger = ResolvedEventTrigger {
+            fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+            correlation_field: Some("run_id".to_string()),
+            expected_count: case.expected_count,
+            group_timeout_secs: case.timed_out.then_some(1),
+            group_min_count: case.minimum_count,
+            ..resolved_event_trigger_with_concurrency(
+                &case.candidate.trigger_id,
+                task.clone(),
+                ConcurrencyMode::Parallel,
+            )
+        };
+        let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+            "general".to_string(),
+            vec![behavior],
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .with_event_triggers(
+            HashMap::from([(case.candidate.trigger_id.clone(), trigger)]),
+            HashSet::new(),
+        )
+        .with_principal(stub_principal());
+        let snapshot = Arc::new(resolved.activate(1, HashMap::new()));
+        let (_tx, rx) = watch::channel(snapshot);
+        let materializer = SpyMaterializer::new();
+        for marker in &case.prior_markers {
+            let marker_did = if marker.target_agent_did == case.candidate.target_agent_did {
+                actual_target_did.as_str()
+            } else {
+                marker.target_agent_did.as_str()
+            };
+            materializer.mark_group_materialized(
+                marker_did,
+                &marker.trigger_id,
+                trigger_kind_from_lean(&marker.trigger_kind),
+                &marker.correlation,
+            );
+        }
+        let engine = TriggerEngine::new(rx, materializer.clone());
+        let result = engine
+            .dispatch(FireIntent {
+                trigger_id: Some(case.candidate.trigger_id.clone()),
+                trigger_kind: trigger_kind_from_lean(&case.candidate.trigger_kind),
+                task,
+                concurrency: ConcurrencyMode::Parallel,
+                event_vars: serde_json::json!({"source_doc_id": "doc-1"}),
+                doc_vars: Some(serde_json::json!({"_docID": "doc-1"})),
+                correlation: Some(case.candidate.correlation.clone()),
+                group_vars: Some(serde_json::json!({"count": case.actual_count})),
+                trigger_context: None,
+                args_vars: None,
+                pre_materialized_request_id: None,
+                on_result: Box::new(|_| {}),
+            })
+            .await;
+
+        match (created, result) {
+            (true, FireResult::Fired { .. }) => assert_eq!(materializer.calls().len(), 1),
+            (true, other) => panic!("Lean case {} should fire, got {other:?}", case.name),
+            (false, FireResult::Skipped { reason }) => {
+                assert_eq!(reason, "per_group: request already materialized");
+                assert!(materializer.calls().is_empty());
+            }
+            (false, other) => panic!(
+                "Lean case {} should be suppressed, got {other:?}",
+                case.name
+            ),
+        }
+        let logical_marker_count =
+            case.prior_markers.len() + usize::from(materializer.calls().len() == 1);
+        assert_eq!(
+            logical_marker_count, case.marker_count_after,
+            "Lean case {} marker count drifted",
+            case.name
+        );
+    }
+}
+
 pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
     let cases = lean_trigger_dispatch_cases();
     assert!(
@@ -75,6 +184,9 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
             concurrency,
             event_vars,
             doc_vars: None,
+            correlation: None,
+            group_vars: None,
+            trigger_context: None,
             args_vars: None,
             pre_materialized_request_id: None,
             on_result: Box::new(|_| {}),

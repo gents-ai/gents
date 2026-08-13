@@ -1,0 +1,69 @@
+{
+  "name": "code-review",
+  "description": "Four-stage Rust review: pre-scan -> lens swarm -> adversarial verification -> triage",
+  "init": {
+    "inference_url": "${GENTS_REVIEW_COORDINATOR_ENDPOINT:-http://100.87.27.25:8000/v1}",
+    "model_name": "${GENTS_REVIEW_COORDINATOR_MODEL:-GLM-5.2}",
+    "tool_package": "write",
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions"
+  },
+  "seed": {
+    "collection": "ReviewJob",
+    "job_id_field": "run_id",
+    "prompt_field": "focus",
+    "fields": {"repository_path": "${GENTS_REVIEW_ROOT:-.}"}
+  },
+  "default_prompt": "Review this repository for correctness, durability, authorization, and concurrency defects.",
+  "expect": {
+    "trigger_ids": ["review-recon", "review-scan", "review-verify", "review-triage"],
+    "trigger_request_counts": {"review-scan": 4},
+    "signed_provenance": true,
+    "required_tool_call_trigger_ids": ["review-recon", "review-scan", "review-verify", "review-triage"],
+    "prompt_tool_contracts": [
+      {
+        "task_id": "review-recon-task",
+        "required_tool_names": ["write_review_area"]
+      },
+      {
+        "task_id": "review-scan-task",
+        "required_tool_names": ["write_candidate_finding", "write_scan_result"]
+      },
+      {
+        "task_id": "review-verify-task",
+        "required_tool_names": ["defra_query", "write_finding_verdict", "write_verification_summary"],
+        "required_query_collections": ["CandidateFinding"]
+      },
+      {
+        "task_id": "review-triage-task",
+        "required_tool_names": ["defra_query", "write_finding", "write_triage_report"],
+        "required_query_collections": ["FindingVerdict"]
+      }
+    ],
+    "source_edges": [],
+    "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
+    "collection_counts": {"ReviewArea": 4, "ScanResult": 4, "VerificationSummary": 1, "TriageReport": 1},
+    "fan_in": {
+      "member_collection": "ReviewArea",
+      "result_collection": "ScanResult",
+      "report_collection": "TriageReport",
+      "correlation_field": "run_id",
+      "expected_count_field": "expected_total",
+      "consumer_trigger_id": "review-verify",
+      "member_required_fields": ["area_id", "repository_path", "lens", "baseline", "instructions"],
+      "verification": {
+        "candidate_collection": "CandidateFinding",
+        "decision_collection": "FindingVerdict",
+        "summary_collection": "VerificationSummary",
+        "confirmed_collection": "Finding",
+        "final_consumer_trigger_id": "review-triage",
+        "finding_id_field": "finding_id",
+        "verdict_field": "verdict",
+        "evidence_field": "evidence",
+        "confirmed_count_field": "confirmed_count",
+        "refuted_count_field": "refuted_count"
+      }
+    }
+  },
+  "await_timeout_secs": 1800
+}

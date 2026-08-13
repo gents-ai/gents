@@ -161,6 +161,8 @@ struct RequestShowHeader {
     caused_by_parent_tool_call_id: Option<String>,
     caused_by_trigger_id: Option<String>,
     caused_by_trigger_kind: Option<String>,
+    caused_by_correlation: Option<String>,
+    caused_by_trigger_context: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -421,6 +423,8 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "caused_by_parent_tool_call_id",
         "caused_by_trigger_id",
         "caused_by_trigger_kind",
+        "caused_by_correlation",
+        "caused_by_trigger_context",
         "subagent_depth",
     ];
     append_optional_fields(
@@ -539,6 +543,8 @@ fn request_header_view(
         caused_by_parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
         caused_by_trigger_id: string_field(row, "caused_by_trigger_id"),
         caused_by_trigger_kind: string_field(row, "caused_by_trigger_kind"),
+        caused_by_correlation: string_field(row, "caused_by_correlation"),
+        caused_by_trigger_context: string_field(row, "caused_by_trigger_context"),
     }
 }
 

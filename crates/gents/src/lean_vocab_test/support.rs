@@ -32,6 +32,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) trigger_dispatch_case_count: usize,
     pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
+    pub(crate) trigger_group_case_count: usize,
+    pub(crate) trigger_group_cases: Vec<LeanTriggerGroupCase>,
     #[serde(default)]
     pub(crate) goal_decision_cases: Vec<LeanGoalDecisionCase>,
     #[serde(default)]
@@ -1013,6 +1015,14 @@ pub(crate) fn lean_goal_transition_cases() -> &'static [LeanGoalTransitionCase] 
 
 pub(crate) fn lean_trigger_dispatch_case_count() -> usize {
     lean_contract_snapshot().trigger_dispatch_case_count
+}
+
+pub(crate) fn lean_trigger_group_cases() -> &'static [LeanTriggerGroupCase] {
+    &lean_contract_snapshot().trigger_group_cases
+}
+
+pub(crate) fn lean_trigger_group_case_count() -> usize {
+    lean_contract_snapshot().trigger_group_case_count
 }
 
 pub(crate) fn assert_lean_contract_vocabulary_matches(spec: LeanContractVocabulary<'_>) {

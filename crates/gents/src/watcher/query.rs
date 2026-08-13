@@ -30,6 +30,8 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     caused_by_parent_request_doc_id
                     caused_by_parent_tool_call_id
                     caused_by_parent_tool_call_doc_id
+                    caused_by_correlation
+                    caused_by_trigger_context
 "#;
 
 impl DefraWatcher {

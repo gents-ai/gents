@@ -71,6 +71,8 @@ fn validate_accepts_background_completion_lineage_without_tool_call_link() {
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
         ..base_request()
     };
     assert!(validate_agent_request(&req).is_ok());
@@ -88,6 +90,8 @@ fn validate_accepts_depth_zero_background_completion_control_lineage() {
         caused_by_parent_request_doc_id: Some("goal-parent-doc-1".to_string()),
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
         ..base_request()
     };
     assert!(validate_agent_request(&req).is_ok());
@@ -155,6 +159,8 @@ fn validate_accepts_top_level_request() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
         ..base_request()
     };
     assert!(validate_agent_request(&req).is_ok());
@@ -225,6 +231,8 @@ fn agent_request_clone() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     };
     let cloned = req.clone();
     assert_eq!(cloned.doc_id, "abc");
@@ -293,6 +301,8 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
     }
 }
 

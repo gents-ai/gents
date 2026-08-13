@@ -1,5 +1,9 @@
 namespace EventDelivery
 
+/-- Opaque delivery identity.  A source may instantiate this with a physical
+document id when one document has one consumer.  `EventSource` instantiates it
+with `(trigger_id, source_doc_id)`: readiness and monotone-once handling are
+therefore independent for two triggers observing the same source document. -/
 structure DocId where
   raw : String
   deriving DecidableEq, Repr

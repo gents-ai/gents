@@ -1,0 +1,6 @@
+type ScanResult {
+  run_id: String @index @immutable
+  area_id: String @index(unique: true) @immutable
+  expected_total: String @immutable
+  summary: String
+}

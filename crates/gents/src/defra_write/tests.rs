@@ -5,13 +5,19 @@ use defra_node::EmbeddedNode;
 use serde_json::json;
 
 use super::BoundedWriteTool;
-use crate::document_config::{WriteToolDecl, WriteToolField};
+use crate::document_config::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
 
 async fn node_with_actionrequest() -> Arc<EmbeddedNode> {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_schema(
         r#"
-        type ActionRequest { drift_sig: String summary: String status: String }
+        type ActionRequest {
+            drift_sig: String
+            summary: String
+            status: String
+            run_id: String
+            expected_total: String
+        }
     "#,
     )
     .await
@@ -28,14 +34,17 @@ fn decl() -> WriteToolDecl {
             WriteToolField {
                 name: "drift_sig".into(),
                 required: true,
+                fill: None,
             },
             WriteToolField {
                 name: "summary".into(),
                 required: true,
+                fill: None,
             },
             WriteToolField {
                 name: "status".into(),
                 required: false,
+                fill: None,
             },
         ],
     }
@@ -131,4 +140,74 @@ async fn rejects_write_with_empty_collection_decl() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_time() {
+    let node = node_with_actionrequest().await;
+    let tool = BoundedWriteTool::new(
+        Arc::clone(&node),
+        WriteToolDecl {
+            tool_name: "write_result".into(),
+            collection: "ActionRequest".into(),
+            description: "write a correlated result".into(),
+            fields: vec![
+                WriteToolField {
+                    name: "summary".into(),
+                    required: true,
+                    fill: None,
+                },
+                WriteToolField {
+                    name: "run_id".into(),
+                    required: false,
+                    fill: Some(WriteToolFieldFill::Correlation),
+                },
+                WriteToolField {
+                    name: "expected_total".into(),
+                    required: false,
+                    fill: Some(WriteToolFieldFill::SourceField("expected_total".into())),
+                },
+            ],
+        },
+    );
+    let definition = Tool::definition(&tool, String::new()).await;
+    let properties = definition.parameters["properties"].as_object().unwrap();
+    assert!(properties.contains_key("summary"));
+    assert!(!properties.contains_key("run_id"));
+    assert!(!properties.contains_key("expected_total"));
+
+    let supplied = Tool::call(
+        &tool,
+        serde_json::from_value(json!({"summary": "done", "run_id": "model-value"})).unwrap(),
+    )
+    .await;
+    assert!(supplied.unwrap_err().to_string().contains("runtime-filled"));
+
+    let mut source_fields = std::collections::BTreeMap::new();
+    source_fields.insert("expected_total".to_string(), "3".to_string());
+    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        None,
+        None,
+        Some("run-42".to_string()),
+        source_fields,
+        false,
+        async {
+            Tool::call(
+                &tool,
+                serde_json::from_value(json!({"summary": "done"})).unwrap(),
+            )
+            .await
+            .expect("runtime-filled write");
+        },
+    )
+    .await;
+
+    let response = node
+        .execute("{ ActionRequest { summary run_id expected_total } }")
+        .await;
+    let row = response.data.unwrap()["ActionRequest"][0].clone();
+    assert_eq!(row["run_id"], "run-42");
+    assert_eq!(row["expected_total"], "3");
 }

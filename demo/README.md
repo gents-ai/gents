@@ -88,6 +88,7 @@ new required field on a public config struct breaks there first.
 | Pack | What it shows |
 | --- | --- |
 | [`pipeline/`](pipeline/README.md) | **Canonical example** — job → finding create via surface → stage-2 |
+| [`code-review/`](code-review/README.md) | **Advanced graph example** — live-inference fan-out/fan-in with correlation propagation, source-field fills, exact cardinality, and one durable triage request |
 
 ## Model
 

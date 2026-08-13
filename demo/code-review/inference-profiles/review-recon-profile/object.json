@@ -1,0 +1,12 @@
+{
+  "profile_id": "review-recon-profile",
+  "display_name": "Bounded review planning profile",
+  "context_window": 131072,
+  "max_output_tokens": 4096,
+  "max_turns": 32,
+  "temperature": 0.1,
+  "top_p": null,
+  "top_k": null,
+  "min_p": null,
+  "frequency_penalty": null
+}

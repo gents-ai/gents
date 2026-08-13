@@ -311,18 +311,22 @@ fn request_action_decl() -> WriteToolDecl {
             WriteToolField {
                 name: "drift_sig".into(),
                 required: true,
+                fill: None,
             },
             WriteToolField {
                 name: "summary".into(),
                 required: true,
+                fill: None,
             },
             WriteToolField {
                 name: "target_paths".into(),
                 required: true,
+                fill: None,
             },
             WriteToolField {
                 name: "status".into(),
                 required: false,
+                fill: None,
             },
         ],
     }

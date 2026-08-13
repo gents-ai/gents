@@ -47,6 +47,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
         }),
         doc: None,
         args: Some(args),
+        group: None,
         node: node_scope,
         ctx: ctx_scope,
     };
@@ -63,6 +64,8 @@ pub async fn write_manual_agent_request_with_conversation_title(
             trigger_id: None,
             trigger_kind: Some("manual".to_string()),
             source_doc_id: None,
+            correlation: None,
+            trigger_context: None,
         },
         conversation_title,
     )

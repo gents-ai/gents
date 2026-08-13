@@ -8,6 +8,8 @@ async fn serial_skips_when_prior_active_runtime() {
         trigger_id: Some("trigger-event-serial".into()),
         trigger_kind: Some("event".into()),
         source_doc_id: Some("event-source-serial-doc".into()),
+        correlation: None,
+        trigger_context: None,
     };
     RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -54,6 +56,8 @@ async fn latest_only_supersedes_prior_fire() {
         trigger_id: Some("trigger-event-latest".into()),
         trigger_kind: Some("event".into()),
         source_doc_id: Some("event-source-latest-doc".into()),
+        correlation: None,
+        trigger_context: None,
     };
     let prior = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -93,6 +97,8 @@ async fn latest_only_supersedes_prior_fire() {
         trigger_id: Some("trigger-event-latest".into()),
         trigger_kind: Some("event".into()),
         source_doc_id: Some("event-source-latest-doc-2".into()),
+        correlation: None,
+        trigger_context: None,
     };
     let new_fire = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
