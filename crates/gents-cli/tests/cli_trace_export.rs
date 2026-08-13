@@ -1245,7 +1245,7 @@ async fn initialized_trace_node(
 
     EmbeddedNode::builder()
         .data_path(agent_home.join("data"))
-        .with_storage_backend(StorageBackend::RocksDb)
+        .with_storage_backend(StorageBackend::Lark)
         .with_node_identity_did(agent_did)
         .build()
         .await

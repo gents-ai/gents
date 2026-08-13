@@ -2018,7 +2018,7 @@ mod live_tests {
         let data_dir = tempdir.path().join("data");
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
@@ -2048,7 +2048,7 @@ mod live_tests {
         let data_dir = tempdir.path().join("data");
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
@@ -2087,7 +2087,7 @@ mod live_tests {
         let tempdir = tempfile::tempdir()?;
         let node = EmbeddedNode::builder()
             .data_path(tempdir.path().join("data"))
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
@@ -2192,7 +2192,7 @@ mod live_tests {
         let data_path = tempdir.path().join("data");
         let node = EmbeddedNode::builder()
             .data_path(&data_path)
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
@@ -2259,7 +2259,7 @@ mod live_tests {
         let restarted_node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(&data_path)
-                .with_storage_backend(StorageBackend::RocksDb)
+                .with_storage_backend(StorageBackend::Lark)
                 .build()
                 .await?,
         );
@@ -2396,7 +2396,7 @@ mod live_tests {
         manifest.peer_pairings[0].enabled = false;
         let node = EmbeddedNode::builder()
             .data_path(&data_path)
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await?;
         let access = ConfigAccess::Local(std::sync::Arc::new(node));
@@ -2429,7 +2429,7 @@ mod live_tests {
         let removal_node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(&data_path)
-                .with_storage_backend(StorageBackend::RocksDb)
+                .with_storage_backend(StorageBackend::Lark)
                 .build()
                 .await?,
         );
@@ -2452,7 +2452,7 @@ mod live_tests {
         let data_dir = tempdir.path().join("data");
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
@@ -2648,7 +2648,7 @@ mod live_tests {
         let data_dir = tempdir.path().join("data");
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
@@ -2803,7 +2803,7 @@ mod live_tests {
         let tempdir = tempfile::tempdir()?;
         let node = EmbeddedNode::builder()
             .data_path(tempdir.path().join("data"))
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
@@ -2904,7 +2904,7 @@ mod live_tests {
         let tempdir = tempfile::tempdir()?;
         let node = EmbeddedNode::builder()
             .data_path(tempdir.path().join("data"))
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;

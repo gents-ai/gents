@@ -81,7 +81,7 @@ async fn external_adapter_native_captures_roundtrip_through_gents_binary() -> Re
         {
             let node = EmbeddedNode::builder()
                 .data_path(&data_dir)
-                .with_storage_backend(StorageBackend::RocksDb)
+                .with_storage_backend(StorageBackend::Lark)
                 .build()
                 .await
                 .context("opening embedded node")?;
@@ -233,7 +233,7 @@ async fn negative_external_capture_imports_reject_bad_mappings_without_partial_r
         let data_dir = tempdir.path().join("data");
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await
             .with_context(|| format!("opening embedded node for {name}"))?;

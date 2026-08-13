@@ -78,9 +78,14 @@ pub(super) fn collab_projection_events(
                 && current.status != ProjectionStatus::InProgress
             {
                 vec![ProjectionEvent::Completed]
+            } else if previous != current {
+                // A completed-item snapshot is also the wire update for
+                // agentsStates. Child lifecycle/model/failure changes must be
+                // observable after the spawn operation itself has settled;
+                // emitting Completed without Started refreshes presentation
+                // state without reopening the item lifecycle.
+                vec![ProjectionEvent::Completed]
             } else {
-                // Child presentation fields may keep changing after the spawn
-                // operation completed. They do not reopen its item lifecycle.
                 Vec::new()
             }
         }
@@ -137,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn one_spawn_emits_one_lifecycle_despite_child_presentation_updates() {
+    fn child_presentation_updates_refresh_without_reopening_spawn() {
         let running = running_spawn();
         assert_eq!(
             collab_projection_events(None, &running),
@@ -149,7 +154,10 @@ mod tests {
 
         let mut completed = running;
         completed.child_status = ChildStatus::Completed;
-        assert!(collab_projection_events(Some(&previous), &completed).is_empty());
+        assert_eq!(
+            collab_projection_events(Some(&previous), &completed),
+            vec![ProjectionEvent::Completed]
+        );
 
         let in_progress = CollabProjection {
             status: ProjectionStatus::InProgress,

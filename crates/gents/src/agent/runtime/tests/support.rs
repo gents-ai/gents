@@ -166,7 +166,11 @@ pub(super) async fn wait_for_runtime_process_state(
     expected_process_state: &str,
 ) {
     let escaped_agent_did = escape_graphql_string(agent_did);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    // A fresh embedded backend can spend several seconds in schema recovery
+    // when the full package suite is saturating the host. The assertion is on
+    // the eventual state, not startup latency; production readiness has its
+    // own health and timeout boundaries.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let query = format!(
             r#"{{
@@ -294,7 +298,9 @@ pub(super) struct HttpRequestData {
 }
 
 pub(super) fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequestData> {
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    // Avoid turning scheduler starvation in the full parallel test suite into
+    // a synthetic provider failure after accept() but before all headers land.
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     let mut buffer = Vec::new();
     let mut temp = [0u8; 1024];
     let header_end = loop {

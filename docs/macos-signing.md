@@ -30,10 +30,11 @@ designated requirement, so keychain trust can survive binary updates.
 The macOS release workflow:
 
 - runs on a self-hosted Mac Studio runner labeled `self-hosted`, `macOS`,
-  `ARM64`, and `studio`;
+  `ARM64`, `studio`, `studio-2`, and `ci-desktop`;
 - caps Cargo build fan-out with `CARGO_BUILD_JOBS` and uses disk-backed
   `sccache`, forcing recache so release objects cannot come from PR jobs;
-- builds `gents-cli` in a release-only persistent Cargo target tree;
+- builds `gents-cli` in the `studio-2-2` release-only persistent Cargo target
+  tree, reusing only artifacts from prior trusted release builds;
 - unlocks the runner's persistent signing keychain;
 - makes that keychain visible to non-interactive `codesign` jobs;
 - smoke-signs a test binary before the Rust build starts;

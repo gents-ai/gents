@@ -409,15 +409,20 @@ async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
     );
     let tool_surface = Arc::new(behavior.tools.resolve(node).await.unwrap());
     let starts = Arc::new(AtomicUsize::new(0));
+    let (starts_tx, mut starts_rx) = watch::channel(0usize);
     let runner = {
         let starts = starts.clone();
+        let starts_tx = starts_tx.clone();
         move |_behavior: Arc<AgentBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               mut shutdown: watch::Receiver<bool>| {
             let starts = starts.clone();
+            let starts_tx = starts_tx.clone();
             async move {
-                if starts.fetch_add(1, Ordering::SeqCst) == 0 {
+                let attempt = starts.fetch_add(1, Ordering::SeqCst) + 1;
+                starts_tx.send_replace(attempt);
+                if attempt == 1 {
                     panic!("contract probe panic");
                 }
                 loop {
@@ -449,16 +454,12 @@ async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
         shutdown_rx,
     );
 
-    let restarted = tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            if starts.load(Ordering::SeqCst) >= 2 {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
+    let restarted = tokio::time::timeout(
+        Duration::from_secs(30),
+        starts_rx.wait_for(|starts| *starts >= 2),
+    )
     .await
-    .unwrap_or(false);
+    .is_ok_and(|result| result.is_ok());
     let _ = shutdown_tx.send(true);
     retire_slot(slot);
     restarted

@@ -7,9 +7,16 @@ repository.workspace = true
 description = "Core DefraDB-backed agent runtime for Gents"
 
 [features]
-default = ["defra-node/http", "defra-node/p2p", "rocksdb"]
+# Gents executes Lens migrations at runtime, so keep Wasmtime explicit while
+# omitting DefraDB's SourceHub ACP and legacy libp2p defaults.
+default = [
+    "defra-node/http",
+    "defra-node/p2p",
+    "defra-node/wasmtime-runtime",
+    "lark",
+]
 agent-memory = []
-rocksdb = ["defra-node/rocksdb"]
+lark = ["defra-node/lark"]
 
 [dependencies]
 anyhow.workspace = true

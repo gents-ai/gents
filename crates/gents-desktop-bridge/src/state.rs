@@ -26,7 +26,7 @@ pub struct ResolvedBridgePolicy {
 /// Outcome of a single-flight `desktop_client_start`.
 ///
 /// Concurrent start callers share one in-flight open of the embedded node so a
-/// second `NodeBuilder` cannot race the first for the RocksDB LOCK file.
+/// second `NodeBuilder` cannot race the first for the persistent store.
 #[derive(Debug, Clone)]
 pub enum ClientStartProgress {
     Pending,
@@ -39,7 +39,7 @@ pub struct DesktopAppState {
     /// Serializes start *install* / shutdown mutations against bridge state.
     /// Long-running node open does **not** hold this lock (see single-flight
     /// `start_inflight` instead) so a cancelled Tauri command cannot drop the
-    /// lock while RocksDB is still opening on a background thread.
+    /// lock while the store is still opening on a background thread.
     pub client_lifecycle: tokio::sync::Mutex<()>,
     /// Serializes managed server start/stop operations. Startup intentionally
     /// spans provisioning and server readiness, so the state flag alone is

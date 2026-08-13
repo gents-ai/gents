@@ -583,7 +583,7 @@ mod tests {
             // (`persistent_node_builder`): the builder's default is Redb,
             // whose defra-node feature is only transitively enabled — the CI
             // cli shard builds without it.
-            .with_storage_backend(StorageBackend::RocksDb)
+            .with_storage_backend(StorageBackend::Lark)
             .build()
             .await
             .expect("embedded node boots");

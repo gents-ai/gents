@@ -341,7 +341,10 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
 /// dispatcher's own envelope) is the only path a managed terminal can take:
 /// the `biased` ordering polls cancellation and deadline before the tool's
 /// result, so an already-cancelled token or an already-elapsed deadline wins
-/// deterministically regardless of what the tool returned.
+/// deterministically regardless of what the tool returned. The result branch
+/// also rechecks the wall-clock deadline: an inner managed boundary can wake
+/// this task at the same deadline before Tokio's sibling sleep is observed as
+/// ready.
 pub(crate) async fn call_tool_managed(tool: &dyn ToolDyn, args: String) -> ToolOutcome {
     let name = tool.name();
     let Ok(scope) = TOOL_RUNTIME_SCOPE.try_with(Clone::clone) else {
@@ -366,7 +369,13 @@ pub(crate) async fn call_tool_managed(tool: &dyn ToolDyn, args: String) -> ToolO
         biased;
         _ = scope.cancellation_token.cancelled() => ToolOutcome::Cancelled,
         _ = &mut deadline => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
-        result = tool.call(args) => ToolOutcome::from_dispatch(&name, result),
+        result = tool.call(args) => {
+            if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
+                ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
+            } else {
+                ToolOutcome::from_dispatch(&name, result)
+            }
+        },
     }
 }
 

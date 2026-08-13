@@ -56,9 +56,9 @@ clap = { version = "4", features = ["derive", "env"] }
 # DefraDB v0.18.0 includes signed explicit transactions and default node query
 # identity. Its iterative parent-DAG replay remains required on iOS:
 # a deep collection history otherwise exhausts even a 32 MiB Tokio worker stack.
-acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
-crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
-defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
+acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
+crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
+defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
 gents-codex-protocol = { path = "crates/gents-codex-protocol" }
@@ -66,12 +66,14 @@ gents-schemas = { path = "crates/gents-schemas" }
 gents-desktop-core = { path = "crates/gents-desktop-core" }
 gents-desktop-bridge = { path = "crates/gents-desktop-bridge" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
-defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39", default-features = false }
-defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
+# Keep DefraDB defaults off: Gents selects Iroh P2P and Lens execution without
+# SourceHub ACP or the legacy libp2p transport (defradb.rs#1431-#1435).
+defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e", default-features = false }
+defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e", default-features = false }
 dirs = "5"
-events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
+events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
 hostname = "0.4"
-identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
+identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
@@ -79,8 +81,8 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
-query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "61e429fc06b152219fa5a5bda18500497a645c39" }
+p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
+query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig-core = "0.35.0"
@@ -119,6 +121,17 @@ strip = false
 
 [profile.dev.package."*"]
 opt-level = 1
+
+# Agent and batch worktrees generally need actionable backtraces, not complete
+# dependency DWARF. Keep the default dev profile available for debugger-heavy
+# work while giving repeated build/link loops a smaller opt-in artifact set.
+[profile.fast-dev]
+inherits = "dev"
+debug = "line-tables-only"
+
+[profile.fast-dev.package."*"]
+opt-level = 1
+debug = 0
 
 [profile.test]
 # At opt-level 1 Cargo's implicit `lto = false` still performs local ThinLTO.
