@@ -1,4 +1,4 @@
-type Finding {
+type CandidateFinding {
   run_id: String @index @immutable
   finding_id: String @index(unique: true) @immutable
   area_id: String
@@ -7,7 +7,5 @@ type Finding {
   line: String
   title: String
   detail: String
-  verdict: String
   evidence: String
-  verification: String
 }

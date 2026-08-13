@@ -1,5 +1,5 @@
 type ReviewJob {
-  run_id: String @index @immutable
+  run_id: String @index(unique: true) @immutable
   repository_path: String
   focus: String
 }

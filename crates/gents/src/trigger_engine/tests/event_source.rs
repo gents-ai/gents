@@ -394,6 +394,161 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
     assert_eq!(intent.group_vars.as_ref().unwrap()["complete"], false);
 }
 
+#[tokio::test]
+async fn correlation_populated_after_create_remains_eligible_for_delivery() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type DeferredCorrelationMember {
+            run_id: String @index
+            value: String
+        }"#,
+    )
+    .await
+    .expect("deferred correlation source schema");
+
+    let response = node
+        .execute(
+            r#"mutation {
+                create_DeferredCorrelationMember(input: { value: "created-first" }) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+    let lookup = node
+        .execute(r#"query { DeferredCorrelationMember { _docID } }"#)
+        .await;
+    assert!(!lookup.has_errors(), "{:#?}", lookup.errors);
+    let doc_id = lookup
+        .data
+        .as_ref()
+        .and_then(|data| data.get("DeferredCorrelationMember"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .expect("created document id")
+        .to_string();
+
+    let trigger = ResolvedEventTrigger {
+        correlation_field: Some("run_id".into()),
+        ..resolved_event_trigger(
+            "deferred-correlation-trigger",
+            "DeferredCorrelationMember",
+            resolved_task("{{ event.correlation }}"),
+        )
+    };
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("deferred-correlation-trigger".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+
+    // Startup sees the row, but must not consume it while its declared
+    // correlation is absent. A producer may populate that field in a
+    // follow-up mutation.
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+    let mutation = format!(
+        r#"mutation {{
+            update_DeferredCorrelationMember(
+                docID: "{}",
+                input: {{ run_id: "run-late" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&doc_id),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("follow-up correlation update timed out")
+        .expect("follow-up correlation update must deliver the created document");
+    assert_eq!(intent.correlation.as_deref(), Some("run-late"));
+    assert_eq!(intent.event_vars["source_doc_id"], doc_id);
+}
+
+#[tokio::test]
+async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type QuiescedGroupMember {
+            run_id: String @index
+            value: String
+        }"#,
+    )
+    .await
+    .expect("quiesced group source schema");
+    for value in ["one", "two"] {
+        let mutation = format!(
+            r#"mutation {{
+                create_QuiescedGroupMember(input: {{ run_id: "run-overfull", value: "{value}" }}) {{
+                    _docID
+                }}
+            }}"#,
+        );
+        let response = node.execute(&mutation).await;
+        assert!(!response.has_errors(), "{:#?}", response.errors);
+    }
+
+    let trigger = ResolvedEventTrigger {
+        fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
+        correlation_field: Some("run_id".into()),
+        expected_count: Some(1),
+        ..resolved_event_trigger(
+            "quiesced-group-trigger",
+            "QuiescedGroupMember",
+            resolved_task("{{ group.count }}"),
+        )
+    };
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("quiesced-group-trigger".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut first_source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    first_source
+        .reconcile_subscriptions(snapshot.as_ref())
+        .await;
+    assert_eq!(first_source.group_membership_query_count(), 1);
+
+    let response = node
+        .execute(
+            r#"query {
+                EventTriggerGroupState(
+                    filter: { trigger_id: { _eq: "quiesced-group-trigger" } }
+                ) { quiesced_at quiesced_reason }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("EventTriggerGroupState"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .expect("durable group state");
+    assert!(row.get("quiesced_at").is_some_and(|value| !value.is_null()));
+    assert!(row["quiesced_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("exceeds expected count")));
+
+    // A fresh source has no process-local timer state. Its bounded startup
+    // sweep must prune the durable quiescence marker before issuing another
+    // full membership query for the permanently invalid group.
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut restarted_source = EventSource::new(rx, node, CancellationToken::new());
+    restarted_source
+        .reconcile_subscriptions(snapshot.as_ref())
+        .await;
+    assert_eq!(restarted_source.group_membership_query_count(), 0);
+}
+
 #[test]
 fn group_state_identity_changes_only_with_membership_definition() {
     let task = resolved_task("first prompt");

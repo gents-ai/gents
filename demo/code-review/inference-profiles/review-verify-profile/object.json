@@ -1,6 +1,6 @@
 {
-  "profile_id": "review-profile",
-  "display_name": "Code review profile",
+  "profile_id": "review-verify-profile",
+  "display_name": "Bounded adversarial verifier profile",
   "context_window": 131072,
   "max_output_tokens": 8192,
   "max_turns": 64,

@@ -4,4 +4,6 @@ type EventTriggerGroupState @branchable {
     correlation: String @index @immutable
     trigger_config_key: String @index @immutable
     first_seen_at: DateTime @index @immutable
+    quiesced_at: DateTime @index
+    quiesced_reason: String
 }

@@ -10,8 +10,11 @@
     "fields": [
       {"name": "run_id", "required": false, "fill": "correlation"},
       {"name": "area_id", "required": true},
+      {"name": "repository_path", "required": true},
+      {"name": "lens", "required": true},
       {"name": "path", "required": true},
       {"name": "instructions", "required": true},
+      {"name": "baseline", "required": true},
       {"name": "expected_total", "required": true}
     ]
   }]

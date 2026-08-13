@@ -292,7 +292,8 @@ their full documents; do not load all historical markers into an unbounded
 process cache and do not issue one marker query per historical group.
 
 This makes the steady-state processing cost proportional to new/dirty groups,
-due cached timers, and one rotating recovery page. The existing rescan still
+a fair batch of at most 16 due cached timers, and one rotating recovery page.
+Both sequential group loops poll cancellation between membership queries. The existing rescan still
 reads collection document ids and therefore retains its current
 linear-in-collection-size I/O cost, but fan-in does not multiply that into a
 full collection scan per trigger or generation bump. A complete rotating cycle
@@ -324,8 +325,8 @@ This answers the issue's resolution-durability question without a separate
 fired marker: a node restart can neither double-materialize a group that
 already has a request nor lose an eligible group, because the marker is the
 durable request row and membership is rebuilt by the explicit group reconciler.
-`EventTriggerGroupState` affects timeout liveness only and is never consulted
-for the already-fired decision.
+`EventTriggerGroupState` affects timeout liveness and recovery cost only; it is
+never consulted for the already-fired decision.
 
 The marker check and request creation occur under the same tag-keyed process
 lock for **all** concurrency modes, including `parallel`; `serial`'s active-row
@@ -397,11 +398,17 @@ discoverable by the rotating sweep and consult their durable clock without
 entering the cache; capacity pressure can add database reads but cannot strand
 an eligible timeout fire.
 
-Clock rows are append-only in this release, so durable storage grows by one
-small row per distinct timeout correlation. The runtime never scans that
-collection: it performs an indexed key lookup only for an unresolved group,
-and AgentRequest marker pruning prevents lookups for resolved groups. Retention
-or compaction of historical clock rows is follow-up operational work.
+Permanently malformed groups (inconsistent or invalid cardinality, overfull,
+or over the hard cap) set `quiesced_at` and a diagnostic reason on this same
+state row. Due-timer processing then stops considering them, and each bounded
+recovery page batch-loads request markers and quiescence markers before it
+loads group membership. A membership-definition change produces a new state
+key and is therefore the explicit way to reconsider a quiesced group.
+
+State rows are retained in this release, so durable storage grows by one small
+row per distinct observed correlation. The runtime performs indexed key or
+bounded `_in` lookups only; it never full-scans the state collection. Retention
+or compaction of historical rows is follow-up operational work.
 
 ### Concurrency gate, with the tag
 
@@ -448,12 +455,14 @@ build:
 ### Fail-closed, both directions
 
 - **Tag missing on the source doc** while `correlation_field` is declared →
-  skip the fire; `last_status` / `last_error` name the field. Firing untagged
-  would silently rejoin unrelated runs inside the gate, which is the bug being
-  fixed.
-- **Tag empty or not a string**, or **expected count missing, malformed,
-  inconsistent, overfull, or over the cap** → emit no intent and record a
-  rate-limited operational error on the trigger.
+  defer delivery without consuming the source document's first-seen marker.
+  A create-then-populate producer can supply the tag in a follow-up update,
+  which is then handled as the document's created delivery. Firing untagged
+  would silently rejoin unrelated runs inside the gate.
+- **Tag empty or not a string** → defer the same way as a missing tag.
+- **Expected count missing, malformed, inconsistent, overfull, or over the
+  cap** → emit no intent and durably quiesce the correlation with a diagnostic
+  reason.
 - **`fill: correlation` with no ambient tag** (e.g. someone manual-runs the
   behavior) → the write fails with an error naming the trigger, rather than
   quietly creating a document orphaned from every group.
@@ -524,12 +533,13 @@ Conformance tests driven from the spec change, plus e2e beside
   every group; a normal tick does not perform one full collection scan per
   `per_group` trigger.
 - Restart mid-group: neither double-materializes a group with a request marker
-  nor loses a durable eligible group; the incomplete group's timeout clock
-  restarts.
+  nor loses a durable eligible group; the incomplete group's durable timeout
+  clock retains its original first-seen instant.
 - Crash before request creation is retried; crash after request creation is
   suppressed by the marker.
-- Inconsistent expected fields, overfull groups, missing/empty tags, and group
-  sizes over the cap fail closed.
+- Inconsistent expected fields, overfull groups, and group sizes over the cap
+  fail closed and are durably quiesced; missing/empty tags defer until a
+  follow-up update supplies a usable correlation.
 - Triggers without the new fields retain today's dispatch semantics.
 - Foreground and background write-tool calls both preserve correlation and
   source-field fills across the durable request boundary.

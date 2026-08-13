@@ -45,10 +45,18 @@ fn default_timeout() -> u64 {
 struct PackInit {
     inference_url: String,
     model_name: String,
+    #[serde(default = "default_tool_package")]
+    tool_package: String,
+    #[serde(default)]
+    api_key_env_var: Option<String>,
     #[serde(default)]
     backend_preset: Option<String>,
     #[serde(default)]
     openai_wire_api: Option<String>,
+}
+
+fn default_tool_package() -> String {
+    "readonly".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +72,8 @@ struct PackSeed {
 struct PackExpect {
     trigger_ids: Vec<String>,
     #[serde(default)]
+    trigger_request_counts: BTreeMap<String, usize>,
+    #[serde(default)]
     collection_counts: BTreeMap<String, u64>,
     #[serde(default)]
     projections: Vec<String>,
@@ -75,6 +85,16 @@ struct PackExpect {
     source_edges: Vec<SourceEdgeExpectation>,
     #[serde(default)]
     fan_in: Option<FanInExpectation>,
+    #[serde(default)]
+    prompt_tool_contracts: Vec<PromptToolContract>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PromptToolContract {
+    task_id: String,
+    required_tool_names: Vec<String>,
+    #[serde(default)]
+    required_query_collections: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +105,24 @@ struct FanInExpectation {
     correlation_field: String,
     expected_count_field: String,
     consumer_trigger_id: String,
+    #[serde(default)]
+    member_required_fields: Vec<String>,
+    #[serde(default)]
+    verification: Option<VerificationExpectation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerificationExpectation {
+    candidate_collection: String,
+    decision_collection: String,
+    summary_collection: String,
+    confirmed_collection: String,
+    final_consumer_trigger_id: String,
+    finding_id_field: String,
+    verdict_field: String,
+    evidence_field: String,
+    confirmed_count_field: String,
+    refuted_count_field: String,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +133,12 @@ struct FanInEvidence {
     result_count: usize,
     consumer_request_id: String,
     report_count: usize,
+    candidate_count: Option<usize>,
+    confirmed_count: Option<usize>,
+    refuted_count: Option<usize>,
+    decision_count: Option<usize>,
+    verification_summary_count: Option<usize>,
+    final_consumer_request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,12 +180,213 @@ fn load_manifest(pack: &Path) -> Result<PackManifest> {
     let manifest =
         serde_json::from_str(&expanded).with_context(|| format!("parsing {}", path.display()))?;
     validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
+    validate_prompt_tool_contracts(pack, &manifest)
+        .with_context(|| format!("validating prompt/tool contracts in {}", path.display()))?;
     Ok(manifest)
+}
+
+fn read_pack_json(path: &Path) -> Result<Value> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("reading prompt/tool contract document {}", path.display()))?;
+    serde_json::from_str(&raw)
+        .with_context(|| format!("parsing prompt/tool contract document {}", path.display()))
+}
+
+fn required_json_string<'a>(value: &'a Value, field: &str, path: &Path) -> Result<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .with_context(|| format!("{} has no non-empty {field}", path.display()))
+}
+
+/// Keep model instructions coupled to the exact tools exposed by the pack.
+///
+/// A config can be structurally valid while asking the model to call a stale
+/// tool name. These contracts follow Task -> Behavior -> ToolSelection ->
+/// DatastoreToolSurface and require the exact advertised name to occur in the
+/// task or system prompt. Surface collections must also exist in `schemas/`.
+fn validate_prompt_tool_contracts(pack: &Path, manifest: &PackManifest) -> Result<()> {
+    if manifest.expect.prompt_tool_contracts.is_empty() {
+        return Ok(());
+    }
+    let schemas = std::fs::read_dir(pack.join("schemas"))
+        .with_context(|| format!("reading {}", pack.join("schemas").display()))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "graphql"))
+        .map(|entry| std::fs::read_to_string(entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .join("\n");
+
+    for contract in &manifest.expect.prompt_tool_contracts {
+        let task_dir = pack.join("tasks").join(&contract.task_id);
+        let task_path = task_dir.join("object.json");
+        let task = read_pack_json(&task_path)?;
+        let behavior_id = required_json_string(&task, "behavior_id", &task_path)?;
+        let task_prompt_path = task_dir.join(
+            required_json_string(&task, "prompt_template", &task_path)?.trim_start_matches("./"),
+        );
+        let task_prompt = std::fs::read_to_string(&task_prompt_path)
+            .with_context(|| format!("reading {}", task_prompt_path.display()))?;
+
+        let behavior_dir = pack.join("agent-behaviors").join(behavior_id);
+        let behavior_path = behavior_dir.join("object.json");
+        let behavior = read_pack_json(&behavior_path)?;
+        let system_prompt_path = behavior_dir.join(
+            required_json_string(&behavior, "system_prompt", &behavior_path)?
+                .trim_start_matches("./"),
+        );
+        let system_prompt = std::fs::read_to_string(&system_prompt_path)
+            .with_context(|| format!("reading {}", system_prompt_path.display()))?;
+        let selection_id = required_json_string(&behavior, "tool_selection_id", &behavior_path)?;
+        let selection_path = pack
+            .join("tool-selections")
+            .join(selection_id)
+            .join("object.json");
+        let selection = read_pack_json(&selection_path)?;
+
+        let mut advertised = std::collections::BTreeSet::new();
+        let query_collections = selection
+            .get("defra_query_collections")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        if selection
+            .get("enable_defra_query")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            advertised.insert("defra_query".to_string());
+        }
+        for surface_id in selection
+            .get("datastore_tool_surface_ids")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            let surface_path = pack
+                .join("datastore-tool-surfaces")
+                .join(surface_id)
+                .join("object.json");
+            let surface = read_pack_json(&surface_path)?;
+            for entry in surface
+                .get("entries")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let tool_name = entry
+                    .get("tool_name")
+                    .and_then(Value::as_str)
+                    .context("datastore tool entry has no tool_name")?;
+                let collection = entry
+                    .get("collection")
+                    .and_then(Value::as_str)
+                    .context("datastore tool entry has no collection")?;
+                if !schemas.contains(&format!("type {collection} {{")) {
+                    bail!(
+                        "tool {tool_name} writes collection {collection}, but the pack has no matching schema"
+                    );
+                }
+                let type_start = schemas
+                    .find(&format!("type {collection} {{"))
+                    .context("schema type disappeared during tool validation")?;
+                let type_body = schemas[type_start..]
+                    .split_once('}')
+                    .map(|(body, _)| body)
+                    .context("schema type has no closing brace")?;
+                for field in entry
+                    .get("fields")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let field_name = field
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .context("datastore tool field has no name")?;
+                    if !type_body.lines().any(|line| {
+                        line.trim_start()
+                            .strip_prefix(field_name)
+                            .is_some_and(|rest| rest.trim_start().starts_with(':'))
+                    }) {
+                        bail!(
+                            "tool {tool_name} exposes field {field_name}, but {collection} has no matching schema field"
+                        );
+                    }
+                }
+                advertised.insert(tool_name.to_string());
+            }
+        }
+
+        let combined_prompt = format!("{system_prompt}\n{task_prompt}");
+        for tool_name in &contract.required_tool_names {
+            if !advertised.contains(tool_name) {
+                bail!(
+                    "task {} requires tool {tool_name}, but behavior {behavior_id} does not advertise it",
+                    contract.task_id
+                );
+            }
+            if !combined_prompt.contains(&format!("`{tool_name}`")) {
+                bail!(
+                    "task {} exposes tool {tool_name}, but its prompts do not name it exactly as `{tool_name}`",
+                    contract.task_id
+                );
+            }
+        }
+        for collection in &contract.required_query_collections {
+            if !query_collections.contains(collection.as_str()) {
+                bail!(
+                    "task {} asks defra_query for {collection}, but behavior {behavior_id} cannot query it",
+                    contract.task_id
+                );
+            }
+            if !combined_prompt.contains(&format!("`{collection}`")) {
+                bail!(
+                    "task {} can query {collection}, but its prompts do not name that collection exactly",
+                    contract.task_id
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn trigger_source_collections(pack: &Path, trigger_ids: &[String]) -> Result<Vec<String>> {
+    let mut collections = std::collections::BTreeSet::new();
+    for trigger_id in trigger_ids {
+        let path = pack
+            .join("event_triggers")
+            .join(trigger_id)
+            .join("object.json");
+        let trigger = read_pack_json(&path)?;
+        let source_collection = required_json_string(&trigger, "source_collection", &path)?;
+        validate_collection_identifier(source_collection)?;
+        collections.insert(source_collection.to_string());
+    }
+    Ok(collections.into_iter().collect())
 }
 
 fn validate_manifest(manifest: &PackManifest) -> Result<()> {
     if !manifest.expect.source_edges.is_empty() && !manifest.expect.signed_provenance {
         bail!("expect.source_edges requires expect.signed_provenance=true");
+    }
+    if !matches!(
+        manifest.init.tool_package.as_str(),
+        "minimal" | "introspection" | "readonly" | "write" | "yolo"
+    ) {
+        bail!("init.tool_package must be minimal, introspection, readonly, write, or yolo");
+    }
+    for (trigger_id, count) in &manifest.expect.trigger_request_counts {
+        if !manifest.expect.trigger_ids.contains(trigger_id) {
+            bail!("expect.trigger_request_counts names unknown trigger {trigger_id}");
+        }
+        if *count == 0 {
+            bail!("expect.trigger_request_counts[{trigger_id}] must be greater than zero");
+        }
     }
     Ok(())
 }
@@ -800,15 +1045,22 @@ async fn render_projection_artifacts(
 async fn await_stages(
     graphql: &str,
     trigger_ids: &[String],
+    trigger_request_counts: &BTreeMap<String, usize>,
+    correlation: &str,
     deadline: Duration,
 ) -> Result<Vec<StageResult>> {
     let started = Instant::now();
     loop {
         let mut done: Vec<StageResult> = Vec::new();
         for trigger_id in trigger_ids {
+            let expected_count = trigger_request_counts.get(trigger_id).copied().unwrap_or(1);
             let query = format!(
-                r#"{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state caused_by_source_doc_id }} }}"#,
-                escape_graphql_string(trigger_id)
+                r#"{{ AgentRequest(filter: {{
+                    caused_by_trigger_id: {{ _eq: "{}" }},
+                    caused_by_correlation: {{ _eq: "{}" }}
+                }}) {{ request_id lifecycle_state failure_reason caused_by_source_doc_id }} }}"#,
+                escape_graphql_string(trigger_id),
+                escape_graphql_string(correlation),
             );
             let Ok(resp) = post_graphql(graphql, &query).await else {
                 continue;
@@ -816,37 +1068,59 @@ async fn await_stages(
             let Some(rows) = resp.pointer("/data/AgentRequest").and_then(Value::as_array) else {
                 continue;
             };
+            if rows.len() > expected_count {
+                bail!(
+                    "trigger {trigger_id} materialized {} requests for correlation {correlation}; expected {expected_count}",
+                    rows.len()
+                );
+            }
             for row in rows {
                 let state = row
                     .get("lifecycle_state")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 if matches!(state, "completed" | "failed" | "cancelled") {
+                    let request_id = row
+                        .get("request_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if state != "completed" {
+                        let reason = row
+                            .get("failure_reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        bail!("trigger {trigger_id} request {request_id} ended {state}: {reason}");
+                    }
                     done.push(StageResult {
                         trigger_id: trigger_id.clone(),
-                        request_id: row
-                            .get("request_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
+                        request_id: request_id.to_string(),
                         lifecycle_state: state.to_string(),
                         caused_by_source_doc_id: row
                             .get("caused_by_source_doc_id")
                             .and_then(Value::as_str)
                             .map(ToOwned::to_owned),
                     });
-                    break;
                 }
             }
         }
-        if done.len() == trigger_ids.len() {
+        let expected_total = trigger_ids
+            .iter()
+            .map(|trigger_id| trigger_request_counts.get(trigger_id).copied().unwrap_or(1))
+            .sum::<usize>();
+        if done.len() == expected_total {
             return Ok(done);
         }
         // A trigger that fired and failed to materialize will never retry:
         // created/first-seen means the source document is already marked seen.
         // Surface its own last_error instead of waiting out the deadline.
         for trigger_id in trigger_ids {
-            if done.iter().any(|s| &s.trigger_id == trigger_id) {
+            let expected_count = trigger_request_counts.get(trigger_id).copied().unwrap_or(1);
+            if done
+                .iter()
+                .filter(|stage| &stage.trigger_id == trigger_id)
+                .count()
+                == expected_count
+            {
                 continue;
             }
             if let Some(error) = trigger_error(graphql, trigger_id).await {
@@ -901,11 +1175,34 @@ async fn verify_fan_in(
     for field in [&expected.correlation_field, &expected.expected_count_field] {
         gents::graphql::validate_graphql_name(field)?;
     }
+    for field in &expected.member_required_fields {
+        gents::graphql::validate_graphql_name(field)?;
+    }
+    if let Some(verification) = &expected.verification {
+        for collection in [
+            &verification.candidate_collection,
+            &verification.decision_collection,
+            &verification.summary_collection,
+            &verification.confirmed_collection,
+        ] {
+            validate_collection_identifier(collection)?;
+        }
+        for field in [
+            &verification.finding_id_field,
+            &verification.verdict_field,
+            &verification.evidence_field,
+            &verification.confirmed_count_field,
+            &verification.refuted_count_field,
+        ] {
+            gents::graphql::validate_graphql_name(field)?;
+        }
+    }
 
     let escaped_correlation = escape_graphql_string(correlation);
-    let load_members = |collection: &str| {
+    let required_member_projection = expected.member_required_fields.join(" ");
+    let load_members = |collection: &str, required_projection: &str| {
         format!(
-            r#"{{ {collection}(filter: {{ {correlation_field}: {{ _eq: "{escaped_correlation}" }} }}) {{ _docID {correlation_field} {expected_count_field} }} }}"#,
+            r#"{{ {collection}(filter: {{ {correlation_field}: {{ _eq: "{escaped_correlation}" }} }}) {{ _docID {correlation_field} {expected_count_field} {required_projection} }} }}"#,
             correlation_field = expected.correlation_field,
             expected_count_field = expected.expected_count_field,
         )
@@ -913,7 +1210,7 @@ async fn verify_fan_in(
     let member_rows = graphql_rows(
         graphql,
         &expected.member_collection,
-        &load_members(&expected.member_collection),
+        &load_members(&expected.member_collection, &required_member_projection),
     )
     .await?;
     if member_rows.is_empty() {
@@ -938,12 +1235,21 @@ async fn verify_fan_in(
                 expected_count
             );
         }
+        for field in &expected.member_required_fields {
+            if !row
+                .get(field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                bail!("fan-in member has no non-empty required field {field}");
+            }
+        }
     }
 
     let result_rows = graphql_rows(
         graphql,
         &expected.result_collection,
-        &load_members(&expected.result_collection),
+        &load_members(&expected.result_collection, ""),
     )
     .await?;
     if result_rows.len() != expected_count {
@@ -994,8 +1300,17 @@ async fn verify_fan_in(
         .context("fan-in consumer request has no request_id")?
         .to_string();
 
+    let report_projection = expected.verification.as_ref().map_or_else(
+        || "_docID".to_string(),
+        |verification| {
+            format!(
+                "_docID {} {}",
+                verification.confirmed_count_field, verification.refuted_count_field
+            )
+        },
+    );
     let report_query = format!(
-        r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{escaped_correlation}" }} }}) {{ _docID }} }}"#,
+        r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{escaped_correlation}" }} }}) {{ {report_projection} }} }}"#,
         collection = expected.report_collection,
         field = expected.correlation_field,
     );
@@ -1008,6 +1323,203 @@ async fn verify_fan_in(
         );
     }
 
+    let mut candidate_count = None;
+    let mut confirmed_count = None;
+    let mut refuted_count = None;
+    let mut decision_count = None;
+    let mut verification_summary_count = None;
+    let mut final_consumer_request_id = None;
+    if let Some(verification) = &expected.verification {
+        let candidate_query = format!(
+            r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{escaped_correlation}" }} }}) {{ _docID {finding_id} }} }}"#,
+            collection = verification.candidate_collection,
+            field = expected.correlation_field,
+            finding_id = verification.finding_id_field,
+        );
+        let candidates = graphql_rows(
+            graphql,
+            &verification.candidate_collection,
+            &candidate_query,
+        )
+        .await?;
+        let decision_query = format!(
+            r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{escaped_correlation}" }} }}) {{ _docID {finding_id} {verdict} {evidence} }} }}"#,
+            collection = verification.decision_collection,
+            field = expected.correlation_field,
+            finding_id = verification.finding_id_field,
+            verdict = verification.verdict_field,
+            evidence = verification.evidence_field,
+        );
+        let decisions =
+            graphql_rows(graphql, &verification.decision_collection, &decision_query).await?;
+        let candidate_ids = candidates
+            .iter()
+            .map(|row| {
+                row.get(&verification.finding_id_field)
+                    .and_then(Value::as_str)
+                    .context("candidate finding has no finding id")
+            })
+            .collect::<Result<std::collections::BTreeSet<_>>>()?;
+        let decision_ids = decisions
+            .iter()
+            .map(|row| {
+                row.get(&verification.finding_id_field)
+                    .and_then(Value::as_str)
+                    .context("verification decision has no finding id")
+            })
+            .collect::<Result<std::collections::BTreeSet<_>>>()?;
+        if candidate_ids.len() != candidates.len() {
+            bail!("fan-in candidate finding ids are not unique");
+        }
+        if decision_ids.len() != decisions.len() {
+            bail!("fan-in verification decision ids are not unique");
+        }
+        if candidate_ids != decision_ids {
+            bail!("fan-in verification decisions do not cover the exact candidate set");
+        }
+        let mut verified_confirmed = 0usize;
+        let mut verified_refuted = 0usize;
+        for row in &decisions {
+            match row.get(&verification.verdict_field).and_then(Value::as_str) {
+                Some("confirmed") => verified_confirmed += 1,
+                Some("refuted") => verified_refuted += 1,
+                verdict => bail!("verification decision has invalid verdict {verdict:?}"),
+            }
+            if !row
+                .get(&verification.evidence_field)
+                .and_then(Value::as_str)
+                .is_some_and(|evidence| !evidence.trim().is_empty())
+            {
+                bail!("verification decision has no fresh evidence");
+            }
+        }
+        let summary_query = format!(
+            r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{escaped_correlation}" }} }}) {{ _docID {confirmed_count} {refuted_count} }} }}"#,
+            collection = verification.summary_collection,
+            field = expected.correlation_field,
+            confirmed_count = verification.confirmed_count_field,
+            refuted_count = verification.refuted_count_field,
+        );
+        let summaries =
+            graphql_rows(graphql, &verification.summary_collection, &summary_query).await?;
+        if summaries.len() != 1 {
+            bail!(
+                "fan-in expected exactly one correlated {}, found {}",
+                verification.summary_collection,
+                summaries.len()
+            );
+        }
+        let parse_count = |row: &Value, field: &str| -> Result<usize> {
+            row.get(field)
+                .and_then(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .or_else(|| value.as_str()?.parse::<usize>().ok())
+                })
+                .with_context(|| format!("row has no valid {field}"))
+        };
+        if parse_count(&summaries[0], &verification.confirmed_count_field)? != verified_confirmed
+            || parse_count(&summaries[0], &verification.refuted_count_field)? != verified_refuted
+        {
+            bail!("verification summary does not match the durable decision ledger");
+        }
+
+        let final_request_query = format!(
+            r#"{{ AgentRequest(filter: {{
+                agent_did: {{ _eq: "{}" }},
+                caused_by_trigger_id: {{ _eq: "{}" }},
+                caused_by_trigger_kind: {{ _eq: "event" }},
+                caused_by_correlation: {{ _eq: "{}" }}
+            }}) {{ request_id }} }}"#,
+            escape_graphql_string(agent_did),
+            escape_graphql_string(&verification.final_consumer_trigger_id),
+            escaped_correlation,
+        );
+        let final_requests = graphql_rows(graphql, "AgentRequest", &final_request_query).await?;
+        if final_requests.len() != 1 {
+            bail!(
+                "final consumer {} expected exactly one correlated AgentRequest, found {}",
+                verification.final_consumer_trigger_id,
+                final_requests.len()
+            );
+        }
+        final_consumer_request_id = Some(
+            final_requests[0]
+                .get("request_id")
+                .and_then(Value::as_str)
+                .context("final consumer request has no request_id")?
+                .to_string(),
+        );
+        let confirmed_query = format!(
+            r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{escaped_correlation}" }} }}) {{ _docID {verdict} {evidence} }} }}"#,
+            collection = verification.confirmed_collection,
+            field = expected.correlation_field,
+            verdict = verification.verdict_field,
+            evidence = verification.evidence_field,
+        );
+        let confirmed = graphql_rows(
+            graphql,
+            &verification.confirmed_collection,
+            &confirmed_query,
+        )
+        .await?;
+        for row in &confirmed {
+            if row.get(&verification.verdict_field).and_then(Value::as_str) != Some("confirmed") {
+                bail!(
+                    "fan-in promoted {} row has a verdict other than confirmed",
+                    verification.confirmed_collection
+                );
+            }
+            if !row
+                .get(&verification.evidence_field)
+                .and_then(Value::as_str)
+                .is_some_and(|evidence| !evidence.trim().is_empty())
+            {
+                bail!(
+                    "fan-in promoted {} row has no verification evidence",
+                    verification.confirmed_collection
+                );
+            }
+        }
+        let parse_report_count = |field: &str| -> Result<usize> {
+            report_rows[0]
+                .get(field)
+                .and_then(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .or_else(|| value.as_str()?.parse::<usize>().ok())
+                })
+                .with_context(|| format!("fan-in report has no valid {field}"))
+        };
+        let reported_confirmed = parse_report_count(&verification.confirmed_count_field)?;
+        let reported_refuted = parse_report_count(&verification.refuted_count_field)?;
+        if reported_confirmed != confirmed.len() {
+            bail!(
+                "fan-in report says {} confirmed findings, found {}",
+                reported_confirmed,
+                confirmed.len()
+            );
+        }
+        if reported_confirmed != verified_confirmed || reported_refuted != verified_refuted {
+            bail!("final report counts do not match the verification decision ledger");
+        }
+        if reported_confirmed + reported_refuted != candidates.len() {
+            bail!(
+                "fan-in verification ledger is unbalanced: {} confirmed + {} refuted != {} candidates",
+                reported_confirmed,
+                reported_refuted,
+                candidates.len()
+            );
+        }
+        candidate_count = Some(candidates.len());
+        confirmed_count = Some(reported_confirmed);
+        refuted_count = Some(reported_refuted);
+        decision_count = Some(decisions.len());
+        verification_summary_count = Some(summaries.len());
+    }
+
     Ok(Some(FanInEvidence {
         correlation: correlation.to_string(),
         expected_count,
@@ -1015,6 +1527,12 @@ async fn verify_fan_in(
         result_count: result_rows.len(),
         consumer_request_id,
         report_count: report_rows.len(),
+        candidate_count,
+        confirmed_count,
+        refuted_count,
+        decision_count,
+        verification_summary_count,
+        final_consumer_request_id,
     }))
 }
 
@@ -1069,6 +1587,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let pack = resolve_pack(&args.pack)?;
     let manifest = load_manifest(&pack)?;
+    let observed_collections = trigger_source_collections(&pack, &manifest.expect.trigger_ids)?;
     let job_id = args.job_id.clone().unwrap_or_else(default_job_id);
     let prompt = args
         .prompt
@@ -1110,7 +1629,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         "--model-name".into(),
         manifest.init.model_name.clone(),
         "--tool-package".into(),
-        "minimal".into(),
+        manifest.init.tool_package.clone(),
     ];
     if let Some(preset) = manifest.init.backend_preset.as_deref() {
         init_args.push("--backend-preset".into());
@@ -1119,6 +1638,10 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     if let Some(wire) = manifest.init.openai_wire_api.as_deref() {
         init_args.push("--openai-wire-api".into());
         init_args.push(wire.into());
+    }
+    if let Some(api_key_env_var) = manifest.init.api_key_env_var.as_deref() {
+        init_args.push("--api-key-env-var".into());
+        init_args.push(api_key_env_var.into());
     }
     let init = run_cli_json(&bin, &init_args).await?;
     let agent_did = init
@@ -1137,15 +1660,18 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
         println!(
-            "runtime  ready; waiting for the event source to observe {}…",
-            manifest.seed.collection
+            "runtime  ready; waiting for {} event source collection(s)…",
+            observed_collections.len()
         );
-        wait_for_event_source(
-            &log,
-            &manifest.seed.collection,
-            Duration::from_secs(manifest.await_timeout_secs),
-        )
-        .await?;
+        for collection in &observed_collections {
+            wait_for_event_source(
+                &log,
+                collection,
+                Duration::from_secs(manifest.await_timeout_secs),
+            )
+            .await?;
+            println!("observing {collection}");
+        }
 
         let mutation = seed_mutation(&manifest.seed, &job_id, &prompt);
         post_graphql(&graphql, &mutation)
@@ -1156,6 +1682,8 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         let stages = await_stages(
             &graphql,
             &manifest.expect.trigger_ids,
+            &manifest.expect.trigger_request_counts,
+            &job_id,
             Duration::from_secs(manifest.await_timeout_secs),
         )
         .await?;
@@ -1305,6 +1833,12 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             "result_count": evidence.result_count,
             "consumer_request_id": evidence.consumer_request_id,
             "report_count": evidence.report_count,
+            "candidate_count": evidence.candidate_count,
+            "confirmed_count": evidence.confirmed_count,
+            "refuted_count": evidence.refuted_count,
+            "decision_count": evidence.decision_count,
+            "verification_summary_count": evidence.verification_summary_count,
+            "final_consumer_request_id": evidence.final_consumer_request_id,
         })),
         "projection_artifacts": projection_artifacts,
         "prompt_tokens": prompt_tokens,
@@ -1423,6 +1957,8 @@ mod tests {
             init: PackInit {
                 inference_url: "http://127.0.0.1:8080".to_string(),
                 model_name: "test".to_string(),
+                tool_package: "readonly".to_string(),
+                api_key_env_var: None,
                 backend_preset: None,
                 openai_wire_api: None,
             },
@@ -1435,6 +1971,7 @@ mod tests {
             default_prompt: String::new(),
             expect: PackExpect {
                 trigger_ids: Vec::new(),
+                trigger_request_counts: BTreeMap::new(),
                 collection_counts: BTreeMap::new(),
                 projections: Vec::new(),
                 signed_provenance: false,
@@ -1446,6 +1983,7 @@ mod tests {
                     source_collection: "Source".to_string(),
                 }],
                 fan_in: None,
+                prompt_tool_contracts: Vec::new(),
             },
             await_timeout_secs: 1,
         };
@@ -1454,6 +1992,17 @@ mod tests {
         assert!(error
             .to_string()
             .contains("source_edges requires expect.signed_provenance=true"));
+    }
+
+    #[test]
+    fn code_review_prompts_name_the_tools_their_behaviors_advertise() {
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/code-review");
+        let manifest = load_manifest(&pack).expect("code-review pack should load");
+        assert_eq!(manifest.expect.prompt_tool_contracts.len(), 4);
+        assert_eq!(
+            manifest.expect.trigger_request_counts.get("review-scan"),
+            Some(&4)
+        );
     }
 
     #[test]

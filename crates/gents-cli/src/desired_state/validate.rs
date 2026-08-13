@@ -123,6 +123,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
 
     let mut behavior_ids = BTreeSet::new();
     let mut backend_ids = BTreeSet::new();
+    let mut backend_models = HashMap::<String, BTreeSet<String>>::new();
     let mut tool_selection_ids = BTreeSet::new();
 
     let mut surface_ids = BTreeSet::new();
@@ -163,6 +164,19 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             errors.push(format!(
                 "duplicate backend_id in inference-backends.json: {backend_id}"
             ));
+        }
+
+        if !backend_id.is_empty() {
+            backend_models.insert(
+                backend_id.to_string(),
+                backend
+                    .models
+                    .iter()
+                    .map(|model| model.trim())
+                    .filter(|model| !model.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            );
         }
 
         if backend.endpoint.trim().is_empty() {
@@ -452,6 +466,16 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                     "behavior {} references missing backend_id {}",
                     behavior.behavior_id, backend_id
                 ));
+            } else if let Some(model_name) = non_empty(&behavior.model_name) {
+                let advertised = backend_models
+                    .get(backend_id)
+                    .expect("known backend has a model entry");
+                if !advertised.is_empty() && !advertised.contains(model_name) {
+                    errors.push(format!(
+                        "behavior {} selects model {} which backend {} does not advertise",
+                        behavior.behavior_id, model_name, backend_id
+                    ));
+                }
             }
         }
 
@@ -1725,6 +1749,35 @@ mod tests {
         let mut errors = Vec::new();
         validate_manifest(&manifest, &mut errors);
         errors
+    }
+
+    #[test]
+    fn behavior_model_must_be_advertised_by_its_backend() {
+        let mut manifest = manifest(None, None);
+        manifest
+            .inference_backends
+            .push(super::super::DesiredInferenceBackend {
+                backend_id: "reviewers".to_string(),
+                name: "Reviewers".to_string(),
+                provider_kind: Default::default(),
+                openai_wire_api: None,
+                endpoint: "http://127.0.0.1:8000/v1".to_string(),
+                api_key: None,
+                api_key_env_var: None,
+                max_concurrent: 4,
+                max_queue_depth: 8,
+                enabled: true,
+                models: vec!["d4f".to_string()],
+            });
+        manifest.agent_behaviors[0].backend_id = Some("reviewers".to_string());
+        manifest.agent_behaviors[0].model_name = Some("GLM-5.2".to_string());
+
+        let errors = validate_errors(manifest);
+        assert!(errors.iter().any(|error| {
+            error.contains(
+                "behavior default selects model GLM-5.2 which backend reviewers does not advertise",
+            )
+        }));
     }
 
     fn manifest_with_reasoning_effort(reasoning_effort: Option<&str>) -> DesiredStateManifest {

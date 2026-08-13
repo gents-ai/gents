@@ -1,9 +1,9 @@
 {
-  "profile_id": "review-profile",
-  "display_name": "Code review profile",
+  "profile_id": "review-scan-profile",
+  "display_name": "Bounded parallel reviewer profile",
   "context_window": 131072,
   "max_output_tokens": 8192,
-  "max_turns": 64,
+  "max_turns": 16,
   "temperature": 0.1,
   "top_p": null,
   "top_k": null,

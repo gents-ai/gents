@@ -1,13 +1,13 @@
 {
-  "surface_id": "review-triage-writes",
+  "surface_id": "review-verify-writes",
   "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
-  "display_name": "Triage report writes",
+  "display_name": "Verification decision writes",
   "enabled": true,
   "entries": [
     {
-      "tool_name": "write_finding",
-      "collection": "Finding",
-      "description": "Promote one confirmed verification verdict into the final review.",
+      "tool_name": "write_finding_verdict",
+      "collection": "FindingVerdict",
+      "description": "Persist one confirmed or refuted decision for a candidate finding.",
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "finding_id", "required": true},
@@ -23,12 +23,12 @@
       ]
     },
     {
-      "tool_name": "write_triage_report",
-      "collection": "TriageReport",
-      "description": "Create the single count-balanced final report for this correlated review run; run_id is filled by the runtime.",
+      "tool_name": "write_verification_summary",
+      "collection": "VerificationSummary",
+      "description": "Close the verification ledger and trigger final triage.",
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "high_priority_count", "required": true},
+        {"name": "candidate_count", "required": true},
         {"name": "confirmed_count", "required": true},
         {"name": "refuted_count", "required": true},
         {"name": "summary", "required": true}

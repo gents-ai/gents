@@ -1,0 +1,9 @@
+{
+  "task_id": "review-verify-task",
+  "name": "Verify completed review candidates",
+  "description": null,
+  "behavior_id": "review-verify",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

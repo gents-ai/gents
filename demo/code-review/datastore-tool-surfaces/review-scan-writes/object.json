@@ -5,9 +5,9 @@
   "enabled": true,
   "entries": [
     {
-      "tool_name": "write_finding",
-      "collection": "Finding",
-      "description": "Record one actionable finding for this review run.",
+      "tool_name": "write_candidate_finding",
+      "collection": "CandidateFinding",
+      "description": "Record one evidenced Critical/Major candidate for adversarial verification.",
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "finding_id", "required": true},
@@ -16,7 +16,8 @@
         {"name": "path", "required": true},
         {"name": "line", "required": false},
         {"name": "title", "required": true},
-        {"name": "detail", "required": true}
+        {"name": "detail", "required": true},
+        {"name": "evidence", "required": true}
       ]
     },
     {

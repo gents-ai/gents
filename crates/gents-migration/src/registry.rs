@@ -421,7 +421,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE_NAME,
         gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
-        "bafyreiex6ljhcocvmuc76s6wklnjgjked6pwcrzfttvrqzbps42oc4yhb4"
+        "bafyreierekkunke7pqlclttwsv3iugbxqq37fz4zstkfxxuju2d7htxhly"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SERVICE_REGISTRY_NAME,

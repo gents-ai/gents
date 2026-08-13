@@ -434,6 +434,81 @@ async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
 }
 
 #[tokio::test]
+async fn concurrent_conversation_upserts_converge_on_one_session_row() {
+    let data_path = std::env::temp_dir().join(format!(
+        "gents-conversation-create-race-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    let first = upsert_conversation_from_request_with_identity(
+        &node,
+        "session-race",
+        "review-scan",
+        "did:key:zTestReviewer",
+        "review-scan",
+        "request-race",
+        "Review one area",
+        "pending",
+    );
+    let second = upsert_conversation_from_request_with_identity(
+        &node,
+        "session-race",
+        "review-scan",
+        "did:key:zTestReviewer",
+        "review-scan",
+        "request-race",
+        "Review one area",
+        "processing",
+    );
+    let (first, second) = tokio::join!(first, second);
+    first.unwrap();
+    second.unwrap();
+
+    let response = node
+        .execute(
+            r#"{
+                AgentConversation(filter: { session_id: { _eq: "session-race" } }) {
+                    latest_request_id
+                    status
+                }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query failed: {:?}",
+        response.errors
+    );
+    let conversations = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentConversation"))
+        .and_then(|rows| rows.as_array())
+        .expect("conversation rows");
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(
+        conversations[0]
+            .get("latest_request_id")
+            .and_then(|value| value.as_str()),
+        Some("request-race")
+    );
+    assert_eq!(
+        conversations[0]
+            .get("status")
+            .and_then(|value| value.as_str()),
+        Some("processing")
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn update_conversation_title_with_source_persists_generated_title() {
     let data_path =
         std::env::temp_dir().join(format!("gents-conversation-title-{}", uuid::Uuid::new_v4()));
