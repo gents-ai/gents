@@ -15,7 +15,7 @@
 //!   introspected source-doc projection cached per source collection.
 //! - Task 22: `on_result` callback body for bookkeeping writes.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -124,6 +124,12 @@ struct GroupTrackingKey {
     correlation: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SourceDocumentKey {
+    source_collection: String,
+    source_doc_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct GroupTriggerScanFingerprint {
     source_collection: String,
@@ -161,6 +167,7 @@ struct DurableGroupStateRow {
 struct DeliveryBuild {
     intents: Vec<FireIntent>,
     correlation_pending: bool,
+    settled_trigger_ids: Vec<String>,
 }
 
 pub struct EventSource {
@@ -175,7 +182,13 @@ pub struct EventSource {
     cancel: CancellationToken,
     source_schema_cache: SourceSchemaCache,
     collection_id_to_name: HashMap<String, String>,
+    // Fast path for documents whose matching trigger deliveries have all
+    // settled. Incomplete correlation keeps a document out of this set.
     seen_docs: HashMap<String, HashSet<String>>,
+    // Settled delivery identities for a document that still has at least one
+    // correlation-incomplete sibling. This prevents a ready sibling from
+    // firing again when a follow-up update supplies the missing correlation.
+    partially_seen_triggers: HashMap<SourceDocumentKey, HashSet<String>>,
     pending_intents: Mutex<VecDeque<FireIntent>>,
     group_timers: Arc<Mutex<HashMap<GroupTrackingKey, GroupTimer>>>,
     group_due_cursor: usize,
@@ -303,6 +316,7 @@ impl EventSource {
             source_schema_cache: SourceSchemaCache::default(),
             collection_id_to_name: HashMap::new(),
             seen_docs: HashMap::new(),
+            partially_seen_triggers: HashMap::new(),
             pending_intents: Mutex::new(VecDeque::new()),
             group_timers: Arc::new(Mutex::new(HashMap::new())),
             group_due_cursor: 0,
@@ -500,16 +514,33 @@ impl EventSource {
         snapshot: &ActiveRuntimeSnapshot,
     ) -> anyhow::Result<()> {
         crate::graphql::validate_collection_identifier(collection)?;
-        let correlation_probes = snapshot
+        let trigger_ids = snapshot
             .active_event_triggers()
             .values()
             .filter(|trigger| trigger.source_collection == collection)
-            .filter_map(|trigger| {
-                let field = trigger.correlation_field.as_deref()?.trim();
-                (!field.is_empty()).then(|| (trigger.filter.clone(), field.to_string()))
-            })
-            .collect::<BTreeSet<_>>();
-        for (_, field) in &correlation_probes {
+            .map(|trigger| trigger.trigger_id.clone())
+            .collect::<HashSet<_>>();
+        let mut correlation_probes: BTreeMap<(Option<String>, String), Vec<String>> =
+            BTreeMap::new();
+        for trigger in snapshot
+            .active_event_triggers()
+            .values()
+            .filter(|trigger| trigger.source_collection == collection)
+        {
+            let Some(field) = trigger
+                .correlation_field
+                .as_deref()
+                .map(str::trim)
+                .filter(|field| !field.is_empty())
+            else {
+                continue;
+            };
+            correlation_probes
+                .entry((trigger.filter.clone(), field.to_string()))
+                .or_default()
+                .push(trigger.trigger_id.clone());
+        }
+        for (_, field) in correlation_probes.keys() {
             crate::graphql::validate_graphql_name(field)?;
         }
         let query = format!(
@@ -543,8 +574,8 @@ impl EventSource {
                     .map(str::to_owned)
             })
             .collect();
-        let mut deferred_ids = HashSet::new();
-        for (filter, field) in correlation_probes {
+        let mut deferred_by_doc: HashMap<String, HashSet<String>> = HashMap::new();
+        for ((filter, field), correlated_trigger_ids) in correlation_probes {
             let filter = filter
                 .as_deref()
                 .map(str::trim)
@@ -581,16 +612,27 @@ impl EventSource {
                     .is_some_and(|value| !value.is_empty());
                 if !ready {
                     if let Some(doc_id) = row.get("_docID").and_then(serde_json::Value::as_str) {
-                        deferred_ids.insert(doc_id.to_string());
+                        deferred_by_doc
+                            .entry(doc_id.to_string())
+                            .or_default()
+                            .extend(correlated_trigger_ids.iter().cloned());
                     }
                 }
             }
         }
-        for doc_id in &deferred_ids {
+        for (doc_id, pending_trigger_ids) in &deferred_by_doc {
             doc_ids.remove(doc_id);
+            self.mark_triggers_seen(
+                collection,
+                doc_id,
+                trigger_ids
+                    .difference(pending_trigger_ids)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
         }
         let count = doc_ids.len();
-        let deferred = deferred_ids.len();
+        let deferred = deferred_by_doc.len();
         if deferred > 0 {
             tracing::debug!(
                 source_collection = %collection,
@@ -664,6 +706,53 @@ impl EventSource {
             .entry(collection.to_string())
             .or_default()
             .insert(doc_id.to_string());
+        self.partially_seen_triggers.remove(&SourceDocumentKey {
+            source_collection: collection.to_string(),
+            source_doc_id: doc_id.to_string(),
+        });
+    }
+
+    fn has_seen_trigger(&self, collection: &str, doc_id: &str, trigger_id: &str) -> bool {
+        self.has_seen(collection, doc_id)
+            || self
+                .partially_seen_triggers
+                .get(&SourceDocumentKey {
+                    source_collection: collection.to_string(),
+                    source_doc_id: doc_id.to_string(),
+                })
+                .is_some_and(|trigger_ids| trigger_ids.contains(trigger_id))
+    }
+
+    fn mark_triggers_seen(
+        &mut self,
+        collection: &str,
+        doc_id: &str,
+        trigger_ids: impl IntoIterator<Item = String>,
+    ) {
+        let trigger_ids = trigger_ids.into_iter().collect::<Vec<_>>();
+        if trigger_ids.is_empty() {
+            return;
+        }
+        self.partially_seen_triggers
+            .entry(SourceDocumentKey {
+                source_collection: collection.to_string(),
+                source_doc_id: doc_id.to_string(),
+            })
+            .or_default()
+            .extend(trigger_ids);
+    }
+
+    fn commit_delivery_seen_state(
+        &mut self,
+        collection: &str,
+        doc_id: &str,
+        build: &DeliveryBuild,
+    ) {
+        if build.correlation_pending {
+            self.mark_triggers_seen(collection, doc_id, build.settled_trigger_ids.clone());
+        } else {
+            self.mark_seen(collection, doc_id);
+        }
     }
 
     async fn resolve_collection_name(&mut self, collection_id: &str) -> Option<String> {
@@ -1856,8 +1945,12 @@ impl EventSource {
         let mut build = DeliveryBuild {
             intents: Vec::with_capacity(candidates.len()),
             correlation_pending: false,
+            settled_trigger_ids: Vec::with_capacity(candidates.len()),
         };
         for trigger in candidates {
+            if self.has_seen_trigger(collection_name, source_doc_id, &trigger.trigger_id) {
+                continue;
+            }
             match self.probe_filter(source_doc_id, &trigger).await {
                 Ok(true) => {}
                 Ok(false) => {
@@ -1867,6 +1960,7 @@ impl EventSource {
                         %source_doc_id,
                         "event source: filter miss, skipping this trigger",
                     );
+                    build.settled_trigger_ids.push(trigger.trigger_id.clone());
                     continue;
                 }
                 Err(err) => {
@@ -1877,6 +1971,7 @@ impl EventSource {
                         %err,
                         "event source: filter probe failed; skipping this trigger",
                     );
+                    build.settled_trigger_ids.push(trigger.trigger_id.clone());
                     continue;
                 }
             }
@@ -1894,6 +1989,7 @@ impl EventSource {
                         %err,
                         "event source: source-doc fetch failed; skipping this trigger",
                     );
+                    build.settled_trigger_ids.push(trigger.trigger_id.clone());
                     continue;
                 }
             };
@@ -1930,6 +2026,7 @@ impl EventSource {
                 {
                     build.intents.push(intent);
                 }
+                build.settled_trigger_ids.push(trigger.trigger_id.clone());
                 continue;
             }
 
@@ -1946,6 +2043,7 @@ impl EventSource {
                         %error,
                         "event source trigger-context snapshot failed; skipping fire",
                     );
+                    build.settled_trigger_ids.push(trigger.trigger_id.clone());
                     continue;
                 }
             };
@@ -1992,6 +2090,7 @@ impl EventSource {
                     );
                 }),
             });
+            build.settled_trigger_ids.push(trigger.trigger_id.clone());
         }
         build
     }
@@ -2044,10 +2143,7 @@ impl EventSource {
                         "created",
                     )
                     .await;
-                if build.correlation_pending {
-                    continue;
-                }
-                self.mark_seen(&collection, &doc_id);
+                self.commit_delivery_seen_state(&collection, &doc_id, &build);
                 if let Some(first) = self.take_first_and_queue_rest(build.intents) {
                     tracing::info!(
                         source_collection = %collection,
@@ -2208,10 +2304,7 @@ impl TriggerSource for EventSource {
                         event_kind,
                     )
                     .await;
-                if build.correlation_pending {
-                    continue;
-                }
-                self.mark_seen(&collection_name, &doc_id);
+                self.commit_delivery_seen_state(&collection_name, &doc_id, &build);
                 if build.intents.is_empty() {
                     continue;
                 }

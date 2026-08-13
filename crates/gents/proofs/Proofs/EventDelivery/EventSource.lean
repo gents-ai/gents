@@ -27,4 +27,22 @@ theorem E1_event_source_delivery_convergence
     eventSourceSrc w₀ d h_persisted h_unprocessed
     eventSourceSrc_rescanBoundedBy_pos
 
+/-- One trigger waiting for a source field cannot prevent a different ready
+trigger on the same physical document from being handled.  EventSource models
+those as distinct delivery identities, so handling the ready identity leaves
+the pending identity eligible and otherwise unchanged. -/
+theorem E2_ready_trigger_independent_of_pending_trigger
+    (w : World) (ready pending : DocId)
+    (h_ready_queued : ready ∈ w.subscriptionQueue)
+    (h_ready_unprocessed : ready ∉ w.processedSet)
+    (h_pending_persisted : pending ∈ w.persistentSet) :
+    let w' :=
+      { w with handled := ready :: w.handled
+             , processedSet := ready :: w.processedSet
+             , subscriptionQueue := w.subscriptionQueue.erase ready }
+    Transition w (.handle ready) w' ∧ pending ∈ w'.persistentSet := by
+  constructor
+  · exact Transition.handle w ready h_ready_queued h_ready_unprocessed
+  · exact h_pending_persisted
+
 end EventDelivery.EventSource

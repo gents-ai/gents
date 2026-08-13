@@ -472,6 +472,163 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
 }
 
 #[tokio::test]
+async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type MixedCorrelationMember {
+            run_id: String @index
+            value: String
+        }"#,
+    )
+    .await
+    .expect("mixed correlation source schema");
+
+    let ready = resolved_event_trigger(
+        "trigger-a-ready",
+        "MixedCorrelationMember",
+        resolved_task("ready"),
+    );
+    let pending = ResolvedEventTrigger {
+        correlation_field: Some("run_id".into()),
+        ..resolved_event_trigger(
+            "trigger-z-pending",
+            "MixedCorrelationMember",
+            resolved_task("{{ event.correlation }}"),
+        )
+    };
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            (ready.trigger_id.clone(), ready),
+            (pending.trigger_id.clone(), pending),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let response = node
+        .execute(
+            r#"mutation {
+                create_MixedCorrelationMember(input: { value: "created-first" }) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+    let lookup = node
+        .execute(r#"query { MixedCorrelationMember { _docID } }"#)
+        .await;
+    assert!(!lookup.has_errors(), "{:#?}", lookup.errors);
+    let doc_id = lookup.data.as_ref().unwrap()["MixedCorrelationMember"][0]["_docID"]
+        .as_str()
+        .expect("created document id")
+        .to_string();
+
+    let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("ready sibling delivery timed out")
+        .expect("ready sibling must not be blocked by missing correlation");
+    assert_eq!(first.trigger_id.as_deref(), Some("trigger-a-ready"));
+
+    let mutation = format!(
+        r#"mutation {{
+            update_MixedCorrelationMember(
+                docID: "{}",
+                input: {{ run_id: "run-late" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&doc_id),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let second = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("deferred sibling delivery timed out")
+        .expect("deferred sibling must become eligible when correlation arrives");
+    assert_eq!(second.trigger_id.as_deref(), Some("trigger-z-pending"));
+    assert_eq!(second.correlation.as_deref(), Some("run-late"));
+}
+
+#[tokio::test]
+async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema(
+        r#"type SeededMixedCorrelationMember {
+            run_id: String @index
+            value: String
+        }"#,
+    )
+    .await
+    .expect("seeded mixed correlation source schema");
+    let response = node
+        .execute(
+            r#"mutation {
+                create_SeededMixedCorrelationMember(input: { value: "pre-existing" }) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+    let lookup = node
+        .execute(r#"query { SeededMixedCorrelationMember { _docID } }"#)
+        .await;
+    assert!(!lookup.has_errors(), "{:#?}", lookup.errors);
+    let doc_id = lookup.data.as_ref().unwrap()["SeededMixedCorrelationMember"][0]["_docID"]
+        .as_str()
+        .expect("created document id")
+        .to_string();
+
+    let ready = resolved_event_trigger(
+        "trigger-a-ready",
+        "SeededMixedCorrelationMember",
+        resolved_task("ready"),
+    );
+    let pending = ResolvedEventTrigger {
+        correlation_field: Some("run_id".into()),
+        ..resolved_event_trigger(
+            "trigger-z-pending",
+            "SeededMixedCorrelationMember",
+            resolved_task("{{ event.correlation }}"),
+        )
+    };
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            (ready.trigger_id.clone(), ready),
+            (pending.trigger_id.clone(), pending),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let mutation = format!(
+        r#"mutation {{
+            update_SeededMixedCorrelationMember(
+                docID: "{}",
+                input: {{ run_id: "run-seeded-late" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&doc_id),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:#?}", response.errors);
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("deferred seeded delivery timed out")
+        .expect("only the correlation-incomplete trigger should remain eligible");
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-z-pending"));
+    assert_eq!(intent.correlation.as_deref(), Some("run-seeded-late"));
+}
+
+#[tokio::test]
 async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

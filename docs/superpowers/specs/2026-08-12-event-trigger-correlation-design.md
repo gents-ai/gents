@@ -263,10 +263,16 @@ An incomplete group emits **no `FireIntent` at all**. Routing it through
 `last_status: "skipped"` and bump the trigger's runtime fields, so `fire_count`
 and `last_error` would stop meaning anything operationally.
 
-The existing `seen_docs` remains keyed by collection and retains its
-forward-only, per-document meaning. Group state is separate and keyed by
-`(trigger_id, correlation)`: filters, expected cardinality, timeouts, and task
-bindings belong to a trigger, not merely to a collection.
+The existing `seen_docs` remains the collection/document fast path once every
+matching trigger has settled and retains its forward-only meaning. While one
+trigger is waiting for correlation, the source also tracks settled
+`(trigger_id, source_doc_id)` delivery identities in memory. Ready siblings
+fire and become individually seen; only the incomplete sibling remains
+eligible for a follow-up update. Once all siblings settle, the document moves
+to the ordinary collection-level seen set and the partial entry is removed.
+Group state is separate and keyed by `(trigger_id, correlation)`: filters,
+expected cardinality, timeouts, and task bindings belong to a trigger, not
+merely to a collection.
 
 Group reconciliation has three paths:
 
@@ -455,9 +461,10 @@ build:
 ### Fail-closed, both directions
 
 - **Tag missing on the source doc** while `correlation_field` is declared →
-  defer delivery without consuming the source document's first-seen marker.
-  A create-then-populate producer can supply the tag in a follow-up update,
-  which is then handled as the document's created delivery. Firing untagged
+  defer only that trigger's delivery identity without consuming it. Other
+  matching triggers on the same physical document settle independently. A
+  create-then-populate producer can supply the tag in a follow-up update,
+  which is then handled as that trigger's created delivery. Firing untagged
   would silently rejoin unrelated runs inside the gate.
 - **Tag empty or not a string** → defer the same way as a missing tag.
 - **Expected count missing, malformed, inconsistent, overfull, or over the
@@ -540,6 +547,11 @@ Conformance tests driven from the spec change, plus e2e beside
 - Inconsistent expected fields, overfull groups, and group sizes over the cap
   fail closed and are durably quiesced; missing/empty tags defer until a
   follow-up update supplies a usable correlation.
+- A ready trigger and a correlation-incomplete trigger observing the same
+  physical document are independent delivery identities: the ready trigger
+  fires once immediately, the incomplete sibling fires once after a follow-up
+  update, and neither is duplicated. Startup seeding preserves the same
+  forward-only behavior for pre-existing shared documents.
 - Triggers without the new fields retain today's dispatch semantics.
 - Foreground and background write-tool calls both preserve correlation and
   source-field fills across the durable request boundary.
@@ -562,24 +574,33 @@ A self-contained pack with real (non-toy) stages that reviews **this
 repository** by default, following the `demo/pipeline` layout precedent.
 
 ```text
-ReviewJob (seed)  ──►  recon   ──► N × ReviewArea      fan-out
-ReviewArea        ──►  scan    ──► Finding*, ScanResult    per_document, tagged
-ScanResult        ──►  triage  ──► TriageReport        per_group
+ReviewJob (seed)       ──► recon    ──► 4 × ReviewArea
+ReviewArea             ──► scan     ──► CandidateFinding*, 4 × ScanResult
+ScanResult (fan-in)    ──► verify   ──► FindingVerdict*, VerificationSummary
+VerificationSummary   ──► triage   ──► confirmed Finding*, TriageReport
 ```
 
-- **recon** partitions the repo into review areas and stamps `expected_total`
-  on each `ReviewArea`. Before its first write it must decide the final list and
-  use that one cardinality on every row; this is the producer side of the
-  closed-group contract.
-- **scan** fires once per area, reads code in that area, writes zero or more
-  `Finding` docs and exactly one `ScanResult` sentinel. Both write tools stamp
-  `run_id` with `fill: correlation`; the result tool also stamps
-  `expected_total` with `fill: {source_field: "expected_total"}`, so neither
-  barrier input is the scan model's responsibility.
-- **triage** is `per_group` on `ScanResult` with `expected_count_field:
-  "expected_total"`, `concurrency: serial`, `correlation_field: "run_id"`. It
-  fires once with the whole group and reads the run's findings via
-  `defra_query`.
+- **recon** runs deterministic Rust pre-scan commands, chooses exactly four
+  distinct review lenses, and stamps `expected_total: 4` on every
+  `ReviewArea`. It uses the coordinator model and the schema-generated
+  `write_review_area` tool.
+- **scan** fires once per area on the reviewer model. Its bounded evidence
+  packet contains the lens-specific source context, so the four parallel
+  scanners need only `write_candidate_finding` and `write_scan_result`. A
+  scanner writes at most one strongest evidenced Critical/Major candidate and
+  exactly one sentinel. Both tools stamp `run_id` with `fill: correlation`;
+  the sentinel also stamps `expected_total` with
+  `fill: {source_field: "expected_total"}`.
+- **verify** is `per_group` on `ScanResult` with `expected_count_field:
+  "expected_total"`, `concurrency: serial`, and `correlation_field: "run_id"`.
+  It fires once with deterministic `group.docs`, rereads every candidate and
+  the source, then writes exactly one `FindingVerdict` per candidate plus one
+  count-balanced `VerificationSummary`. Its prompt names the generated
+  `defra_query`, `write_finding_verdict`, and `write_verification_summary`
+  tools exactly.
+- **triage** fires once from `VerificationSummary`, reads the closed verdict
+  ledger, promotes only confirmed rows through `write_finding`, and writes one
+  `TriageReport` through `write_triage_report`.
 
 The `ScanResult` sentinel stays — one create by an agent that already has a
 write tool is a legitimate "worker finished" signal. What the feature removes
@@ -588,17 +609,21 @@ is the **gate behavior** (one inference call per sentinel to compute a
 (replaced by `group_timeout_secs`). That is the issue's actual complaint, and
 the claim should not be stated more broadly than that.
 
-Scan stages need `enable_file_tools` and `enable_bash` to read the repo — they
-are not datastore-only agents. `triage` gets `defra_query` scoped to the pack's
-collections and no file tools.
+Recon, verification, and triage receive read-only file tools and a
+network-enabled shell rooted at `GENTS_REVIEW_ROOT`; scanners receive only the
+bounded evidence packet and their two write tools. DefraDB query/write access
+remains stage-specific, and the pack declares a `write` principal ceiling.
 
 Because the pack runs against this repo, it is tunable in place: real findings
 on real code are a useful operator signal, not a deterministic test oracle.
-Automated acceptance checks graph structure and durable outputs: N tagged
-`ReviewArea` rows with one consistent expected count, N tagged `ScanResult`
-rows, exactly one correlated triage `AgentRequest`, and one `TriageReport`.
-Finding quality remains a smoke/evaluation criterion because model output is
-not deterministic.
+Automated acceptance checks graph structure and durable outputs: four tagged
+`ReviewArea` rows with one consistent expected count, four distinct completed
+scan requests and sentinels, one correlated verification request, a one-to-one
+candidate/verdict ledger, one count-balanced verification summary, one final
+triage request, one report, and signed tool-call provenance for all seven
+requests. It also validates every prompt against the exact generated tool names
+and query collection allow-list. Finding quality remains a smoke/evaluation
+criterion because model output is not deterministic.
 
 Related, not blocking: `sourcenetwork/defending-code-reference-harness` runs
 the same shape (recon → find → grade → judge), and its judge stage is
