@@ -367,10 +367,6 @@ pub(crate) struct ManagedProcess {
 }
 
 impl ManagedProcess {
-    pub(crate) async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        self.child.inner.wait().await
-    }
-
     pub(crate) async fn terminate(&mut self) {
         #[cfg(unix)]
         {

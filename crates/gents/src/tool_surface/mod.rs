@@ -182,6 +182,7 @@ impl ToolSurface {
         build::dedupe_strings(names)
     }
 
+    #[cfg(test)]
     pub(crate) fn lsp_config(&self) -> Option<&crate::toolset::lsp::LspToolConfig> {
         self.lsp.as_ref()
     }

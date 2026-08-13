@@ -2,7 +2,6 @@ mod command;
 mod context;
 mod filesystem;
 
-pub(crate) use command::build_shell_env;
 pub(crate) use command::parse_argv_prefixes;
 pub(crate) use command::{
     admit_host_executable, default_lsp_network_mode, lsp_sandbox_for_effective,

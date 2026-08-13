@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use serde_json::{json, Value};
 
 use crate::tool_call_lifecycle::FailureClass;
@@ -859,10 +860,7 @@ async fn glob_action(
         return Err(arg_invalid("globs are only valid for diagnostics"));
     }
     let runner = crate::toolset::native_runner::NativeFsRunner::new(context);
-    let paths = runner
-        .glob_paths(pattern, MAX_GLOB_TARGETS)
-        .await
-        .unwrap_or_default();
+    let paths = runner.glob_paths(pattern, MAX_GLOB_TARGETS).await?;
     if paths.is_empty() {
         return Ok("no files matched the diagnostic glob".into());
     }
@@ -879,7 +877,8 @@ async fn glob_action(
     {
         let display = context.display_path(&path);
         let uri = super::uri::path_to_file_uri(&path);
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading matched diagnostic file {}", path.display()))?;
         client
             .ensure_open(&uri, &language_id(servers, &path), &text)
             .await

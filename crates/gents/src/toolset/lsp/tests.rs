@@ -103,10 +103,10 @@ fn sample_config(
 
 #[test]
 fn advertised_only_when_enabled_and_file_tools_on() {
-    assert!(advertised(true, FileToolMode::ReadOnly));
-    assert!(advertised(true, FileToolMode::ReadWrite));
-    assert!(!advertised(true, FileToolMode::Off));
-    assert!(!advertised(false, FileToolMode::ReadWrite));
+    assert!(lsp_advertised(true, FileToolMode::ReadOnly));
+    assert!(lsp_advertised(true, FileToolMode::ReadWrite));
+    assert!(!lsp_advertised(true, FileToolMode::Off));
+    assert!(!lsp_advertised(false, FileToolMode::ReadWrite));
 }
 
 #[test]
@@ -1475,11 +1475,12 @@ while True:
 }
 
 #[test]
-fn glob_match_parser_reads_structured_paths() {
+fn glob_match_parser_resolves_paths_from_the_effective_workspace_base() {
     let root = std::path::PathBuf::from("/tmp/ws");
-    let raw = r#"{"matches":[{"path":"src/lib.rs","entry_type":"file"}]}"#;
-    let paths = super::super::native_runner::parse_glob_match_paths(raw, &root);
-    assert_eq!(paths, vec![root.join("src/lib.rs")]);
+    let base = root.join("sub");
+    let raw = r#"{"matches":[{"path":"a.rs","entry_type":"file"}]}"#;
+    let paths = super::super::native_runner::parse_glob_match_paths(raw, &base);
+    assert_eq!(paths, vec![root.join("sub/a.rs")]);
 }
 
 #[tokio::test]

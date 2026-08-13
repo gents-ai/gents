@@ -56,7 +56,6 @@ pub use session_history::{
     build_session_history_tool, load_session_history_snapshot, SessionHistoryRow,
     SessionHistorySnapshot, SESSION_HISTORY_TOOL_NAME,
 };
-pub(crate) use shared::build_shell_env;
 pub(crate) use shared::parse_argv_prefixes;
 pub(crate) use shared::{
     admit_host_executable, default_lsp_network_mode, lsp_sandbox_for_effective,

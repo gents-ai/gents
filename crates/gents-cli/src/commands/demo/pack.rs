@@ -2644,15 +2644,27 @@ mod tests {
             .tool_calls
             .iter()
             .any(|call| call.result_contains.iter().any(|n| n == "FileToolMode")));
-        for (file, symbol) in [
-            ("crates/gents/src/toolset/shared/command.rs", "meet"),
-            ("crates/gents/src/toolset/lsp/auth.rs", "lsp_advertised"),
+        for (file, symbol, result_needle) in [
+            (
+                "crates/gents/src/toolset/shared/command.rs",
+                "meet",
+                "Disabled",
+            ),
+            (
+                "crates/gents/src/toolset/lsp/auth.rs",
+                "lsp_advertised",
+                "FileToolMode",
+            ),
         ] {
             assert!(manifest.expect.tool_calls.iter().any(|call| {
                 call.tool_name == "lsp"
-                    && call.action.as_deref() == Some("symbols")
+                    && call.action.as_deref() == Some("hover")
                     && call.file.as_deref() == Some(file)
-                    && call.result_contains.iter().any(|needle| needle == symbol)
+                    && call.symbol.as_deref() == Some(symbol)
+                    && call
+                        .result_contains
+                        .iter()
+                        .any(|needle| needle == result_needle)
             }));
         }
     }
@@ -2707,6 +2719,7 @@ mod tests {
                 source_edges: Vec::new(),
                 fan_in: None,
                 prompt_tool_contracts: Vec::new(),
+                background_completion: None,
                 tool_calls: Vec::new(),
             },
             await_timeout_secs: 1,

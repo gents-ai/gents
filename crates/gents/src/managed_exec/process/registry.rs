@@ -12,15 +12,6 @@ pub enum ManagedExecKind {
     PersistentService,
 }
 
-impl ManagedExecKind {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::ForegroundCommand => "foregroundCommand",
-            Self::PersistentService => "persistentService",
-        }
-    }
-}
-
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct ActiveManagedExecSnapshot {
     pub(crate) id: u64,

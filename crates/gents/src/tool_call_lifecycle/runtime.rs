@@ -224,31 +224,11 @@ pub(crate) async fn scope_request_tool_execution_with_workspace<F, T>(
 where
     F: Future<Output = T>,
 {
-    scope_request_tool_execution_with_workspace_and_live_output(
-        deadline_at,
-        cancellation_token,
-        workspace_cwd,
-        None,
-        future,
-    )
-    .await
-}
-
-pub(crate) async fn scope_request_tool_execution_with_workspace_and_live_output<F, T>(
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    workspace_cwd: Option<PathBuf>,
-    live_output: Option<LiveToolOutputWriter>,
-    future: F,
-) -> T
-where
-    F: Future<Output = T>,
-{
     scope_request_tool_execution_with_session(
         deadline_at,
         cancellation_token,
         workspace_cwd,
-        live_output,
+        None,
         current_tool_runtime_context().and_then(|scope| scope.session_id),
         future,
     )

@@ -410,7 +410,3 @@ pub fn config_digest(
     }
     format!("{:x}", hasher.finalize())
 }
-
-pub fn advertised(lsp: bool, file: FileToolMode) -> bool {
-    lsp_advertised(lsp, file)
-}
