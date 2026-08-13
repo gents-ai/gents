@@ -46,7 +46,8 @@ pub(crate) use denial::DenialReason;
 pub(crate) use goal::build_goal_tools;
 pub(crate) use goal::{GetGoalArgs, UpdateGoalArgs};
 pub use lsp::{
-    lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
+    lsp_action_authorized, lsp_advertised, lsp_apply_authorized, result_looks_failed,
+    result_path_matches, LspAction, LspMutationSource,
 };
 #[cfg(feature = "agent-memory")]
 pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};

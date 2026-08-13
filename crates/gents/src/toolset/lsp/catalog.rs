@@ -80,6 +80,61 @@ pub fn detect_admitted_servers(workspace: &Path, servers: &[CatalogServer]) -> V
         .collect()
 }
 
+pub(crate) fn server_unavailable_reason(
+    workspace: &Path,
+    server: &CatalogServer,
+) -> Option<String> {
+    if !marker_matches(workspace, &server.root_markers) {
+        return Some(format!(
+            "unavailable — none of the root markers exist: {}",
+            server.root_markers.join(", ")
+        ));
+    }
+    if !family_eligible(server, workspace) {
+        return Some("unavailable — another language-server family owns this workspace".into());
+    }
+    if let Err(reason) = super::admit::admit_command(&server.command, workspace) {
+        return Some(format!(
+            "unavailable — executable `{}` was not admitted: {}",
+            server.command,
+            reason.diagnostic()
+        ));
+    }
+    None
+}
+
+pub(crate) fn unavailable_servers_message(
+    workspace: &Path,
+    servers: &[CatalogServer],
+    file: Option<&Path>,
+) -> String {
+    if servers.is_empty() {
+        return "no language servers are present in the built-in catalog".into();
+    }
+    let checks = servers
+        .iter()
+        .map(|server| {
+            let reason = server_unavailable_reason(workspace, server).or_else(|| {
+                file.filter(|path| !server.is_linter && !file_type_matches(server, path))
+                    .map(|path| {
+                        format!(
+                            "not selected — {} does not match its file types ({})",
+                            path.display(),
+                            server.file_types.join(", ")
+                        )
+                    })
+            });
+            format!(
+                "{}: {}",
+                server.name,
+                reason.unwrap_or_else(|| "eligible but no primary server was selected".into())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("no usable language server. Configured server checks: {checks}")
+}
+
 pub fn family_eligible(server: &CatalogServer, root: &Path) -> bool {
     match server.name.as_str() {
         "typescript-language-server" => !marker_matches(

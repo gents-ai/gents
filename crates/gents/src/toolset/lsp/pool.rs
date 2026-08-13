@@ -33,6 +33,14 @@ enum EntryState {
     Retiring,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PoolServerState {
+    Starting,
+    Ready,
+    Retiring,
+    Failed(String),
+}
+
 struct PoolEntry {
     state: EntryState,
     leases: Arc<AtomicUsize>,
@@ -297,6 +305,11 @@ impl LspPool {
                 }
                 let ready = entry.ready.clone();
                 let notified = ready.notified();
+                tokio::pin!(notified);
+                // `notify_waiters` does not retain a permit. Register this
+                // waiter before releasing the state lock so the starter
+                // cannot publish Ready in the registration gap.
+                notified.as_mut().enable();
                 drop(entry);
                 notified.await;
             }
@@ -491,15 +504,15 @@ impl LspPool {
         self.inner.lock().await.len()
     }
 
-    pub async fn inspect_session(
+    pub(crate) async fn inspect_session(
         &self,
         session_id: &str,
         behavior_id: &str,
         workspace: &std::path::Path,
         digest: &str,
-    ) -> Vec<String> {
+    ) -> HashMap<String, PoolServerState> {
         let map = self.inner.lock().await;
-        let mut names = Vec::new();
+        let mut states = HashMap::new();
         for (key, slot) in map.iter() {
             if key.session_id == session_id
                 && key.behavior_id == behavior_id
@@ -507,12 +520,30 @@ impl LspPool {
                 && key.config_digest == digest
             {
                 let entry = slot.lock().await;
-                if entry.state == EntryState::Ready {
-                    names.push(key.server_name.clone());
-                }
+                let state = match entry.state {
+                    EntryState::Starting => PoolServerState::Starting,
+                    EntryState::Ready => PoolServerState::Ready,
+                    EntryState::Retiring => PoolServerState::Retiring,
+                };
+                states.insert(key.server_name.clone(), state);
             }
         }
-        names
+        drop(map);
+        let failed = self.failed.lock().await;
+        for (key, (error, at)) in failed.iter() {
+            if key.session_id == session_id
+                && key.behavior_id == behavior_id
+                && key.workspace_root == workspace
+                && key.config_digest == digest
+                && at.elapsed() < INIT_BACKOFF
+            {
+                states.insert(
+                    key.server_name.clone(),
+                    PoolServerState::Failed(error.clone()),
+                );
+            }
+        }
+        states
     }
 
     #[cfg(test)]

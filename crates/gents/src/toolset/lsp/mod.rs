@@ -38,6 +38,34 @@ use config::apply_overrides;
 
 pub const LSP_TOOL_NAME: &str = "lsp";
 
+/// Shared acceptance semantics for persisted LSP results. Keep demo-pack and
+/// live-test qualification on the same definition so ordinary hover text such
+/// as `Result<T, ToolError>` is not mistaken for a failed tool call.
+pub fn result_looks_failed(result: &str) -> bool {
+    let trimmed = result.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    trimmed.is_empty()
+        || matches!(
+            lower.as_str(),
+            "no result" | "no symbols found" | "no hover information" | "no definition found"
+        )
+        || lower.starts_with("error:")
+        || lower.starts_with("lsp error")
+        || lower.starts_with("failed")
+        || lower.starts_with("unavailable")
+        || lower.starts_with("policydenied")
+        || lower.contains("stdout closed")
+        || lower.contains("timed out")
+}
+
+pub fn result_path_matches(expected: &str, actual: &str) -> bool {
+    let expected = expected.replace('\\', "/");
+    let expected = expected.trim_start_matches("./").trim_matches('/');
+    let actual = actual.replace('\\', "/");
+    let actual = actual.trim_start_matches("./").trim_end_matches('/');
+    actual == expected || actual.ends_with(&format!("/{expected}"))
+}
+
 #[derive(Clone)]
 pub struct LspToolConfig {
     pub lsp: bool,
@@ -71,14 +99,28 @@ pub fn constraints_from_effective_bash(
         crate::tool_surface::EndpointScope::None => (Vec::new(), true),
         crate::tool_surface::EndpointScope::Only(_) => (bash.allowed_argv_prefixes.keys(), false),
     };
-    let desired = lsp_network_overlay.unwrap_or_else(crate::toolset::default_lsp_network_mode);
+    let sandbox = crate::toolset::lsp_sandbox_for_effective(bash.execution_mode);
+    // The platform default disables network only when the effective LSP
+    // sandbox can enforce that promise. In particular, a macOS behavior whose
+    // effective execution mode is Unrestricted must inherit network rather
+    // than constructing the rejected Disabled + Unrestricted combination.
+    let desired = lsp_network_overlay.unwrap_or_else(|| {
+        if matches!(
+            sandbox,
+            crate::toolset::CommandExecutionMode::WorkspaceWrite
+        ) {
+            crate::toolset::default_lsp_network_mode()
+        } else {
+            CommandNetworkMode::Inherit
+        }
+    });
     let network_mode = desired.meet(bash.network_mode);
     CommandConstraints {
         allowed_argv_prefixes: allowed,
         forbidden_argv_prefixes: bash.forbidden_argv_prefixes.iter().cloned().collect(),
         network_mode,
         execution_mode: bash.execution_mode,
-        sandbox: crate::toolset::lsp_sandbox_for_effective(bash.execution_mode),
+        sandbox,
         deny_all_argv: deny_all,
     }
 }
@@ -131,7 +173,7 @@ impl Tool for LspTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: LSP_TOOL_NAME.to_string(),
-            description: "Symbol-aware code intelligence from language servers. Position actions accept file + 1-indexed line + symbol; when line is omitted, Gents searches the file for symbol. symbols with a file lists document symbols; file=\"*\" + query searches the workspace. Prefer lsp over text search for definitions, references, renames, and code actions because it follows shadowing and cross-file callsites. status never starts a server: call a server-backed action first, then status in a later tool turn if you need to verify ready. reload retires the current snapshot's clients without starting replacements. workspace/executeCommand is never sent.".into(),
+            description: "Symbol-aware code intelligence from language servers. Position actions accept file + 1-indexed line + symbol; when line is omitted, Gents searches the file for symbol. symbols with a file lists qualified document symbols with kind and line; file=\"*\" + query searches the workspace. Prefer lsp over text search for definitions, references, renames, and code actions because it follows shadowing and cross-file callsites. status reports each configured server as starting/indexing, ready, not started, or unavailable and does not start one. reload retires the current snapshot's clients without starting replacements. workspace/executeCommand is never sent.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -180,13 +222,13 @@ impl Tool for LspTool {
                     },
                     "payload": {
                         "type": "string",
-                        "description": "JSON object for action=request. Only allowlisted read methods; every file URI is validated."
+                        "description": "JSON object for action=request. Only allowlisted read methods; every URI field is validated and non-file schemes are rejected."
                     },
                     "timeout": {
                         "type": "integer",
                         "minimum": 5,
                         "maximum": 300,
-                        "description": "Tool timeout in seconds (default 20)."
+                        "description": "Request timeout in seconds. This bounds the entire indexing-retry loop; linter fallback is also bounded and cancellable (default 20)."
                     }
                 },
                 "required": ["action"]
@@ -221,7 +263,11 @@ impl Tool for LspTool {
             let path = if file.is_empty() || file == "*" || file.contains(['*', '?', '{', '[']) {
                 None
             } else {
-                edits::resolve_inbound_path(&self.context, file).ok()
+                Some(
+                    edits::resolve_inbound_path(&self.context, file).map_err(|err| {
+                        ToolError::reported_failure(FailureClass::PolicyDenied, err)
+                    })?,
+                )
             };
             let server = match path.as_ref() {
                 Some(path) => primary_for_file(&detected, path).cloned(),
@@ -249,7 +295,14 @@ impl Tool for LspTool {
                         })?,
                 )
             } else {
-                None
+                return Err(ToolError::reported_failure(
+                    FailureClass::ServiceUnavailable,
+                    catalog::unavailable_servers_message(
+                        &self.config.workspace,
+                        &self.config.servers,
+                        path.as_deref(),
+                    ),
+                ));
             }
         } else {
             None

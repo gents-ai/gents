@@ -468,7 +468,7 @@ under a looser generation cannot be reused.
 
 | Action | Mutates files? | May cold-start? | Notes |
 | --- | --- | --- | --- |
-| `status` | no | **no** | Inspect existing clients only. |
+| `status` | no | **no** | Report each configured server as starting/indexing, ready, retiring, failed/backoff, unavailable (with the failed catalog check), or not started with the server-backed action needed to start it. |
 | `reload` | no | **no** | Retire matching current-key clients. Does not start a replacement. |
 | `capabilities` | no | yes | |
 | `diagnostics` | no | yes (pooled servers). Biome/SwiftLint single-shot only here. | File, typed glob, or `file: "*"`. |
@@ -479,12 +479,18 @@ under a looser generation cannot be reused.
 
 `request` on ReadOnly: only the read-method allowlist. Deserialize the
 **known** parameter shape for that method (`textDocument`, `position`,
-…). Every `file:` URI in those params goes through `ToolContext`. Do
+…). Every URI-shaped field in those params goes through `ToolContext`;
+bare paths are treated as paths and non-`file:` schemes are rejected. Do
 **not** forward an arbitrary `payload` verbatim on a ReadOnly surface.
 
-`request` on ReadWrite: `payload` is still parsed JSON, and every `file:`
-URI in it is validated the same way. Unknown methods are
+`request` on ReadWrite: `payload` is still parsed JSON, and every
+URI-shaped field in it is validated the same way. Unknown methods are
 `argumentInvalid`.
+
+Cold-start semantic navigation retries `null` and empty-array responses
+for the indexing window. The user-supplied tool timeout bounds the whole
+retry loop, not each individual attempt. Empty diagnostics remain a
+successful clean result.
 
 ### 12. Client capabilities
 
@@ -514,6 +520,12 @@ can still mention host paths. If we need “no absolute host path reaches
 the model,” that is a **separate text redactor** over those strings, not
 the location preflight. v1 ships the structured-field rules; the text
 redactor is optional and called out in `tools explain` if omitted.
+
+Model-facing document symbols retain qualified container names, symbol
+kind, and 1-indexed line. The 200-symbol cap is global across nested
+children, and normal tool truncation keeps the head (including the result
+header). Push, pull, and workspace diagnostic envelopes are normalized to
+the same capped message-bearing representation before location redaction.
 
 ### 14. WorkspaceEdit
 
@@ -697,20 +709,31 @@ allowlist (scalars + per-server `disabled` / `priority` /
 - `LspTool` built from `build_tools` with `runtime.lsp_pool`.
 - `status` / `reload` do not start a server. Writethrough does not.
   Biome only on explicit `diagnostics`.
-- Simultaneous first calls: one process. Failed initialize wakes
-  waiters. Retry after backoff starts again.
+- Simultaneous first calls: one process. A waiter registers its
+  notification before releasing the entry lock, so Ready cannot be a
+  lost wakeup. Failed initialize wakes waiters. Retry after backoff starts
+  again.
 - Lease: reload / LRU do not terminate a leased client. All-busy cap
   returns `serviceUnavailable`.
 - `reload` scopes to the current session/behavior/workspace/digest.
 - `session::close_session` does not touch the pool; the owner calls
   `LspPool::close_session`.
 - `applyEdit: false`; fake `workspace/applyEdit` is a no-op.
-- Inbound URI → `policyDenied`. Edit URI → no writes. Read-output URI →
-  redact + complete.
+- Inbound bare path / URI → validate through `ToolContext` or reject the
+  scheme. Edit URI → no writes. Read-output URI → redact + complete.
+- Rename destinations use create-target resolution, including
+  server-returned rename document changes.
 - ReadOnly `request` rejects verbatim `payload` and unknown shapes.
 - Format-on-write does not deadlock; diagnostics wait is off the lock.
 - Hash check: documents the preflight-to-write window only.
 - UTF-8 / UTF-16 with `😀`.
+- UTF-8 positions in the middle of a code point return an error, never
+  panic.
+- Semantic indexing retry covers `null` and `[]` under one total timeout;
+  linter diagnostics honor the request deadline and cancellation.
+- Push, pull, and workspace diagnostic envelopes preserve capped messages.
+- Nested document-symbol output has qualified names/kinds and a global cap;
+  truncation retains its header.
 - Typed glob helper, not `GlobTool` text.
 - Explicit `network_mode: disabled` off macOS is
   `DisabledNetworkUnenforceable`, not coerced.
@@ -720,9 +743,11 @@ allowlist (scalars + per-server `disabled` / `priority` /
 
 No live rust-analyzer in required CI. Operator-run proof is
 `demo/lsp-rust` plus the ignored `e2e_live::lsp_live` test
-(`GENTS_LIVE_LSP=1`). Both must assert useful, file-specific document-symbol
-results, the corresponding file/symbol-specific hovers, and Ready status;
-merely completing a tool call or returning `No result` is not acceptance.
+(`GENTS_LIVE_LSP=1`). The deterministic arm asserts useful, file-specific
+document-symbol results and corresponding hovers. A second unscripted arm
+asks only a semantic question, asserts at least one useful LSP call, and
+checks the factual answer. Neither arm accepts status, a completed-but-empty
+call, or a scripted call sequence by itself as proof that the server works.
 
 ## Implementation sketch
 

@@ -14,6 +14,11 @@ const OPERATOR_SERVER_KEYS: &[&str] = &[
     "init_options",
     "initOptions",
 ];
+// Operator settings/init options are intentionally more powerful than they
+// look: language servers such as rust-analyzer accept settings that select
+// check, build-script, or proc-macro child commands. Self-config therefore
+// cannot write either field; otherwise an agent could introduce execution
+// outside the runtime's CommandConstraints through an already-admitted server.
 const SELF_CONFIG_SERVER_KEYS: &[&str] = &["disabled", "priority", "warmup_timeout_ms"];
 const TOP_LEVEL_KEYS: &[&str] = &[
     "idle_timeout_ms",

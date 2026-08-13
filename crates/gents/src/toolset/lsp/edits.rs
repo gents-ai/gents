@@ -42,7 +42,7 @@ pub fn prepare_workspace_edit(
                         .and_then(Value::as_str)
                         .ok_or_else(|| "rename missing newUri".to_string())?;
                     let old_path = resolve_inbound_path(context, old)?;
-                    let new_path = resolve_inbound_path(context, new)?;
+                    let new_path = resolve_inbound_path_allow_create(context, new)?;
                     prepared.push(PreparedEdit {
                         path: new_path,
                         new_bytes: Vec::new(),
@@ -166,7 +166,8 @@ pub async fn apply_prepared_with_held_locks(
 
 const URI_KEYS: &[&str] = &["uri", "targetUri", "newUri", "oldUri"];
 
-/// Rewrite structured `file:` URI fields. Out-of-root URIs are omitted.
+/// Rewrite structured URI fields. Out-of-root, malformed, and unsupported
+/// scheme URIs are omitted.
 /// Returns the rewritten value and how many locations were dropped.
 pub fn redact_structured_uris(context: &ToolContext, value: &Value) -> (Value, usize) {
     let mut omitted = 0usize;
@@ -181,17 +182,15 @@ fn redact_value(context: &ToolContext, value: &Value, omitted: &mut usize) -> Va
             for (key, child) in map {
                 if URI_KEYS.contains(&key.as_str()) {
                     if let Some(uri) = child.as_str() {
-                        if uri.starts_with("file:") {
-                            match redact_outside_root(context, uri) {
-                                Some(display) => {
-                                    out.insert(key.clone(), Value::String(display));
-                                }
-                                None => {
-                                    *omitted += 1;
-                                }
+                        match redact_outside_root(context, uri) {
+                            Some(display) => {
+                                out.insert(key.clone(), Value::String(display));
                             }
-                            continue;
+                            None => {
+                                *omitted += 1;
+                            }
                         }
+                        continue;
                     }
                 }
                 out.insert(key.clone(), redact_value(context, child, omitted));
@@ -220,9 +219,7 @@ fn walk_uris_inner(value: &Value, out: &mut Vec<String>) {
             for (key, child) in map {
                 if URI_KEYS.contains(&key.as_str()) {
                     if let Some(uri) = child.as_str() {
-                        if uri.starts_with("file:") {
-                            out.push(uri.to_string());
-                        }
+                        out.push(uri.to_string());
                     }
                 }
                 walk_uris_inner(child, out);
@@ -316,7 +313,7 @@ fn lsp_offset(
     for (idx, text_line) in text.split_inclusive('\n').enumerate() {
         if idx == line {
             let line_body = text_line.trim_end_matches(['\n', '\r']);
-            return Ok(offset + position_to_byte_offset(line_body, encoding, character));
+            return Ok(offset + position_to_byte_offset(line_body, encoding, character)?);
         }
         offset += text_line.len();
     }
@@ -327,20 +324,48 @@ pub fn resolve_inbound_path(
     context: &ToolContext,
     file: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let path = if file.starts_with("file:") {
-        super::uri::file_uri_to_path(file)?
-    } else {
-        std::path::PathBuf::from(file)
-    };
+    let path = inbound_path(file)?;
     context
         .resolve_path(&path.to_string_lossy())
         .map_err(|err| err.to_string())
 }
 
-pub fn redact_outside_root(context: &ToolContext, uri: &str) -> Option<String> {
-    let path = file_uri_to_path(uri).ok()?;
-    match context.resolve_path(&path.to_string_lossy()) {
-        Ok(resolved) => Some(context.display_path(&resolved)),
-        Err(_) => None,
+pub fn resolve_inbound_path_allow_create(
+    context: &ToolContext,
+    file: &str,
+) -> Result<std::path::PathBuf, String> {
+    let path = inbound_path(file)?;
+    context
+        .resolve_path_allow_create(&path.to_string_lossy())
+        .map_err(|err| err.to_string())
+}
+
+fn inbound_path(file: &str) -> Result<std::path::PathBuf, String> {
+    if file.starts_with("file:") {
+        super::uri::file_uri_to_path(file)
+    } else if has_uri_scheme(file) {
+        Err(format!("unsupported URI scheme in {file}"))
+    } else {
+        Ok(std::path::PathBuf::from(file))
     }
+}
+
+fn has_uri_scheme(value: &str) -> bool {
+    let Some((scheme, _)) = value.split_once(':') else {
+        return false;
+    };
+    if cfg!(windows) && scheme.len() == 1 && scheme.as_bytes()[0].is_ascii_alphabetic() {
+        return false;
+    }
+    !scheme.is_empty()
+        && scheme.as_bytes()[0].is_ascii_alphabetic()
+        && scheme
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+}
+
+pub fn redact_outside_root(context: &ToolContext, uri: &str) -> Option<String> {
+    resolve_inbound_path(context, uri)
+        .ok()
+        .map(|resolved| context.display_path(&resolved))
 }

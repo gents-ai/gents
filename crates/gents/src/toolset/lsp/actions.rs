@@ -8,7 +8,8 @@ use super::catalog::{family_eligible, marker_matches, primary_for_file, CatalogS
 use super::client::LspClient;
 use super::edits::{
     acquire_mutation_locks, apply_prepared_with_held_locks, apply_workspace_edit,
-    redact_structured_uris, resolve_inbound_path, walk_uris, PreparedEdit,
+    redact_structured_uris, resolve_inbound_path, resolve_inbound_path_allow_create, walk_uris,
+    PreparedEdit,
 };
 use super::encoding::position_for_symbol;
 use super::pool::LspLease;
@@ -57,7 +58,7 @@ pub async fn dispatch(
                 .and_then(|scope| scope.session_id)
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
-            let ready = pool
+            let states = pool
                 .inspect_session(
                     &session_id,
                     &config.behavior_id,
@@ -65,7 +66,7 @@ pub async fn dispatch(
                     &config.digest,
                 )
                 .await;
-            Ok(status_text(ready, servers))
+            Ok(status_text(states, &config.servers, &config.workspace))
         }
         LspAction::Reload => {
             let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
@@ -114,7 +115,16 @@ async fn run_file_action(
         return workspace_action(context, client, action, req).await;
     }
     if looks_like_glob(file) {
-        return glob_action(context, client, config, servers, action, file).await;
+        return glob_action(
+            context,
+            client,
+            config,
+            servers,
+            action,
+            file,
+            request_timeout(req),
+        )
+        .await;
     }
     let path = resolve_inbound_path(context, file).map_err(|err| policy(err))?;
     let text = std::fs::read_to_string(&path).map_err(|err| {
@@ -187,7 +197,7 @@ async fn run_file_action(
             .new_name
             .as_deref()
             .ok_or_else(|| arg_invalid("new_name required for rename_file"))?;
-        let dest_path = resolve_inbound_path(context, dest).map_err(policy)?;
+        let dest_path = resolve_inbound_path_allow_create(context, dest).map_err(policy)?;
         params = json!({
             "files": [{
                 "oldUri": uri,
@@ -200,7 +210,12 @@ async fn run_file_action(
     // transient in that window just like a null hover/definition response.
     let retry_empty = matches!(
         action,
-        LspAction::Hover | LspAction::Definition | LspAction::Symbols
+        LspAction::Hover
+            | LspAction::Definition
+            | LspAction::TypeDefinition
+            | LspAction::Implementation
+            | LspAction::References
+            | LspAction::Symbols
     );
     let result = match request_maybe_retry(
         client,
@@ -229,8 +244,8 @@ async fn run_file_action(
     ) && req.apply != Some(false)
     {
         if !super::lsp_apply_authorized(
-            true,
-            crate::tool_surface::FileToolMode::ReadWrite,
+            config.lsp,
+            config.file,
             super::LspMutationSource::ForegroundReturnedEdit,
         ) {
             return Err(policy("lsp apply is not authorized"));
@@ -246,7 +261,7 @@ async fn run_file_action(
                 .new_name
                 .as_deref()
                 .ok_or_else(|| arg_invalid("new_name required for rename_file"))?;
-            let dest_path = resolve_inbound_path(context, dest).map_err(policy)?;
+            let dest_path = resolve_inbound_path_allow_create(context, dest).map_err(policy)?;
             if path.exists() && path != dest_path {
                 let prepared = vec![PreparedEdit {
                     path: dest_path,
@@ -263,7 +278,9 @@ async fn run_file_action(
     }
     let mut output = truncate_model_output(format_result(context, action, result));
     if matches!(action, LspAction::Diagnostics) {
-        if let Some(linter) = run_linter_diagnostics(config, servers, &path).await {
+        if let Some(linter) =
+            run_linter_diagnostics(config, servers, &path, request_timeout(req)).await
+        {
             output = format!("{output}\n{linter}");
         }
     }
@@ -412,30 +429,39 @@ fn validate_payload_uris(context: &ToolContext, params: &Value) -> Result<(), To
     Ok(())
 }
 
-async fn request_maybe_retry(
+pub(crate) async fn request_maybe_retry(
     client: &LspClient,
     method: &str,
     params: Value,
     timeout: std::time::Duration,
     retry_empty: bool,
 ) -> Result<Value, String> {
-    let mut result = client
-        .request_with_timeout(method, params.clone(), timeout)
-        .await?;
-    if !retry_empty || !result.is_null() {
-        return Ok(result);
-    }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-    while std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        result = client
-            .request_with_timeout(method, params.clone(), timeout)
+    let deadline = std::time::Instant::now() + timeout;
+    let mut first = true;
+    loop {
+        if !first {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(Value::Null);
+            }
+            tokio::time::sleep(remaining.min(std::time::Duration::from_millis(400))).await;
+        }
+        first = false;
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(Value::Null);
+        }
+        let result = client
+            .request_with_timeout(method, params.clone(), remaining)
             .await?;
-        if !result.is_null() {
-            break;
+        if !retry_empty || !semantic_result_is_empty(&result) {
+            return Ok(result);
         }
     }
-    Ok(result)
+}
+
+fn semantic_result_is_empty(result: &Value) -> bool {
+    result.is_null() || result.as_array().is_some_and(Vec::is_empty)
 }
 
 async fn resolve_code_action_edit(
@@ -494,16 +520,16 @@ pub(crate) fn select_code_action<'a>(
     selected.ok_or_else(|| arg_invalid("no matching CodeAction.edit to apply"))
 }
 
-fn truncate_model_output(text: String) -> String {
+pub(crate) fn truncate_model_output(text: String) -> String {
     crate::truncation::truncate_text(
         &text,
-        crate::truncation::TruncationMode::Tail,
+        crate::truncation::TruncationMode::Head,
         &crate::truncation::TruncationLimits::default(),
     )
     .0
 }
 
-fn format_result(context: &ToolContext, action: LspAction, result: Value) -> String {
+pub(crate) fn format_result(context: &ToolContext, action: LspAction, result: Value) -> String {
     if result.is_null() {
         return match action {
             LspAction::Hover => "No hover information".into(),
@@ -516,6 +542,9 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
         return flatten_hover(contents);
     }
     let (redacted, omitted) = redact_structured_uris(context, &result);
+    if matches!(action, LspAction::Diagnostics) {
+        return format_diagnostics(&redacted, omitted);
+    }
     if let Some(arr) = redacted.as_array() {
         let cap = match action {
             LspAction::Diagnostics => MAX_DIAGNOSTICS,
@@ -525,7 +554,10 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
             _ => usize::MAX,
         };
         let mut lines = Vec::new();
-        for item in arr.iter().take(cap) {
+        for item in arr {
+            if lines.len() >= cap {
+                break;
+            }
             if let Some(uri) = item
                 .pointer("/uri")
                 .or_else(|| item.pointer("/targetUri"))
@@ -540,12 +572,17 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
                     .unwrap_or(0)
                     + 1;
                 let name = item.get("name").and_then(Value::as_str);
+                let kind = item
+                    .get("kind")
+                    .and_then(Value::as_u64)
+                    .map(symbol_kind_name);
+                let container = item.get("containerName").and_then(Value::as_str);
                 lines.push(match name {
-                    Some(name) => format!("{name} {uri}:{line}"),
+                    Some(name) => format_symbol_location(name, kind, container, uri, line),
                     None => format!("{uri}:{line}"),
                 });
             } else if item.get("name").is_some() {
-                collect_document_symbol_lines(item, &mut lines);
+                collect_document_symbol_lines(item, None, &mut lines, cap);
             } else if !item.is_null() {
                 lines.push(item.to_string());
             }
@@ -575,7 +612,15 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
     text
 }
 
-fn collect_document_symbol_lines(item: &Value, lines: &mut Vec<String>) {
+fn collect_document_symbol_lines(
+    item: &Value,
+    container: Option<&str>,
+    lines: &mut Vec<String>,
+    cap: usize,
+) {
+    if lines.len() >= cap {
+        return;
+    }
     if let Some(name) = item.get("name").and_then(Value::as_str) {
         let line = item
             .pointer("/selectionRange/start/line")
@@ -583,13 +628,182 @@ fn collect_document_symbol_lines(item: &Value, lines: &mut Vec<String>) {
             .and_then(Value::as_u64)
             .unwrap_or(0)
             + 1;
-        lines.push(format!("{name}:{line}"));
+        let kind = item
+            .get("kind")
+            .and_then(Value::as_u64)
+            .map(symbol_kind_name);
+        let qualified = container
+            .map(clean_symbol_container)
+            .filter(|parent| !parent.is_empty())
+            .map(|parent| format!("{parent}::{name}"))
+            .unwrap_or_else(|| name.to_string());
+        lines.push(match kind {
+            Some(kind) => format!("{qualified} ({kind}):{line}"),
+            None => format!("{qualified}:{line}"),
+        });
     }
     if let Some(children) = item.get("children").and_then(Value::as_array) {
         for child in children {
-            collect_document_symbol_lines(child, lines);
+            if lines.len() >= cap {
+                break;
+            }
+            let next_container = item.get("name").and_then(Value::as_str).or(container);
+            collect_document_symbol_lines(child, next_container, lines, cap);
         }
     }
+}
+
+fn clean_symbol_container(container: &str) -> &str {
+    container.strip_prefix("impl ").unwrap_or(container).trim()
+}
+
+fn format_symbol_location(
+    name: &str,
+    kind: Option<&str>,
+    container: Option<&str>,
+    uri: &str,
+    line: u64,
+) -> String {
+    let qualified = container
+        .map(clean_symbol_container)
+        .filter(|parent| !parent.is_empty())
+        .map(|parent| format!("{parent}::{name}"))
+        .unwrap_or_else(|| name.to_string());
+    match kind {
+        Some(kind) => format!("{qualified} ({kind}) {uri}:{line}"),
+        None => format!("{qualified} {uri}:{line}"),
+    }
+}
+
+fn symbol_kind_name(kind: u64) -> &'static str {
+    const KINDS: &[&str] = &[
+        "unknown",
+        "file",
+        "module",
+        "namespace",
+        "package",
+        "class",
+        "method",
+        "property",
+        "field",
+        "constructor",
+        "enum",
+        "interface",
+        "function",
+        "variable",
+        "constant",
+        "string",
+        "number",
+        "boolean",
+        "array",
+        "object",
+        "key",
+        "null",
+        "enum member",
+        "struct",
+        "event",
+        "operator",
+        "type parameter",
+    ];
+    KINDS.get(kind as usize).copied().unwrap_or("unknown")
+}
+
+fn format_diagnostics(value: &Value, omitted: usize) -> String {
+    let mut diagnostics = Vec::new();
+    collect_diagnostics(value, None, &mut diagnostics, MAX_DIAGNOSTICS);
+    if diagnostics.is_empty() {
+        return if omitted > 0 {
+            format!("No diagnostics in the allowed workspace; omitted {omitted} outside-root location(s)")
+        } else {
+            "No diagnostics".into()
+        };
+    }
+    let count = diagnostics.len();
+    let mut text = format!("Found {count} diagnostic(s):\n{}", diagnostics.join("\n"));
+    if omitted > 0 {
+        text.push_str(&format!(
+            "\nomitted {omitted} diagnostic location(s) outside the allowed workspace"
+        ));
+    }
+    text
+}
+
+fn collect_diagnostics(
+    value: &Value,
+    inherited_uri: Option<&str>,
+    out: &mut Vec<String>,
+    cap: usize,
+) {
+    if out.len() >= cap {
+        return;
+    }
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                if out.len() >= cap {
+                    break;
+                }
+                collect_diagnostics(item, inherited_uri, out, cap);
+            }
+        }
+        Value::Object(map) => {
+            let uri = map.get("uri").and_then(Value::as_str).or(inherited_uri);
+            if map.get("message").and_then(Value::as_str).is_some() {
+                out.push(format_diagnostic(value, uri));
+                return;
+            }
+            if let Some(items) = map
+                .get("diagnostics")
+                .or_else(|| map.get("items"))
+                .and_then(Value::as_array)
+            {
+                for item in items {
+                    if out.len() >= cap {
+                        break;
+                    }
+                    collect_diagnostics(item, uri, out, cap);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn format_diagnostic(item: &Value, uri: Option<&str>) -> String {
+    let line = item
+        .pointer("/range/start/line")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        + 1;
+    let location = uri
+        .map(|uri| format!("{uri}:{line}"))
+        .unwrap_or_else(|| format!("line {line}"));
+    let severity = match item.get("severity").and_then(Value::as_u64) {
+        Some(1) => "error",
+        Some(2) => "warning",
+        Some(3) => "information",
+        Some(4) => "hint",
+        _ => "diagnostic",
+    };
+    let source = item
+        .get("source")
+        .and_then(Value::as_str)
+        .map(|source| format!(" [{source}]"))
+        .unwrap_or_default();
+    let code = item
+        .get("code")
+        .and_then(|code| {
+            code.as_str()
+                .map(str::to_string)
+                .or_else(|| code.as_i64().map(|n| n.to_string()))
+        })
+        .map(|code| format!(" ({code})"))
+        .unwrap_or_default();
+    let message = item
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("missing diagnostic message");
+    format!("{location}: {severity}{source}{code}: {message}")
 }
 
 fn finish_location_lines(lines: Vec<String>, omitted: usize) -> String {
@@ -636,6 +850,7 @@ async fn glob_action(
     servers: &[CatalogServer],
     action: LspAction,
     pattern: &str,
+    timeout: std::time::Duration,
 ) -> Result<String, ToolError> {
     if !matches!(action, LspAction::Diagnostics) {
         return Err(arg_invalid("globs are only valid for diagnostics"));
@@ -664,7 +879,7 @@ async fn glob_action(
             .await
             .unwrap_or(Value::Null);
         let mut section = format!("{display}:\n{}", format_result(context, action, result));
-        if let Some(linter) = run_linter_diagnostics(config, servers, &path).await {
+        if let Some(linter) = run_linter_diagnostics(config, servers, &path, timeout).await {
             section = format!("{section}\n{linter}");
         }
         sections.push(section);
@@ -672,10 +887,11 @@ async fn glob_action(
     Ok(truncate_model_output(sections.join("\n")))
 }
 
-async fn run_linter_diagnostics(
+pub(crate) async fn run_linter_diagnostics(
     config: &super::LspToolConfig,
     servers: &[CatalogServer],
     path: &std::path::Path,
+    timeout: std::time::Duration,
 ) -> Option<String> {
     let linter = servers.iter().find(|server| {
         server.is_linter
@@ -707,11 +923,23 @@ async fn run_linter_diagnostics(
     .ok()?;
     let mut full = vec![program.to_string_lossy().into_owned()];
     full.extend(rest);
+    let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
+    let command_deadline = chrono::Utc::now()
+        + chrono::Duration::from_std(timeout).unwrap_or_else(|_| chrono::Duration::days(36_500));
+    let deadline_at = Some(
+        runtime
+            .as_ref()
+            .and_then(|scope| scope.deadline_at)
+            .map_or(command_deadline, |deadline| deadline.min(command_deadline)),
+    );
+    let cancellation_token = runtime
+        .map(|scope| scope.cancellation_token)
+        .unwrap_or_default();
     let outcome = crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
         argv: full,
         cwd: config.workspace.clone(),
-        deadline_at: None,
-        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        deadline_at,
+        cancellation_token,
         max_output_bytes: 64 * 1024,
         stdin: Vec::new(),
         environment: Some(env),
@@ -733,24 +961,41 @@ async fn run_linter_diagnostics(
     }
 }
 
-fn status_text(ready: Vec<String>, servers: &[CatalogServer]) -> String {
+fn status_text(
+    states: std::collections::HashMap<String, super::pool::PoolServerState>,
+    servers: &[CatalogServer],
+    workspace: &std::path::Path,
+) -> String {
     let names: Vec<String> = servers
         .iter()
         .map(|s| {
-            if ready.iter().any(|name| name == &s.name) {
-                format!("{} (ready)", s.name)
-            } else {
-                format!("{} (configured, not started)", s.name)
+            use super::pool::PoolServerState;
+            match states.get(&s.name) {
+                Some(PoolServerState::Starting) => format!("{} (starting/indexing)", s.name),
+                Some(PoolServerState::Ready) => format!("{} (ready)", s.name),
+                Some(PoolServerState::Retiring) => format!("{} (retiring)", s.name),
+                Some(PoolServerState::Failed(error)) => {
+                    format!("{} (start failed; retry backoff active: {error})", s.name)
+                }
+                None => format!(
+                    "{} ({})",
+                    s.name,
+                    super::catalog::server_unavailable_reason(workspace, s).unwrap_or_else(|| {
+                        if s.is_linter {
+                            "available on demand for diagnostics".into()
+                        } else {
+                            "not started — run a server-backed action such as hover or symbols"
+                                .into()
+                        }
+                    })
+                ),
             }
         })
         .collect();
     if names.is_empty() {
         "No language servers configured for this project".into()
     } else {
-        format!(
-            "Language servers: {}\nNote: status never starts a server. Run a server-backed action first, then call status again in a later tool turn to verify ready.",
-            names.join(", ")
-        )
+        format!("Language servers:\n- {}", names.join("\n- "))
     }
 }
 

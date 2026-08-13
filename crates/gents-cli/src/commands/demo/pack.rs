@@ -16,7 +16,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::fleet::{spawn_server_with_args, wait_http, wait_runtime_ready};
+use super::fleet::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
 use super::util::{path_arg, run_cli_json};
 use crate::cli::args::DemoRunArgs;
 use crate::desired_state::interpolate::interpolate;
@@ -57,6 +57,10 @@ struct PackInit {
     /// inferable. Relative paths resolve against the process cwd.
     #[serde(default)]
     tool_root: Option<String>,
+    /// Files or directories that must exist under the resolved tool root.
+    /// Packs use this to fail fast when invoked from the wrong checkout.
+    #[serde(default)]
+    tool_root_markers: Vec<String>,
 }
 
 fn default_tool_package() -> String {
@@ -473,7 +477,11 @@ fn tool_package_needs_root(package: &str) -> bool {
     matches!(package, "readonly" | "write" | "yolo")
 }
 
-fn resolve_pack_tool_root(pack: &Path, declared: Option<&str>) -> Result<PathBuf> {
+fn resolve_pack_tool_root(
+    pack: &Path,
+    declared: Option<&str>,
+    markers: &[String],
+) -> Result<PathBuf> {
     let raw = declared.map(str::trim).filter(|value| !value.is_empty());
     let path = match raw {
         Some(raw) => {
@@ -488,7 +496,25 @@ fn resolve_pack_tool_root(pack: &Path, declared: Option<&str>) -> Result<PathBuf
         }
         None => pack.join("../.."),
     };
-    Ok(path.canonicalize().unwrap_or(path))
+    let root = path
+        .canonicalize()
+        .with_context(|| format!("resolving pack tool root {}", path.display()))?;
+    if !root.is_dir() {
+        bail!("pack tool root is not a directory: {}", root.display());
+    }
+    let missing = markers
+        .iter()
+        .filter(|marker| !root.join(marker).exists())
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        bail!(
+            "pack tool root {} is missing required marker(s): {}",
+            root.display(),
+            missing.join(", ")
+        );
+    }
+    Ok(root)
 }
 
 pub(crate) async fn list(root: &Path) -> Result<()> {
@@ -708,13 +734,22 @@ fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
         ("file", expected.file.as_deref()),
         ("symbol", expected.symbol.as_deref()),
     ] {
-        if expected_value.is_some()
-            && parsed
-                .as_ref()
-                .and_then(|value| value.get(field))
-                .and_then(Value::as_str)
-                != expected_value
-        {
+        let Some(expected_value) = expected_value else {
+            continue;
+        };
+        let Some(actual) = parsed
+            .as_ref()
+            .and_then(|value| value.get(field))
+            .and_then(Value::as_str)
+        else {
+            return false;
+        };
+        let matches = if field == "file" {
+            gents::toolset::result_path_matches(expected_value, actual)
+        } else {
+            actual == expected_value
+        };
+        if !matches {
             return false;
         }
     }
@@ -729,19 +764,7 @@ fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
 }
 
 fn result_looks_failed(result: &str) -> bool {
-    let trimmed = result.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    trimmed.is_empty()
-        || matches!(
-            lower.as_str(),
-            "no result" | "no symbols found" | "no hover information" | "no definition found"
-        )
-        || lower.starts_with("error:")
-        || lower.starts_with("lsp error")
-        || lower.starts_with("failed")
-        || lower.starts_with("unavailable")
-        || lower.contains("stdout closed")
-        || lower.contains("timed out")
+    gents::toolset::result_looks_failed(result)
 }
 
 async fn graphql_rows(graphql: &str, field: &str, query: &str) -> Result<Vec<Value>> {
@@ -2017,14 +2040,12 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         Some(resolve_pack_tool_root(
             &pack,
             manifest.init.tool_root.as_deref(),
+            &manifest.init.tool_root_markers,
         )?)
     } else {
         None
     };
     if let Some(root) = tool_root.as_ref() {
-        // Desired-state `${GENTS_LSP_WORKSPACE:-.}` and the init ceiling
-        // must agree. The child server inherits this.
-        std::env::set_var("GENTS_LSP_WORKSPACE", root);
         println!(
             "tool     {} @ {}",
             manifest.init.tool_package,
@@ -2074,7 +2095,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     let log = run_dir.join("server.log");
     let started = Instant::now();
 
-    let mut server = spawn_server_with_pack(&bin, &home, port, &log, &pack)?;
+    let mut server = spawn_server_with_pack(&bin, &home, port, &log, &pack, tool_root.as_deref())?;
     let outcome = async {
         wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
@@ -2361,9 +2382,13 @@ fn spawn_server_with_pack(
     port: u16,
     log: &Path,
     pack: &Path,
+    tool_root: Option<&Path>,
 ) -> Result<tokio::process::Child> {
     let root = path_arg(pack);
-    spawn_server_with_args(bin, home, port, log, &["--apply-root", &root])
+    let environment = tool_root
+        .map(|path| vec![("GENTS_LSP_WORKSPACE", path.to_string_lossy().into_owned())])
+        .unwrap_or_default();
+    spawn_server_with_args_and_env(bin, home, port, log, &["--apply-root", &root], &environment)
 }
 
 #[cfg(test)]
@@ -2434,6 +2459,7 @@ mod tests {
                 backend_preset: None,
                 openai_wire_api: None,
                 tool_root: None,
+                tool_root_markers: Vec::new(),
             },
             seed: PackSeed {
                 collection: "Source".to_string(),
@@ -2583,6 +2609,23 @@ mod tests {
     }
 
     #[test]
+    fn pack_tool_root_requires_declared_markers() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        let markers = vec!["Cargo.toml".to_string(), "crates/gents".to_string()];
+        let error =
+            resolve_pack_tool_root(root.path(), Some(root.path().to_str().unwrap()), &markers)
+                .unwrap_err();
+        assert!(error.to_string().contains("crates/gents"), "{error}");
+
+        std::fs::create_dir_all(root.path().join("crates/gents")).unwrap();
+        let resolved =
+            resolve_pack_tool_root(root.path(), Some(root.path().to_str().unwrap()), &markers)
+                .unwrap();
+        assert_eq!(resolved, std::fs::canonicalize(root.path()).unwrap());
+    }
+
+    #[test]
     fn readonly_pack_requires_tool_root() {
         let mut manifest = PackManifest {
             name: "lsp".into(),
@@ -2595,6 +2638,7 @@ mod tests {
                 openai_wire_api: None,
                 tool_package: "readonly".into(),
                 tool_root: None,
+                tool_root_markers: Vec::new(),
             },
             seed: PackSeed {
                 collection: "Job".into(),

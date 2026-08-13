@@ -150,6 +150,46 @@ async fn inbound_uri_escape_is_policy_denied() {
     assert!(err.contains("outside") || err.contains("allowed"), "{err}");
 }
 
+#[tokio::test]
+async fn invalid_inbound_file_is_rejected_before_server_start() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let pool = LspPool::new();
+    let tool = LspTool::new(
+        sample_config(
+            root.path().to_path_buf(),
+            FileToolMode::ReadOnly,
+            "invalid-before-start",
+            vec![fixture_server(FIXTURE_PY.into())],
+        ),
+        pool.clone(),
+    )
+    .unwrap();
+    let error = tool
+        .call(LspArgs {
+            action: "hover".into(),
+            file: Some("untitled:outside".into()),
+            line: Some(1),
+            symbol: Some("outside".into()),
+            query: None,
+            new_name: None,
+            apply: None,
+            payload: None,
+            timeout: Some(5),
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("unsupported URI"), "{error}");
+    assert_eq!(pool.live_count().await, 0);
+}
+
 #[test]
 fn self_config_rejects_settings_and_command() {
     let err = LspConfigDocument::parse_self_config(Some(
@@ -294,19 +334,130 @@ async fn fixture_hover_definition_and_rename_preview() {
 }
 
 #[tokio::test]
+async fn rename_file_allows_a_new_destination() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("old.rs");
+    let destination = root.path().join("new.rs");
+    std::fs::write(&source, "fn old() {}\n").unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname=\"t\"\nversion=\"0.0.1\"\n",
+    )
+    .unwrap();
+    let tool = LspTool::new(
+        sample_config(
+            root.path().to_path_buf(),
+            FileToolMode::ReadWrite,
+            "s-rename-file",
+            vec![fixture_server(FIXTURE_PY.into())],
+        ),
+        LspPool::new(),
+    )
+    .unwrap();
+    let output = tool
+        .call(LspArgs {
+            action: "rename_file".into(),
+            file: Some("old.rs".into()),
+            line: None,
+            symbol: None,
+            query: None,
+            new_name: Some("new.rs".into()),
+            apply: Some(true),
+            payload: None,
+            timeout: Some(5),
+        })
+        .await
+        .expect("rename_file must admit a destination that does not exist yet");
+    assert!(output.contains("Applied edit"), "{output}");
+    assert!(!source.exists());
+    assert_eq!(
+        std::fs::read_to_string(destination).unwrap(),
+        "fn old() {}\n"
+    );
+}
+
+#[test]
+fn workspace_edit_rename_allows_a_new_destination() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("old.rs");
+    let destination = root.path().join("nested/new.rs");
+    std::fs::write(&source, "fn old() {}\n").unwrap();
+    let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
+    let edit = serde_json::json!({
+        "documentChanges": [{
+            "kind": "rename",
+            "oldUri": super::uri::path_to_file_uri(&source),
+            "newUri": super::uri::path_to_file_uri(&destination)
+        }]
+    });
+    let prepared = super::edits::prepare_workspace_edit(
+        &context,
+        &edit,
+        super::encoding::PositionEncoding::Utf16,
+    )
+    .expect("newUri may name a not-yet-created path under the tool root");
+    assert_eq!(prepared.len(), 1);
+    let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+    assert_eq!(prepared[0].path, canonical_root.join("nested/new.rs"));
+    assert_eq!(
+        prepared[0].rename_from.as_deref(),
+        Some(canonical_root.join("old.rs").as_path())
+    );
+}
+
+#[test]
+fn text_edit_rejects_a_mid_codepoint_utf8_position() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("lib.rs");
+    std::fs::write(&path, "a😀b\n").unwrap();
+    let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
+    let uri = super::uri::path_to_file_uri(&path);
+    let edit = serde_json::json!({
+        "changes": {
+            (uri): [{
+                "range": {
+                    "start": {"line": 0, "character": 2},
+                    "end": {"line": 0, "character": 2}
+                },
+                "newText": "x"
+            }]
+        }
+    });
+    let error = super::edits::prepare_workspace_edit(
+        &context,
+        &edit,
+        super::encoding::PositionEncoding::Utf8,
+    )
+    .unwrap_err();
+    assert!(error.contains("multibyte"), "{error}");
+}
+
+#[tokio::test]
 async fn status_does_not_start_a_server() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
     let pool = LspPool::new();
     let tool = LspTool::new(
         sample_config(
-            std::env::temp_dir(),
+            root.path().to_path_buf(),
             FileToolMode::ReadOnly,
             "s-status",
-            vec![],
+            vec![fixture_server(FIXTURE_PY.into())],
         ),
         pool.clone(),
     )
     .unwrap();
-    let _ = tool
+    let output = tool
         .call(LspArgs {
             action: "status".into(),
             file: None,
@@ -318,7 +469,12 @@ async fn status_does_not_start_a_server() {
             payload: None,
             timeout: None,
         })
-        .await;
+        .await
+        .expect("status");
+    assert!(
+        output.contains("fixture (not started — run a server-backed action"),
+        "{output}"
+    );
     assert_eq!(pool.live_count().await, 0);
 }
 
@@ -752,10 +908,112 @@ async fn simultaneous_first_calls_share_one_process() {
     };
     let first = pool.get_or_start(key.clone(), &server, &config);
     let second = pool.get_or_start(key.clone(), &server, &config);
-    let (a, b) = tokio::join!(first, second);
+    let (a, b) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(first, second)
+    })
+    .await
+    .expect("singleflight waiters must not lose the Ready notification");
     assert!(a.is_ok(), "first start failed");
     assert!(b.is_ok(), "second start failed");
     assert_eq!(pool.live_count().await, 1);
+}
+
+#[tokio::test]
+async fn semantic_retry_handles_empty_arrays_with_one_total_budget() {
+    if !python3_available() {
+        return;
+    }
+    let fixture = r#"
+import json, sys
+calls = 0
+def read():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b'\r\n', b'\n'):
+            break
+        key, _, value = line.decode().partition(':')
+        headers[key.strip().lower()] = value.strip()
+    n = int(headers.get('content-length', '0'))
+    return json.loads(sys.stdin.buffer.read(n) or b'null')
+def write(obj):
+    body = json.dumps(obj).encode()
+    sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+while True:
+    msg = read()
+    if msg is None:
+        break
+    method = msg.get('method')
+    mid = msg.get('id')
+    if method == 'initialize':
+        write({"jsonrpc":"2.0","id":mid,"result":{"capabilities":{}}})
+    elif method == 'textDocument/documentSymbol':
+        calls += 1
+        result = [] if calls == 1 else [{"name":"retried","kind":12,"range":{"start":{"line":0,"character":0}},"selectionRange":{"start":{"line":0,"character":0}}}]
+        write({"jsonrpc":"2.0","id":mid,"result":result})
+    elif method == 'workspace/symbol':
+        write({"jsonrpc":"2.0","id":mid,"result":[]})
+    elif method == 'shutdown':
+        write({"jsonrpc":"2.0","id":mid,"result":None})
+    elif method == 'exit':
+        break
+    elif mid is not None:
+        write({"jsonrpc":"2.0","id":mid,"result":None})
+"#;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn retried() {}\n").unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let pool = LspPool::new();
+    let server = fixture_server(fixture.into());
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        "s-empty-array",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id: "s-empty-array".into(),
+        behavior_id: "b1".into(),
+        workspace_root: root.path().to_path_buf(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let result = super::actions::request_maybe_retry(
+        lease.client(),
+        "textDocument/documentSymbol",
+        serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
+        std::time::Duration::from_secs(2),
+        true,
+    )
+    .await
+    .expect("empty array should be retried");
+    assert_eq!(result[0]["name"], "retried");
+
+    let started = std::time::Instant::now();
+    let empty = super::actions::request_maybe_retry(
+        lease.client(),
+        "workspace/symbol",
+        serde_json::json!({"query":"missing"}),
+        std::time::Duration::from_millis(250),
+        true,
+    )
+    .await
+    .expect("empty result at deadline is a semantic empty response");
+    assert!(empty.is_null() || empty.as_array().is_some_and(Vec::is_empty));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "the timeout must bound the whole retry loop: {:?}",
+        started.elapsed()
+    );
 }
 
 #[tokio::test]
@@ -1248,6 +1506,160 @@ fn redacts_single_location_workspace_symbol_and_nested_diagnostics() {
 }
 
 #[test]
+fn diagnostics_render_messages_for_push_pull_and_workspace_shapes() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
+    let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
+    let uri = super::uri::path_to_file_uri(&root.path().join("lib.rs"));
+    let diagnostic = serde_json::json!({
+        "range": {"start": {"line": 2, "character": 1}},
+        "severity": 1,
+        "source": "rustc",
+        "code": "E0001",
+        "message": "useful diagnostic"
+    });
+
+    let push = super::actions::format_result(
+        &context,
+        LspAction::Diagnostics,
+        serde_json::json!({"uri": uri, "diagnostics": [diagnostic.clone()]}),
+    );
+    assert!(push.contains("lib.rs:3"), "{push}");
+    assert!(push.contains("useful diagnostic"), "{push}");
+    assert!(push.contains("rustc") && push.contains("E0001"), "{push}");
+
+    let pull = super::actions::format_result(
+        &context,
+        LspAction::Diagnostics,
+        serde_json::json!({"kind": "full", "items": [diagnostic.clone()]}),
+    );
+    assert!(pull.contains("line 3"), "{pull}");
+    assert!(pull.contains("useful diagnostic"), "{pull}");
+
+    let workspace = super::actions::format_result(
+        &context,
+        LspAction::Diagnostics,
+        serde_json::json!({"items": [{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs")), "items": [diagnostic]}]}),
+    );
+    assert!(workspace.contains("lib.rs:3"), "{workspace}");
+    assert!(workspace.contains("useful diagnostic"), "{workspace}");
+}
+
+#[test]
+fn document_symbol_cap_is_global_and_output_is_qualified() {
+    let root = tempfile::tempdir().unwrap();
+    let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
+    let children = (0..=super::actions::MAX_WORKSPACE_SYMBOLS)
+        .map(|index| {
+            serde_json::json!({
+                "name": format!("method_{index}"),
+                "kind": 6,
+                "selectionRange": {"start": {"line": index, "character": 0}},
+                "range": {"start": {"line": index, "character": 0}}
+            })
+        })
+        .collect::<Vec<_>>();
+    let output = super::actions::format_result(
+        &context,
+        LspAction::Symbols,
+        serde_json::json!([{
+            "name": "impl Demo",
+            "kind": 5,
+            "selectionRange": {"start": {"line": 0, "character": 0}},
+            "range": {"start": {"line": 0, "character": 0}},
+            "children": children
+        }]),
+    );
+    assert!(output.contains("Demo::method_0 (method):1"), "{output}");
+    assert!(output.starts_with("Found 200 result(s):"), "{output}");
+    assert!(!output.contains("method_199"), "{output}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn linter_fallback_obeys_its_total_deadline() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let host = tempfile::tempdir().unwrap();
+    let linter_path = host.path().join("hung-biome");
+    std::fs::write(&linter_path, "#!/bin/sh\nsleep 5\n").unwrap();
+    let mut permissions = std::fs::metadata(&linter_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&linter_path, permissions).unwrap();
+    let source = workspace.path().join("source.js");
+    std::fs::write(&source, "const x = 1;\n").unwrap();
+    std::fs::write(workspace.path().join("package.json"), "{}").unwrap();
+    let server = CatalogServer {
+        name: "biome".into(),
+        command: linter_path.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        file_types: vec![".js".into()],
+        root_markers: vec!["package.json".into()],
+        is_linter: true,
+        priority: 1,
+        language_id: None,
+        init_options: None,
+        settings: None,
+        capabilities: None,
+        workspace_ready_timings: None,
+        warmup_timeout_ms: None,
+    };
+    let config = sample_config(
+        workspace.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        "s-linter-deadline",
+        vec![server.clone()],
+    );
+    let started = std::time::Instant::now();
+    let result = super::actions::run_linter_diagnostics(
+        &config,
+        &[server.clone()],
+        &source,
+        std::time::Duration::from_millis(200),
+    )
+    .await;
+    assert!(result.is_none());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "hung linter exceeded its action deadline: {:?}",
+        started.elapsed()
+    );
+
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let trigger = cancellation.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        trigger.cancel();
+    });
+    let started = std::time::Instant::now();
+    let result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        None,
+        cancellation,
+        super::actions::run_linter_diagnostics(
+            &config,
+            &[server],
+            &source,
+            std::time::Duration::from_secs(5),
+        ),
+    )
+    .await;
+    assert!(result.is_none());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "cancelled linter did not stop promptly: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn lsp_truncation_keeps_the_header() {
+    let text = format!("Found 999 result(s):\n{}", "x\n".repeat(100_000));
+    let output = super::actions::truncate_model_output(text);
+    assert!(output.starts_with("Found 999 result(s):"), "{output}");
+}
+
+#[test]
 fn sandbox_change_flips_digest() {
     let root = tempfile::tempdir().unwrap();
     let base = CommandConstraints {
@@ -1279,6 +1691,32 @@ fn readonly_request_rejects_unknown_payload_fields_before_start() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("unknown field"), "{err}");
+}
+
+#[test]
+fn readonly_request_validates_bare_and_non_file_uris() {
+    let root = tempfile::tempdir().unwrap();
+    let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
+    for uri in [
+        "/etc/passwd",
+        "https://example.com/not-a-file",
+        "untitled:outside",
+    ] {
+        let payload = serde_json::json!({"textDocument": {"uri": uri}}).to_string();
+        let err = super::actions::validate_raw_request(
+            &context,
+            "textDocument/documentSymbol",
+            Some(&payload),
+        )
+        .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("outside")
+                || text.contains("allowed")
+                || text.contains("unsupported URI"),
+            "{uri}: {text}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1456,6 +1894,16 @@ fn effective_disabled_network_is_not_replaced_by_lsp_default() {
 }
 
 #[test]
+fn unrestricted_lsp_defaults_to_inherited_network() {
+    let mut bash = crate::tool_surface::ToolPolicyBash::off();
+    bash.execution_mode = CommandExecutionMode::Unrestricted;
+    bash.network_mode = CommandNetworkMode::Inherit;
+    let constraints = constraints_from_effective_bash(&bash, None);
+    assert_eq!(constraints.sandbox, CommandExecutionMode::Unrestricted);
+    assert_eq!(constraints.network_mode, CommandNetworkMode::Inherit);
+}
+
+#[test]
 fn explicit_disabled_under_unrestricted_sandbox_is_unenforceable() {
     let root = tempfile::tempdir().unwrap();
     let constraints = CommandConstraints {
@@ -1504,6 +1952,9 @@ fn missing_host_executable_is_not_detected() {
         workspace_ready_timings: None,
         warmup_timeout_ms: None,
     };
+    let message = catalog::unavailable_servers_message(root.path(), &[missing.clone()], None);
+    assert!(message.contains("ghost-ls"), "{message}");
+    assert!(message.contains("executable"), "{message}");
     let detected = catalog::detect_admitted_servers(root.path(), &[missing]);
     assert!(detected.is_empty());
 }

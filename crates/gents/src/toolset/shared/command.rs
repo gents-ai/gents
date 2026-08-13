@@ -773,14 +773,10 @@ fn executable_name_lookup_key(raw: &str) -> Option<String> {
 
 fn is_secret_env_name(key: &str) -> bool {
     let key = key.to_ascii_uppercase();
-    key.contains("SECRET")
+    key.contains("KEY")
+        || key.contains("SECRET")
+        || key.contains("TOKEN")
         || key.contains("PASSWORD")
-        || key.ends_with("_TOKEN")
-        || key.ends_with("_KEY")
-        || key.contains("_TOKEN_")
-        || key.contains("_KEY_")
-        || key == "TOKEN"
-        || key == "KEY"
 }
 
 fn validate_network_mode(

@@ -218,7 +218,27 @@ fn normalize_for_creation(path: &Path) -> Result<PathBuf> {
             _ => normalized.push(component.as_os_str()),
         }
     }
-    Ok(normalized)
+    // Canonicalize the nearest existing ancestor, then append the missing
+    // suffix. This preserves allow-create semantics while resolving symlinked
+    // platform prefixes such as macOS `/var` -> `/private/var` and prevents a
+    // missing child beneath an in-root symlink from bypassing the root check.
+    let mut ancestor = normalized.as_path();
+    let mut suffix = Vec::new();
+    while !ancestor.exists() {
+        let name = ancestor
+            .file_name()
+            .ok_or_else(|| anyhow!("path has no existing ancestor: {}", path.display()))?;
+        suffix.push(name.to_os_string());
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| anyhow!("path has no existing ancestor: {}", path.display()))?;
+    }
+    let mut resolved = std::fs::canonicalize(ancestor)
+        .with_context(|| format!("canonicalizing path ancestor {}", ancestor.display()))?;
+    for component in suffix.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
 }
 
 fn resolve_base_dir(root: &Path, base: Option<PathBuf>) -> Result<PathBuf> {

@@ -60,8 +60,10 @@ type ToolSelection @branchable {
     self_config_dry_run: Boolean
     # Optional language-server tool. Default false; never backfill true.
     enable_lsp: Boolean
-    # Operator JSON for lsp flags and per-catalog overrides. Never carries
-    # command/args. Self-config may patch only a subset of keys.
+    # Trusted-operator JSON for lsp flags and built-in-catalog overrides. It
+    # cannot replace a catalog server's top-level command/args, but settings or
+    # init options may influence child commands run by that server. Self-config
+    # is restricted to the non-executable subset.
     lsp_config: String
     updated_at: DateTime @index(direction: DESC)
 }

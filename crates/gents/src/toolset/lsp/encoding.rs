@@ -89,18 +89,31 @@ fn split_symbol_nth(symbol: &str) -> (&str, usize) {
     (symbol, 1)
 }
 
-pub fn position_to_byte_offset(line: &str, encoding: PositionEncoding, character: u32) -> usize {
+pub fn position_to_byte_offset(
+    line: &str,
+    encoding: PositionEncoding,
+    character: u32,
+) -> Result<usize, String> {
     match encoding {
-        PositionEncoding::Utf8 => (character as usize).min(line.len()),
+        PositionEncoding::Utf8 => {
+            let offset = (character as usize).min(line.len());
+            if line.is_char_boundary(offset) {
+                Ok(offset)
+            } else {
+                Err(format!(
+                    "UTF-8 position {character} falls inside a multibyte character"
+                ))
+            }
+        }
         PositionEncoding::Utf16 => {
             let mut units = 0u32;
             for (idx, ch) in line.char_indices() {
                 if units >= character {
-                    return idx;
+                    return Ok(idx);
                 }
                 units += ch.len_utf16() as u32;
             }
-            line.len()
+            Ok(line.len())
         }
     }
 }
@@ -117,9 +130,16 @@ mod tests {
         // "hi " = 3, emoji = 2 UTF-16 units, space = 1 → 6
         assert_eq!(pos.character, 6);
         assert_eq!(
-            position_to_byte_offset(line, PositionEncoding::Utf16, pos.character),
+            position_to_byte_offset(line, PositionEncoding::Utf16, pos.character).unwrap(),
             line.find("there").unwrap()
         );
+    }
+
+    #[test]
+    fn utf8_mid_codepoint_is_rejected() {
+        let line = "a😀b";
+        let err = position_to_byte_offset(line, PositionEncoding::Utf8, 2).unwrap_err();
+        assert!(err.contains("multibyte"), "{err}");
     }
 
     #[test]

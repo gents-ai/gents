@@ -18,8 +18,4 @@ Required sequence:
    Read the 1-indexed line for `lsp_advertised`.
 4. `action=hover` on that file with `symbol=lsp_advertised` and that line.
    Quote the signature.
-5. After both hover results have returned, start a **new tool turn** and call
-   `action=status` by itself. Do not batch status with symbols or hover. Status
-   must say `rust-analyzer (ready)`; `configured, not started` does not count.
-
 Quote the hover text. Reply DONE when those calls have completed.

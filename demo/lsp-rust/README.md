@@ -2,7 +2,7 @@
 
 Least-privilege coding surface: ReadOnly file tools rooted at **this Gents
 repository**, bash and every other tool off, `enable_lsp: true`. The model
-has to call `lsp` (hover + status) against rust-analyzer and answer two
+has to call `lsp` against rust-analyzer and answer two
 checkable questions about the runtime crate.
 
 This pack is **not** a CI gate. Required CI still says no live rust-analyzer.
@@ -22,9 +22,13 @@ GENTS_LSP_WORKSPACE=/abs/path/to/gents \
 ```
 
 `experiment.json` asks `gents demo run` for a **readonly** ceiling rooted
-at `tool_root` and then checks persisted `AgentToolCall` rows (symbols,
-both hovers, ready status). The ignored live test loads this same pack
-prompt and lsp_config:
+at `tool_root` and then checks persisted `AgentToolCall` rows (symbols and
+both hovers). The ignored live test loads this same pack prompt and
+lsp_config. It first runs `unscripted_prompt.md`, which gives the model no
+path, action order, retry instruction, or expected wording beyond the
+semantic question. Useful semantic results and a factually correct answer—
+not status or a completed-but-empty call—prove the server actually started
+and answered:
 
 ```bash
 GENTS_LIVE_LSP=1 cargo test -p gents --test e2e_live \
@@ -41,7 +45,7 @@ test. The live pack and e2e point at the real Gents tree.
 | --- | --- |
 | `workspace/` | Tiny Rust lib for the offline rust-analyzer unit test |
 | `tool-selections/lsp-readonly/` | ReadOnly files + `enable_lsp`; bash off; root is the repo |
-| `tasks/lsp-hover-task/` | Prompt asks checkable hover questions, then status |
+| `tasks/lsp-hover-task/` | Deterministic prompt asks checkable semantic questions |
 | `event_triggers/lsp-hover/` | Fires on `LspDemoJob` create |
 
 ## Tools

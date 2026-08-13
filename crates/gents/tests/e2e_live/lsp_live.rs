@@ -3,7 +3,8 @@
 //!
 //! Offline and required CI skip this. The spec still says no live
 //! rust-analyzer in CI. Run it when you want proof the model asked
-//! rust-analyzer a checkable question about the runtime crate:
+//! rust-analyzer both an unscripted semantic question and a deterministic
+//! sequence about the runtime crate:
 //!
 //! ```bash
 //! rust-analyzer --version
@@ -86,6 +87,11 @@ fn pack_lsp_config() -> String {
 fn pack_system_prompt() -> String {
     std::fs::read_to_string(pack_dir().join("agent-behaviors/lsp-coder/system_prompt.md"))
         .expect("pack system prompt")
+}
+
+fn pack_unscripted_prompt() -> String {
+    std::fs::read_to_string(pack_dir().join("unscripted_prompt.md"))
+        .expect("pack unscripted prompt")
 }
 
 struct CurrentDirGuard(PathBuf);
@@ -210,6 +216,66 @@ async fn lsp_live_model_uses_rust_analyzer() {
     wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
     let booted = BootedAgent::new(shutdown_tx, handle, agent_did.clone());
 
+    // UX arm: no paths, line numbers, symbol-discovery steps, retries, or
+    // status choreography. The model must discover and use the semantic tool.
+    let unscripted_request_id = "lsp-live-unscripted-1";
+    create_runtime_request(
+        db.node.as_ref(),
+        &agent_did,
+        &behavior_id,
+        unscripted_request_id,
+        "lsp-live-unscripted-session-1",
+        &pack_unscripted_prompt(),
+    )
+    .await;
+    let terminal = wait_for_request_terminal(
+        db.node.as_ref(),
+        unscripted_request_id,
+        Duration::from_secs(600),
+    )
+    .await;
+    assert_eq!(
+        terminal, "completed",
+        "unscripted live lsp run must complete"
+    );
+    let unscripted_calls = fetch_tool_calls(db.node.as_ref(), unscripted_request_id).await;
+    let useful_semantic = unscripted_calls.iter().any(|call| {
+        call.tool_name.as_deref() == Some("lsp")
+            && call_completed(call)
+            && matches!(
+                action_of(call).as_deref(),
+                Some(
+                    "hover"
+                        | "symbols"
+                        | "definition"
+                        | "type_definition"
+                        | "implementation"
+                        | "references"
+                )
+            )
+            && !result_is_error(call)
+    });
+    assert!(
+        useful_semantic,
+        "unscripted arm must produce at least one useful semantic lsp result; calls: {:?}",
+        summarize_calls(unscripted_calls.iter())
+    );
+    let unscripted_answer = wait_for_assistant_answer(
+        db.node.as_ref(),
+        unscripted_request_id,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        unscripted_answer.contains("Disabled")
+            && unscripted_answer.contains("Inherit")
+            && unscripted_answer.contains("Enabled")
+            && (unscripted_answer.to_ascii_lowercase().contains("restrict")
+                || unscripted_answer.to_ascii_lowercase().contains("wins")),
+        "unscripted answer must report that the more restrictive mode wins in Disabled < Inherit < Enabled order; got:\n{unscripted_answer}"
+    );
+
+    // Deterministic arm: retained as a stable harness/protocol regression gate.
     let request_id = "lsp-live-req-1";
     let prompt = pack_default_prompt();
     create_runtime_request(
@@ -271,16 +337,6 @@ async fn lsp_live_model_uses_rust_analyzer() {
         summarize_calls(lsp_calls.iter().copied())
     );
 
-    let status = lsp_calls
-        .iter()
-        .find(|call| call_completed(call) && action_of(call).as_deref() == Some("status"));
-    let status_result = status.and_then(|call| call.result.as_deref()).unwrap_or("");
-    assert!(
-        status_result.contains("rust-analyzer (ready)"),
-        "status must show rust-analyzer (ready); got:\n{status_result}\nall: {:?}",
-        summarize_calls(lsp_calls.iter().copied())
-    );
-
     let answer =
         wait_for_assistant_answer(db.node.as_ref(), request_id, Duration::from_secs(10)).await;
     assert!(
@@ -299,7 +355,8 @@ fn find_hover<'a>(calls: &'a [&ToolCallRow], file: &str, symbol: &str) -> &'a To
         .find(|call| {
             call_completed(call)
                 && action_of(call).as_deref() == Some("hover")
-                && file_of(call).is_some_and(|path| path.ends_with(file) || path.contains(file))
+                && file_of(call)
+                    .is_some_and(|path| gents::toolset::result_path_matches(file, &path))
                 && symbol_of(call).as_deref() == Some(symbol)
         })
         .unwrap_or_else(|| {
@@ -322,7 +379,8 @@ fn find_useful_action_for_file<'a>(
         .find(|call| {
             call_completed(call)
                 && action_of(call).as_deref() == Some(action)
-                && file_of(call).is_some_and(|path| path.ends_with(file) || path.contains(file))
+                && file_of(call)
+                    .is_some_and(|path| gents::toolset::result_path_matches(file, &path))
                 && !result_is_error(call)
                 && call
                     .result
@@ -368,18 +426,7 @@ fn symbol_of(call: &ToolCallRow) -> Option<String> {
 }
 
 fn result_is_error(call: &ToolCallRow) -> bool {
-    let result = call.result.as_deref().unwrap_or("").trim();
-    let lower = result.to_ascii_lowercase();
-    result.is_empty()
-        || matches!(
-            lower.as_str(),
-            "no result" | "no symbols found" | "no hover information" | "no definition found"
-        )
-        || lower.contains("error")
-        || lower.contains("failed")
-        || lower.contains("unavailable")
-        || lower.contains("stdout closed")
-        || lower.contains("timed out")
+    gents::toolset::result_looks_failed(call.result.as_deref().unwrap_or(""))
 }
 
 fn summarize_calls<'a>(

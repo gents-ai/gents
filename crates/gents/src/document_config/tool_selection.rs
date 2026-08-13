@@ -1054,10 +1054,9 @@ pub async fn upsert_tool_selection(
             selection.self_config_dry_run,
         ),
         graphql_fields::graphql_optional_bool_field("enable_lsp", selection.enable_lsp),
-        selection
-            .lsp_config
-            .as_deref()
-            .and_then(|value| graphql_fields::graphql_string_field("lsp_config", Some(value))),
+        // Optional strings in desired state are authoritative: omission clears
+        // an older operator value instead of silently preserving it.
+        graphql_fields::graphql_string_field("lsp_config", selection.lsp_config.as_deref()),
         Some(format!(
             r#"updated_at: "{}""#,
             escape_graphql_string(&mint_recreate_identity_timestamp())
@@ -1199,10 +1198,7 @@ pub async fn upsert_tool_selection(
             selection.self_config_dry_run,
         ),
         graphql_fields::graphql_optional_bool_field("enable_lsp", selection.enable_lsp),
-        selection
-            .lsp_config
-            .as_deref()
-            .and_then(|value| graphql_fields::graphql_string_field("lsp_config", Some(value))),
+        graphql_fields::graphql_string_field("lsp_config", selection.lsp_config.as_deref()),
     ]
     .into_iter()
     .flatten()
