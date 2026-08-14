@@ -134,6 +134,10 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
 }
 
 async fn load_p2p_metrics_for_scrape(state: &RuntimeHttpState) -> P2pMetricsSnapshot {
+    if state.p2p_admission.is_none() {
+        return p2p_metrics_admission_only(state, false);
+    }
+
     let cached = state
         .p2p_metrics_cache
         .lock()
@@ -613,6 +617,21 @@ mod tests {
         assert_eq!(sync.next_pending_retry_in_ms, Some(71));
         assert_eq!(sync.pending_dag_terminal_quarantined, 73);
         assert_eq!(sync.quarantined_pending_dags, 79);
+    }
+
+    #[tokio::test]
+    async fn disabled_p2p_metrics_skip_live_status_fetch() {
+        let mut state = state();
+        state.graphql = "http://127.0.0.1:9/api/v0/graphql".to_string();
+
+        let snapshot = load_p2p_metrics_for_scrape(&state).await;
+
+        assert!(!snapshot.enabled);
+        assert!(!snapshot.stale);
+        assert_eq!(snapshot.connected_peers, 0);
+        assert_eq!(snapshot.replicators, 0);
+        assert!(snapshot.admission.is_none());
+        assert!(snapshot.sync_status.is_none());
     }
 
     #[test]
