@@ -25,6 +25,7 @@
       "tool_name": "write_scan_result",
       "collection": "ScanResult",
       "description": "Signal that one review area has finished scanning.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "area_id", "required": true},

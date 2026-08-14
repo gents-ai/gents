@@ -1762,6 +1762,7 @@ fn validate_rejects_write_tool_with_empty_collection() {
         tool_name: "request_action".to_string(),
         collection: String::new(),
         description: String::new(),
+        output_obligation: None,
         fields: Vec::new(),
     })];
     manifest.tool_selections.push(sel);
@@ -1785,6 +1786,7 @@ fn validate_rejects_write_tool_with_empty_field_name() {
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
         description: String::new(),
+        output_obligation: None,
         fields: vec![WriteToolField {
             name: "   ".to_string(),
             required: true,
@@ -1812,6 +1814,7 @@ fn validate_rejects_duplicate_write_tool_name() {
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
         description: String::new(),
+        output_obligation: None,
         fields: Vec::new(),
     };
     sel.write_tools = vec![
@@ -1842,6 +1845,7 @@ fn validate_accepts_well_formed_write_tools() {
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
         description: "Request a bounded action".to_string(),
+        output_obligation: None,
         fields: vec![
             WriteToolField {
                 name: "title".to_string(),
@@ -1865,6 +1869,34 @@ fn validate_accepts_well_formed_write_tools() {
 }
 
 #[test]
+fn validate_rejects_zero_write_tool_output_obligation() {
+    use gents::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};
+    use gents::WriteToolDecl;
+    let mut manifest = manifest_with_default_behavior();
+    let mut sel = sample_tool_selection("agent-tools");
+    sel.agent_did = "did:test:test".to_string();
+    sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
+        tool_name: "request_action".to_string(),
+        collection: "ActionRequest".to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+        output_obligation: Some(WriteToolOutputObligation {
+            scope: WriteToolOutputObligationScope::Trigger,
+            minimum_writes: 0,
+        }),
+    })];
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("output_obligation.minimum_writes")),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn validate_rejects_write_tool_name_colliding_with_builtin() {
     use gents::{WriteToolDecl, WriteToolField};
     let mut manifest = manifest_with_default_behavior();
@@ -1874,6 +1906,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
         tool_name: "read_file".to_string(),
         collection: "AuditLog".to_string(),
         description: String::new(),
+        output_obligation: None,
         fields: vec![WriteToolField {
             name: "path".to_string(),
             required: true,
@@ -1902,6 +1935,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
         tool_name: "rg".to_string(),
         collection: "AuditLog".to_string(),
         description: String::new(),
+        output_obligation: None,
         fields: Vec::new(),
     })];
     manifest.tool_selections.push(sel);
@@ -1925,6 +1959,7 @@ fn validate_rejects_duplicate_write_tool_field_name() {
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
         description: String::new(),
+        output_obligation: None,
         fields: vec![
             WriteToolField {
                 name: "summary".to_string(),
@@ -2972,6 +3007,7 @@ fn sample_surface(surface_id: &str) -> DesiredDatastoreToolSurface {
             tool_name: "write_experiment_finding".to_string(),
             collection: "ExperimentFinding".to_string(),
             description: "Record a finding".to_string(),
+            output_obligation: None,
             fields: Vec::new(),
         })],
     }

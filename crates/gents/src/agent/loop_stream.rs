@@ -51,6 +51,7 @@ use crate::llm::ToolChoice;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use super::stream_processor::AssistantTurnAccumulator;
+use crate::agent::output_obligation::OutputObligationGate;
 use crate::hook::DefraSessionHook;
 use crate::tool_call_lifecycle::runtime::{
     current_tool_runtime_context, deadline_remaining, scope_request_tool_execution_with_session,
@@ -165,6 +166,9 @@ pub(crate) enum LoopStreamItem<R> {
         will_retry: bool,
         backoff: std::time::Duration,
     },
+    OutputObligationPending {
+        reminder: Message,
+    },
 }
 
 #[derive(Clone)]
@@ -190,6 +194,7 @@ pub(crate) struct LoopConfig {
     pub(crate) retry_policy: CompletionRetryPolicy,
     pub(crate) deadline: Option<DateTime<Utc>>,
     pub(crate) max_turns: usize,
+    pub(crate) output_obligation_gate: Option<OutputObligationGate>,
 }
 
 fn add_usage_saturating(aggregate: &mut Usage, usage: Usage) {
@@ -1006,6 +1011,27 @@ where
             }
 
             if pending_results.is_empty() {
+                if let Some(gate) = config.output_obligation_gate.as_ref() {
+                    let unmet = gate.unmet().await.map_err(|error| {
+                        StreamingError::Completion(CompletionError::ProviderError(format!(
+                            "checking output obligations failed: {error:#}"
+                        )))
+                    })?;
+                    if !unmet.is_empty() {
+                        if let Some(mut assistant_message) = accumulator.take_message() {
+                            if let Message::Assistant { id, .. } = &mut assistant_message {
+                                *id = stream.message_id.clone();
+                            }
+                            new_messages.push(assistant_message);
+                        }
+                        let reminder = Message::user(
+                            crate::agent::output_obligation::continuation_message(&unmet),
+                        );
+                        new_messages.push(reminder.clone());
+                        yield LoopStreamItem::OutputObligationPending { reminder };
+                        continue 'turns;
+                    }
+                }
                 yield LoopStreamItem::Item(MultiTurnStreamItem::final_response(&turn_text, aggregated_usage));
                 break 'turns;
             }
@@ -1199,6 +1225,22 @@ where
         })?;
         match item {
             LoopStreamItem::TurnRetracted { .. } => {
+                accumulator = AssistantTurnAccumulator::default();
+                continue;
+            }
+            LoopStreamItem::OutputObligationPending { reminder } => {
+                if let Some(hook) = hook.as_ref() {
+                    if let Some(message) = accumulator.take_message() {
+                        hook.apply_persistence_policy(
+                            hook.persist_message(&message).await.map(|_| ()),
+                            "persist one-shot assistant output-obligation proposal",
+                        )?;
+                    }
+                    hook.apply_persistence_policy(
+                        hook.persist_message(&reminder).await.map(|_| ()),
+                        "persist one-shot output-obligation reminder",
+                    )?;
+                }
                 accumulator = AssistantTurnAccumulator::default();
                 continue;
             }

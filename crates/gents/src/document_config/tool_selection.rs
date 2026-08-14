@@ -121,6 +121,41 @@ pub struct WriteToolDecl {
     pub collection: String,
     pub description: String,
     pub fields: Vec<WriteToolField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_obligation: Option<WriteToolOutputObligation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteToolOutputObligationScope {
+    Request,
+    Trigger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WriteToolOutputObligation {
+    pub scope: WriteToolOutputObligationScope,
+    #[serde(default = "default_minimum_writes")]
+    pub minimum_writes: usize,
+}
+
+impl WriteToolOutputObligation {
+    pub fn applies_to(&self, origin: crate::lifecycle::ExecutionOrigin) -> bool {
+        match self.scope {
+            WriteToolOutputObligationScope::Request => true,
+            WriteToolOutputObligationScope::Trigger => {
+                origin == crate::lifecycle::ExecutionOrigin::Scheduled
+            }
+        }
+    }
+
+    pub fn is_satisfied(&self, completed_writes: usize) -> bool {
+        self.minimum_writes <= completed_writes
+    }
+}
+
+const fn default_minimum_writes() -> usize {
+    1
 }
 
 impl<'de> serde::Deserialize<'de> for WriteToolDecl {
@@ -136,6 +171,8 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
             description: String,
             #[serde(default)]
             fields: Vec<WriteToolField>,
+            #[serde(default)]
+            output_obligation: Option<WriteToolOutputObligation>,
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(WriteToolDecl {
@@ -143,6 +180,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
             collection: raw.collection.trim().to_string(),
             description: raw.description,
             fields: raw.fields,
+            output_obligation: raw.output_obligation,
         })
     }
 }
@@ -152,6 +190,12 @@ impl WriteToolDecl {
     /// Single source of truth for the registration/advertisement gate.
     pub fn is_well_formed(&self) -> bool {
         !self.tool_name.trim().is_empty() && !self.collection.trim().is_empty()
+    }
+
+    pub fn output_obligation_is_well_formed(&self) -> bool {
+        self.output_obligation
+            .as_ref()
+            .is_none_or(|obligation| obligation.minimum_writes > 0)
     }
 }
 
@@ -575,6 +619,12 @@ impl ToolSelectionDocument {
                          non-empty): tool_name={:?}, collection={:?}",
                         decl.tool_name,
                         decl.collection
+                    ));
+                }
+                if !decl.output_obligation_is_well_formed() {
+                    return Err(anyhow::anyhow!(
+                        "write_tools[{i}] (tool {:?}) output_obligation.minimum_writes must be greater than zero",
+                        decl.tool_name
                     ));
                 }
                 // A declared write tool may not reuse a built-in tool name:

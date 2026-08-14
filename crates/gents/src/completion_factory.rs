@@ -79,6 +79,7 @@ pub(crate) fn loop_config(
         retry_policy: CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns: behavior.max_turns,
+        output_obligation_gate: None,
     }
 }
 

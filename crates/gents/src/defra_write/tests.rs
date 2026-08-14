@@ -47,6 +47,7 @@ fn decl() -> WriteToolDecl {
                 fill: None,
             },
         ],
+        output_obligation: None,
     }
 }
 
@@ -133,6 +134,7 @@ async fn rejects_write_with_empty_collection_decl() {
         collection: "".into(),
         description: "no collection".into(),
         fields: vec![],
+        output_obligation: None,
     };
     let tool = BoundedWriteTool::new(node, bad);
     assert!(
@@ -168,6 +170,7 @@ async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_
                     fill: Some(WriteToolFieldFill::SourceField("expected_total".into())),
                 },
             ],
+            output_obligation: None,
         },
     );
     let definition = Tool::definition(&tool, String::new()).await;

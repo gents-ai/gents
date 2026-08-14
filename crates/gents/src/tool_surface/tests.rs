@@ -739,6 +739,7 @@ async fn write_tools_register_under_declared_names() {
                         required: true,
                         fill: None,
                     }],
+                    output_obligation: None,
                 },
                 // Malformed: empty collection — must be skipped, not advertised.
                 WriteToolDecl {
@@ -746,6 +747,7 @@ async fn write_tools_register_under_declared_names() {
                     collection: "  ".to_string(),
                     description: String::new(),
                     fields: Vec::new(),
+                    output_obligation: None,
                 },
             ],
             ..Default::default()
@@ -805,6 +807,7 @@ async fn write_tool_colliding_with_builtin_is_not_registered_twice() {
                     required: false,
                     fill: None,
                 }],
+                output_obligation: None,
             }],
             ..Default::default()
         },

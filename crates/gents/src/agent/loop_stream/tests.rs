@@ -406,6 +406,7 @@ fn config(max_turns: usize) -> LoopConfig {
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns,
+        output_obligation_gate: None,
     }
 }
 
@@ -614,6 +615,67 @@ async fn single_turn_no_tools_yields_text_then_final() {
 
     assert_eq!(texts, vec!["Hello ".to_string(), "world".to_string()]);
     assert_eq!(final_text.as_deref(), Some("Hello world"));
+}
+
+#[tokio::test]
+async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let model = ScriptedModel::new_turns(vec![
+        vec![
+            RawStreamingChoice::Message("premature answer".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("continuing".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let mut loop_config = config(2);
+    loop_config.output_obligation_gate =
+        Some(crate::agent::output_obligation::OutputObligationGate::new(
+            node.clone(),
+            "request-doc-unmet",
+            vec![crate::agent::output_obligation::ActiveOutputObligation {
+                tool_name: "write_result".to_string(),
+                contract: crate::document_config::WriteToolOutputObligation {
+                    scope: crate::document_config::WriteToolOutputObligationScope::Request,
+                    minimum_writes: 1,
+                },
+            }],
+        ));
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("do the work"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    );
+    futures::pin_mut!(stream);
+
+    let mut saw_pending = false;
+    let mut saw_final = false;
+    while let Some(item) = stream.next().await {
+        match item.unwrap() {
+            LoopStreamItem::OutputObligationPending { reminder } => {
+                saw_pending = true;
+                assert!(format!("{reminder:?}").contains("write_result"));
+            }
+            LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(_)) => saw_final = true,
+            LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
+                StreamedAssistantContent::Text(text),
+            )) if saw_pending && text.text == "continuing" => break,
+            _ => {}
+        }
+    }
+
+    assert!(saw_pending);
+    assert!(!saw_final);
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 2);
+    assert!(format!("{:?}", histories[1]).contains("configured output obligation is unmet"));
+    node.shutdown().await;
 }
 
 #[tokio::test]

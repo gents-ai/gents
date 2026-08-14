@@ -573,6 +573,9 @@ exhaustion. It is executable in Lean through
 `step_sound`, and `transition_complete`; a `preStreamFail` action carries the
 observed `FailureClass` and the selected wake time, so `step?` genuinely
 consumes both the classification and the fail-fast (overshoot) decision.
+`OutputObligation.lean` additionally proves that an unsatisfied durable-write
+minimum cannot take the terminal transition and that successful writes advance
+monotonically toward completion.
 
 The key guarantees (`Proofs/CompletionRetry/Properties.lean`) are:
 

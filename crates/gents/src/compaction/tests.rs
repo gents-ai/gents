@@ -81,6 +81,7 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::no_retry(),
         deadline: None,
         max_turns: 0,
+        output_obligation_gate: None,
     }
 }
 
@@ -957,6 +958,7 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns: 0,
+        output_obligation_gate: None,
     }
 }
 
@@ -2115,6 +2117,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns: 0,
+        output_obligation_gate: None,
     };
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
 

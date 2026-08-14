@@ -1,4 +1,5 @@
 import Proofs.CompletionRetry.Executable
+import Proofs.CompletionRetry.OutputObligation
 import Proofs.Conformance.ContractTypes
 
 namespace CompletionRetry.Contracts
@@ -106,6 +107,24 @@ def caseCloseTurnThenContinue : CompletionRetryCase :=
   , pre := pre
   , intermediate := intermediate
   , post := post
+  }
+
+def outputObligationCase
+    (name rustSurface : String)
+    (state : OutputObligation.State)
+    (enabled : Bool := true) : CompletionRetryCase :=
+  let pre := baseState
+  let decision := if enabled then OutputObligation.decideTerminal state else .complete
+  let phase := match decision with
+    | .continue => Phase.turnClosed
+    | .complete => Phase.turnDone
+  { name := name
+  , action := "output_obligation_terminal"
+  , rustSurface := rustSurface
+  , failureClass := none
+  , selectedWake := none
+  , pre := pre
+  , post := some { pre with phase := phase }
   }
 
 def cases : List CompletionRetryCase :=
@@ -223,6 +242,19 @@ def cases : List CompletionRetryCase :=
       (some 12)
       (baseState)
       (.preStreamFail .permanent "permanent" 12)
+  , outputObligationCase
+      "unsatisfied_output_obligation_continues"
+      "output_obligation_gate_blocks_terminal"
+      { minimumWrites := 1, completedWrites := 0 }
+  , outputObligationCase
+      "satisfied_output_obligation_completes"
+      "output_obligation_gate_accepts_terminal"
+      { minimumWrites := 1, completedWrites := 1 }
+  , outputObligationCase
+      "trigger_output_obligation_inactive_interactive"
+      "trigger_scope_activation"
+      { minimumWrites := 1, completedWrites := 0 }
+      (OutputObligation.active .trigger false)
   ]
 
 def CompletionRetryCase.toJson (c : CompletionRetryCase) : String :=

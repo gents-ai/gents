@@ -83,6 +83,19 @@ impl ToolSurface {
             .collect()
     }
 
+    pub(crate) fn output_obligations(
+        &self,
+    ) -> Vec<(String, crate::document_config::WriteToolOutputObligation)> {
+        self.write_tools
+            .iter()
+            .filter_map(|decl| {
+                decl.output_obligation
+                    .clone()
+                    .map(|obligation| (decl.tool_name.clone(), obligation))
+            })
+            .collect()
+    }
+
     pub fn host_tools(&self) -> &ToolSet {
         &self.host_tools
     }
@@ -256,7 +269,7 @@ impl ToolSurface {
         let mut registered_names: HashSet<String> = tools.iter().map(|tool| tool.name()).collect();
         for decl in &self.write_tools {
             let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
-            if !tool.is_well_formed() {
+            if !tool.is_well_formed() || !decl.output_obligation_is_well_formed() {
                 tracing::warn!(
                     tool_name = %decl.tool_name,
                     collection = %decl.collection,

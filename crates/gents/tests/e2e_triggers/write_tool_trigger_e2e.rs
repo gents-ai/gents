@@ -329,6 +329,7 @@ fn request_action_decl() -> WriteToolDecl {
                 fill: None,
             },
         ],
+        output_obligation: None,
     }
 }
 

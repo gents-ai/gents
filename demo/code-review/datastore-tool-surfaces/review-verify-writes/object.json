@@ -27,6 +27,7 @@
       "tool_name": "write_verification_summary",
       "collection": "VerificationSummary",
       "description": "Close the verification ledger and trigger final triage.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "candidate_count", "required": true},

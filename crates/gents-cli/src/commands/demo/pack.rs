@@ -2824,6 +2824,26 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        for (surface, tool_name) in [
+            ("review-recon-writes", "write_review_area"),
+            ("review-scan-writes", "write_scan_result"),
+            ("review-verify-writes", "write_verification_summary"),
+            ("review-triage-writes", "write_triage_report"),
+        ] {
+            let document = read_pack_json(
+                &pack
+                    .join("datastore-tool-surfaces")
+                    .join(surface)
+                    .join("object.json"),
+            )
+            .unwrap_or_else(|error| panic!("{surface} should load: {error:#}"));
+            let entry = document["entries"]
+                .as_array()
+                .and_then(|entries| entries.iter().find(|entry| entry["tool_name"] == tool_name))
+                .unwrap_or_else(|| panic!("{surface} should declare {tool_name}"));
+            assert_eq!(entry["output_obligation"]["scope"], "trigger");
+            assert_eq!(entry["output_obligation"]["minimum_writes"], 1);
+        }
         let recon_prompt = std::fs::read_to_string(
             pack.join("tasks")
                 .join("review-recon-task")

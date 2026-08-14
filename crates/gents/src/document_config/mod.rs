@@ -37,6 +37,7 @@ pub use tool_selection::{
     is_reserved_builtin_tool_name, load_tool_selection, upsert_tool_selection,
     wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 #[allow(unused_imports)]
 pub(crate) use tool_selection::{

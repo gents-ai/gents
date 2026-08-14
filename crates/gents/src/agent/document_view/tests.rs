@@ -1701,6 +1701,7 @@ fn finding_decl() -> crate::document_config::WriteToolDecl {
                 fill: None,
             },
         ],
+        output_obligation: None,
     }
 }
 

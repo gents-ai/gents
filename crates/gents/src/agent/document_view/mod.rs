@@ -346,6 +346,13 @@ pub(crate) fn merge_write_tools_with_surfaces(
                     surface_id
                 );
             }
+            if !entry.output_obligation_is_well_formed() {
+                bail!(
+                    "DatastoreToolSurface {} entry {:?} has an output obligation with a zero minimum_writes",
+                    surface_id,
+                    entry.tool_name,
+                );
+            }
             if !seen.insert(entry.tool_name.clone()) {
                 bail!(
                     "duplicate write tool_name {:?} after expanding DatastoreToolSurface {} for ToolSelection {}",
