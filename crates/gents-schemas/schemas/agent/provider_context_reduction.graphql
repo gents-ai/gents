@@ -1,0 +1,48 @@
+# Immutable request-local provider-context reduction fact.
+#
+# This is deliberately separate from CompactionEntry. CompactionEntry names a
+# session-prefix reduction consumed by later request-boundary history loading;
+# this collection names a sticky provider projection inside one AgentRequest
+# and must never participate in cumulative session-prefix dropping.
+#
+# Payload fields contain prompt material and have the same local audit-only
+# placement as RenderedRequest. There is no @policy or encryption claim: the
+# pinned EmbeddedNode cannot install document ACP, and Defra field encryption
+# does not encrypt the local datastore. The runtime catalog excludes this
+# collection from participant, desktop, fixture, and bulk-sync routes.
+type ProviderContextReduction @branchable {
+    # SHA-256 of the canonical tuple
+    # [agent_did, session_id, request_doc_id, turn_index, reduction_index].
+    # Ordinary indexed, not unique: pinned DefraDB retains remotely-conflicting
+    # unique twins but indexes only one deterministic winner. Runtime
+    # create-and-compare enumerates every visible ordinary-index twin and fails
+    # closed if more than one fact binds this key.
+    reduction_key: String @index @immutable
+    agent_did: String @index @immutable
+    requester_did: String @index @immutable
+    session_id: String @index @immutable
+    request_id: String @index @immutable
+    request_doc_id: String @index @immutable
+    request_commit_cid: String @immutable
+    reduction_index: Int @index @immutable
+    turn_index: Int @index @immutable
+    parent_reduction_key: String @index @immutable
+    producer_call_id: String @index @immutable
+    producer_call_seq: Int @immutable
+    # Versioned manifest of the exact AgentRequest version and ordered
+    # AgentMessage document/version boundary visible when reduction began.
+    source_boundary_json: String @immutable
+    # Exact pair-safe split of the source native provider projection. Their
+    # concatenation is the source view; no future mutable message count is
+    # consulted to reconstruct the boundary.
+    compacted_prefix_json: String @immutable
+    retained_suffix_json: String @immutable
+    pair_closed: Boolean @immutable
+    # Exact sticky native provider projection activated after persistence.
+    checkpoint_messages_json: String @immutable
+    summary: String @immutable
+    messages_compacted: Int @immutable
+    original_tokens: Int @immutable
+    compacted_tokens: Int @immutable
+    created_at: DateTime @index @immutable
+}

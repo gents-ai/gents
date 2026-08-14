@@ -401,6 +401,9 @@ fn config(max_turns: usize) -> LoopConfig {
         tool_choice: None,
         on_rendered_request: None,
         turn_compactor: None,
+        active_reduction_keys: Vec::new(),
+        reduction_chain_keys: Vec::new(),
+        initial_turn_index: 0,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
@@ -997,7 +1000,7 @@ async fn nested_compaction_charges_the_same_request_budget() {
     loop_config.context_window = 6_500;
     loop_config.compaction_threshold = 0.25;
     loop_config.aggregate_token_budget = Some(budget.clone());
-    loop_config.turn_compactor = Some(Arc::new(move |_messages, _target| {
+    loop_config.turn_compactor = Some(Arc::new(move |_request| {
         let model = compaction_model.clone();
         let config = compaction_config.clone();
         Box::pin(async move {
@@ -1010,7 +1013,10 @@ async fn nested_compaction_charges_the_same_request_budget() {
                 config,
             )
             .await?;
-            Ok(vec![Message::user("compacted prompt")])
+            Ok(TurnCompactionOutcome {
+                messages: vec![Message::user("compacted prompt")],
+                reduction_key: "reduction-1".to_string(),
+            })
         })
     }));
 
@@ -1039,7 +1045,7 @@ async fn per_turn_compaction_preserves_canonical_budget_exhaustion() {
     loop_config.max_tokens = Some(6_000);
     loop_config.context_window = 6_500;
     loop_config.compaction_threshold = 0.25;
-    loop_config.turn_compactor = Some(Arc::new(move |_messages, _target| {
+    loop_config.turn_compactor = Some(Arc::new(move |_request| {
         Box::pin(async move {
             Err(
                 anyhow::Error::new(StreamingError::Completion(CompletionError::ProviderError(
@@ -1292,18 +1298,21 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
     let compactions_for_callback = compactions.clone();
     let keep_recent_target = Arc::new(AtomicUsize::new(usize::MAX));
     let keep_recent_target_for_callback = keep_recent_target.clone();
-    loop_config.turn_compactor = Some(Arc::new(move |messages, target| {
+    loop_config.turn_compactor = Some(Arc::new(move |request| {
         let compactions = compactions_for_callback.clone();
         let keep_recent_target = keep_recent_target_for_callback.clone();
         Box::pin(async move {
             compactions.fetch_add(1, Ordering::SeqCst);
-            keep_recent_target.store(target, Ordering::SeqCst);
-            let keep_from = messages.len().saturating_sub(2);
+            keep_recent_target.store(request.keep_recent_target, Ordering::SeqCst);
+            let keep_from = request.messages.len().saturating_sub(2);
             let mut compacted = vec![Message::user(
                 "<system-reminder>compacted earlier turn</system-reminder>",
             )];
-            compacted.extend(messages.into_iter().skip(keep_from));
-            Ok(compacted)
+            compacted.extend(request.messages.into_iter().skip(keep_from));
+            Ok(TurnCompactionOutcome {
+                messages: compacted,
+                reduction_key: "reduction-1".to_string(),
+            })
         })
     }));
 

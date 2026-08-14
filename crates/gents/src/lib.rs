@@ -81,6 +81,7 @@ pub mod native_executor_status;
 pub mod oneshot;
 pub mod periodic_recovery;
 pub mod prompt;
+pub mod provider_context_reduction;
 pub(crate) mod registry;
 pub mod rendered_request;
 pub(crate) mod request_binding;

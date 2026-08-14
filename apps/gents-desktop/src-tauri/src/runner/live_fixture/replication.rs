@@ -162,7 +162,7 @@ fn subscribed_collection_names_for_runner() -> Vec<String> {
     gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .chain(gents_protocol::schemas::ALL_COLLECTION_NAMES.iter())
-        .filter(|name| **name != gents_protocol::schemas::RENDERED_REQUEST_NAME)
+        .filter(|name| !gents_protocol::schemas::is_local_audit_collection(name))
         .map(|name| (*name).to_string())
         .collect()
 }
@@ -177,12 +177,12 @@ mod tests {
     #[test]
     fn the_runner_does_not_replicate_plaintext_provider_bodies() {
         let names = subscribed_collection_names_for_runner();
-        assert!(
-            !names
-                .iter()
-                .any(|name| name == gents_protocol::schemas::RENDERED_REQUEST_NAME),
-            "RenderedRequest must stay out of the fixture's replication set: {names:?}"
-        );
+        for sensitive in gents_protocol::schemas::LOCAL_AUDIT_COLLECTION_NAMES {
+            assert!(
+                !names.iter().any(|name| name == sensitive),
+                "{sensitive} must stay out of the fixture replication set: {names:?}"
+            );
+        }
         assert!(
             names.iter().any(|name| name == "AgentRequest"),
             "the exclusion must not have emptied the set: {names:?}"

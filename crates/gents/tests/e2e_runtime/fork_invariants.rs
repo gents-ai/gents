@@ -641,6 +641,30 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
                 compacted_tokens: 5,
                 created_at: "2026-04-21T10:00:02Z"
             }}) {{ _docID }}
+            providerReduction: create_ProviderContextReduction(input: {{
+                reduction_key: "parent-provider-reduction"
+                agent_did: "{AGENT_DID}"
+                requester_did: null
+                session_id: "{parent_session_escaped}"
+                request_id: "{parent_request_id_escaped}"
+                request_doc_id: "{parent_request_doc_id_escaped}"
+                request_commit_cid: "request-cid"
+                reduction_index: 1
+                turn_index: 0
+                parent_reduction_key: null
+                producer_call_id: null
+                producer_call_seq: null
+                source_boundary_json: "{{}}"
+                compacted_prefix_json: "null"
+                retained_suffix_json: "null"
+                pair_closed: true
+                checkpoint_messages_json: "null"
+                summary: "parent provider summary"
+                messages_compacted: 1
+                original_tokens: 10
+                compacted_tokens: 5
+                created_at: "2026-04-21T10:00:02Z"
+            }}) {{ _docID }}
         }}"#
     );
     let response = db.node.execute(&mutation).await;
@@ -714,6 +738,9 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
             CompactionEntry(filter: {{ session_id: {{ _eq: "{child_session_escaped}" }} }}) {{
                 request_id request_doc_id
             }}
+            ProviderContextReduction(filter: {{ session_id: {{ _eq: "{child_session_escaped}" }} }}) {{
+                reduction_key
+            }}
             AgentToolResult(filter: {{ session_id: {{ _eq: "{child_session_escaped}" }} }}) {{
                 tool_call_doc_id
             }}
@@ -741,6 +768,10 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
     {
         assert_eq!(row["tool_call_doc_id"].as_str(), Some(""));
     }
+    assert!(data["ProviderContextReduction"]
+        .as_array()
+        .expect("fork provider reductions")
+        .is_empty());
 
     let child_request_id = "child-projection-request";
     create_request(

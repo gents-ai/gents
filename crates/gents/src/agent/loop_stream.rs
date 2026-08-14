@@ -92,11 +92,24 @@ pub(crate) type RenderedRequestSink = Arc<
         + Sync,
 >;
 
+#[derive(Clone, Debug)]
+pub(crate) struct TurnCompactionRequest {
+    pub(crate) messages: Vec<Message>,
+    pub(crate) keep_recent_target: usize,
+    pub(crate) turn_index: usize,
+    pub(crate) prior_reduction_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TurnCompactionOutcome {
+    pub(crate) messages: Vec<Message>,
+    pub(crate) reduction_key: String,
+}
+
 pub(crate) type TurnCompactor = Arc<
     dyn Fn(
-            Vec<Message>,
-            usize,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Message>>> + Send>>
+            TurnCompactionRequest,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<TurnCompactionOutcome>> + Send>>
         + Send
         + Sync,
 >;
@@ -181,10 +194,17 @@ pub(crate) struct LoopConfig {
     pub(crate) structured_output: Option<StructuredOutputConfig>,
     pub(crate) tool_choice: Option<ToolChoice>,
     pub(crate) on_rendered_request: Option<RenderedRequestSink>,
-    /// Ephemeral provider-view compaction used between completion turns. The
-    /// durable transcript remains permissive; this callback only narrows the
-    /// in-memory input immediately before provider dispatch.
+    /// Provider-view compaction used between completion turns. The callback
+    /// must durably create or verify its reduction fact before returning.
     pub(crate) turn_compactor: Option<TurnCompactor>,
+    /// Restored exact sticky reduction chain for an unconsumed crash
+    /// checkpoint. Empty on a fresh request.
+    pub(crate) active_reduction_keys: Vec<String>,
+    /// Every durable reduction for this request, including consumed facts that
+    /// order the next identity but no longer shape the active provider view.
+    pub(crate) reduction_chain_keys: Vec<String>,
+    /// Turn index to resume at an unconsumed durable checkpoint.
+    pub(crate) initial_turn_index: usize,
     pub(crate) context_window: usize,
     pub(crate) compaction_threshold: f64,
     pub(crate) retry_policy: CompletionRetryPolicy,
@@ -270,19 +290,22 @@ where
             assemble_new_messages(config.context_message.clone(), prompt);
         let mut aggregated_usage = Usage::new();
         let aggregate_token_budget = config.aggregate_token_budget.clone();
-        let mut current_turn: usize = 0;
+        let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
-        // Three in-memory-only transforms can enter these vectors: the rendered
-        // request context, a model-generated per-turn compaction summary, and a
-        // repair rewrite. Once any of them lands, this and every later turn must
-        // retain the full native list.
+        // Three request-local transforms can enter these vectors: the rendered
+        // request context, a durably fenced per-turn checkpoint, and a repair
+        // rewrite. Once any lands, this and every later turn retains the full
+        // native list as the rendered-request reconstruction oracle.
         //
         // The request context *is* persisted (`prompt_hook.rs:28-30`), so the
         // reason to retain it is not absence — it is that persistence runs under
         // a configurable `FailurePolicy::FailOpen`, so that row may legitimately
         // be missing while the request still ships. Capture must not depend on a
         // subsystem whose failure mode is tolerant.
-        let mut effective_messages_are_ephemeral = config.context_message.is_some();
+        let mut retain_effective_messages_oracle =
+            config.context_message.is_some() || !config.active_reduction_keys.is_empty();
+        let mut active_reduction_keys = config.active_reduction_keys.clone();
+        let mut reduction_chain_keys = config.reduction_chain_keys.clone();
 
         'turns: loop {
             if current_turn > config.max_turns + 1 {
@@ -310,9 +333,11 @@ where
                 tools.as_slice(),
                 &config,
                 turn_index,
+                &mut reduction_chain_keys,
+                &mut active_reduction_keys,
             )
             .await?;
-            effective_messages_are_ephemeral |= compacted_this_turn;
+            retain_effective_messages_oracle |= compacted_this_turn;
 
             let current_prompt = new_messages
                 .last()
@@ -365,14 +390,15 @@ where
                         // rewrote both vectors in place).
                         let effective_messages =
                             history.iter().chain(new_messages.iter()).cloned().collect();
-                        let assembly_trace = if effective_messages_are_ephemeral {
+                        let assembly_trace = if retain_effective_messages_oracle {
                             AssemblyTrace::from_effective_messages(build_path, effective_messages)
                         } else {
                             AssemblyTrace::from_reconstructible_messages(
                                 build_path,
                                 effective_messages,
                             )
-                        };
+                        }
+                        .with_reduction_keys(active_reduction_keys.clone());
                         on_rendered_request(turn_index, attempt, request.clone(), assembly_trace)
                             .await
                             .map_err(|error| {
@@ -448,7 +474,7 @@ where
                                     // effective list ephemeral for the rest of the request, not just
                                     // this turn — `build_path` resets per turn and would otherwise
                                     // report `Budgeted` for a turn whose input repair had altered.
-                                    effective_messages_are_ephemeral = true;
+                                    retain_effective_messages_oracle = true;
                                     attempt += 1;
                                 }
                                 PreStreamDirective::Fail { reason } => {
@@ -563,7 +589,7 @@ where
                                     // See the sibling repair arm above: repair mutates the
                                     // request-scoped message vectors, so the effective list stays
                                     // ephemeral for every later turn of this request.
-                                    effective_messages_are_ephemeral = true;
+                                    retain_effective_messages_oracle = true;
                                     attempt += 1;
                                     continue 'attempts;
                                 }
@@ -1492,6 +1518,8 @@ async fn build_budgeted_request<M: CompletionModel>(
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
     turn_index: usize,
+    reduction_chain_keys: &mut Vec<String>,
+    active_reduction_keys: &mut Vec<String>,
 ) -> Result<(CompletionRequest, bool), StreamingError> {
     let current_prompt = new_messages
         .last()
@@ -1515,18 +1543,24 @@ async fn build_budgeted_request<M: CompletionModel>(
         .collect::<Vec<_>>();
     let before_tokens = completion_request_input_estimate(&request);
     let keep_recent_target = turn_keep_recent_target(&request, &provider_messages, config);
-    let mut compacted = compactor(provider_messages, keep_recent_target)
-        .await
-        .map_err(|error| {
-            aggregate_token_budget_exhaustion_message(&error).map_or_else(
-                || {
-                    StreamingError::Completion(CompletionError::ProviderError(format!(
-                        "per-turn provider-input compaction failed: {error:#}"
-                    )))
-                },
-                |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),
-            )
-        })?;
+    let outcome = compactor(TurnCompactionRequest {
+        messages: provider_messages,
+        keep_recent_target,
+        turn_index,
+        prior_reduction_keys: reduction_chain_keys.clone(),
+    })
+    .await
+    .map_err(|error| {
+        aggregate_token_budget_exhaustion_message(&error).map_or_else(
+            || {
+                StreamingError::Completion(CompletionError::ProviderError(format!(
+                    "per-turn provider-input compaction failed: {error:#}"
+                )))
+            },
+            |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),
+        )
+    })?;
+    let mut compacted = outcome.messages;
     let compacted_prompt = compacted.pop().ok_or_else(|| {
         StreamingError::Completion(CompletionError::ProviderError(
             "per-turn provider-input compaction returned no prompt".to_string(),
@@ -1534,6 +1568,8 @@ async fn build_budgeted_request<M: CompletionModel>(
     })?;
     *history = compacted;
     *new_messages = vec![compacted_prompt.clone()];
+    reduction_chain_keys.push(outcome.reduction_key.clone());
+    active_reduction_keys.push(outcome.reduction_key);
 
     let mut rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
     clamp_request_output_budget(&mut rebuilt, config);

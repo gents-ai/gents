@@ -2868,10 +2868,7 @@ mod tests {
                 document.get("temperature").and_then(Value::as_f64),
                 Some(1.0)
             );
-            assert_eq!(
-                document.get("top_p").and_then(Value::as_f64),
-                Some(0.95)
-            );
+            assert_eq!(document.get("top_p").and_then(Value::as_f64), Some(0.95));
             assert_eq!(
                 document
                     .get("deadline_duration_secs")

@@ -267,6 +267,37 @@ pub(super) async fn load_timeline_compactions_for_session(
     load_rows(access, "CompactionEntry", &query).await
 }
 
+pub(super) async fn load_timeline_provider_context_reductions_for_request(
+    access: &ConfigAccess,
+    request_doc_id: &str,
+) -> Result<Vec<TimelineProviderContextReductionRow>> {
+    let query = format!(
+        r#"{{
+            ProviderContextReduction(
+                filter: {{ request_doc_id: {{ _eq: "{}" }} }},
+                order: {{ reduction_index: ASC }}
+            ) {{
+                _docID
+                reduction_key
+                request_id
+                request_doc_id
+                session_id
+                reduction_index
+                turn_index
+                parent_reduction_key
+                producer_call_id
+                producer_call_seq
+                messages_compacted
+                original_tokens
+                compacted_tokens
+                created_at
+            }}
+        }}"#,
+        escape_graphql_string(request_doc_id)
+    );
+    load_rows(access, "ProviderContextReduction", &query).await
+}
+
 pub(super) async fn load_timeline_rendered_request_refs(
     access: &ConfigAccess,
     request_doc_id: &str,

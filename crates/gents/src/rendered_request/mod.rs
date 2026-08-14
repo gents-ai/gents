@@ -8,10 +8,10 @@
 //!   `RenderedRequest` row needs. It is built at the **transport seam** — the
 //!   last `HttpClientExt` before the network client — and handed to the capture
 //!   sink, which must succeed before the body is forwarded.
-//! * `AssemblyTrace` is the *leak set*. Prompt assembly reads durable
-//!   documents, but four of its inputs are created in memory and never written
-//!   anywhere a reconstructor could find them. Those four are enumerated on
-//!   `AssemblyTrace` with the citation that proves each one is lost.
+//! * `AssemblyTrace` is the reconstruction manifest. It records the effective
+//!   native messages plus the ordered `ProviderContextReduction` keys that
+//!   produced a sticky request-local projection. `RenderedRequest` remains the
+//!   exact provider-wire oracle.
 //!
 //! ## Why the transport seam and not the assembled request
 //!

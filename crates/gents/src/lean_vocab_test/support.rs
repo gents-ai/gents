@@ -154,6 +154,8 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     #[serde(default)]
+    pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
+    #[serde(default)]
     pub(crate) rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     #[serde(default)]
     pub(crate) capture_scope_cases: Vec<LeanCaptureScopeCase>,
@@ -375,6 +377,8 @@ mod codex_shim;
 mod command_identity_queue;
 #[path = "composed_invariants.rs"]
 mod composed_invariants;
+#[path = "durable_reduction.rs"]
+mod durable_reduction;
 #[path = "event_delivery.rs"]
 mod event_delivery;
 #[path = "prompt_assembly.rs"]
@@ -395,6 +399,7 @@ pub(crate) use client_session::*;
 pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
 pub(crate) use composed_invariants::*;
+pub(crate) use durable_reduction::*;
 pub(crate) use event_delivery::*;
 pub(crate) use prompt_assembly::*;
 pub(crate) use rendered_capture::*;
@@ -892,6 +897,10 @@ pub(crate) fn lean_prompt_assembly_turn_budget_cases() -> &'static [LeanPromptAs
 
 pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
     &lean_contract_snapshot().rendered_capture_cases
+}
+
+pub(crate) fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {
+    &lean_contract_snapshot().durable_reduction_cases
 }
 
 pub(crate) fn lean_rendered_capture_key_cases() -> &'static [LeanRenderedCaptureKeyCase] {

@@ -14,8 +14,8 @@ use crate::graphql::escape_graphql_string;
 use crate::run_timeline::{
     build_run_timeline, RunTimeline, RunTimelineRows, TimelineCompactionRow,
     TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow,
-    TimelineRenderedRequestRef, TimelineRenderedRequestRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    TimelineProviderContextReductionRow, TimelineRenderedRequestRef, TimelineRenderedRequestRow,
+    TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
 };
 use gents_protocol::graphql::graphql_rows_from_response;
 
@@ -97,9 +97,13 @@ pub async fn load_run_timeline_rows(
         responses.extend(load_timeline_responses_for_request(access, request_doc_id).await?);
     }
     let mut inference_calls = Vec::new();
+    let mut provider_context_reductions = Vec::new();
     for request_doc_id in timeline_request_doc_ids(&requests)? {
         inference_calls
             .extend(load_timeline_inference_calls_for_request(access, &request_doc_id).await?);
+        provider_context_reductions.extend(
+            load_timeline_provider_context_reductions_for_request(access, &request_doc_id).await?,
+        );
     }
     let mut rendered_requests = Vec::new();
     for session_id in &session_ids {
@@ -158,6 +162,13 @@ pub async fn load_run_timeline_rows(
                     && nonempty(row.request_doc_id.as_deref()).is_none()
             })
             .count()
+        + provider_context_reductions
+            .iter()
+            .filter(|row| {
+                in_scope_ids.contains(row.request_id.as_str())
+                    && nonempty(Some(row.request_doc_id.as_str())).is_none()
+            })
+            .count()
         + rendered_requests
             .iter()
             .filter(|row| {
@@ -207,6 +218,13 @@ pub async fn load_run_timeline_rows(
             row.request_doc_id.as_deref(),
         )
     });
+    provider_context_reductions.retain(|row| {
+        request_scoped_row_is_in_timeline(
+            &request_bindings,
+            Some(row.request_id.as_str()),
+            Some(row.request_doc_id.as_str()),
+        )
+    });
     rendered_requests.retain(|row| {
         request_scoped_row_is_in_timeline(
             &request_bindings,
@@ -221,6 +239,7 @@ pub async fn load_run_timeline_rows(
         &responses,
         &inference_calls,
         &compactions,
+        &provider_context_reductions,
         &rendered_requests,
     )?;
     validate_child_tool_bridges(&request, &requests, &tool_calls)?;
@@ -243,6 +262,7 @@ pub async fn load_run_timeline_rows(
         tool_calls,
         inference_calls,
         compactions,
+        provider_context_reductions,
         responses,
         rendered_requests,
         rendered_request_refs,
@@ -258,10 +278,10 @@ mod validation;
 use context_loaders::{load_timeline_conversation, load_timeline_session};
 use event_loaders::{
     load_timeline_compactions_for_session, load_timeline_inference_calls_for_request,
-    load_timeline_messages_for_session, load_timeline_rendered_request_refs,
-    load_timeline_rendered_requests_for_request, load_timeline_rendered_requests_for_session,
-    load_timeline_responses_for_request, load_timeline_responses_for_session,
-    load_timeline_tool_calls_for_session,
+    load_timeline_messages_for_session, load_timeline_provider_context_reductions_for_request,
+    load_timeline_rendered_request_refs, load_timeline_rendered_requests_for_request,
+    load_timeline_rendered_requests_for_session, load_timeline_responses_for_request,
+    load_timeline_responses_for_session, load_timeline_tool_calls_for_session,
 };
 use query_helpers::load_rows;
 use request_loaders::{
