@@ -123,23 +123,24 @@ async fn advertised_name_and_required_array_come_from_decl() {
     assert!(props.contains_key("status"));
 }
 
-/// A declaration with an empty collection is a config/programming error and must
-/// not silently produce a tool that writes to `""`.
 #[tokio::test]
-async fn rejects_write_with_empty_collection_decl() {
+async fn runtime_backstop_rejects_invalid_graphql_identifiers() {
     let node = node_with_actionrequest().await;
-    let bad = WriteToolDecl {
-        tool_name: "broken".into(),
-        collection: "".into(),
-        description: "no collection".into(),
-        fields: vec![],
-    };
-    let tool = BoundedWriteTool::new(node, bad);
-    assert!(
-        Tool::call(&tool, serde_json::from_value(json!({})).unwrap())
-            .await
-            .is_err()
-    );
+    let mut empty_collection = decl();
+    empty_collection.collection.clear();
+    let mut bad_collection = decl();
+    bad_collection.collection = "ActionRequest) { _docID } mutation {".into();
+    let mut bad_field = decl();
+    bad_field.fields[0].name = "drift_sig: \"injected\"".into();
+
+    for declaration in [empty_collection, bad_collection, bad_field] {
+        let result = Tool::call(
+            &BoundedWriteTool::new(Arc::clone(&node), declaration),
+            serde_json::from_value(json!({ "drift_sig": "a", "summary": "b" })).unwrap(),
+        )
+        .await;
+        assert!(result.is_err(), "runtime must reject invalid identifiers");
+    }
 }
 
 #[tokio::test]

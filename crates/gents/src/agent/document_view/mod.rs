@@ -340,12 +340,9 @@ pub(crate) fn merge_write_tools_with_surfaces(
             );
         }
         for entry in surface.entries.as_deref().unwrap_or(&[]) {
-            if !entry.is_well_formed() {
-                bail!(
-                    "DatastoreToolSurface {} has a malformed entry (tool_name/collection required)",
-                    surface_id
-                );
-            }
+            entry.validate().map_err(|error| {
+                anyhow::anyhow!("DatastoreToolSurface {surface_id} has a malformed entry: {error}")
+            })?;
             if !seen.insert(entry.tool_name.clone()) {
                 bail!(
                     "duplicate write tool_name {:?} after expanding DatastoreToolSurface {} for ToolSelection {}",

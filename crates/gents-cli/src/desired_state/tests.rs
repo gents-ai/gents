@@ -1753,26 +1753,28 @@ fn write_tool_storage_entry(decl: &gents::WriteToolDecl) -> String {
 }
 
 #[test]
-fn validate_rejects_write_tool_with_empty_collection() {
+fn validate_rejects_write_tool_with_invalid_collection_identifier() {
     use gents::WriteToolDecl;
-    let mut manifest = manifest_with_default_behavior();
-    let mut sel = sample_tool_selection("agent-tools");
-    sel.agent_did = "did:test:test".to_string();
-    sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
-        tool_name: "request_action".to_string(),
-        collection: String::new(),
-        description: String::new(),
-        fields: Vec::new(),
-    })];
-    manifest.tool_selections.push(sel);
+    for collection in ["", "ActionRequest) { _docID } mutation {"] {
+        let mut manifest = manifest_with_default_behavior();
+        let mut sel = sample_tool_selection("agent-tools");
+        sel.agent_did = "did:test:test".to_string();
+        sel.write_tools = vec![write_tool_storage_entry(&WriteToolDecl {
+            tool_name: "request_action".to_string(),
+            collection: collection.to_string(),
+            description: String::new(),
+            fields: Vec::new(),
+        })];
+        manifest.tool_selections.push(sel);
 
-    let errors = validation_errors(&manifest);
-    assert!(
-        errors.iter().any(|msg| msg.contains("write_tools")
-            && msg.contains("agent-tools")
-            && msg.contains("collection")),
-        "expected empty-collection write_tools rejection, got {errors:?}"
-    );
+        let errors = validation_errors(&manifest);
+        assert!(
+            errors.iter().any(|msg| msg.contains("write_tools")
+                && msg.contains("agent-tools")
+                && msg.contains("collection")),
+            "expected invalid-collection write_tools rejection, got {errors:?}"
+        );
+    }
 }
 
 #[test]

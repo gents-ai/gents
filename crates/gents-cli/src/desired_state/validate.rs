@@ -1190,6 +1190,13 @@ pub(crate) async fn validate_manifest_against_live(
         if source_collection.is_empty() || trigger_id.is_empty() {
             continue;
         }
+        if let Err(error) = gents::graphql::validate_collection_identifier(source_collection) {
+            errors.push(format!(
+                "event_trigger {} has invalid source_collection {:?}: {}",
+                trigger_id, trig.source_collection, error
+            ));
+            continue;
+        }
 
         if let Some(filter) = trig.filter.as_deref().map(str::trim) {
             if !filter.is_empty() {
@@ -1237,7 +1244,7 @@ pub(crate) async fn validate_manifest_against_live(
 
         let introspect = format!(
             r#"query {{ __type(name: "{name}") {{ fields {{ name type {{ name kind }} }} }} }}"#,
-            name = source_collection,
+            name = gents::graphql::escape_graphql_string(source_collection),
         );
         let response = match access.execute(&introspect).await {
             Ok(response) => response,
@@ -1539,10 +1546,9 @@ fn validate_datastore_surface_links(
         for entry in &surface.entries {
             match serde_json::from_str::<WriteToolDecl>(entry) {
                 Ok(decl) => {
-                    if !decl.is_well_formed() {
+                    if let Err(error) = decl.validate() {
                         errors.push(format!(
-                            "DatastoreToolSurface {} has a malformed entry (tool_name/collection required)",
-                            surface_id
+                            "DatastoreToolSurface {surface_id} has a malformed entry: {error}"
                         ));
                         continue;
                     }
@@ -1595,14 +1601,9 @@ fn validate_write_tools(
                 continue;
             }
         };
-        if decl.tool_name.trim().is_empty() {
+        if let Err(error) = decl.validate() {
             errors.push(format!(
-                "tool selection {selection_id} write_tools entry {entry:?} must have a non-empty tool_name"
-            ));
-        }
-        if decl.collection.trim().is_empty() {
-            errors.push(format!(
-                "tool selection {selection_id} write_tools tool {:?} must have a non-empty collection",
+                "tool selection {selection_id} write_tools entry for tool {:?} is malformed: {error}",
                 decl.tool_name
             ));
         }
@@ -1624,12 +1625,7 @@ fn validate_write_tools(
         }
         let mut seen_field_names: HashSet<String> = HashSet::new();
         for field in &decl.fields {
-            if field.name.trim().is_empty() {
-                errors.push(format!(
-                    "tool selection {selection_id} write_tools tool {:?} has a field with an empty name",
-                    decl.tool_name
-                ));
-            } else if !seen_field_names.insert(field.name.trim().to_string()) {
+            if !seen_field_names.insert(field.name.trim().to_string()) {
                 errors.push(format!(
                     "tool selection {selection_id} write_tools tool {:?} has a duplicate field name {:?}",
                     decl.tool_name,
@@ -2012,6 +2008,48 @@ mod live_tests {
             schedules: Vec::new(),
             event_triggers: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn live_validate_rejects_invalid_event_trigger_collection_identifier() -> Result<()> {
+        use super::super::DesiredEventTrigger;
+
+        let tempdir = tempfile::tempdir()?;
+        let node = EmbeddedNode::builder()
+            .data_path(tempdir.path().join("data"))
+            .with_storage_backend(StorageBackend::Lark)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
+
+        let mut manifest = manifest_with_subagent_targets(Vec::new());
+        manifest.event_triggers.push(DesiredEventTrigger {
+            trigger_id: "malformed-source".to_string(),
+            task_id: "unused-task".to_string(),
+            source_collection: "AgentMessage) { _docID } mutation {".to_string(),
+            event_kind: "created".to_string(),
+            filter: Some("{}".to_string()),
+            correlation_field: None,
+            fire_mode: None,
+            expected_count: None,
+            expected_count_field: None,
+            group_timeout_secs: None,
+            group_min_count: None,
+            enabled: true,
+            concurrency: "serial".to_string(),
+        });
+
+        let errors = validate_manifest_against_live(&manifest, &access).await?;
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("malformed-source")
+                    && error.contains("invalid source_collection")
+                    && error.contains("invalid identifier")
+            }),
+            "expected direct live-validation identifier rejection, got {errors:?}"
+        );
+        Ok(())
     }
 
     #[tokio::test]
