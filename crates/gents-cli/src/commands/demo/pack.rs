@@ -2824,6 +2824,14 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        let recon_prompt = std::fs::read_to_string(
+            pack.join("tasks")
+                .join("review-recon-task")
+                .join("prompt.md"),
+        )
+        .expect("review recon prompt should load");
+        assert!(recon_prompt.contains("You are not a scanner"));
+        assert!(recon_prompt.contains("Never repeat a successful repository command"));
         for profile in [
             "review-recon-profile",
             "review-scan-profile",
