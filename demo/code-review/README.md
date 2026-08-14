@@ -68,6 +68,10 @@ strip-then-summarize compaction with access to its live context budget. Set
 `REVIEW_CONTEXT_WINDOW` to the serving endpoint's advertised window and
 `REVIEW_MAX_OUTPUT_TOKENS` to the desired per-turn output reserve. Recon is
 instructed to release parallel work promptly, but it has no tool-call budget.
+Scheduled inference retries transport failures for the full 24-hour review
+window by default, using a 5s/30s/120s backoff ladder with the final delay
+repeated. This lets a retained review survive a serving-process restart instead
+of losing an otherwise complete fan-out.
 
 The review policy is intentionally Gents-specific. It follows the formal-model
 and conformance boundary for modeled semantics, treats DefraDB as the complete

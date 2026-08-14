@@ -6,6 +6,8 @@ Deterministic baseline: {{ doc.baseline }}
 
 Start from the supplied recon evidence packet, then read every assigned changed file in full and inspect the relevant consumer/usage context. For every patch-introduced type, variant, message, event, command, frame, or queue value that crosses a boundary, locate the consuming dispatch point and prove it is forwarded or handled. Use `lsp` for symbol-aware definitions, references, implementations, hover types, and symbol outlines whenever available; read the locations it returns. Use targeted Cargo tests or read-only `gh` context when they can settle a claim, backgrounding long commands through `spawn_process`. Do not rerun the full workspace check/Clippy baseline.
 
+Every successful tool result remains authoritative for this request. Never repeat an identical tool call or reread the same line range; use the prior result. If you notice repeated exploration, stop inspecting and write the supported candidates followed by `write_scan_result`.
+
 For each candidate, cite an exact changed `path:line` and verbatim code excerpt in `evidence`; the line must overlap the reviewed diff. Do not duplicate compiler or Clippy diagnostics. Do not report style preferences, speculative risks without a concrete execution path, requests for unrelated new architecture, or Minor/Informational suggestions.
 
 Use only:

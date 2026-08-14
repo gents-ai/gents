@@ -2832,6 +2832,13 @@ mod tests {
         .expect("review recon prompt should load");
         assert!(recon_prompt.contains("You are not a scanner"));
         assert!(recon_prompt.contains("Never repeat a successful repository command"));
+        let scan_prompt = std::fs::read_to_string(
+            pack.join("tasks")
+                .join("review-scan-task")
+                .join("prompt.md"),
+        )
+        .expect("review scan prompt should load");
+        assert!(scan_prompt.contains("Never repeat an identical tool call"));
         for profile in [
             "review-recon-profile",
             "review-scan-profile",
@@ -2854,6 +2861,16 @@ mod tests {
                     .get("deadline_duration_secs")
                     .and_then(Value::as_u64),
                 Some(86_400)
+            );
+            assert_eq!(
+                document
+                    .get("stream_liveness_timeout_secs")
+                    .and_then(Value::as_u64),
+                Some(86_400)
+            );
+            assert_eq!(
+                document.get("retry_max_transport").and_then(Value::as_u64),
+                Some(720)
             );
         }
     }
