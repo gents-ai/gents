@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::DateTime;
 use gents_protocol::rendered_request::{
@@ -21,6 +21,8 @@ pub struct RunTimelineRows {
     pub tool_calls: Vec<TimelineToolCallRow>,
     #[serde(default)]
     pub tool_approvals: Vec<TimelineToolApprovalRow>,
+    #[serde(default)]
+    pub goal_versions: Vec<TimelineGoalVersionRow>,
     #[serde(default)]
     pub inference_calls: Vec<TimelineInferenceCallRow>,
     #[serde(default)]
@@ -277,6 +279,61 @@ pub struct TimelineToolApprovalRow {
     pub created_at: Option<String>,
 }
 
+/// One content-addressed historical `Goal` document version reconstructed
+/// through DefraDB's `_commits` + CID query boundary.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineGoalVersionRow {
+    #[serde(default, skip_serializing)]
+    pub goal_doc_id: String,
+    #[serde(default)]
+    pub goal_id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub agent_did: String,
+    #[serde(default)]
+    pub commit_cid: String,
+    #[serde(default)]
+    pub height: i64,
+    #[serde(default)]
+    pub parent_commit_cids: Vec<String>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub consecutive_blocked_audits: i64,
+    #[serde(default)]
+    pub wrapup_requested: bool,
+    #[serde(default)]
+    pub wrapup_completed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<i64>,
+    #[serde(default)]
+    pub tokens_used: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_blocked_request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_blocked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+impl TimelineGoalVersionRow {
+    fn semantic_state(&self) -> TimelineGoalState {
+        TimelineGoalState {
+            status: self.status.clone(),
+            consecutive_blocked_audits: self.consecutive_blocked_audits,
+            wrapup_requested: self.wrapup_requested,
+            wrapup_completed: self.wrapup_completed,
+        }
+    }
+}
+
 /// One `RenderedRequest` capture row, as the timeline reads it.
 ///
 /// Deliberately has **no `request_json` field**: the fetch layer never selects
@@ -467,6 +524,7 @@ pub enum RunTimelineEvent {
     ToolCall(TimelineToolCallEvent),
     ToolApproval(TimelineToolApprovalEvent),
     Response(TimelineResponseEvent),
+    GoalTransition(TimelineGoalTransitionEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -623,6 +681,48 @@ pub struct TimelineToolApprovalEvent {
     pub approver_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+}
+
+/// The proven state vocabulary recorded at one durable Goal version.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineGoalState {
+    pub status: String,
+    pub consecutive_blocked_audits: i64,
+    pub wrapup_requested: bool,
+    pub wrapup_completed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineGoalParentState {
+    pub commit_cid: String,
+    pub state: TimelineGoalState,
+}
+
+/// A semantic Goal transition derived from DefraDB's native version DAG.
+/// Multiple parents are preserved rather than flattened into invented order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineGoalTransitionEvent {
+    pub goal_id: String,
+    pub session_id: String,
+    pub agent_did: String,
+    pub commit_cid: String,
+    pub height: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<TimelineGoalParentState>,
+    pub state: TimelineGoalState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<i64>,
+    pub tokens_used: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_blocked_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_blocked_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_failure: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_evidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
 }
@@ -885,6 +985,11 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         }
     }
 
+    events.extend(goal_transition_events(
+        &rows.goal_versions,
+        session_id.as_deref(),
+    ));
+
     for response in &rows.responses {
         if included_request_ids.contains(&response.request_id) {
             events.push(RunTimelineEvent::Response(TimelineResponseEvent {
@@ -937,6 +1042,73 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         background_completion_diagnostics_error: None,
         events,
     }
+}
+
+fn goal_transition_events(
+    versions: &[TimelineGoalVersionRow],
+    root_session_id: Option<&str>,
+) -> Vec<RunTimelineEvent> {
+    let versions_by_cid = versions
+        .iter()
+        .map(|version| (version.commit_cid.as_str(), version))
+        .collect::<BTreeMap<_, _>>();
+    let mut ordered = versions.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        (&left.goal_doc_id, left.height, &left.commit_cid).cmp(&(
+            &right.goal_doc_id,
+            right.height,
+            &right.commit_cid,
+        ))
+    });
+
+    ordered
+        .into_iter()
+        .filter(|version| Some(version.session_id.as_str()) == root_session_id)
+        .filter_map(|version| {
+            let state = version.semantic_state();
+            let mut parents = version
+                .parent_commit_cids
+                .iter()
+                .filter_map(|cid| {
+                    let parent = versions_by_cid.get(cid.as_str())?;
+                    (parent.goal_doc_id == version.goal_doc_id).then(|| TimelineGoalParentState {
+                        commit_cid: cid.clone(),
+                        state: parent.semantic_state(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            parents.sort_by(|left, right| left.commit_cid.cmp(&right.commit_cid));
+
+            // Goal documents also receive operational updates for usage and
+            // continuation claims. Only emit creation or a change to the Lean
+            // Goal state; the native commit CID remains the durable witness.
+            if !parents.is_empty() && parents.iter().all(|parent| parent.state == state) {
+                return None;
+            }
+
+            Some(RunTimelineEvent::GoalTransition(
+                TimelineGoalTransitionEvent {
+                    goal_id: version.goal_id.clone(),
+                    session_id: version.session_id.clone(),
+                    agent_did: version.agent_did.clone(),
+                    commit_cid: version.commit_cid.clone(),
+                    height: version.height,
+                    parents,
+                    state,
+                    token_budget: version.token_budget,
+                    tokens_used: version.tokens_used,
+                    last_blocked_request_id: version.last_blocked_request_id.clone(),
+                    last_blocked_reason: version.last_blocked_reason.clone(),
+                    last_failure: version.last_failure.clone(),
+                    completion_evidence: version.completion_evidence.clone(),
+                    timestamp: first_owned([
+                        version.updated_at.as_deref(),
+                        version.created_at.as_deref(),
+                    ]),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn child_bridge_is_corroborated(
@@ -1272,7 +1444,7 @@ fn should_include_event(
 /// unserialized internals and only break same-millisecond ties: request 0,
 /// rendered_request 1 (persist-before-send puts the capture before the bytes
 /// leave), inference_call 2, compaction/message 3, tool_call 4, approval 5,
-/// response 6.
+/// response 6, goal transition 7.
 fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
     match event {
         RunTimelineEvent::Request(event) => (
@@ -1357,6 +1529,16 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
             event.materialized_message_sequence.unwrap_or(i64::MAX),
             event.request_id.clone(),
         ),
+        RunTimelineEvent::GoalTransition(event) => (
+            event
+                .timestamp
+                .as_deref()
+                .and_then(timestamp_millis)
+                .unwrap_or(i64::MIN),
+            7,
+            event.height,
+            event.commit_cid.clone(),
+        ),
     }
 }
 
@@ -1403,6 +1585,75 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn goal_history_emits_semantic_changes_and_preserves_native_parent_cids() {
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "request-goal".to_string(),
+                session_id: Some("session-goal".to_string()),
+                ..Default::default()
+            },
+            goal_versions: vec![
+                TimelineGoalVersionRow {
+                    goal_doc_id: "doc-goal".to_string(),
+                    goal_id: "goal-1".to_string(),
+                    session_id: "session-goal".to_string(),
+                    agent_did: "did:test:agent".to_string(),
+                    commit_cid: "cid-1".to_string(),
+                    height: 1,
+                    status: "active".to_string(),
+                    created_at: Some("2026-08-14T12:00:00Z".to_string()),
+                    updated_at: Some("2026-08-14T12:00:00Z".to_string()),
+                    ..Default::default()
+                },
+                TimelineGoalVersionRow {
+                    goal_doc_id: "doc-goal".to_string(),
+                    goal_id: "goal-1".to_string(),
+                    session_id: "session-goal".to_string(),
+                    agent_did: "did:test:agent".to_string(),
+                    commit_cid: "cid-2".to_string(),
+                    height: 2,
+                    parent_commit_cids: vec!["cid-1".to_string()],
+                    status: "active".to_string(),
+                    tokens_used: 10,
+                    updated_at: Some("2026-08-14T12:00:01Z".to_string()),
+                    ..Default::default()
+                },
+                TimelineGoalVersionRow {
+                    goal_doc_id: "doc-goal".to_string(),
+                    goal_id: "goal-1".to_string(),
+                    session_id: "session-goal".to_string(),
+                    agent_did: "did:test:agent".to_string(),
+                    commit_cid: "cid-3".to_string(),
+                    height: 3,
+                    parent_commit_cids: vec!["cid-2".to_string()],
+                    status: "paused".to_string(),
+                    tokens_used: 10,
+                    updated_at: Some("2026-08-14T12:00:02Z".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        let transitions = timeline
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                RunTimelineEvent::GoalTransition(event) => Some(event),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(transitions.len(), 2, "usage-only commit must be omitted");
+        assert_eq!(transitions[0].commit_cid, "cid-1");
+        assert!(transitions[0].parents.is_empty());
+        assert_eq!(transitions[1].commit_cid, "cid-3");
+        assert_eq!(transitions[1].state.status, "paused");
+        assert_eq!(transitions[1].parents.len(), 1);
+        assert_eq!(transitions[1].parents[0].commit_cid, "cid-2");
+        assert_eq!(transitions[1].parents[0].state.status, "active");
+    }
 
     #[test]
     fn timeline_projects_exact_approval_and_complete_inference_provenance() {

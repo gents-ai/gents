@@ -13,7 +13,7 @@ use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::run_timeline::{
     build_run_timeline, RunTimeline, RunTimelineRows, TimelineCompactionRow,
-    TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow,
+    TimelineConversationRow, TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
     TimelineRenderedRequestRef, TimelineRenderedRequestRow, TimelineRequestRow,
     TimelineResponseRow, TimelineSessionRow, TimelineToolApprovalRow, TimelineToolCallRow,
 };
@@ -93,6 +93,12 @@ pub async fn load_run_timeline_rows(
         responses.extend(load_timeline_responses_for_session(access, session_id).await?);
         compactions.extend(load_timeline_compactions_for_session(access, session_id).await?);
     }
+    // Goal transitions describe the root run's session-scoped objective. Child
+    // sessions have independent goals and are not projected into this timeline.
+    let goal_versions = match root_session_id.as_deref() {
+        Some(session_id) => load_timeline_goal_versions_for_session(access, session_id).await?,
+        None => Vec::new(),
+    };
     if session_ids.is_empty() || root_session_id.is_none() {
         responses.extend(load_timeline_responses_for_request(access, request_doc_id).await?);
     }
@@ -252,6 +258,7 @@ pub async fn load_run_timeline_rows(
         messages,
         tool_calls,
         tool_approvals,
+        goal_versions,
         inference_calls,
         compactions,
         responses,
@@ -262,6 +269,7 @@ pub async fn load_run_timeline_rows(
 
 mod context_loaders;
 mod event_loaders;
+mod goal_history;
 mod query_helpers;
 mod request_loaders;
 mod validation;
@@ -274,6 +282,7 @@ use event_loaders::{
     load_timeline_responses_for_request, load_timeline_responses_for_session,
     load_timeline_tool_approvals_for_call, load_timeline_tool_calls_for_session,
 };
+use goal_history::load_timeline_goal_versions_for_session;
 use query_helpers::load_rows;
 use request_loaders::{
     load_timeline_child_requests, load_timeline_request_by_id, load_timeline_requests_for_session,
@@ -441,6 +450,92 @@ mod tests {
         assert_eq!(
             inference.backend_config_fingerprint.as_deref(),
             Some("sha256:abc")
+        );
+
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn fetches_native_goal_history_without_projecting_usage_only_commits() {
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_schemas(node.as_ref()).await.unwrap();
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_AgentSession(input: {
+                        session_id: "session-goal-history"
+                        agent_name: "agent"
+                        agent_did: "did:test:agent"
+                        behavior_id: "general"
+                        started: "2026-08-14T12:00:00Z"
+                        status: "active"
+                    }) { _docID }
+                    create_AgentRequest(input: {
+                        request_id: "request-goal-history"
+                        agent_did: "did:test:agent"
+                        behavior_id: "general"
+                        session_id: "session-goal-history"
+                        content: "ship the timeline"
+                        status: "completed"
+                        lifecycle_state: "completed"
+                        created_at: "2026-08-14T12:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "seed goal run: {:?}",
+            response.errors
+        );
+
+        let active = crate::goal::set_goal(
+            node.as_ref(),
+            "did:test:agent",
+            "session-goal-history",
+            Some("ship the timeline"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .expect("create goal");
+        crate::goal::refresh_goal_usage(node.as_ref(), &active)
+            .await
+            .expect("refresh usage");
+        crate::goal::set_goal(
+            node.as_ref(),
+            "did:test:agent",
+            "session-goal-history",
+            None,
+            Some(crate::goal::GoalStatus::Paused),
+            None,
+        )
+        .await
+        .expect("pause goal");
+
+        let access = ConfigAccess::Local(node.clone());
+        let timeline = load_run_timeline(&access, "request-goal-history")
+            .await
+            .expect("load timeline");
+        let transitions = timeline
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                crate::run_timeline::RunTimelineEvent::GoalTransition(event) => Some(event),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(transitions.len(), 2, "usage-only commit must be omitted");
+        assert_eq!(transitions[0].state.status, "active");
+        assert_eq!(transitions[1].state.status, "paused");
+        assert!(!transitions[0].commit_cid.is_empty());
+        assert!(!transitions[1].commit_cid.is_empty());
+        assert_eq!(transitions[1].parents.len(), 1);
+        assert_eq!(transitions[1].parents[0].state.status, "active");
+        assert_ne!(
+            transitions[1].parents[0].commit_cid, transitions[0].commit_cid,
+            "the semantic event must preserve its immediate native usage-only parent",
         );
 
         node.shutdown().await;
