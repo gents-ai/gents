@@ -28,7 +28,8 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 pub use gents_protocol::graphql::{
-    validate_collection_identifier, validate_graphql_filter_fragment, validate_graphql_name,
+    escape_graphql_string, validate_collection_identifier, validate_graphql_filter_fragment,
+    validate_graphql_name,
 };
 
 pub const DEFRA_DB_CONFLICT_MAX_RETRIES: u32 = 3;
@@ -459,14 +460,6 @@ pub fn defradb_conflict_retry_backoff(retry_index: u32) -> Duration {
     Duration::from_millis(
         DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS.saturating_mul(1u64 << retry_index.min(10)),
     )
-}
-
-pub fn escape_graphql_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
 }
 
 pub fn response_has_documents(value: &serde_json::Value) -> bool {

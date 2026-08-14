@@ -83,16 +83,9 @@ impl BoundedWriteTool {
     }
 
     fn ensure_well_formed(&self) -> Result<()> {
-        if self.decl.tool_name.trim().is_empty() {
-            bail!("bounded write tool declaration has an empty tool_name");
-        }
-        if self.decl.collection.trim().is_empty() {
-            bail!(
-                "bounded write tool {:?} has an empty collection and cannot write",
-                self.decl.tool_name
-            );
-        }
-        Ok(())
+        self.decl
+            .validate()
+            .map_err(|error| anyhow!("invalid bounded write tool declaration: {error}"))
     }
 
     fn build_mutation(&self, args: &Map<String, Value>) -> Result<String> {
