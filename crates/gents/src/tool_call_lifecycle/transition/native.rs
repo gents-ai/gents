@@ -9,6 +9,18 @@ impl ToolCallLifecycle {
         crate::session::request_doc_id_create_field(self.request_doc_id.as_deref())
     }
 
+    fn selected_tool_fields_fragment(&self) -> String {
+        match self.selected_tool_identity.as_ref() {
+            Some(selected) => format!(
+                "selected_service_id: \"{}\",\n                    selected_tool_name: \"{}\",",
+                escape_graphql_string(&selected.service_id),
+                escape_graphql_string(&selected.tool_name),
+            ),
+            _ => "selected_service_id: null,\n                    selected_tool_name: null,"
+                .to_string(),
+        }
+    }
+
     /// GraphQL fragment for the durable workflow-group projection fields,
     /// emitted on every create path so a bridge stays projectable by
     /// `workflow_group_id` regardless of which transition created its row.
@@ -91,6 +103,7 @@ impl ToolCallLifecycle {
         let requester_did_field = self.requester_did_fragment();
         let request_doc_id_field = self.request_doc_id_fragment();
         let workflow_fields = self.workflow_fields_fragment();
+        let selected_tool_fields = self.selected_tool_fields_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -112,8 +125,7 @@ impl ToolCallLifecycle {
                     deadline_at: "{deadline_at_str}",
                     {bridge_fields}
                     {workflow_fields}
-                    selected_service_id: null,
-                    selected_tool_name: null,
+                    {selected_tool_fields}
                     tool_failure_class: null,
                     latency_ms: null
                 }}) {{ _docID }}
@@ -329,6 +341,7 @@ impl ToolCallLifecycle {
         let requester_did_field = self.requester_did_fragment();
         let request_doc_id_field = self.request_doc_id_fragment();
         let workflow_fields = self.workflow_fields_fragment();
+        let selected_tool_fields = self.selected_tool_fields_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -352,6 +365,7 @@ impl ToolCallLifecycle {
                     tool_failure_class: "{failure_class_str}",
                     {command_denial_fields}
                     {workflow_fields}
+                    {selected_tool_fields}
                     latency_ms: 0
                 }}) {{ _docID }}
             }}"#
@@ -468,6 +482,7 @@ impl ToolCallLifecycle {
         let requester_did_field = self.requester_did_fragment();
         let request_doc_id_field = self.request_doc_id_fragment();
         let workflow_fields = self.workflow_fields_fragment();
+        let selected_tool_fields = self.selected_tool_fields_fragment();
 
         let escaped_result = escape_graphql_string("tool call cancelled before dispatch");
 
@@ -492,6 +507,7 @@ impl ToolCallLifecycle {
                     deadline_at: "{deadline_at_str}",
                     completed_at: "{started_at_str}",
                     {workflow_fields}
+                    {selected_tool_fields}
                     latency_ms: 0
                 }}) {{ _docID }}
             }}"#
@@ -531,6 +547,7 @@ impl ToolCallLifecycle {
         let requester_did_field = self.requester_did_fragment();
         let request_doc_id_field = self.request_doc_id_fragment();
         let workflow_fields = self.workflow_fields_fragment();
+        let selected_tool_fields = self.selected_tool_fields_fragment();
 
         let mutation = format!(
             r#"mutation {{
@@ -551,8 +568,7 @@ impl ToolCallLifecycle {
                     started_at: null,
                     deadline_at: "{deadline_at_str}",
                     {workflow_fields}
-                    selected_service_id: null,
-                    selected_tool_name: null,
+                    {selected_tool_fields}
                     tool_failure_class: null,
                     latency_ms: null
                 }}) {{ _docID }}

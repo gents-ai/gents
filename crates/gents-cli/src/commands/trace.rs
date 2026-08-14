@@ -19,7 +19,8 @@ use gents::run_timeline::{
 #[cfg(test)]
 use gents::run_timeline::{
     TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow,
-    TimelineRenderedRequestRef, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    TimelineRenderedRequestRef, TimelineResponseRow, TimelineSessionRow, TimelineToolApprovalRow,
+    TimelineToolCallRow,
 };
 use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
 use gents::trace_export::{
@@ -365,6 +366,7 @@ const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
     "AgentToolCall",
+    "AgentToolApproval",
     "AgentResponse",
     "InferenceCall",
     "CompactionEntry",
@@ -674,6 +676,27 @@ async fn apply_projection_acp_read_filter(
             filtered_tool_calls.push(tool_call);
         }
     }
+    let allowed_tool_call_doc_ids = filtered_tool_calls
+        .iter()
+        .filter_map(|tool_call| tool_call.doc_id.as_deref())
+        .collect::<BTreeSet<_>>();
+    let mut filtered_tool_approvals = Vec::new();
+    for approval in rows.tool_approvals {
+        if !allowed_tool_call_doc_ids.contains(approval.tool_call_doc_id.as_str()) {
+            continue;
+        }
+        let doc_id = required_doc_id(
+            "AgentToolApproval",
+            approval.approval_id.as_str(),
+            &approval.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("AgentToolApproval"), doc_id)
+            .await?
+        {
+            filtered_tool_approvals.push(approval);
+        }
+    }
 
     let mut filtered_responses = Vec::new();
     for response in rows.responses {
@@ -789,6 +812,7 @@ async fn apply_projection_acp_read_filter(
         requests: filtered_requests,
         messages: filtered_messages,
         tool_calls: filtered_tool_calls,
+        tool_approvals: filtered_tool_approvals,
         inference_calls: filtered_inference_calls,
         compactions: filtered_compactions,
         responses: filtered_responses,
@@ -1007,6 +1031,9 @@ fn should_keep_scoped_timeline_event(
         ),
         RunTimelineEvent::ToolCall(tool_call) => {
             scoped_tool_call_allowed(tool_call, allowed_request_ids, scope)
+        }
+        RunTimelineEvent::ToolApproval(approval) => {
+            allowed_request_ids.contains(&approval.request_id)
         }
         RunTimelineEvent::Response(response) => allowed_request_ids.contains(&response.request_id),
     }
@@ -2192,6 +2219,7 @@ mod tests {
             ("AgentRequest", "doc-request-root"),
             ("AgentMessage", "doc-message-allowed"),
             ("AgentToolCall", "doc-tool-allowed"),
+            ("AgentToolApproval", "doc-approval-allowed"),
             ("AgentResponse", "doc-response-allowed"),
             ("InferenceCall", "doc-inference-allowed"),
             ("AgentConversation", "doc-conversation"),
@@ -2226,6 +2254,14 @@ mod tests {
                 .map(|tool_call| tool_call.tool_call_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["call-allowed"]
+        );
+        assert_eq!(
+            filtered
+                .tool_approvals
+                .iter()
+                .map(|approval| approval.approval_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["approval-allowed"]
         );
         assert_eq!(
             filtered
@@ -2266,6 +2302,7 @@ mod tests {
             ("runtime_request", "doc-request-root"),
             ("runtime_message", "doc-message-allowed"),
             ("runtime_tool_call", "doc-tool-allowed"),
+            ("runtime_tool_approval", "doc-approval-allowed"),
             ("runtime_response", "doc-response-allowed"),
             ("runtime_inference_call", "doc-inference-allowed"),
             ("runtime_conversation", "doc-conversation"),
@@ -2278,6 +2315,10 @@ mod tests {
             ("AgentRequest".to_string(), "runtime_request".to_string()),
             ("AgentMessage".to_string(), "runtime_message".to_string()),
             ("AgentToolCall".to_string(), "runtime_tool_call".to_string()),
+            (
+                "AgentToolApproval".to_string(),
+                "runtime_tool_approval".to_string(),
+            ),
             ("AgentResponse".to_string(), "runtime_response".to_string()),
             (
                 "InferenceCall".to_string(),
@@ -2298,6 +2339,7 @@ mod tests {
         assert_eq!(filtered.requests.len(), 1);
         assert_eq!(filtered.messages.len(), 1);
         assert_eq!(filtered.tool_calls.len(), 1);
+        assert_eq!(filtered.tool_approvals.len(), 1);
         assert_eq!(filtered.inference_calls.len(), 1);
         assert_eq!(filtered.responses.len(), 1);
         assert!(filtered.conversation.is_some());
@@ -2397,6 +2439,26 @@ mod tests {
                     tool_name: "review".to_string(),
                     status: "completed".to_string(),
                     ..TimelineToolCallRow::default()
+                },
+            ],
+            tool_approvals: vec![
+                TimelineToolApprovalRow {
+                    doc_id: Some("doc-approval-allowed".to_string()),
+                    approval_id: "approval-allowed".to_string(),
+                    tool_call_doc_id: "doc-tool-allowed".to_string(),
+                    tool_call_id: "call-allowed".to_string(),
+                    request_id: Some("req-root".to_string()),
+                    decision: "approved".to_string(),
+                    ..TimelineToolApprovalRow::default()
+                },
+                TimelineToolApprovalRow {
+                    doc_id: Some("doc-approval-denied".to_string()),
+                    approval_id: "approval-denied".to_string(),
+                    tool_call_doc_id: "doc-tool-denied".to_string(),
+                    tool_call_id: "call-denied".to_string(),
+                    request_id: Some("req-child".to_string()),
+                    decision: "denied".to_string(),
+                    ..TimelineToolApprovalRow::default()
                 },
             ],
             responses: vec![

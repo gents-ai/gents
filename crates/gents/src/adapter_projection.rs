@@ -1898,6 +1898,7 @@ fn build_openai_codex_run_trace(
                     completed_at: event.completed_at.clone(),
                 });
             }
+            RunTimelineEvent::ToolApproval(_) => {}
             RunTimelineEvent::Response(event) => {
                 items.push(OpenAiCodexTraceItem::Response {
                     id: event.request_id.clone(),
@@ -2024,6 +2025,18 @@ fn build_langgraph_state_history(
                 None,
                 Some(event.status.clone()),
                 None,
+                None,
+            ),
+            RunTimelineEvent::ToolApproval(event) => (
+                format!("tool_approval:{}", event.approval_id),
+                "tool_approval".to_string(),
+                Some(event.request_id.clone()),
+                Some(event.agent_did.clone()),
+                None,
+                None,
+                Some(event.tool_call_id.clone()),
+                Some(event.decision.clone()),
+                redact_option(event.reason.as_deref(), context),
                 None,
             ),
             RunTimelineEvent::Response(event) => (
@@ -2211,6 +2224,7 @@ fn build_multi_agent_task(
                     child_request_id: tool.child_request_id.clone(),
                 });
             }
+            RunTimelineEvent::ToolApproval(_) => {}
             RunTimelineEvent::Response(_) => {}
         }
     }

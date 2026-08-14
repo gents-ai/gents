@@ -15,7 +15,7 @@ use crate::run_timeline::{
     build_run_timeline, RunTimeline, RunTimelineRows, TimelineCompactionRow,
     TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow,
     TimelineRenderedRequestRef, TimelineRenderedRequestRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    TimelineResponseRow, TimelineSessionRow, TimelineToolApprovalRow, TimelineToolCallRow,
 };
 use gents_protocol::graphql::graphql_rows_from_response;
 
@@ -225,6 +225,16 @@ pub async fn load_run_timeline_rows(
     )?;
     validate_child_tool_bridges(&request, &requests, &tool_calls)?;
 
+    let mut tool_approvals = Vec::new();
+    for tool_call_doc_id in tool_calls
+        .iter()
+        .filter_map(|tool_call| nonempty(tool_call.doc_id.as_deref()))
+    {
+        tool_approvals
+            .extend(load_timeline_tool_approvals_for_call(access, tool_call_doc_id).await?);
+    }
+    validate_tool_approval_bindings(&tool_calls, &tool_approvals)?;
+
     let session = match root_session_id.as_deref() {
         Some(session_id) => load_timeline_session(access, session_id).await?,
         None => None,
@@ -241,6 +251,7 @@ pub async fn load_run_timeline_rows(
         requests,
         messages,
         tool_calls,
+        tool_approvals,
         inference_calls,
         compactions,
         responses,
@@ -261,7 +272,7 @@ use event_loaders::{
     load_timeline_messages_for_session, load_timeline_rendered_request_refs,
     load_timeline_rendered_requests_for_request, load_timeline_rendered_requests_for_session,
     load_timeline_responses_for_request, load_timeline_responses_for_session,
-    load_timeline_tool_calls_for_session,
+    load_timeline_tool_approvals_for_call, load_timeline_tool_calls_for_session,
 };
 use query_helpers::load_rows;
 use request_loaders::{
@@ -271,4 +282,167 @@ use validation::{
     ensure_unique_timeline_request_ids, merge_timeline_request, nonempty,
     request_scoped_row_is_in_timeline, timeline_request_bindings, timeline_request_doc_ids,
     timeline_session_ids, validate_child_tool_bridges, validate_request_scoped_rows,
+    validate_tool_approval_bindings,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn created_doc_id(response: &defra_node::QueryResponse, field: &str) -> String {
+        let alternate = field
+            .strip_prefix("create_")
+            .map(|collection| format!("add_{collection}"));
+        let created = response
+            .data
+            .as_ref()
+            .and_then(|data| {
+                data.get(field)
+                    .or_else(|| alternate.as_deref().and_then(|field| data.get(field)))
+            })
+            .expect("create response field");
+        created
+            .as_array()
+            .and_then(|rows| rows.first())
+            .unwrap_or(created)
+            .get("_docID")
+            .and_then(Value::as_str)
+            .expect("created _docID")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn fetches_approvals_and_complete_inference_provenance() {
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_schemas(node.as_ref()).await.unwrap();
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_AgentSession(input: {
+                        session_id: "session-timeline"
+                        agent_name: "agent"
+                        agent_did: "did:test:agent"
+                        behavior_id: "general"
+                        started: "2026-08-14T12:00:00Z"
+                        status: "active"
+                    }) { _docID }
+                    create_AgentRequest(input: {
+                        request_id: "request-timeline"
+                        agent_did: "did:test:agent"
+                        behavior_id: "general"
+                        session_id: "session-timeline"
+                        content: "run"
+                        status: "completed"
+                        lifecycle_state: "completed"
+                        created_at: "2026-08-14T12:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "seed request: {:?}",
+            response.errors
+        );
+        let request_doc_id = created_doc_id(&response, "create_AgentRequest");
+
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentToolCall(input: {{
+                        tool_call_key: "session-timeline:tool-1"
+                        request_id: "request-timeline"
+                        request_doc_id: "{request_doc_id}"
+                        session_id: "session-timeline"
+                        agent_did: "did:test:agent"
+                        message_sequence: 1
+                        tool_name: "call_tool"
+                        tool_call_id: "tool-1"
+                        args: "{{}}"
+                        result: "ok"
+                        status: "completed"
+                        lifecycle_state: "completed"
+                        started_at: "2026-08-14T12:00:02Z"
+                        deadline_at: "2026-08-14T12:05:00Z"
+                        completed_at: "2026-08-14T12:00:04Z"
+                        selected_service_id: "metrics-prod"
+                        selected_tool_name: "query_metrics"
+                    }}) {{ _docID }}
+                    create_InferenceCall(input: {{
+                        call_id: "inference-1"
+                        runtime_instance_id: "runtime-a"
+                        request_id: "request-timeline"
+                        request_doc_id: "{request_doc_id}"
+                        call_seq: 1
+                        backend_id: "backend-a"
+                        behavior_id: "general"
+                        agent_did: "did:test:agent"
+                        call_kind: "inference"
+                        attempt: 1
+                        call_state: "completed"
+                        queued_at: "2026-08-14T12:00:01Z"
+                        priority: 7
+                        queue_depth_at_enqueue: 3
+                        controller_generation: 11
+                        backend_config_fingerprint: "sha256:abc"
+                        prompt_tokens: 10
+                        completion_tokens: 5
+                        cached_input_tokens: 2
+                    }}) {{ _docID }}
+                }}"#,
+            ))
+            .await;
+        assert!(!response.has_errors(), "seed calls: {:?}", response.errors);
+        let tool_call_doc_id = created_doc_id(&response, "create_AgentToolCall");
+
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentToolApproval(input: {{
+                        approval_id: "approval-1"
+                        tool_call_doc_id: "{tool_call_doc_id}"
+                        tool_call_id: "tool-1"
+                        request_id: "request-timeline"
+                        agent_did: "did:test:agent"
+                        decision: "approved"
+                        approver_did: "did:test:operator"
+                        reason: "reviewed"
+                        created_at: "2026-08-14T12:00:03Z"
+                    }}) {{ _docID }}
+                }}"#,
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "seed approval: {:?}",
+            response.errors
+        );
+
+        let access = ConfigAccess::Local(node.clone());
+        let timeline = load_run_timeline(&access, "request-timeline")
+            .await
+            .expect("load timeline");
+        assert!(timeline.events.iter().any(|event| matches!(
+            event,
+            crate::run_timeline::RunTimelineEvent::ToolApproval(approval)
+                if approval.approval_id == "approval-1"
+                    && approval.tool_call_id == "tool-1"
+        )));
+        let inference = timeline.events.iter().find_map(|event| match event {
+            crate::run_timeline::RunTimelineEvent::InferenceCall(inference) => Some(inference),
+            _ => None,
+        });
+        let inference = inference.expect("inference event");
+        assert_eq!(inference.runtime_instance_id.as_deref(), Some("runtime-a"));
+        assert_eq!(inference.priority, Some(7));
+        assert_eq!(inference.queue_depth_at_enqueue, Some(3));
+        assert_eq!(inference.controller_generation, Some(11));
+        assert_eq!(
+            inference.backend_config_fingerprint.as_deref(),
+            Some("sha256:abc")
+        );
+
+        node.shutdown().await;
+    }
+}

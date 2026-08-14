@@ -1889,6 +1889,8 @@ async fn projection_graphql_mock(
         json!({ "data": { "AgentMessage": projection_mock_agent_messages() } })
     } else if query.contains("AgentToolCall(") {
         json!({ "data": { "AgentToolCall": projection_mock_tool_calls() } })
+    } else if query.contains("AgentToolApproval(") {
+        json!({ "data": { "AgentToolApproval": [] } })
     } else if query.contains("AgentResponse(") {
         json!({ "data": { "AgentResponse": projection_mock_agent_responses() } })
     } else if query.contains("AgentSession(") {

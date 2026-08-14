@@ -20,6 +20,8 @@ pub struct RunTimelineRows {
     #[serde(default)]
     pub tool_calls: Vec<TimelineToolCallRow>,
     #[serde(default)]
+    pub tool_approvals: Vec<TimelineToolApprovalRow>,
+    #[serde(default)]
     pub inference_calls: Vec<TimelineInferenceCallRow>,
     #[serde(default)]
     pub compactions: Vec<TimelineCompactionRow>,
@@ -207,6 +209,8 @@ pub struct TimelineInferenceCallRow {
     pub doc_id: Option<String>,
     #[serde(default)]
     pub call_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_instance_id: Option<String>,
     #[serde(default)]
     pub request_id: String,
     #[serde(default, skip_serializing)]
@@ -227,14 +231,50 @@ pub struct TimelineInferenceCallRow {
     pub ended_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_did: Option<String>,
     #[serde(default)]
     pub call_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_depth_at_enqueue: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_generation: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_config_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_input_tokens: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineToolApprovalRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
+    #[serde(default)]
+    pub approval_id: String,
+    #[serde(default, skip_serializing)]
+    pub tool_call_doc_id: String,
+    #[serde(default)]
+    pub tool_call_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub agent_did: String,
+    #[serde(default)]
+    pub decision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approver_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 /// One `RenderedRequest` capture row, as the timeline reads it.
@@ -425,6 +465,7 @@ pub enum RunTimelineEvent {
     Compaction(TimelineCompactionEvent),
     Message(TimelineMessageEvent),
     ToolCall(TimelineToolCallEvent),
+    ToolApproval(TimelineToolApprovalEvent),
     Response(TimelineResponseEvent),
 }
 
@@ -534,6 +575,8 @@ pub struct TimelineRenderedRequestEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineInferenceCallEvent {
     pub call_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_instance_id: Option<String>,
     pub request_id: String,
     pub call_seq: i64,
     pub attempt: i64,
@@ -542,7 +585,19 @@ pub struct TimelineInferenceCallEvent {
     pub failure_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_did: Option<String>,
     pub call_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_depth_at_enqueue: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub controller_generation: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_config_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -555,6 +610,21 @@ pub struct TimelineInferenceCallEvent {
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineToolApprovalEvent {
+    pub approval_id: String,
+    pub request_id: String,
+    pub tool_call_id: String,
+    pub agent_did: String,
+    pub decision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approver_did: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -670,13 +740,20 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         events.push(RunTimelineEvent::InferenceCall(
             TimelineInferenceCallEvent {
                 call_id: call.call_id.clone(),
+                runtime_instance_id: call.runtime_instance_id.clone(),
                 request_id: call.request_id.clone(),
                 call_seq: call.call_seq,
                 attempt: call.attempt,
                 call_state: call.call_state.clone(),
                 failure_reason: call.failure_reason.clone(),
                 backend_id: call.backend_id.clone(),
+                behavior_id: call.behavior_id.clone(),
+                agent_did: call.agent_did.clone(),
                 call_kind: call.call_kind.clone(),
+                priority: call.priority,
+                queue_depth_at_enqueue: call.queue_depth_at_enqueue,
+                controller_generation: call.controller_generation,
+                backend_config_fingerprint: call.backend_config_fingerprint.clone(),
                 prompt_tokens: call.prompt_tokens,
                 completion_tokens: call.completion_tokens,
                 cached_input_tokens: call.cached_input_tokens,
@@ -779,6 +856,31 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                     .filter(|request_id| included_request_ids.contains(request_id)),
                 started_at: tool_call.started_at.clone(),
                 completed_at: tool_call.completed_at.clone(),
+            }));
+        }
+    }
+
+    for approval in &rows.tool_approvals {
+        let Some(tool_call) = rows.tool_calls.iter().find(|tool_call| {
+            tool_call.doc_id.as_deref() == Some(approval.tool_call_doc_id.as_str())
+        }) else {
+            continue;
+        };
+        let Some(request_id) =
+            infer_request_id_for_tool_call(tool_call, &rows.requests, &rows.responses)
+        else {
+            continue;
+        };
+        if included_request_ids.contains(&request_id) {
+            events.push(RunTimelineEvent::ToolApproval(TimelineToolApprovalEvent {
+                approval_id: approval.approval_id.clone(),
+                request_id,
+                tool_call_id: approval.tool_call_id.clone(),
+                agent_did: approval.agent_did.clone(),
+                decision: approval.decision.clone(),
+                approver_did: approval.approver_did.clone(),
+                reason: approval.reason.clone(),
+                timestamp: approval.created_at.clone(),
             }));
         }
     }
@@ -1169,7 +1271,8 @@ fn should_include_event(
 /// `(timestamp_millis, family_rank, intra_rank, tiebreak)`. Family ranks are
 /// unserialized internals and only break same-millisecond ties: request 0,
 /// rendered_request 1 (persist-before-send puts the capture before the bytes
-/// leave), inference_call 2, message 3, tool_call 4, response 5.
+/// leave), inference_call 2, compaction/message 3, tool_call 4, approval 5,
+/// response 6.
 fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
     match event {
         RunTimelineEvent::Request(event) => (
@@ -1234,13 +1337,23 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
             event.message_sequence.unwrap_or(i64::MAX),
             event.tool_call_id.clone(),
         ),
-        RunTimelineEvent::Response(event) => (
+        RunTimelineEvent::ToolApproval(event) => (
             event
                 .timestamp
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
             5,
+            i64::MAX,
+            event.approval_id.clone(),
+        ),
+        RunTimelineEvent::Response(event) => (
+            event
+                .timestamp
+                .as_deref()
+                .and_then(timestamp_millis)
+                .unwrap_or(i64::MIN),
+            6,
             event.materialized_message_sequence.unwrap_or(i64::MAX),
             event.request_id.clone(),
         ),
@@ -1290,6 +1403,94 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeline_projects_exact_approval_and_complete_inference_provenance() {
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                doc_id: Some("doc-request".to_string()),
+                request_id: "request-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                created_at: Some("2026-08-14T12:00:00Z".to_string()),
+                ..Default::default()
+            },
+            requests: vec![TimelineRequestRow {
+                doc_id: Some("doc-request".to_string()),
+                request_id: "request-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                ..Default::default()
+            }],
+            inference_calls: vec![TimelineInferenceCallRow {
+                call_id: "inference-1".to_string(),
+                runtime_instance_id: Some("runtime-a".to_string()),
+                request_id: "request-1".to_string(),
+                request_doc_id: Some("doc-request".to_string()),
+                call_seq: 1,
+                attempt: 2,
+                call_state: "completed".to_string(),
+                backend_id: Some("backend-a".to_string()),
+                behavior_id: Some("behavior-a".to_string()),
+                agent_did: Some("did:test:agent".to_string()),
+                call_kind: "inference".to_string(),
+                priority: Some(7),
+                queue_depth_at_enqueue: Some(3),
+                controller_generation: Some(11),
+                backend_config_fingerprint: Some("sha256:abc".to_string()),
+                queued_at: Some("2026-08-14T12:00:01Z".to_string()),
+                ..Default::default()
+            }],
+            tool_calls: vec![TimelineToolCallRow {
+                doc_id: Some("doc-tool".to_string()),
+                request_id: Some("request-1".to_string()),
+                request_doc_id: Some("doc-request".to_string()),
+                session_id: "session-1".to_string(),
+                tool_call_id: "tool-1".to_string(),
+                tool_name: "call_tool".to_string(),
+                status: "completed".to_string(),
+                started_at: Some("2026-08-14T12:00:02Z".to_string()),
+                ..Default::default()
+            }],
+            tool_approvals: vec![TimelineToolApprovalRow {
+                approval_id: "approval-1".to_string(),
+                tool_call_doc_id: "doc-tool".to_string(),
+                tool_call_id: "tool-1".to_string(),
+                request_id: Some("request-1".to_string()),
+                agent_did: "did:test:agent".to_string(),
+                decision: "approved".to_string(),
+                approver_did: Some("did:test:operator".to_string()),
+                reason: Some("reviewed".to_string()),
+                created_at: Some("2026-08-14T12:00:03Z".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let inference = timeline.events.iter().find_map(|event| match event {
+            RunTimelineEvent::InferenceCall(event) => Some(event),
+            _ => None,
+        });
+        let inference = inference.expect("inference event");
+        assert_eq!(inference.runtime_instance_id.as_deref(), Some("runtime-a"));
+        assert_eq!(inference.behavior_id.as_deref(), Some("behavior-a"));
+        assert_eq!(inference.agent_did.as_deref(), Some("did:test:agent"));
+        assert_eq!(inference.priority, Some(7));
+        assert_eq!(inference.queue_depth_at_enqueue, Some(3));
+        assert_eq!(inference.controller_generation, Some(11));
+        assert_eq!(
+            inference.backend_config_fingerprint.as_deref(),
+            Some("sha256:abc")
+        );
+
+        let approval = timeline.events.iter().find_map(|event| match event {
+            RunTimelineEvent::ToolApproval(event) => Some(event),
+            _ => None,
+        });
+        let approval = approval.expect("approval event");
+        assert_eq!(approval.request_id, "request-1");
+        assert_eq!(approval.tool_call_id, "tool-1");
+        assert_eq!(approval.approver_did.as_deref(), Some("did:test:operator"));
+        assert_eq!(approval.reason.as_deref(), Some("reviewed"));
+    }
 
     #[test]
     fn builds_ordered_timeline_with_inferred_tool_call_and_child_request() {

@@ -16,6 +16,7 @@ use super::shared::{
 
 const CALL_TOOL_MAX_BYTES: usize = 50 * 1024;
 const CALL_TOOL_MAX_LINES: usize = 2_000;
+pub(crate) const CALL_TOOL_NAME: &str = "call_tool";
 
 #[derive(Debug, Deserialize)]
 pub struct CallToolArgs {
@@ -35,8 +36,23 @@ impl CallToolTool {
     }
 }
 
+/// Return the concrete MCP dispatch identity carried by a `call_tool`
+/// invocation. `call_tool` has no alias-resolution step: these are the exact
+/// registry and native-tool keys used by execution after typed argument
+/// parsing succeeds.
+pub(crate) fn selected_tool_identity(tool_name: &str, args: &str) -> Option<(String, String)> {
+    if tool_name != CALL_TOOL_NAME {
+        return None;
+    }
+    let args = crate::llm::tool::parse_tool_args::<CallToolArgs>(args).ok()?;
+    if args.service_id.trim().is_empty() || args.tool_name.trim().is_empty() {
+        return None;
+    }
+    Some((args.service_id, args.tool_name))
+}
+
 impl Tool for CallToolTool {
-    const NAME: &'static str = "call_tool";
+    const NAME: &'static str = CALL_TOOL_NAME;
 
     type Error = MetaToolError;
     type Args = CallToolArgs;

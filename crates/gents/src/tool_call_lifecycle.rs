@@ -304,6 +304,7 @@ pub struct ToolCallLifecycle {
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     failure_class: Option<FailureClass>,
     cancel_cause: Option<CancelCause>,
+    selected_tool_identity: Option<SelectedToolIdentity>,
     pub(crate) await_mode: AwaitMode,
     pub(crate) cancel_policy: CancelPolicy,
     pub(crate) child_request_id: Option<String>,
@@ -311,6 +312,12 @@ pub struct ToolCallLifecycle {
     pub(crate) unclaimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) workflow_group_id: Option<String>,
     pub(crate) workflow_role: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedToolIdentity {
+    service_id: String,
+    tool_name: String,
 }
 
 impl ToolCallLifecycle {
@@ -350,6 +357,7 @@ impl ToolCallLifecycle {
             started_at: None,
             failure_class: None,
             cancel_cause: None,
+            selected_tool_identity: None,
             await_mode: AwaitMode::Foreground,
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,
@@ -371,6 +379,22 @@ impl ToolCallLifecycle {
     /// Attach the exact owning AgentRequest document to the persisted tool call.
     pub fn with_request_doc_id(mut self, request_doc_id: Option<String>) -> Self {
         self.request_doc_id = request_doc_id.filter(|doc_id| !doc_id.trim().is_empty());
+        self
+    }
+
+    /// Attach the concrete MCP dispatch identity to the row created by the
+    /// first lifecycle transition. Later transitions deliberately never write
+    /// these fields, so retries and recovery cannot retarget a persisted call.
+    pub(crate) fn with_selected_tool_identity(
+        mut self,
+        selected: Option<(String, String)>,
+    ) -> Self {
+        if let Some((service_id, tool_name)) = selected {
+            self.selected_tool_identity = Some(SelectedToolIdentity {
+                service_id,
+                tool_name,
+            });
+        }
         self
     }
 
@@ -411,6 +435,7 @@ impl ToolCallLifecycle {
             started_at: None,
             failure_class: None,
             cancel_cause: None,
+            selected_tool_identity: None,
             await_mode,
             cancel_policy,
             child_request_id: Some(child_request_id),
@@ -452,6 +477,7 @@ impl ToolCallLifecycle {
             started_at: None,
             failure_class: None,
             cancel_cause: None,
+            selected_tool_identity: None,
             await_mode: AwaitMode::Background,
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,
