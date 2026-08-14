@@ -50,7 +50,11 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         MigrationStep::PatchVersioned { collection, .. }
             if *collection == gents_protocol::schemas::INFERENCE_PROFILE_NAME
     )));
-    assert!(versioned_collections.contains(gents_protocol::schemas::AGENT_REQUEST_NAME));
+    // AgentRequest (#1123): a client-authored plane collection, deliberately
+    // kept OFF the step chain so a fresh client store's genesis version
+    // matches the server's. It must stay fresh-apply-equivalent, not
+    // versioned.
+    assert!(!versioned_collections.contains(gents_protocol::schemas::AGENT_REQUEST_NAME));
     assert!(gents_migration::DEFAULT_STEPS.iter().any(|step| matches!(
         step,
         MigrationStep::PatchVersioned { collection, .. }
@@ -200,7 +204,14 @@ async fn inference_profile_migrations_preserve_existing_document() {
 }
 
 #[tokio::test]
-async fn agent_request_additive_migrations_preserve_existing_document() {
+async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
+    // #1123: AgentRequest is a client-authored plane collection, deliberately
+    // kept off the step chain so a fresh client store's genesis version
+    // matches the server's (see the baseline_entry! comment in registry.rs).
+    // This test locks in that the baseline SDL already carries every current
+    // field (no PatchVersioned step needed) and that re-running
+    // ensure_migrations against an already-registered, already-populated
+    // store is a safe no-op.
     let node = fresh_node().await;
     let baseline = gents_migration::DEFAULT_BASELINE
         .iter()
@@ -208,7 +219,7 @@ async fn agent_request_additive_migrations_preserve_existing_document() {
         .expect("AgentRequest baseline");
     node.add_schema(baseline.sdl)
         .await
-        .expect("register frozen request baseline");
+        .expect("register request baseline");
 
     let create = r#"mutation {
         create_AgentRequest(input: {
@@ -228,6 +239,14 @@ async fn agent_request_additive_migrations_preserve_existing_document() {
     ensure_migrations(node.as_ref())
         .await
         .expect("apply production migrations");
+
+    // Single-version DAG: the baseline root is still the active version,
+    // because there is no post-baseline step to chain it forward.
+    let cv = node
+        .get_collection(gents_protocol::schemas::AGENT_REQUEST_NAME)
+        .expect("get_collection")
+        .expect("AgentRequest present");
+    assert_eq!(Some(cv.version_id.as_str()), baseline.expected_version);
 
     let response = node
         .execute(
