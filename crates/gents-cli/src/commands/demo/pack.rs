@@ -2853,6 +2853,14 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("{profile} should load: {error:#}"));
             assert_eq!(
+                document.get("context_window").and_then(Value::as_u64),
+                Some(262_144)
+            );
+            assert_eq!(
+                document.get("max_output_tokens").and_then(Value::as_u64),
+                Some(65_536)
+            );
+            assert_eq!(
                 document.get("max_turns").and_then(Value::as_u64),
                 Some(1_000_000)
             );

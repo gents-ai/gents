@@ -64,9 +64,10 @@ export GENTS_REVIEW_REVIEWER_MODEL=d4f
 Review agents are configured as long-running workers: the one-million-turn
 default is a practical removal of the runtime's required integer turn ceiling,
 stage and runner deadlines default to 24 hours, and every stage uses automatic
-strip-then-summarize compaction with access to its live context budget. Set
-`REVIEW_CONTEXT_WINDOW` to the serving endpoint's advertised window and
-`REVIEW_MAX_OUTPUT_TOKENS` to the desired per-turn output reserve. Recon is
+strip-then-summarize compaction with access to its live context budget. The
+default context window is 256K with a 64K per-turn output reserve. Override
+`REVIEW_CONTEXT_WINDOW` and `REVIEW_MAX_OUTPUT_TOKENS` when a serving endpoint
+requires different limits. Recon is
 instructed to release parallel work promptly, but it has no tool-call budget.
 Scheduled inference retries transport failures for the full 24-hour review
 window by default, using a 5s/30s/120s backoff ladder with the final delay
@@ -94,7 +95,7 @@ make review REVIEW_BASE=main REVIEW_HEAD=my-pr-branch
 make review REVIEW_PROMPT='Pay special attention to trigger recovery and ACP'
 make review REVIEW_LENSES=8
 make review REVIEW_PR=123 REVIEW_MIN_LENSES=6 REVIEW_MAX_LENSES=16 REVIEW_KEEP_HOME=1 REVIEW_JOB_ID=pr-123
-make review REVIEW_CONTEXT_WINDOW=1048576 REVIEW_MAX_OUTPUT_TOKENS=262144
+make review REVIEW_CONTEXT_WINDOW=262144 REVIEW_MAX_OUTPUT_TOKENS=65536
 ```
 
 `make review` builds and runs the workspace CLI, roots file and LSP tools at

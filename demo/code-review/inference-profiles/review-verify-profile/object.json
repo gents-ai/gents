@@ -1,8 +1,8 @@
 {
   "profile_id": "review-verify-profile",
   "display_name": "Long-running adversarial verifier profile",
-  "context_window": ${GENTS_REVIEW_CONTEXT_WINDOW:-131072},
-  "max_output_tokens": ${GENTS_REVIEW_MAX_OUTPUT_TOKENS:-32768},
+  "context_window": ${GENTS_REVIEW_CONTEXT_WINDOW:-262144},
+  "max_output_tokens": ${GENTS_REVIEW_MAX_OUTPUT_TOKENS:-65536},
   "max_turns": ${GENTS_REVIEW_MAX_TURNS:-1000000},
   "temperature": 0.1,
   "top_p": null,
