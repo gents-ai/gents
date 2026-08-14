@@ -1154,7 +1154,12 @@ impl EventSource {
                 &now.to_rfc3339_opts(SecondsFormat::Millis, true)
             ),
         );
-        let response = self.node.execute(&mutation).await;
+        let response = crate::graphql::graphql_mutation_response_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "create EventTriggerGroupState",
+        )
+        .await;
         if !response.has_errors() {
             return Ok(now);
         }
@@ -1198,13 +1203,12 @@ impl EventSource {
             ),
             reason = crate::graphql::escape_graphql_string(reason),
         );
-        let response = self.node.execute(&mutation).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "EventTriggerGroupState quiesce failed: {:?}",
-                response.errors
-            );
-        }
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "quiesce EventTriggerGroupState",
+        )
+        .await?;
         Ok(())
     }
 

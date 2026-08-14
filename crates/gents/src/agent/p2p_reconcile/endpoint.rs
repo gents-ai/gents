@@ -83,7 +83,7 @@ async fn tick_endpoint(
         .await
         .context("signing PeerEndpoint binding")?;
     let mutation = peer_endpoint_upsert_mutation(&record);
-    crate::graphql::graphql_with_transaction_retry(
+    crate::graphql::graphql_mutation_with_transaction_retry(
         node,
         &mutation,
         "upsert_peer_endpoint_heartbeat",

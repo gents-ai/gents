@@ -2,7 +2,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 
 use super::graphql_fields;
 use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
@@ -285,7 +285,7 @@ pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior
         }}"#
     );
 
-    graphql_with_transaction_retry(node, &mutation, "upsert AgentBehavior").await?;
+    graphql_mutation_with_transaction_retry(node, &mutation, "upsert AgentBehavior").await?;
     Ok(())
 }
 

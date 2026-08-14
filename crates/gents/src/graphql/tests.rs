@@ -126,3 +126,40 @@ fn mutation_composite_version_accepts_unique_newest_composite() {
         .expect("composite commit");
     assert_eq!(commit.cid, "bafy-new");
 }
+
+#[tokio::test]
+async fn concurrent_mutations_share_the_node_write_path() {
+    const WRITES: usize = 32;
+
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema("type GateWrite { write_id: String }")
+        .await
+        .unwrap();
+    let barrier = Arc::new(tokio::sync::Barrier::new(WRITES));
+    let mut tasks = tokio::task::JoinSet::new();
+
+    for index in 0..WRITES {
+        let node = Arc::clone(&node);
+        let barrier = Arc::clone(&barrier);
+        tasks.spawn(async move {
+            barrier.wait().await;
+            let mutation = format!(
+                r#"mutation {{ create_GateWrite(input: {{ write_id: "write-{index}" }}) {{ _docID }} }}"#
+            );
+            graphql_mutation_with_transaction_retry(&node, &mutation, "test concurrent write")
+                .await
+        });
+    }
+
+    while let Some(result) = tasks.join_next().await {
+        result
+            .expect("concurrent mutation task panicked")
+            .expect("concurrent mutation exhausted the shared write path");
+    }
+
+    let response = graphql_with_transaction_retry(&node, "{ GateWrite { write_id } }", "count")
+        .await
+        .unwrap();
+    assert_eq!(rows::<Value>(&response, "GateWrite").unwrap().len(), WRITES);
+    node.shutdown().await;
+}

@@ -105,6 +105,8 @@ pub async fn write_agent_behavior_document(
         add_fields = add_fields,
         update_fields = update_fields,
     );
-    let response = access.execute(&mutation).await?;
+    let response = access
+        .execute_mutation(&mutation, "upsert AgentBehavior")
+        .await?;
     gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentBehavior")
 }

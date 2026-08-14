@@ -101,7 +101,7 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
     // or another interrupt caller. DefraDB reports those overlapping commits
     // as transient transaction conflicts, so use the runtime's bounded retry
     // seam instead of surfacing a flaky operator failure.
-    let resp = crate::graphql::graphql_with_transaction_retry(
+    let resp = crate::graphql::graphql_mutation_with_transaction_retry(
         node,
         &mutation,
         "latch AgentRequest interrupt_requested_at",

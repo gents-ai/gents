@@ -16,6 +16,8 @@
 //! `EventTrigger.filter` is by the trigger engine's filter probe — is
 //! covered by neither. See #1038.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -23,6 +25,7 @@ use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryResponse};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 pub use gents_protocol::graphql::{
     validate_collection_identifier, validate_graphql_filter_fragment, validate_graphql_name,
@@ -36,6 +39,30 @@ const GRAPHQL_RETRY_POLICY: ExecuteRetryPolicy = ExecuteRetryPolicy::new(
     Duration::from_millis(DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS),
     Duration::from_millis(800),
 );
+
+type MutationWriteGate = Mutex<()>;
+
+/// DefraDB commits auto-committed mutations at a database-wide revision
+/// boundary. Keep all ordinary writes for one embedded node on the same gate;
+/// the retry policy below then covers conflicts with transactions outside this
+/// process instead of making in-process writers race until one exhausts it.
+fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
+    static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
+
+    let node_key = node as *const EmbeddedNode as usize;
+    let mut gates = GATES
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(gate) = gates.get(&node_key).and_then(Weak::upgrade) {
+        return gate;
+    }
+
+    gates.retain(|_, gate| gate.strong_count() > 0);
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(node_key, Arc::downgrade(&gate));
+    gate
+}
 
 /// Execute GraphQL through the node's identity-aware retry path.
 ///
@@ -73,6 +100,33 @@ pub async fn graphql_with_transaction_retry(
     operation: &str,
 ) -> Result<QueryResponse> {
     let response = graphql_response_with_transaction_retry(node, graphql, operation).await;
+    ensure_no_errors(&response, operation)?;
+    Ok(response)
+}
+
+/// Execute an auto-committed GraphQL mutation through the single node-scoped
+/// write path. This low-level form is for callers that intentionally inspect
+/// GraphQL errors; most mutation callers should use
+/// [`graphql_mutation_with_transaction_retry`].
+pub async fn graphql_mutation_response_with_transaction_retry(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> QueryResponse {
+    let gate = mutation_write_gate(node);
+    let _write_guard = gate.lock().await;
+    graphql_response_with_transaction_retry(node, graphql, operation).await
+}
+
+/// Execute an auto-committed GraphQL mutation through the single node-scoped
+/// write path, with identity propagation, conflict retry, timing, and GraphQL
+/// error handling applied consistently.
+pub async fn graphql_mutation_with_transaction_retry(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> Result<QueryResponse> {
+    let response = graphql_mutation_response_with_transaction_retry(node, graphql, operation).await;
     ensure_no_errors(&response, operation)?;
     Ok(response)
 }

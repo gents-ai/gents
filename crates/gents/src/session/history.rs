@@ -489,10 +489,7 @@ async fn create_message(
         message_key,
     );
 
-    let resp = node.execute(&mutation).await;
-    if resp.has_errors() {
-        anyhow::bail!("append AgentMessage failed: {:?}", resp.errors);
-    }
+    super::retry::execute_mutation_with_retry(node, &mutation, "append AgentMessage").await?;
     Ok(())
 }
 

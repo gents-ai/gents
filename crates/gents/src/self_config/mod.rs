@@ -1353,10 +1353,12 @@ async fn persona_mutate(
         resolved_profile_id.as_deref(),
         &now,
     );
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!("create PersonaConfigRequest failed: {:?}", response.errors);
-    }
+    crate::graphql::graphql_mutation_with_transaction_retry(
+        node,
+        &mutation,
+        "create PersonaConfigRequest",
+    )
+    .await?;
 
     poll_persona_request(node, &request_key).await
 }

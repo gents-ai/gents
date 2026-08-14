@@ -83,6 +83,21 @@ impl ConfigAccess {
             }
         }
     }
+
+    pub async fn execute_mutation(&self, mutation: &str, operation: &str) -> Result<Value> {
+        match self {
+            Self::Graphql(graphql) => post_graphql(graphql, mutation).await,
+            Self::Local(node) => {
+                let response = crate::graphql::graphql_mutation_with_transaction_retry(
+                    node, mutation, operation,
+                )
+                .await?;
+                Ok(json!({
+                    "data": response.data.unwrap_or(Value::Null),
+                }))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -324,13 +324,8 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
         }}"#
     );
 
-    let resp = node.execute(&mutation).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "update_conversation_status_if_latest mutation failed for session_id={session_id}: {:?}",
-            resp.errors
-        );
-    }
+    let resp = execute_mutation_with_retry(node, &mutation, "update_conversation_status_if_latest")
+        .await?;
 
     if resp
         .data

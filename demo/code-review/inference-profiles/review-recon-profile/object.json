@@ -9,6 +9,7 @@
   "top_k": null,
   "min_p": null,
   "frequency_penalty": null,
+  "stream_batch_ms": ${GENTS_REVIEW_STREAM_BATCH_MS:-5000},
   "deadline_duration_secs": ${GENTS_REVIEW_DEADLINE_SECS:-86400},
   "stream_liveness_timeout_secs": ${GENTS_REVIEW_STREAM_LIVENESS_SECS:-86400},
   "retry_max_transport": ${GENTS_REVIEW_RETRY_MAX_TRANSPORT:-720},

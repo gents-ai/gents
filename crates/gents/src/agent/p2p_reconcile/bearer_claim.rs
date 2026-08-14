@@ -444,7 +444,13 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
     async fn burn_nonce(&self, nonce: &str, issuer_did: &str, claimant_did: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = burn_bearer_nonce_mutation(nonce, issuer_did, claimant_did, &now);
-        match self.node.execute(&mutation).await {
+        match crate::graphql::graphql_mutation_response_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "burn bearer nonce",
+        )
+        .await
+        {
             response if response.has_errors() => {
                 let message = format!("{:?}", response.errors);
                 // Losing the unique-index race is not an error: the tick
@@ -490,8 +496,13 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
             .context("signing bearer-claim membership grant")?;
 
         let mutation = bearer_membership_create_mutation(&membership_key, &record);
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "create NetworkMembership for bearer claim")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "create NetworkMembership for bearer claim",
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn ensure_conversation_intent(&self, member_did: &str, template: &str) -> Result<()> {
@@ -519,11 +530,13 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
 
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = bearer_intent_upsert_mutation(member_did, template, &now);
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(
-            &response,
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
             "upsert ReciprocalConversationIntent for bearer claim",
         )
+        .await
+        .map(|_| ())
     }
 }
 

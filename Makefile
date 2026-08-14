@@ -27,6 +27,7 @@ REVIEW_COMPACTION_THRESHOLD ?= 0.85
 REVIEW_DEADLINE_SECS ?= 86400
 REVIEW_AWAIT_TIMEOUT_SECS ?= 86400
 REVIEW_STREAM_LIVENESS_SECS ?= 86400
+REVIEW_STREAM_BATCH_MS ?= 5000
 REVIEW_RETRY_MAX_TRANSPORT ?= 720
 REVIEW_RETRY_MAX_RESAMPLE ?= 32
 
@@ -99,6 +100,7 @@ help:
 	@echo "    REVIEW_MAX_OUTPUT_TOKENS=N Reserve output tokens per model turn"
 	@echo "    REVIEW_TEMPERATURE=N      Set the provider sampling temperature"
 	@echo "    REVIEW_TOP_P=N            Set the provider nucleus-sampling threshold"
+	@echo "    REVIEW_STREAM_BATCH_MS=N  Batch live token persistence writes"
 	@echo
 	@echo "Worktrees:"
 	@echo "  make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]"
@@ -150,6 +152,7 @@ review:
 	GENTS_REVIEW_DEADLINE_SECS="$(REVIEW_DEADLINE_SECS)" \
 	GENTS_REVIEW_AWAIT_TIMEOUT_SECS="$(REVIEW_AWAIT_TIMEOUT_SECS)" \
 	GENTS_REVIEW_STREAM_LIVENESS_SECS="$(REVIEW_STREAM_LIVENESS_SECS)" \
+	GENTS_REVIEW_STREAM_BATCH_MS="$(REVIEW_STREAM_BATCH_MS)" \
 	GENTS_REVIEW_RETRY_MAX_TRANSPORT="$(REVIEW_RETRY_MAX_TRANSPORT)" \
 	GENTS_REVIEW_RETRY_MAX_RESAMPLE="$(REVIEW_RETRY_MAX_RESAMPLE)" \
 	$(CARGO) run -p gents-cli -- demo run "$(CURDIR)/demo/code-review" \

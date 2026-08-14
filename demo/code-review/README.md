@@ -98,6 +98,11 @@ make review REVIEW_PR=123 REVIEW_MIN_LENSES=6 REVIEW_MAX_LENSES=16 REVIEW_KEEP_H
 make review REVIEW_CONTEXT_WINDOW=262144 REVIEW_MAX_OUTPUT_TOKENS=65536
 ```
 
+Live response snapshots are batched every five seconds by default so parallel
+reviewers do not turn token streaming into database write pressure. Override
+that cadence with `REVIEW_STREAM_BATCH_MS` when needed; terminal and tool-call
+boundaries still flush immediately.
+
 `make review` builds and runs the workspace CLI, roots file and LSP tools at
 `REVIEW_ROOT` (the current repository by default), and fails before inference if
 the base or head ref is invalid. Reviewer stages also receive the intentionally

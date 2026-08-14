@@ -2868,9 +2868,10 @@ mod tests {
                 document.get("temperature").and_then(Value::as_f64),
                 Some(1.0)
             );
+            assert_eq!(document.get("top_p").and_then(Value::as_f64), Some(0.95));
             assert_eq!(
-                document.get("top_p").and_then(Value::as_f64),
-                Some(0.95)
+                document.get("stream_batch_ms").and_then(Value::as_u64),
+                Some(5_000)
             );
             assert_eq!(
                 document

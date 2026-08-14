@@ -7,7 +7,7 @@ use super::serde_helpers;
 use crate::config_client::mint_recreate_identity_timestamp;
 use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::document_config::SubagentTarget;
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 use crate::meta_tools::META_TOOL_NAMES;
 use crate::tool_surface::TOOL_POLICY_V1;
 use crate::toolset::{
@@ -1219,6 +1219,6 @@ pub async fn upsert_tool_selection(
         }}"#
     );
 
-    graphql_with_transaction_retry(node, &mutation, "upsert ToolSelection").await?;
+    graphql_mutation_with_transaction_retry(node, &mutation, "upsert ToolSelection").await?;
     Ok(())
 }
