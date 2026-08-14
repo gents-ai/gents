@@ -558,3 +558,55 @@ pub static DEFAULT_REGISTRY: Registry<'static> = Registry {
 pub fn fixture_lens_wasm() -> &'static [u8] {
     include_bytes!(env!("GENTS_LENS_FIXTURE_ADD_LABEL_WASM_PATH"))
 }
+
+// ---------------------------------------------------------------------------
+// Client-authored (conversation-plane) collections (#1123 / #1125)
+// ---------------------------------------------------------------------------
+
+/// Collections a paired client fresh-applies its bundled SDL into and then
+/// authors documents into directly: the conversation-plane transcript
+/// (`AgentRequest`, `AgentResponse`, `AgentMessage`, `AgentToolCall`,
+/// `AgentToolResult`, `AgentSession`, `AgentConversation`,
+/// `CompactionEntry`), pairing readiness/claim rows (`BearerPairingReady`,
+/// `PairingBearerClaim`), the signed `PeerEndpoint` heartbeat,
+/// `PersonaConfigRequest`, and the fleet-discovery `AgentDirectoryEntry`.
+///
+/// A client mints its store from the collection's *current* SDL with no
+/// server-side history: a single `add_schema` call produces a genesis
+/// version whose DAG-CBOR block has empty `heads`. A server-side
+/// [`MigrationStep::PatchVersioned`] step instead chains a new version onto
+/// its predecessor's CID as `heads`. Because a version's CID is the hash of
+/// that DAG-CBOR block, a chain-tip CID (non-empty heads) can never equal a
+/// fresh client's genesis CID (empty heads) — even when the two collections
+/// end up with byte-identical fields. This is a structural property of
+/// DefraDB's version DAG, not something schema authoring discipline alone
+/// can avoid.
+///
+/// Until #1123's option 1 or 2 lands (a mechanism that lets `ensure_migrations`
+/// accept more than one known root/tip per collection), every collection in
+/// this list MUST evolve by **re-pinning its baseline** to the new
+/// fresh-apply CID — never by adding a `PatchVersioned` step. PR #1125 is the
+/// worked example: `AgentRequest` had drifted onto a chain (a
+/// `PatchVersioned` step appended fields after the baseline), which broke
+/// fresh mobile stores against a v0.11 server; the fix folded the fields
+/// into the baseline SDL and re-pinned the root to the fresh-apply CID.
+///
+/// `tests/fresh_apply_parity.rs` enforces this for every collection listed
+/// here; `default_baseline_matches_ordered_protocol_catalog`
+/// (`tests/baseline_ensure.rs`) enforces per-collection that no
+/// `PatchVersioned` step exists for `AgentRequest` specifically.
+pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
+    gents_protocol::schemas::AGENT_REQUEST_NAME,
+    gents_protocol::schemas::AGENT_RESPONSE_NAME,
+    gents_protocol::schemas::AGENT_MESSAGE_NAME,
+    gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
+    gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
+    gents_protocol::schemas::AGENT_SESSION_NAME,
+    gents_protocol::schemas::AGENT_CONVERSATION_NAME,
+    gents_protocol::schemas::COMPACTION_ENTRY_NAME,
+    gents_protocol::schemas::BEARER_PAIRING_READY_NAME,
+    gents_protocol::schemas::PAIRING_BEARER_CLAIM_NAME,
+    gents_protocol::schemas::PEER_ENDPOINT_NAME,
+    gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
+    gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,
+];
