@@ -268,71 +268,69 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             )
                             .await?;
                         let source_messages = compaction_request.messages;
-                        let (provider_messages, row) = admission::scope_call(
+                        let (result, producer_join) = admission::scope_call_with_join(
                             CallKind::Compaction,
                             1,
-                            async {
-                                let result = compactor
-                                    .compact(source_messages.clone(), turn_context_window, &options)
-                                    .await?;
-                                let producer_call = crate::admission::current_call_join()
-                                    .filter(|join| matches!(join.call_kind, CallKind::Compaction))
-                                    .map(|join| crate::provider_context_reduction::ProducerCallRef {
-                                        call_id: join.call_id,
-                                        call_seq: join.call_seq,
-                                    });
-                                let (normalized_source, _) =
-                                    crate::compaction::provider_view(source_messages);
-                                let split = usize::try_from(result.messages_compacted)
-                                    .unwrap_or(usize::MAX)
-                                    .min(normalized_source.len());
-                                let (compacted_prefix, retained_suffix) =
-                                    normalized_source.split_at(split);
-                                if retained_suffix != result.messages.as_slice() {
-                                    anyhow::bail!(
-                                        "per-turn compaction retained suffix does not match its exact source split"
-                                    );
-                                }
+                            compactor.compact(
+                                source_messages.clone(),
+                                turn_context_window,
+                                &options,
+                            ),
+                        )
+                        .await;
+                        let result = result?;
+                        let producer_call = producer_join
+                            .filter(|join| matches!(join.call_kind, CallKind::Compaction))
+                            .map(|join| crate::provider_context_reduction::ProducerCallRef {
+                                call_id: join.call_id,
+                                call_seq: join.call_seq,
+                            });
+                        let (normalized_source, _) =
+                            crate::compaction::provider_view(source_messages);
+                        let split = usize::try_from(result.messages_compacted)
+                            .unwrap_or(usize::MAX)
+                            .min(normalized_source.len());
+                        let (compacted_prefix, retained_suffix) = normalized_source.split_at(split);
+                        if retained_suffix != result.messages.as_slice() {
+                            anyhow::bail!(
+                                "per-turn compaction retained suffix does not match its exact source split"
+                            );
+                        }
 
-                                let summary = result.summary.unwrap_or_default().trim().to_string();
-                                let mut provider_messages = result.messages;
-                                if !summary.is_empty() {
-                                    provider_messages.insert(
-                                        0,
-                                        crate::prompt::LayeredPromptBuilder::system_reminder(
-                                            &crate::prompt::continuation_checkpoint_reminder(&summary),
-                                        ),
-                                    );
-                                }
-                                let reduction_index =
-                                    compaction_request.prior_reduction_keys.len() + 1;
-                                let row = crate::provider_context_reduction::persist(
-                                    node.as_ref(),
-                                    crate::provider_context_reduction::NewProviderContextReduction {
-                                        agent_did: &request.agent_did,
-                                        requester_did: request.requester_did.as_deref(),
-                                        session_id: &request.session_id,
-                                        request_id: &request.request_id,
-                                        request_doc_id: &request.doc_id,
-                                        request_commit_cid: &request_commit_cid,
-                                        reduction_index,
-                                        turn_index: compaction_request.turn_index,
-                                        parent_reduction_key: compaction_request
-                                            .prior_reduction_keys
-                                            .last()
-                                            .map(String::as_str),
-                                        producer_call: producer_call.as_ref(),
-                                        source_boundary: &source_boundary,
-                                        compacted_prefix,
-                                        retained_suffix,
-                                        checkpoint_messages: &provider_messages,
-                                        summary: &summary,
-                                        original_tokens: result.original_token_estimate,
-                                        compacted_tokens: result.compacted_token_estimate,
-                                    },
-                                )
-                                .await?;
-                                Ok::<_, anyhow::Error>((provider_messages, row))
+                        let summary = result.summary.unwrap_or_default().trim().to_string();
+                        let mut provider_messages = result.messages;
+                        if !summary.is_empty() {
+                            provider_messages.insert(
+                                0,
+                                crate::prompt::LayeredPromptBuilder::system_reminder(
+                                    &crate::prompt::continuation_checkpoint_reminder(&summary),
+                                ),
+                            );
+                        }
+                        let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
+                        let row = crate::provider_context_reduction::persist(
+                            node.as_ref(),
+                            crate::provider_context_reduction::NewProviderContextReduction {
+                                agent_did: &request.agent_did,
+                                requester_did: request.requester_did.as_deref(),
+                                session_id: &request.session_id,
+                                request_id: &request.request_id,
+                                request_doc_id: &request.doc_id,
+                                request_commit_cid: &request_commit_cid,
+                                reduction_index,
+                                turn_index: compaction_request.turn_index,
+                                parent_reduction_key: compaction_request
+                                    .prior_reduction_keys
+                                    .last()
+                                    .map(String::as_str),
+                                producer_call: producer_call.as_ref(),
+                                source_boundary: &source_boundary,
+                                compacted_prefix,
+                                retained_suffix,
+                                checkpoint_messages: &provider_messages,
+                                summary: &summary,
+                                original_tokens: result.original_token_estimate,
+                                compacted_tokens: result.compacted_token_estimate,
                             },
                         )
                         .await?;

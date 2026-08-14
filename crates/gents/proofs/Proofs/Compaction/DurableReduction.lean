@@ -11,9 +11,9 @@ times in that request, and must never participate in session-prefix dropping.
 This model gives that entity its own immutable store.  The checkpoint is opaque
 but exact; production persists the native post-reduction message list.  The
 source boundary is opaque too; production binds it to the exact request version
-and the ordered AgentMessage document/version manifest visible at reduction
-time.  Pair closure is a creation precondition rather than something recovery
-is allowed to repair.
+and a bounded canonical AgentMessage high-water identity while the stored split
+contains the exact source projection. Pair closure is a creation precondition
+rather than something recovery is allowed to repair.
 -/
 
 namespace Compaction.DurableReduction
@@ -21,6 +21,7 @@ namespace Compaction.DurableReduction
 abbrev AgentDid := Nat
 abbrev ProducerCallId := Nat
 abbrev RequestDocId := Nat
+abbrev ClaimCommitId := Nat
 
 /-- One reduction result.  Retry/repair attempts of the summary provider call
 are provenance of `producerCall`, not new reduction identities. -/
@@ -45,6 +46,9 @@ structure Projection where
 
 /-- The immutable fact value stored under a reduction key. -/
 structure Fact where
+  /-- Claim-local request version.  It is exact provenance for this fact, not a
+  chain-wide epoch and not part of `ReductionKey`. -/
+  claimCommit : ClaimCommitId
   sourceBoundary : SourceBoundary
   sourceProjection : Projection
   checkpoint : Projection
@@ -132,6 +136,9 @@ must use the next ordinal and link its parent. -/
 theorem provider_attempt_not_in_reduction_identity
     (key : ReductionKey) (_firstAttempt _retryAttempt : Nat) : key = key := rfl
 
+theorem claim_commit_not_in_reduction_identity
+    (key : ReductionKey) (_firstClaim _laterClaim : ClaimCommitId) : key = key := rfl
+
 theorem turn_separates_reductions (key : ReductionKey) {a b : Nat} (h : a ≠ b) :
     ({ key with turnIndex := a } : ReductionKey) ≠ { key with turnIndex := b } := by
   intro heq
@@ -148,6 +155,36 @@ theorem fork_separates_reductions
     ({ key with sessionId := a } : ReductionKey) ≠ { key with sessionId := b } := by
   intro heq
   exact h (congrArg ReductionKey.sessionId heq)
+
+/-! ## Durable consumption evidence -/
+
+inductive CaptureKind where
+  | inference
+  | title
+  | compaction
+  deriving BEq, DecidableEq, Repr
+
+structure CaptureCitation where
+  kind : CaptureKind
+  reductionKeys : List ReductionKey
+  deriving Repr
+
+/-- A rendered capture consumes a checkpoint only by explicitly citing its key
+from the owned inference scope.  Timestamps and unrelated capture kinds are not
+evidence. -/
+def consumedBy (key : ReductionKey) (captures : List CaptureCitation) : Bool :=
+  captures.any fun capture =>
+    match capture.kind with
+    | .inference => decide (key ∈ capture.reductionKeys)
+    | .title | .compaction => false
+
+@[simp] theorem title_citation_does_not_consume (key : ReductionKey) :
+    consumedBy key [{ kind := .title, reductionKeys := [key] }] = false := by
+  rfl
+
+@[simp] theorem inference_citation_consumes (key : ReductionKey) :
+    consumedBy key [{ kind := .inference, reductionKeys := [key] }] = true := by
+  simp [consumedBy]
 
 /-! ## Persistence fence and recovery -/
 

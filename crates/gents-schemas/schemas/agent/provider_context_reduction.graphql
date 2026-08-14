@@ -29,8 +29,9 @@ type ProviderContextReduction @branchable {
     parent_reduction_key: String @index @immutable
     producer_call_id: String @index @immutable
     producer_call_seq: Int @immutable
-    # Versioned manifest of the exact AgentRequest version and ordered
-    # AgentMessage document/version boundary visible when reduction began.
+    # Versioned boundary containing the exact AgentRequest claim commit and the
+    # newest canonical AgentMessage document/version visible when reduction
+    # began. The exact source projection lives in the bounded split below.
     source_boundary_json: String @immutable
     # Exact pair-safe split of the source native provider projection. Their
     # concatenation is the source view; no future mutable message count is

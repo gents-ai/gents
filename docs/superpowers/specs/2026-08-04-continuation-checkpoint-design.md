@@ -113,16 +113,21 @@ session ID, request document ID, turn index, reduction index)`. Redelivery with
 the same immutable payload is idempotent. Rebinding that key to a different
 source boundary, split, producer call, checkpoint, or parent is an integrity
 error. The split persists the exact compacted prefix and retained suffix, and
-the source boundary pins the physical request commit plus the ordered
-`AgentMessage` document/version manifest. It does not rely on a mutable message
-count.
+the source boundary pins the physical claim commit plus the newest canonical
+`AgentMessage` document/version visible when reduction began. That bounded
+high-water identity and the exact stored split avoid both a mutable message
+count and an unbounded session snapshot. Claim commits are provenance of each
+fact, not a request-chain invariant: a later claim may append the next reduction
+under a different commit.
 
 The owned loop may activate a checkpoint only after create-and-compare
 persistence succeeds. A crash after summary completion but before the next
 provider call therefore leaves a durable unconsumed checkpoint. Recovery
 restores that exact checkpoint and its ordered reduction-key chain. Once a
-`RenderedRequest.AssemblyTrace` cites the latest key, recovery deliberately
-derives from canonical history instead of assuming an unknown provider outcome.
+inference-scope `RenderedRequest.AssemblyTrace` cites the latest key, recovery
+deliberately derives from canonical history instead of assuming an unknown
+provider outcome. Title and compaction captures never count as consumption, and
+wall-clock ordering is not consulted.
 Repeated reductions form a strict parent chain within one request. Forked and
 concurrent requests receive distinct identities; these local audit payloads are
 not copied by session fork or participant replication.

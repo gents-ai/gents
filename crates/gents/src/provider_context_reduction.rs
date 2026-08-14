@@ -13,7 +13,7 @@ use crate::graphql::escape_graphql_string;
 use crate::llm::message::Message;
 
 const REDUCTION_KEY_PREFIX: &str = "provider-context-reduction:v1";
-const SOURCE_BOUNDARY_VERSION: u32 = 1;
+const SOURCE_BOUNDARY_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptFactRef {
@@ -27,7 +27,11 @@ pub struct SourceBoundary {
     pub boundary_version: u32,
     pub request_doc_id: String,
     pub request_commit_cid: String,
-    pub transcript: Vec<TranscriptFactRef>,
+    /// The newest canonical transcript fact visible when the exact provider
+    /// source projection was reduced. The projection itself is stored in the
+    /// prefix/suffix payloads; this bounded high-water mark ties it to the
+    /// append-only transcript without copying the session or its history.
+    pub canonical_through: Option<TranscriptFactRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,11 +132,11 @@ pub async fn capture_source_boundary(
         r#"{{
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{}" }} }},
-                order: {{ sequence: ASC }}
+                order: {{ sequence: DESC }},
+                limit: 1
             ) {{
                 _docID
                 sequence
-                _version {{ cid height fieldName }}
             }}
         }}"#,
         escape_graphql_string(session_id)
@@ -151,26 +155,37 @@ pub async fn capture_source_boundary(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let mut transcript = Vec::with_capacity(rows.len());
-    for row in rows {
-        let doc_id = required_str(&row, "_docID")?;
-        let sequence = row
-            .get("sequence")
-            .and_then(Value::as_i64)
-            .with_context(|| format!("AgentMessage {doc_id} has no sequence"))?;
-        let commit_cid = composite_version_cid(&row)
+    let canonical_through = match rows.as_slice() {
+        [] => None,
+        [row] => {
+            let doc_id = required_str(row, "_docID")?;
+            let sequence = row
+                .get("sequence")
+                .and_then(Value::as_i64)
+                .with_context(|| format!("AgentMessage {doc_id} has no sequence"))?;
+            let commit = crate::graphql::newest_document_composite_commit(
+                node,
+                doc_id,
+                &format!("AgentMessage {doc_id} source boundary"),
+            )
+            .await?
             .with_context(|| format!("AgentMessage {doc_id} has no composite commit CID"))?;
-        transcript.push(TranscriptFactRef {
-            doc_id: doc_id.to_string(),
-            sequence,
-            commit_cid: commit_cid.to_string(),
-        });
-    }
+            Some(TranscriptFactRef {
+                doc_id: doc_id.to_string(),
+                sequence,
+                commit_cid: commit.cid,
+            })
+        }
+        rows => anyhow::bail!(
+            "capturing provider-context source boundary returned {} high-water rows",
+            rows.len()
+        ),
+    };
     Ok(SourceBoundary {
         boundary_version: SOURCE_BOUNDARY_VERSION,
         request_doc_id: request_doc_id.to_string(),
         request_commit_cid: request_commit_cid.to_string(),
-        transcript,
+        canonical_through,
     })
 }
 
@@ -353,7 +368,7 @@ pub async fn load_unconsumed_for_request(
         .map(|row| row.reduction_key.clone())
         .collect::<Vec<_>>();
     let rendered = format!(
-        r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ provenance_json created_at }} }}"#,
+        r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ capture_scope turn_index provenance_json }} }}"#,
         escape_graphql_string(request_doc_id)
     );
     let response = node.execute(&rendered).await;
@@ -363,47 +378,65 @@ pub async fn load_unconsumed_for_request(
             response.errors
         );
     }
-    let latest_created_at = chrono::DateTime::parse_from_rfc3339(&latest.created_at)
-        .context("latest ProviderContextReduction has invalid created_at")?;
-    let later_captures = response
+    let captures = response
         .data
         .as_ref()
         .and_then(|data| data.get("RenderedRequest"))
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|row| {
-            row.get("created_at")
-                .and_then(Value::as_str)
-                .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
-                .is_some_and(|created_at| created_at >= latest_created_at)
-        })
-        .collect::<Vec<_>>();
+        .cloned()
+        .unwrap_or_default();
     let mut consumed = false;
-    for row in &later_captures {
-        let raw = row
+    for row in captures {
+        let scope = row
+            .get("capture_scope")
+            .and_then(Value::as_str)
+            .context("RenderedRequest has no capture_scope")?;
+        let turn_index = row
+            .get("turn_index")
+            .and_then(Value::as_i64)
+            .context("RenderedRequest has no turn_index")?;
+        let provenance = row
             .get("provenance_json")
             .and_then(Value::as_str)
-            .context("post-reduction RenderedRequest has no provenance manifest")?;
-        let parsed = gents_protocol::rendered_request::ProvenanceManifest::parse(raw)
-            .context("post-reduction RenderedRequest has malformed provenance")?;
-        let gents_protocol::rendered_request::ParsedProvenance::Manifest(manifest) = parsed else {
-            anyhow::bail!(
-                "post-reduction RenderedRequest has unsupported provenance; consumption is ambiguous"
-            );
-        };
-        consumed |= manifest
-            .assembly_trace
-            .reduction_keys
-            .iter()
-            .any(|key| key == &latest.reduction_key);
-    }
-    if !later_captures.is_empty() && !consumed {
-        anyhow::bail!(
-            "post-reduction RenderedRequest does not cite the active reduction; consumption is ambiguous"
-        );
+            .context("RenderedRequest has no provenance manifest")?;
+        consumed |= rendered_capture_cites_reduction(
+            scope,
+            turn_index,
+            provenance,
+            latest.turn_index,
+            &latest.reduction_key,
+        )?;
     }
     Ok((!consumed).then(|| (latest.clone(), active_keys)))
+}
+
+/// Consumption is an explicit join from an inference capture to a reduction,
+/// never an inference from clocks or unrelated capture scopes.
+pub fn rendered_capture_cites_reduction(
+    capture_scope: &str,
+    capture_turn_index: i64,
+    provenance_json: &str,
+    reduction_turn_index: i64,
+    reduction_key: &str,
+) -> Result<bool> {
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind, ParsedProvenance};
+
+    let scope = capture_scope
+        .parse::<CaptureScope>()
+        .context("RenderedRequest has malformed capture_scope")?;
+    if scope.kind != CaptureScopeKind::Inference || capture_turn_index < reduction_turn_index {
+        return Ok(false);
+    }
+    let parsed = gents_protocol::rendered_request::ProvenanceManifest::parse(provenance_json)
+        .context("inference RenderedRequest has malformed provenance")?;
+    let ParsedProvenance::Manifest(manifest) = parsed else {
+        anyhow::bail!("inference RenderedRequest has unsupported provenance");
+    };
+    Ok(manifest
+        .assembly_trace
+        .reduction_keys
+        .iter()
+        .any(|key| key == reduction_key))
 }
 
 const REDUCTION_FIELDS: &str = "_docID reduction_key agent_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json summary messages_compacted original_tokens compacted_tokens created_at";
@@ -561,7 +594,6 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
             || row.session_id != first.session_id
             || row.request_id != first.request_id
             || row.request_doc_id != first.request_doc_id
-            || row.request_commit_cid != first.request_commit_cid
         {
             anyhow::bail!(
                 "ProviderContextReduction {} rebinds its request-local chain",
@@ -624,10 +656,9 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
             );
         }
         let checkpoint = row.checkpoint_messages()?;
-        let expected_checkpoint = checkpoint_from_suffix(&suffix, &row.summary);
-        if checkpoint.is_empty() || checkpoint != expected_checkpoint {
+        if !checkpoint_matches_stored_projection(&checkpoint, &suffix, &row.summary) {
             anyhow::bail!(
-                "ProviderContextReduction {} checkpoint disagrees with its summary and retained suffix",
+                "ProviderContextReduction {} checkpoint has invalid stored projection structure",
                 row.reduction_key
             );
         }
@@ -649,6 +680,20 @@ fn checkpoint_from_suffix(suffix: &[Message], summary: &str) -> Vec<Message> {
     checkpoint
 }
 
+fn checkpoint_matches_stored_projection(
+    checkpoint: &[Message],
+    suffix: &[Message],
+    summary: &str,
+) -> bool {
+    if checkpoint.is_empty() {
+        return false;
+    }
+    if summary.trim().is_empty() {
+        return checkpoint == suffix;
+    }
+    checkpoint.len() == suffix.len() + 1 && checkpoint.get(1..) == Some(suffix)
+}
+
 fn validate_source_boundary(
     boundary: &SourceBoundary,
     request_doc_id: &str,
@@ -662,21 +707,10 @@ fn validate_source_boundary(
             "provider-context reduction source boundary is bound to another request version"
         );
     }
-    let mut prior_sequence = None;
-    let mut doc_ids = std::collections::BTreeSet::new();
-    for row in &boundary.transcript {
+    if let Some(row) = &boundary.canonical_through {
         if row.doc_id.is_empty() || row.commit_cid.is_empty() {
             anyhow::bail!("provider-context reduction source boundary has an empty fact identity");
         }
-        if prior_sequence.is_some_and(|prior| row.sequence <= prior) {
-            anyhow::bail!("provider-context reduction source boundary is not strictly ordered");
-        }
-        if !doc_ids.insert(row.doc_id.as_str()) {
-            anyhow::bail!(
-                "provider-context reduction source boundary repeats an AgentMessage document"
-            );
-        }
-        prior_sequence = Some(row.sequence);
     }
     Ok(())
 }
@@ -691,16 +725,6 @@ fn required_str<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
     row.get(field)
         .and_then(Value::as_str)
         .with_context(|| format!("row has no string {field}"))
-}
-
-fn composite_version_cid(row: &Value) -> Option<&str> {
-    row.get("_version")
-        .and_then(Value::as_array)?
-        .iter()
-        .find(|version| version.get("fieldName").and_then(Value::as_str) == Some("_C"))
-        .or_else(|| row.get("_version")?.as_array()?.first())?
-        .get("cid")?
-        .as_str()
 }
 
 #[cfg(test)]
@@ -758,11 +782,11 @@ mod tests {
             boundary_version: SOURCE_BOUNDARY_VERSION,
             request_doc_id: request_doc_id.to_string(),
             request_commit_cid: "request-cid".to_string(),
-            transcript: vec![TranscriptFactRef {
+            canonical_through: Some(TranscriptFactRef {
                 doc_id: "message-doc".to_string(),
                 sequence: 1,
                 commit_cid: "message-cid".to_string(),
-            }],
+            }),
         }
     }
 
@@ -880,6 +904,8 @@ mod tests {
         assert_eq!(restored.1, vec![first.reduction_key.clone()]);
 
         let second_checkpoint = checkpoint_from_suffix(&suffix, "summary 2");
+        let mut second_source = source.clone();
+        second_source.request_commit_cid = "request-cid-after-reclaim".to_string();
         let second = persist(
             &node,
             NewProviderContextReduction {
@@ -888,12 +914,12 @@ mod tests {
                 session_id: "session",
                 request_id: "request",
                 request_doc_id: "request-doc",
-                request_commit_cid: "request-cid",
+                request_commit_cid: "request-cid-after-reclaim",
                 reduction_index: 2,
                 turn_index: 4,
                 parent_reduction_key: Some(&first.reduction_key),
                 producer_call: None,
-                source_boundary: &source,
+                source_boundary: &second_source,
                 compacted_prefix: &prefix,
                 retained_suffix: &suffix,
                 checkpoint_messages: &second_checkpoint,
@@ -919,6 +945,50 @@ mod tests {
             restored.1,
             vec![first.reduction_key.clone(), second.reduction_key]
         );
+
+        let title_manifest = gents_protocol::rendered_request::ProvenanceManifest::captured_only(
+            "title.1".to_string(),
+            None,
+            None,
+            gents_protocol::rendered_request::AssemblyTrace::from_effective_messages(
+                gents_protocol::rendered_request::AssemblyBuildPath::Budgeted,
+                vec![Message::user("title")],
+            ),
+        );
+        let title_provenance =
+            escape_graphql_string(&serde_json::to_string(&title_manifest).unwrap());
+        let title_capture = format!(
+            r#"mutation {{ create_RenderedRequest(input: {{
+                capture_key: "title-after-reduction"
+                request_doc_id: "request-doc"
+                request_commit_cid: "request-cid-after-reclaim"
+                request_id: "request"
+                session_id: "session"
+                agent_did: "did:key:agent"
+                requester_did: "did:key:user"
+                behavior_id: "behavior"
+                capture_scope: "title.1"
+                turn_index: 99
+                attempt: 0
+                capture_version: 1
+                model_name: "model"
+                source: "openai_responses"
+                request_json: "{{}}"
+                provenance_json: "{title_provenance}"
+                created_at: "2200-08-14T00:00:00Z"
+            }}) {{ _docID }} }}"#
+        );
+        let response = node.execute(&title_capture).await;
+        assert!(
+            !response.has_errors(),
+            "title seed failed: {:?}",
+            response.errors
+        );
+        assert!(load_unconsumed_for_request(&node, "request-doc")
+            .await
+            .unwrap()
+            .is_some());
+
         let coexistence = node
             .execute(
                 r#"{ CompactionEntry(filter: { session_id: { _eq: "session" } }) { compaction_key }
@@ -969,7 +1039,7 @@ mod tests {
                 source: "openai_responses"
                 request_json: "{{}}"
                 provenance_json: "{provenance}"
-                created_at: "2099-08-14T00:00:00Z"
+                created_at: "1900-08-14T00:00:00Z"
             }}) {{ _docID }} }}"#
         );
         let response = node.execute(&rendered).await;
@@ -1051,8 +1121,25 @@ mod tests {
         assert!(error.to_string().contains("open tool-call/result pair"));
     }
 
+    #[test]
+    fn recovery_treats_the_stored_checkpoint_text_as_authoritative() {
+        let suffix = vec![Message::user("current")];
+        let checkpoint = [
+            vec![crate::prompt::LayeredPromptBuilder::system_reminder(
+                "wording from an older runtime",
+            )],
+            suffix.clone(),
+        ]
+        .concat();
+        assert!(checkpoint_matches_stored_projection(
+            &checkpoint,
+            &suffix,
+            "durable summary"
+        ));
+    }
+
     #[tokio::test]
-    async fn source_boundary_pins_ordered_message_commit_cids() {
+    async fn source_boundary_pins_bounded_canonical_high_water() {
         let node = EmbeddedNode::builder().build().await.unwrap();
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for sequence in [2, 1] {
@@ -1077,17 +1164,9 @@ mod tests {
             capture_source_boundary(&node, "session-boundary", "request-doc", "request-cid")
                 .await
                 .unwrap();
-        assert_eq!(
-            boundary
-                .transcript
-                .iter()
-                .map(|row| row.sequence)
-                .collect::<Vec<_>>(),
-            vec![1, 2]
-        );
-        assert!(boundary
-            .transcript
-            .iter()
-            .all(|row| !row.doc_id.is_empty() && !row.commit_cid.is_empty()));
+        let high_water = boundary.canonical_through.expect("canonical high-water");
+        assert_eq!(high_water.sequence, 2);
+        assert!(!high_water.doc_id.is_empty());
+        assert!(!high_water.commit_cid.is_empty());
     }
 }
