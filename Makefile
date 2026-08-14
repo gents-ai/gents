@@ -18,6 +18,12 @@ REVIEW_PR ?= auto
 REVIEW_PORT ?= 19191
 REVIEW_JOB_ID ?=
 REVIEW_KEEP_HOME ?=
+REVIEW_CONTEXT_WINDOW ?= 131072
+REVIEW_MAX_OUTPUT_TOKENS ?= 32768
+REVIEW_MAX_TURNS ?= 1000000
+REVIEW_COMPACTION_THRESHOLD ?= 0.85
+REVIEW_DEADLINE_SECS ?= 86400
+REVIEW_AWAIT_TIMEOUT_SECS ?= 86400
 
 .DEFAULT_GOAL := help
 
@@ -84,6 +90,8 @@ help:
 	@echo "    REVIEW_MAX_LENSES=12      Set the automatic upper bound"
 	@echo "    REVIEW_PR=auto            Discover the current branch's GitHub PR"
 	@echo "    REVIEW_KEEP_HOME=1        Keep the generated runtime home"
+	@echo "    REVIEW_CONTEXT_WINDOW=N   Match the serving endpoint's context window"
+	@echo "    REVIEW_MAX_OUTPUT_TOKENS=N Reserve output tokens per model turn"
 	@echo
 	@echo "Worktrees:"
 	@echo "  make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]"
@@ -126,6 +134,12 @@ review:
 	GENTS_REVIEW_MIN_LENSES="$(REVIEW_MIN_LENSES)" \
 	GENTS_REVIEW_MAX_LENSES="$(REVIEW_MAX_LENSES)" \
 	GENTS_REVIEW_PR_NUMBER="$$review_pr" \
+	GENTS_REVIEW_CONTEXT_WINDOW="$(REVIEW_CONTEXT_WINDOW)" \
+	GENTS_REVIEW_MAX_OUTPUT_TOKENS="$(REVIEW_MAX_OUTPUT_TOKENS)" \
+	GENTS_REVIEW_MAX_TURNS="$(REVIEW_MAX_TURNS)" \
+	GENTS_REVIEW_COMPACTION_THRESHOLD="$(REVIEW_COMPACTION_THRESHOLD)" \
+	GENTS_REVIEW_DEADLINE_SECS="$(REVIEW_DEADLINE_SECS)" \
+	GENTS_REVIEW_AWAIT_TIMEOUT_SECS="$(REVIEW_AWAIT_TIMEOUT_SECS)" \
 	$(CARGO) run -p gents-cli -- demo run "$(CURDIR)/demo/code-review" \
 		--http-port "$(REVIEW_PORT)" \
 		$(if $(REVIEW_JOB_ID),--job-id "$(REVIEW_JOB_ID)",) \

@@ -1,12 +1,13 @@
 {
   "profile_id": "review-profile",
   "display_name": "Code review profile",
-  "context_window": 131072,
-  "max_output_tokens": 32768,
-  "max_turns": 96,
+  "context_window": ${GENTS_REVIEW_CONTEXT_WINDOW:-131072},
+  "max_output_tokens": ${GENTS_REVIEW_MAX_OUTPUT_TOKENS:-32768},
+  "max_turns": ${GENTS_REVIEW_MAX_TURNS:-1000000},
   "temperature": 0.1,
   "top_p": null,
   "top_k": null,
   "min_p": null,
-  "frequency_penalty": null
+  "frequency_penalty": null,
+  "deadline_duration_secs": ${GENTS_REVIEW_DEADLINE_SECS:-86400}
 }

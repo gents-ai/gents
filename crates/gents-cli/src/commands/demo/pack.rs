@@ -2774,6 +2774,12 @@ mod tests {
                 document.get("command_network_mode").and_then(Value::as_str),
                 Some("enabled")
             );
+            assert_eq!(
+                document
+                    .get("enable_context_budget")
+                    .and_then(Value::as_bool),
+                Some(true)
+            );
             assert!(document
                 .get("backgroundable_tool_names")
                 .and_then(Value::as_array)
@@ -2782,6 +2788,65 @@ mod tests {
                         .iter()
                         .any(|name| name.as_str() == Some("bash_unrestricted"))
                 }));
+        }
+        for behavior in [
+            "review-recon",
+            "review-scan",
+            "review-verify",
+            "review-triage",
+        ] {
+            let document = read_pack_json(
+                &pack
+                    .join("agent-behaviors")
+                    .join(behavior)
+                    .join("object.json"),
+            )
+            .unwrap_or_else(|error| panic!("{behavior} should load: {error:#}"));
+            assert_eq!(
+                document.get("compaction_strategy").and_then(Value::as_str),
+                Some("StripThenSummarize")
+            );
+            assert_eq!(
+                document.get("compaction_threshold").and_then(Value::as_f64),
+                Some(0.85)
+            );
+        }
+        let triage_tools = read_pack_json(
+            &pack
+                .join("tool-selections")
+                .join("review-triage-tools")
+                .join("object.json"),
+        )
+        .expect("review-triage-tools should load");
+        assert_eq!(
+            triage_tools
+                .get("enable_context_budget")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        for profile in [
+            "review-recon-profile",
+            "review-scan-profile",
+            "review-verify-profile",
+            "review-profile",
+        ] {
+            let document = read_pack_json(
+                &pack
+                    .join("inference-profiles")
+                    .join(profile)
+                    .join("object.json"),
+            )
+            .unwrap_or_else(|error| panic!("{profile} should load: {error:#}"));
+            assert_eq!(
+                document.get("max_turns").and_then(Value::as_u64),
+                Some(1_000_000)
+            );
+            assert_eq!(
+                document
+                    .get("deadline_duration_secs")
+                    .and_then(Value::as_u64),
+                Some(86_400)
+            );
         }
     }
 

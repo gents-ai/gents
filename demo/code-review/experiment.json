@@ -96,5 +96,5 @@
       }
     }
   },
-  "await_timeout_secs": 1800
+  "await_timeout_secs": ${GENTS_REVIEW_AWAIT_TIMEOUT_SECS:-86400}
 }

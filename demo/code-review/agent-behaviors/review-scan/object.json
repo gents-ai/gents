@@ -10,8 +10,8 @@
   "model_name": "${GENTS_REVIEW_REVIEWER_MODEL:-d4f}",
   "tool_selection_id": "review-scan-tools",
   "inference_profile_id": "review-scan-profile",
-  "compaction_strategy": null,
-  "compaction_threshold": null,
+  "compaction_strategy": "StripThenSummarize",
+  "compaction_threshold": ${GENTS_REVIEW_COMPACTION_THRESHOLD:-0.85},
   "enabled": true,
   "skill_refs": [],
   "skill_excludes": []

@@ -10,8 +10,8 @@
   "model_name": "${GENTS_REVIEW_COORDINATOR_MODEL:-GLM-5.2}",
   "tool_selection_id": "review-recon-tools",
   "inference_profile_id": "review-recon-profile",
-  "compaction_strategy": null,
-  "compaction_threshold": null,
+  "compaction_strategy": "StripThenSummarize",
+  "compaction_threshold": ${GENTS_REVIEW_COMPACTION_THRESHOLD:-0.85},
   "enabled": true,
   "skill_refs": [],
   "skill_excludes": []

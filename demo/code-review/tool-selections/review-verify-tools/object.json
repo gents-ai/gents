@@ -14,7 +14,7 @@
   "allowed_mcp_service_ids": [],
   "enable_memory": false,
   "enable_session_history_tool": false,
-  "enable_context_budget": false,
+  "enable_context_budget": true,
   "enable_defra_query": true,
   "defra_query_collections": ["CandidateFinding"],
   "subagent_targets": [],
