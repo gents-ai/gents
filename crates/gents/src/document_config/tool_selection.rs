@@ -140,12 +140,10 @@ pub struct WriteToolOutputObligation {
 }
 
 impl WriteToolOutputObligation {
-    pub fn applies_to(&self, origin: crate::lifecycle::ExecutionOrigin) -> bool {
+    pub fn applies_to(&self, has_automated_trigger_lineage: bool) -> bool {
         match self.scope {
             WriteToolOutputObligationScope::Request => true,
-            WriteToolOutputObligationScope::Trigger => {
-                origin == crate::lifecycle::ExecutionOrigin::Scheduled
-            }
+            WriteToolOutputObligationScope::Trigger => has_automated_trigger_lineage,
         }
     }
 

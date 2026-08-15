@@ -5,10 +5,15 @@ inductive Scope
   | trigger
   deriving DecidableEq, Repr
 
-def active (scope : Scope) (scheduled : Bool) : Bool :=
+structure ActivationContext where
+  executionScheduled : Bool
+  hasAutomatedTriggerLineage : Bool
+  deriving DecidableEq, Repr
+
+def active (scope : Scope) (context : ActivationContext) : Bool :=
   match scope with
   | .request => true
-  | .trigger => scheduled
+  | .trigger => context.hasAutomatedTriggerLineage
 
 structure State where
   minimumWrites : Nat
@@ -48,11 +53,23 @@ theorem enough_writes_eventually_complete (minimumWrites : Nat) :
   simp [decideTerminal]
 
 theorem trigger_obligation_inactive_for_interactive :
-    active .trigger false = false := by
+    active .trigger
+      { executionScheduled := false, hasAutomatedTriggerLineage := false } = false := by
   rfl
 
 theorem request_obligation_active_for_interactive :
-    active .request false = true := by
+    active .request
+      { executionScheduled := false, hasAutomatedTriggerLineage := false } = true := by
+  rfl
+
+theorem trigger_obligation_inactive_for_scheduled_control :
+    active .trigger
+      { executionScheduled := true, hasAutomatedTriggerLineage := false } = false := by
+  rfl
+
+theorem trigger_obligation_active_for_automated_trigger :
+    active .trigger
+      { executionScheduled := true, hasAutomatedTriggerLineage := true } = true := by
   rfl
 
 end CompletionRetry.OutputObligation

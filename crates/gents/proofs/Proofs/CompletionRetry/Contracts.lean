@@ -254,7 +254,20 @@ def cases : List CompletionRetryCase :=
       "trigger_output_obligation_inactive_interactive"
       "trigger_scope_activation"
       { minimumWrites := 1, completedWrites := 0 }
-      (OutputObligation.active .trigger false)
+      (OutputObligation.active .trigger
+        { executionScheduled := false, hasAutomatedTriggerLineage := false })
+  , outputObligationCase
+      "trigger_output_obligation_inactive_scheduled_control"
+      "trigger_scope_activation"
+      { minimumWrites := 1, completedWrites := 0 }
+      (OutputObligation.active .trigger
+        { executionScheduled := true, hasAutomatedTriggerLineage := false })
+  , outputObligationCase
+      "trigger_output_obligation_active_automated_trigger"
+      "trigger_scope_activation"
+      { minimumWrites := 1, completedWrites := 0 }
+      (OutputObligation.active .trigger
+        { executionScheduled := true, hasAutomatedTriggerLineage := true })
   ]
 
 def CompletionRetryCase.toJson (c : CompletionRetryCase) : String :=

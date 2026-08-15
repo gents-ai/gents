@@ -16,7 +16,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        16,
+        18,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
@@ -49,6 +49,8 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "unsatisfied_output_obligation_continues",
             "satisfied_output_obligation_completes",
             "trigger_output_obligation_inactive_interactive",
+            "trigger_output_obligation_inactive_scheduled_control",
+            "trigger_output_obligation_active_automated_trigger",
         ]),
         "CompletionRetry witness names drifted"
     );
@@ -78,9 +80,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "unsatisfied_output_obligation_continues" => {
                 assert_eq!(case.expected_phase.as_deref(), Some("turn_closed"));
                 let configured = output_obligation_config();
-                assert!(configured[0]
-                    .1
-                    .applies_to(gents::lifecycle::ExecutionOrigin::Scheduled));
+                assert!(configured[0].1.applies_to(true));
                 assert_eq!(configured[0].1.minimum_writes, 1);
                 assert!(!configured[0].1.is_satisfied(0));
             }
@@ -90,9 +90,15 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             }
             "trigger_output_obligation_inactive_interactive" => {
                 assert_eq!(case.expected_phase.as_deref(), Some("turn_done"));
-                assert!(!output_obligation_config()[0]
-                    .1
-                    .applies_to(gents::lifecycle::ExecutionOrigin::Interactive));
+                assert!(!output_obligation_config()[0].1.applies_to(false));
+            }
+            "trigger_output_obligation_inactive_scheduled_control" => {
+                assert_eq!(case.expected_phase.as_deref(), Some("turn_done"));
+                assert!(!output_obligation_config()[0].1.applies_to(false));
+            }
+            "trigger_output_obligation_active_automated_trigger" => {
+                assert_eq!(case.expected_phase.as_deref(), Some("turn_closed"));
+                assert!(output_obligation_config()[0].1.applies_to(true));
             }
             other => panic!("unhandled CompletionRetry witness {other}"),
         }

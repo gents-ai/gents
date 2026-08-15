@@ -13,13 +13,13 @@ pub(crate) struct ActiveOutputObligation {
     pub(crate) contract: crate::document_config::WriteToolOutputObligation,
 }
 
-pub(crate) fn active_for_origin(
+pub(crate) fn active_for_request(
     configured: &[(String, crate::document_config::WriteToolOutputObligation)],
-    origin: crate::lifecycle::ExecutionOrigin,
+    has_automated_trigger_lineage: bool,
 ) -> Vec<ActiveOutputObligation> {
     configured
         .iter()
-        .filter(|(_, obligation)| obligation.applies_to(origin))
+        .filter(|(_, obligation)| obligation.applies_to(has_automated_trigger_lineage))
         .map(|(tool_name, obligation)| ActiveOutputObligation {
             tool_name: tool_name.clone(),
             contract: obligation.clone(),
@@ -131,7 +131,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn trigger_scope_is_inert_for_interactive_requests() {
+    fn trigger_scope_follows_automated_trigger_lineage() {
         let configured = vec![(
             "write_result".to_string(),
             crate::document_config::WriteToolOutputObligation {
@@ -139,12 +139,9 @@ mod tests {
                 minimum_writes: 1,
             },
         )];
-        assert!(
-            active_for_origin(&configured, crate::lifecycle::ExecutionOrigin::Interactive)
-                .is_empty()
-        );
+        assert!(active_for_request(&configured, false).is_empty());
         assert_eq!(
-            active_for_origin(&configured, crate::lifecycle::ExecutionOrigin::Scheduled),
+            active_for_request(&configured, true),
             vec![ActiveOutputObligation {
                 tool_name: "write_result".to_string(),
                 contract: configured[0].1.clone(),

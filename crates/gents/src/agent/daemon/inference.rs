@@ -210,12 +210,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     self.loop_tools.len(),
                 )?;
                 loop_config.deadline = request_deadline;
-                let origin = crate::lifecycle::ExecutionOrigin::from_persisted(
-                    request.execution_origin.as_deref(),
-                );
-                let active_obligations = crate::agent::output_obligation::active_for_origin(
+                let active_obligations = crate::agent::output_obligation::active_for_request(
                     self.output_obligations.as_ref(),
-                    origin,
+                    request.has_automated_trigger_lineage(),
                 );
                 if !active_obligations.is_empty() {
                     loop_config.output_obligation_gate = Some(
@@ -834,6 +831,9 @@ mod tests {
             caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
             caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
             caused_by_parent_tool_call_doc_id: Some("parent-tool-call-doc".to_string()),
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            caused_by_source_doc_id: None,
             caused_by_correlation: None,
             caused_by_trigger_context: None,
         }
