@@ -82,6 +82,12 @@ impl ProviderContextReduction {
         serde_json::from_str(&self.source_boundary_json)
             .context("decoding ProviderContextReduction source_boundary_json")
     }
+
+    /// Only this newest checkpoint directly shapes the restored provider view;
+    /// `load_unconsumed_for_request` returns the full lineage separately.
+    pub fn active_reduction_keys(&self) -> Vec<String> {
+        vec![self.reduction_key.clone()]
+    }
 }
 
 #[derive(Debug)]
@@ -363,13 +369,24 @@ pub async fn load_unconsumed_for_request(
     let Some(latest) = reductions.last() else {
         return Ok(None);
     };
-    let active_keys = reductions
+    let lineage_keys = reductions
         .iter()
         .map(|row| row.reduction_key.clone())
         .collect::<Vec<_>>();
     let rendered = format!(
-        r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ capture_scope turn_index provenance_json }} }}"#,
-        escape_graphql_string(request_doc_id)
+        r#"{{ RenderedRequest(
+            filter: {{
+                request_doc_id: {{ _eq: "{}" }}
+                capture_scope: {{ _like: "inference.%" }}
+                turn_index: {{ _ge: {} }}
+                provenance_json: {{ _like: "%{}%" }}
+            }},
+            order: [{{ turn_index: DESC }}, {{ attempt: DESC }}],
+            limit: 64
+        ) {{ capture_scope turn_index provenance_json }} }}"#,
+        escape_graphql_string(request_doc_id),
+        latest.turn_index,
+        escape_graphql_string(&latest.reduction_key)
     );
     let response = node.execute(&rendered).await;
     if response.has_errors() {
@@ -387,56 +404,67 @@ pub async fn load_unconsumed_for_request(
         .unwrap_or_default();
     let mut consumed = false;
     for row in captures {
-        let scope = row
-            .get("capture_scope")
-            .and_then(Value::as_str)
-            .context("RenderedRequest has no capture_scope")?;
-        let turn_index = row
-            .get("turn_index")
-            .and_then(Value::as_i64)
-            .context("RenderedRequest has no turn_index")?;
-        let provenance = row
-            .get("provenance_json")
-            .and_then(Value::as_str)
-            .context("RenderedRequest has no provenance manifest")?;
+        let Some(scope) = row.get("capture_scope").and_then(Value::as_str) else {
+            tracing::warn!(
+                request_doc_id,
+                "ignoring RenderedRequest without capture scope"
+            );
+            continue;
+        };
+        let Some(turn_index) = row.get("turn_index").and_then(Value::as_i64) else {
+            tracing::warn!(
+                request_doc_id,
+                scope,
+                "ignoring RenderedRequest without turn index"
+            );
+            continue;
+        };
+        let Some(provenance) = row.get("provenance_json").and_then(Value::as_str) else {
+            tracing::warn!(
+                request_doc_id,
+                scope,
+                "ignoring RenderedRequest without provenance"
+            );
+            continue;
+        };
         consumed |= rendered_capture_cites_reduction(
             scope,
             turn_index,
             provenance,
             latest.turn_index,
             &latest.reduction_key,
-        )?;
+        );
     }
-    Ok((!consumed).then(|| (latest.clone(), active_keys)))
+    Ok((!consumed).then(|| (latest.clone(), lineage_keys)))
 }
 
-/// Consumption is an explicit join from an inference capture to a reduction,
-/// never an inference from clocks or unrelated capture scopes.
+/// Consumption is an explicit, supported join from an inference capture to a
+/// reduction, never an inference from clocks or unrelated/opaque rows.
 pub fn rendered_capture_cites_reduction(
     capture_scope: &str,
     capture_turn_index: i64,
     provenance_json: &str,
     reduction_turn_index: i64,
     reduction_key: &str,
-) -> Result<bool> {
+) -> bool {
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind, ParsedProvenance};
 
-    let scope = capture_scope
-        .parse::<CaptureScope>()
-        .context("RenderedRequest has malformed capture_scope")?;
-    if scope.kind != CaptureScopeKind::Inference || capture_turn_index < reduction_turn_index {
-        return Ok(false);
-    }
-    let parsed = gents_protocol::rendered_request::ProvenanceManifest::parse(provenance_json)
-        .context("inference RenderedRequest has malformed provenance")?;
-    let ParsedProvenance::Manifest(manifest) = parsed else {
-        anyhow::bail!("inference RenderedRequest has unsupported provenance");
+    let Ok(scope) = capture_scope.parse::<CaptureScope>() else {
+        return false;
     };
-    Ok(manifest
+    if scope.kind != CaptureScopeKind::Inference || capture_turn_index < reduction_turn_index {
+        return false;
+    }
+    let Ok(ParsedProvenance::Manifest(manifest)) =
+        gents_protocol::rendered_request::ProvenanceManifest::parse(provenance_json)
+    else {
+        return false;
+    };
+    manifest
         .assembly_trace
         .reduction_keys
         .iter()
-        .any(|key| key == reduction_key))
+        .any(|key| key == reduction_key)
 }
 
 const REDUCTION_FIELDS: &str = "_docID reduction_key agent_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json summary messages_compacted original_tokens compacted_tokens created_at";
@@ -942,6 +970,10 @@ mod tests {
             .unwrap();
         assert_eq!(restored.0.reduction_key, second.reduction_key);
         assert_eq!(
+            restored.0.active_reduction_keys(),
+            vec![second.reduction_key.clone()]
+        );
+        assert_eq!(
             restored.1,
             vec![first.reduction_key.clone(), second.reduction_key]
         );
@@ -989,6 +1021,72 @@ mod tests {
             .unwrap()
             .is_some());
 
+        let unsupported_provenance = escape_graphql_string(
+            &json!({
+                "manifest_version": 999,
+                "reduction_key": restored.0.reduction_key,
+            })
+            .to_string(),
+        );
+        let unsupported_capture = format!(
+            r#"mutation {{ create_RenderedRequest(input: {{
+                capture_key: "unsupported-inference-after-reduction"
+                request_doc_id: "request-doc"
+                request_commit_cid: "request-cid-after-reclaim"
+                request_id: "request"
+                session_id: "session"
+                agent_did: "did:key:agent"
+                requester_did: "did:key:user"
+                behavior_id: "behavior"
+                capture_scope: "inference.1"
+                turn_index: 4
+                attempt: 0
+                capture_version: 1
+                model_name: "model"
+                source: "openai_responses"
+                request_json: "{{}}"
+                provenance_json: "{unsupported_provenance}"
+                created_at: "2026-08-14T00:00:00Z"
+            }}) {{ _docID }} }}"#
+        );
+        let response = node.execute(&unsupported_capture).await;
+        assert!(
+            !response.has_errors(),
+            "unsupported inference seed failed: {:?}",
+            response.errors
+        );
+        let missing_provenance_capture = r#"mutation { create_RenderedRequest(input: {
+            capture_key: "missing-provenance-after-reduction"
+            request_doc_id: "request-doc"
+            request_commit_cid: "request-cid-after-reclaim"
+            request_id: "request"
+            session_id: "session"
+            agent_did: "did:key:agent"
+            requester_did: "did:key:user"
+            behavior_id: "behavior"
+            capture_scope: "inference.1"
+            turn_index: 4
+            attempt: 1
+            capture_version: 1
+            model_name: "model"
+            source: "openai_responses"
+            request_json: "{}"
+            created_at: "2026-08-14T00:00:01Z"
+        }) { _docID } }"#;
+        let response = node.execute(missing_provenance_capture).await;
+        assert!(
+            !response.has_errors(),
+            "missing-provenance inference seed failed: {:?}",
+            response.errors
+        );
+        assert!(
+            load_unconsumed_for_request(&node, "request-doc")
+                .await
+                .unwrap()
+                .is_some(),
+            "unsupported and incomplete captures are not consumption evidence"
+        );
+
         let coexistence = node
             .execute(
                 r#"{ CompactionEntry(filter: { session_id: { _eq: "session" } }) { compaction_key }
@@ -1018,7 +1116,7 @@ mod tests {
                 gents_protocol::rendered_request::AssemblyBuildPath::Budgeted,
                 second_checkpoint,
             )
-            .with_reduction_keys(restored.1),
+            .with_reduction_keys(vec![restored.0.reduction_key.clone()]),
         );
         let provenance = escape_graphql_string(&serde_json::to_string(&manifest).unwrap());
         let rendered = format!(
@@ -1033,7 +1131,7 @@ mod tests {
                 behavior_id: "behavior"
                 capture_scope: "inference.1"
                 turn_index: 4
-                attempt: 0
+                attempt: 2
                 capture_version: 1
                 model_name: "model"
                 source: "openai_responses"

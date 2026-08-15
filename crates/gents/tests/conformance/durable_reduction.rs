@@ -208,26 +208,29 @@ async fn generated_durable_reduction_cases_pin_identity_and_persist_before_send(
         );
 
         let cited_keys = |cites: bool| cites.then(|| vec![key.clone()]).unwrap_or_default();
-        let inference = rendered_capture_cites_reduction(
-            "inference.1",
-            i64::try_from(case.turn_index).unwrap(),
-            &provenance(
+        let inference_provenance = if case.inference_supported {
+            provenance(
                 "inference.1",
                 intended_checkpoint.clone(),
                 cited_keys(case.inference_cites),
-            ),
+            )
+        } else {
+            serde_json::json!({"manifest_version": 999}).to_string()
+        };
+        let inference = rendered_capture_cites_reduction(
+            "inference.1",
+            i64::try_from(case.turn_index).unwrap(),
+            &inference_provenance,
             i64::try_from(case.turn_index).unwrap(),
             &key,
-        )
-        .unwrap();
+        );
         let title = rendered_capture_cites_reduction(
             "title.1",
             i64::try_from(case.turn_index).unwrap(),
             &provenance("title.1", intended_checkpoint, cited_keys(case.title_cites)),
             i64::try_from(case.turn_index).unwrap(),
             &key,
-        )
-        .unwrap();
+        );
         assert_eq!(
             inference || title,
             case.consumed,
@@ -235,6 +238,21 @@ async fn generated_durable_reduction_cases_pin_identity_and_persist_before_send(
             case.name
         );
     }
+
+    assert!(!rendered_capture_cites_reduction(
+        "malformed-scope",
+        0,
+        "{not-json",
+        0,
+        "reduction-key",
+    ));
+    assert!(!rendered_capture_cites_reduction(
+        "inference.1",
+        0,
+        "{not-json",
+        0,
+        "reduction-key",
+    ));
 }
 
 fn result_is_send_permitted(outcome: &str, pair_closed: bool) -> bool {

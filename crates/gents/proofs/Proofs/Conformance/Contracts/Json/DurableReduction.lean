@@ -17,6 +17,7 @@ def durableReductionCaseJson (witness : DurableReductionCase) : String :=
     ++ "\"prior_claim_commit\":" ++ jsonOptionalNat witness.priorClaimCommit ++ ","
     ++ "\"pair_closed\":" ++ boolString witness.pairClosed ++ ","
     ++ "\"inference_cites\":" ++ boolString witness.inferenceCites ++ ","
+    ++ "\"inference_supported\":" ++ boolString witness.inferenceSupported ++ ","
     ++ "\"title_cites\":" ++ boolString witness.titleCites ++ ","
     ++ "\"outcome\":" ++ jsonString witness.outcome ++ ","
     ++ "\"durable_after\":" ++ boolString witness.durableAfter ++ ","

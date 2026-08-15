@@ -14,6 +14,7 @@ pub(crate) struct LeanDurableReductionCase {
     pub(crate) prior_claim_commit: Option<u64>,
     pub(crate) pair_closed: bool,
     pub(crate) inference_cites: bool,
+    pub(crate) inference_supported: bool,
     pub(crate) title_cites: bool,
     pub(crate) outcome: String,
     pub(crate) durable_after: bool,

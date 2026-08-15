@@ -303,11 +303,8 @@ pub(crate) fn build_rendered_completion_request(
 /// The admission identity to stamp into this capture's provenance, if the call
 /// in flight on this task belongs to the loop the capture describes.
 ///
-/// The kind guard is what keeps a cross-loop race honest: the `current_call`
-/// slot is shared across every admission scope of the request, so a title
-/// call minted concurrently with an inference capture must not be joined to
-/// it. A dropped join degrades to the pre-#1066 ordinal situation; a wrong
-/// join would be worse than none. One-shot captures never join — no admission
+/// The kind guard keeps the task-local admission join honest if a caller wires
+/// the wrong capture scope. One-shot captures never join because no admission
 /// scope exists there.
 fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
     let join = crate::admission::current_call_join()?;

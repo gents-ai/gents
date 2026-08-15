@@ -297,7 +297,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             );
                         }
 
-                        let summary = result.summary.unwrap_or_default().trim().to_string();
+                        let summary = durable_reduction_summary(result.summary, split)?;
                         let mut provider_messages = result.messages;
                         if !summary.is_empty() {
                             provider_messages.insert(
@@ -348,14 +348,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     &request.doc_id,
                 )
                 .await?;
-                let (loop_history, loop_prompt) = if let Some((row, active_keys)) = restored {
+                let (loop_history, loop_prompt) = if let Some((row, lineage_keys)) = restored {
                     let mut messages = row.checkpoint_messages()?;
                     let prompt = messages.pop().context(
                         "durable provider-context checkpoint has no current prompt",
                     )?;
                     loop_config.context_message = None;
-                    loop_config.active_reduction_keys = active_keys;
-                    loop_config.reduction_chain_keys = loop_config.active_reduction_keys.clone();
+                    loop_config.active_reduction_keys = row.active_reduction_keys();
+                    loop_config.reduction_chain_keys = lineage_keys;
                     loop_config.initial_turn_index = usize::try_from(row.turn_index)
                         .context("durable provider-context checkpoint has invalid turn index")?;
                     tracing::info!(
@@ -712,11 +712,22 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     }
 }
 
+fn durable_reduction_summary(
+    summary: Option<String>,
+    compacted_prefix_len: usize,
+) -> Result<String> {
+    let summary = summary.map(|summary| summary.trim().to_string());
+    if compacted_prefix_len > 0 && summary.as_deref().is_none_or(str::is_empty) {
+        anyhow::bail!("per-turn compaction removed a provider prefix without a non-empty summary");
+    }
+    Ok(summary.unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        await_with_request_deadline, ensure_request_deadline_open, request_deadline_remaining,
-        terminal_response_has_visible_output, BehaviorDaemon,
+        await_with_request_deadline, durable_reduction_summary, ensure_request_deadline_open,
+        request_deadline_remaining, terminal_response_has_visible_output, BehaviorDaemon,
     };
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::runtime::StartupBarrier;
@@ -736,6 +747,17 @@ mod tests {
     use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn durable_reduction_requires_a_nonempty_summary_for_a_removed_prefix() {
+        assert!(durable_reduction_summary(Some("   \n".to_string()), 1).is_err());
+        assert!(durable_reduction_summary(None, 1).is_err());
+        assert_eq!(
+            durable_reduction_summary(Some("  checkpoint  ".to_string()), 1).unwrap(),
+            "checkpoint"
+        );
+        assert_eq!(durable_reduction_summary(None, 0).unwrap(), "");
+    }
 
     #[derive(Clone)]
     struct RoutedReplyModel;

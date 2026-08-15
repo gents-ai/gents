@@ -16,6 +16,7 @@ structure DurableReductionCase where
   priorClaimCommit : Option Nat
   pairClosed : Bool
   inferenceCites : Bool
+  inferenceSupported : Bool
   titleCites : Bool
   consumed : Bool
   outcome : String
@@ -37,7 +38,8 @@ private def fact (checkpoint claimCommit : Nat) (pairClosed : Bool) : Fact :=
   }
 
 private def reductionCase (name : String) (requestDocId turnIndex ordinal checkpoint claimCommit : Nat)
-    (priorCheckpoint priorClaimCommit : Option Nat) (pairClosed inferenceCites titleCites : Bool) :
+    (priorCheckpoint priorClaimCommit : Option Nat)
+    (pairClosed inferenceCites inferenceSupported titleCites : Bool) :
     DurableReductionCase :=
   let reductionKey := key requestDocId turnIndex ordinal
   let scenario : Scenario :=
@@ -46,10 +48,14 @@ private def reductionCase (name : String) (requestDocId turnIndex ordinal checkp
     , prior := priorCheckpoint.map (fun prior => fact prior (priorClaimCommit.getD claimCommit) pairClosed)
     }
   let captures : List CaptureCitation :=
-    (if inferenceCites then [{ kind := .inference, reductionKeys := [reductionKey] }] else []) ++
-    (if titleCites then [{ kind := .title, reductionKeys := [reductionKey] }] else [])
+    (if inferenceCites then
+      [{ kind := .inference, supported := inferenceSupported, reductionKeys := [reductionKey] }]
+    else []) ++
+    (if titleCites then
+      [{ kind := .title, supported := true, reductionKeys := [reductionKey] }]
+    else [])
   { name, requestDocId, turnIndex, ordinal, checkpoint, claimCommit, priorCheckpoint,
-    priorClaimCommit, pairClosed, inferenceCites, titleCites
+    priorClaimCommit, pairClosed, inferenceCites, inferenceSupported, titleCites
   , outcome := scenario.outcome.toContract
   , durableAfter := scenario.durableAfter
   , sendPermitted := scenario.sendPermitted
@@ -57,12 +63,13 @@ private def reductionCase (name : String) (requestDocId turnIndex ordinal checkp
   }
 
 def durableReductionCases : List DurableReductionCase :=
-  [ reductionCase "fresh_reduction_is_durable_before_send" 23 0 1 100 51 none none true false false
-  , reductionCase "identical_redelivery_is_idempotent" 23 0 1 100 51 (some 100) (some 51) true false true
-  , reductionCase "conflicting_rebinding_blocks_send" 23 0 1 100 51 (some 101) (some 51) true true false
-  , reductionCase "pair_open_checkpoint_blocks_send" 23 0 1 100 51 none none false false false
-  , reductionCase "later_claim_can_create_next_ordered_fact" 23 4 2 102 52 none none true false false
-  , reductionCase "concurrent_request_is_a_distinct_fact" 24 0 1 103 51 none none true false false
+  [ reductionCase "fresh_reduction_is_durable_before_send" 23 0 1 100 51 none none true false true false
+  , reductionCase "identical_redelivery_is_idempotent" 23 0 1 100 51 (some 100) (some 51) true false true true
+  , reductionCase "conflicting_rebinding_blocks_send" 23 0 1 100 51 (some 101) (some 51) true true true false
+  , reductionCase "pair_open_checkpoint_blocks_send" 23 0 1 100 51 none none false false true false
+  , reductionCase "later_claim_can_create_next_ordered_fact" 23 4 2 102 52 none none true false true false
+  , reductionCase "concurrent_request_is_a_distinct_fact" 24 0 1 103 51 none none true false true false
+  , reductionCase "unsupported_inference_is_not_consumption_evidence" 25 0 1 104 51 none none true true false false
   ]
 
 theorem durableReductionCases_pinned :
@@ -74,6 +81,7 @@ theorem durableReductionCases_pinned :
       , ("pair_open_checkpoint_blocks_send", "pair_open", false, false)
       , ("later_claim_can_create_next_ordered_fact", "fresh", true, true)
       , ("concurrent_request_is_a_distinct_fact", "fresh", true, true)
+      , ("unsupported_inference_is_not_consumption_evidence", "fresh", true, true)
       ] := by
   rfl
 
@@ -90,6 +98,7 @@ theorem durableReductionCases_consumption_is_inference_only :
       , ("pair_open_checkpoint_blocks_send", false)
       , ("later_claim_can_create_next_ordered_fact", false)
       , ("concurrent_request_is_a_distinct_fact", false)
+      , ("unsupported_inference_is_not_consumption_evidence", false)
       ] := by
   rfl
 

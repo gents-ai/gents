@@ -197,8 +197,8 @@ pub(crate) struct LoopConfig {
     /// Provider-view compaction used between completion turns. The callback
     /// must durably create or verify its reduction fact before returning.
     pub(crate) turn_compactor: Option<TurnCompactor>,
-    /// Restored exact sticky reduction chain for an unconsumed crash
-    /// checkpoint. Empty on a fresh request.
+    /// The one newest reduction fact that shapes the sticky provider
+    /// projection. Empty on a fresh request.
     pub(crate) active_reduction_keys: Vec<String>,
     /// Every durable reduction for this request, including consumed facts that
     /// order the next identity but no longer shape the active provider view.
@@ -267,7 +267,20 @@ where
     M::StreamingResponse: 'static,
 {
     try_stream! {
-        let history = crate::compaction::sanitize_history_for_provider(history);
+        // A recovered durable checkpoint is one exact provider projection even
+        // though rig's loop API carries its final message separately as the
+        // prompt. Sanitize the joined projection before splitting it again so
+        // a tool call in history remains paired with a tool result prompt.
+        let mut entry_projection = history;
+        entry_projection.push(prompt);
+        let mut entry_projection =
+            crate::compaction::sanitize_history_for_provider(entry_projection);
+        let prompt = entry_projection.pop().ok_or_else(|| {
+            StreamingError::Completion(CompletionError::ProviderError(
+                "provider-bound loop entry has no prompt after sanitization".to_string(),
+            ))
+        })?;
+        let history = entry_projection;
         // #497: prior requests' per-request `<context>` messages are durably
         // persisted (training capture), but must NOT be replayed to the provider:
         // they carry stale `ctx.now` / collection summaries and would accumulate
@@ -1569,6 +1582,7 @@ async fn build_budgeted_request<M: CompletionModel>(
     *history = compacted;
     *new_messages = vec![compacted_prompt.clone()];
     reduction_chain_keys.push(outcome.reduction_key.clone());
+    active_reduction_keys.clear();
     active_reduction_keys.push(outcome.reduction_key);
 
     let mut rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;

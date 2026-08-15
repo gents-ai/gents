@@ -166,6 +166,8 @@ inductive CaptureKind where
 
 structure CaptureCitation where
   kind : CaptureKind
+  /-- Only a supported provenance format is consumption evidence. -/
+  supported : Bool
   reductionKeys : List ReductionKey
   deriving Repr
 
@@ -174,17 +176,44 @@ from the owned inference scope.  Timestamps and unrelated capture kinds are not
 evidence. -/
 def consumedBy (key : ReductionKey) (captures : List CaptureCitation) : Bool :=
   captures.any fun capture =>
-    match capture.kind with
-    | .inference => decide (key ∈ capture.reductionKeys)
-    | .title | .compaction => false
+    capture.supported &&
+      match capture.kind with
+      | .inference => decide (key ∈ capture.reductionKeys)
+      | .title | .compaction => false
 
 @[simp] theorem title_citation_does_not_consume (key : ReductionKey) :
-    consumedBy key [{ kind := .title, reductionKeys := [key] }] = false := by
+    consumedBy key [{ kind := .title, supported := true, reductionKeys := [key] }] = false := by
   rfl
 
 @[simp] theorem inference_citation_consumes (key : ReductionKey) :
-    consumedBy key [{ kind := .inference, reductionKeys := [key] }] = true := by
+    consumedBy key [{ kind := .inference, supported := true, reductionKeys := [key] }] = true := by
   simp [consumedBy]
+
+@[simp] theorem unsupported_inference_does_not_consume (key : ReductionKey) :
+    consumedBy key
+      [{ kind := .inference, supported := false, reductionKeys := [key] }] = false := by
+  rfl
+
+/-! ## Active checkpoint versus immutable lineage -/
+
+/-- Every key remains in lineage to order the next fact, but only the newest
+checkpoint shapes the sticky provider projection after recovery. -/
+def activeKeys : List ReductionKey → List ReductionKey
+  | [] => []
+  | key :: rest =>
+      match rest.getLast? with
+      | none => [key]
+      | some latest => [latest]
+
+@[simp] theorem activeKeys_singleton (key : ReductionKey) :
+    activeKeys [key] = [key] := by
+  rfl
+
+theorem activeKeys_append_nonempty (lineage : List ReductionKey) (key : ReductionKey) :
+    activeKeys (lineage ++ [key]) = [key] := by
+  cases lineage with
+  | nil => rfl
+  | cons head tail => simp [activeKeys]
 
 /-! ## Persistence fence and recovery -/
 
