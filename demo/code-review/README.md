@@ -5,7 +5,7 @@ model-backed document graph:
 
 ```text
 ReviewJob -> GLM pre-scan + lens planning
-          -> N x ReviewArea -> N x DeepSeek V4 specialized scanners
+          -> N x ReviewArea -> N x GLM specialized scanners
                             -> CandidateFinding* + N x ScanResult
                             -> GLM adversarial verifier
                             -> N x FindingVerdict + VerificationSummary
@@ -50,15 +50,15 @@ candidate-to-verdict bijection and summary count balance, so a verifier that
 violates the write-last contract fails acceptance instead of publishing a
 plausible but incomplete review.
 
-The default uses `GLM-5.2` on workstation-2 for recon, verification, and final
-triage, with DeepSeek V4 Flash on workstation-1 for the parallel
-scanner swarm. Both endpoints are OpenAI-compatible vLLM services.
+The default uses `GLM-5.2` on workstation-2 for every review stage. The
+coordinator and parallel scanner backends remain separately configurable so
+their concurrency and serving endpoints can be tuned independently.
 
 ```bash
 export GENTS_REVIEW_COORDINATOR_ENDPOINT=http://100.87.27.25:8000/v1
 export GENTS_REVIEW_COORDINATOR_MODEL=GLM-5.2
-export GENTS_REVIEW_REVIEWER_ENDPOINT=http://100.73.235.38:8000/v1
-export GENTS_REVIEW_REVIEWER_MODEL=d4f
+export GENTS_REVIEW_REVIEWER_ENDPOINT=http://100.87.27.25:8000/v1
+export GENTS_REVIEW_REVIEWER_MODEL=GLM-5.2
 ```
 
 Review agents are configured as long-running workers: the one-million-turn

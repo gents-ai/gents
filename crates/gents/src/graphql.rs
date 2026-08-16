@@ -39,8 +39,20 @@ const GRAPHQL_RETRY_POLICY: ExecuteRetryPolicy = ExecuteRetryPolicy::new(
     Duration::from_millis(DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS),
     Duration::from_millis(800),
 );
+const GRAPHQL_SINGLE_ATTEMPT_POLICY: ExecuteRetryPolicy =
+    ExecuteRetryPolicy::new(0, Duration::ZERO, Duration::ZERO);
 
 type MutationWriteGate = Mutex<()>;
+
+pub(crate) trait GraphqlExecution: Sync {
+    async fn execute(&self, graphql: &str, retry_policy: ExecuteRetryPolicy) -> QueryResponse;
+}
+
+impl GraphqlExecution for EmbeddedNode {
+    async fn execute(&self, graphql: &str, retry_policy: ExecuteRetryPolicy) -> QueryResponse {
+        self.execute_with_retry(graphql, retry_policy).await
+    }
+}
 
 /// DefraDB commits auto-committed mutations at a database-wide revision
 /// boundary. Keep all ordinary writes for one embedded node on the same gate;
@@ -64,17 +76,17 @@ fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
     gate
 }
 
-/// Execute GraphQL through the node's identity-aware retry path.
-///
-/// This is the low-level form for callers that intentionally inspect GraphQL
-/// errors. Most callers should use [`graphql_with_transaction_retry`].
-pub async fn graphql_response_with_transaction_retry(
-    node: &EmbeddedNode,
+async fn graphql_response_with_policy<E>(
+    executor: &E,
     graphql: &str,
     operation: &str,
-) -> QueryResponse {
+    retry_policy: ExecuteRetryPolicy,
+) -> QueryResponse
+where
+    E: GraphqlExecution + ?Sized,
+{
     let started = std::time::Instant::now();
-    let response = node.execute_with_retry(graphql, GRAPHQL_RETRY_POLICY).await;
+    let response = executor.execute(graphql, retry_policy).await;
     let elapsed = started.elapsed();
     if elapsed > Duration::from_secs(1) {
         tracing::warn!(
@@ -90,6 +102,18 @@ pub async fn graphql_response_with_transaction_retry(
         );
     }
     response
+}
+
+/// Execute GraphQL through the node's identity-aware retry path.
+///
+/// This is the low-level form for callers that intentionally inspect GraphQL
+/// errors. Most callers should use [`graphql_with_transaction_retry`].
+pub async fn graphql_response_with_transaction_retry(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> QueryResponse {
+    graphql_response_with_policy(node, graphql, operation, GRAPHQL_RETRY_POLICY).await
 }
 
 /// Execute identity-aware GraphQL with transaction-conflict retry and fail on
@@ -113,9 +137,23 @@ pub async fn graphql_mutation_response_with_transaction_retry(
     graphql: &str,
     operation: &str,
 ) -> QueryResponse {
+    graphql_mutation_response_with_policy(node, node, graphql, operation, GRAPHQL_RETRY_POLICY)
+        .await
+}
+
+async fn graphql_mutation_response_with_policy<E>(
+    node: &EmbeddedNode,
+    executor: &E,
+    graphql: &str,
+    operation: &str,
+    retry_policy: ExecuteRetryPolicy,
+) -> QueryResponse
+where
+    E: GraphqlExecution + ?Sized,
+{
     let gate = mutation_write_gate(node);
     let _write_guard = gate.lock().await;
-    graphql_response_with_transaction_retry(node, graphql, operation).await
+    graphql_response_with_policy(executor, graphql, operation, retry_policy).await
 }
 
 /// Execute an auto-committed GraphQL mutation through the single node-scoped
@@ -126,9 +164,55 @@ pub async fn graphql_mutation_with_transaction_retry(
     graphql: &str,
     operation: &str,
 ) -> Result<QueryResponse> {
-    let response = graphql_mutation_response_with_transaction_retry(node, graphql, operation).await;
+    graphql_mutation_with_transaction_retry_using(node, node, graphql, operation).await
+}
+
+pub(crate) async fn graphql_mutation_with_transaction_retry_using<E>(
+    node: &EmbeddedNode,
+    executor: &E,
+    graphql: &str,
+    operation: &str,
+) -> Result<QueryResponse>
+where
+    E: GraphqlExecution + ?Sized,
+{
+    graphql_mutation_with_policy(node, executor, graphql, operation, GRAPHQL_RETRY_POLICY).await
+}
+
+async fn graphql_mutation_with_policy<E>(
+    node: &EmbeddedNode,
+    executor: &E,
+    graphql: &str,
+    operation: &str,
+    retry_policy: ExecuteRetryPolicy,
+) -> Result<QueryResponse>
+where
+    E: GraphqlExecution + ?Sized,
+{
+    let response =
+        graphql_mutation_response_with_policy(node, executor, graphql, operation, retry_policy)
+            .await;
     ensure_no_errors(&response, operation)?;
     Ok(response)
+}
+
+pub(crate) async fn graphql_mutation_once_with_executor<E>(
+    node: &EmbeddedNode,
+    executor: &E,
+    graphql: &str,
+    operation: &str,
+) -> Result<QueryResponse>
+where
+    E: GraphqlExecution + ?Sized,
+{
+    graphql_mutation_with_policy(
+        node,
+        executor,
+        graphql,
+        operation,
+        GRAPHQL_SINGLE_ATTEMPT_POLICY,
+    )
+    .await
 }
 
 pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()> {

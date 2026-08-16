@@ -7,7 +7,7 @@
   "system_prompt": "./system_prompt.md",
   "request_context_template": null,
   "backend_id": "review-reviewer-backend",
-  "model_name": "${GENTS_REVIEW_REVIEWER_MODEL:-d4f}",
+  "model_name": "${GENTS_REVIEW_REVIEWER_MODEL:-GLM-5.2}",
   "tool_selection_id": "review-scan-tools",
   "inference_profile_id": "review-scan-profile",
   "compaction_strategy": "StripThenSummarize",
