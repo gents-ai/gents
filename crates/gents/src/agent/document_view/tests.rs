@@ -1829,6 +1829,44 @@ fn merge_fails_closed_on_disabled_surface() {
 }
 
 #[test]
+fn merge_reports_invalid_output_obligation_fields() {
+    let agent_did = "did:key:zSurfaceObligation";
+    let mut decl = finding_decl();
+    decl.output_obligation = Some(crate::document_config::WriteToolOutputObligation {
+        scope: crate::document_config::WriteToolOutputObligationScope::Trigger,
+        minimum_writes: 1,
+        expected_count_field: Some("missing_count".to_string()),
+    });
+
+    let mut view = empty_runtime_view(agent_did);
+    view.datastore_tool_surfaces.insert(
+        "invalid-obligation-writes".to_string(),
+        DocumentRecord {
+            doc_id: "surf-doc".to_string(),
+            value: crate::document_config::DatastoreToolSurfaceDocument {
+                surface_id: "invalid-obligation-writes".to_string(),
+                agent_did: agent_did.to_string(),
+                display_name: None,
+                enabled: true,
+                entries: Some(vec![decl]),
+                created_at: None,
+            },
+        },
+    );
+    let selection = ToolSelectionDocument {
+        selection_id: "sel".to_string(),
+        agent_did: agent_did.to_string(),
+        datastore_tool_surface_ids: Some(vec!["invalid-obligation-writes".to_string()]),
+        ..Default::default()
+    };
+
+    let error = merge_write_tools_with_surfaces(&selection, &view).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("expected_count_field"), "got: {message}");
+    assert!(!message.contains("zero minimum_writes"), "got: {message}");
+}
+
+#[test]
 fn merge_fails_closed_on_foreign_agent_surface() {
     let agent_did = "did:key:zSurfaceOwner";
     let mut view = empty_runtime_view(agent_did);

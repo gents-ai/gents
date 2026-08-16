@@ -348,7 +348,7 @@ pub(crate) fn merge_write_tools_with_surfaces(
             }
             if !entry.output_obligation_is_well_formed() {
                 bail!(
-                    "DatastoreToolSurface {} entry {:?} has an output obligation with a zero minimum_writes",
+                    "DatastoreToolSurface {} entry {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
                     surface_id,
                     entry.tool_name,
                 );

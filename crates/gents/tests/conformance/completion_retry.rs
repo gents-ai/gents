@@ -16,7 +16,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        18,
+        22,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
@@ -48,6 +48,10 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "permanent_class_cannot_backoff",
             "unsatisfied_output_obligation_continues",
             "satisfied_output_obligation_completes",
+            "dynamic_output_obligation_incomplete_continues",
+            "dynamic_output_obligation_complete_closes",
+            "dynamic_output_obligation_overfull_rejects",
+            "dynamic_output_obligation_inconsistent_rejects",
             "trigger_output_obligation_inactive_interactive",
             "trigger_output_obligation_inactive_scheduled_control",
             "trigger_output_obligation_active_automated_trigger",
@@ -82,11 +86,45 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
                 let configured = output_obligation_config();
                 assert!(configured[0].1.applies_to(true));
                 assert_eq!(configured[0].1.minimum_writes, 1);
-                assert!(!configured[0].1.is_satisfied(0));
+                assert_eq!(
+                    configured[0].1.decision(0, None, true),
+                    gents::document_config::OutputObligationDecision::Continue
+                );
             }
             "satisfied_output_obligation_completes" => {
                 assert_eq!(case.expected_phase.as_deref(), Some("turn_done"));
-                assert!(output_obligation_config()[0].1.is_satisfied(1));
+                assert_eq!(
+                    output_obligation_config()[0].1.decision(1, None, true),
+                    gents::document_config::OutputObligationDecision::Complete
+                );
+            }
+            "dynamic_output_obligation_incomplete_continues" => {
+                assert_eq!(case.expected_phase.as_deref(), Some("turn_closed"));
+                assert_eq!(
+                    output_obligation_config()[0].1.decision(2, Some(4), true),
+                    gents::document_config::OutputObligationDecision::Continue
+                );
+            }
+            "dynamic_output_obligation_complete_closes" => {
+                assert_eq!(case.expected_phase.as_deref(), Some("turn_done"));
+                assert_eq!(
+                    output_obligation_config()[0].1.decision(4, Some(4), true),
+                    gents::document_config::OutputObligationDecision::Complete
+                );
+            }
+            "dynamic_output_obligation_overfull_rejects" => {
+                assert_eq!(case.expected_phase.as_deref(), Some("failed_permanent"));
+                assert_eq!(
+                    output_obligation_config()[0].1.decision(5, Some(4), true),
+                    gents::document_config::OutputObligationDecision::Reject
+                );
+            }
+            "dynamic_output_obligation_inconsistent_rejects" => {
+                assert_eq!(case.expected_phase.as_deref(), Some("failed_permanent"));
+                assert_eq!(
+                    output_obligation_config()[0].1.decision(2, Some(4), false),
+                    gents::document_config::OutputObligationDecision::Reject
+                );
             }
             "trigger_output_obligation_inactive_interactive" => {
                 assert_eq!(case.expected_phase.as_deref(), Some("turn_done"));
@@ -111,6 +149,7 @@ fn output_obligation_config() -> Vec<(String, gents::document_config::WriteToolO
         gents::document_config::WriteToolOutputObligation {
             scope: gents::document_config::WriteToolOutputObligationScope::Trigger,
             minimum_writes: 1,
+            expected_count_field: None,
         },
     )]
 }

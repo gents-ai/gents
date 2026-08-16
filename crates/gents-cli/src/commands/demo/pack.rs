@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use super::fleet::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
 use super::util::{path_arg, run_cli_json};
 use crate::cli::args::DemoRunArgs;
-use crate::desired_state::interpolate::interpolate;
+use crate::desired_state::interpolate::interpolate_with;
 use crate::graphql_access::post_graphql;
 use gents::graphql::{escape_graphql_string, validate_collection_identifier};
 
@@ -252,10 +252,17 @@ fn resolve_pack(target: &str) -> Result<PathBuf> {
 }
 
 fn load_manifest(pack: &Path) -> Result<PackManifest> {
+    load_manifest_with(pack, &|name| std::env::var(name).ok())
+}
+
+fn load_manifest_with(
+    pack: &Path,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<PackManifest> {
     let path = pack.join("experiment.json");
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    let expanded = interpolate(&raw).map_err(|missing| {
+    let expanded = interpolate_with(&raw, lookup).map_err(|missing| {
         anyhow::anyhow!(
             "{} references unset environment variable(s): {}",
             path.display(),
@@ -265,15 +272,19 @@ fn load_manifest(pack: &Path) -> Result<PackManifest> {
     let manifest =
         serde_json::from_str(&expanded).with_context(|| format!("parsing {}", path.display()))?;
     validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
-    validate_prompt_tool_contracts(pack, &manifest)
+    validate_prompt_tool_contracts_with(pack, &manifest, lookup)
         .with_context(|| format!("validating prompt/tool contracts in {}", path.display()))?;
     Ok(manifest)
 }
 
 fn read_pack_json(path: &Path) -> Result<Value> {
+    read_pack_json_with(path, &|name| std::env::var(name).ok())
+}
+
+fn read_pack_json_with(path: &Path, lookup: &dyn Fn(&str) -> Option<String>) -> Result<Value> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("reading pack document {}", path.display()))?;
-    let expanded = interpolate(&raw).map_err(|missing| {
+    let expanded = interpolate_with(&raw, lookup).map_err(|missing| {
         anyhow::anyhow!(
             "{} references unset environment variable(s): {}",
             path.display(),
@@ -298,7 +309,11 @@ fn required_json_string<'a>(value: &'a Value, field: &str, path: &Path) -> Resul
 /// tool name. These contracts follow Task -> Behavior -> ToolSelection ->
 /// DatastoreToolSurface and require the exact advertised name to occur in the
 /// task or system prompt. Surface collections must also exist in `schemas/`.
-fn validate_prompt_tool_contracts(pack: &Path, manifest: &PackManifest) -> Result<()> {
+fn validate_prompt_tool_contracts_with(
+    pack: &Path,
+    manifest: &PackManifest,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<()> {
     if manifest.expect.prompt_tool_contracts.is_empty() {
         return Ok(());
     }
@@ -313,7 +328,7 @@ fn validate_prompt_tool_contracts(pack: &Path, manifest: &PackManifest) -> Resul
     for contract in &manifest.expect.prompt_tool_contracts {
         let task_dir = pack.join("tasks").join(&contract.task_id);
         let task_path = task_dir.join("object.json");
-        let task = read_pack_json(&task_path)?;
+        let task = read_pack_json_with(&task_path, lookup)?;
         let behavior_id = required_json_string(&task, "behavior_id", &task_path)?;
         let task_prompt_path = task_dir.join(
             required_json_string(&task, "prompt_template", &task_path)?.trim_start_matches("./"),
@@ -323,7 +338,7 @@ fn validate_prompt_tool_contracts(pack: &Path, manifest: &PackManifest) -> Resul
 
         let behavior_dir = pack.join("agent-behaviors").join(behavior_id);
         let behavior_path = behavior_dir.join("object.json");
-        let behavior = read_pack_json(&behavior_path)?;
+        let behavior = read_pack_json_with(&behavior_path, lookup)?;
         let system_prompt_path = behavior_dir.join(
             required_json_string(&behavior, "system_prompt", &behavior_path)?
                 .trim_start_matches("./"),
@@ -335,7 +350,7 @@ fn validate_prompt_tool_contracts(pack: &Path, manifest: &PackManifest) -> Resul
             .join("tool-selections")
             .join(selection_id)
             .join("object.json");
-        let selection = read_pack_json(&selection_path)?;
+        let selection = read_pack_json_with(&selection_path, lookup)?;
 
         let mut advertised = std::collections::BTreeSet::new();
         let query_collections = selection
@@ -363,7 +378,7 @@ fn validate_prompt_tool_contracts(pack: &Path, manifest: &PackManifest) -> Resul
                 .join("datastore-tool-surfaces")
                 .join(surface_id)
                 .join("object.json");
-            let surface = read_pack_json(&surface_path)?;
+            let surface = read_pack_json_with(&surface_path, lookup)?;
             for entry in surface
                 .get("entries")
                 .and_then(Value::as_array)
@@ -1390,28 +1405,16 @@ async fn sourced_trigger_request_count(
                 source.collection, source.expected_count_field
             )
         })?;
-        let count = match value {
-            Value::Number(number) => number
-                .as_u64()
-                .and_then(|value| usize::try_from(value).ok()),
-            Value::String(value)
-                if !value.is_empty()
-                    && value.bytes().all(|byte| byte.is_ascii_digit())
-                    && (value == "0" || !value.starts_with('0')) =>
-            {
-                value.parse::<usize>().ok()
-            }
-            _ => None,
-        }
-        .filter(|count| (1..=gents::MAX_EVENT_TRIGGER_GROUP_DOCS).contains(count))
-        .with_context(|| {
-            format!(
-                "{}.{} must be a canonical positive integer <= {}",
-                source.collection,
-                source.expected_count_field,
-                gents::MAX_EVENT_TRIGGER_GROUP_DOCS
-            )
-        })?;
+        let count =
+            gents::graphql::canonical_positive_count(value, gents::MAX_EVENT_TRIGGER_GROUP_DOCS)
+                .with_context(|| {
+                    format!(
+                        "{}.{} must be a canonical positive integer <= {}",
+                        source.collection,
+                        source.expected_count_field,
+                        gents::MAX_EVENT_TRIGGER_GROUP_DOCS
+                    )
+                })?;
         if expected.is_some_and(|prior| prior != count) {
             bail!(
                 "{}.{} is inconsistent for correlation {correlation}",
@@ -2619,6 +2622,14 @@ fn spawn_server_with_pack(
 mod tests {
     use super::*;
 
+    fn load_manifest_defaults(pack: &Path) -> Result<PackManifest> {
+        load_manifest_with(pack, &|_| None)
+    }
+
+    fn read_pack_json_defaults(path: &Path) -> Result<Value> {
+        read_pack_json_with(path, &|_| None)
+    }
+
     /// Regression: tracing colours its file output, so the raw bytes are
     /// `source_collection` ESC `=` ESC `ExperimentJob`. Matching the plain
     /// substring silently never fired and the runner timed out with the
@@ -2725,7 +2736,7 @@ mod tests {
     #[test]
     fn code_review_prompts_name_the_tools_their_behaviors_advertise() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/code-review");
-        let manifest = load_manifest(&pack).expect("code-review pack should load");
+        let manifest = load_manifest_defaults(&pack).expect("code-review pack should load");
         assert_eq!(manifest.expect.prompt_tool_contracts.len(), 4);
         assert_eq!(manifest.expect.result_documents.len(), 2);
         let scan_count_source = manifest
@@ -2740,7 +2751,7 @@ mod tests {
             manifest.seed.fields.get("lens_count").map(String::as_str),
             Some("auto")
         );
-        let verify_trigger = read_pack_json(
+        let verify_trigger = read_pack_json_defaults(
             &pack
                 .join("event_triggers")
                 .join("review-verify")
@@ -2755,7 +2766,7 @@ mod tests {
             "review-scan-tools",
             "review-verify-tools",
         ] {
-            let document = read_pack_json(
+            let document = read_pack_json_defaults(
                 &pack
                     .join("tool-selections")
                     .join(selection)
@@ -2795,7 +2806,7 @@ mod tests {
             "review-verify",
             "review-triage",
         ] {
-            let document = read_pack_json(
+            let document = read_pack_json_defaults(
                 &pack
                     .join("agent-behaviors")
                     .join(behavior)
@@ -2811,7 +2822,7 @@ mod tests {
                 Some(0.85)
             );
         }
-        let triage_tools = read_pack_json(
+        let triage_tools = read_pack_json_defaults(
             &pack
                 .join("tool-selections")
                 .join("review-triage-tools")
@@ -2830,7 +2841,7 @@ mod tests {
             ("review-verify-writes", "write_verification_summary"),
             ("review-triage-writes", "write_triage_report"),
         ] {
-            let document = read_pack_json(
+            let document = read_pack_json_defaults(
                 &pack
                     .join("datastore-tool-surfaces")
                     .join(surface)
@@ -2843,6 +2854,12 @@ mod tests {
                 .unwrap_or_else(|| panic!("{surface} should declare {tool_name}"));
             assert_eq!(entry["output_obligation"]["scope"], "trigger");
             assert_eq!(entry["output_obligation"]["minimum_writes"], 1);
+            if tool_name == "write_review_area" {
+                assert_eq!(
+                    entry["output_obligation"]["expected_count_field"],
+                    "expected_total"
+                );
+            }
         }
         let recon_prompt = std::fs::read_to_string(
             pack.join("tasks")
@@ -2865,7 +2882,7 @@ mod tests {
             "review-verify-profile",
             "review-profile",
         ] {
-            let document = read_pack_json(
+            let document = read_pack_json_defaults(
                 &pack
                     .join("inference-profiles")
                     .join(profile)
@@ -2923,7 +2940,7 @@ mod tests {
         packs.sort();
         assert!(!packs.is_empty(), "expected checked-in demo packs");
         for pack in packs {
-            load_manifest(&pack)
+            load_manifest_defaults(&pack)
                 .unwrap_or_else(|error| panic!("{} should load: {error:#}", pack.display()));
         }
     }
@@ -2931,7 +2948,7 @@ mod tests {
     #[test]
     fn omitted_tool_package_keeps_the_minimal_ceiling() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
-        let manifest = load_manifest(&pack).expect("pipeline pack should load");
+        let manifest = load_manifest_defaults(&pack).expect("pipeline pack should load");
         assert_eq!(manifest.init.tool_package, "minimal");
         assert!(manifest.init.tool_root.is_none());
     }
@@ -3008,7 +3025,7 @@ mod tests {
     #[test]
     fn lsp_rust_pack_declares_readonly_ceiling_and_tool_calls() {
         let pack = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/lsp-rust");
-        let manifest = load_manifest(&pack).expect("demo/lsp-rust experiment.json");
+        let manifest = load_manifest_defaults(&pack).expect("demo/lsp-rust experiment.json");
         assert_eq!(manifest.init.tool_package, "readonly");
         assert!(manifest
             .init

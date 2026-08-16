@@ -270,19 +270,16 @@ impl ToolSurface {
         for decl in &self.write_tools {
             let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
             if !tool.is_well_formed() || !decl.output_obligation_is_well_formed() {
-                tracing::warn!(
-                    tool_name = %decl.tool_name,
-                    collection = %decl.collection,
-                    "skipping malformed write_tools entry",
+                anyhow::bail!(
+                    "write tool `{}` reached registration with an invalid declaration",
+                    decl.tool_name
                 );
-                continue;
             }
             if !registered_names.insert(tool.name()) {
-                tracing::warn!(
-                    tool_name = %decl.tool_name,
-                    "skipping write_tools entry whose name collides with an already-registered tool",
+                anyhow::bail!(
+                    "write tool `{}` reached registration with a duplicate tool name",
+                    decl.tool_name
                 );
-                continue;
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }

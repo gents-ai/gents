@@ -136,3 +136,8 @@ The runner's deterministic acceptance checks require:
 
 Finding quality remains model-dependent; the runner enforces graph shape,
 durable outputs, and a count-balanced verification ledger.
+
+Recon's `write_review_area` obligation also names `expected_total` as its
+dynamic count field. The runtime therefore keeps recon active until the durable
+completed writes contain the exact declared closed set; disagreement or an
+overfull set fails closed before the scanner fanout can be treated as complete.

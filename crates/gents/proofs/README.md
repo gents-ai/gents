@@ -574,9 +574,11 @@ exhaustion. It is executable in Lean through
 observed `FailureClass` and the selected wake time, so `step?` genuinely
 consumes both the classification and the fail-fast (overshoot) decision.
 `OutputObligation.lean` additionally proves that an unsatisfied durable-write
-minimum cannot take the terminal transition and that successful writes advance
-monotonically toward completion. Trigger-scoped obligations follow automated
-trigger lineage rather than the broader scheduled-request classification.
+minimum or incomplete dynamic closed set cannot take the terminal transition,
+that exact closed sets complete, and that inconsistent or overfull sets reject.
+Successful writes advance monotonically toward completion. Trigger-scoped
+obligations follow automated trigger lineage rather than the broader
+scheduled-request classification.
 
 The key guarantees (`Proofs/CompletionRetry/Properties.lean`) are:
 

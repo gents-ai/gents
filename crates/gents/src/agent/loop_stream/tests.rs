@@ -641,6 +641,7 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
                 contract: crate::document_config::WriteToolOutputObligation {
                     scope: crate::document_config::WriteToolOutputObligationScope::Request,
                     minimum_writes: 1,
+                    expected_count_field: None,
                 },
             }],
         ));

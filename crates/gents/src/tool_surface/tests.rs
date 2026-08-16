@@ -729,27 +729,17 @@ async fn write_tools_register_under_declared_names() {
         "ops",
         ToolSelection {
             enable_defra_query: false,
-            write_tools: vec![
-                WriteToolDecl {
-                    tool_name: "request_action".to_string(),
-                    collection: "ActionRequest".to_string(),
-                    description: "Request an action".to_string(),
-                    fields: vec![WriteToolField {
-                        name: "summary".to_string(),
-                        required: true,
-                        fill: None,
-                    }],
-                    output_obligation: None,
-                },
-                // Malformed: empty collection — must be skipped, not advertised.
-                WriteToolDecl {
-                    tool_name: "broken_tool".to_string(),
-                    collection: "  ".to_string(),
-                    description: String::new(),
-                    fields: Vec::new(),
-                    output_obligation: None,
-                },
-            ],
+            write_tools: vec![WriteToolDecl {
+                tool_name: "request_action".to_string(),
+                collection: "ActionRequest".to_string(),
+                description: "Request an action".to_string(),
+                fields: vec![WriteToolField {
+                    name: "summary".to_string(),
+                    required: true,
+                    fill: None,
+                }],
+                output_obligation: None,
+            }],
             ..Default::default()
         },
         &ToolCeiling::meta_only(),
@@ -765,10 +755,6 @@ async fn write_tools_register_under_declared_names() {
         names.contains(&"request_action".to_string()),
         "declared write tool should be advertised under its tool_name; got {names:?}"
     );
-    assert!(
-        !names.contains(&"broken_tool".to_string()),
-        "malformed write tool (empty collection) must be skipped; got {names:?}"
-    );
 
     // The built dynamic tools must carry the per-decl name too.
     let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
@@ -777,24 +763,36 @@ async fn write_tools_register_under_declared_names() {
         built.iter().any(|tool| tool.name() == "request_action"),
         "registered dynamic tool should advertise decl.tool_name"
     );
-    assert!(
-        !built.iter().any(|tool| tool.name() == "broken_tool"),
-        "malformed decl must not produce a registered tool"
-    );
 }
 
-#[tokio::test]
-async fn write_tool_colliding_with_builtin_is_not_registered_twice() {
+#[test]
+fn malformed_write_tool_is_rejected_during_configuration() {
+    use crate::document_config::WriteToolDecl;
+
+    let error = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            write_tools: vec![WriteToolDecl {
+                tool_name: "broken_tool".to_string(),
+                collection: "  ".to_string(),
+                description: String::new(),
+                fields: Vec::new(),
+                output_obligation: None,
+            }],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("malformed"));
+}
+
+#[test]
+fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
     use crate::document_config::{WriteToolDecl, WriteToolField};
 
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-
-    // `context_budget` is registered by default. A write tool that reuses that
-    // name (here bypassing apply-time validation by constructing the surface
-    // directly) must be dropped by the runtime guard, not registered as a second
-    // ToolDyn under the same name.
-    let surface = BehaviorToolConfig::from_selection(
+    let error = BehaviorToolConfig::from_selection(
         "ops",
         ToolSelection {
             enable_defra_query: false,
@@ -814,21 +812,8 @@ async fn write_tool_colliding_with_builtin_is_not_registered_twice() {
         &ToolCeiling::meta_only(),
         Vec::new(),
     )
-    .unwrap()
-    .resolve(&node)
-    .await
-    .unwrap();
-
-    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
-    let built = surface.build_tools(&runtime).unwrap();
-    let count = built
-        .iter()
-        .filter(|tool| tool.name() == "context_budget")
-        .count();
-    assert_eq!(
-        count, 1,
-        "a write tool colliding with a built-in must not register a second impl under that name"
-    );
+    .unwrap_err();
+    assert!(error.to_string().contains("collides with a built-in"));
 }
 
 #[test]

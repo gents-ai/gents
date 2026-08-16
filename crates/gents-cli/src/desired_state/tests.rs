@@ -1883,6 +1883,7 @@ fn validate_rejects_zero_write_tool_output_obligation() {
         output_obligation: Some(WriteToolOutputObligation {
             scope: WriteToolOutputObligationScope::Trigger,
             minimum_writes: 0,
+            expected_count_field: None,
         }),
     })];
     manifest.tool_selections.push(sel);

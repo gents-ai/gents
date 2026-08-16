@@ -118,6 +118,7 @@ def outputObligationCase
   let phase := match decision with
     | .continue => Phase.turnClosed
     | .complete => Phase.turnDone
+    | .reject => Phase.failedPermanent
   { name := name
   , action := "output_obligation_terminal"
   , rustSurface := rustSurface
@@ -250,6 +251,26 @@ def cases : List CompletionRetryCase :=
       "satisfied_output_obligation_completes"
       "output_obligation_gate_accepts_terminal"
       { minimumWrites := 1, completedWrites := 1 }
+  , outputObligationCase
+      "dynamic_output_obligation_incomplete_continues"
+      "output_obligation_dynamic_count"
+      { minimumWrites := 1, completedWrites := 2, expectedWrites := some 4 }
+  , outputObligationCase
+      "dynamic_output_obligation_complete_closes"
+      "output_obligation_dynamic_count"
+      { minimumWrites := 1, completedWrites := 4, expectedWrites := some 4 }
+  , outputObligationCase
+      "dynamic_output_obligation_overfull_rejects"
+      "output_obligation_dynamic_count"
+      { minimumWrites := 1, completedWrites := 5, expectedWrites := some 4 }
+  , outputObligationCase
+      "dynamic_output_obligation_inconsistent_rejects"
+      "output_obligation_dynamic_count"
+      { minimumWrites := 1
+      , completedWrites := 2
+      , expectedWrites := some 4
+      , countValid := false
+      }
   , outputObligationCase
       "trigger_output_obligation_inactive_interactive"
       "trigger_scope_activation"

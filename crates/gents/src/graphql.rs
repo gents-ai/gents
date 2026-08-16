@@ -138,6 +138,27 @@ pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()>
     Ok(())
 }
 
+/// Parse a canonical positive integer represented as either a JSON number or
+/// decimal string. Leading zeroes and values above `maximum` are rejected so
+/// independently persisted members cannot disagree through alternate textual
+/// representations of the same count.
+pub fn canonical_positive_count(value: &Value, maximum: usize) -> Option<usize> {
+    let parsed = match value {
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok()),
+        Value::String(value)
+            if !value.is_empty()
+                && value.bytes().all(|byte| byte.is_ascii_digit())
+                && (value == "0" || !value.starts_with('0')) =>
+        {
+            value.parse::<usize>().ok()
+        }
+        _ => None,
+    }?;
+    (1..=maximum).contains(&parsed).then_some(parsed)
+}
+
 pub fn rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
