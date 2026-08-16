@@ -269,7 +269,7 @@ pub const SUPPORTED_PROVENANCE_MANIFEST_VERSIONS: std::ops::RangeInclusive<u32> 
 /// Outcome of reading a `provenance_json` column.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParsedProvenance {
-    Manifest(ProvenanceManifest),
+    Manifest(Box<ProvenanceManifest>),
     /// The row was written by a runtime this reader does not understand. The
     /// row is still real and still listed; only its provenance is opaque.
     Unsupported {
@@ -329,7 +329,7 @@ impl ProvenanceManifest {
             return Ok(ParsedProvenance::Unsupported { manifest_version });
         }
         serde_json::from_value(value)
-            .map(ParsedProvenance::Manifest)
+            .map(|m| ParsedProvenance::Manifest(Box::new(m)))
             .map_err(ProvenanceParseError::InvalidManifest)
     }
 }
@@ -856,7 +856,7 @@ mod tests {
             turn_index,
             attempt,
         };
-        let mut keys = vec![
+        let mut keys = [
             key("inference.10", 0, 0),
             key("inference.2", 3, 1),
             key("inference.2", 3, 0),
@@ -974,7 +974,7 @@ mod tests {
         let serialized = serde_json::to_string(&manifest).expect("serialize manifest");
         assert_eq!(
             ProvenanceManifest::parse(&serialized).expect("reader accepts producer output"),
-            ParsedProvenance::Manifest(manifest)
+            ParsedProvenance::Manifest(Box::new(manifest))
         );
     }
 
