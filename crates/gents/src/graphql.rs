@@ -16,6 +16,8 @@
 //! `EventTrigger.filter` is by the trigger engine's filter probe — is
 //! covered by neither. See #1038.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -23,6 +25,7 @@ use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryResponse};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 pub use gents_protocol::graphql::{
     validate_collection_identifier, validate_graphql_filter_fragment, validate_graphql_name,
@@ -36,6 +39,30 @@ const GRAPHQL_RETRY_POLICY: ExecuteRetryPolicy = ExecuteRetryPolicy::new(
     Duration::from_millis(DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS),
     Duration::from_millis(800),
 );
+
+type MutationWriteGate = Mutex<()>;
+
+/// DefraDB commits auto-committed mutations at a database-wide revision
+/// boundary. Keep all ordinary writes for one embedded node on the same gate;
+/// the retry policy below then covers conflicts with transactions outside this
+/// process instead of making in-process writers race until one exhausts it.
+fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
+    static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
+
+    let node_key = node as *const EmbeddedNode as usize;
+    let mut gates = GATES
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(gate) = gates.get(&node_key).and_then(Weak::upgrade) {
+        return gate;
+    }
+
+    gates.retain(|_, gate| gate.strong_count() > 0);
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(node_key, Arc::downgrade(&gate));
+    gate
+}
 
 /// Execute GraphQL through the node's identity-aware retry path.
 ///
@@ -77,11 +104,59 @@ pub async fn graphql_with_transaction_retry(
     Ok(response)
 }
 
+/// Execute an auto-committed GraphQL mutation through the single node-scoped
+/// write path. This low-level form is for callers that intentionally inspect
+/// GraphQL errors; most mutation callers should use
+/// [`graphql_mutation_with_transaction_retry`].
+pub async fn graphql_mutation_response_with_transaction_retry(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> QueryResponse {
+    let gate = mutation_write_gate(node);
+    let _write_guard = gate.lock().await;
+    graphql_response_with_transaction_retry(node, graphql, operation).await
+}
+
+/// Execute an auto-committed GraphQL mutation through the single node-scoped
+/// write path, with identity propagation, conflict retry, timing, and GraphQL
+/// error handling applied consistently.
+pub async fn graphql_mutation_with_transaction_retry(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> Result<QueryResponse> {
+    let response = graphql_mutation_response_with_transaction_retry(node, graphql, operation).await;
+    ensure_no_errors(&response, operation)?;
+    Ok(response)
+}
+
 pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()> {
     if response.has_errors() {
         anyhow::bail!("{operation} failed: {:?}", response.errors);
     }
     Ok(())
+}
+
+/// Parse a canonical positive integer represented as either a JSON number or
+/// decimal string. Leading zeroes and values above `maximum` are rejected so
+/// independently persisted members cannot disagree through alternate textual
+/// representations of the same count.
+pub fn canonical_positive_count(value: &Value, maximum: usize) -> Option<usize> {
+    let parsed = match value {
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok()),
+        Value::String(value)
+            if !value.is_empty()
+                && value.bytes().all(|byte| byte.is_ascii_digit())
+                && (value == "0" || !value.starts_with('0')) =>
+        {
+            value.parse::<usize>().ok()
+        }
+        _ => None,
+    }?;
+    (1..=maximum).contains(&parsed).then_some(parsed)
 }
 
 pub fn rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
@@ -176,11 +251,21 @@ pub fn mutation_composite_version(
     let Some(document) = single_mutation_document(response, field)? else {
         return Ok(None);
     };
+    document_composite_version(document, field)
+}
+
+/// Select the unique newest composite commit from a document `_version`
+/// projection. Field commits cannot identify an exact document version and
+/// are therefore never accepted as a fallback.
+pub fn document_composite_version(
+    document: &Value,
+    operation: &str,
+) -> Result<Option<CompositeCommit>> {
     let versions = document
         .get("_version")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("{field} returned no _version array"))?;
-    let mut commits = versions
+        .ok_or_else(|| anyhow::anyhow!("{operation} returned no _version array"))?;
+    let commits = versions
         .iter()
         .cloned()
         .map(serde_json::from_value::<CompositeCommit>)
@@ -188,6 +273,13 @@ pub fn mutation_composite_version(
         .into_iter()
         .filter(|commit| commit.field_name == "_C")
         .collect::<Vec<_>>();
+    unique_newest_composite_commit(commits, operation)
+}
+
+fn unique_newest_composite_commit(
+    mut commits: Vec<CompositeCommit>,
+    operation: &str,
+) -> Result<Option<CompositeCommit>> {
     commits.sort_by(|left, right| {
         right
             .height
@@ -202,11 +294,39 @@ pub fn mutation_composite_version(
         .is_some_and(|candidate| candidate.height == newest.height)
     {
         anyhow::bail!(
-            "{field} returned multiple composite commits at newest height {}; mutation version is ambiguous",
+            "{operation} returned multiple composite commits at newest height {}; document version is ambiguous",
             newest.height
         );
     }
     Ok(commits.into_iter().next())
+}
+
+/// Read at most the current composite heads for a document. `depth: 1` keeps
+/// the query independent of document history length, while `limit: 2` retains
+/// enough evidence to reject concurrent newest heads.
+pub async fn newest_document_composite_commit(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    operation: &str,
+) -> Result<Option<CompositeCommit>> {
+    let query = format!(
+        r#"query {{
+            _commits(
+                docID: "{}"
+                depth: 1
+                filter: {{ fieldName: {{ _eq: "_C" }} }}
+                order: {{ height: DESC }}
+                limit: 2
+            ) {{ cid height fieldName }}
+        }}"#,
+        escape_graphql_string(doc_id),
+    );
+    let response = graphql_with_transaction_retry(node, &query, operation).await?;
+    let commits = rows::<CompositeCommit>(&response, "_commits")?
+        .into_iter()
+        .filter(|commit| commit.field_name == "_C")
+        .collect();
+    unique_newest_composite_commit(commits, operation)
 }
 
 /// Load a document's DefraDB-native composite versions, newest first.

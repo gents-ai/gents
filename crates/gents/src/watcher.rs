@@ -44,8 +44,25 @@ pub struct AgentRequest {
     pub caused_by_parent_request_doc_id: Option<String>,
     pub caused_by_parent_tool_call_id: Option<String>,
     pub caused_by_parent_tool_call_doc_id: Option<String>,
+    pub caused_by_trigger_id: Option<String>,
+    pub caused_by_trigger_kind: Option<String>,
+    pub caused_by_source_doc_id: Option<String>,
     pub caused_by_correlation: Option<String>,
     pub caused_by_trigger_context: Option<String>,
+}
+
+impl AgentRequest {
+    pub(crate) fn has_automated_trigger_lineage(&self) -> bool {
+        let has_trigger_id = self
+            .caused_by_trigger_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+        has_trigger_id
+            && matches!(
+                self.caused_by_trigger_kind.as_deref().map(str::trim),
+                Some("event" | "schedule")
+            )
+    }
 }
 
 pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {

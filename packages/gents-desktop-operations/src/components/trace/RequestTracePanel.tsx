@@ -182,7 +182,9 @@ export function eventSummary(event: RunTimelineEventView): string {
         .join(" — ");
     case "rendered_request": {
       const turn =
-        typeof event.turn_index === "number" ? `turn ${event.turn_index}` : null;
+        typeof event.turn_index === "number"
+          ? `turn ${event.turn_index}`
+          : null;
       const attempt =
         typeof event.attempt === "number" ? `attempt ${event.attempt}` : null;
       return [
@@ -194,6 +196,19 @@ export function eventSummary(event: RunTimelineEventView): string {
         .filter(Boolean)
         .join(" — ");
     }
+    case "provider_context_reduction":
+      return [
+        typeof event.reduction_index === "number"
+          ? `per-turn reduction #${event.reduction_index}`
+          : "per-turn reduction",
+        typeof event.original_tokens === "number" &&
+        typeof event.compacted_tokens === "number"
+          ? `${event.original_tokens} → ${event.compacted_tokens} tokens`
+          : null,
+        str(event.producer_call_id),
+      ]
+        .filter(Boolean)
+        .join(" — ");
     case "response":
       return [str(event.status) ?? "response", str(event.error_message)]
         .filter(Boolean)

@@ -37,6 +37,9 @@ pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
 pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
 pub const RENDERED_REQUEST_NAME: &str = "RenderedRequest";
 pub const RENDERED_REQUEST: &str = include_str!("../schemas/agent/rendered_request.graphql");
+pub const PROVIDER_CONTEXT_REDUCTION_NAME: &str = "ProviderContextReduction";
+pub const PROVIDER_CONTEXT_REDUCTION: &str =
+    include_str!("../schemas/agent/provider_context_reduction.graphql");
 pub const PROJECTION_ACP_BINDING_NAME: &str = "ProjectionAcpBinding";
 pub const PROJECTION_ACP_BINDING: &str =
     include_str!("../schemas/agent/projection_acp_binding.graphql");
@@ -116,6 +119,7 @@ pub const ALL: &[&str] = &[
     AGENT_TOOL_APPROVAL,
     COMPACTION_ENTRY,
     RENDERED_REQUEST,
+    PROVIDER_CONTEXT_REDUCTION,
     PROJECTION_ACP_BINDING,
     TASK,
     SCHEDULE,
@@ -158,6 +162,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_TOOL_APPROVAL_NAME,
     COMPACTION_ENTRY_NAME,
     RENDERED_REQUEST_NAME,
+    PROVIDER_CONTEXT_REDUCTION_NAME,
     PROJECTION_ACP_BINDING_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
@@ -182,7 +187,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 ///
 /// This is a curated subset of the `@branchable` collections, not a mirror of
 /// the directive: `WorkspaceRoot`, `AgentNetwork`, `PeerEndpoint`, and
-/// `RenderedRequest` are branchable but deliberately not bulk-synced.
+/// `RenderedRequest` and `ProviderContextReduction` are branchable but
+/// deliberately not bulk-synced.
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_DIRECTORY_ENTRY_NAME,
     AGENT_MEMORY_NAME,
@@ -201,6 +207,18 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     EVENT_TRIGGER_NAME,
     EVENT_TRIGGER_GROUP_STATE_NAME,
 ];
+
+/// Plaintext prompt-bearing audit facts that stay on the runtime node until
+/// installable DefraDB ACP provides an enforceable read boundary (#1074).
+///
+/// This is a placement classification, not an ACP claim. Every broad
+/// replication catalog filters these names explicitly.
+pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] =
+    &[RENDERED_REQUEST_NAME, PROVIDER_CONTEXT_REDUCTION_NAME];
+
+pub fn is_local_audit_collection(name: &str) -> bool {
+    LOCAL_AUDIT_COLLECTION_NAMES.contains(&name)
+}
 
 #[cfg(test)]
 mod tests {
@@ -269,6 +287,14 @@ mod tests {
                 declaration.contains("@branchable"),
                 "bulk-sync collection {name} must be @branchable: {declaration}"
             );
+        }
+    }
+
+    #[test]
+    fn prompt_bearing_audit_facts_are_classified_and_not_bulk_synced() {
+        for name in LOCAL_AUDIT_COLLECTION_NAMES {
+            assert!(ALL_COLLECTION_NAMES.contains(name));
+            assert!(!BRANCHABLE_COLLECTION_NAMES.contains(name));
         }
     }
 }

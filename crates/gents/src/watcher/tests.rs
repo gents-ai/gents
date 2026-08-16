@@ -28,6 +28,37 @@ fn local_and_relayed_updates_are_both_request_wakeups() {
     assert!(request_update_wakeup(&relayed).unwrap().is_relay);
 }
 
+#[test]
+fn automated_trigger_lineage_excludes_scheduled_control_requests() {
+    let triggered = AgentRequest {
+        execution_origin: Some("scheduled".to_string()),
+        caused_by_trigger_id: Some("review-scan".to_string()),
+        caused_by_trigger_kind: Some("event".to_string()),
+        caused_by_source_doc_id: Some("review-area-doc".to_string()),
+        ..base_request()
+    };
+    assert!(triggered.has_automated_trigger_lineage());
+
+    let background_wake = AgentRequest {
+        execution_origin: Some("scheduled".to_string()),
+        metadata: Some(
+            r#"{"queue":{"source":"background_completion"},"background_completion_wake_version":1}"#
+                .to_string(),
+        ),
+        caused_by_parent_request_id: Some("parent-request".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
+        ..base_request()
+    };
+    assert!(!background_wake.has_automated_trigger_lineage());
+
+    let subagent = AgentRequest {
+        caused_by_trigger_id: Some("tool-call".to_string()),
+        caused_by_trigger_kind: Some("subagent".to_string()),
+        ..base_request()
+    };
+    assert!(!subagent.has_automated_trigger_lineage());
+}
+
 // ---------------------------------------------------------------------------
 // validate_agent_request
 // ---------------------------------------------------------------------------
@@ -71,6 +102,9 @@ fn validate_accepts_background_completion_lineage_without_tool_call_link() {
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         ..base_request()
@@ -90,6 +124,9 @@ fn validate_accepts_depth_zero_background_completion_control_lineage() {
         caused_by_parent_request_doc_id: Some("goal-parent-doc-1".to_string()),
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         ..base_request()
@@ -159,6 +196,9 @@ fn validate_accepts_top_level_request() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         ..base_request()
@@ -231,6 +271,9 @@ fn agent_request_clone() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     };
@@ -301,6 +344,9 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     }

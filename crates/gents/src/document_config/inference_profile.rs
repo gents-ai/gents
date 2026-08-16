@@ -9,7 +9,7 @@ use crate::config::{
     DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::config_client::mint_recreate_identity_timestamp;
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct InferenceProfile {
@@ -242,7 +242,7 @@ pub async fn upsert_inference_profile(
     }
     let mutation = upsert_inference_profile_mutation(profile);
 
-    graphql_with_transaction_retry(node, &mutation, "upsert InferenceProfile").await?;
+    graphql_mutation_with_transaction_retry(node, &mutation, "upsert InferenceProfile").await?;
     Ok(())
 }
 

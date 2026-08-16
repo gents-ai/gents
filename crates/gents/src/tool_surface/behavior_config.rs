@@ -115,6 +115,15 @@ impl BehaviorToolConfig {
         subagent_tools: SubagentToolConfig,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
+        let custom_tool_names = custom_tools
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect::<Vec<_>>();
+        crate::document_config::validate_write_tool_declarations(
+            &selection.write_tools,
+            &selection.cli_tool_names,
+            &custom_tool_names,
+        )?;
         if selection.enable_lsp {
             crate::toolset::lsp::LspConfigDocument::parse_operator(selection.lsp_config.as_deref())
                 .map_err(|err| anyhow::anyhow!("invalid lsp_config: {err}"))?;

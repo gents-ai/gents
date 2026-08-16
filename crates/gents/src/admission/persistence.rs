@@ -6,7 +6,7 @@ use defra_node::EmbeddedNode;
 use rig::completion::{CompletionError, Usage};
 
 use super::controller::InferenceCallRecord;
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 
 pub(super) fn spawn_persistence<F>(future: F)
 where
@@ -45,9 +45,12 @@ pub(super) async fn persist_call_queued(
 ) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None);
-    let resp =
-        graphql_with_transaction_retry(node.as_ref(), &mutation, "persist queued InferenceCall")
-            .await?;
+    let resp = graphql_mutation_with_transaction_retry(
+        node.as_ref(),
+        &mutation,
+        "persist queued InferenceCall",
+    )
+    .await?;
     extract_inference_call_doc_id(resp.data.as_ref())
 }
 
@@ -57,10 +60,13 @@ pub(super) async fn persist_call_started(
 ) -> Result<String, CompletionError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None);
-    let resp =
-        graphql_with_transaction_retry(node.as_ref(), &mutation, "persist running InferenceCall")
-            .await
-            .map_err(completion_persistence_error)?;
+    let resp = graphql_mutation_with_transaction_retry(
+        node.as_ref(),
+        &mutation,
+        "persist running InferenceCall",
+    )
+    .await
+    .map_err(completion_persistence_error)?;
     extract_inference_call_doc_id(resp.data.as_ref()).map_err(completion_persistence_error)
 }
 
@@ -70,7 +76,7 @@ pub(super) async fn persist_existing_call_running(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = upsert_call_running_mutation(call, &now);
-    graphql_with_transaction_retry(
+    graphql_mutation_with_transaction_retry(
         node.as_ref(),
         &mutation,
         "persist existing running InferenceCall",
@@ -96,8 +102,12 @@ pub(super) async fn persist_terminal_call(
         Some(&now),
         usage,
     );
-    graphql_with_transaction_retry(node.as_ref(), &mutation, "persist terminal InferenceCall")
-        .await?;
+    graphql_mutation_with_transaction_retry(
+        node.as_ref(),
+        &mutation,
+        "persist terminal InferenceCall",
+    )
+    .await?;
     Ok(())
 }
 
@@ -110,7 +120,7 @@ pub(super) async fn persist_existing_call_terminal(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = upsert_call_terminal_mutation(call, call_state, failure_reason, &now, usage);
-    graphql_with_transaction_retry(
+    graphql_mutation_with_transaction_retry(
         node.as_ref(),
         &mutation,
         "persist existing terminal InferenceCall",

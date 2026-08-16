@@ -57,6 +57,9 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     }

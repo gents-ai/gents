@@ -313,13 +313,12 @@ pub async fn set_backend_probe_status(
         escape_graphql_string(backend_id),
         escape_graphql_string(probe_status),
     );
-    let resp = node.execute(&mutation).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "update InferenceBackend probe_status for {backend_id} failed: {:?}",
-            resp.errors
-        );
-    }
+    crate::graphql::graphql_mutation_with_transaction_retry(
+        node,
+        &mutation,
+        "update InferenceBackend probe_status",
+    )
+    .await?;
     Ok(())
 }
 
@@ -340,13 +339,12 @@ pub async fn set_backend_probe_status_with_last_probe(
         escape_graphql_string(probe_status),
         last_probe.to_rfc3339(),
     );
-    let resp = node.execute(&mutation).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "update InferenceBackend probe_status/last_probe for {backend_id} failed: {:?}",
-            resp.errors
-        );
-    }
+    crate::graphql::graphql_mutation_with_transaction_retry(
+        node,
+        &mutation,
+        "update InferenceBackend probe status and last probe",
+    )
+    .await?;
     Ok(())
 }
 

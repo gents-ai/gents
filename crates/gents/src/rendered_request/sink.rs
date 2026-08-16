@@ -168,7 +168,7 @@ impl DefraRenderedRequestSink {
         // A duplicate-key error is an expected input to reconciliation, so the
         // create itself does not warn. A genuine failure is logged by the
         // transport after the re-read below cannot establish idempotency.
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::graphql::graphql_mutation_with_transaction_retry(
             &self.node,
             &mutation,
             "rendered_request::create",

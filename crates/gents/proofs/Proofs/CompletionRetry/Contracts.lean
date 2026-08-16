@@ -1,4 +1,5 @@
 import Proofs.CompletionRetry.Executable
+import Proofs.CompletionRetry.OutputObligation
 import Proofs.Conformance.ContractTypes
 
 namespace CompletionRetry.Contracts
@@ -106,6 +107,25 @@ def caseCloseTurnThenContinue : CompletionRetryCase :=
   , pre := pre
   , intermediate := intermediate
   , post := post
+  }
+
+def outputObligationCase
+    (name rustSurface : String)
+    (state : OutputObligation.State)
+    (enabled : Bool := true) : CompletionRetryCase :=
+  let pre := baseState
+  let decision := if enabled then OutputObligation.decideTerminal state else .complete
+  let phase := match decision with
+    | .continue => Phase.turnClosed
+    | .complete => Phase.turnDone
+    | .reject => Phase.failedPermanent
+  { name := name
+  , action := "output_obligation_terminal"
+  , rustSurface := rustSurface
+  , failureClass := none
+  , selectedWake := none
+  , pre := pre
+  , post := some { pre with phase := phase }
   }
 
 def cases : List CompletionRetryCase :=
@@ -223,6 +243,52 @@ def cases : List CompletionRetryCase :=
       (some 12)
       (baseState)
       (.preStreamFail .permanent "permanent" 12)
+  , outputObligationCase
+      "unsatisfied_output_obligation_continues"
+      "output_obligation_gate_blocks_terminal"
+      { minimumWrites := 1, completedWrites := 0 }
+  , outputObligationCase
+      "satisfied_output_obligation_completes"
+      "output_obligation_gate_accepts_terminal"
+      { minimumWrites := 1, completedWrites := 1 }
+  , outputObligationCase
+      "dynamic_output_obligation_incomplete_continues"
+      "output_obligation_dynamic_count"
+      { minimumWrites := 1, completedWrites := 2, expectedWrites := some 4 }
+  , outputObligationCase
+      "dynamic_output_obligation_complete_closes"
+      "output_obligation_dynamic_count"
+      { minimumWrites := 1, completedWrites := 4, expectedWrites := some 4 }
+  , outputObligationCase
+      "dynamic_output_obligation_overfull_rejects"
+      "output_obligation_dynamic_count"
+      { minimumWrites := 1, completedWrites := 5, expectedWrites := some 4 }
+  , outputObligationCase
+      "dynamic_output_obligation_inconsistent_rejects"
+      "output_obligation_dynamic_count"
+      { minimumWrites := 1
+      , completedWrites := 2
+      , expectedWrites := some 4
+      , countValid := false
+      }
+  , outputObligationCase
+      "trigger_output_obligation_inactive_interactive"
+      "trigger_scope_activation"
+      { minimumWrites := 1, completedWrites := 0 }
+      (OutputObligation.active .trigger
+        { executionScheduled := false, hasAutomatedTriggerLineage := false })
+  , outputObligationCase
+      "trigger_output_obligation_inactive_scheduled_control"
+      "trigger_scope_activation"
+      { minimumWrites := 1, completedWrites := 0 }
+      (OutputObligation.active .trigger
+        { executionScheduled := true, hasAutomatedTriggerLineage := false })
+  , outputObligationCase
+      "trigger_output_obligation_active_automated_trigger"
+      "trigger_scope_activation"
+      { minimumWrites := 1, completedWrites := 0 }
+      (OutputObligation.active .trigger
+        { executionScheduled := true, hasAutomatedTriggerLineage := true })
   ]
 
 def CompletionRetryCase.toJson (c : CompletionRetryCase) : String :=

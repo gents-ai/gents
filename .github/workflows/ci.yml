@@ -295,6 +295,8 @@ jobs:
       - name: Run demo packs end to end
         if: matrix.suite == 'cli'
         timeout-minutes: 15
+        env:
+          GENTS_EXP_MODEL: GLM-5.2
         run: cargo run -p gents-cli --bin gents -- demo run pipeline --http-port 19891
 
       - name: Run full library and integration tests

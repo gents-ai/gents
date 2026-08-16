@@ -53,6 +53,7 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
     approval_required_tools: Arc<Vec<String>>,
+    output_obligations: Arc<Vec<(String, crate::document_config::WriteToolOutputObligation)>>,
     startup_barrier: Arc<StartupBarrier>,
     startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
 }
@@ -114,6 +115,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             background_tool_registry,
             background_execution_registry,
             approval_required_tools: Arc::new(Vec::new()),
+            output_obligations: Arc::new(Vec::new()),
             startup_barrier,
             startup_demotions,
         }
@@ -143,6 +145,14 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
 
     pub(super) fn with_approval_required_tools(mut self, tools: Vec<String>) -> Self {
         self.approval_required_tools = Arc::new(tools);
+        self
+    }
+
+    pub(super) fn with_output_obligations(
+        mut self,
+        obligations: Vec<(String, crate::document_config::WriteToolOutputObligation)>,
+    ) -> Self {
+        self.output_obligations = Arc::new(obligations);
         self
     }
 

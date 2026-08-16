@@ -245,12 +245,11 @@ async fn mark_background_tool_completion_side_effects_done(
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "mark background completion side effects done failed: {:?}",
-            response.errors
-        );
-    }
+    crate::graphql::graphql_mutation_with_transaction_retry(
+        node,
+        &mutation,
+        "mark background completion side effects done",
+    )
+    .await?;
     Ok(())
 }

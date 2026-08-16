@@ -3,7 +3,7 @@ use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 
 /// Runtime-owned Schedule fields the trigger engine writes back after a fire
 /// attempt.
@@ -181,7 +181,8 @@ pub(crate) async fn update_schedule_runtime_fields(
         }}"#
     );
 
-    graphql_with_transaction_retry(node, &mutation, "update Schedule runtime fields").await?;
+    graphql_mutation_with_transaction_retry(node, &mutation, "update Schedule runtime fields")
+        .await?;
 
     Ok(())
 }

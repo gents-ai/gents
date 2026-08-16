@@ -16,6 +16,19 @@ fn resolve_template_is_total_over_catalog_and_id_faithful() {
 }
 
 #[test]
+fn sensitive_local_audit_payloads_have_no_builtin_replication_route() {
+    for template in builtin_templates() {
+        for collection in ["RenderedRequest", "ProviderContextReduction"] {
+            assert!(
+                !template.collections.contains(&collection),
+                "{} must not replicate local audit collection {collection}",
+                template.id
+            );
+        }
+    }
+}
+
+#[test]
 fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
     let t = resolve_template("conversation").expect("conversation in catalog");
     assert_eq!(t.delivery, Delivery::Push);

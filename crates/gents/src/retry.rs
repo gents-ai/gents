@@ -125,11 +125,7 @@ pub(crate) async fn execute_graphql_with_terminal_persistence_retry(
         TERMINAL_PERSISTENCE_MAX_RETRIES,
         Duration::from_millis(TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS),
         || async {
-            let response = node.execute(graphql).await;
-            if response.has_errors() {
-                anyhow::bail!("{operation} failed: {:?}", response.errors);
-            }
-            Ok(response)
+            crate::graphql::graphql_mutation_with_transaction_retry(node, graphql, operation).await
         },
     )
     .await

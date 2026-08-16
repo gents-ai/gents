@@ -23,11 +23,9 @@ const MAX_LIVE_REASONING_BYTES: usize = 64 * 1024;
 
 type ResponseWriteGate = Mutex<()>;
 
-/// DefraDB commits mutations at a database-wide revision boundary, so
-/// independent behavior daemons streaming into different AgentResponse rows
-/// can still collide. Writers are constructed per behavior; this node-scoped
-/// gate keeps their short response mutations ordered without coupling daemon
-/// ownership or holding the gate while waiting on the provider.
+/// Response operations include read-before-write checks that must remain
+/// ordered across behavior daemons. The actual mutations also pass through
+/// the runtime-wide mutation gate in `graphql`.
 fn response_write_gate(node: &Arc<EmbeddedNode>) -> Arc<ResponseWriteGate> {
     static GATES: OnceLock<StdMutex<HashMap<usize, Weak<ResponseWriteGate>>>> = OnceLock::new();
 

@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::client::scope_call_with_token;
 use super::{
-    scope_call, scope_call_with_token_and_failure_reason, scope_request,
+    scope_call, scope_call_with_join, scope_call_with_token_and_failure_reason, scope_request,
     set_terminal_failure_reason,
     slot_accounting::{reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow},
     terminal_failure_reason_observer, AdmissionCallContext, AdmissionRegistry,
@@ -70,6 +70,9 @@ fn request(request_id: &str) -> AgentRequest {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     }
@@ -128,6 +131,33 @@ async fn current_call_join_reflects_the_minted_call() {
 
     // Cleared with the scope: no ambient join leaks across requests.
     assert!(super::current_call_join().is_none());
+}
+
+#[tokio::test]
+async fn concurrent_call_scopes_return_their_own_exact_join() {
+    let context = AdmissionCallContext::for_request(&request("req-scopes"), "default", "backend-1");
+    scope_request(context, async {
+        let compaction = scope_call_with_join(CallKind::Compaction, 1, async {
+            super::client::current_context()
+                .unwrap()
+                .next_call("runtime-test")
+        });
+        let title = scope_call_with_join(CallKind::OneOff, 1, async {
+            super::client::current_context()
+                .unwrap()
+                .next_call("runtime-test")
+        });
+        let ((compaction_call, compaction_join), (title_call, title_join)) =
+            tokio::join!(compaction, title);
+        let compaction_join = compaction_join.expect("compaction join");
+        let title_join = title_join.expect("title join");
+        assert_eq!(compaction_join.call_id, compaction_call.call_id);
+        assert_eq!(compaction_join.call_kind, CallKind::Compaction);
+        assert_eq!(title_join.call_id, title_call.call_id);
+        assert_eq!(title_join.call_kind, CallKind::OneOff);
+        assert_ne!(compaction_join.call_id, title_join.call_id);
+    })
+    .await;
 }
 
 const ADMISSION_TERMINAL_REASON_SOURCES: &[&str] = &[

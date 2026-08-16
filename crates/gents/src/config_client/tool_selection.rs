@@ -51,7 +51,9 @@ pub async fn write_tool_selection_document_with_clear_fields(
         add_fields = add_fields,
         update_fields = update_fields,
     );
-    let response = access.execute(&mutation).await?;
+    let response = access
+        .execute_mutation(&mutation, "upsert ToolSelection")
+        .await?;
     gents_protocol::graphql::extract_mutation_doc_id(&response, "ToolSelection")
 }
 

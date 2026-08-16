@@ -7,7 +7,7 @@ use super::serde_helpers;
 use crate::config_client::mint_recreate_identity_timestamp;
 use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::document_config::SubagentTarget;
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 use crate::meta_tools::META_TOOL_NAMES;
 use crate::tool_surface::TOOL_POLICY_V1;
 use crate::toolset::{
@@ -121,6 +121,95 @@ pub struct WriteToolDecl {
     pub collection: String,
     pub description: String,
     pub fields: Vec<WriteToolField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_obligation: Option<WriteToolOutputObligation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteToolOutputObligationScope {
+    Request,
+    Trigger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WriteToolOutputObligation {
+    pub scope: WriteToolOutputObligationScope,
+    #[serde(default = "default_minimum_writes")]
+    pub minimum_writes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_count_field: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputObligationDecision {
+    Continue,
+    Complete,
+    Reject,
+}
+
+impl<'de> serde::Deserialize<'de> for WriteToolOutputObligation {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            scope: WriteToolOutputObligationScope,
+            #[serde(default = "default_minimum_writes")]
+            minimum_writes: usize,
+            #[serde(default)]
+            expected_count_field: Option<String>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(Self {
+            scope: raw.scope,
+            minimum_writes: raw.minimum_writes,
+            expected_count_field: raw
+                .expected_count_field
+                .map(|field| field.trim().to_string())
+                .filter(|field| !field.is_empty()),
+        })
+    }
+}
+
+impl WriteToolOutputObligation {
+    pub fn applies_to(&self, has_automated_trigger_lineage: bool) -> bool {
+        match self.scope {
+            WriteToolOutputObligationScope::Request => true,
+            WriteToolOutputObligationScope::Trigger => has_automated_trigger_lineage,
+        }
+    }
+
+    pub fn decision(
+        &self,
+        completed_writes: usize,
+        expected_writes: Option<usize>,
+        count_valid: bool,
+    ) -> OutputObligationDecision {
+        if !count_valid {
+            return OutputObligationDecision::Reject;
+        }
+        if let Some(expected_writes) = expected_writes {
+            if expected_writes < self.minimum_writes || completed_writes > expected_writes {
+                return OutputObligationDecision::Reject;
+            }
+            if completed_writes == expected_writes {
+                return OutputObligationDecision::Complete;
+            }
+            return OutputObligationDecision::Continue;
+        }
+        if completed_writes >= self.minimum_writes {
+            OutputObligationDecision::Complete
+        } else {
+            OutputObligationDecision::Continue
+        }
+    }
+}
+
+const fn default_minimum_writes() -> usize {
+    1
 }
 
 impl<'de> serde::Deserialize<'de> for WriteToolDecl {
@@ -136,6 +225,8 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
             description: String,
             #[serde(default)]
             fields: Vec<WriteToolField>,
+            #[serde(default)]
+            output_obligation: Option<WriteToolOutputObligation>,
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(WriteToolDecl {
@@ -143,6 +234,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
             collection: raw.collection.trim().to_string(),
             description: raw.description,
             fields: raw.fields,
+            output_obligation: raw.output_obligation,
         })
     }
 }
@@ -153,6 +245,105 @@ impl WriteToolDecl {
     pub fn is_well_formed(&self) -> bool {
         !self.tool_name.trim().is_empty() && !self.collection.trim().is_empty()
     }
+
+    pub fn output_obligation_is_well_formed(&self) -> bool {
+        self.output_obligation.as_ref().is_none_or(|obligation| {
+            obligation.minimum_writes > 0
+                && obligation.expected_count_field.as_ref().is_none_or(|name| {
+                    self.fields
+                        .iter()
+                        .any(|field| field.name == *name && field.required && field.fill.is_none())
+                })
+        })
+    }
+}
+
+pub(crate) fn validate_write_tool_declarations(
+    decls: &[WriteToolDecl],
+    cli_tool_names: &[String],
+    additional_tool_names: &[String],
+) -> Result<()> {
+    let cli_tool_names = cli_tool_names
+        .iter()
+        .map(|name| name.trim())
+        .collect::<std::collections::HashSet<_>>();
+    let additional_tool_names = additional_tool_names
+        .iter()
+        .map(|name| name.trim())
+        .collect::<std::collections::HashSet<_>>();
+    let mut seen_tool_names = std::collections::HashSet::new();
+    for (i, decl) in decls.iter().enumerate() {
+        if !decl.is_well_formed() {
+            return Err(anyhow::anyhow!(
+                "write_tools[{i}] is malformed (tool_name and collection must both be non-empty): tool_name={:?}, collection={:?}",
+                decl.tool_name,
+                decl.collection
+            ));
+        }
+        if !decl.output_obligation_is_well_formed() {
+            return Err(anyhow::anyhow!(
+                "write_tools[{i}] (tool {:?}) output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
+                decl.tool_name
+            ));
+        }
+        if is_reserved_builtin_tool_name(&decl.tool_name) {
+            return Err(anyhow::anyhow!(
+                "write_tools[{i}] tool_name {:?} collides with a built-in tool; declared write tools must use a unique name",
+                decl.tool_name.trim()
+            ));
+        }
+        if cli_tool_names.contains(decl.tool_name.trim()) {
+            return Err(anyhow::anyhow!(
+                "write_tools[{i}] tool_name {:?} collides with a cli_tool_names entry in the same tool selection; each tool must have a unique name",
+                decl.tool_name.trim()
+            ));
+        }
+        if additional_tool_names.contains(decl.tool_name.trim()) {
+            return Err(anyhow::anyhow!(
+                "write_tools[{i}] tool_name {:?} collides with another runtime-provided tool; each tool must have a unique name",
+                decl.tool_name.trim()
+            ));
+        }
+        let mut seen_field_names = std::collections::HashSet::new();
+        for (j, field) in decl.fields.iter().enumerate() {
+            if field.name.trim().is_empty() {
+                return Err(anyhow::anyhow!(
+                    "write_tools[{i}] (tool {:?}) has a field[{j}] with an empty name; every WriteToolField must have a non-empty name",
+                    decl.tool_name
+                ));
+            }
+            if !seen_field_names.insert(field.name.trim()) {
+                return Err(anyhow::anyhow!(
+                    "write_tools[{i}] (tool {:?}) has a duplicate field name {:?}; each WriteToolField in a declaration must have a unique name",
+                    decl.tool_name,
+                    field.name.trim()
+                ));
+            }
+            if field.fill.is_some() && field.required {
+                return Err(anyhow::anyhow!(
+                    "write_tools[{i}] (tool {:?}) field[{j}] {:?} is runtime-filled and cannot be required",
+                    decl.tool_name,
+                    field.name,
+                ));
+            }
+            if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
+                crate::graphql::validate_graphql_name(source_field).map_err(|error| {
+                    anyhow::anyhow!(
+                        "write_tools[{i}] (tool {:?}) field[{j}] has invalid source_field {:?}: {error}",
+                        decl.tool_name,
+                        source_field,
+                    )
+                })?;
+            }
+        }
+        if !seen_tool_names.insert(decl.tool_name.trim()) {
+            return Err(anyhow::anyhow!(
+                "write_tools has a duplicate tool_name {:?}; each declared write tool must have a unique tool_name",
+                decl.tool_name.trim()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// True when `name` is already claimed by the built-in tool surface: the native
@@ -549,95 +740,11 @@ impl ToolSelectionDocument {
             }
         }
         if let Some(decls) = &self.write_tools {
-            // Sibling cli_tool_names are advertised as individually-named tools
-            // in the same selection, so a write tool reusing one of those names
-            // is the same dispatch collision as reusing a built-in name. (Other
-            // categories: built-ins are covered by `is_reserved_builtin_tool_name`;
-            // subagent targets are arguments to `spawn_subagent`, not tool names;
-            // MCP/custom tools are runtime-discovered and guarded in
-            // `ToolSurface::build_tools`.)
-            let cli_tool_names: std::collections::HashSet<&str> = self
-                .cli_tool_names
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .map(|name| name.trim())
-                .collect();
-            let mut seen_tool_names = std::collections::HashSet::new();
-            for (i, decl) in decls.iter().enumerate() {
-                // A decl must name a non-empty tool AND target collection.
-                // `is_well_formed()` is the single source of truth for that gate;
-                // mirror it here so malformed decls fail validation loudly
-                // instead of being silently dropped at registration.
-                if !decl.is_well_formed() {
-                    return Err(anyhow::anyhow!(
-                        "write_tools[{i}] is malformed (tool_name and collection must both be \
-                         non-empty): tool_name={:?}, collection={:?}",
-                        decl.tool_name,
-                        decl.collection
-                    ));
-                }
-                // A declared write tool may not reuse a built-in tool name:
-                // doing so silently shadows the built-in (see
-                // `is_reserved_builtin_tool_name`).
-                if is_reserved_builtin_tool_name(&decl.tool_name) {
-                    return Err(anyhow::anyhow!(
-                        "write_tools[{i}] tool_name {:?} collides with a built-in tool; declared \
-                         write tools must use a name not already provided by the native, meta, \
-                         subagent, or built-in (defra_query, context_budget, sessions, memory) \
-                         tool surface",
-                        decl.tool_name.trim()
-                    ));
-                }
-                if cli_tool_names.contains(decl.tool_name.trim()) {
-                    return Err(anyhow::anyhow!(
-                        "write_tools[{i}] tool_name {:?} collides with a cli_tool_names entry in \
-                         the same tool selection; each tool must have a unique name",
-                        decl.tool_name.trim()
-                    ));
-                }
-                let mut seen_field_names = std::collections::HashSet::new();
-                for (j, field) in decl.fields.iter().enumerate() {
-                    if field.name.trim().is_empty() {
-                        return Err(anyhow::anyhow!(
-                            "write_tools[{i}] (tool {:?}) has a field[{j}] with an empty name; \
-                             every WriteToolField must have a non-empty name",
-                            decl.tool_name
-                        ));
-                    }
-                    if !seen_field_names.insert(field.name.trim()) {
-                        return Err(anyhow::anyhow!(
-                            "write_tools[{i}] (tool {:?}) has a duplicate field name {:?}; each \
-                             WriteToolField in a declaration must have a unique name",
-                            decl.tool_name,
-                            field.name.trim()
-                        ));
-                    }
-                    if field.fill.is_some() && field.required {
-                        return Err(anyhow::anyhow!(
-                            "write_tools[{i}] (tool {:?}) field[{j}] {:?} is runtime-filled and cannot be required",
-                            decl.tool_name,
-                            field.name,
-                        ));
-                    }
-                    if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
-                        crate::graphql::validate_graphql_name(source_field).map_err(|error| {
-                            anyhow::anyhow!(
-                                "write_tools[{i}] (tool {:?}) field[{j}] has invalid source_field {:?}: {error}",
-                                decl.tool_name,
-                                source_field,
-                            )
-                        })?;
-                    }
-                }
-                if !seen_tool_names.insert(decl.tool_name.trim()) {
-                    return Err(anyhow::anyhow!(
-                        "write_tools has a duplicate tool_name {:?}; each declared write tool \
-                         must have a unique tool_name",
-                        decl.tool_name.trim()
-                    ));
-                }
-            }
+            validate_write_tool_declarations(
+                decls,
+                self.cli_tool_names.as_deref().unwrap_or_default(),
+                &[],
+            )?;
         }
         Ok(())
     }
@@ -1219,6 +1326,6 @@ pub async fn upsert_tool_selection(
         }}"#
     );
 
-    graphql_with_transaction_retry(node, &mutation, "upsert ToolSelection").await?;
+    graphql_mutation_with_transaction_retry(node, &mutation, "upsert ToolSelection").await?;
     Ok(())
 }

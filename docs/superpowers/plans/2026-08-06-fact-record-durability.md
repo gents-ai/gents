@@ -374,9 +374,9 @@ task: doing so would invalidate the migration baseline pins.
 - [ ] Extend the capture seam to carry an `AssemblyTrace` (or equivalent typed
   data) alongside the final `CompletionRequest`. After #988,
   `build_budgeted_request` may invoke the model-backed `turn_compactor` and
-  inject an in-memory continuation checkpoint that is **not** saved as an
-  `AgentCompactionEntry`. The callback currently sees only the final request,
-  which is enough for #840 capture but not enough to explain #523 provenance.
+  inject a request-local continuation checkpoint. That checkpoint is persisted
+  as `ProviderContextReduction`, not `AgentCompactionEntry`, and its key is
+  carried by `AssemblyTrace` for #523 provenance.
   Record whether dynamic output clamping and per-turn compaction occurred, the
   effective compacted provider messages/checkpoint, and the pre/post budget
   estimates. Never re-run the summarizer during reconstruction and expect the

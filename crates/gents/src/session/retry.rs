@@ -4,8 +4,8 @@ use crate::retry::{
     DEFRA_DB_CONFLICT_MAX_RETRIES,
 };
 
+pub(crate) use crate::graphql::graphql_mutation_with_transaction_retry as execute_mutation_with_retry;
 pub(super) use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
-pub(crate) use crate::graphql::graphql_with_transaction_retry as execute_mutation_with_retry;
 
 pub(super) async fn retry_operation<F, Fut, T>(operation: &str, f: F) -> Result<T>
 where

@@ -845,8 +845,13 @@ impl GraphqlPairingStateStore {
             .await
             .context("signing bearer pairing readiness acknowledgement")?;
         let mutation = bearer_pairing_ready_upsert_mutation(&readiness_key, &record);
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "upsert BearerPairingReady")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "upsert BearerPairingReady",
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn delete_bearer_readiness_for_peer(&self, peer_id: &str) -> Result<()> {
@@ -858,8 +863,13 @@ impl GraphqlPairingStateStore {
                 ) {{ _docID }}
             }}"#
         );
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "delete BearerPairingReady")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "delete BearerPairingReady",
+        )
+        .await
+        .map(|_| ())
     }
 }
 
@@ -973,8 +983,13 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 ) {{ _docID }}
             }}"#
         );
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "upsert PeerPairingApplied")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "upsert PeerPairingApplied",
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn delete_applied(&self, peer_id: &str) -> Result<()> {
@@ -986,8 +1001,13 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 ) {{ _docID }}
             }}"#
         );
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "delete PeerPairingApplied")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "delete PeerPairingApplied",
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {

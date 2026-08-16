@@ -1,5 +1,5 @@
 use super::query::{load_session_document, load_session_document_optional};
-use super::retry::{execute_query_timed, log_mutation_timing, retry_operation};
+use super::retry::{execute_mutation_with_retry, execute_query_timed, retry_operation};
 use super::*;
 
 pub async fn create_session(
@@ -89,15 +89,8 @@ async fn create_session_with_behavior_id_and_requester_did(
             }}"#
         );
 
-        let started_at = std::time::Instant::now();
-        let resp = node.execute(&mutation).await;
-        log_mutation_timing("create_session", started_at.elapsed());
-
-        if !resp.has_errors() {
-            return Ok(created);
-        }
-
-        anyhow::bail!("create_session mutation failed: {:?}", resp.errors)
+        execute_mutation_with_retry(node, &mutation, "create_session").await?;
+        Ok(created)
     })
     .await?;
 
@@ -207,15 +200,8 @@ pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> 
             doc_id = session.doc_id,
         );
 
-        let started_at = std::time::Instant::now();
-        let resp = node.execute(&mutation).await;
-        log_mutation_timing("close_session", started_at.elapsed());
-
-        if !resp.has_errors() {
-            return Ok(());
-        }
-
-        anyhow::bail!("close_session mutation failed: {:?}", resp.errors)
+        execute_mutation_with_retry(node, &mutation, "close_session").await?;
+        Ok(())
     })
     .await?;
 

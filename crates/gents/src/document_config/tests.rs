@@ -124,6 +124,7 @@ fn validate_rejects_write_tool_with_empty_tool_name() {
             collection: "ActionRequest".to_string(),
             description: String::new(),
             fields: Vec::new(),
+            output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
         ..Default::default()
@@ -146,6 +147,7 @@ fn validate_rejects_write_tool_with_empty_collection() {
             collection: "  ".to_string(),
             description: String::new(),
             fields: Vec::new(),
+            output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
         ..Default::default()
@@ -173,6 +175,7 @@ fn validate_rejects_write_tool_field_with_empty_name() {
                 required: true,
                 fill: None,
             }],
+            output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
         ..Default::default()
@@ -193,6 +196,7 @@ fn validate_rejects_duplicate_write_tool_names() {
         collection: collection.to_string(),
         description: String::new(),
         fields: Vec::new(),
+        output_obligation: None,
     };
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),
@@ -225,12 +229,14 @@ fn validate_accepts_well_formed_write_tools() {
                     required: true,
                     fill: None,
                 }],
+                output_obligation: None,
             },
             WriteToolDecl {
                 tool_name: "log_note".to_string(),
                 collection: "Note".to_string(),
                 description: String::new(),
                 fields: Vec::new(),
+                output_obligation: None,
             },
         ]),
         datastore_tool_surface_ids: None,
@@ -240,6 +246,82 @@ fn validate_accepts_well_formed_write_tools() {
         doc.validate().is_ok(),
         "well-formed, uniquely-named write_tools must validate"
     );
+}
+
+#[test]
+fn write_tool_output_obligation_round_trips_and_rejects_zero_minimum() {
+    let value = serde_json::json!({
+        "tool_name": "write_result",
+        "collection": "Result",
+        "description": "Persist the request output.",
+        "fields": [{"name": "expected_total", "required": true}],
+        "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1,
+            "expected_count_field": "expected_total"
+        }
+    });
+    let decl: WriteToolDecl = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decl).unwrap(), value);
+
+    let doc = ToolSelectionDocument {
+        selection_id: "obligated-tools".to_string(),
+        agent_did: "did:test:test".to_string(),
+        write_tools: Some(vec![WriteToolDecl {
+            output_obligation: Some(WriteToolOutputObligation {
+                scope: WriteToolOutputObligationScope::Trigger,
+                minimum_writes: 0,
+                expected_count_field: None,
+            }),
+            ..decl
+        }]),
+        ..Default::default()
+    };
+    assert!(doc
+        .validate()
+        .unwrap_err()
+        .to_string()
+        .contains("minimum_writes"));
+}
+
+#[test]
+fn dynamic_output_obligation_requires_a_model_provided_required_field() {
+    for fields in [
+        vec![WriteToolField {
+            name: "expected_total".to_string(),
+            required: false,
+            fill: None,
+        }],
+        vec![WriteToolField {
+            name: "expected_total".to_string(),
+            required: false,
+            fill: Some(WriteToolFieldFill::SourceField(
+                "expected_total".to_string(),
+            )),
+        }],
+    ] {
+        let doc = ToolSelectionDocument {
+            selection_id: "dynamic-obligation-tools".to_string(),
+            agent_did: "did:test:test".to_string(),
+            write_tools: Some(vec![WriteToolDecl {
+                tool_name: "write_result".to_string(),
+                collection: "Result".to_string(),
+                description: String::new(),
+                fields,
+                output_obligation: Some(WriteToolOutputObligation {
+                    scope: WriteToolOutputObligationScope::Trigger,
+                    minimum_writes: 1,
+                    expected_count_field: Some("expected_total".to_string()),
+                }),
+            }]),
+            ..Default::default()
+        };
+        assert!(doc
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("expected_count_field"));
+    }
 }
 
 #[test]
@@ -258,6 +340,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
                 required: true,
                 fill: None,
             }],
+            output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
         ..Default::default()
@@ -284,6 +367,7 @@ fn validate_rejects_write_tool_name_colliding_with_defra_query() {
             collection: "AuditLog".to_string(),
             description: String::new(),
             fields: Vec::new(),
+            output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
         ..Default::default()
@@ -307,6 +391,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
             collection: "AuditLog".to_string(),
             description: String::new(),
             fields: Vec::new(),
+            output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
         ..Default::default()
@@ -344,6 +429,7 @@ fn validate_rejects_duplicate_field_names_within_decl() {
                     fill: None,
                 },
             ],
+            output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
         ..Default::default()
@@ -590,6 +676,7 @@ async fn tool_selection_document_round_trips_write_tools() {
                     fill: None,
                 },
             ],
+            output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
         ..Default::default()
@@ -940,6 +1027,7 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
                 required: true,
                 fill: Some(WriteToolFieldFill::Correlation),
             }],
+            output_obligation: None,
         }]),
         ..Default::default()
     };

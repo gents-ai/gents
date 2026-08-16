@@ -1606,6 +1606,12 @@ fn validate_write_tools(
                 decl.tool_name
             ));
         }
+        if !decl.output_obligation_is_well_formed() {
+            errors.push(format!(
+                "tool selection {selection_id} write_tools tool {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
+                decl.tool_name
+            ));
+        }
         if is_reserved_builtin_tool_name(&decl.tool_name) {
             errors.push(format!(
                 "tool selection {selection_id} write_tools tool_name {:?} collides with a \

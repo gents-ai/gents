@@ -14,6 +14,7 @@ import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
+import Proofs.Conformance.Contracts.Json.DurableReduction
 import Proofs.Conformance.Contracts.Json.AggregateBudget
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
@@ -226,6 +227,8 @@ def snapshotJson : String :=
       ++ promptAssemblyTurnBudgetCasesJson ++ ","
     ++ "\"rendered_capture_cases\":"
       ++ renderedCaptureCasesJson ++ ","
+    ++ "\"durable_reduction_cases\":"
+      ++ durableReductionCasesJson ++ ","
     ++ "\"rendered_capture_key_cases\":"
       ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"capture_scope_cases\":"

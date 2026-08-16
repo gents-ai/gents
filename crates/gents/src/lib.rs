@@ -81,6 +81,7 @@ pub mod native_executor_status;
 pub mod oneshot;
 pub mod periodic_recovery;
 pub mod prompt;
+pub mod provider_context_reduction;
 pub(crate) mod registry;
 pub mod rendered_request;
 pub(crate) mod request_binding;
@@ -154,6 +155,7 @@ pub use document_config::{
     wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
     ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
