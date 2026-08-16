@@ -2,18 +2,12 @@ use crate::types::DerivedCancelCauseView;
 
 #[derive(Debug, Clone, Default)]
 pub struct RequestEvidence {
-    #[allow(dead_code)]
-    pub request_id: String,
     pub interrupt_requested_at: Option<String>,
     pub caused_by_parent_request_id: Option<String>,
-    #[allow(dead_code)]
-    pub deadline_breached: bool,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ToolCallEvidence {
-    #[allow(dead_code)]
-    pub tool_call_id: String,
     pub lifecycle_state: Option<String>,
     pub deadline_at: Option<String>,
     pub cancel_policy: Option<String>,
@@ -24,8 +18,6 @@ pub struct ToolCallEvidence {
 #[derive(Debug, Clone, Default)]
 pub struct ResponseEvidence {
     pub interrupted_at: Option<String>,
-    #[allow(dead_code)]
-    pub completed_at: Option<String>,
 }
 
 fn is_cancelled_terminal(state: &Option<String>) -> bool {
