@@ -1608,7 +1608,7 @@ fn validate_write_tools(
         }
         if !decl.output_obligation_is_well_formed() {
             errors.push(format!(
-                "tool selection {selection_id} write_tools tool {:?} output_obligation.minimum_writes must be greater than zero",
+                "tool selection {selection_id} write_tools tool {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
                 decl.tool_name
             ));
         }
