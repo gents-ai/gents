@@ -151,8 +151,8 @@ incremental = false
 # `reasoning` vs `reasoning_content` mismatch on Chat Completions). Without the
 # fork our Responses-API reasoning capture is silently empty.
 rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "1ebeeaee3b569bb6e242e000c11df1ed2c0cca90" }
-# noq 1.1.1 includes the stale-path and duplicate-Draining fixes, but
-# n0-computer/noq#723 remains open. Keep the two endpoint Drop paths from
+# noq 1.1.1 includes the stale-path and duplicate-Draining fixes, and
+# n0-computer/noq#723 has been closed. Keep the two endpoint Drop paths from
 # aborting the process when an earlier driver panic poisons their mutex.
 # See third_party/README.md, defradb.rs#1090, and gents#634.
 noq = { path = "third_party/noq" }

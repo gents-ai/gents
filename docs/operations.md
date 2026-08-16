@@ -269,7 +269,7 @@ are unchanged; re-pair with a machine QR to opt in.
 The low-level `p2p admin replicators add` command accepts `--filter` to express
 per-collection field-equality predicates (repeatable). These are parsed into
 `PairingFilters` and echoed in the command output. Full forwarding to the
-DefraDB filtered-replication endpoint is pending defradb.rs #1033.
+DefraDB filtered-replication endpoint is implemented (defradb.rs #1033).
 
 ```bash
 gents p2p admin replicators add \
