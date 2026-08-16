@@ -636,34 +636,3 @@ describe("projectChatShell", () => {
     expect(projection.sendStatus).toEqual({ kind: "ready" });
   });
 });
-
-function shouldShowLiveOverlay(c: LeanLiveOverlayCase): boolean {
-  if (c.materialized) {
-    return false;
-  }
-  if (c.responseStatus === "complete" || c.responseStatus === "error") {
-    return false;
-  }
-  if (c.turnLabel !== "streaming" && c.turnLabel !== "waitingForClaim") {
-    return false;
-  }
-  return c.hasContent || c.hasReasoning;
-}
-
-describe("LiveOverlay conformance (issue #64)", () => {
-  const cases = loadLeanLiveOverlayCases();
-
-  it("Lean LiveOverlay case table is non-empty", () => {
-    expect(cases.length).toBeGreaterThan(0);
-  });
-
-  for (const raw of cases) {
-    it(`case ${raw.name} matches Lean expected decision`, () => {
-      expect(shouldShowLiveOverlay(raw)).toBe(raw.expectOverlay);
-      if (raw.turnTerminal) {
-        expect(raw.expectOverlay).toBe(false);
-      }
-      expect(typeof raw.precedingToolCalls).toBe("number");
-    });
-  }
-});

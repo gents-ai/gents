@@ -1488,8 +1488,6 @@ function operationsLineage(rootRequestId: string): SubagentTreeView {
   };
 }
 
-export const createBombadilDesktopHarness = createDesktopUiHarness;
-
 function createDeployment(): DeploymentView {
   return {
     peerId: "peer-bombadil-local",
