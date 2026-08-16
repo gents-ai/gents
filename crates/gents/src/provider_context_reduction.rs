@@ -9,7 +9,7 @@ use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_mutation_response_with_transaction_retry};
 use crate::llm::message::Message;
 
 const REDUCTION_KEY_PREFIX: &str = "provider-context-reduction:v1";
@@ -304,7 +304,12 @@ pub async fn persist(
         original_tokens = input.original_tokens,
         compacted_tokens = input.compacted_tokens,
     );
-    let response = node.execute(&mutation).await;
+    let response = graphql_mutation_response_with_transaction_retry(
+        node,
+        &mutation,
+        "creating ProviderContextReduction",
+    )
+    .await;
     if response.has_errors() {
         anyhow::bail!(
             "creating ProviderContextReduction {reduction_key}: {:?}",
