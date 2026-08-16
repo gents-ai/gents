@@ -251,11 +251,21 @@ pub fn mutation_composite_version(
     let Some(document) = single_mutation_document(response, field)? else {
         return Ok(None);
     };
+    document_composite_version(document, field)
+}
+
+/// Select the unique newest composite commit from a document `_version`
+/// projection. Field commits cannot identify an exact document version and
+/// are therefore never accepted as a fallback.
+pub fn document_composite_version(
+    document: &Value,
+    operation: &str,
+) -> Result<Option<CompositeCommit>> {
     let versions = document
         .get("_version")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("{field} returned no _version array"))?;
-    let mut commits = versions
+        .ok_or_else(|| anyhow::anyhow!("{operation} returned no _version array"))?;
+    let commits = versions
         .iter()
         .cloned()
         .map(serde_json::from_value::<CompositeCommit>)
@@ -263,6 +273,13 @@ pub fn mutation_composite_version(
         .into_iter()
         .filter(|commit| commit.field_name == "_C")
         .collect::<Vec<_>>();
+    unique_newest_composite_commit(commits, operation)
+}
+
+fn unique_newest_composite_commit(
+    mut commits: Vec<CompositeCommit>,
+    operation: &str,
+) -> Result<Option<CompositeCommit>> {
     commits.sort_by(|left, right| {
         right
             .height
@@ -277,11 +294,39 @@ pub fn mutation_composite_version(
         .is_some_and(|candidate| candidate.height == newest.height)
     {
         anyhow::bail!(
-            "{field} returned multiple composite commits at newest height {}; mutation version is ambiguous",
+            "{operation} returned multiple composite commits at newest height {}; document version is ambiguous",
             newest.height
         );
     }
     Ok(commits.into_iter().next())
+}
+
+/// Read at most the current composite heads for a document. `depth: 1` keeps
+/// the query independent of document history length, while `limit: 2` retains
+/// enough evidence to reject concurrent newest heads.
+pub async fn newest_document_composite_commit(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    operation: &str,
+) -> Result<Option<CompositeCommit>> {
+    let query = format!(
+        r#"query {{
+            _commits(
+                docID: "{}"
+                depth: 1
+                filter: {{ fieldName: {{ _eq: "_C" }} }}
+                order: {{ height: DESC }}
+                limit: 2
+            ) {{ cid height fieldName }}
+        }}"#,
+        escape_graphql_string(doc_id),
+    );
+    let response = graphql_with_transaction_retry(node, &query, operation).await?;
+    let commits = rows::<CompositeCommit>(&response, "_commits")?
+        .into_iter()
+        .filter(|commit| commit.field_name == "_C")
+        .collect();
+    unique_newest_composite_commit(commits, operation)
 }
 
 /// Load a document's DefraDB-native composite versions, newest first.

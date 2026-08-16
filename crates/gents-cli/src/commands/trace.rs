@@ -717,6 +717,23 @@ async fn apply_projection_acp_read_filter(
         }
     }
 
+    let mut filtered_provider_context_reductions = Vec::new();
+    for reduction in rows.provider_context_reductions {
+        let doc_id = reduction.doc_id.trim();
+        if doc_id.is_empty() {
+            anyhow::bail!(
+                "DefraDB ACP projection decisions require _docID for ProviderContextReduction {}",
+                reduction.reduction_key
+            );
+        }
+        if decider
+            .read_allowed(scope.resource_name("ProviderContextReduction"), doc_id)
+            .await?
+        {
+            filtered_provider_context_reductions.push(reduction);
+        }
+    }
+
     let session = match rows.session {
         Some(session) => {
             let doc_id =
@@ -791,6 +808,7 @@ async fn apply_projection_acp_read_filter(
         tool_calls: filtered_tool_calls,
         inference_calls: filtered_inference_calls,
         compactions: filtered_compactions,
+        provider_context_reductions: filtered_provider_context_reductions,
         responses: filtered_responses,
         rendered_requests: filtered_rendered_requests,
         rendered_request_refs: filtered_rendered_request_refs,
@@ -998,6 +1016,9 @@ fn should_keep_scoped_timeline_event(
             .is_some_and(|request_id| allowed_request_ids.contains(request_id)),
         RunTimelineEvent::Compaction(compaction) => {
             allowed_request_ids.contains(&compaction.request_id)
+        }
+        RunTimelineEvent::ProviderContextReduction(reduction) => {
+            allowed_request_ids.contains(&reduction.request_id)
         }
         RunTimelineEvent::Message(message) => scoped_request_id_allowed(
             message.request_id.as_deref(),
@@ -2440,6 +2461,7 @@ mod tests {
             ],
             rendered_requests: Vec::new(),
             compactions: Vec::new(),
+            provider_context_reductions: Vec::new(),
             rendered_request_refs: vec![
                 TimelineRenderedRequestRef {
                     doc_id: "doc-rendered-allowed".to_string(),

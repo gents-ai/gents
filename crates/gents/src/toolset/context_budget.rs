@@ -42,6 +42,8 @@ struct ContextEnvelope {
 struct CompactionEnvelope {
     #[serde(rename = "CompactionEntry", default)]
     compactions: Vec<CompactionRow>,
+    #[serde(rename = "ProviderContextReduction", default)]
+    provider_context_reductions: Vec<CompactionRow>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -125,7 +127,7 @@ impl Tool for ContextBudgetTool {
             description: "Report this agent's persisted context-window budget signal: \
                 max context window from enabled behavior profiles, latest compaction token \
                 estimate, utilization percentage when calculable, compaction count, and latest \
-                compaction time."
+                compaction time. Counts both session-prefix and per-turn provider-context reductions."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -176,7 +178,11 @@ pub async fn load_context_budget_snapshot(
             bail!("loading context compactions failed: {:?}", resp.errors);
         }
         let envelope: CompactionEnvelope = decode(resp.data.as_ref(), "context compactions")?;
-        envelope.compactions
+        envelope
+            .compactions
+            .into_iter()
+            .chain(envelope.provider_context_reductions)
+            .collect()
     };
 
     Ok(build_snapshot(
@@ -214,6 +220,11 @@ fn compaction_query(session_ids: &[String]) -> String {
     format!(
         r#"{{
             CompactionEntry(filter: {{ session_id: {{ _in: [{list}] }} }}, order: {{ created_at: DESC }}) {{
+                created_at
+                original_tokens
+                compacted_tokens
+            }}
+            ProviderContextReduction(filter: {{ session_id: {{ _in: [{list}] }} }}, order: {{ created_at: DESC }}) {{
                 created_at
                 original_tokens
                 compacted_tokens
@@ -334,6 +345,32 @@ mod tests {
                     created_at: "2026-06-03T10:30:00Z"
                 }) { _docID }
             }"#,
+            r#"mutation {
+                create_ProviderContextReduction(input: {
+                    reduction_key: "context-reduction:1",
+                    agent_did: "did:key:z-context",
+                    requester_did: null,
+                    session_id: "session-context",
+                    request_id: "request-context",
+                    request_doc_id: "request-doc-context",
+                    request_commit_cid: "request-cid",
+                    reduction_index: 1,
+                    turn_index: 0,
+                    parent_reduction_key: null,
+                    producer_call_id: null,
+                    producer_call_seq: null,
+                    source_boundary_json: "null",
+                    compacted_prefix_json: "null",
+                    retained_suffix_json: "null",
+                    pair_closed: true,
+                    checkpoint_messages_json: "null",
+                    summary: "provider checkpoint",
+                    messages_compacted: 1,
+                    original_tokens: 700,
+                    compacted_tokens: 300,
+                    created_at: "2026-06-03T10:45:00Z"
+                }) { _docID }
+            }"#,
         ] {
             let response = node.execute(mutation).await;
             assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
@@ -351,12 +388,12 @@ mod tests {
         let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
 
         assert_eq!(parsed.max_tokens, Some(1000));
-        assert_eq!(parsed.current_estimate, Some(400));
-        assert_eq!(parsed.utilization_percent, Some(40.0));
-        assert_eq!(parsed.compaction_count, 1);
+        assert_eq!(parsed.current_estimate, Some(300));
+        assert_eq!(parsed.utilization_percent, Some(30.0));
+        assert_eq!(parsed.compaction_count, 2);
         assert_eq!(
             parsed.last_compacted_at.as_deref(),
-            Some("2026-06-03T10:30:00Z")
+            Some("2026-06-03T10:45:00Z")
         );
         assert_eq!(parsed.sessions_considered, 1);
     }

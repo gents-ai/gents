@@ -1875,6 +1875,7 @@ fn build_openai_codex_run_trace(
             RunTimelineEvent::RenderedRequest(_) => {}
             RunTimelineEvent::InferenceCall(_) => {}
             RunTimelineEvent::Compaction(_) => {}
+            RunTimelineEvent::ProviderContextReduction(_) => {}
             RunTimelineEvent::Message(event) => {
                 items.push(OpenAiCodexTraceItem::Message {
                     id: format!("{}:message:{}", event.session_id, event.sequence),
@@ -1966,6 +1967,18 @@ fn build_langgraph_state_history(
             // Captures surface in `values.rendered_captures`, not as graph
             // nodes — a capture is a fact about an inference call, not a step.
             RunTimelineEvent::RenderedRequest(_) => continue,
+            RunTimelineEvent::ProviderContextReduction(event) => (
+                format!("provider_context_reduction:{}", event.reduction_key),
+                "provider_context_reduction".to_string(),
+                Some(event.request_id.clone()),
+                None,
+                None,
+                None,
+                None,
+                Some("completed".to_string()),
+                None,
+                None,
+            ),
             RunTimelineEvent::Request(event) => (
                 format!("request:{}", event.request_id),
                 "request".to_string(),
@@ -2190,6 +2203,7 @@ fn build_multi_agent_task(
             RunTimelineEvent::RenderedRequest(_) => {}
             RunTimelineEvent::InferenceCall(_) => {}
             RunTimelineEvent::Compaction(_) => {}
+            RunTimelineEvent::ProviderContextReduction(_) => {}
             RunTimelineEvent::Message(message) => {
                 messages.push(MultiAgentMessage {
                     id: format!("{}:message:{}", message.session_id, message.sequence),

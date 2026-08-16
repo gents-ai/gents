@@ -24,6 +24,8 @@ pub struct RunTimelineRows {
     #[serde(default)]
     pub compactions: Vec<TimelineCompactionRow>,
     #[serde(default)]
+    pub provider_context_reductions: Vec<TimelineProviderContextReductionRow>,
+    #[serde(default)]
     pub responses: Vec<TimelineResponseRow>,
     #[serde(default)]
     pub rendered_requests: Vec<TimelineRenderedRequestRow>,
@@ -368,6 +370,40 @@ pub struct TimelineCompactionRow {
     pub created_at: Option<String>,
 }
 
+/// Metadata-only timeline view of a request-local provider reduction. Prompt
+/// payloads remain in `ProviderContextReduction` and `RenderedRequest`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineProviderContextReductionRow {
+    #[serde(default, rename = "_docID")]
+    pub doc_id: String,
+    #[serde(default)]
+    pub reduction_key: String,
+    #[serde(default)]
+    pub request_id: String,
+    #[serde(default)]
+    pub request_doc_id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub reduction_index: i64,
+    #[serde(default)]
+    pub turn_index: i64,
+    #[serde(default)]
+    pub parent_reduction_key: Option<String>,
+    #[serde(default)]
+    pub producer_call_id: Option<String>,
+    #[serde(default)]
+    pub producer_call_seq: Option<i64>,
+    #[serde(default)]
+    pub messages_compacted: i64,
+    #[serde(default)]
+    pub original_tokens: i64,
+    #[serde(default)]
+    pub compacted_tokens: i64,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineSessionRow {
     #[serde(default, rename = "_docID", skip_serializing)]
@@ -423,6 +459,7 @@ pub enum RunTimelineEvent {
     RenderedRequest(TimelineRenderedRequestEvent),
     InferenceCall(TimelineInferenceCallEvent),
     Compaction(TimelineCompactionEvent),
+    ProviderContextReduction(TimelineProviderContextReductionEvent),
     Message(TimelineMessageEvent),
     ToolCall(TimelineToolCallEvent),
     Response(TimelineResponseEvent),
@@ -435,6 +472,28 @@ pub struct TimelineCompactionEvent {
     pub session_id: String,
     pub sequence: i64,
     pub summary: String,
+    pub messages_compacted: i64,
+    pub original_tokens: i64,
+    pub compacted_tokens: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineProviderContextReductionEvent {
+    pub reduction_key: String,
+    pub reduction_doc_id: String,
+    pub request_id: String,
+    pub request_doc_id: String,
+    pub session_id: String,
+    pub reduction_index: i64,
+    pub turn_index: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_reduction_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer_call_seq: Option<i64>,
     pub messages_compacted: i64,
     pub original_tokens: i64,
     pub compacted_tokens: i64,
@@ -527,6 +586,8 @@ pub struct TimelineRenderedRequestEvent {
     pub call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_seq: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reduction_keys: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
 }
@@ -712,6 +773,29 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 compacted_tokens: compaction.compacted_tokens,
                 timestamp: compaction.created_at.clone(),
             }));
+        }
+    }
+
+    for reduction in &rows.provider_context_reductions {
+        if included_request_ids.contains(&reduction.request_id) {
+            events.push(RunTimelineEvent::ProviderContextReduction(
+                TimelineProviderContextReductionEvent {
+                    reduction_key: reduction.reduction_key.clone(),
+                    reduction_doc_id: reduction.doc_id.clone(),
+                    request_id: reduction.request_id.clone(),
+                    request_doc_id: reduction.request_doc_id.clone(),
+                    session_id: reduction.session_id.clone(),
+                    reduction_index: reduction.reduction_index,
+                    turn_index: reduction.turn_index,
+                    parent_reduction_key: reduction.parent_reduction_key.clone(),
+                    producer_call_id: reduction.producer_call_id.clone(),
+                    producer_call_seq: reduction.producer_call_seq,
+                    messages_compacted: reduction.messages_compacted,
+                    original_tokens: reduction.original_tokens,
+                    compacted_tokens: reduction.compacted_tokens,
+                    timestamp: reduction.created_at.clone(),
+                },
+            ));
         }
     }
 
@@ -1003,29 +1087,34 @@ pub fn rendered_request_event(row: &TimelineRenderedRequestRow) -> TimelineRende
         .capture_scope
         .as_deref()
         .and_then(|scope| scope.parse::<CaptureScope>().ok());
-    let (provenance_status, manifest_version, call_id, call_seq) =
+    let (provenance_status, manifest_version, call_id, call_seq, reduction_keys) =
         match row.provenance_json.as_deref() {
-            None => ("unavailable".to_string(), None, None, None),
+            None => ("unavailable".to_string(), None, None, None, Vec::new()),
             Some(raw) => match ProvenanceManifest::parse(raw) {
-                Ok(ParsedProvenance::Manifest(manifest)) => (
-                    provenance_status_label(manifest.status).to_string(),
-                    Some(i64::from(manifest.manifest_version)),
-                    manifest
-                        .admission
-                        .as_ref()
-                        .map(|admission| admission.call_id.clone()),
-                    manifest
-                        .admission
-                        .as_ref()
-                        .map(|admission| admission.call_seq),
-                ),
+                Ok(ParsedProvenance::Manifest(manifest)) => {
+                    let reduction_keys = manifest.assembly_trace.reduction_keys.clone();
+                    (
+                        provenance_status_label(manifest.status).to_string(),
+                        Some(i64::from(manifest.manifest_version)),
+                        manifest
+                            .admission
+                            .as_ref()
+                            .map(|admission| admission.call_id.clone()),
+                        manifest
+                            .admission
+                            .as_ref()
+                            .map(|admission| admission.call_seq),
+                        reduction_keys,
+                    )
+                }
                 Ok(ParsedProvenance::Unsupported { manifest_version }) => (
                     "unsupported_manifest".to_string(),
                     Some(i64::from(manifest_version)),
                     None,
                     None,
+                    Vec::new(),
                 ),
-                Err(_) => ("malformed".to_string(), None, None, None),
+                Err(_) => ("malformed".to_string(), None, None, None, Vec::new()),
             },
         };
 
@@ -1048,6 +1137,7 @@ pub fn rendered_request_event(row: &TimelineRenderedRequestRow) -> TimelineRende
         manifest_version,
         call_id,
         call_seq,
+        reduction_keys,
         created_at: row.created_at.clone(),
     }
 }
@@ -1168,8 +1258,9 @@ fn should_include_event(
 
 /// `(timestamp_millis, family_rank, intra_rank, tiebreak)`. Family ranks are
 /// unserialized internals and only break same-millisecond ties: request 0,
-/// rendered_request 1 (persist-before-send puts the capture before the bytes
-/// leave), inference_call 2, message 3, tool_call 4, response 5.
+/// provider_context_reduction 1, rendered_request 2 (both persistence fences
+/// precede the consuming send), inference_call 3, compaction/message 4,
+/// tool_call 5, response 6.
 fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
     match event {
         RunTimelineEvent::Request(event) => (
@@ -1188,7 +1279,7 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            1,
+            2,
             event.call_seq.unwrap_or(i64::MAX),
             rendered_request_tiebreak(event),
         ),
@@ -1200,7 +1291,7 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
             ])
             .and_then(timestamp_millis)
             .unwrap_or(i64::MIN),
-            2,
+            3,
             event.call_seq,
             event.call_id.clone(),
         ),
@@ -1210,7 +1301,7 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            3,
+            4,
             event.sequence,
             event.compaction_key.clone(),
         ),
@@ -1220,7 +1311,7 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            3,
+            4,
             event.sequence,
             format!("{}:{}", event.session_id, event.sequence),
         ),
@@ -1230,7 +1321,7 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            4,
+            5,
             event.message_sequence.unwrap_or(i64::MAX),
             event.tool_call_id.clone(),
         ),
@@ -1240,9 +1331,19 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            5,
+            6,
             event.materialized_message_sequence.unwrap_or(i64::MAX),
             event.request_id.clone(),
+        ),
+        RunTimelineEvent::ProviderContextReduction(event) => (
+            event
+                .timestamp
+                .as_deref()
+                .and_then(timestamp_millis)
+                .unwrap_or(i64::MIN),
+            1,
+            event.reduction_index,
+            event.reduction_key.clone(),
         ),
     }
 }
@@ -1609,6 +1710,72 @@ mod tests {
         assert_eq!(call_event.prompt_tokens, Some(120));
         assert_eq!(call_event.completion_tokens, Some(30));
         assert_eq!(call_event.cached_input_tokens, Some(64));
+    }
+
+    #[test]
+    fn provider_reductions_are_ordered_before_and_linked_from_rendered_capture() {
+        let mut provenance: serde_json::Value =
+            serde_json::from_str(&provenance_fixture("inference.1", Some(("call-3", 3)))).unwrap();
+        provenance["assembly_trace"]["trace_version"] = serde_json::json!(3);
+        provenance["assembly_trace"]["reduction_keys"] =
+            serde_json::json!(["reduction-1", "reduction-2"]);
+        let rows = RunTimelineRows {
+            request: TimelineRequestRow {
+                doc_id: Some("doc-req-1".to_string()),
+                request_id: "req-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                created_at: Some("2026-08-14T12:00:00Z".to_string()),
+                ..Default::default()
+            },
+            provider_context_reductions: vec![
+                TimelineProviderContextReductionRow {
+                    doc_id: "reduction-doc-1".to_string(),
+                    reduction_key: "reduction-1".to_string(),
+                    request_id: "req-1".to_string(),
+                    request_doc_id: "doc-req-1".to_string(),
+                    session_id: "session-1".to_string(),
+                    reduction_index: 1,
+                    turn_index: 1,
+                    created_at: Some("2026-08-14T12:00:01Z".to_string()),
+                    ..Default::default()
+                },
+                TimelineProviderContextReductionRow {
+                    doc_id: "reduction-doc-2".to_string(),
+                    reduction_key: "reduction-2".to_string(),
+                    request_id: "req-1".to_string(),
+                    request_doc_id: "doc-req-1".to_string(),
+                    session_id: "session-1".to_string(),
+                    reduction_index: 2,
+                    turn_index: 2,
+                    parent_reduction_key: Some("reduction-1".to_string()),
+                    created_at: Some("2026-08-14T12:00:02Z".to_string()),
+                    ..Default::default()
+                },
+            ],
+            rendered_requests: vec![rendered_row(
+                "capture-3",
+                "inference.1",
+                2,
+                0,
+                "2026-08-14T12:00:02Z",
+                Some(provenance.to_string()),
+            )],
+            ..Default::default()
+        };
+
+        let timeline = build_run_timeline(rows);
+        assert!(matches!(
+            timeline.events[1],
+            RunTimelineEvent::ProviderContextReduction(_)
+        ));
+        assert!(matches!(
+            timeline.events[2],
+            RunTimelineEvent::ProviderContextReduction(_)
+        ));
+        let RunTimelineEvent::RenderedRequest(rendered) = &timeline.events[3] else {
+            panic!("expected rendered request after reductions");
+        };
+        assert_eq!(rendered.reduction_keys, ["reduction-1", "reduction-2"]);
     }
 
     /// A capture row whose `request_id` is not part of this timeline (another

@@ -96,6 +96,7 @@ pub(super) fn validate_request_scoped_rows(
     responses: &[TimelineResponseRow],
     inference_calls: &[TimelineInferenceCallRow],
     compactions: &[TimelineCompactionRow],
+    provider_context_reductions: &[TimelineProviderContextReductionRow],
     rendered_requests: &[TimelineRenderedRequestRow],
 ) -> Result<()> {
     for row in messages {
@@ -154,6 +155,15 @@ pub(super) fn validate_request_scoped_rows(
             row.doc_id.as_deref().unwrap_or(&row.capture_key),
             row.request_id.as_deref(),
             row.request_doc_id.as_deref(),
+        )?;
+    }
+    for row in provider_context_reductions {
+        validate_required_request_binding(
+            bindings,
+            "ProviderContextReduction",
+            &row.reduction_key,
+            &row.request_id,
+            Some(&row.request_doc_id),
         )?;
     }
     Ok(())
