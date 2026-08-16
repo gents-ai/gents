@@ -115,17 +115,33 @@ where
     }
 }
 
+/// Execute one initial terminal mutation plus at most
+/// [`TERMINAL_PERSISTENCE_MAX_RETRIES`] retries. Each attempt enters the shared
+/// node mutation gate once; terminal backoff happens after that guard is gone.
 pub(crate) async fn execute_graphql_with_terminal_persistence_retry(
     node: &EmbeddedNode,
     graphql: &str,
     operation: &str,
 ) -> anyhow::Result<QueryResponse> {
+    execute_graphql_with_terminal_persistence_retry_using(node, node, graphql, operation).await
+}
+
+async fn execute_graphql_with_terminal_persistence_retry_using<E>(
+    node: &EmbeddedNode,
+    executor: &E,
+    graphql: &str,
+    operation: &str,
+) -> anyhow::Result<QueryResponse>
+where
+    E: crate::graphql::GraphqlExecution + ?Sized,
+{
     retry_terminal_persistence_operation(
         operation,
         TERMINAL_PERSISTENCE_MAX_RETRIES,
         Duration::from_millis(TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS),
         || async {
-            crate::graphql::graphql_mutation_with_transaction_retry(node, graphql, operation).await
+            crate::graphql::graphql_mutation_once_with_executor(node, executor, graphql, operation)
+                .await
         },
     )
     .await

@@ -1,4 +1,62 @@
 use super::*;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+
+use defra_node::ExecuteRetryPolicy;
+
+#[derive(Clone, Copy)]
+enum ScriptedGraphqlResult {
+    Conflict(&'static str),
+    Error(&'static str),
+    Success,
+}
+
+struct ScriptedGraphqlExecution {
+    results: StdMutex<VecDeque<ScriptedGraphqlResult>>,
+    attempts: AtomicUsize,
+    policies: StdMutex<Vec<ExecuteRetryPolicy>>,
+}
+
+impl ScriptedGraphqlExecution {
+    fn new(results: impl IntoIterator<Item = ScriptedGraphqlResult>) -> Self {
+        Self {
+            results: StdMutex::new(results.into_iter().collect()),
+            attempts: AtomicUsize::new(0),
+            policies: StdMutex::new(Vec::new()),
+        }
+    }
+
+    fn attempts(&self) -> usize {
+        self.attempts.load(Ordering::SeqCst)
+    }
+
+    fn policies(&self) -> Vec<ExecuteRetryPolicy> {
+        self.policies.lock().unwrap().clone()
+    }
+}
+
+impl crate::graphql::GraphqlExecution for ScriptedGraphqlExecution {
+    async fn execute(&self, _graphql: &str, retry_policy: ExecuteRetryPolicy) -> QueryResponse {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        self.policies.lock().unwrap().push(retry_policy);
+        match self
+            .results
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("scripted GraphQL result")
+        {
+            ScriptedGraphqlResult::Conflict(message) => {
+                QueryResponse::transaction_conflict(message)
+            }
+            ScriptedGraphqlResult::Error(message) => QueryResponse::error(message),
+            ScriptedGraphqlResult::Success => {
+                QueryResponse::success(serde_json::json!({ "ok": true }))
+            }
+        }
+    }
+}
 
 #[test]
 fn default_policy() {
@@ -132,4 +190,163 @@ async fn terminal_lifecycle_persistence_exhaustion_is_bounded() {
 
     assert!(error.to_string().contains("storage remains unavailable"));
     assert_eq!(attempts, 4, "initial attempt plus three retries");
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminal_graphql_conflicts_have_one_total_attempt_budget() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    let executor = ScriptedGraphqlExecution::new([
+        ScriptedGraphqlResult::Conflict("persistent conflict 1"),
+        ScriptedGraphqlResult::Conflict("persistent conflict 2"),
+        ScriptedGraphqlResult::Conflict("persistent conflict 3"),
+        ScriptedGraphqlResult::Conflict("persistent conflict 4"),
+    ]);
+
+    let error = execute_graphql_with_terminal_persistence_retry_using(
+        &node,
+        &executor,
+        "mutation { terminal }",
+        "persist terminal state",
+    )
+    .await
+    .expect_err("persistent conflicts must exhaust the terminal budget");
+
+    assert!(error.to_string().contains("persistent conflict 4"));
+    assert_eq!(
+        executor.attempts(),
+        (TERMINAL_PERSISTENCE_MAX_RETRIES + 1) as usize
+    );
+    assert!(
+        executor
+            .policies()
+            .iter()
+            .all(|policy| policy.max_retries == 0),
+        "each terminal attempt must disable DefraDB's nested retry budget"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminal_graphql_retries_non_conflict_storage_errors_until_recovery() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    let executor = ScriptedGraphqlExecution::new([
+        ScriptedGraphqlResult::Error("temporary disk unavailable"),
+        ScriptedGraphqlResult::Error("ambiguous commit acknowledgement"),
+        ScriptedGraphqlResult::Success,
+    ]);
+
+    let response = execute_graphql_with_terminal_persistence_retry_using(
+        &node,
+        &executor,
+        "mutation { terminal }",
+        "persist terminal state",
+    )
+    .await
+    .expect("ambiguous storage failure should recover");
+
+    assert!(!response.has_errors());
+    assert_eq!(executor.attempts(), 3);
+    node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminal_graphql_exhaustion_returns_the_underlying_storage_error() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    let executor = ScriptedGraphqlExecution::new([
+        ScriptedGraphqlResult::Error("storage failure 1"),
+        ScriptedGraphqlResult::Error("storage failure 2"),
+        ScriptedGraphqlResult::Error("storage failure 3"),
+        ScriptedGraphqlResult::Error("durable repair sentinel"),
+    ]);
+
+    let error = execute_graphql_with_terminal_persistence_retry_using(
+        &node,
+        &executor,
+        "mutation { terminal }",
+        "persist terminal state",
+    )
+    .await
+    .expect_err("terminal persistence must leave durable repair pending");
+
+    assert!(error.to_string().contains("durable repair sentinel"));
+    assert_eq!(executor.attempts(), 4);
+    node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminal_backoff_releases_the_node_mutation_gate() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let terminal_executor = Arc::new(ScriptedGraphqlExecution::new([
+        ScriptedGraphqlResult::Conflict("retry terminal mutation"),
+        ScriptedGraphqlResult::Success,
+    ]));
+    let terminal_task = {
+        let node = Arc::clone(&node);
+        let executor = Arc::clone(&terminal_executor);
+        tokio::spawn(async move {
+            execute_graphql_with_terminal_persistence_retry_using(
+                &node,
+                executor.as_ref(),
+                "mutation { terminal }",
+                "persist terminal state",
+            )
+            .await
+        })
+    };
+
+    while terminal_executor.attempts() == 0 {
+        tokio::task::yield_now().await;
+    }
+    tokio::task::yield_now().await;
+
+    let unrelated_executor = ScriptedGraphqlExecution::new([ScriptedGraphqlResult::Success]);
+    let before = tokio::time::Instant::now();
+    crate::graphql::graphql_mutation_once_with_executor(
+        &node,
+        &unrelated_executor,
+        "mutation { unrelated }",
+        "unrelated mutation",
+    )
+    .await
+    .expect("unrelated mutation should enter the gate during terminal backoff");
+
+    assert_eq!(
+        tokio::time::Instant::now(),
+        before,
+        "the unrelated mutation must not wait for terminal backoff"
+    );
+    assert_eq!(unrelated_executor.attempts(), 1);
+    tokio::time::advance(Duration::from_millis(
+        TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS,
+    ))
+    .await;
+    terminal_task
+        .await
+        .expect("terminal task panicked")
+        .expect("terminal retry should recover");
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn ordinary_mutations_keep_defradb_conflict_retry_policy() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    let executor = ScriptedGraphqlExecution::new([ScriptedGraphqlResult::Success]);
+
+    crate::graphql::graphql_mutation_with_transaction_retry_using(
+        &node,
+        &executor,
+        "mutation { ordinary }",
+        "ordinary mutation",
+    )
+    .await
+    .unwrap();
+
+    let policies = executor.policies();
+    assert_eq!(policies.len(), 1);
+    assert_eq!(policies[0].max_retries, DEFRA_DB_CONFLICT_MAX_RETRIES);
+    assert_eq!(
+        policies[0].initial_backoff,
+        Duration::from_millis(DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS)
+    );
+    node.shutdown().await;
 }
