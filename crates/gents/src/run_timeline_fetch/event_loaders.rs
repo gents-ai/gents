@@ -73,6 +73,33 @@ pub(super) async fn load_timeline_tool_calls_for_session(
     load_rows(access, "AgentToolCall", &query).await
 }
 
+pub(super) async fn load_timeline_tool_approvals_for_call(
+    access: &ConfigAccess,
+    tool_call_doc_id: &str,
+) -> Result<Vec<TimelineToolApprovalRow>> {
+    let query = format!(
+        r#"{{
+            AgentToolApproval(
+                filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                _docID
+                approval_id
+                tool_call_doc_id
+                tool_call_id
+                request_id
+                agent_did
+                decision
+                approver_did
+                reason
+                created_at
+            }}
+        }}"#,
+        escape_graphql_string(tool_call_doc_id)
+    );
+    load_rows(access, "AgentToolApproval", &query).await
+}
+
 pub(super) async fn load_timeline_responses_for_session(
     access: &ConfigAccess,
     session_id: &str,
@@ -153,6 +180,7 @@ pub(super) async fn load_timeline_inference_calls_for_request(
             ) {{
                 _docID
                 call_id
+                runtime_instance_id
                 request_id
                 request_doc_id
                 call_seq
@@ -163,7 +191,13 @@ pub(super) async fn load_timeline_inference_calls_for_request(
                 started_at
                 ended_at
                 backend_id
+                behavior_id
+                agent_did
                 call_kind
+                priority
+                queue_depth_at_enqueue
+                controller_generation
+                backend_config_fingerprint
                 prompt_tokens
                 completion_tokens
                 cached_input_tokens

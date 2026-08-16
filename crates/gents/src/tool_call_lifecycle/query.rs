@@ -8,11 +8,35 @@ use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
 
-use super::{AwaitMode, CancelCause, CancelPolicy, FailureClass, ToolCallLifecycle, ToolCallState};
+use super::{
+    AwaitMode, CancelCause, CancelPolicy, FailureClass, SelectedToolIdentity, ToolCallLifecycle,
+    ToolCallState,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 struct ToolCallResultRow {
     result: String,
+}
+
+fn decode_selected_tool_identity(
+    service_id: Option<String>,
+    tool_name: Option<String>,
+) -> Result<Option<SelectedToolIdentity>> {
+    match (service_id, tool_name) {
+        (None, None) => Ok(None),
+        (Some(service_id), Some(tool_name))
+            if !service_id.trim().is_empty() && !tool_name.trim().is_empty() =>
+        {
+            Ok(Some(SelectedToolIdentity {
+                service_id,
+                tool_name,
+            }))
+        }
+        _ => anyhow::bail!(
+            "AgentToolCall selected tool identity must contain both non-empty \
+             selected_service_id and selected_tool_name"
+        ),
+    }
 }
 
 /// Load the persisted result string for a tool call identified by
@@ -85,6 +109,8 @@ struct ToolCallRow {
     deadline_at: Option<String>,
     tool_failure_class: Option<String>,
     cancel_cause: Option<String>,
+    selected_service_id: Option<String>,
+    selected_tool_name: Option<String>,
     // v3 subagent fields — nullable for v2 rows that pre-date the schema migration.
     await_mode: Option<String>,
     cancel_policy: Option<String>,
@@ -127,6 +153,8 @@ impl ToolCallLifecycle {
                     deadline_at
                     tool_failure_class
                     cancel_cause
+                    selected_service_id
+                    selected_tool_name
                     await_mode
                     cancel_policy
                     child_request_id
@@ -208,6 +236,8 @@ impl ToolCallLifecycle {
             .as_deref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc));
+        let selected_tool_identity =
+            decode_selected_tool_identity(row.selected_service_id, row.selected_tool_name)?;
 
         Ok(Some(Self {
             node,
@@ -229,6 +259,7 @@ impl ToolCallLifecycle {
             started_at,
             failure_class,
             cancel_cause,
+            selected_tool_identity,
             await_mode,
             cancel_policy,
             child_request_id,
@@ -244,8 +275,33 @@ impl ToolCallLifecycle {
 mod tests {
     use super::*;
 
+    #[test]
+    fn selected_tool_identity_is_an_atomic_pair() {
+        assert!(decode_selected_tool_identity(None, None)
+            .expect("legacy native tool call")
+            .is_none());
+
+        let selected = decode_selected_tool_identity(
+            Some("metrics-prod".to_string()),
+            Some("query_metrics".to_string()),
+        )
+        .expect("complete identity")
+        .expect("selected identity");
+        assert_eq!(selected.service_id, "metrics-prod");
+        assert_eq!(selected.tool_name, "query_metrics");
+
+        for (service_id, tool_name) in [
+            (Some("metrics-prod".to_string()), None),
+            (None, Some("query_metrics".to_string())),
+            (Some(String::new()), Some("query_metrics".to_string())),
+            (Some("metrics-prod".to_string()), Some("  ".to_string())),
+        ] {
+            assert!(decode_selected_tool_identity(service_id, tool_name).is_err());
+        }
+    }
+
     #[tokio::test]
-    async fn load_preserves_immutable_requester_route() {
+    async fn load_preserves_requester_route_and_selected_tool_identity() {
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
                 .build()
@@ -266,7 +322,11 @@ mod tests {
             "{}".to_string(),
             chrono::Utc::now() + chrono::Duration::minutes(5),
         )
-        .with_requester_did(Some("did:test:coordinator".to_string()));
+        .with_requester_did(Some("did:test:coordinator".to_string()))
+        .with_selected_tool_identity(Some((
+            "metrics-prod".to_string(),
+            "query_metrics".to_string(),
+        )));
         lifecycle.start_running().await.expect("persist tool call");
 
         let loaded = ToolCallLifecycle::load(node.clone(), "session-routed", "tool-call-routed")
@@ -278,6 +338,9 @@ mod tests {
             loaded.requester_did.as_deref(),
             Some("did:test:coordinator")
         );
+        let selected = loaded.selected_tool_identity.expect("selected identity");
+        assert_eq!(selected.service_id, "metrics-prod");
+        assert_eq!(selected.tool_name, "query_metrics");
         node.shutdown().await;
     }
 }
