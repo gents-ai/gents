@@ -1,0 +1,42 @@
+{
+  "surface_id": "maintenance-execute-writes",
+  "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
+  "display_name": "Maintenance execution ledger and completion barrier writes",
+  "enabled": true,
+  "entries": [{
+    "tool_name": "write_maintenance_execution_result",
+    "collection": "MaintenanceExecutionResult",
+    "description": "Record the terminal outcome of one isolated branch-oriented maintenance work unit.",
+    "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+    "fields": [
+      {"name": "run_id", "required": false, "fill": "correlation"},
+      {"name": "package_id", "required": true},
+      {"name": "sequence", "required": true},
+      {"name": "branch", "required": true},
+      {"name": "worktree_path", "required": true},
+      {"name": "status", "required": true},
+      {"name": "commit_sha", "required": true},
+      {"name": "changed_paths", "required": true},
+      {"name": "validation", "required": true},
+      {"name": "summary", "required": true},
+      {"name": "expected_total", "required": false, "fill": {"source_field": "work_package_count"}}
+    ]
+  }, {
+    "tool_name": "write_maintenance_execution_summary",
+    "collection": "MaintenanceExecutionSummary",
+    "description": "Close one ordered maintenance execution after every planned package has a terminal result.",
+    "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+    "fields": [
+      {"name": "run_id", "required": false, "fill": "correlation"},
+      {"name": "expected_total", "required": false, "fill": {"source_field": "work_package_count"}},
+      {"name": "completed_count", "required": true},
+      {"name": "skipped_count", "required": true},
+      {"name": "blocked_count", "required": true},
+      {"name": "branch", "required": true},
+      {"name": "worktree_path", "required": true},
+      {"name": "final_commit_sha", "required": true},
+      {"name": "status", "required": true},
+      {"name": "summary", "required": true}
+    ]
+  }]
+}

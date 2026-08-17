@@ -1,0 +1,14 @@
+type MaintenanceJob {
+  run_id: String @index(unique: true) @immutable
+  repository_path: String
+  worktree_parent: String
+  worktree_path: String
+  suggested_branch: String
+  head_ref: String
+  area_count: String
+  area_min: String
+  area_max: String
+  history_depth: String
+  pr_base: String
+  focus: String
+}

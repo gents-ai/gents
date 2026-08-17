@@ -1,0 +1,80 @@
+{
+  "surface_id": "maintenance-triage-writes",
+  "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
+  "display_name": "Triage report writes",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_maintenance_finding",
+      "collection": "MaintenanceFinding",
+      "description": "Promote one confirmed verification verdict into the final maintenance.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "finding_id", "required": true},
+        {"name": "area_id", "required": true},
+        {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "worktree_parent", "required": false, "fill": {"source_field": "worktree_parent"}},
+        {"name": "worktree_path", "required": false, "fill": {"source_field": "worktree_path"}},
+        {"name": "suggested_branch", "required": false, "fill": {"source_field": "suggested_branch"}},
+        {"name": "base_ref", "required": false, "fill": {"source_field": "base_ref"}},
+        {"name": "pr_base", "required": false, "fill": {"source_field": "pr_base"}},
+        {"name": "category", "required": true},
+        {"name": "priority", "required": true},
+        {"name": "confidence", "required": true},
+        {"name": "path", "required": true},
+        {"name": "line", "required": false},
+        {"name": "title", "required": true},
+        {"name": "detail", "required": true},
+        {"name": "verdict", "required": true},
+        {"name": "evidence", "required": true},
+        {"name": "preservation", "required": true},
+        {"name": "validation", "required": true},
+        {"name": "estimated_scope", "required": true},
+        {"name": "existing_issue", "required": false},
+        {"name": "verification", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_maintenance_work_package",
+      "collection": "MaintenanceWorkPackage",
+      "description": "Group one to three compatible confirmed findings into one focused commit on the round's shared branch and worktree.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "package_id", "required": true},
+        {"name": "sequence", "required": true},
+        {"name": "previous_package_id", "required": true},
+        {"name": "title", "required": true},
+        {"name": "category", "required": true},
+        {"name": "finding_ids", "required": true},
+        {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "worktree_parent", "required": false, "fill": {"source_field": "worktree_parent"}},
+        {"name": "base_ref", "required": false, "fill": {"source_field": "base_ref"}},
+        {"name": "pr_base", "required": false, "fill": {"source_field": "pr_base"}},
+        {"name": "worktree_path", "required": false, "fill": {"source_field": "worktree_path"}},
+        {"name": "path", "required": true},
+        {"name": "priority", "required": true},
+        {"name": "estimated_scope", "required": true},
+        {"name": "rationale", "required": true},
+        {"name": "preservation", "required": true},
+        {"name": "validation", "required": true},
+        {"name": "suggested_branch", "required": false, "fill": {"source_field": "suggested_branch"}},
+        {"name": "existing_issues", "required": false},
+        {"name": "expected_total", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_maintenance_report",
+      "collection": "MaintenanceReport",
+      "description": "Create the single count-balanced final report for this correlated maintenance run; run_id is filled by the runtime.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "high_priority_count", "required": true},
+        {"name": "confirmed_count", "required": true},
+        {"name": "refuted_count", "required": true},
+        {"name": "work_package_count", "required": true},
+        {"name": "summary", "required": true}
+      ]
+    }
+  ]
+}
