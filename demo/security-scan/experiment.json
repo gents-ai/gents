@@ -1,0 +1,86 @@
+{
+  "name": "security-scan",
+  "description": "Whole-codebase security scan: free regex pre-scan -> batch planner -> investigator fan-out -> adversarial revalidation -> report",
+  "init": {
+    "inference_url": "${GENTS_SCAN_ENDPOINT:-http://100.87.27.25:8000/v1}",
+    "model_name": "${GENTS_SCAN_MODEL:-GLM-5.2}",
+    "tool_package": "write",
+    "tool_root": "${GENTS_SCAN_ROOT:-.}",
+    "tool_root_env_var": "GENTS_SCAN_ROOT",
+    "tool_root_markers": [],
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions"
+  },
+  "scan": {
+    "root": "${GENTS_SCAN_ROOT:-.}",
+    "max_payload_chars": "${GENTS_SCAN_MAX_PAYLOAD_CHARS:-49152}"
+  },
+  "seed": {
+    "collection": "ScanJob",
+    "job_id_field": "run_id",
+    "prompt_field": "focus",
+    "fields": {
+      "scan_root": "${GENTS_SCAN_ROOT:-.}",
+      "batch_min": "${GENTS_SCAN_MIN_BATCHES:-4}",
+      "batch_max": "${GENTS_SCAN_MAX_BATCHES:-24}"
+    }
+  },
+  "default_prompt": "${GENTS_SCAN_PROMPT:-Scan the repository for exploitable vulnerabilities and high-impact bugs; prioritize authorization, injection, secrets, and data-loss paths.}",
+  "expect": {
+    "trigger_ids": ["scan-plan", "scan-investigate", "scan-revalidate", "scan-report"],
+    "trigger_request_count_sources": {
+      "scan-investigate": {
+        "collection": "InvestigationBatch",
+        "correlation_field": "run_id",
+        "expected_count_field": "expected_total"
+      }
+    },
+    "signed_provenance": true,
+    "required_tool_call_trigger_ids": ["scan-plan", "scan-investigate", "scan-revalidate", "scan-report"],
+    "prompt_tool_contracts": [
+      {"task_id": "scan-plan-task", "required_tool_names": ["write_investigation_batch"]},
+      {"task_id": "scan-investigate-task", "required_tool_names": ["write_candidate_finding", "write_investigation_result"]},
+      {"task_id": "scan-revalidate-task", "required_tool_names": ["query_candidate_finding", "write_finding_verdict", "write_revalidation_summary"]},
+      {"task_id": "scan-report-task", "required_tool_names": ["query_finding_verdict", "write_finding", "write_scan_report"]}
+    ],
+    "source_edges": [],
+    "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
+    "collection_counts": {"RevalidationSummary": 1, "ScanReport": 1},
+    "result_documents": [
+      {
+        "collection": "ScanReport",
+        "correlation_field": "run_id",
+        "fields": ["candidate_total", "batch_count", "confirmed_count", "refuted_count", "severity_counts", "slug_counts", "summary"]
+      },
+      {
+        "collection": "Finding",
+        "correlation_field": "run_id",
+        "fields": ["finding_id", "batch_id", "severity", "confidence", "path", "line", "title", "detail", "verdict", "evidence", "verification"]
+      }
+    ],
+    "fan_in": {
+      "member_collection": "InvestigationBatch",
+      "result_collection": "InvestigationResult",
+      "report_collection": "ScanReport",
+      "correlation_field": "run_id",
+      "expected_count_field": "expected_total",
+      "min_expected_count": ${GENTS_SCAN_MIN_BATCHES:-4},
+      "max_expected_count": ${GENTS_SCAN_MAX_BATCHES:-24},
+      "consumer_trigger_id": "scan-revalidate",
+      "member_required_fields": ["batch_id", "scan_root", "paths", "hits", "instructions"],
+      "verification": {
+        "candidate_collection": "CandidateFinding",
+        "decision_collection": "FindingVerdict",
+        "summary_collection": "RevalidationSummary",
+        "confirmed_collection": "Finding",
+        "final_consumer_trigger_id": "scan-report",
+        "finding_id_field": "finding_id",
+        "verdict_field": "verdict",
+        "evidence_field": "evidence",
+        "confirmed_count_field": "confirmed_count",
+        "refuted_count_field": "refuted_count"
+      }
+    }
+  },
+  "await_timeout_secs": ${GENTS_SCAN_AWAIT_TIMEOUT_SECS:-86400}
+}

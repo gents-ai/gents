@@ -1,0 +1,6 @@
+{
+  "agent_did": "did:key:zSecurityScanAgentPlaceholder00000000000000000000000",
+  "display_name": "Whole-Codebase Security Scan Graph",
+  "default_behavior_id": "scan-plan",
+  "enabled": true
+}

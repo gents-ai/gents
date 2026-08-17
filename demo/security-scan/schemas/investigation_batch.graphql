@@ -1,0 +1,9 @@
+type InvestigationBatch {
+  run_id: String @index @immutable
+  batch_id: String @index(unique: true) @immutable
+  scan_root: String @immutable
+  paths: String
+  hits: String
+  instructions: String
+  expected_total: String @immutable
+}
