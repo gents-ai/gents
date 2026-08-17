@@ -51,6 +51,9 @@ fn wake_agent_request(
         caused_by_parent_request_doc_id: Some(parent.doc_id.clone()),
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
     }
 }
 
@@ -483,4 +486,9 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         .unwrap();
     assert_eq!(timeline.background_completions.len(), 2);
     assert!(timeline.background_completion_diagnostics_error.is_none());
+    assert!(timeline.descendant_edges.is_empty());
+    assert!(timeline
+        .descendant_graph_diagnostics_error
+        .as_deref()
+        .is_some_and(|error| error.contains("points to missing parent")));
 }

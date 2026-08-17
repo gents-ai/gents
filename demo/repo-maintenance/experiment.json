@@ -1,0 +1,133 @@
+{
+  "name": "repo-maintenance",
+  "description": "Six-stage repository maintenance round: inventory -> concern swarm -> verification -> commit planning -> serial execution -> one reviewed PR",
+  "init": {
+    "inference_url": "${GENTS_MAINTENANCE_COORDINATOR_ENDPOINT:-http://100.87.27.25:8000/v1}",
+    "model_name": "${GENTS_MAINTENANCE_COORDINATOR_MODEL:-GLM-5.2}",
+    "tool_package": "write",
+    "tool_root": "${GENTS_MAINTENANCE_WORKTREE_PARENT:-..}",
+    "tool_root_env_var": "GENTS_MAINTENANCE_WORKTREE_PARENT",
+    "tool_root_markers": [],
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions"
+  },
+  "seed": {
+    "collection": "MaintenanceJob",
+    "job_id_field": "run_id",
+    "prompt_field": "focus",
+    "fields": {
+      "repository_path": "${GENTS_MAINTENANCE_ROOT:-.}",
+      "worktree_parent": "${GENTS_MAINTENANCE_WORKTREE_PARENT:-..}",
+      "worktree_path": "${GENTS_MAINTENANCE_WORKTREE_PATH:-../gents-maintenance}",
+      "suggested_branch": "${GENTS_MAINTENANCE_BRANCH:-agent/maintenance}",
+      "head_ref": "${GENTS_MAINTENANCE_HEAD_REF:-HEAD}",
+      "area_count": "${GENTS_MAINTENANCE_AREA_COUNT:-auto}",
+      "area_min": "${GENTS_MAINTENANCE_MIN_AREAS:-5}",
+      "area_max": "${GENTS_MAINTENANCE_MAX_AREAS:-10}",
+      "history_depth": "${GENTS_MAINTENANCE_HISTORY_DEPTH:-250}",
+      "pr_base": "${GENTS_MAINTENANCE_PR_BASE:-main}"
+    }
+  },
+  "default_prompt": "${GENTS_MAINTENANCE_PROMPT:-Find the next small, behavior-preserving repository cleanup wave and package the strongest work into focused 1-3 finding commits on one shared branch and worktree.}",
+  "expect": {
+    "trigger_ids": ["maintenance-recon", "maintenance-scan", "maintenance-verify", "maintenance-triage", "maintenance-execute", "maintenance-publish"],
+    "trigger_request_count_sources": {
+      "maintenance-scan": {
+        "collection": "MaintenanceArea",
+        "correlation_field": "run_id",
+        "expected_count_field": "expected_total"
+      }
+    },
+    "signed_provenance": true,
+    "required_tool_call_trigger_ids": ["maintenance-recon", "maintenance-scan", "maintenance-verify", "maintenance-triage", "maintenance-execute", "maintenance-publish"],
+    "prompt_tool_contracts": [
+      {
+        "task_id": "maintenance-recon-task",
+        "required_tool_names": ["write_maintenance_area"]
+      },
+      {
+        "task_id": "maintenance-scan-task",
+        "required_tool_names": ["write_maintenance_candidate", "write_maintenance_scan_result"]
+      },
+      {
+        "task_id": "maintenance-verify-task",
+        "required_tool_names": ["defra_query", "write_maintenance_verdict", "write_maintenance_verification_summary"],
+        "required_query_collections": ["MaintenanceCandidate"]
+      },
+      {
+        "task_id": "maintenance-triage-task",
+        "required_tool_names": ["defra_query", "write_maintenance_finding", "write_maintenance_work_package", "write_maintenance_report"],
+        "required_query_collections": ["MaintenanceVerdict"]
+      },
+      {
+        "task_id": "maintenance-execute-task",
+        "required_tool_names": ["defra_query", "write_maintenance_execution_result", "write_maintenance_execution_summary"],
+        "required_query_collections": ["MaintenanceWorkPackage", "MaintenanceExecutionResult"]
+      },
+      {
+        "task_id": "maintenance-publish-task",
+        "required_tool_names": ["defra_query", "write_maintenance_pull_request"],
+        "required_query_collections": ["MaintenanceExecutionSummary", "MaintenanceExecutionResult", "MaintenanceWorkPackage"]
+      }
+    ],
+    "source_edges": [],
+    "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
+    "collection_counts": {"MaintenanceArea": 1, "MaintenanceScanResult": 1, "MaintenanceVerificationSummary": 1, "MaintenanceReport": 1, "MaintenanceExecutionSummary": 1, "MaintenancePullRequest": 1},
+    "result_documents": [
+      {
+        "collection": "MaintenanceReport",
+        "correlation_field": "run_id",
+        "fields": ["high_priority_count", "confirmed_count", "refuted_count", "work_package_count", "summary"]
+      },
+      {
+        "collection": "MaintenanceFinding",
+        "correlation_field": "run_id",
+        "fields": ["finding_id", "area_id", "category", "priority", "confidence", "path", "line", "title", "detail", "evidence", "preservation", "validation", "estimated_scope", "existing_issue", "verdict", "verification"]
+      },
+      {
+        "collection": "MaintenanceWorkPackage",
+        "correlation_field": "run_id",
+        "fields": ["package_id", "sequence", "previous_package_id", "title", "category", "finding_ids", "repository_path", "worktree_parent", "base_ref", "pr_base", "worktree_path", "path", "priority", "estimated_scope", "rationale", "preservation", "validation", "suggested_branch", "existing_issues", "expected_total"]
+      },
+      {
+        "collection": "MaintenanceExecutionResult",
+        "correlation_field": "run_id",
+        "fields": ["package_id", "sequence", "branch", "worktree_path", "status", "commit_sha", "changed_paths", "validation", "summary", "expected_total"]
+      },
+      {
+        "collection": "MaintenanceExecutionSummary",
+        "correlation_field": "run_id",
+        "fields": ["expected_total", "completed_count", "skipped_count", "blocked_count", "branch", "worktree_path", "final_commit_sha", "status", "summary"]
+      },
+      {
+        "collection": "MaintenancePullRequest",
+        "correlation_field": "run_id",
+        "fields": ["branch", "worktree_path", "status", "url", "title", "commit_count", "review_rounds", "confirmed_review_findings", "ci_status", "validation", "summary"]
+      }
+    ],
+    "fan_in": {
+      "member_collection": "MaintenanceArea",
+      "result_collection": "MaintenanceScanResult",
+      "report_collection": "MaintenanceReport",
+      "correlation_field": "run_id",
+      "expected_count_field": "expected_total",
+      "min_expected_count": ${GENTS_MAINTENANCE_MIN_AREAS:-5},
+      "max_expected_count": ${GENTS_MAINTENANCE_MAX_AREAS:-10},
+      "consumer_trigger_id": "maintenance-verify",
+      "member_required_fields": ["area_id", "repository_path", "worktree_parent", "worktree_path", "suggested_branch", "base_ref", "pr_base", "category", "baseline", "instructions"],
+      "verification": {
+        "candidate_collection": "MaintenanceCandidate",
+        "decision_collection": "MaintenanceVerdict",
+        "summary_collection": "MaintenanceVerificationSummary",
+        "confirmed_collection": "MaintenanceFinding",
+        "final_consumer_trigger_id": "maintenance-triage",
+        "finding_id_field": "finding_id",
+        "verdict_field": "verdict",
+        "evidence_field": "evidence",
+        "confirmed_count_field": "confirmed_count",
+        "refuted_count_field": "refuted_count"
+      }
+    }
+  },
+  "await_timeout_secs": ${GENTS_MAINTENANCE_AWAIT_TIMEOUT_SECS:-86400}
+}

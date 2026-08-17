@@ -10,7 +10,7 @@ inference server (e.g. `llama.cpp`). The `gents codex` command additionally
 needs the Codex CLI on `PATH`. Building from source or developing also needs:
 
 - **Rust** — stable toolchain, edition 2021. There is no pinned MSRV; the
-  workspace is developed and built against current stable (1.96). Install via
+  workspace is developed and built against current stable (1.97.1). Install via
   [rustup](https://rustup.rs); `rustup update stable` keeps you current.
 - **C/C++ toolchain** — `cc`/`gcc`, `g++`, and `make`. Several transitive
   cryptography dependencies build native code (`aws-lc-sys` and `ring`).

@@ -357,14 +357,24 @@ impl ReciprocalStore for GraphqlReciprocalStore {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation =
             upsert_reciprocal_data_plane_mutation(peer_id, agent_did, address, template, &now)?;
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "upsert reciprocal DataPlanePairingDesired")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "upsert reciprocal DataPlanePairingDesired",
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn delete_reciprocal_data_plane(&self, peer_id: &str) -> Result<()> {
         let mutation = delete_reciprocal_data_plane_mutation(peer_id);
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "delete reciprocal DataPlanePairingDesired")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "delete reciprocal DataPlanePairingDesired",
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn list_reciprocal_data_plane_rows(

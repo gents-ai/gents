@@ -884,7 +884,12 @@ impl DefraSessionHook {
                 tail = crate::graphql::escape_graphql_string(&tail),
                 datetimes = datetime_fragment,
             );
-            let response = self.node.execute(&mutation).await;
+            let response = crate::graphql::graphql_mutation_response_with_transaction_retry(
+                &self.node,
+                &mutation,
+                "flush background tool live output",
+            )
+            .await;
             if response.has_errors() {
                 tracing::debug!(
                     tool_call_id = %tool_call_id,

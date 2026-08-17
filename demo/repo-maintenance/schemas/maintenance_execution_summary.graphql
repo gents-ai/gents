@@ -1,0 +1,12 @@
+type MaintenanceExecutionSummary {
+  run_id: String @index(unique: true) @immutable
+  expected_total: String @immutable
+  completed_count: String
+  skipped_count: String
+  blocked_count: String
+  branch: String
+  worktree_path: String
+  final_commit_sha: String
+  status: String
+  summary: String
+}

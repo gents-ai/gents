@@ -36,10 +36,10 @@ pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
-/// `RenderedRequest` is deliberately excluded.
+/// Prompt-bearing local audit collections are deliberately excluded.
 ///
-/// Each row is a full provider request body — the conversation, the rendered
-/// preamble, and the resolved tool surface in plaintext, because
+/// These rows carry either a full provider request or an exact reduction
+/// checkpoint — conversation and tool material in plaintext, because
 /// `RenderedRequest` carries no `@policy` and no field encryption (both blocked
 /// on defradb.rs#1318). Capture is on by default and writes one row per turn per
 /// attempt, so subscribing it would push a full conversation body per provider
@@ -53,7 +53,7 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
     RUNTIME_COLLECTION_NAMES
         .iter()
         .chain(ALL_COLLECTION_NAMES.iter())
-        .filter(|name| **name != gents_protocol::schemas::RENDERED_REQUEST_NAME)
+        .filter(|name| !gents_protocol::schemas::is_local_audit_collection(name))
         .copied()
         .collect()
 }
@@ -72,12 +72,12 @@ mod tests {
     #[test]
     fn the_desktop_does_not_replicate_plaintext_provider_bodies() {
         let names = subscribed_collection_names();
-        assert!(
-            !names
-                .iter()
-                .any(|name| *name == gents_protocol::schemas::RENDERED_REQUEST_NAME),
-            "RenderedRequest must stay out of the desktop replication set: {names:?}"
-        );
+        for sensitive in gents_protocol::schemas::LOCAL_AUDIT_COLLECTION_NAMES {
+            assert!(
+                !names.contains(sensitive),
+                "{sensitive} must stay out of the desktop replication set: {names:?}"
+            );
+        }
         assert!(
             names.iter().any(|name| *name == "AgentRequest"),
             "the exclusion must not have emptied the set: {names:?}"

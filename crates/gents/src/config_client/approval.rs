@@ -132,7 +132,7 @@ pub async fn write_tool_approval(
         }}"#
     );
     access
-        .execute(&mutation)
+        .execute_mutation(&mutation, "create AgentToolApproval")
         .await
         .context("create AgentToolApproval")?;
     Ok(approval_id)

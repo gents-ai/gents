@@ -213,8 +213,11 @@ pub(super) fn build_atif_trajectory(
             | RunTimelineEvent::RenderedRequest(_)
             | RunTimelineEvent::InferenceCall(_)
             | RunTimelineEvent::Compaction(_)
+            | RunTimelineEvent::ProviderContextReduction(_)
             | RunTimelineEvent::Message(_)
             | RunTimelineEvent::ToolCall(_)
+            | RunTimelineEvent::ToolApproval(_)
+            | RunTimelineEvent::GoalTransition(_)
             | RunTimelineEvent::Response(_) => {}
         }
     }
@@ -257,6 +260,7 @@ pub(super) fn build_atif_trajectory(
         .iter()
         .filter(|event| {
             matches!(event, RunTimelineEvent::Compaction(compaction) if compaction.request_id == timeline.request_id)
+                || matches!(event, RunTimelineEvent::ProviderContextReduction(reduction) if reduction.request_id == timeline.request_id)
         })
         .count();
     let (total_prompt_tokens, total_completion_tokens, total_cached_tokens) =

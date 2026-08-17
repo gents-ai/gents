@@ -1,0 +1,23 @@
+type MaintenanceWorkPackage {
+  run_id: String @index @immutable
+  package_id: String @index(unique: true) @immutable
+  sequence: String @immutable
+  previous_package_id: String @immutable
+  title: String
+  category: String
+  finding_ids: String
+  repository_path: String @immutable
+  worktree_parent: String @immutable
+  base_ref: String @immutable
+  pr_base: String @immutable
+  worktree_path: String @immutable
+  path: String
+  priority: String
+  estimated_scope: String
+  rationale: String
+  preservation: String
+  validation: String
+  suggested_branch: String @immutable
+  existing_issues: String
+  expected_total: String @immutable
+}

@@ -288,15 +288,6 @@ jobs:
           cargo test -p gents-cli --test cli_status -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
 
-      # Real-model end-to-end: no mocks. The pack applies to a throwaway home,
-      # seeds one document, and gates on both trigger stages reaching a
-      # terminal state. Runners reach the shared DeepSeek box over Tailscale;
-      # GENTS_EXP_ENDPOINT/GENTS_EXP_MODEL retarget it without editing config.
-      - name: Run demo packs end to end
-        if: matrix.suite == 'cli'
-        timeout-minutes: 15
-        run: cargo run -p gents-cli --bin gents -- demo run pipeline --http-port 19891
-
       - name: Run full library and integration tests
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
         env:

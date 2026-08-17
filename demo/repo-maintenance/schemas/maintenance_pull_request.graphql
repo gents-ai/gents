@@ -1,0 +1,14 @@
+type MaintenancePullRequest {
+  run_id: String @index(unique: true) @immutable
+  branch: String
+  worktree_path: String
+  status: String
+  url: String
+  title: String
+  commit_count: String
+  review_rounds: String
+  confirmed_review_findings: String
+  ci_status: String
+  validation: String
+  summary: String
+}

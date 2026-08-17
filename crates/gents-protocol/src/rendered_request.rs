@@ -31,7 +31,7 @@ pub const PROVENANCE_MANIFEST_VERSION: u32 = 3;
 /// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
 /// changes. Versioned independently of the manifest so a manifest that later
 /// gains pinned config CIDs does not have to re-version the trace.
-pub const ASSEMBLY_TRACE_VERSION: u32 = 2;
+pub const ASSEMBLY_TRACE_VERSION: u32 = 3;
 
 /// Request paths whose body is a completion request, and the wire shape each
 /// one implies. The capturing transport only claims a pending capture for one
@@ -88,10 +88,9 @@ impl RenderedRequestSource {
 pub enum CaptureScopeKind {
     /// The request's own owned completion loop (`agent/loop_stream.rs`).
     Inference,
-    /// The guided per-turn compaction summarizer. Its output is the ephemeral
-    /// continuation checkpoint injected straight into provider history and
-    /// never written as an `AgentCompactionEntry`, which is the single fact
-    /// this whole design exists to make explainable.
+    /// The guided per-turn compaction summarizer. Its output becomes a durable
+    /// request-local `ProviderContextReduction` before it may replace provider
+    /// history; it is not a session-prefix `CompactionEntry`.
     Compaction,
     /// The strict-JSON compaction fallback, taken when guided structured output
     /// exhausts its recovery.
@@ -270,7 +269,7 @@ pub const SUPPORTED_PROVENANCE_MANIFEST_VERSIONS: std::ops::RangeInclusive<u32> 
 /// Outcome of reading a `provenance_json` column.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParsedProvenance {
-    Manifest(ProvenanceManifest),
+    Manifest(Box<ProvenanceManifest>),
     /// The row was written by a runtime this reader does not understand. The
     /// row is still real and still listed; only its provenance is opaque.
     Unsupported {
@@ -330,7 +329,7 @@ impl ProvenanceManifest {
             return Ok(ParsedProvenance::Unsupported { manifest_version });
         }
         serde_json::from_value(value)
-            .map(ParsedProvenance::Manifest)
+            .map(|m| ParsedProvenance::Manifest(Box::new(m)))
             .map_err(ProvenanceParseError::InvalidManifest)
     }
 }
@@ -412,23 +411,23 @@ pub struct ThreadedToolResult {
     pub content: Vec<ToolResultContent>,
 }
 
-/// The genuinely unrecoverable inputs to one rendered provider request.
+/// The request-local inputs that reconstruction must account for explicitly.
 ///
 /// Everything else that shapes a request is either durable (transcript rows,
 /// behavior/profile/backend/skill documents) or a pure function of durable data.
-/// These four are not:
+/// These four need an overlay, an oracle, or an explicit durable lineage:
 ///
 /// 1. `assistant_message_ids` — provider-assigned, persisted as `None`.
 /// 2. `threaded_tool_results` — the loop and the persistence path derive
 ///    different text from different sources.
-/// 3. `effective_messages` — when a rendered request-context message or
-///    per-turn compaction adds ephemeral content. Compaction is a *sticky*
+/// 3. `effective_messages` — when a rendered request-context message,
+///    repair, or per-turn compaction adds request-local content. Compaction is a *sticky*
 ///    mutation
 ///    (`*history = compacted; *new_messages = vec![compacted_prompt]`,
 ///    `agent/loop_stream.rs:1350-1351`), so one turn's model-generated summary
-///    governs every later turn of the same request, and that summary is never
-///    written as an `AgentCompactionEntry`. Re-running the summarizer does not
-///    produce the same words.
+///    governs every later turn of the same request. Its exact source split and
+///    checkpoint are written as a `ProviderContextReduction`; re-running the
+///    summarizer is not reconstruction because it need not produce the same words.
 /// 4. `build_path` — see `AssemblyBuildPath`.
 ///
 /// `assistant_message_ids` and `threaded_tool_results` are projections of the
@@ -438,7 +437,7 @@ pub struct ThreadedToolResult {
 /// list from `AgentMessage` rows and needs these as an *overlay* keyed by
 /// position and call id; `effective_messages` is the oracle it checks itself
 /// against. `effective_messages` is present only when that list contains a
-/// rendered request-context message, a model-generated per-turn compaction
+/// rendered request-context message, a durably recorded per-turn compaction
 /// summary, or the result of a repair rewrite. Otherwise the durable transcript
 /// plus these overlays reconstructs it exactly.
 ///
@@ -447,10 +446,10 @@ pub struct ThreadedToolResult {
 /// Ordinary turns do not retain the full native message list next to the
 /// provider-wire copy in `request_json`; that list is reconstructible from
 /// durable rows plus the overlays. Once request-context rendering, per-turn
-/// compaction, or a repair introduces content no durable row reproduces, the
-/// full native list becomes the oracle and is retained on that and every later
-/// turn of the request. Compacted lists are bounded by the context window
-/// rather than growing with the unabridged session.
+/// compaction, or a repair changes the native list, the full list is retained
+/// as the reconstruction oracle. Per-turn reductions additionally cite their
+/// durable fact keys, so the oracle can be checked against independently
+/// addressable checkpoints. Compacted lists are bounded by the context window.
 ///
 /// `threaded_tool_results` is carried on **every** turn, compact path included,
 /// because rig joins multi-part tool-result content with `"\n"` on the Chat
@@ -466,12 +465,17 @@ pub struct AssemblyTrace {
     pub effective_message_count: usize,
     /// The full effective provider message list at capture time, retained only
     /// after request-context rendering or per-turn compaction introduces
-    /// ephemeral content. Native `Message`s, not provider wire shapes: this is
+    /// request-local content. Native `Message`s, not provider wire shapes: this is
     /// the *input* to assembly, whereas `request_json` is its output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_messages: Option<Vec<Message>>,
     pub assistant_message_ids: Vec<AssistantMessageId>,
     pub threaded_tool_results: Vec<ThreadedToolResult>,
+    /// Ordered immutable per-turn reduction facts that causally determine the
+    /// sticky provider projection used for this request. Empty on ordinary
+    /// assembly and on pre-v3 traces.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reduction_keys: Vec<String>,
 }
 
 impl AssemblyTrace {
@@ -535,7 +539,13 @@ impl AssemblyTrace {
             effective_messages: retain_effective_messages.then_some(effective_messages),
             assistant_message_ids,
             threaded_tool_results,
+            reduction_keys: Vec::new(),
         }
+    }
+
+    pub fn with_reduction_keys(mut self, reduction_keys: Vec<String>) -> Self {
+        self.reduction_keys = reduction_keys;
+        self
     }
 }
 
@@ -846,7 +856,7 @@ mod tests {
             turn_index,
             attempt,
         };
-        let mut keys = vec![
+        let mut keys = [
             key("inference.10", 0, 0),
             key("inference.2", 3, 1),
             key("inference.2", 3, 0),
@@ -964,7 +974,7 @@ mod tests {
         let serialized = serde_json::to_string(&manifest).expect("serialize manifest");
         assert_eq!(
             ProvenanceManifest::parse(&serialized).expect("reader accepts producer output"),
-            ParsedProvenance::Manifest(manifest)
+            ParsedProvenance::Manifest(Box::new(manifest))
         );
     }
 

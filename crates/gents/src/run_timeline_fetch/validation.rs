@@ -96,6 +96,7 @@ pub(super) fn validate_request_scoped_rows(
     responses: &[TimelineResponseRow],
     inference_calls: &[TimelineInferenceCallRow],
     compactions: &[TimelineCompactionRow],
+    provider_context_reductions: &[TimelineProviderContextReductionRow],
     rendered_requests: &[TimelineRenderedRequestRow],
 ) -> Result<()> {
     for row in messages {
@@ -154,6 +155,15 @@ pub(super) fn validate_request_scoped_rows(
             row.doc_id.as_deref().unwrap_or(&row.capture_key),
             row.request_id.as_deref(),
             row.request_doc_id.as_deref(),
+        )?;
+    }
+    for row in provider_context_reductions {
+        validate_required_request_binding(
+            bindings,
+            "ProviderContextReduction",
+            &row.reduction_key,
+            &row.request_id,
+            Some(&row.request_doc_id),
         )?;
     }
     Ok(())
@@ -276,6 +286,49 @@ pub(super) fn validate_child_tool_bridges(
     Ok(())
 }
 
+pub(super) fn validate_tool_approval_bindings(
+    tool_calls: &[TimelineToolCallRow],
+    approvals: &[TimelineToolApprovalRow],
+) -> Result<()> {
+    for approval in approvals {
+        let tool_call = tool_calls
+            .iter()
+            .find(|tool_call| {
+                nonempty(tool_call.doc_id.as_deref())
+                    == nonempty(Some(approval.tool_call_doc_id.as_str()))
+            })
+            .with_context(|| {
+                format!(
+                    "AgentToolApproval {} points to AgentToolCall {}, which is outside this timeline",
+                    approval.approval_id, approval.tool_call_doc_id
+                )
+            })?;
+        if approval.tool_call_id != tool_call.tool_call_id {
+            anyhow::bail!(
+                "AgentToolApproval {} names tool_call_id {}, but physical AgentToolCall {} is {}",
+                approval.approval_id,
+                approval.tool_call_id,
+                approval.tool_call_doc_id,
+                tool_call.tool_call_id
+            );
+        }
+        if let (Some(approval_request_id), Some(tool_request_id)) = (
+            nonempty(approval.request_id.as_deref()),
+            nonempty(tool_call.request_id.as_deref()),
+        ) {
+            if approval_request_id != tool_request_id {
+                anyhow::bail!(
+                    "AgentToolApproval {} names request_id {}, but its physical AgentToolCall belongs to {}",
+                    approval.approval_id,
+                    approval_request_id,
+                    tool_request_id
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn required_lineage_value<'a>(
     collection: &str,
     label: &str,
@@ -287,4 +340,32 @@ pub(super) fn required_lineage_value<'a>(
 
 pub(super) fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approval_binding_rejects_a_mismatched_logical_tool_id() {
+        let tool_calls = vec![TimelineToolCallRow {
+            doc_id: Some("doc-tool".to_string()),
+            request_id: Some("request-1".to_string()),
+            tool_call_id: "tool-1".to_string(),
+            ..Default::default()
+        }];
+        let approvals = vec![TimelineToolApprovalRow {
+            approval_id: "approval-forged".to_string(),
+            tool_call_doc_id: "doc-tool".to_string(),
+            tool_call_id: "different-logical-id".to_string(),
+            request_id: Some("request-1".to_string()),
+            ..Default::default()
+        }];
+
+        let error = validate_tool_approval_bindings(&tool_calls, &approvals).unwrap_err();
+        assert!(
+            error.to_string().contains("names tool_call_id"),
+            "unexpected error: {error:#}"
+        );
+    }
 }

@@ -19,8 +19,10 @@ gents demo run pipeline --keep-home  # keep the node home for debugging
 Everything a run produces lands under `<pack>/runs/<job_id>/` (gitignored):
 `meta.json` with stage request ids, lifecycle states, collection counts and
 token totals, signed request-version provenance, plus timeline and adapter
-projection artifacts under `projections/`. The runner fails when a configured
-projection cannot be built or its contract is invalid. `--keep-home` also
+projection artifacts under `projections/`. A pack may declare
+`expect.result_documents`; the runner exports those correlated rows to
+`results.json` and records that artifact's path in `meta.json`. The runner fails when a configured
+projection or result query cannot be built or its contract is invalid. `--keep-home` also
 leaves the node home there, so a failed run can be re-opened and queried:
 
 ```bash
@@ -96,6 +98,7 @@ new required field on a public config struct breaks there first.
 | --- | --- |
 | [`pipeline/`](pipeline/README.md) | **Canonical example** — job → finding create via surface → stage-2 |
 | [`code-review/`](code-review/README.md) | **Advanced graph example** — live-inference fan-out/fan-in with correlation propagation, source-field fills, exact cardinality, and one durable triage request |
+| [`repo-maintenance/`](repo-maintenance/README.md) | Whole-repository cleanup round that verifies findings, executes focused 1-3 item commits, reviews the assembled change, and opens one PR |
 | [`background-continuation/`](background-continuation/README.md) | Two background subagents → durable notification → acknowledged parent wake |
 | [`lsp-rust/`](lsp-rust/README.md) | Native `lsp` + rust-analyzer on this Gents tree (not a CI gate) |
 

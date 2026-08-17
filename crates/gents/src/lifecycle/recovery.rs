@@ -158,7 +158,12 @@ impl RequestLifecycle {
                 }}"#,
             );
 
-            let resp = node.execute(&mutation).await;
+            let resp = crate::graphql::graphql_mutation_response_with_transaction_retry(
+                node,
+                &mutation,
+                "re-drive terminal request convergence",
+            )
+            .await;
             if resp.has_errors() {
                 tracing::warn!(
                     doc_id = %doc_id,
@@ -782,6 +787,11 @@ async fn update_conversation_status_by_doc_id(
         latest_request_id = escape_graphql_string(&canonical.latest_request_id),
     );
 
-    crate::graphql::graphql_with_transaction_retry(node, &mutation, "recover_conversation").await?;
+    crate::graphql::graphql_mutation_with_transaction_retry(
+        node,
+        &mutation,
+        "recover_conversation",
+    )
+    .await?;
     Ok(())
 }

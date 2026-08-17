@@ -1,0 +1,9 @@
+{
+  "task_id": "maintenance-publish-task",
+  "name": "Review and publish the maintenance PR",
+  "description": null,
+  "behavior_id": "maintenance-publish",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

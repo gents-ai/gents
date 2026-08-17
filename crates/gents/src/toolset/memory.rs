@@ -263,10 +263,8 @@ async fn write_memory(
             ) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mutation).await;
-    if resp.has_errors() {
-        bail!("writing agent memory failed: {:?}", resp.errors);
-    }
+    crate::graphql::graphql_mutation_with_transaction_retry(node, &mutation, "write agent memory")
+        .await?;
     tracing::debug!(
         agent_did,
         key,

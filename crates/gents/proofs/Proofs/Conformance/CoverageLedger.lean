@@ -149,6 +149,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
         [ (Surface.operatorCli, "#268")
         ]
     }
+  , { feature := "descendant-graph"
+    , required := [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
+    , deferred := []
+    }
   , { feature := "subagents-cross-deployment"
     , required := [Surface.agentFacing, Surface.api, Surface.operatorUi]
     , deferred := []
@@ -738,6 +742,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_subagent_delegation_graph_cases_pin_gap2_contract")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "descendant_graph_cases"
+      "DescendantGraphCases"
+      "descendant_graph::tests::generated_descendant_graph_cases_fence_visibility_and_control")
+      "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
+  , tagged (consumerCoverage
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
       "conformance::generated_r4c_background_work_cases_pin_observable_shapes")
@@ -917,6 +926,11 @@ def caseCoverage : List CoverageEntry :=
       "RenderedCaptureCases"
       "agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send")
       "rendered-capture" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "durable_reduction_cases"
+      "DurableReductionCases"
+      "conformance::durable_reduction::generated_durable_reduction_cases_pin_identity_and_persist_before_send")
+      "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "rendered_capture_cases"
       "RenderedCaptureKeyCases"

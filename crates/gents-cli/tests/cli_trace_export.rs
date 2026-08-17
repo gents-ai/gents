@@ -1883,12 +1883,18 @@ async fn projection_graphql_mock(
     let query = body.query.as_str();
     let response = if query.contains("AgentRequest(") {
         json!({ "data": { "AgentRequest": projection_mock_agent_requests(query) } })
+    } else if query.contains("ProviderContextReduction(") {
+        json!({ "data": { "ProviderContextReduction": [] } })
     } else if query.contains("RenderedRequest(") {
         json!({ "data": { "RenderedRequest": [] } })
     } else if query.contains("AgentMessage(") {
         json!({ "data": { "AgentMessage": projection_mock_agent_messages() } })
     } else if query.contains("AgentToolCall(") {
         json!({ "data": { "AgentToolCall": projection_mock_tool_calls() } })
+    } else if query.contains("AgentToolApproval(") {
+        json!({ "data": { "AgentToolApproval": [] } })
+    } else if query.contains("Goal(") {
+        json!({ "data": { "Goal": [] } })
     } else if query.contains("AgentResponse(") {
         json!({ "data": { "AgentResponse": projection_mock_agent_responses() } })
     } else if query.contains("AgentSession(") {

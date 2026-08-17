@@ -1,0 +1,13 @@
+type MaintenanceVerificationSummary {
+  run_id: String @index(unique: true) @immutable
+  repository_path: String @immutable
+  worktree_parent: String @immutable
+  worktree_path: String @immutable
+  suggested_branch: String @immutable
+  base_ref: String @immutable
+  pr_base: String @immutable
+  candidate_count: String
+  confirmed_count: String
+  refuted_count: String
+  summary: String
+}

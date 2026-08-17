@@ -238,15 +238,12 @@ pub fn build_session_snapshot_from_store_for_agent(
         .map(|row| {
             let req_evidence = latest_request
                 .map(|r| RequestEvidence {
-                    request_id: r.request_id.clone(),
                     interrupt_requested_at: r.interrupt_requested_at.clone(),
                     caused_by_parent_request_id: r.caused_by_parent_request_id.clone(),
-                    deadline_breached: false,
                 })
                 .unwrap_or_default();
             let resp_evidence = ResponseEvidence {
                 interrupted_at: normalize_optional(row.interrupted_at.as_deref()),
-                completed_at: normalize_optional(row.completed_at.as_deref()),
             };
             let cancel_cause = derive_response_cause(&req_evidence, &resp_evidence);
             let backend_id =
@@ -369,14 +366,11 @@ pub fn build_session_snapshot_from_store_for_agent(
                         .or(latest_request);
                     let req_evidence = req_for_tool
                         .map(|r| RequestEvidence {
-                            request_id: r.request_id.clone(),
                             interrupt_requested_at: r.interrupt_requested_at.clone(),
                             caused_by_parent_request_id: r.caused_by_parent_request_id.clone(),
-                            deadline_breached: false,
                         })
                         .unwrap_or_default();
                     let tool_evidence = ToolCallEvidence {
-                        tool_call_id: row.tool_call_id.clone().unwrap_or_default(),
                         lifecycle_state: row.lifecycle_state.clone(),
                         deadline_at: row.deadline_at.clone(),
                         cancel_policy: row.cancel_policy.clone(),

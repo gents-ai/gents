@@ -23,6 +23,7 @@ pub mod config;
 pub mod config_client;
 pub mod defra_query;
 pub mod defra_write;
+pub mod descendant_graph;
 pub mod desired_fields;
 pub mod document_config;
 pub mod error;
@@ -81,6 +82,7 @@ pub mod native_executor_status;
 pub mod oneshot;
 pub mod periodic_recovery;
 pub mod prompt;
+pub mod provider_context_reduction;
 pub(crate) mod registry;
 pub mod rendered_request;
 pub(crate) mod request_binding;
@@ -143,7 +145,14 @@ pub use config::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
     DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
+pub use config_client::ConfigAccess;
 pub use defra_node;
+pub use descendant_graph::{
+    resolve_descendant_edge, resolve_descendant_graph, resolve_descendant_root_request_id,
+    DescendantAuthorizationState, DescendantControlAuthority, DescendantEdge,
+    DescendantGraphAccess, DescendantMaterializationState, DescendantPage, DescendantQuery,
+    DescendantScope, MAX_DESCENDANT_PAGE_LIMIT,
+};
 pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
@@ -154,6 +163,7 @@ pub use document_config::{
     wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
     ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
@@ -195,8 +205,10 @@ pub use periodic_recovery::{
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use run_timeline::{
     build_run_timeline, RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows,
-    TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    TimelineConversationRow, TimelineGoalParentState, TimelineGoalState,
+    TimelineGoalTransitionEvent, TimelineGoalVersionRow, TimelineInferenceCallRow,
+    TimelineMessageRow, TimelineRequestRow, TimelineResponseRow, TimelineSessionRow,
+    TimelineToolCallRow,
 };
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,

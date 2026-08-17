@@ -7,11 +7,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents_protocol::graphql::escape_graphql_string;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
+use crate::graphql::escape_graphql_string;
 use crate::mcp_pool::{resolve_mcp_url, McpPool};
 
 #[derive(Clone, Debug)]
@@ -853,10 +853,12 @@ async fn upsert_persisted_health_state(
         k_max = entry.k_max,
     );
 
-    let resp = persistence.node.execute(&mutation).await;
-    if resp.has_errors() {
-        anyhow::bail!("upsert_ToolServiceHealthState failed: {:?}", resp.errors);
-    }
+    crate::graphql::graphql_mutation_with_transaction_retry(
+        persistence.node,
+        &mutation,
+        "upsert ToolServiceHealthState",
+    )
+    .await?;
     Ok(())
 }
 
@@ -876,7 +878,12 @@ async fn delete_persisted_health_state(
             ) {{ _docID }}
         }}"#
     );
-    let resp = persistence.node.execute(&mutation).await;
+    let resp = crate::graphql::graphql_mutation_response_with_transaction_retry(
+        persistence.node,
+        &mutation,
+        "delete stale ToolServiceHealthState",
+    )
+    .await;
     if resp.has_errors() {
         tracing::warn!(
             service_id = %service_id,

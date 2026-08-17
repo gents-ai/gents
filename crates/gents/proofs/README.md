@@ -24,6 +24,8 @@ The proofs are strongest where the runtime is a state machine:
 - command/tool execution policy for bash argv, network, sandbox, and shell env
 - MCP/tool execution preflight and retry eligibility boundaries
 - managed native executor deadline/cancel liveness and tool composition
+- canonical descendant visibility, materialization authorization, and
+  direct-parent control authority (`DescendantGraph`, #836)
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
   #448 / #992): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
@@ -85,7 +87,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers sixteen practical areas:
+The current proof suite covers seventeen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -110,6 +112,13 @@ The current proof suite covers sixteen practical areas:
 15. Provider-input and token-budget enforcement: prompt assembly and
     sanitization, per-turn context clamps, and the request-wide aggregate
     ledger across tool turns and retracted attempts
+16. Canonical descendant graphs: durable pending bridge visibility,
+    logical-plus-physical materialization authorization, behavior/deployment/
+    await/workflow-role independence, replicated authorization equivalence,
+    and the separation between ancestor visibility and direct-parent control
+17. Agent self-configuration writes: per-collection writable/protected field
+    partitions, patch-merge identity immutability and containment,
+    transactional accept/reject totality, and no-lockout recoverability
 
 Separately, **obligation models** (no Rust refinement tests yet):
 
@@ -130,9 +139,6 @@ The proof boundary matters:
 - External assumptions such as "DefraDB eventually makes an acked mutation
   visible" or "provider streamed bytes" are not proven here.
 
-16. Agent self-configuration writes: per-collection writable/protected field
-    partitions, patch-merge identity immutability and containment,
-    transactional accept/reject totality, and no-lockout recoverability
 ## Cross-node TLA+ specs
 
 The `tla/` sibling directory contains TLA+ specifications for cross-node properties beyond per-node Lean coverage. See `tla/README.md`.
@@ -168,6 +174,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | File | Contents |
 |------|----------|
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
+| `Proofs/DescendantGraph.lean` | Canonical descendant-edge visibility/read/control authorization, materialization and scope properties (#836) |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |
@@ -193,7 +200,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
 | `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair) |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
-| `Proofs/Compaction/` | Transcript reduction (#993): the payload-stubbing `strip`, the canonical `providerView = sanitize ∘ strip` with `strip_sanitize_commute` and idempotence, prefix stability under append and the compacted-prefix index correspondence, and the `summarize` reducer parameterised over the production split policy with pair closure proven over it. Fences: `tests/conformance/streaming_compaction.rs`. |
+| `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
 | `Proofs/RenderedCapture.lean` | Persist-before-send at the provider boundary (#840/#523): the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send` (ordering, driven through the real owned loop), `tests/conformance/rendered_capture.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
 | `Proofs/DurableLineage.lean` | DefraDB ingest boundary for request provenance: logical/physical document-edge coherence, root/bridge/control-continuation shapes, per-row rejection that cannot poison later admissible work, steering normalization that clears both halves of the spawn tool edge, and message-before-steering-request publication. The R4C generated steering witness fences these values in Rust conformance tests. |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
@@ -573,6 +580,12 @@ exhaustion. It is executable in Lean through
 `step_sound`, and `transition_complete`; a `preStreamFail` action carries the
 observed `FailureClass` and the selected wake time, so `step?` genuinely
 consumes both the classification and the fail-fast (overshoot) decision.
+`OutputObligation.lean` additionally proves that an unsatisfied durable-write
+minimum or incomplete dynamic closed set cannot take the terminal transition,
+that exact closed sets complete, and that inconsistent or overfull sets reject.
+Successful writes advance monotonically toward completion. Trigger-scoped
+obligations follow automated trigger lineage rather than the broader
+scheduled-request classification.
 
 The key guarantees (`Proofs/CompletionRetry/Properties.lean`) are:
 

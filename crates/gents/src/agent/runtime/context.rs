@@ -168,6 +168,7 @@ impl RuntimeContext {
                         loop_tools.clone(),
                         background_tool_registry,
                         tool_surface.approval_required_tools().to_vec(),
+                        tool_surface.output_obligations(),
                         client,
                     )
                     .await
@@ -198,6 +199,7 @@ impl RuntimeContext {
                         loop_tools.clone(),
                         background_tool_registry,
                         tool_surface.approval_required_tools().to_vec(),
+                        tool_surface.output_obligations(),
                         client,
                     )
                     .await
@@ -227,6 +229,7 @@ impl RuntimeContext {
                     loop_tools.clone(),
                     background_tool_registry,
                     tool_surface.approval_required_tools().to_vec(),
+                    tool_surface.output_obligations(),
                     client,
                 )
                 .await
@@ -263,6 +266,7 @@ impl RuntimeContext {
                     loop_tools.clone(),
                     background_tool_registry,
                     tool_surface.approval_required_tools().to_vec(),
+                    tool_surface.output_obligations(),
                     client,
                 )
                 .await
@@ -300,6 +304,7 @@ impl RuntimeContext {
                         loop_tools.clone(),
                         background_tool_registry,
                         tool_surface.approval_required_tools().to_vec(),
+                        tool_surface.output_obligations(),
                         client,
                     )
                     .await
@@ -325,6 +330,7 @@ impl RuntimeContext {
                         loop_tools.clone(),
                         background_tool_registry,
                         tool_surface.approval_required_tools().to_vec(),
+                        tool_surface.output_obligations(),
                         client,
                     )
                     .await
@@ -344,6 +350,7 @@ impl RuntimeContext {
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
         approval_required_tools: Vec<String>,
+        output_obligations: Vec<(String, crate::document_config::WriteToolOutputObligation)>,
         client: C,
     ) -> Result<()>
     where
@@ -369,7 +376,8 @@ impl RuntimeContext {
             self.startup_barrier.clone(),
             self.startup_demotions.clone(),
         )
-        .with_approval_required_tools(approval_required_tools);
+        .with_approval_required_tools(approval_required_tools)
+        .with_output_obligations(output_obligations);
         daemon.run(request_rx, shutdown).await
     }
 }

@@ -13,6 +13,7 @@
         {"name": "finding_id", "required": true},
         {"name": "area_id", "required": true},
         {"name": "severity", "required": true},
+        {"name": "confidence", "required": true},
         {"name": "path", "required": true},
         {"name": "line", "required": false},
         {"name": "title", "required": true},
@@ -26,6 +27,7 @@
       "tool_name": "write_triage_report",
       "collection": "TriageReport",
       "description": "Create the single count-balanced final report for this correlated review run; run_id is filled by the runtime.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "high_priority_count", "required": true},

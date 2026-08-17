@@ -1875,6 +1875,7 @@ fn build_openai_codex_run_trace(
             RunTimelineEvent::RenderedRequest(_) => {}
             RunTimelineEvent::InferenceCall(_) => {}
             RunTimelineEvent::Compaction(_) => {}
+            RunTimelineEvent::ProviderContextReduction(_) => {}
             RunTimelineEvent::Message(event) => {
                 items.push(OpenAiCodexTraceItem::Message {
                     id: format!("{}:message:{}", event.session_id, event.sequence),
@@ -1898,6 +1899,8 @@ fn build_openai_codex_run_trace(
                     completed_at: event.completed_at.clone(),
                 });
             }
+            RunTimelineEvent::ToolApproval(_) => {}
+            RunTimelineEvent::GoalTransition(_) => {}
             RunTimelineEvent::Response(event) => {
                 items.push(OpenAiCodexTraceItem::Response {
                     id: event.request_id.clone(),
@@ -1921,7 +1924,16 @@ fn build_openai_codex_run_trace(
             .clone()
             .or(timeline.request.status.clone()),
         items,
-        child_run_ids: timeline.child_request_ids.clone(),
+        child_run_ids: if timeline.descendant_edges.is_empty() {
+            timeline.child_request_ids.clone()
+        } else {
+            timeline
+                .descendant_edges
+                .iter()
+                .filter(|edge| edge.is_direct() && edge.readable())
+                .map(|edge| edge.child_request_id.clone())
+                .collect()
+        },
     }
 }
 
@@ -1946,7 +1958,16 @@ fn build_langgraph_state_history(
         ),
         (
             "child_request_ids".to_string(),
-            json!(timeline.child_request_ids),
+            json!(if timeline.descendant_edges.is_empty() {
+                timeline.child_request_ids.clone()
+            } else {
+                timeline
+                    .descendant_edges
+                    .iter()
+                    .filter(|edge| edge.readable())
+                    .map(|edge| edge.child_request_id.clone())
+                    .collect::<Vec<_>>()
+            }),
         ),
     ]);
 
@@ -1966,6 +1987,18 @@ fn build_langgraph_state_history(
             // Captures surface in `values.rendered_captures`, not as graph
             // nodes — a capture is a fact about an inference call, not a step.
             RunTimelineEvent::RenderedRequest(_) => continue,
+            RunTimelineEvent::ProviderContextReduction(event) => (
+                format!("provider_context_reduction:{}", event.reduction_key),
+                "provider_context_reduction".to_string(),
+                Some(event.request_id.clone()),
+                None,
+                None,
+                None,
+                None,
+                Some("completed".to_string()),
+                None,
+                None,
+            ),
             RunTimelineEvent::Request(event) => (
                 format!("request:{}", event.request_id),
                 "request".to_string(),
@@ -2024,6 +2057,37 @@ fn build_langgraph_state_history(
                 None,
                 Some(event.status.clone()),
                 None,
+                None,
+            ),
+            RunTimelineEvent::ToolApproval(event) => (
+                format!("tool_approval:{}", event.approval_id),
+                "tool_approval".to_string(),
+                Some(event.request_id.clone()),
+                Some(event.agent_did.clone()),
+                None,
+                None,
+                Some(event.tool_call_id.clone()),
+                Some(event.decision.clone()),
+                redact_option(event.reason.as_deref(), context),
+                None,
+            ),
+            RunTimelineEvent::GoalTransition(event) => (
+                format!("goal_transition:{}", event.commit_cid),
+                "goal_transition".to_string(),
+                None,
+                Some(event.agent_did.clone()),
+                None,
+                None,
+                None,
+                Some(event.state.status.clone()),
+                redact_option(
+                    event
+                        .completion_evidence
+                        .as_deref()
+                        .or(event.last_blocked_reason.as_deref())
+                        .or(event.last_failure.as_deref()),
+                    context,
+                ),
                 None,
             ),
             RunTimelineEvent::Response(event) => (
@@ -2090,6 +2154,48 @@ fn build_langgraph_state_history(
         }
     }
 
+    for descendant in timeline
+        .descendant_edges
+        .iter()
+        .filter(|edge| edge.readable())
+    {
+        let node_id = format!("request:{}", descendant.child_request_id);
+        if seen_nodes.insert(node_id.clone()) {
+            nodes.push(LangGraphNode {
+                id: node_id.clone(),
+                kind: "request".to_string(),
+                request_id: Some(descendant.child_request_id.clone()),
+                agent_did: descendant.principal_did.clone(),
+                behavior_id: descendant.behavior_id.clone(),
+                parent_request_id: Some(descendant.immediate_parent_request_id.clone()),
+                parent_tool_call_id: Some(descendant.immediate_parent_tool_call_id.clone()),
+                status: Some(descendant.lifecycle_state.clone()),
+                content: None,
+                reasoning: None,
+            });
+        }
+        let lineage_edge = LangGraphEdge {
+            from: format!("request:{}", descendant.immediate_parent_request_id),
+            to: node_id,
+            kind: "child_request".to_string(),
+        };
+        if !edges.contains(&lineage_edge) {
+            edges.push(lineage_edge);
+        }
+        if !tasks
+            .iter()
+            .any(|task| task.id == descendant.immediate_parent_tool_call_id)
+        {
+            tasks.push(LangGraphTask {
+                id: descendant.immediate_parent_tool_call_id.clone(),
+                request_id: Some(descendant.immediate_parent_request_id.clone()),
+                name: "spawn_subagent".to_string(),
+                status: descendant.lifecycle_state.clone(),
+                child_request_id: Some(descendant.child_request_id.clone()),
+            });
+        }
+    }
+
     if let Some(output) = root_final_output(timeline) {
         values.insert(
             "final_output".to_string(),
@@ -2150,6 +2256,31 @@ fn build_multi_agent_task(
     let mut delegations = Vec::new();
     let mut tool_events = Vec::new();
 
+    for edge in timeline
+        .descendant_edges
+        .iter()
+        .filter(|edge| edge.readable())
+    {
+        push_participant(
+            &mut participants,
+            edge.principal_did.clone(),
+            edge.behavior_id.clone(),
+            edge.workflow_role.as_deref().unwrap_or("delegate"),
+        );
+        delegations.push(MultiAgentDelegation {
+            parent_request_id: edge.immediate_parent_request_id.clone(),
+            child_request_id: edge.child_request_id.clone(),
+            parent_tool_call_id: Some(edge.immediate_parent_tool_call_id.clone()),
+            agent_did: edge.principal_did.clone(),
+            behavior_id: edge.behavior_id.clone(),
+            status: Some(edge.lifecycle_state.clone()),
+            // Descendant transcripts are deliberately not injected into
+            // projections. The durable result remains addressable by the
+            // canonical edge's terminal_result_ref.
+            input: None,
+        });
+    }
+
     for event in &timeline.events {
         match event {
             RunTimelineEvent::Request(request) => {
@@ -2173,16 +2304,18 @@ fn build_multi_agent_task(
                             }),
                     );
                 }
-                if let Some(parent_request_id) = request.parent_request_id.as_deref() {
-                    delegations.push(MultiAgentDelegation {
-                        parent_request_id: parent_request_id.to_string(),
-                        child_request_id: request.request_id.clone(),
-                        parent_tool_call_id: request.parent_tool_call_id.clone(),
-                        agent_did: request.agent_did.clone(),
-                        behavior_id: request.behavior_id.clone(),
-                        status: request.lifecycle_state.clone().or(request.status.clone()),
-                        input: redact_option(request.content.as_deref(), context),
-                    });
+                if timeline.descendant_edges.is_empty() {
+                    if let Some(parent_request_id) = request.parent_request_id.as_deref() {
+                        delegations.push(MultiAgentDelegation {
+                            parent_request_id: parent_request_id.to_string(),
+                            child_request_id: request.request_id.clone(),
+                            parent_tool_call_id: request.parent_tool_call_id.clone(),
+                            agent_did: request.agent_did.clone(),
+                            behavior_id: request.behavior_id.clone(),
+                            status: request.lifecycle_state.clone().or(request.status.clone()),
+                            input: redact_option(request.content.as_deref(), context),
+                        });
+                    }
                 }
             }
             // Captures ride the envelope's `rendered_captures`; the
@@ -2190,6 +2323,7 @@ fn build_multi_agent_task(
             RunTimelineEvent::RenderedRequest(_) => {}
             RunTimelineEvent::InferenceCall(_) => {}
             RunTimelineEvent::Compaction(_) => {}
+            RunTimelineEvent::ProviderContextReduction(_) => {}
             RunTimelineEvent::Message(message) => {
                 messages.push(MultiAgentMessage {
                     id: format!("{}:message:{}", message.session_id, message.sequence),
@@ -2211,6 +2345,8 @@ fn build_multi_agent_task(
                     child_request_id: tool.child_request_id.clone(),
                 });
             }
+            RunTimelineEvent::ToolApproval(_) => {}
+            RunTimelineEvent::GoalTransition(_) => {}
             RunTimelineEvent::Response(_) => {}
         }
     }

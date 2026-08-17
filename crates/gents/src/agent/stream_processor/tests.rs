@@ -76,6 +76,9 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     };
@@ -416,6 +419,9 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     };
@@ -584,6 +590,9 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     };
@@ -778,6 +787,9 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     };
@@ -930,6 +942,9 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     };
@@ -1094,6 +1109,9 @@ async fn post_tool_resumed_resets_response_tail() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     };
@@ -1232,6 +1250,9 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     };
@@ -1372,6 +1393,9 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
         caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
     };

@@ -202,7 +202,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
 
     // A trigger fire is not replayable: `event_kind: created` is first-seen, so
     // dropping this create on a transient conflict loses the stage for good.
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::graphql::graphql_mutation_with_transaction_retry(
         node,
         &mutation,
         "materialize_pending_agent_request",
@@ -384,7 +384,7 @@ impl RequestLifecycle {
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
         );
 
-        let resp = crate::graphql::graphql_with_transaction_retry(
+        let resp = crate::graphql::graphql_mutation_with_transaction_retry(
             node.as_ref(),
             &mutation,
             "materialize_claimed_agent_request",
@@ -432,6 +432,9 @@ impl RequestLifecycle {
             caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
             caused_by_parent_tool_call_doc_id: None,
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            caused_by_source_doc_id: None,
             caused_by_correlation: None,
             caused_by_trigger_context: None,
         };

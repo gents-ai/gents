@@ -595,14 +595,24 @@ impl NetworkStore for GraphqlNetworkStore {
     async fn upsert_network_desired(&self, entry: &NetworkEndpointEntry) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let mutation = upsert_network_desired_mutation(entry, &now)?;
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "upsert network-owned PeerPairingDesired")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "upsert network-owned PeerPairingDesired",
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn delete_network_desired(&self, peer_id: &str) -> Result<()> {
         let mutation = delete_network_desired_mutation(peer_id);
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "delete network-owned PeerPairingDesired")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "delete network-owned PeerPairingDesired",
+        )
+        .await
+        .map(|_| ())
     }
 }
 

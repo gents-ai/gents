@@ -29,6 +29,14 @@ describe("request trace panel", () => {
             timestamp: "2026-06-03T14:05:00Z",
           },
           {
+            kind: "provider_context_reduction",
+            reduction_index: 1,
+            original_tokens: 234436,
+            compacted_tokens: 27849,
+            producer_call_id: "call-124",
+            timestamp: "2026-06-03T14:05:00.500Z",
+          },
+          {
             kind: "rendered_request",
             capture_key: "rendered:v1:abc",
             capture_scope: "inference.1",
@@ -46,6 +54,9 @@ describe("request trace panel", () => {
     render(<RequestTracePanel agentDid="did:a" rootRequestId="req-1" />);
 
     await waitFor(() => expect(screen.getByText("user: hi")).toBeInTheDocument());
+    expect(
+      screen.getByText("per-turn reduction #1 — 234436 → 27849 tokens — call-124"),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(
         "captured inference.1 — turn 0 attempt 1 — gpt-5 — captured_only",
@@ -91,6 +102,15 @@ describe("request trace panel", () => {
       eventTimestamp({ kind: "tool_call", started_at: "2026-01-01T00:00:00Z" }),
     ).toBe("2026-01-01T00:00:00Z");
     expect(eventTimestamp({ kind: "response" })).toBeNull();
+    expect(
+      eventSummary({
+        kind: "provider_context_reduction",
+        reduction_index: 2,
+        original_tokens: 235605,
+        compacted_tokens: 16488,
+        producer_call_id: "call-172",
+      }),
+    ).toBe("per-turn reduction #2 — 235605 → 16488 tokens — call-172");
     expect(
       eventSummary({
         kind: "rendered_request",

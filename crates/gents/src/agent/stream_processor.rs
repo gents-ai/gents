@@ -180,6 +180,28 @@ impl<'a> StreamProcessor<'a> {
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
             }
+            Ok(LoopStreamItem::OutputObligationPending { reminder }) => {
+                let _ = self.stream_writer.flush_pending(self.doc_id).await?;
+                if let Some(message) = self.assistant_turn.take_message() {
+                    self.persistence_hook.apply_persistence_policy(
+                        self.persistence_hook
+                            .persist_message(&message)
+                            .await
+                            .map(|_| ()),
+                        "persist assistant output-obligation proposal",
+                    )?;
+                }
+                self.persistence_hook.apply_persistence_policy(
+                    self.persistence_hook
+                        .persist_message(&reminder)
+                        .await
+                        .map(|_| ()),
+                    "persist output-obligation reminder",
+                )?;
+                self.streamed_text.truncate(self.committed_text_len);
+                self.stream_writer.reset_tail(self.doc_id).await?;
+                Ok(StreamAction::Continue)
+            }
             Ok(LoopStreamItem::Item(_)) | Ok(LoopStreamItem::AttemptFailed { .. }) => {
                 Ok(StreamAction::Continue)
             }

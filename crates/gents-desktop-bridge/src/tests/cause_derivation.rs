@@ -13,13 +13,10 @@ fn tool_default() -> ToolCallEvidence {
 #[test]
 fn user_cancelled_when_root_has_interrupt_and_no_parent_cascade() {
     let req = RequestEvidence {
-        request_id: "req_root".into(),
         interrupt_requested_at: Some("2026-05-20T10:32:14Z".into()),
         caused_by_parent_request_id: None,
-        deadline_breached: false,
     };
     let tool = ToolCallEvidence {
-        tool_call_id: "tc_1".into(),
         lifecycle_state: Some("cancelled".into()),
         deadline_at: None,
         cancel_policy: Some("cascade".into()),
@@ -39,13 +36,10 @@ fn user_cancelled_when_root_has_interrupt_and_no_parent_cascade() {
 #[test]
 fn interrupted_when_request_has_parent_cascade() {
     let req = RequestEvidence {
-        request_id: "req_child".into(),
         interrupt_requested_at: None,
         caused_by_parent_request_id: Some("req_parent".into()),
-        deadline_breached: false,
     };
     let tool = ToolCallEvidence {
-        tool_call_id: "tc_2".into(),
         lifecycle_state: Some("cancelled".into()),
         cancel_policy: Some("cascade".into()),
         ..tool_default()
@@ -59,7 +53,6 @@ fn interrupted_when_request_has_parent_cascade() {
 #[test]
 fn deadline_when_tool_lifecycle_is_timedout() {
     let tool = ToolCallEvidence {
-        tool_call_id: "tc_3".into(),
         timed_out: true,
         lifecycle_state: Some("timedOut".into()),
         deadline_at: Some("2026-05-20T10:34:00Z".into()),
@@ -75,12 +68,10 @@ fn deadline_when_tool_lifecycle_is_timedout() {
 #[test]
 fn deadline_wins_over_interrupted_when_both_signals_present() {
     let req = RequestEvidence {
-        request_id: "req_child".into(),
         caused_by_parent_request_id: Some("req_parent".into()),
         ..req_default()
     };
     let tool = ToolCallEvidence {
-        tool_call_id: "tc_4".into(),
         timed_out: true,
         lifecycle_state: Some("timedOut".into()),
         cancel_policy: Some("cascade".into()),
@@ -93,13 +84,10 @@ fn deadline_wins_over_interrupted_when_both_signals_present() {
 #[test]
 fn interrupted_wins_over_user_cancelled_when_both_signals_present_on_child() {
     let req = RequestEvidence {
-        request_id: "req_child".into(),
         interrupt_requested_at: Some("2026-05-20T10:32:14Z".into()),
         caused_by_parent_request_id: Some("req_parent".into()),
-        deadline_breached: false,
     };
     let tool = ToolCallEvidence {
-        tool_call_id: "tc_5".into(),
         lifecycle_state: Some("cancelled".into()),
         cancel_policy: Some("cascade".into()),
         ..tool_default()
@@ -111,7 +99,6 @@ fn interrupted_wins_over_user_cancelled_when_both_signals_present_on_child() {
 #[test]
 fn unknown_when_cancelled_but_no_evidence() {
     let tool = ToolCallEvidence {
-        tool_call_id: "tc_6".into(),
         lifecycle_state: Some("cancelled".into()),
         ..tool_default()
     };
@@ -132,7 +119,6 @@ fn unknown_when_cancelled_but_no_evidence() {
 #[test]
 fn none_for_non_cancelled_tool_calls() {
     let tool = ToolCallEvidence {
-        tool_call_id: "tc_7".into(),
         lifecycle_state: Some("completed".into()),
         ..tool_default()
     };
@@ -142,7 +128,6 @@ fn none_for_non_cancelled_tool_calls() {
 #[test]
 fn none_for_failed_tool_calls() {
     let tool = ToolCallEvidence {
-        tool_call_id: "tc_8".into(),
         lifecycle_state: Some("failed".into()),
         ..tool_default()
     };
@@ -156,7 +141,6 @@ fn none_for_failed_tool_calls() {
 fn response_cause_uses_response_interrupted_at_when_present() {
     let resp = ResponseEvidence {
         interrupted_at: Some("2026-05-20T10:36:11Z".into()),
-        completed_at: None,
     };
     let cause = derive_response_cause(&req_default(), &resp).expect("derives");
     assert_eq!(cause.cause, "interrupted");
@@ -167,7 +151,6 @@ fn response_cause_uses_response_interrupted_at_when_present() {
 fn response_cause_none_when_no_interrupted_at() {
     let resp = ResponseEvidence {
         interrupted_at: None,
-        completed_at: Some("2026-05-20T10:36:11Z".into()),
     };
     assert!(derive_response_cause(&req_default(), &resp).is_none());
 }

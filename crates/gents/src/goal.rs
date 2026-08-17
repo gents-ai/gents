@@ -5,7 +5,10 @@ use chrono::{DateTime, Utc};
 use defra_node::{EmbeddedNode, QueryResponse};
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use crate::graphql::{
+    escape_graphql_string, graphql_mutation_with_transaction_retry, graphql_with_transaction_retry,
+    rows,
+};
 
 pub const GOAL_TRIGGER_KIND: &str = "goal";
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
@@ -764,7 +767,7 @@ pub async fn claim_continuation(
         }}"#
     );
     let response =
-        graphql_with_transaction_retry(node, &mutation, "claim goal continuation").await?;
+        graphql_mutation_with_transaction_retry(node, &mutation, "claim goal continuation").await?;
     Ok(response
         .data
         .as_ref()
@@ -878,7 +881,7 @@ async fn execute_goal_mutation_response(
     mutation: &str,
     label: &str,
 ) -> Result<QueryResponse> {
-    graphql_with_transaction_retry(node, mutation, label).await
+    graphql_mutation_with_transaction_retry(node, mutation, label).await
 }
 
 fn mutation_returned_rows(value: &serde_json::Value) -> bool {

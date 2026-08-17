@@ -76,11 +76,15 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
         tool_choice: None,
         on_rendered_request: None,
         turn_compactor: None,
+        active_reduction_keys: Vec::new(),
+        reduction_chain_keys: Vec::new(),
+        initial_turn_index: 0,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::no_retry(),
         deadline: None,
         max_turns: 0,
+        output_obligation_gate: None,
     }
 }
 
@@ -952,11 +956,15 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
         tool_choice: None,
         on_rendered_request: None,
         turn_compactor: None,
+        active_reduction_keys: Vec::new(),
+        reduction_chain_keys: Vec::new(),
+        initial_turn_index: 0,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns: 0,
+        output_obligation_gate: None,
     }
 }
 
@@ -1216,13 +1224,10 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
     );
 }
 
-/// The summarizer is the call this whole fact record exists to explain: its
-/// output is injected straight into provider history and is never written as an
-/// `AgentCompactionEntry`. It runs two provider calls of its own inside a turn
-/// that already has an inference call, and all three start at `(turn 0, attempt
-/// 0)`. If they shared a capture scope they would share a capture key, and the
-/// sink would (correctly) reject the second as an integrity violation — taking
-/// the request down. Each has to arm its own scope.
+/// The summarizer runs provider calls of its own before its result is persisted
+/// as a request-local `ProviderContextReduction`. Those calls can share turn
+/// and attempt coordinates with the inference call they compact. Each must arm
+/// its own capture scope so their rendered-request keys remain distinct.
 #[tokio::test(start_paused = true)]
 async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     use crate::rendered_request::scope::{
@@ -2110,11 +2115,15 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         tool_choice: None,
         on_rendered_request: None,
         turn_compactor: None,
+        active_reduction_keys: Vec::new(),
+        reduction_chain_keys: Vec::new(),
+        initial_turn_index: 0,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns: 0,
+        output_obligation_gate: None,
     };
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
 

@@ -38,7 +38,7 @@ use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
 use crate::document_config::{WriteToolDecl, WriteToolFieldFill};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
@@ -83,16 +83,9 @@ impl BoundedWriteTool {
     }
 
     fn ensure_well_formed(&self) -> Result<()> {
-        if self.decl.tool_name.trim().is_empty() {
-            bail!("bounded write tool declaration has an empty tool_name");
-        }
-        if self.decl.collection.trim().is_empty() {
-            bail!(
-                "bounded write tool {:?} has an empty collection and cannot write",
-                self.decl.tool_name
-            );
-        }
-        Ok(())
+        self.decl
+            .validate()
+            .map_err(|error| anyhow!("invalid bounded write tool declaration: {error}"))
     }
 
     fn build_mutation(&self, args: &Map<String, Value>) -> Result<String> {
@@ -232,7 +225,8 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
             "write to {:?} via tool `{}`",
             self.decl.collection, self.decl.tool_name
         );
-        let resp = graphql_with_transaction_retry(&self.node, &mutation, &operation).await?;
+        let resp =
+            graphql_mutation_with_transaction_retry(&self.node, &mutation, &operation).await?;
 
         let doc_id = extract_doc_id(resp.data.as_ref(), &self.decl.collection)
             .ok_or_else(|| anyhow!("write to {:?} returned no _docID", self.decl.collection))?;

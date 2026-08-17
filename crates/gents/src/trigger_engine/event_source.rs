@@ -993,22 +993,10 @@ impl EventSource {
             let value = doc.get(field).ok_or_else(|| {
                 anyhow::anyhow!("group member is missing expected_count_field `{field}`")
             })?;
-            let parsed = match value {
-                serde_json::Value::Number(number) => number
-                    .as_u64()
-                    .and_then(|value| usize::try_from(value).ok()),
-                serde_json::Value::String(value)
-                    if !value.is_empty()
-                        && value.bytes().all(|byte| byte.is_ascii_digit())
-                        && (value == "0" || !value.starts_with('0')) =>
-                {
-                    value.parse::<usize>().ok()
-                }
-                _ => None,
-            }
-            .filter(|value| {
-                (1..=crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS).contains(value)
-            })
+            let parsed = crate::graphql::canonical_positive_count(
+                value,
+                crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS,
+            )
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "expected_count_field `{field}` must be a canonical positive integer <= {}",
@@ -1154,7 +1142,12 @@ impl EventSource {
                 &now.to_rfc3339_opts(SecondsFormat::Millis, true)
             ),
         );
-        let response = self.node.execute(&mutation).await;
+        let response = crate::graphql::graphql_mutation_response_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "create EventTriggerGroupState",
+        )
+        .await;
         if !response.has_errors() {
             return Ok(now);
         }
@@ -1198,13 +1191,12 @@ impl EventSource {
             ),
             reason = crate::graphql::escape_graphql_string(reason),
         );
-        let response = self.node.execute(&mutation).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "EventTriggerGroupState quiesce failed: {:?}",
-                response.errors
-            );
-        }
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "quiesce EventTriggerGroupState",
+        )
+        .await?;
         Ok(())
     }
 

@@ -532,14 +532,24 @@ impl DiscoveryStore for GraphqlDiscoveryStore {
             .desired_collections()
             .with_context(|| format!("derive collections for registry peer {}", entry.peer_id))?;
         let mutation = upsert_registry_desired_mutation(entry, template.id, &collections, &now);
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "upsert registry-owned PeerPairingDesired")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "upsert registry-owned PeerPairingDesired",
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn delete_registry_desired(&self, peer_id: &str) -> Result<()> {
         let mutation = delete_registry_desired_mutation(peer_id);
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "delete registry-owned PeerPairingDesired")
+        crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "delete registry-owned PeerPairingDesired",
+        )
+        .await
+        .map(|_| ())
     }
 }
 

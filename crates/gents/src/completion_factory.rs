@@ -74,11 +74,15 @@ pub(crate) fn loop_config(
             capture_scope,
         )),
         turn_compactor: None,
+        active_reduction_keys: Vec::new(),
+        reduction_chain_keys: Vec::new(),
+        initial_turn_index: 0,
         context_window: behavior.context_window,
         compaction_threshold: behavior.compaction_threshold,
         retry_policy: CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns: behavior.max_turns,
+        output_obligation_gate: None,
     }
 }
 

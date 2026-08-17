@@ -3,6 +3,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::descendant_graph::{
+    DescendantAuthorizationState, DescendantControlAuthority, DescendantEdge,
+    DescendantMaterializationState, DescendantScope,
+};
+
 const DEFAULT_LIST_LIMIT: u32 = 20;
 const MAX_LIST_LIMIT: u32 = 50;
 const MAX_TRANSCRIPT_LIMIT: u32 = 100;
@@ -38,6 +43,12 @@ pub struct ListSubagentsArgs {
     pub(crate) status: ListStatusFilter,
     #[serde(default = "default_list_limit")]
     pub(crate) limit: u32,
+    #[serde(default)]
+    pub(crate) scope: DescendantScope,
+    #[serde(default)]
+    pub(crate) workflow_group_id: Option<String>,
+    #[serde(default)]
+    pub(crate) after: Option<String>,
 }
 
 fn default_list_limit() -> u32 {
@@ -49,6 +60,9 @@ impl Default for ListSubagentsArgs {
         Self {
             status: ListStatusFilter::default(),
             limit: DEFAULT_LIST_LIMIT,
+            scope: DescendantScope::DirectChildren,
+            workflow_group_id: None,
+            after: None,
         }
     }
 }
@@ -155,19 +169,37 @@ pub(crate) struct SteerSubagentArgs {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ListSubagentsEntry {
+    pub root_request_id: String,
+    pub immediate_parent_request_id: String,
+    pub parent_tool_call_id: String,
     pub child_request_id: String,
     pub child_session_id: String,
     /// Friendly model-facing name of the subagent target (from the spawn args).
     /// Matches the `name` passed to `spawn_subagent`. Empty string if the
     /// bridge args did not carry a name (legacy or malformed record).
     pub name: String,
+    pub principal_did: String,
     pub behavior_id: String,
     pub deployment_id: String,
     pub await_mode: String,
+    pub cancel_policy: Option<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub last_update: DateTime<Utc>,
     pub depth: u32,
+    pub materialization_state: DescendantMaterializationState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_result_ref: Option<String>,
+    pub transcript_cursor: u64,
+    pub authorization_state: DescendantAuthorizationState,
+    pub control_authority: DescendantControlAuthority,
+    pub cursor: String,
     /// #593: present only on a bridge-level entry whose child `AgentRequest`
     /// has not materialized (status `awaiting_child_materialization`) or
     /// whose bridge went terminal without one; explains the bridge state.
@@ -181,6 +213,8 @@ pub struct ListSubagentsEntry {
 pub struct ListSubagentsResponse {
     pub read_at: DateTime<Utc>,
     pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
     pub entries: Vec<ListSubagentsEntry>,
 }
 
@@ -206,6 +240,7 @@ pub(crate) struct ListBackgroundToolsResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadSubagentResponse {
+    pub edge: DescendantEdge,
     pub child_request_id: String,
     pub child_session_id: String,
     pub from_sequence: u64,

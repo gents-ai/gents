@@ -50,8 +50,8 @@ type RenderedRequest @branchable {
     behavior_id: String @immutable
     # Which completion loop inside the request issued this provider call.
     # `inference.N` is the request's own loop; `compaction.N` and
-    # `compaction_fallback.N` are the summarizer that produces the ephemeral
-    # continuation checkpoint; `title.N` and `oneshot.N` are the rest. Each loop
+    # `compaction_fallback.N` are the summarizer whose checkpoint is fenced by
+    # ProviderContextReduction; `title.N` and `oneshot.N` are the rest. Each loop
     # starts its own turn/attempt counters at zero, so without this component
     # the summarizer's first call and the request's first turn would be one
     # fact. Deliberately unindexed: it is low cardinality and always reachable

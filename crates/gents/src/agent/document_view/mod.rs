@@ -340,10 +340,14 @@ pub(crate) fn merge_write_tools_with_surfaces(
             );
         }
         for entry in surface.entries.as_deref().unwrap_or(&[]) {
-            if !entry.is_well_formed() {
+            entry.validate().map_err(|error| {
+                anyhow::anyhow!("DatastoreToolSurface {surface_id} has a malformed entry: {error}")
+            })?;
+            if !entry.output_obligation_is_well_formed() {
                 bail!(
-                    "DatastoreToolSurface {} has a malformed entry (tool_name/collection required)",
-                    surface_id
+                    "DatastoreToolSurface {} entry {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
+                    surface_id,
+                    entry.tool_name,
                 );
             }
             if !seen.insert(entry.tool_name.clone()) {

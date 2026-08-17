@@ -568,6 +568,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_subagent_delegation_graph_cases_pin_gap2_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "descendant_graph::tests::generated_descendant_graph_cases_fence_visibility_and_control",
+            package: "gents",
+            source_path: "crates/gents/src/descendant_graph.rs",
+            module_path: "descendant_graph::tests",
+            function: "generated_descendant_graph_cases_fence_visibility_and_control",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::generated_r4c_background_work_cases_pin_observable_shapes",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",
@@ -650,6 +657,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/agent/loop_stream/tests.rs",
             module_path: "agent::loop_stream::tests",
             function: "generated_rendered_capture_cases_fence_persist_before_send",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::durable_reduction::generated_durable_reduction_cases_pin_identity_and_persist_before_send",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/durable_reduction.rs",
+            module_path: "conformance::durable_reduction",
+            function: "generated_durable_reduction_cases_pin_identity_and_persist_before_send",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::rendered_capture::generated_rendered_capture_key_cases_pin_the_capture_key_tuple",

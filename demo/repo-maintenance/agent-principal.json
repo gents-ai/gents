@@ -1,0 +1,6 @@
+{
+  "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
+  "display_name": "Repository Maintenance Graph",
+  "default_behavior_id": "maintenance-recon",
+  "enabled": true
+}

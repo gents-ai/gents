@@ -221,7 +221,7 @@ async fn tick_registry(
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Heartbeat);
-    crate::graphql::graphql_with_transaction_retry(
+    crate::graphql::graphql_mutation_with_transaction_retry(
         node,
         &mutation,
         "upsert_peer_registry_heartbeat",

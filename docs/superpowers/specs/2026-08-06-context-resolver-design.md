@@ -390,7 +390,7 @@ retry, and repair-retry requests.
 - Config drift: mutate behavior, backend, profile, tool selection, and skill
   documents after capture; reconstruction uses the pinned versions.
 - Compaction and retries: reconstruct a durable-compaction-entry session,
-  #988's ephemeral per-turn compaction result, an unchanged transport retry,
+  a durable request-local per-turn provider reduction, an unchanged transport retry,
   and a repair retry whose input differs without a transcript write.
 - Epoch: a payload with no supported manifest is `CapturedOnly`; a request
   before the collection migration is `Unavailable`.

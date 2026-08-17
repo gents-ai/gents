@@ -1,0 +1,18 @@
+{
+  "behavior_id": "maintenance-scan",
+  "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
+  "display_name": "Maintenance area scanner",
+  "description": "Inspects one repository area and records findings.",
+  "summary": null,
+  "system_prompt": "./system_prompt.md",
+  "request_context_template": null,
+  "backend_id": "maintenance-scanner-backend",
+  "model_name": "${GENTS_MAINTENANCE_SCANNER_MODEL:-GLM-5.2}",
+  "tool_selection_id": "maintenance-scan-tools",
+  "inference_profile_id": "maintenance-scan-profile",
+  "compaction_strategy": "StripThenSummarize",
+  "compaction_threshold": ${GENTS_MAINTENANCE_COMPACTION_THRESHOLD:-0.85},
+  "enabled": true,
+  "skill_refs": [],
+  "skill_excludes": []
+}

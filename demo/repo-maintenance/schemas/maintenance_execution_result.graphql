@@ -1,0 +1,13 @@
+type MaintenanceExecutionResult {
+  run_id: String @index @immutable
+  package_id: String @index(unique: true) @immutable
+  sequence: String @immutable
+  branch: String
+  worktree_path: String
+  status: String
+  commit_sha: String
+  changed_paths: String
+  validation: String
+  summary: String
+  expected_total: String @immutable
+}

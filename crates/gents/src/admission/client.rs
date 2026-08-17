@@ -175,9 +175,8 @@ pub(crate) struct AdmissionCallContext {
     pub(super) attempt: i64,
     pub(super) call_seq: Arc<AtomicU64>,
     /// Written by `next_call`, read by `current_call_join()` at the transport
-    /// seam. Shared (`Arc`) across the request's call scopes — `scope_call`
-    /// clones the context, and the clone must observe the same slot the
-    /// admitted call writes.
+    /// seam. Every call scope installs its own slot so concurrent inference,
+    /// compaction, and title calls cannot replace each other's joins.
     pub(super) current_call: Arc<Mutex<Option<CurrentCallJoin>>>,
     pub(super) inference_token: Option<CancellationToken>,
     pub(super) terminal_failure_reason: Option<TerminalFailureReasonObserver>,
@@ -248,10 +247,35 @@ pub(crate) async fn scope_call<T>(
     attempt: i64,
     future: impl Future<Output = T>,
 ) -> T {
+    let context = context_for_call(call_kind, attempt);
+    ADMISSION_CALL_CONTEXT.scope(context, future).await
+}
+
+pub(crate) async fn scope_call_with_join<T>(
+    call_kind: CallKind,
+    attempt: i64,
+    future: impl Future<Output = T>,
+) -> (T, Option<CurrentCallJoin>) {
+    let context = context_for_call(call_kind, attempt);
+    let current_call = context.current_call.clone();
+    ADMISSION_CALL_CONTEXT
+        .scope(context, async move {
+            let output = future.await;
+            let join = match current_call.lock() {
+                Ok(slot) => slot.clone(),
+                Err(poisoned) => poisoned.into_inner().clone(),
+            };
+            (output, join)
+        })
+        .await
+}
+
+fn context_for_call(call_kind: CallKind, attempt: i64) -> AdmissionCallContext {
     let mut context = current_context().expect("admission call scope requires request context");
     context.call_kind = call_kind;
     context.attempt = attempt;
-    ADMISSION_CALL_CONTEXT.scope(context, future).await
+    context.current_call = Arc::new(Mutex::new(None));
+    context
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -261,9 +285,7 @@ pub(crate) async fn scope_call_with_token<T>(
     token: CancellationToken,
     future: impl Future<Output = T>,
 ) -> T {
-    let mut context = current_context().expect("admission call scope requires request context");
-    context.call_kind = call_kind;
-    context.attempt = attempt;
+    let mut context = context_for_call(call_kind, attempt);
     context.inference_token = Some(token);
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
@@ -292,9 +314,7 @@ pub(crate) async fn scope_call_with_token_and_failure_reason<T>(
     terminal_failure_reason: TerminalFailureReasonObserver,
     future: impl Future<Output = T>,
 ) -> T {
-    let mut context = current_context().expect("admission call scope requires request context");
-    context.call_kind = call_kind;
-    context.attempt = attempt;
+    let mut context = context_for_call(call_kind, attempt);
     context.inference_token = Some(token);
     context.terminal_failure_reason = Some(terminal_failure_reason);
     ADMISSION_CALL_CONTEXT.scope(context, future).await

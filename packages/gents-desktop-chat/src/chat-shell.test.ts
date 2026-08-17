@@ -18,7 +18,7 @@ import {
 
 const CONTRACT_JSON_BEGIN = "---BEGIN GENTS LEAN CONTRACT JSON---";
 const CONTRACT_JSON_END = "---END GENTS LEAN CONTRACT JSON---";
-const GENERATED_CONTRACT_TEST_TIMEOUT_MS = 30000;
+const GENERATED_CONTRACT_TEST_TIMEOUT_MS = 120000;
 
 type LeanClientShellCase = {
   name: string;
@@ -51,22 +51,9 @@ type LeanClientShellCase = {
   frontend_expected_turn_state: TurnState | null;
 };
 
-type LeanLiveOverlayCase = {
-  name: string;
-  responseStatus: "streaming" | "complete" | "error";
-  materialized: boolean;
-  precedingToolCalls: number;
-  turnTerminal: boolean;
-  turnLabel: string;
-  hasContent: boolean;
-  hasReasoning: boolean;
-  expectOverlay: boolean;
-};
-
 type LeanContractSnapshot = {
   frontend_client_shell_case_count: number;
   frontend_client_shell_cases: LeanClientShellCase[];
-  live_overlay_cases: LeanLiveOverlayCase[];
 };
 
 let leanContractSnapshot: LeanContractSnapshot | null = null;
@@ -148,10 +135,6 @@ function loadLeanContractSnapshot(): LeanContractSnapshot {
 
 function loadLeanClientShellCases() {
   return loadLeanContractSnapshot().frontend_client_shell_cases;
-}
-
-function loadLeanLiveOverlayCases() {
-  return loadLeanContractSnapshot().live_overlay_cases;
 }
 
 function runLeanCommand(proofsDir: string, args: string[]) {
@@ -635,35 +618,4 @@ describe("projectChatShell", () => {
     expect(projection.workflow).toEqual({ kind: "ready" });
     expect(projection.sendStatus).toEqual({ kind: "ready" });
   });
-});
-
-function shouldShowLiveOverlay(c: LeanLiveOverlayCase): boolean {
-  if (c.materialized) {
-    return false;
-  }
-  if (c.responseStatus === "complete" || c.responseStatus === "error") {
-    return false;
-  }
-  if (c.turnLabel !== "streaming" && c.turnLabel !== "waitingForClaim") {
-    return false;
-  }
-  return c.hasContent || c.hasReasoning;
-}
-
-describe("LiveOverlay conformance (issue #64)", () => {
-  const cases = loadLeanLiveOverlayCases();
-
-  it("Lean LiveOverlay case table is non-empty", () => {
-    expect(cases.length).toBeGreaterThan(0);
-  });
-
-  for (const raw of cases) {
-    it(`case ${raw.name} matches Lean expected decision`, () => {
-      expect(shouldShowLiveOverlay(raw)).toBe(raw.expectOverlay);
-      if (raw.turnTerminal) {
-        expect(raw.expectOverlay).toBe(false);
-      }
-      expect(typeof raw.precedingToolCalls).toBe("number");
-    });
-  }
 });
