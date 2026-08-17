@@ -9,8 +9,10 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 pub(crate) mod matchers;
+mod payload;
 
 pub(crate) use matchers::{registry, NoiseTier};
+pub(crate) use payload::{format_payload, ScanOutput};
 
 #[derive(Debug, Clone)]
 pub(crate) struct CandidateMatch {
