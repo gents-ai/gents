@@ -682,10 +682,7 @@ async fn load_rooted_lineage(
         .await?
         .ok_or_else(|| anyhow::anyhow!("AgentRequest {root_request_id} not found"))?;
     let max_depth = max_depth.unwrap_or(usize::MAX);
-    let mut rows = vec![LineageNode {
-        row: root,
-        depth: 0,
-    }];
+    let mut descendants_by_parent = BTreeMap::<String, Vec<LineageNode>>::new();
     let mut after = None;
     loop {
         let page = gents::resolve_descendant_graph(
@@ -697,11 +694,15 @@ async fn load_rooted_lineage(
             },
         )
         .await?;
-        rows.extend(
-            page.edges
-                .into_iter()
-                .filter(|edge| edge.depth <= max_depth)
-                .map(|edge| LineageNode {
+        for edge in page.edges {
+            if edge.depth > max_depth {
+                continue;
+            }
+            let parent_request_id = edge.immediate_parent_request_id.clone();
+            descendants_by_parent
+                .entry(parent_request_id)
+                .or_default()
+                .push(LineageNode {
                     depth: edge.depth,
                     row: AgentRequestLineageRow {
                         request_id: edge.child_request_id,
@@ -713,12 +714,34 @@ async fn load_rooted_lineage(
                         claimed_at: None,
                         caused_by_parent_request_id: Some(edge.immediate_parent_request_id),
                     },
-                }),
-        );
+                });
+        }
         if !page.has_more {
             break;
         }
         after = page.next_cursor;
+    }
+
+    // The resolver pages breadth-first, but tree/table rendering assumes a
+    // child's subtree precedes later siblings; flatten depth-first (sibling
+    // order preserved from the resolver's started_at/tool_call_id ordering).
+    let mut rows = Vec::new();
+    let mut stack = vec![LineageNode {
+        row: root,
+        depth: 0,
+    }];
+    while let Some(node) = stack.pop() {
+        let request_id = node.row.request_id.clone();
+        rows.push(node);
+        if let Some(mut children) = descendants_by_parent.remove(&request_id) {
+            children.reverse();
+            stack.extend(children);
+        }
+    }
+    // A durable bridge can name a parent with no materialized row; keep such
+    // edges visible instead of silently dropping them.
+    for children in descendants_by_parent.into_values() {
+        rows.extend(children);
     }
 
     Ok(rows)
