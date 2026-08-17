@@ -1,0 +1,9 @@
+{
+  "task_id": "maintenance-triage-task",
+  "name": "Triage completed maintenance",
+  "description": null,
+  "behavior_id": "maintenance-triage",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

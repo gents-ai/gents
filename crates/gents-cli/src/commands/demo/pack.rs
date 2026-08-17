@@ -643,32 +643,45 @@ pub(crate) async fn list(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Wait for the trigger engine to announce it is watching `collection`.
+/// Wait for the trigger engine to announce it is watching `collection` and
+/// has opened the global update subscription that can actually receive its
+/// documents.
 ///
-/// This is the real go-signal, and it is strictly later than "serving": the
-/// event source only starts observing once the behaviors behind the triggers
-/// are runnable, which needs the pack's backend probed. Seeding earlier is
-/// silently dropped rather than rejected.
+/// Both signals are strictly later than "serving": the event source only
+/// starts observing once the behaviors behind the triggers are runnable,
+/// which needs the pack's backend probed. The per-collection messages are
+/// emitted just before the subscription is opened, so treating either one as
+/// the go-signal can race the first seed. Seeding earlier is silently dropped
+/// rather than rejected.
 async fn wait_for_event_source(log: &Path, collection: &str, deadline: Duration) -> Result<()> {
     let started = Instant::now();
     while started.elapsed() < deadline {
         if let Ok(text) = std::fs::read_to_string(log) {
-            if text
-                .lines()
-                .any(|line| observes_collection(&strip_ansi(line), collection))
-            {
+            if event_source_ready(&text, collection) {
                 return Ok(());
             }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     bail!(
-        "timed out after {}s waiting for the event source to observe {collection}. \
+        "timed out after {}s waiting for the event source to observe {collection} \
+         and open its global Update subscription. \
          The pack's backend may still be unprobed — check {} for \
          'behavior unavailable after runtime reconcile'.",
         deadline.as_secs(),
         log.display()
     )
+}
+
+fn event_source_ready(log: &str, collection: &str) -> bool {
+    let mut observes_target = false;
+    let mut subscription_open = false;
+    for line in log.lines() {
+        let line = strip_ansi(line);
+        observes_target |= observes_collection(&line, collection);
+        subscription_open |= line.contains("event source opened global Update subscription");
+    }
+    observes_target && subscription_open
 }
 
 /// The runtime writes coloured tracing output even to a file, which splits
@@ -2642,6 +2655,19 @@ mod tests {
     }
 
     #[test]
+    fn observe_line_alone_is_not_ready_to_seed() {
+        assert!(!event_source_ready(COLOURED, "ExperimentJob"));
+    }
+
+    #[test]
+    fn global_update_subscription_completes_seed_readiness() {
+        let log = format!(
+            "{COLOURED}\n INFO event source opened global Update subscription collections=1 generation=3"
+        );
+        assert!(event_source_ready(&log, "ExperimentJob"));
+    }
+
+    #[test]
     fn does_not_match_a_different_collection() {
         assert!(!observes_collection(
             &strip_ansi(COLOURED),
@@ -2927,6 +2953,150 @@ mod tests {
                 Some(720)
             );
         }
+    }
+
+    #[test]
+    fn repo_maintenance_pack_preserves_categories_and_worktree_sized_packages() {
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/repo-maintenance");
+        let manifest = load_manifest_defaults(&pack).expect("repo-maintenance pack should load");
+        assert_eq!(manifest.expect.prompt_tool_contracts.len(), 6);
+        assert_eq!(manifest.expect.result_documents.len(), 6);
+        assert!(manifest
+            .default_prompt
+            .contains("one shared branch and worktree"));
+        assert!(!manifest
+            .default_prompt
+            .contains("independent 1-3 finding worktrees"));
+        assert_eq!(
+            manifest.seed.fields.get("area_count").map(String::as_str),
+            Some("auto")
+        );
+        assert_eq!(
+            manifest
+                .seed
+                .fields
+                .get("history_depth")
+                .map(String::as_str),
+            Some("250")
+        );
+        assert_eq!(
+            manifest.seed.fields.get("pr_base").map(String::as_str),
+            Some("main")
+        );
+        assert_eq!(
+            manifest
+                .seed
+                .fields
+                .get("worktree_parent")
+                .map(String::as_str),
+            Some("..")
+        );
+        assert_eq!(
+            manifest
+                .seed
+                .fields
+                .get("worktree_path")
+                .map(String::as_str),
+            Some("../gents-maintenance")
+        );
+        assert_eq!(
+            manifest
+                .seed
+                .fields
+                .get("suggested_branch")
+                .map(String::as_str),
+            Some("agent/maintenance")
+        );
+        let fan_in = manifest.expect.fan_in.as_ref().expect("fan-in contract");
+        assert_eq!(fan_in.min_expected_count, Some(5));
+        assert_eq!(fan_in.max_expected_count, Some(10));
+
+        let recon_prompt = std::fs::read_to_string(
+            pack.join("tasks")
+                .join("maintenance-recon-task")
+                .join("prompt.md"),
+        )
+        .expect("maintenance recon prompt should load");
+        for category in [
+            "dead-surface",
+            "duplicate-ownership",
+            "test-value",
+            "module-boundaries",
+            "comment-contract-drift",
+        ] {
+            assert!(recon_prompt.contains(category), "missing {category}");
+        }
+
+        let triage_surface = read_pack_json_defaults(
+            &pack
+                .join("datastore-tool-surfaces")
+                .join("maintenance-triage-writes")
+                .join("object.json"),
+        )
+        .expect("maintenance triage surface should load");
+        let package_entry = triage_surface["entries"]
+            .as_array()
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry["tool_name"].as_str() == Some("write_maintenance_work_package")
+                })
+            })
+            .expect("maintenance work-package writer");
+        assert_eq!(package_entry["collection"], "MaintenanceWorkPackage");
+
+        let triage_prompt = std::fs::read_to_string(
+            pack.join("tasks")
+                .join("maintenance-triage-task")
+                .join("prompt.md"),
+        )
+        .expect("maintenance triage prompt should load");
+        assert!(triage_prompt.contains("becomes exactly one commit"));
+        assert!(triage_prompt.contains("runtime-owned execution boundary"));
+        assert!(triage_prompt.contains("do not supply or reinterpret them"));
+
+        let execute_trigger = read_pack_json_defaults(
+            &pack
+                .join("event_triggers")
+                .join("maintenance-execute")
+                .join("object.json"),
+        )
+        .expect("maintenance execute trigger should load");
+        assert_eq!(execute_trigger["concurrency"], "serial");
+        assert_eq!(execute_trigger["source_collection"], "MaintenanceReport");
+
+        let execute_prompt = std::fs::read_to_string(
+            pack.join("tasks")
+                .join("maintenance-execute-task")
+                .join("prompt.md"),
+        )
+        .expect("maintenance execute prompt should load");
+        assert!(execute_prompt.contains("single execution owner"));
+        assert!(execute_prompt.contains("Process packages strictly in numeric order"));
+        assert!(execute_prompt.contains("write_maintenance_execution_summary"));
+
+        let publish_trigger = read_pack_json_defaults(
+            &pack
+                .join("event_triggers")
+                .join("maintenance-publish")
+                .join("object.json"),
+        )
+        .expect("maintenance publish trigger should load");
+        assert_eq!(
+            publish_trigger["source_collection"],
+            "MaintenanceExecutionSummary"
+        );
+
+        let publish_prompt = std::fs::read_to_string(
+            pack.join("tasks")
+                .join("maintenance-publish-task")
+                .join("prompt.md"),
+        )
+        .expect("maintenance publish prompt should load");
+        assert!(publish_prompt.contains("one normal, non-draft PR"));
+        assert!(publish_prompt.contains("Bound this at two full review rounds"));
+        assert!(publish_prompt.contains("cargo fmt --all --check"));
+        assert!(publish_prompt.contains("poll at intervals no longer than 60 seconds"));
+        assert!(publish_prompt.contains("Never kill by port or broad process-name match"));
     }
 
     #[test]

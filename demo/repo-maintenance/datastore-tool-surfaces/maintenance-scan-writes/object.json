@@ -1,0 +1,54 @@
+{
+  "surface_id": "maintenance-scan-writes",
+  "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
+  "display_name": "Maintenance candidate and scan-result writes",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_maintenance_candidate",
+      "collection": "MaintenanceCandidate",
+      "description": "Record one evidenced, behavior-preserving repository maintenance candidate for adversarial verification.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "finding_id", "required": true},
+        {"name": "area_id", "required": true},
+        {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "worktree_parent", "required": false, "fill": {"source_field": "worktree_parent"}},
+        {"name": "worktree_path", "required": false, "fill": {"source_field": "worktree_path"}},
+        {"name": "suggested_branch", "required": false, "fill": {"source_field": "suggested_branch"}},
+        {"name": "base_ref", "required": false, "fill": {"source_field": "base_ref"}},
+        {"name": "pr_base", "required": false, "fill": {"source_field": "pr_base"}},
+        {"name": "category", "required": true},
+        {"name": "priority", "required": true},
+        {"name": "confidence", "required": true},
+        {"name": "path", "required": true},
+        {"name": "line", "required": false},
+        {"name": "title", "required": true},
+        {"name": "detail", "required": true},
+        {"name": "evidence", "required": true},
+        {"name": "preservation", "required": true},
+        {"name": "validation", "required": true},
+        {"name": "estimated_scope", "required": true},
+        {"name": "existing_issue", "required": false}
+      ]
+    },
+    {
+      "tool_name": "write_maintenance_scan_result",
+      "collection": "MaintenanceScanResult",
+      "description": "Signal that one maintenance area has finished scanning.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "area_id", "required": true},
+        {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "worktree_parent", "required": false, "fill": {"source_field": "worktree_parent"}},
+        {"name": "worktree_path", "required": false, "fill": {"source_field": "worktree_path"}},
+        {"name": "suggested_branch", "required": false, "fill": {"source_field": "suggested_branch"}},
+        {"name": "base_ref", "required": false, "fill": {"source_field": "base_ref"}},
+        {"name": "pr_base", "required": false, "fill": {"source_field": "pr_base"}},
+        {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}},
+        {"name": "summary", "required": true}
+      ]
+    }
+  ]
+}

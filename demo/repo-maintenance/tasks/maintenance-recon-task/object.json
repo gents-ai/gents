@@ -1,0 +1,9 @@
+{
+  "task_id": "maintenance-recon-task",
+  "name": "Partition repository maintenance",
+  "description": null,
+  "behavior_id": "maintenance-recon",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

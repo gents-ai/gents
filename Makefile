@@ -30,6 +30,32 @@ REVIEW_STREAM_LIVENESS_SECS ?= 86400
 REVIEW_STREAM_BATCH_MS ?= 5000
 REVIEW_RETRY_MAX_TRANSPORT ?= 720
 REVIEW_RETRY_MAX_RESAMPLE ?= 32
+MAINTENANCE_ROOT ?= $(CURDIR)
+MAINTENANCE_WORKTREE_PARENT ?= $(abspath $(MAINTENANCE_ROOT)/..)
+MAINTENANCE_WORKTREE_PATH ?=
+MAINTENANCE_BRANCH ?=
+MAINTENANCE_HEAD ?= HEAD
+MAINTENANCE_PR_BASE ?= main
+MAINTENANCE_PROMPT ?= Find the next small, behavior-preserving repository cleanup wave and package the strongest work into focused 1-3 finding commits on one shared branch and worktree.
+MAINTENANCE_AREAS ?= auto
+MAINTENANCE_MIN_AREAS ?= 5
+MAINTENANCE_MAX_AREAS ?= 10
+MAINTENANCE_HISTORY_DEPTH ?= 250
+MAINTENANCE_PORT ?= 19192
+MAINTENANCE_JOB_ID ?=
+MAINTENANCE_KEEP_HOME ?=
+MAINTENANCE_CONTEXT_WINDOW ?= 262144
+MAINTENANCE_MAX_OUTPUT_TOKENS ?= 65536
+MAINTENANCE_MAX_TURNS ?= 1000000
+MAINTENANCE_TEMPERATURE ?= 1.0
+MAINTENANCE_TOP_P ?= 0.95
+MAINTENANCE_COMPACTION_THRESHOLD ?= 0.85
+MAINTENANCE_DEADLINE_SECS ?= 86400
+MAINTENANCE_AWAIT_TIMEOUT_SECS ?= 86400
+MAINTENANCE_STREAM_LIVENESS_SECS ?= 86400
+MAINTENANCE_STREAM_BATCH_MS ?= 5000
+MAINTENANCE_RETRY_MAX_TRANSPORT ?= 720
+MAINTENANCE_RETRY_MAX_RESAMPLE ?= 32
 
 .DEFAULT_GOAL := help
 
@@ -102,6 +128,19 @@ help:
 	@echo "    REVIEW_TOP_P=N            Set the provider nucleus-sampling threshold"
 	@echo "    REVIEW_STREAM_BATCH_MS=N  Batch live token persistence writes"
 	@echo
+	@echo "Maintenance:"
+	@echo "  make maintain              Audit MAINTENANCE_ROOT and emit small cleanup work packages"
+	@echo "    MAINTENANCE_PROMPT='...'  Override the maintenance focus"
+	@echo "    MAINTENANCE_AREAS=auto    Let recon choose the area count"
+	@echo "    MAINTENANCE_MIN_AREAS=5   Set the automatic lower bound"
+	@echo "    MAINTENANCE_MAX_AREAS=10  Set the automatic upper bound"
+	@echo "    MAINTENANCE_HISTORY_DEPTH=250  Set first-parent history depth"
+	@echo "    MAINTENANCE_PR_BASE=main  Set the base branch for the final PR"
+	@echo "    MAINTENANCE_WORKTREE_PARENT=DIR  Root newly executed sibling worktrees here"
+	@echo "    MAINTENANCE_WORKTREE_PATH=DIR  Override the exact new sibling worktree path"
+	@echo "    MAINTENANCE_BRANCH=BRANCH  Override the exact new maintenance branch"
+	@echo "    MAINTENANCE_KEEP_HOME=1   Keep the generated runtime home"
+	@echo
 	@echo "Worktrees:"
 	@echo "  make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]"
 	@echo "                             Create a worktree with target/ and proofs/.lake"
@@ -159,6 +198,54 @@ review:
 		--http-port "$(REVIEW_PORT)" \
 		$(if $(REVIEW_JOB_ID),--job-id "$(REVIEW_JOB_ID)",) \
 		$(if $(REVIEW_KEEP_HOME),--keep-home,)
+
+.PHONY: maintain
+maintain:
+	@test -d "$(MAINTENANCE_ROOT)" || { echo "MAINTENANCE_ROOT is not a directory: $(MAINTENANCE_ROOT)" >&2; exit 2; }
+	@test -d "$(MAINTENANCE_WORKTREE_PARENT)" || { echo "MAINTENANCE_WORKTREE_PARENT is not a directory: $(MAINTENANCE_WORKTREE_PARENT)" >&2; exit 2; }
+	@case "$(MAINTENANCE_AREAS)" in auto) ;; ''|*[!0-9]*) echo "MAINTENANCE_AREAS must be auto or a positive integer: $(MAINTENANCE_AREAS)" >&2; exit 2;; *) test "$(MAINTENANCE_AREAS)" -gt 0 || { echo "MAINTENANCE_AREAS must be greater than zero" >&2; exit 2; };; esac
+	@case "$(MAINTENANCE_MIN_AREAS)" in ''|*[!0-9]*) echo "MAINTENANCE_MIN_AREAS must be a positive integer: $(MAINTENANCE_MIN_AREAS)" >&2; exit 2;; esac
+	@case "$(MAINTENANCE_MAX_AREAS)" in ''|*[!0-9]*) echo "MAINTENANCE_MAX_AREAS must be a positive integer: $(MAINTENANCE_MAX_AREAS)" >&2; exit 2;; esac
+	@case "$(MAINTENANCE_HISTORY_DEPTH)" in ''|*[!0-9]*) echo "MAINTENANCE_HISTORY_DEPTH must be a positive integer: $(MAINTENANCE_HISTORY_DEPTH)" >&2; exit 2;; esac
+	@test "$(MAINTENANCE_MIN_AREAS)" -ge 5 && test "$(MAINTENANCE_MAX_AREAS)" -ge "$(MAINTENANCE_MIN_AREAS)" || { echo "maintenance area bounds must satisfy 5 <= MAINTENANCE_MIN_AREAS <= MAINTENANCE_MAX_AREAS" >&2; exit 2; }
+	@if test "$(MAINTENANCE_AREAS)" != auto; then test "$(MAINTENANCE_AREAS)" -ge 5 && test "$(MAINTENANCE_AREAS)" -le "$(MAINTENANCE_MAX_AREAS)" || { echo "MAINTENANCE_AREAS must satisfy 5 <= MAINTENANCE_AREAS <= MAINTENANCE_MAX_AREAS" >&2; exit 2; }; fi
+	@test "$(MAINTENANCE_HISTORY_DEPTH)" -gt 0 || { echo "MAINTENANCE_HISTORY_DEPTH must be greater than zero" >&2; exit 2; }
+	@cd "$(MAINTENANCE_ROOT)" && git rev-parse --verify "$(MAINTENANCE_HEAD)^{commit}" >/dev/null || { echo "MAINTENANCE_HEAD is not a commit: $(MAINTENANCE_HEAD)" >&2; exit 2; }
+	@command -v rust-analyzer >/dev/null 2>&1 || echo "warning: rust-analyzer not found on PATH; maintenance will fall back to file/search tools" >&2
+	@maintenance_job_id="$(MAINTENANCE_JOB_ID)"; \
+	if test -z "$$maintenance_job_id"; then maintenance_job_id="maintenance-$$(date -u +%Y%m%dT%H%M%SZ)-$$$$"; fi; \
+	maintenance_worktree_path="$(MAINTENANCE_WORKTREE_PATH)"; \
+	if test -z "$$maintenance_worktree_path"; then maintenance_worktree_path="$(abspath $(MAINTENANCE_WORKTREE_PARENT))/gents-$$maintenance_job_id"; fi; \
+	maintenance_branch="$(MAINTENANCE_BRANCH)"; \
+	if test -z "$$maintenance_branch"; then maintenance_branch="agent/$$maintenance_job_id"; fi; \
+	test "$$(dirname "$$maintenance_worktree_path")" = "$(abspath $(MAINTENANCE_WORKTREE_PARENT))" || { echo "MAINTENANCE_WORKTREE_PATH must be a direct child of MAINTENANCE_WORKTREE_PARENT: $$maintenance_worktree_path" >&2; exit 2; }; \
+	GENTS_MAINTENANCE_ROOT="$(abspath $(MAINTENANCE_ROOT))" \
+	GENTS_MAINTENANCE_WORKTREE_PARENT="$(abspath $(MAINTENANCE_WORKTREE_PARENT))" \
+	GENTS_MAINTENANCE_WORKTREE_PATH="$$maintenance_worktree_path" \
+	GENTS_MAINTENANCE_BRANCH="$$maintenance_branch" \
+	GENTS_MAINTENANCE_HEAD_REF="$(MAINTENANCE_HEAD)" \
+	GENTS_MAINTENANCE_PR_BASE="$(MAINTENANCE_PR_BASE)" \
+	GENTS_MAINTENANCE_PROMPT="$(MAINTENANCE_PROMPT)" \
+	GENTS_MAINTENANCE_AREA_COUNT="$(MAINTENANCE_AREAS)" \
+	GENTS_MAINTENANCE_MIN_AREAS="$(MAINTENANCE_MIN_AREAS)" \
+	GENTS_MAINTENANCE_MAX_AREAS="$(MAINTENANCE_MAX_AREAS)" \
+	GENTS_MAINTENANCE_HISTORY_DEPTH="$(MAINTENANCE_HISTORY_DEPTH)" \
+	GENTS_MAINTENANCE_CONTEXT_WINDOW="$(MAINTENANCE_CONTEXT_WINDOW)" \
+	GENTS_MAINTENANCE_MAX_OUTPUT_TOKENS="$(MAINTENANCE_MAX_OUTPUT_TOKENS)" \
+	GENTS_MAINTENANCE_MAX_TURNS="$(MAINTENANCE_MAX_TURNS)" \
+	GENTS_MAINTENANCE_TEMPERATURE="$(MAINTENANCE_TEMPERATURE)" \
+	GENTS_MAINTENANCE_TOP_P="$(MAINTENANCE_TOP_P)" \
+	GENTS_MAINTENANCE_COMPACTION_THRESHOLD="$(MAINTENANCE_COMPACTION_THRESHOLD)" \
+	GENTS_MAINTENANCE_DEADLINE_SECS="$(MAINTENANCE_DEADLINE_SECS)" \
+	GENTS_MAINTENANCE_AWAIT_TIMEOUT_SECS="$(MAINTENANCE_AWAIT_TIMEOUT_SECS)" \
+	GENTS_MAINTENANCE_STREAM_LIVENESS_SECS="$(MAINTENANCE_STREAM_LIVENESS_SECS)" \
+	GENTS_MAINTENANCE_STREAM_BATCH_MS="$(MAINTENANCE_STREAM_BATCH_MS)" \
+	GENTS_MAINTENANCE_RETRY_MAX_TRANSPORT="$(MAINTENANCE_RETRY_MAX_TRANSPORT)" \
+	GENTS_MAINTENANCE_RETRY_MAX_RESAMPLE="$(MAINTENANCE_RETRY_MAX_RESAMPLE)" \
+	$(CARGO) run -p gents-cli -- demo run "$(CURDIR)/demo/repo-maintenance" \
+		--http-port "$(MAINTENANCE_PORT)" \
+		--job-id "$$maintenance_job_id" \
+		$(if $(MAINTENANCE_KEEP_HOME),--keep-home,)
 
 build-cli-headless:
 	$(CARGO) build -p gents-cli --no-default-features

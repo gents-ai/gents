@@ -1,0 +1,27 @@
+{
+  "surface_id": "maintenance-recon-writes",
+  "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
+  "display_name": "Maintenance area writes",
+  "enabled": true,
+  "entries": [{
+    "tool_name": "write_maintenance_area",
+    "collection": "MaintenanceArea",
+    "description": "Create one member of the closed maintenance-area set.",
+    "output_obligation": {"scope": "trigger", "minimum_writes": 1, "expected_count_field": "expected_total"},
+    "fields": [
+      {"name": "run_id", "required": false, "fill": "correlation"},
+      {"name": "area_id", "required": true},
+      {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+      {"name": "worktree_parent", "required": false, "fill": {"source_field": "worktree_parent"}},
+      {"name": "worktree_path", "required": false, "fill": {"source_field": "worktree_path"}},
+      {"name": "suggested_branch", "required": false, "fill": {"source_field": "suggested_branch"}},
+      {"name": "base_ref", "required": true},
+      {"name": "pr_base", "required": false, "fill": {"source_field": "pr_base"}},
+      {"name": "category", "required": true},
+      {"name": "path", "required": true},
+      {"name": "instructions", "required": true},
+      {"name": "baseline", "required": true},
+      {"name": "expected_total", "required": true}
+    ]
+  }]
+}

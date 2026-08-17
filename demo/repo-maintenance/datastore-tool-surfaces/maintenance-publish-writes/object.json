@@ -1,0 +1,26 @@
+{
+  "surface_id": "maintenance-publish-writes",
+  "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
+  "display_name": "Maintenance pull-request result writes",
+  "enabled": true,
+  "entries": [{
+    "tool_name": "write_maintenance_pull_request",
+    "collection": "MaintenancePullRequest",
+    "description": "Record the single terminal draft-PR outcome for a maintenance round.",
+    "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+    "fields": [
+      {"name": "run_id", "required": false, "fill": "correlation"},
+      {"name": "branch", "required": true},
+      {"name": "worktree_path", "required": true},
+      {"name": "status", "required": true},
+      {"name": "url", "required": true},
+      {"name": "title", "required": true},
+      {"name": "commit_count", "required": true},
+      {"name": "review_rounds", "required": true},
+      {"name": "confirmed_review_findings", "required": true},
+      {"name": "ci_status", "required": true},
+      {"name": "validation", "required": true},
+      {"name": "summary", "required": true}
+    ]
+  }]
+}

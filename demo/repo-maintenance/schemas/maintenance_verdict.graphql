@@ -1,0 +1,25 @@
+type MaintenanceVerdict {
+  run_id: String @index @immutable
+  finding_id: String @index(unique: true) @immutable
+  area_id: String
+  repository_path: String @immutable
+  worktree_parent: String @immutable
+  worktree_path: String @immutable
+  suggested_branch: String @immutable
+  base_ref: String @immutable
+  pr_base: String @immutable
+  category: String
+  priority: String
+  confidence: String
+  path: String
+  line: String
+  title: String
+  detail: String
+  verdict: String
+  evidence: String
+  preservation: String
+  validation: String
+  estimated_scope: String
+  existing_issue: String
+  verification: String
+}

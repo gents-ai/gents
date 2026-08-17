@@ -1,0 +1,9 @@
+{
+  "task_id": "maintenance-verify-task",
+  "name": "Verify completed maintenance candidates",
+  "description": null,
+  "behavior_id": "maintenance-verify",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

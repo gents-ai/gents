@@ -1,0 +1,9 @@
+{
+  "task_id": "maintenance-scan-task",
+  "name": "Scan one maintenance area",
+  "description": null,
+  "behavior_id": "maintenance-scan",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}
