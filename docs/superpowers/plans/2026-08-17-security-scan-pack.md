@@ -18,7 +18,7 @@
 - All pack schema fields are `String`-typed (the seed mutation emits strings only).
 - Placeholder DID used in every pack JSON: `did:key:zSecurityScanAgentPlaceholder00000000000000000000000` (runner rebinds with `--bind-agent-did home --force-rebind-concrete-did`).
 - Payload discipline: complete inventory, truncated evidence; every truncation counted in `overflow_count`, never silent.
-- `finding_id` format: `<run_id>:<batch_id>:<finding-slug>`.
+- `finding_id` format: `<batch_id>:<finding-slug>`, where `batch_id` is already `<run_id>:batch-NN` — the run id appears exactly once. Prompts write it as `{{ doc.batch_id }}:<finding-slug>`; never prepend the run id again.
 - Durable verdict vocabulary is exactly `confirmed` | `refuted` (runner bijection contract). deepsec's `true-positive | false-positive | fixed | uncertain | duplicate` word goes in the `verification` text field.
 - Repo rules (CLAUDE.md): `escape_graphql_string()` for anything interpolated into GraphQL; never emit `[]` in a DefraDB mutation; `tracing`, never `println!` (in runtime code — the demo runner already uses `println!` for operator output, keep matching `pack.rs` local style); gate with `cargo test -p gents` and `cargo check --workspace --all-targets`.
 - Commit after every task; never mix the pre-existing bound-query work into pack commits.
@@ -35,7 +35,7 @@ The working tree on `agent/security-scan-pack` already contains the verified bou
 - [ ] **Step 1: Confirm the pending set is exactly the bound-query work**
 
 Run: `git status --short`
-Expected: the 20 modified files under `crates/gents{,-cli,-schemas}` plus new `crates/gents/src/defra_query/bounded.rs` and `crates/gents/src/document_config/surface_tool.rs`, plus `docs/superpowers/specs/2026-08-07-datastore-tool-surface-design.md` (the security-scan spec is already committed). Nothing else. If anything else is dirty, stop and ask.
+Expected: modified/new files under `crates/gents{,-cli,-schemas}` belonging to the bound-query feature (notably new `crates/gents/src/defra_query/bounded.rs` and `crates/gents/src/document_config/surface_tool.rs`) plus `docs/superpowers/specs/2026-08-07-datastore-tool-surface-design.md`. The exact list may drift — judge by content, not count: everything dirty must be part of the bound-query work. If anything unrelated is dirty, stop and ask.
 
 - [ ] **Step 2: Run the verification gates**
 
@@ -821,7 +821,8 @@ type ScanReport {
     {
       "tool_name": "write_investigation_batch",
       "collection": "InvestigationBatch",
-      "description": "Create one self-contained investigation batch assignment.",
+      "description": "Create one member of the closed investigation-batch set.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1, "expected_count_field": "expected_total"},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "batch_id", "required": true},
@@ -1348,7 +1349,8 @@ this run (the run filter is applied automatically). For each candidate,
 in order:
 
 1. Re-read the cited `path:line` and its enclosing function, impl, or
-   module at `{{ group.docs.0.scan_root }}`, plus relevant callers.
+   module, plus relevant callers. Your file tools are already rooted at
+   the scanned tree.
 2. Check for mitigations the investigator may have missed: escaping,
    guards wrapping the handler directly, trusted-only data paths.
 3. Consult git history — was this already fixed after the pre-scan?
@@ -1374,7 +1376,7 @@ must balance exactly), and a short `summary`. Do not supply `run_id`;
 it is runtime-filled.
 ```
 
-Note: if `{{ group.docs.0.scan_root }}` is not supported by the template engine, drop that reference and rely on the sentinel data in `{{ group.docs }}` — verify during the live run; the file-tool root already pins the tree.
+The prompt uses only `{{ group.* }}` variables that code-review's verify stage already exercises — no array indexing into `group.docs` (the sentinel rows carry no `scan_root`, and the template parser would not accept a numeric segment anyway).
 
 - [ ] **Step 7: Write `scan-report/system_prompt.md`**
 
