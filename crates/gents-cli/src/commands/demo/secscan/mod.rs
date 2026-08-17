@@ -8,9 +8,9 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
-mod matchers;
+pub(crate) mod matchers;
 
-use matchers::{registry, NoiseTier};
+pub(crate) use matchers::{registry, NoiseTier};
 
 #[derive(Debug, Clone)]
 pub(crate) struct CandidateMatch {
