@@ -3359,6 +3359,7 @@ dependencies = [
  "gents-protocol",
  "hostname",
  "identity",
+ "ignore",
  "iroh",
  "jsonschema",
  "opentelemetry",
