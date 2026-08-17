@@ -51,22 +51,9 @@ type LeanClientShellCase = {
   frontend_expected_turn_state: TurnState | null;
 };
 
-type LeanLiveOverlayCase = {
-  name: string;
-  responseStatus: "streaming" | "complete" | "error";
-  materialized: boolean;
-  precedingToolCalls: number;
-  turnTerminal: boolean;
-  turnLabel: string;
-  hasContent: boolean;
-  hasReasoning: boolean;
-  expectOverlay: boolean;
-};
-
 type LeanContractSnapshot = {
   frontend_client_shell_case_count: number;
   frontend_client_shell_cases: LeanClientShellCase[];
-  live_overlay_cases: LeanLiveOverlayCase[];
 };
 
 let leanContractSnapshot: LeanContractSnapshot | null = null;
@@ -148,10 +135,6 @@ function loadLeanContractSnapshot(): LeanContractSnapshot {
 
 function loadLeanClientShellCases() {
   return loadLeanContractSnapshot().frontend_client_shell_cases;
-}
-
-function loadLeanLiveOverlayCases() {
-  return loadLeanContractSnapshot().live_overlay_cases;
 }
 
 function runLeanCommand(proofsDir: string, args: string[]) {
