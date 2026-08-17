@@ -14,7 +14,7 @@ use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::query::load_full_snapshot_with_peer_records;
 use super::super::schema::{
-    branchable_collection_names, ensure_runtime_schemas, subscribe_all_collections,
+    ensure_runtime_schemas, index_collection_names, subscribe_all_collections,
     subscribed_collection_names,
 };
 use super::bearer_pairing::{
@@ -31,7 +31,6 @@ use super::{
     ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, BOOTSTRAP_OPERATION_BACKOFF,
     BOOTSTRAP_OPERATION_TIMEOUT,
 };
-pub(super) const BRANCHABLE_PAIR_SYNC_ENV: &str = "GENTS_DESKTOP_SYNC_BRANCHABLE_ON_PAIR";
 
 impl ClientCore {
     pub async fn start() -> Result<Self> {
@@ -237,42 +236,7 @@ pub(super) async fn bootstrap_saved_peers(
 
                 if options.install_replicators_on_bootstrap && !is_bearer_peer(record) {
                     match configure_local_runtime_pairing(node, p2p, actor, record).await {
-                        Ok(()) => {
-                            if branchable_pair_sync_enabled() {
-                                match sync_branchable_collections_with_retry(
-                                    node,
-                                    p2p,
-                                    &record.label,
-                                    BOOTSTRAP_OPERATION_TIMEOUT,
-                                )
-                                .await
-                                {
-                                    Ok(synced) => {
-                                        tracing::info!(
-                                            target: "gents_desktop_core::peer",
-                                            label = %record.label,
-                                            synced_collections = ?synced,
-                                            "desktop requested branchable collection sync after pairing"
-                                        );
-                                    }
-                                    Err(error) => {
-                                        let message = format!(
-                                            "peer {} branchable sync failed: {}",
-                                            record.label, error
-                                        );
-                                        status.last_error = Some(message.clone());
-                                        errors.push(message);
-                                    }
-                                }
-                            } else {
-                                tracing::debug!(
-                                    target: "gents_desktop_core::peer",
-                                    label = %record.label,
-                                    env = BRANCHABLE_PAIR_SYNC_ENV,
-                                    "skipping opt-in branchable collection sync after pairing"
-                                );
-                            }
-                        }
+                        Ok(()) => {}
                         Err(error) => {
                             let message = format!(
                                 "peer {} local runtime pairing failed: {}",
@@ -292,6 +256,25 @@ pub(super) async fn bootstrap_saved_peers(
         }
 
         statuses.push(status);
+    }
+
+    if options.install_replicators_on_bootstrap
+        && statuses.iter().any(|status| status.dial_succeeded)
+    {
+        match sync_index_collections_with_retry(node, p2p, BOOTSTRAP_OPERATION_TIMEOUT).await {
+            Ok(synced) => {
+                tracing::info!(
+                    target: "gents_desktop_core::peer",
+                    synced_collections = ?synced,
+                    "session index sync complete"
+                );
+            }
+            Err(error) => {
+                let message = format!("session index sync failed: {error}");
+                tracing::warn!(target: "gents_desktop_core::peer", %message);
+                errors.push(message);
+            }
+        }
     }
 
     (statuses, errors)
@@ -315,6 +298,7 @@ pub(super) async fn write_peer_pairing_desired(
     requester_did: &str,
     requester_addr: &str,
 ) -> Result<()> {
+    use gents::agent::p2p_reconcile::templates::MACHINE_TEMPLATE;
     use gents_protocol::graphql::escape_graphql_string;
 
     let peer_id = escape_graphql_string(&record.peer_id);
@@ -322,11 +306,7 @@ pub(super) async fn write_peer_pairing_desired(
     // replicator address therefore describe this requester, not the remote
     // deployment represented by `record`.
     let agent_did = escape_graphql_string(requester_did);
-    let collections = subscribed_collection_names()
-        .iter()
-        .map(|s| format!(r#""{}""#, escape_graphql_string(s)))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let template = escape_graphql_string(MACHINE_TEMPLATE);
     let replicator_addr = escape_graphql_string(requester_addr);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now = escape_graphql_string(&now);
@@ -364,7 +344,8 @@ pub(super) async fn write_peer_pairing_desired(
             r#"mutation {{ update_PeerPairingDesired(
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                 input: {{
-                    collections: [{collections}],
+                    collections: null,
+                    template: "{template}",
                     replicator_addresses: ["{replicator_addr}"],
                     agent_did: "{agent_did}",
                     created_at: "{created_at}",
@@ -378,7 +359,8 @@ pub(super) async fn write_peer_pairing_desired(
             r#"mutation {{ create_PeerPairingDesired(input: {{
                 peer_id: "{peer_id}",
                 agent_did: "{agent_did}",
-                collections: [{collections}],
+                collections: null,
+                template: "{template}",
                 replicator_addresses: ["{replicator_addr}"],
                 profiles: null,
                 created_at: "{now}",
@@ -527,61 +509,53 @@ pub(super) async fn add_replicator_with_retry_until(
     }
 }
 
-pub(super) async fn sync_branchable_collections_with_retry(
+pub(super) async fn sync_index_collections_with_retry(
     node: &EmbeddedNode,
     p2p: &Arc<dyn P2POps>,
-    label: &str,
     timeout: Duration,
 ) -> Result<Vec<String>> {
     let deadline = Instant::now() + timeout;
-    let mut synced = Vec::new();
-    for collection_name in branchable_collection_names() {
-        let collection_id = node
+    let [conversation_name, session_name] = index_collection_names();
+    let resolve_id = |collection_name| -> Result<String> {
+        let collection = node
             .get_collection(collection_name)
             .map_err(|error| {
                 anyhow::anyhow!("loading collection id for {collection_name}: {error}")
             })?
-            .ok_or_else(|| anyhow::anyhow!("collection {collection_name} not found"))?
-            .collection_id;
+            .ok_or_else(|| anyhow::anyhow!("collection {collection_name} not found"))?;
+        Ok(collection.collection_id)
+    };
+    let conversation_id = resolve_id(conversation_name)?;
+    let session_id = resolve_id(session_name)?;
 
-        loop {
-            match p2p_sync_branchable_collection(p2p, &collection_id).await {
-                Ok(()) => {
-                    synced.push(collection_name.to_string());
-                    break;
+    tokio::try_join!(
+        sync_index_collection_with_retry(p2p, conversation_name, &conversation_id, deadline),
+        sync_index_collection_with_retry(p2p, session_name, &session_id, deadline),
+    )?;
+
+    Ok(vec![
+        conversation_name.to_string(),
+        session_name.to_string(),
+    ])
+}
+
+async fn sync_index_collection_with_retry(
+    p2p: &Arc<dyn P2POps>,
+    collection_name: &str,
+    collection_id: &str,
+    deadline: Instant,
+) -> Result<()> {
+    loop {
+        match p2p_sync_branchable_collection(p2p, collection_id).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                if Instant::now() >= deadline {
+                    anyhow::bail!("timed out syncing index collection {collection_name}: {error}");
                 }
-                Err(error) => {
-                    if Instant::now() >= deadline {
-                        anyhow::bail!(
-                            "timed out syncing branchable collection {collection_name} for peer {label}: {error}"
-                        );
-                    }
-                    sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
-                }
+                sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
             }
         }
     }
-    Ok(synced)
-}
-
-pub(super) fn branchable_pair_sync_enabled() -> bool {
-    env_flag_enabled(BRANCHABLE_PAIR_SYNC_ENV)
-}
-
-fn env_flag_enabled(name: &str) -> bool {
-    let Ok(value) = std::env::var(name) else {
-        return false;
-    };
-    env_flag_value(Some(&value)).unwrap_or(false)
-}
-
-fn env_flag_value(value: Option<&str>) -> Option<bool> {
-    let value = value?;
-    let value = value.trim().to_ascii_lowercase();
-    if value.is_empty() {
-        return None;
-    }
-    Some(matches!(value.as_str(), "1" | "true" | "yes" | "on"))
 }
 
 pub(super) async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {

@@ -20,9 +20,8 @@ use super::super::query::load_chat_patch;
 use super::super::schema::subscribed_collection_names;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::{
-    add_replicator_with_retry_until, branchable_pair_sync_enabled, connect_peer_with_retry_until,
-    is_connected_peer, normalize_required, sync_branchable_collections_with_retry,
-    BRANCHABLE_PAIR_SYNC_ENV,
+    add_replicator_with_retry_until, connect_peer_with_retry_until, is_connected_peer,
+    normalize_required, sync_index_collections_with_retry,
 };
 use super::p2p_ops;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
@@ -1265,11 +1264,10 @@ impl ClientCore {
         .await
         {
             Ok(()) => {
-                if branchable_pair_sync_enabled() {
-                    match sync_branchable_collections_with_retry(
+                if connected {
+                    match sync_index_collections_with_retry(
                         self.node.as_ref(),
                         &self.p2p,
-                        &record.label,
                         PEER_ADD_OPERATION_TIMEOUT,
                     )
                     .await
@@ -1280,26 +1278,16 @@ impl ClientCore {
                                 peer_id = %record.peer_id,
                                 label = %record.label,
                                 synced_collections = ?synced,
-                                "desktop requested branchable collection sync after peer add"
+                                "session index sync complete after peer add"
                             );
                         }
                         Err(error) => {
                             append_warning(
                                 &mut warning,
-                                format!(
-                                    "deployment paired but existing branchable sync failed: {error}"
-                                ),
+                                format!("deployment paired but session index sync failed: {error}"),
                             );
                         }
                     }
-                } else {
-                    tracing::debug!(
-                        target: "gents_desktop_core::peer",
-                        peer_id = %record.peer_id,
-                        label = %record.label,
-                        env = BRANCHABLE_PAIR_SYNC_ENV,
-                        "skipping opt-in branchable collection sync after peer add"
-                    );
                 }
             }
             Err(error) => {

@@ -155,15 +155,19 @@ theorem conversation_readiness_crossing_is_claimant_scoped (peerDid localDid : D
 theorem machine_filter_eq (peerDid homeDid : Did) :
     scopeFilter machineTemplate.scope [] peerDid homeDid =
       scopeFilter conversationTemplate.scope [] peerDid homeDid ++
-        [ { collection := "AgentDirectoryEntry"
+        [ { collection := "PersonaConfigRequest"
+          , field := "requester_did"
+          , value := peerDid }
+        , { collection := "AgentDirectoryEntry"
           , field := "source_did"
           , value := homeDid } ] := by
   simp [scopeFilter, machineTemplate, machineRules, conversationTemplate]
 
-theorem machine_filters_transcript_and_directory (peerDid homeDid : Did) :
+theorem machine_filters_transcript_persona_and_directory (peerDid homeDid : Did) :
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
-      = (conversationTranscriptCollections ++ ["AgentDirectoryEntry"]).toFinset := by
+      = (conversationTranscriptCollections ++
+          ["PersonaConfigRequest", "AgentDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
     conversationRules, conversationCollections, conversationTranscriptCollections]
 
@@ -243,6 +247,24 @@ theorem appCollections_collections_empty :
 
 theorem appCollections_unscoped_no_filter (collections : List String) (peerDid localDid : Did) :
     scopeFilter appCollectionsTemplate.scope collections peerDid localDid = [] := rfl
+
+theorem clientIndex_in_catalog :
+    resolveTemplate builtinCatalog "client-index" = some clientIndexTemplate := by
+  decide
+
+theorem clientIndex_filter_eq (peerDid localDid : Did) :
+    scopeFilter (.perCollection clientIndexRules) [] peerDid localDid
+      = [ { collection := "AgentConversation", field := "requester_did", value := peerDid }
+        , { collection := "AgentSession",      field := "requester_did", value := peerDid } ] := by
+  simp [scopeFilter, clientIndexRules]
+
+theorem clientIndex_filters_requester_lineage (peerDid localDid : Did) :
+    (scopeFilter clientIndexTemplate.scope [] peerDid localDid).all
+      (fun k => k.value = peerDid ∧ k.field = "requester_did") = true := by
+  simp [scopeFilter, clientIndexTemplate, clientIndexRules]
+
+theorem clientIndex_covers_exactly_index_collections :
+    clientIndexTemplate.collections = clientIndexCollections.toFinset := rfl
 
 theorem subagent_filter_values_local_or_peer
     (rules : List CollectionRule) (peerDid localDid : Did)

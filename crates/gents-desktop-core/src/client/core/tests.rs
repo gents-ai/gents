@@ -27,6 +27,7 @@ struct RecordingP2P {
     connected_peers_error: StdRwLock<Option<String>>,
     connect_calls: StdRwLock<Vec<String>>,
     add_replicator_calls: StdRwLock<Vec<String>>,
+    sync_branchable_calls: StdRwLock<Vec<String>>,
     cleanup_calls: StdRwLock<Vec<String>>,
     replicators: StdRwLock<Vec<ReplicatorInfo>>,
     replicators_error: StdRwLock<Option<String>>,
@@ -91,6 +92,13 @@ impl RecordingP2P {
         self.add_replicator_calls
             .read()
             .expect("add replicator calls lock poisoned")
+            .clone()
+    }
+
+    fn sync_branchable_calls(&self) -> Vec<String> {
+        self.sync_branchable_calls
+            .read()
+            .expect("sync branchable calls lock poisoned")
             .clone()
     }
 
@@ -266,13 +274,58 @@ impl P2POps for RecordingP2P {
         Ok(())
     }
 
-    async fn sync_branchable_collection(&self, _collection_id: &str) -> P2PResult<()> {
+    async fn sync_branchable_collection(&self, collection_id: &str) -> P2PResult<()> {
+        self.sync_branchable_calls
+            .write()
+            .expect("sync branchable calls lock poisoned")
+            .push(collection_id.to_string());
         Ok(())
     }
 
     async fn sync_collection_versions(&self, _version_ids: Vec<String>) -> P2PResult<()> {
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn index_sync_requests_exactly_the_session_index() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().to_path_buf()),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let recording = Arc::new(RecordingP2P::default());
+    let p2p: Arc<dyn P2POps> = recording.clone();
+
+    let synced = super::bootstrap::sync_index_collections_with_retry(
+        core.node(),
+        &p2p,
+        Duration::from_secs(1),
+    )
+    .await
+    .expect("sync index");
+    assert_eq!(synced, ["AgentConversation", "AgentSession"]);
+
+    let mut expected = crate::client::schema::index_collection_names()
+        .into_iter()
+        .map(|name| {
+            core.node()
+                .get_collection(name)
+                .expect("get collection")
+                .expect("collection exists")
+                .collection_id
+        })
+        .collect::<Vec<_>>();
+    let mut actual = recording.sync_branchable_calls();
+    expected.sort();
+    actual.sort();
+    assert_eq!(actual, expected);
+
+    core.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -328,6 +381,14 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
     )
     .await
     .expect("save pairing desired fixture");
+    super::bootstrap::write_peer_pairing_desired(
+        core.node(),
+        &record,
+        "did:key:desktop-requester",
+        "endpoint-requester-ticket-updated",
+    )
+    .await
+    .expect("update pairing desired fixture");
 
     let error = core
         .remove_peer(&record.peer_id)
@@ -352,17 +413,18 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
     let response = core
         .node()
         .execute(&format!(
-            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID agent_did replicator_addresses }} }}"#
+            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID agent_did collections template replicator_addresses }} }}"#
         ))
         .await;
     assert!(!response.has_errors());
-    let row = response
+    let rows = response
         .data
         .as_ref()
         .and_then(|data| data.get("PeerPairingDesired"))
         .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .expect("saved pairing desired row");
+        .expect("saved pairing desired rows");
+    assert_eq!(rows.len(), 1, "writer must update the existing row");
+    let row = rows.first().expect("saved pairing desired row");
     assert_eq!(
         row.get("agent_did").and_then(serde_json::Value::as_str),
         Some("did:key:desktop-requester")
@@ -372,7 +434,14 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
             .and_then(serde_json::Value::as_array)
             .and_then(|addresses| addresses.first())
             .and_then(serde_json::Value::as_str),
-        Some("endpoint-requester-ticket")
+        Some("endpoint-requester-ticket-updated")
+    );
+    assert!(row
+        .get("collections")
+        .is_some_and(serde_json::Value::is_null));
+    assert_eq!(
+        row.get("template").and_then(serde_json::Value::as_str),
+        Some("machine")
     );
 
     core.shutdown().await.expect("shutdown");

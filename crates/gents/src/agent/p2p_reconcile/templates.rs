@@ -191,6 +191,23 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
     },
 ];
 
+/// Requester-scoped session-index grant. Complete historical index hydration
+/// is handled separately by the desktop's node-global branchable pull.
+const CLIENT_INDEX_COLLECTIONS: &[&str] = &["AgentConversation", "AgentSession"];
+
+const CLIENT_INDEX_RULES: &[CollectionRule] = &[
+    CollectionRule {
+        collection: "AgentConversation",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentSession",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+];
+
 /// The fleet-discovery directory collection replicated by the `machine`
 /// template (issue #714). Registered in `gents-schemas`; named here as a
 /// literal because the catalog is deliberately dependency-free strings.
@@ -367,6 +384,7 @@ pub const SUBAGENT_COORDINATOR_TEMPLATE: &str = "subagent-coordinator";
 pub const SUBAGENT_HOST_TEMPLATE: &str = "subagent-host";
 pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
 pub const MACHINE_TEMPLATE: &str = "machine";
+pub const CLIENT_INDEX_TEMPLATE: &str = "client-index";
 
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
@@ -423,6 +441,12 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
         collections: &[],
         scope: Scope::Unscoped,
         delivery: Delivery::Replicate,
+    },
+    ScopeTemplate {
+        id: CLIENT_INDEX_TEMPLATE,
+        collections: CLIENT_INDEX_COLLECTIONS,
+        scope: Scope::PerCollection(CLIENT_INDEX_RULES),
+        delivery: Delivery::Push,
     },
 ];
 
@@ -580,8 +604,26 @@ mod tests {
     }
 
     #[test]
-    fn builtin_template_count_is_nine() {
-        assert_eq!(builtin_templates().len(), 9);
+    fn builtin_template_count_is_ten() {
+        assert_eq!(builtin_templates().len(), 10);
+    }
+
+    #[test]
+    fn client_index_is_requester_scoped_push_of_the_session_index() {
+        let t = resolve_template(CLIENT_INDEX_TEMPLATE).unwrap();
+        assert_eq!(t.delivery, Delivery::Push);
+        assert!(matches!(t.scope, Scope::PerCollection(_)));
+        assert_eq!(t.collections, &["AgentConversation", "AgentSession"]);
+
+        let filter = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:home");
+        assert_eq!(filter.len(), 2);
+        for collection in CLIENT_INDEX_COLLECTIONS {
+            let predicate = filter
+                .get(*collection)
+                .expect("indexed collection is filtered");
+            assert_eq!(predicate.field, "requester_did");
+            assert_eq!(predicate.value, "did:key:phone");
+        }
     }
 
     #[test]

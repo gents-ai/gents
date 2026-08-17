@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents_protocol::schemas::{
-    ALL_COLLECTION_NAMES, BRANCHABLE_COLLECTION_NAMES, RUNTIME_COLLECTION_NAMES,
-};
+use gents_protocol::schemas::{ALL_COLLECTION_NAMES, RUNTIME_COLLECTION_NAMES};
 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     gents_migration::ensure_migrations(node)
@@ -58,8 +56,9 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
         .collect()
 }
 
-pub fn branchable_collection_names() -> Vec<&'static str> {
-    BRANCHABLE_COLLECTION_NAMES.to_vec()
+/// The lightweight session index eagerly hydrated by paired clients.
+pub fn index_collection_names() -> [&'static str; 2] {
+    ["AgentConversation", "AgentSession"]
 }
 
 #[cfg(test)]
@@ -82,5 +81,17 @@ mod tests {
             names.iter().any(|name| *name == "AgentRequest"),
             "the exclusion must not have emptied the set: {names:?}"
         );
+    }
+
+    #[test]
+    fn index_collections_are_the_session_index_and_are_branchable() {
+        let index = super::index_collection_names();
+        assert_eq!(index, ["AgentConversation", "AgentSession"]);
+        for name in index {
+            assert!(
+                gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&name),
+                "{name} must be branchable for DAG sync"
+            );
+        }
     }
 }
