@@ -736,6 +736,7 @@ impl DefraSessionHook {
             "name": spec.target_name,
             "agent_did": target_agent_did.clone(),
             "behavior_id": spec.behavior_id,
+            "workflow_task_id": spec.task_id.clone(),
             "prompt": spec.prompt,
             "deadline": serde_json::Value::Null,
             "parent_subagent_depth": parent_context.subagent_depth,

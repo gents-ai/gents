@@ -128,6 +128,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     #[serde(default)]
+    pub(crate) descendant_graph_cases: Vec<LeanDescendantGraphCase>,
+    #[serde(default)]
     pub(crate) r5_cross_deployment_cases: Vec<LeanR5CrossDeploymentCase>,
     #[serde(default)]
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
@@ -377,6 +379,8 @@ mod codex_shim;
 mod command_identity_queue;
 #[path = "composed_invariants.rs"]
 mod composed_invariants;
+#[path = "descendant_graph.rs"]
+mod descendant_graph;
 #[path = "durable_reduction.rs"]
 mod durable_reduction;
 #[path = "event_delivery.rs"]
@@ -399,6 +403,7 @@ pub(crate) use client_session::*;
 pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
 pub(crate) use composed_invariants::*;
+pub(crate) use descendant_graph::*;
 pub(crate) use durable_reduction::*;
 pub(crate) use event_delivery::*;
 pub(crate) use prompt_assembly::*;
@@ -763,6 +768,10 @@ pub(crate) fn lean_codex_shim_binding_cases() -> &'static [LeanCodexShimBindingC
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
     &lean_contract_snapshot().r6_backgrounding_cases
+}
+
+pub(crate) fn lean_descendant_graph_cases() -> &'static [LeanDescendantGraphCase] {
+    &lean_contract_snapshot().descendant_graph_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {

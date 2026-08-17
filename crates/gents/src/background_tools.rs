@@ -7,13 +7,18 @@ mod transcript_render;
 use std::collections::{HashMap, HashSet};
 
 use crate::llm::message::{AssistantContent, Message, Text, UserContent};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::transcript::{decode_persisted_message, present_persisted_message};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::descendant_graph::{
+    resolve_descendant_edge, resolve_descendant_graph, resolve_descendant_root_request_id,
+    DescendantGraphAccess, DescendantQuery,
+};
+pub use crate::descendant_graph::{AWAITING_CHILD_MATERIALIZATION, PENDING_CHILD_AUTHORIZATION};
 use crate::document_config::SubagentTarget;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::lifecycle::queue::{
@@ -35,16 +40,6 @@ use self::r4c_args::{
 use self::transcript_render::{
     render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
 };
-
-/// #593: projected status served by `list_subagents`/`read_subagent` for a
-/// background spawn bridge whose child `AgentRequest` has not materialized
-/// yet (spawn convergence #377 creates the child asynchronously via
-/// `SubagentSource`; a cross-deployment child appears only after the owning
-/// peer claims and replicates it). This is a read-side projection of
-/// (bridge `await_mode = background` ∧ bridge non-terminal ∧ child row
-/// absent) — it is never persisted as a bridge `lifecycle_state`. Pinned by
-/// the Lean witness `r4c.list_subagents.unmaterialized_child_visible`.
-pub const AWAITING_CHILD_MATERIALIZATION: &str = "awaiting_child_materialization";
 
 /// Immutable identity boundary used by `list_processes`, `read_process`,
 /// `wait_process`, and `cancel_process`. A handle is usable on a later request
@@ -280,6 +275,8 @@ pub(crate) fn subagent_spawn_denial(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildEdge {
+    pub parent_request_id: String,
+    pub parent_session_id: String,
     pub parent_tool_call_id: String,
     pub child_request_id: String,
     pub child_session_id: String,
@@ -290,6 +287,26 @@ pub struct ChildEdge {
     pub behavior_id: String,
     pub await_mode: AwaitMode,
     pub lifecycle_state: String,
+}
+
+impl ChildEdge {
+    pub(crate) fn from_descendant(edge: &crate::DescendantEdge) -> Option<Self> {
+        if !edge.readable() {
+            return None;
+        }
+        Some(Self {
+            parent_request_id: edge.immediate_parent_request_id.clone(),
+            parent_session_id: edge.immediate_parent_session_id.clone(),
+            parent_tool_call_id: edge.immediate_parent_tool_call_id.clone(),
+            child_request_id: edge.child_request_id.clone(),
+            child_session_id: edge.child_session_id.clone()?,
+            child_agent_did: edge.principal_did.clone()?,
+            behavior_id: edge.behavior_id.clone()?,
+            await_mode: AwaitMode::from_persisted(&edge.await_mode)
+                .unwrap_or(AwaitMode::Foreground),
+            lifecycle_state: edge.lifecycle_state.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -326,28 +343,6 @@ struct ToolSelectionTargetsRow {
 }
 
 pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: i64 = 60;
-
-#[derive(Debug, Deserialize)]
-struct ListSubagentBridgeRow {
-    tool_call_id: String,
-    child_request_id: Option<String>,
-    lifecycle_state: Option<String>,
-    await_mode: Option<String>,
-    started_at: Option<String>,
-    completed_at: Option<String>,
-    unclaimed_deadline_at: Option<String>,
-    /// Raw JSON bridge args — we extract the `name` field here.
-    args: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ListSubagentChildRow {
-    request_id: String,
-    session_id: String,
-    behavior_id: Option<String>,
-    created_at: String,
-    subagent_depth: Option<u32>,
-}
 
 #[derive(Debug, Deserialize)]
 struct ListBackgroundToolRow {
@@ -423,6 +418,7 @@ pub enum SteerSubagentTarget {
     /// explains the bridge state instead of collapsing into not-authorized.
     AwaitingMaterialization {
         message: String,
+        retryable: bool,
     },
     Terminal(String),
 }
@@ -434,174 +430,69 @@ pub async fn handle_list_subagents(
     args: ListSubagentsArgs,
 ) -> Result<ListSubagentsResponse> {
     let limit = args.validated_limit() as usize;
-    let escaped_caller = escape_graphql_string(caller_request_id);
-    let escaped_spawn_tool = escape_graphql_string("spawn_subagent");
-    let bridge_query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    request_id: {{ _eq: "{escaped_caller}" }},
-                    tool_name: {{ _eq: "{escaped_spawn_tool}" }}
-                }},
-                order: {{ started_at: ASC }}
-            ) {{
-                tool_call_id
-                child_request_id
-                lifecycle_state
-                await_mode
-                started_at
-                completed_at
-                unclaimed_deadline_at
-                args
-            }}
-        }}"#
-    );
-    let bridge_response = node.execute(&bridge_query).await;
-    if bridge_response.has_errors() {
-        anyhow::bail!(
-            "list_subagents bridge query failed: {:?}",
-            bridge_response.errors
-        );
-    }
-    let bridges: Vec<ListSubagentBridgeRow> = rows(bridge_response.data.as_ref(), "AgentToolCall")?;
-
-    let child_query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    caused_by_parent_request_id: {{ _eq: "{escaped_caller}" }}
-                }},
-                order: {{ created_at: ASC }}
-            ) {{
-                request_id
-                session_id
-                behavior_id
-                created_at
-                subagent_depth
-            }}
-        }}"#
-    );
-    let child_response = node.execute(&child_query).await;
-    if child_response.has_errors() {
-        anyhow::bail!(
-            "list_subagents child query failed: {:?}",
-            child_response.errors
-        );
-    }
-    let children_by_request =
-        rows::<ListSubagentChildRow>(child_response.data.as_ref(), "AgentRequest")?
-            .into_iter()
-            .map(|row| (row.request_id.clone(), row))
-            .collect::<HashMap<_, _>>();
-
-    let mut entries = Vec::new();
-    for bridge in bridges {
-        if bridge.await_mode.as_deref() != Some("background") {
-            continue;
-        }
-        let Some(child_request_id) = non_empty_string(bridge.child_request_id.as_deref()) else {
-            continue;
-        };
-        let bridge_status = bridge
-            .lifecycle_state
-            .as_deref()
-            .filter(|state| !state.trim().is_empty())
-            .unwrap_or("running");
-
-        // Extract the model-facing `name` (and, for a bridge-level entry, the
-        // resolved `behavior_id`) from the bridge args JSON. The named-target
-        // redesign (#377) always writes both into the bridge args payload;
-        // older or malformed records fall back to empty string.
-        let bridge_args = bridge
-            .args
-            .as_deref()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
-        let bridge_arg = |key: &str| {
-            bridge_args
-                .as_ref()
-                .and_then(|v| v.get(key).and_then(serde_json::Value::as_str))
-                .and_then(|s| non_empty_string(Some(s)))
-                .unwrap_or_default()
-        };
-
-        let entry = match children_by_request.get(&child_request_id) {
-            Some(child) => {
-                if !list_subagent_status_matches(args.status, bridge_status) {
-                    continue;
-                }
-                let created_at = parse_rfc3339(Some(&child.created_at)).ok_or_else(|| {
-                    anyhow!("child AgentRequest {child_request_id} has invalid created_at")
-                })?;
-                let last_update = parse_rfc3339(bridge.completed_at.as_deref())
-                    .or_else(|| parse_rfc3339(bridge.started_at.as_deref()))
-                    .unwrap_or(created_at);
-                ListSubagentsEntry {
-                    child_request_id,
-                    child_session_id: child.session_id.clone(),
-                    name: bridge_arg("name"),
-                    behavior_id: non_empty_string(child.behavior_id.as_deref()).unwrap_or_default(),
-                    deployment_id: local_deployment_id.to_string(),
-                    await_mode: "background".to_string(),
-                    status: bridge_status.to_string(),
-                    created_at,
-                    last_update,
-                    depth: child.subagent_depth.unwrap_or_default(),
-                    diagnostic: None,
-                }
+    let root_request_id =
+        resolve_descendant_root_request_id(DescendantGraphAccess::Local(node), caller_request_id)
+            .await?;
+    let page = resolve_descendant_graph(
+        DescendantGraphAccess::Local(node),
+        &DescendantQuery {
+            root_request_id,
+            scope: args.scope,
+            workflow_group_id: args.workflow_group_id.clone(),
+            after: args.after.clone(),
+            limit: crate::descendant_graph::MAX_DESCENDANT_PAGE_LIMIT,
+            include_terminal: args.status != ListStatusFilter::Running,
+        },
+    )
+    .await?;
+    let mut entries = page
+        .edges
+        .into_iter()
+        .filter(|edge| list_subagent_status_matches(args.status, &edge.lifecycle_state))
+        .map(|edge| {
+            let created_at = parse_rfc3339(edge.created_at.as_deref()).unwrap_or_else(Utc::now);
+            let last_update = parse_rfc3339(edge.updated_at.as_deref()).unwrap_or(created_at);
+            ListSubagentsEntry {
+                root_request_id: edge.root_request_id,
+                immediate_parent_request_id: edge.immediate_parent_request_id,
+                parent_tool_call_id: edge.immediate_parent_tool_call_id,
+                child_request_id: edge.child_request_id,
+                child_session_id: edge.child_session_id.unwrap_or_default(),
+                name: edge.target.unwrap_or_default(),
+                principal_did: edge.principal_did.unwrap_or_default(),
+                behavior_id: edge.behavior_id.unwrap_or_default(),
+                deployment_id: edge
+                    .deployment_id
+                    .unwrap_or_else(|| local_deployment_id.to_string()),
+                await_mode: edge.await_mode,
+                cancel_policy: edge.cancel_policy,
+                status: edge.lifecycle_state,
+                created_at,
+                last_update,
+                depth: u32::try_from(edge.depth).unwrap_or(u32::MAX),
+                materialization_state: edge.materialization_state,
+                workflow_group_id: edge.workflow_group_id,
+                workflow_task_id: edge.workflow_task_id,
+                workflow_role: edge.workflow_role,
+                terminal_result_ref: edge.terminal_result_ref,
+                transcript_cursor: edge.transcript_cursor,
+                authorization_state: edge.authorization_state,
+                control_authority: edge.control_authority,
+                cursor: edge.cursor,
+                diagnostic: edge.diagnostic,
             }
-            None => {
-                // #593: the child `AgentRequest` has not materialized (it is
-                // created asynchronously by the claiming deployment; a
-                // cross-deployment child appears only after replication). A
-                // returned background child id must never disappear from the
-                // control plane, so surface the bridge-level handle with a
-                // projected status instead of dropping it.
-                let status = if bridge_state_is_terminal(bridge_status) {
-                    bridge_status.to_string()
-                } else {
-                    AWAITING_CHILD_MATERIALIZATION.to_string()
-                };
-                if !list_subagent_status_matches(args.status, &status) {
-                    continue;
-                }
-                let created_at = parse_rfc3339(bridge.started_at.as_deref())
-                    .or_else(|| parse_rfc3339(bridge.completed_at.as_deref()))
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "bridge AgentToolCall {} has invalid started_at",
-                            bridge.tool_call_id
-                        )
-                    })?;
-                let last_update =
-                    parse_rfc3339(bridge.completed_at.as_deref()).unwrap_or(created_at);
-                let diagnostic = unmaterialized_child_diagnostic(
-                    &bridge.tool_call_id,
-                    bridge_status,
-                    bridge.unclaimed_deadline_at.as_deref(),
-                );
-                ListSubagentsEntry {
-                    child_request_id,
-                    child_session_id: String::new(),
-                    name: bridge_arg("name"),
-                    behavior_id: bridge_arg("behavior_id"),
-                    deployment_id: local_deployment_id.to_string(),
-                    await_mode: "background".to_string(),
-                    status,
-                    created_at,
-                    last_update,
-                    depth: 0,
-                    diagnostic: Some(diagnostic),
-                }
-            }
-        };
-        entries.push(entry);
-    }
-
-    let truncated = entries.len() > limit;
+        })
+        .collect::<Vec<_>>();
+    let truncated = page.has_more || entries.len() > limit;
     entries.truncate(limit);
+    let next_cursor = truncated
+        .then(|| entries.last().map(|entry| entry.cursor.clone()))
+        .flatten()
+        .or(page.next_cursor);
     Ok(ListSubagentsResponse {
         read_at: Utc::now(),
         truncated,
+        next_cursor,
         entries,
     })
 }
@@ -722,44 +613,35 @@ pub async fn handle_read_subagent(
     args: ReadSubagentArgs,
 ) -> Result<Option<ReadSubagentResponse>> {
     let child_request_id = args.child_request_id.trim();
-    let Some(edge) =
-        load_readable_background_child_edge(node, caller_request_id, child_request_id).await?
+    let root_request_id =
+        resolve_descendant_root_request_id(DescendantGraphAccess::Local(node), caller_request_id)
+            .await?;
+    let Some(canonical_edge) = resolve_descendant_edge(
+        DescendantGraphAccess::Local(node),
+        &root_request_id,
+        child_request_id,
+    )
+    .await?
     else {
-        // #593: distinguish "no such child edge for this caller" from "the
-        // caller owns a background spawn bridge whose child has not
-        // materialized". The bridge-level handle stays readable: an empty
-        // transcript with the projected (never faked-terminal) state.
-        let Some(bridge) = load_spawn_bridge_row(node, caller_request_id, child_request_id).await?
-        else {
-            return Ok(None);
-        };
-        if !bridge.is_background() {
-            return Ok(None);
-        }
-        let terminal = bridge.is_terminal();
-        let lifecycle_state = if terminal {
-            bridge.status().to_string()
-        } else {
-            AWAITING_CHILD_MATERIALIZATION.to_string()
-        };
-        let diagnostic = unmaterialized_child_diagnostic(
-            &bridge.tool_call_id,
-            bridge.status(),
-            bridge.unclaimed_deadline_at.as_deref(),
-        );
+        return Ok(None);
+    };
+    if !canonical_edge.readable() {
         return Ok(Some(ReadSubagentResponse {
-            child_request_id: child_request_id.to_string(),
-            child_session_id: String::new(),
+            edge: canonical_edge.clone(),
+            child_request_id: canonical_edge.child_request_id.clone(),
+            child_session_id: canonical_edge.child_session_id.clone().unwrap_or_default(),
             from_sequence: 0,
             through_sequence: 0,
             next_sequence: 0,
             has_more: false,
-            terminal,
-            lifecycle_state,
-            diagnostic: Some(diagnostic),
+            terminal: canonical_edge.is_terminal(),
+            lifecycle_state: canonical_edge.lifecycle_state.clone(),
+            diagnostic: canonical_edge.diagnostic.clone(),
             transcript: String::new(),
         }));
-    };
+    }
+    let edge = ChildEdge::from_descendant(&canonical_edge)
+        .context("authorized descendant edge lacks materialized child identity")?;
 
     // Project the child's terminal status so the model knows whether to keep
     // polling once it has drained the transcript.
@@ -839,6 +721,7 @@ pub async fn handle_read_subagent(
     );
 
     Ok(Some(ReadSubagentResponse {
+        edge: canonical_edge,
         child_request_id: edge.child_request_id,
         child_session_id: edge.child_session_id,
         from_sequence: rendered.from_sequence,
@@ -850,25 +733,6 @@ pub async fn handle_read_subagent(
         diagnostic: None,
         transcript: rendered.transcript,
     }))
-}
-
-async fn load_readable_background_child_edge(
-    node: &EmbeddedNode,
-    caller_request_id: &str,
-    child_request_id: &str,
-) -> Result<Option<ChildEdge>> {
-    if child_request_id.is_empty() {
-        return Ok(None);
-    }
-    let parent_context = load_parent_subagent_context(node, caller_request_id).await?;
-    match load_authorized_child_edge(node, &parent_context, child_request_id).await {
-        Ok(edge) if edge.await_mode == AwaitMode::Background => Ok(Some(edge)),
-        Ok(_) => Ok(None),
-        Err(error) if authorization_lookup_error(&error, caller_request_id, child_request_id) => {
-            Ok(None)
-        }
-        Err(error) => Err(error),
-    }
 }
 
 /// True for the error class where the child edge could not be RESOLVED for
@@ -1207,31 +1071,46 @@ pub async fn load_steer_subagent_target(
     if child_request_id.trim().is_empty() {
         return Ok(SteerSubagentTarget::NotAuthorized);
     }
-    let parent_context = load_parent_subagent_context(node, caller_request_id).await?;
-    let edge = match load_authorized_child_edge(node, &parent_context, child_request_id).await {
-        Ok(edge) => edge,
-        Err(error) if authorization_lookup_error(&error, caller_request_id, child_request_id) => {
-            // #593: if the caller owns a spawn bridge for this child, the id
-            // is real — report the bridge state instead of not-authorized.
-            let Some(bridge) =
-                load_spawn_bridge_row(node, caller_request_id, child_request_id).await?
-            else {
-                return Ok(SteerSubagentTarget::NotAuthorized);
-            };
-            if !bridge.is_background() {
-                return Ok(SteerSubagentTarget::NotBackgrounded);
-            }
-            if bridge.is_terminal() {
-                return Ok(SteerSubagentTarget::Terminal(bridge.status().to_string()));
-            }
-            let (message, _retryable) = bridge.unmaterialized_child_explanation(child_request_id);
-            return Ok(SteerSubagentTarget::AwaitingMaterialization { message });
-        }
-        Err(error) => return Err(error),
+    let root_request_id =
+        resolve_descendant_root_request_id(DescendantGraphAccess::Local(node), caller_request_id)
+            .await?;
+    let Some(canonical) = resolve_descendant_edge(
+        DescendantGraphAccess::Local(node),
+        &root_request_id,
+        child_request_id,
+    )
+    .await?
+    else {
+        return Ok(SteerSubagentTarget::NotAuthorized);
     };
-    if edge.await_mode != AwaitMode::Background {
+    // Only the immediate owning parent may steer. Keep this structural check
+    // separate from materialization: pending direct edges intentionally do
+    // not have control_authority yet, but still need an accurate bridge-level
+    // diagnostic below.
+    if !canonical.is_direct() {
+        return Ok(SteerSubagentTarget::NotAuthorized);
+    }
+    if canonical.await_mode != AwaitMode::Background.as_str() {
         return Ok(SteerSubagentTarget::NotBackgrounded);
     }
+    if canonical.is_terminal() {
+        return Ok(SteerSubagentTarget::Terminal(
+            canonical.lifecycle_state.clone(),
+        ));
+    }
+    if !canonical.readable() {
+        return Ok(SteerSubagentTarget::AwaitingMaterialization {
+            retryable: canonical.retryable(),
+            message: canonical
+                .diagnostic
+                .unwrap_or_else(|| format!("child request {child_request_id} is not materialized")),
+        });
+    }
+    if !canonical.controllable() {
+        return Ok(SteerSubagentTarget::NotAuthorized);
+    }
+    let edge = ChildEdge::from_descendant(&canonical)
+        .context("authorized descendant edge lacks materialized child identity")?;
     let Some(terminal_row) = load_child_terminal_row(node, &edge.child_request_id).await? else {
         return Ok(SteerSubagentTarget::NotAuthorized);
     };
@@ -1257,17 +1136,17 @@ pub(crate) async fn append_steering_request(
         crate::request_binding::load_agent_request(node, &edge.child_request_id)
             .await?
             .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
-    let caller_request_doc_id =
-        crate::request_binding::require_request_doc_id(node, caller_request_id).await?;
-    if child_request.caused_by_parent_request_id.as_deref() != Some(caller_request_id)
-        || child_request.caused_by_parent_request_doc_id.as_deref()
-            != Some(caller_request_doc_id.as_str())
+    if child_request.caused_by_parent_request_id.as_deref() != Some(edge.parent_request_id.as_str())
     {
         anyhow::bail!(
-            "child AgentRequest {} no longer links to caller request {caller_request_id}",
-            edge.child_request_id
+            "child AgentRequest {} no longer links to owning parent request {}",
+            edge.child_request_id,
+            edge.parent_request_id
         );
     }
+
+    let caller_request_doc_id =
+        crate::request_binding::require_request_doc_id(node, caller_request_id).await?;
 
     child_request.caused_by_parent_request_id = Some(caller_request_id.to_string());
     child_request.caused_by_parent_request_doc_id = Some(caller_request_doc_id);
@@ -1459,10 +1338,14 @@ fn persisted_stream_body(value: &str) -> String {
 
 fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {
     match filter {
-        // #593: the awaiting-materialization projection is non-terminal, so
-        // the default `running` filter must show the handle.
+        // #593: both pending materialization and rejected physical lineage
+        // are owned, nonterminal bridge diagnostics. Keep their handles in
+        // the default view without granting child readability or control.
         ListStatusFilter::Running => {
-            status == "running" || status == AWAITING_CHILD_MATERIALIZATION
+            matches!(
+                status,
+                "running" | AWAITING_CHILD_MATERIALIZATION | PENDING_CHILD_AUTHORIZATION
+            )
         }
         _ => list_status_matches(filter, status),
     }
@@ -1479,35 +1362,16 @@ fn list_status_matches(filter: ListStatusFilter, status: &str) -> bool {
 fn bridge_state_is_terminal(status: &str) -> bool {
     matches!(
         status,
-        "completed" | "failed" | "timedOut" | "cancelled" | "dead" | "interrupted" | "superseded"
+        "completed"
+            | "complete"
+            | "failed"
+            | "error"
+            | "timedOut"
+            | "cancelled"
+            | "dead"
+            | "interrupted"
+            | "superseded"
     )
-}
-
-/// #593: parent-facing explanation for a background spawn bridge whose child
-/// `AgentRequest` row is absent.
-fn unmaterialized_child_diagnostic(
-    tool_call_id: &str,
-    bridge_status: &str,
-    unclaimed_deadline_at: Option<&str>,
-) -> String {
-    if bridge_state_is_terminal(bridge_status) {
-        format!(
-            "spawn bridge {tool_call_id} reached terminal state '{bridge_status}' without a \
-             materialized child request (e.g. no paired deployment claimed the spawn)"
-        )
-    } else {
-        let deadline_clause = unclaimed_deadline_at
-            .filter(|value| !value.trim().is_empty())
-            .map(|deadline| {
-                format!("; the spawn fails as no_peer_claimed_spawn if unclaimed by {deadline}")
-            })
-            .unwrap_or_default();
-        format!(
-            "spawn bridge {tool_call_id} is running but the child request has not materialized \
-             yet (it is created asynchronously by the claiming deployment; a cross-deployment \
-             child appears only after peer replication){deadline_clause}"
-        )
-    }
 }
 
 pub(crate) async fn load_parent_subagent_context(
@@ -1928,32 +1792,6 @@ mod cross_deployment_timeout_tests {
     }
 
     #[test]
-    fn unmaterialized_explanation_is_retryable_until_bridge_terminal() {
-        let running = SpawnBridgeRow {
-            tool_call_id: "tc-running".to_string(),
-            lifecycle_state: Some("running".to_string()),
-            await_mode: Some("background".to_string()),
-            unclaimed_deadline_at: Some("2026-07-01T00:01:00Z".to_string()),
-        };
-        let (message, retryable) = running.unmaterialized_child_explanation("child-1");
-        assert!(retryable, "non-terminal bridge must be retryable");
-        assert!(message.contains("child-1"));
-        assert!(message.contains("tc-running"));
-        assert!(message.contains("no_peer_claimed_spawn"));
-        assert!(message.contains("2026-07-01T00:01:00Z"));
-
-        let failed = SpawnBridgeRow {
-            tool_call_id: "tc-failed".to_string(),
-            lifecycle_state: Some("failed".to_string()),
-            await_mode: Some("background".to_string()),
-            unclaimed_deadline_at: None,
-        };
-        let (message, retryable) = failed.unmaterialized_child_explanation("child-1");
-        assert!(!retryable, "terminal bridge must not be retryable");
-        assert!(message.contains("'failed'"));
-    }
-
-    #[test]
     fn authorization_lookup_error_excludes_child_present_corruption() {
         // Resolution failures (child absent / unlinked) are probe-eligible…
         assert!(authorization_lookup_error(
@@ -1994,6 +1832,18 @@ mod cross_deployment_timeout_tests {
             ListStatusFilter::Terminal,
             AWAITING_CHILD_MATERIALIZATION
         ));
+        assert!(list_subagent_status_matches(
+            ListStatusFilter::Running,
+            PENDING_CHILD_AUTHORIZATION
+        ));
+        assert!(list_subagent_status_matches(
+            ListStatusFilter::All,
+            PENDING_CHILD_AUTHORIZATION
+        ));
+        assert!(!list_subagent_status_matches(
+            ListStatusFilter::Terminal,
+            PENDING_CHILD_AUTHORIZATION
+        ));
         // Unchanged: plain running and terminal bridge states.
         assert!(list_subagent_status_matches(
             ListStatusFilter::Running,
@@ -2010,39 +1860,13 @@ mod cross_deployment_timeout_tests {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ChildRequestEdgeRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    session_id: String,
-    agent_did: Option<String>,
-    behavior_id: Option<String>,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_parent_tool_call_doc_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ParentToolCallEdgeRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    tool_call_id: String,
-    request_id: Option<String>,
-    request_doc_id: Option<String>,
-    lifecycle_state: Option<String>,
-    await_mode: Option<String>,
-    child_request_id: Option<String>,
-}
-
 /// Tolerant variant of [`load_authorized_child_edge`] used by the foreground
 /// subagent wait loop. After the spawn convergence (#377) the child
 /// `AgentRequest` is materialized asynchronously by `SubagentSource` rather than
 /// synchronously by the hook, so the foreground poller can observe the bridge
 /// before the child row exists. This returns `Ok(None)` for the "child not yet
 /// materialized" / not-yet-linked cases (using the same `authorization_lookup_error`
-/// predicate as `load_readable_background_child_edge`) so the caller can back off
+/// authorization lookup predicate) so the caller can back off
 /// and keep polling; all other errors propagate.
 pub(crate) async fn try_load_authorized_child_edge(
     node: &EmbeddedNode,
@@ -2060,232 +1884,39 @@ pub(crate) async fn try_load_authorized_child_edge(
     }
 }
 
-/// #593: the caller-owned spawn bridge pointing at a child request id,
-/// loadable regardless of whether the child `AgentRequest` exists. This is
-/// the durable receipt behind a background spawn: when the child row is
-/// absent, the bridge is what keeps the returned `child_request_id`
-/// observable on the parent control plane.
-#[derive(Debug, Deserialize)]
-pub(crate) struct SpawnBridgeRow {
-    pub(crate) tool_call_id: String,
-    pub(crate) lifecycle_state: Option<String>,
-    pub(crate) await_mode: Option<String>,
-    pub(crate) unclaimed_deadline_at: Option<String>,
-}
-
-impl SpawnBridgeRow {
-    pub(crate) fn status(&self) -> &str {
-        self.lifecycle_state
-            .as_deref()
-            .filter(|state| !state.trim().is_empty())
-            .unwrap_or("running")
-    }
-
-    pub(crate) fn is_terminal(&self) -> bool {
-        bridge_state_is_terminal(self.status())
-    }
-
-    pub(crate) fn is_background(&self) -> bool {
-        self.await_mode.as_deref().map(str::trim) == Some("background")
-    }
-
-    /// Explanation served by `wait_subagent`/`cancel_subagent` for a child
-    /// that has not materialized: `(message, retryable)`. Retryable while the
-    /// bridge is non-terminal (the child may still materialize or the
-    /// unclaimed projection will fail the bridge); not retryable once the
-    /// bridge is terminal.
-    pub(crate) fn unmaterialized_child_explanation(
-        &self,
-        child_request_id: &str,
-    ) -> (String, bool) {
-        let diagnostic = unmaterialized_child_diagnostic(
-            &self.tool_call_id,
-            self.status(),
-            self.unclaimed_deadline_at.as_deref(),
-        );
-        (
-            format!("child request {child_request_id} has no materialized row yet: {diagnostic}"),
-            !self.is_terminal(),
-        )
-    }
-}
-
-/// Load the caller-owned `spawn_subagent` bridge whose `child_request_id`
-/// matches, independent of child materialization. Ownership is enforced by
-/// filtering on the caller's `request_id`, so a caller can never observe a
-/// sibling's bridge through this path.
-pub(crate) async fn load_spawn_bridge_row(
-    node: &EmbeddedNode,
-    caller_request_id: &str,
-    child_request_id: &str,
-) -> Result<Option<SpawnBridgeRow>> {
-    if child_request_id.trim().is_empty() {
-        return Ok(None);
-    }
-    let escaped_caller = escape_graphql_string(caller_request_id);
-    let escaped_child = escape_graphql_string(child_request_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    request_id: {{ _eq: "{escaped_caller}" }},
-                    child_request_id: {{ _eq: "{escaped_child}" }}
-                }},
-                limit: 1
-            ) {{
-                tool_call_id
-                lifecycle_state
-                await_mode
-                unclaimed_deadline_at
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query spawn bridge for child {child_request_id} failed: {:?}",
-            response.errors
-        );
-    }
-    Ok(first_row(response.data.as_ref(), "AgentToolCall"))
-}
-
 pub(crate) async fn load_authorized_child_edge(
     node: &EmbeddedNode,
     parent_context: &ParentSubagentContext,
     child_request_id: &str,
 ) -> Result<ChildEdge> {
-    let Some(child_request_doc_id) =
-        crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
+    let Some(edge) = resolve_descendant_edge(
+        DescendantGraphAccess::Local(node),
+        &parent_context.request_id,
+        child_request_id,
+    )
+    .await?
     else {
-        anyhow::bail!("child AgentRequest {child_request_id} not found");
-    };
-    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
-    let child_query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped_child_request_doc_id}" }} }},
-                limit: 1
-            ) {{
-                _docID
-                request_id
-                session_id
-                agent_did
-                behavior_id
-                caused_by_parent_request_id
-                caused_by_parent_request_doc_id
-                caused_by_parent_tool_call_id
-                caused_by_parent_tool_call_doc_id
-            }}
-        }}"#
-    );
-    let child_response = node.execute(&child_query).await;
-    if child_response.has_errors() {
         anyhow::bail!(
-            "query child AgentRequest {child_request_id} failed: {:?}",
-            child_response.errors
+            "child AgentRequest {child_request_id} is not linked to parent request {}",
+            parent_context.request_id
         );
-    }
-    let child: ChildRequestEdgeRow = first_row(child_response.data.as_ref(), "AgentRequest")
-        .ok_or_else(|| anyhow!("child AgentRequest {child_request_id} not found"))?;
-    if child.request_id != child_request_id || child.doc_id != child_request_doc_id {
-        anyhow::bail!("child AgentRequest binding changed while loading {child_request_id}");
-    }
-    if child.caused_by_parent_request_id.as_deref() != Some(parent_context.request_id.as_str()) {
+    };
+    if edge.immediate_parent_request_id != parent_context.request_id || !edge.is_direct() {
         anyhow::bail!(
             "child AgentRequest {child_request_id} is not linked to parent request {}",
             parent_context.request_id
         );
     }
-    let behavior_id = child
-        .behavior_id
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("child AgentRequest {child_request_id} has no behavior_id"))?;
-    let child_agent_did = child
-        .agent_did
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("child AgentRequest {child_request_id} has no agent_did"))?;
-    if child.caused_by_parent_request_doc_id.as_deref()
-        != Some(parent_context.request_doc_id.as_str())
-    {
+    if !edge.readable() {
+        if edge.authorization_state == crate::DescendantAuthorizationState::PendingMaterialization {
+            anyhow::bail!("child AgentRequest {child_request_id} not found");
+        }
         anyhow::bail!(
-            "child AgentRequest {child_request_id} has incoherent physical parent request provenance"
+            "child AgentRequest {child_request_id} has incoherent physical parent provenance"
         );
     }
-    let parent_tool_call_id = child
-        .caused_by_parent_tool_call_id
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow!("child AgentRequest {child_request_id} has no parent tool-call link")
-        })?;
-    let parent_tool_call_doc_id = child
-        .caused_by_parent_tool_call_doc_id
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow!("child AgentRequest {child_request_id} has no parent tool-call document link")
-        })?;
-    let escaped_parent_tool_call_doc_id = escape_graphql_string(&parent_tool_call_doc_id);
-    let tool_call_query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ _docID: {{ _eq: "{escaped_parent_tool_call_doc_id}" }} }},
-                limit: 1
-            ) {{
-                _docID
-                tool_call_id
-                request_id
-                request_doc_id
-                lifecycle_state
-                await_mode
-                child_request_id
-            }}
-        }}"#
-    );
-    let tool_call_response = node.execute(&tool_call_query).await;
-    if tool_call_response.has_errors() {
-        anyhow::bail!(
-            "query parent AgentToolCall {parent_tool_call_id} failed: {:?}",
-            tool_call_response.errors
-        );
-    }
-    let tool_call: ParentToolCallEdgeRow =
-        first_row(tool_call_response.data.as_ref(), "AgentToolCall").ok_or_else(|| {
-            anyhow!(
-                "parent AgentToolCall {parent_tool_call_id} not found for child {child_request_id}"
-            )
-        })?;
-    if tool_call.doc_id != parent_tool_call_doc_id
-        || tool_call.tool_call_id != parent_tool_call_id
-        || tool_call.request_id.as_deref() != Some(parent_context.request_id.as_str())
-        || tool_call.request_doc_id.as_deref() != Some(parent_context.request_doc_id.as_str())
-    {
-        anyhow::bail!(
-            "parent AgentToolCall {parent_tool_call_id} is not linked to parent request {}",
-            parent_context.request_id
-        );
-    }
-    if tool_call.child_request_id.as_deref() != Some(child.request_id.as_str()) {
-        anyhow::bail!(
-            "parent AgentToolCall {parent_tool_call_id} does not point at child {child_request_id}"
-        );
-    }
-    let await_mode = tool_call
-        .await_mode
-        .as_deref()
-        .and_then(AwaitMode::from_persisted)
-        .unwrap_or(AwaitMode::Foreground);
-
-    Ok(ChildEdge {
-        parent_tool_call_id: tool_call.tool_call_id,
-        child_request_id: child.request_id,
-        child_session_id: child.session_id,
-        child_agent_did,
-        behavior_id,
-        await_mode,
-        lifecycle_state: tool_call
-            .lifecycle_state
-            .unwrap_or_else(|| "running".to_string()),
-    })
+    ChildEdge::from_descendant(&edge)
+        .context("authorized descendant edge lacks materialized child identity")
 }
 
 #[derive(Debug, Deserialize)]

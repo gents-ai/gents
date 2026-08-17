@@ -1012,6 +1012,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SubagentDelegationGraphCases".to_string(),
         ));
     }
+    if !lean_descendant_graph_cases().is_empty() {
+        emitted.insert((
+            "descendant_graph_cases".to_string(),
+            "DescendantGraphCases".to_string(),
+        ));
+    }
     if !lean_goal_decision_cases().is_empty() {
         emitted.insert((
             "goal_decision_cases".to_string(),
@@ -1097,6 +1103,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "cancel_propagation_cases",
         "r6_background_theorem_witnesses",
         "subagent_delegation_graph_cases",
+        "descendant_graph_cases",
         "goal_decision_cases",
         "goal_transition_cases",
         "follow_up_hook",
