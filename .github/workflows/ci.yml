@@ -264,8 +264,10 @@ jobs:
       # so a broken assertion in them can survive indefinitely.
       - name: Run support package tests
         if: matrix.suite == 'support'
+        # --no-fail-fast: a node flake in gents-migration must not mask the
+        # 140 pure gents-protocol/gents-schemas assertions that run after it.
         run: |
-          cargo test \
+          cargo test --no-fail-fast \
             -p gents-migration \
             -p gents-lens-fixture-add-label \
             -p gents-protocol \
@@ -295,22 +297,27 @@ jobs:
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
         env:
           RUST_MIN_STACK: 16777216
-        run: cargo test -p gents --lib --tests
+        run: cargo test --no-fail-fast -p gents --lib --tests
 
       - name: Run desktop Rust package tests
         if: matrix.suite == 'desktop'
+        # --no-fail-fast: the client_core iroh dial must not mask the 15
+        # binaries and the tauri lib tests that run after it.
         run: |
-          cargo test \
+          cargo test --no-fail-fast \
             -p gents-desktop-core \
             -p gents-desktop \
             -p gents-desktop-bridge \
             -p fixture-domain-plugin \
             -p gents-fixture-host
-          cargo test -p gents-desktop-tauri --lib
+          cargo test --no-fail-fast -p gents-desktop-tauri --lib
 
       - name: Run full CLI test suite
         if: matrix.suite == 'cli' && github.event_name != 'pull_request'
-        run: cargo test -p gents-cli -- --nocapture --test-threads=1
+        # --no-fail-fast: cli binaries run alphabetically; without this the
+        # first red binary hides every later one (how a broken cli_subagent
+        # masked cli_trace_export for days — see #1139).
+        run: cargo test --no-fail-fast -p gents-cli -- --nocapture --test-threads=1
 
       - name: Show Rust build cache stats
         # The three heavy suites use runner-local incremental state. Keep one

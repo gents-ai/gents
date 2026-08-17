@@ -210,7 +210,7 @@ struct TranscriptToolExchange {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored; currently blocked on defra.rs #1033 filtered replication (replicator_filter installs null) — see #1147"]
 async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
     require_live_gate("GENTS_LIVE_OPENAI")?;
 
@@ -1878,7 +1878,7 @@ fn is_workflow_terminal(state: Option<&str>) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored; currently blocked on defra.rs #1033 filtered replication (replicator_filter installs null) — see #1147"]
 async fn five_process_workflow_orchestration_live() -> Result<()> {
     require_live_gate("GENTS_LIVE_OPENAI")?;
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
@@ -2518,7 +2518,7 @@ async fn assert_child_materialized_nowhere(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored; currently blocked on defra.rs #1033 filtered replication (replicator_filter installs null) — see #1147"]
 async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
     require_live_gate("GENTS_LIVE_OPENAI")?;
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
@@ -2708,7 +2708,7 @@ async fn five_process_workflow_d10_partial_failure_live() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored; currently blocked on defra.rs #1033 filtered replication (replicator_filter installs null) — see #1147"]
 async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
     require_live_gate("GENTS_LIVE_OPENAI")?;
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
@@ -2916,7 +2916,7 @@ async fn five_process_workflow_d10_materialized_failure_live() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
+#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored; currently blocked on defra.rs #1033 filtered replication (replicator_filter installs null) — see #1147"]
 async fn five_process_workflow_synthesizer_deleted_midrun_live() -> Result<()> {
     require_live_gate("GENTS_LIVE_OPENAI")?;
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")

@@ -18,6 +18,12 @@ pub(crate) mod responses_normalize;
 pub mod rig_compat;
 pub mod tool;
 
+// Deterministic client-side JSON arg-repair pins for the post_status tool
+// shape; moved out of tests/e2e_live so that binary holds only live-gated
+// tests (the file needs no backend and exercises the public ToolDyn seam).
+#[cfg(test)]
+mod post_status_json_repair_tests;
+
 /// Whether/how the model must call a tool before answering. Mirrors rig's
 /// `ToolChoice`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
