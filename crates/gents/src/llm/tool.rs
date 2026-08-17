@@ -128,7 +128,7 @@ impl<T: Tool> ToolDyn for T {
 /// payload — we try a conservative repair and re-parse. If the repair still does
 /// not yield a value that deserializes into `Args`, we raise the typed,
 /// retryable [`ToolError::UnparseableArgs`] so the run re-attempts the inference.
-fn parse_tool_args<A>(args: &str) -> Result<A, ToolError>
+pub(crate) fn parse_tool_args<A>(args: &str) -> Result<A, ToolError>
 where
     A: for<'de> Deserialize<'de>,
 {

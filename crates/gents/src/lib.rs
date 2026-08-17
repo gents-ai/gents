@@ -197,8 +197,10 @@ pub use periodic_recovery::{
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use run_timeline::{
     build_run_timeline, RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows,
-    TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    TimelineConversationRow, TimelineGoalParentState, TimelineGoalState,
+    TimelineGoalTransitionEvent, TimelineGoalVersionRow, TimelineInferenceCallRow,
+    TimelineMessageRow, TimelineRequestRow, TimelineResponseRow, TimelineSessionRow,
+    TimelineToolCallRow,
 };
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,

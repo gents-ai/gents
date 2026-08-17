@@ -240,10 +240,28 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
 }
 
 impl WriteToolDecl {
-    /// A decl is well-formed iff it names a non-empty tool and target collection.
-    /// Single source of truth for the registration/advertisement gate.
+    /// Validate the declaration once for every registration and execution path.
+    pub fn validate(&self) -> Result<()> {
+        if self.tool_name.trim().is_empty() {
+            anyhow::bail!("tool_name must be non-empty");
+        }
+        crate::graphql::validate_collection_identifier(&self.collection).map_err(|error| {
+            anyhow::anyhow!("invalid collection {:?}: {error}", self.collection)
+        })?;
+        for (index, field) in self.fields.iter().enumerate() {
+            if field.name.trim().is_empty() {
+                anyhow::bail!("invalid field[{index}] name: empty name");
+            }
+            crate::graphql::validate_graphql_name(&field.name).map_err(|error| {
+                anyhow::anyhow!("invalid field[{index}] name {:?}: {error}", field.name)
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Boolean form used by tool advertisement and registration filters.
     pub fn is_well_formed(&self) -> bool {
-        !self.tool_name.trim().is_empty() && !self.collection.trim().is_empty()
+        self.validate().is_ok()
     }
 
     pub fn output_obligation_is_well_formed(&self) -> bool {
@@ -273,13 +291,12 @@ pub(crate) fn validate_write_tool_declarations(
         .collect::<std::collections::HashSet<_>>();
     let mut seen_tool_names = std::collections::HashSet::new();
     for (i, decl) in decls.iter().enumerate() {
-        if !decl.is_well_formed() {
-            return Err(anyhow::anyhow!(
-                "write_tools[{i}] is malformed (tool_name and collection must both be non-empty): tool_name={:?}, collection={:?}",
-                decl.tool_name,
-                decl.collection
-            ));
-        }
+        decl.validate().map_err(|error| {
+            anyhow::anyhow!(
+                "write_tools[{i}] (tool {:?}) is malformed: {error}",
+                decl.tool_name
+            )
+        })?;
         if !decl.output_obligation_is_well_formed() {
             return Err(anyhow::anyhow!(
                 "write_tools[{i}] (tool {:?}) output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
@@ -306,12 +323,6 @@ pub(crate) fn validate_write_tool_declarations(
         }
         let mut seen_field_names = std::collections::HashSet::new();
         for (j, field) in decl.fields.iter().enumerate() {
-            if field.name.trim().is_empty() {
-                return Err(anyhow::anyhow!(
-                    "write_tools[{i}] (tool {:?}) has a field[{j}] with an empty name; every WriteToolField must have a non-empty name",
-                    decl.tool_name
-                ));
-            }
             if !seen_field_names.insert(field.name.trim()) {
                 return Err(anyhow::anyhow!(
                     "write_tools[{i}] (tool {:?}) has a duplicate field name {:?}; each WriteToolField in a declaration must have a unique name",

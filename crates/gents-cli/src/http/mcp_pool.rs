@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents_protocol::graphql::escape_graphql_string;
+use gents::graphql::escape_graphql_string;
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

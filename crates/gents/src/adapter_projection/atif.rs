@@ -216,6 +216,8 @@ pub(super) fn build_atif_trajectory(
             | RunTimelineEvent::ProviderContextReduction(_)
             | RunTimelineEvent::Message(_)
             | RunTimelineEvent::ToolCall(_)
+            | RunTimelineEvent::ToolApproval(_)
+            | RunTimelineEvent::GoalTransition(_)
             | RunTimelineEvent::Response(_) => {}
         }
     }

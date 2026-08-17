@@ -12,6 +12,7 @@ mod shared;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use call::selected_tool_identity;
 pub use call::{CallToolArgs, CallToolTool};
 pub use describe::{DescribeToolArgs, DescribeToolTool};
 pub use discover::{DiscoverToolsArgs, DiscoverToolsTool};

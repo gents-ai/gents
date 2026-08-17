@@ -327,7 +327,10 @@ impl DefraSessionHook {
                 deadline_at,
             )
             .with_requester_did(self.active_requester_did().await)
-            .with_request_doc_id(request_doc_id);
+            .with_request_doc_id(request_doc_id)
+            .with_selected_tool_identity(crate::meta_tools::selected_tool_identity(
+                tool_name, args,
+            ));
             if hold_required {
                 lc.hold_for_approval().await?;
             } else {
