@@ -28,3 +28,6 @@ target/npm-pack/
 # Python tooling and Harbor adapter bytecode
 __pycache__/
 *.py[cod]
+
+# macOS Finder metadata (anywhere in the tree)
+.DS_Store
