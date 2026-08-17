@@ -21,20 +21,17 @@ exact candidate→verdict bijection enforced by the runner.
 
 ## Design principle: self-sufficient carrier documents
 
-All inter-stage coordination is documents; **no stage queries the database**.
-There is no `defra_query` anywhere in this pack. Every trigger edge delivers
-its payload through prompt template injection:
+Trigger edges still deliver their local payload through prompt template
+injection (`{{ doc.* }}`, `{{ group.docs }}` for sentinels). Typed finding
+and verdict **rows** are read with single-collection surface query tools —
+not the generic `defra_query` console, and not JSON copies stuffed into
+sentinels.
 
-- `{{ doc.<field> }}` on per-document edges — the trigger source document
-  carries everything the consumer needs.
-- `{{ group.docs }}` on the barrier edge — the grouped sentinel documents
-  embed the candidate findings.
-
-Where the next stage needs data that also exists as typed rows, the carrier
-document embeds a copy. Typed rows (`CandidateFinding`, `FindingVerdict`)
-remain the audit and acceptance surface — the runner verifies against them
-and exports them to `results.json` — while the embedded copies exist purely
-so prompts are assembled by the trigger engine, not by model-driven reads.
+Each consumer stage is granted only the query tool for the collection it
+needs (`query_candidate_finding`, `query_finding_verdict`). The collection
+is bound on the tool; `run_id` is runtime-filled from correlation. Sentinels
+stay thin (`InvestigationResult`, `RevalidationSummary`) the same way
+`code-review` keeps `ScanResult` thin.
 
 Payload discipline: **complete inventory, truncated evidence.** Caps never
 silently drop items — a path+slug inventory line is always complete; only
@@ -52,13 +49,13 @@ ScanJob ──▶ scan-plan (planner)
 InvestigationBatch ──▶ scan-investigate × N
               self-contained evidence packet via {{ doc.* }}
               → CandidateFinding* + exactly 1 InvestigationResult sentinel
-                (sentinel embeds its findings as JSON)
 [N sentinels, fire_mode per_group] ──▶ scan-revalidate (single barrier consumer)
-              all findings arrive via {{ group.docs }}
+              {{ group.docs }} is the sentinel set; load rows with
+              `query_candidate_finding` (bound to CandidateFinding)
               → 1 FindingVerdict per candidate + 1 RevalidationSummary
-                (written last; embeds the verdict ledger)
+                (written last)
 RevalidationSummary ──▶ scan-report
-              ledger arrives via {{ doc.verdict_ledger }}
+              load rows with `query_finding_verdict`
               → confirmed Finding* + 1 ScanReport
 ```
 
@@ -75,9 +72,9 @@ run_id`, `expected_count_field: expected_total`), `scan-report` (on
 | `ScanJob` | runner seed | run_id, prompt/focus, scan root, `candidates` payload, `candidate_total`, `slug_counts`, `overflow_count`, batch bounds |
 | `InvestigationBatch` | planner | `batch_id`, `expected_total`, file list, per-file hits + slug notes, `instructions` |
 | `CandidateFinding` | investigators | typed finding row: `finding_id`, `batch_id`, severity, path, line, title, detail, evidence, confidence |
-| `InvestigationResult` | investigators | sentinel: `batch_id`, counts, `findings_json` (embedded copy) |
+| `InvestigationResult` | investigators | sentinel: `batch_id`, counts |
 | `FindingVerdict` | revalidator | per-candidate verdict row: verdict, reasoning, adjusted severity, fresh evidence |
-| `RevalidationSummary` | revalidator | counts (balance exactly) + `verdict_ledger` (embedded copy) |
+| `RevalidationSummary` | revalidator | counts (balance exactly: `confirmed_count` + `refuted_count`) |
 | `Finding` | report | confirmed findings only |
 | `ScanReport` | report | run summary: counts by severity/slug, notable findings, coverage notes |
 
@@ -179,34 +176,38 @@ tests, `git log`/`git blame`), background process tools for long commands.
 
 Contract: findings written first (each with exact `path:line` + verbatim
 excerpt evidence), then exactly one `write_investigation_result` as the
-final write, embedding the same findings as `findings_json` and preserving
-`batch_id` exactly.
+final write, carrying its finding counts and preserving `batch_id` exactly.
+The sentinel stays thin; the revalidator loads the typed rows itself.
 
 ### scan-revalidate (barrier)
 
-Fires once when all N sentinels exist. Prompt adapted from deepsec's
-revalidation pass: for each candidate in `{{ group.docs }}`, re-read the
-cited artifact and enclosing context in this request, consult git history
-("was this fixed?"), and write exactly one `FindingVerdict` with verdict ∈
-`true-positive | false-positive | fixed | uncertain | duplicate`
-(deepsec's taxonomy; `duplicate` must reference the primary `finding_id`),
-optional adjusted severity, and fresh evidence. Persist each verdict before
-inspecting the next candidate. Final write: one `RevalidationSummary` whose
-counts balance exactly and which embeds the complete `verdict_ledger`.
+Fires once when all N sentinels exist. Call `query_candidate_finding` (no
+collection argument; `run_id` is runtime-filled) to load every typed
+candidate. Prompt adapted from deepsec's revalidation pass: for each
+candidate, re-read the cited artifact and enclosing context in this
+request, consult git history ("was this fixed?"), and write exactly one
+`FindingVerdict` with durable `verdict` ∈ `confirmed | refuted`. Put
+deepsec's `true-positive | false-positive | fixed | uncertain | duplicate`
+word in `verification` (`duplicate` must reference the primary
+`finding_id`). Persist each verdict before inspecting the next candidate.
+Final write: one `RevalidationSummary` whose `confirmed_count` +
+`refuted_count` balance the candidate set.
 
-Tools: `write_finding_verdict`, `write_revalidation_summary`, read-only
-file tools, `lsp`, bash rooted at the scan root (git history, targeted
-tests). No network.
+Tools: `query_candidate_finding`, `write_finding_verdict`,
+`write_revalidation_summary`, read-only file tools, `lsp`, bash rooted at
+the scan root (git history, targeted tests). No network. No `defra_query`.
 
 ### scan-report
 
-Consumes the ledger from `{{ doc.verdict_ledger }}`. Publishes one
-`Finding` row per true-positive (carrying forward identity, final severity,
-evidence, revalidation reasoning) and exactly one `ScanReport` (counts by
-severity and slug, notable findings, coverage/overflow notes).
+Call `query_finding_verdict` (bound to `FindingVerdict`; `run_id`
+runtime-filled). Publishes one `Finding` row per `confirmed` verdict
+(carrying forward identity, final severity, evidence, revalidation
+reasoning) and exactly one `ScanReport` (`confirmed_count`,
+`refuted_count`, counts by severity and slug, notable findings,
+coverage/overflow notes).
 
-Tools: `write_finding`, `write_scan_report` only. No shell, no file tools,
-no network.
+Tools: `query_finding_verdict`, `write_finding`, `write_scan_report`. No
+shell, no file tools, no network, no `defra_query`.
 
 ## Model backend
 
@@ -225,8 +226,9 @@ Mirrors `code-review`'s contract vocabulary:
   `scan-report`.
 - `trigger_request_count_sources`: `scan-investigate` counted from
   `InvestigationBatch` / `run_id` / `expected_total`.
-- `prompt_tool_contracts` per task — **write tools only**; no
-  `required_query_collections` anywhere.
+- `prompt_tool_contracts` per task — write tools plus the bound query
+  tool on consumer stages; no `defra_query`, no
+  `required_query_collections`.
 - `fan_in`: member `InvestigationBatch`, result `InvestigationResult`,
   report `ScanReport`, expected-count bounds from the batch-bounds env
   vars, `verification` sub-block mapping candidate `CandidateFinding` →
