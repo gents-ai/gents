@@ -10,7 +10,7 @@
 
 use std::fmt::Write as _;
 
-use super::{CandidateMatch, FileCandidates, NoiseTier};
+use super::{FileCandidates, NoiseTier};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ScanOutput {

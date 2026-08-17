@@ -23,6 +23,8 @@ impl NoiseTier {
 
 pub(crate) struct Matcher {
     pub slug: &'static str,
+    /// Operator documentation, mirrored in demo/security-scan/README.md; not read at runtime.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub description: &'static str,
     pub tier: NoiseTier,
     /// File-extension gate; empty slice = all files.
@@ -30,6 +32,8 @@ pub(crate) struct Matcher {
     /// Regex sources compiled once at registry build.
     pub patterns: &'static [&'static str],
     /// Snippets this matcher MUST flag; enforced by the discovery test.
+    /// Consumed only by the discovery test.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub examples: &'static [&'static str],
 }
 

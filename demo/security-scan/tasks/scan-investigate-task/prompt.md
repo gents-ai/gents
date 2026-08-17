@@ -23,7 +23,8 @@ For each genuine finding call `write_candidate_finding` with an exact
 `path:line`, a verbatim code excerpt in `evidence`, severity from the
 fixed vocabulary, `confidence` as an integer string 0–100 (only report
 at 60 or above), and `finding_id` exactly
-`{{ doc.batch_id }}:<finding-slug>`. At most six findings per batch —
+`{{ doc.batch_id }}:<finding-slug>`, where `<finding-slug>` is a short
+slug unique within this batch. At most six findings per batch —
 prefer the highest-impact. Zero findings is a valid outcome.
 
 Then call `write_investigation_result` exactly once as your final write:
