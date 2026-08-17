@@ -360,9 +360,10 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     // Client-authored plane (#1123): kept chain-free so a fresh client store
     // fresh-applying the live SDL mints the same version identity as the
-    // server. Do not reintroduce a PatchVersioned step for this collection —
-    // any future field addition must land directly in the live SDL and this
-    // pin must move with it.
+    // server. Do not add DEFAULT_STEPS entries for this collection — neither
+    // PatchVersioned nor PatchInPlace (see CLIENT_AUTHORED_COLLECTIONS) —
+    // any future change must land directly in the live SDL and this pin
+    // must move with it.
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
@@ -590,16 +591,23 @@ pub fn fixture_lens_wasm() -> &'static [u8] {
 /// Until #1123's option 1 or 2 lands (a mechanism that lets `ensure_migrations`
 /// accept more than one known root/tip per collection), every collection in
 /// this list MUST evolve by **re-pinning its baseline** to the new
-/// fresh-apply CID — never by adding a `PatchVersioned` step. PR #1125 is the
-/// worked example: `AgentRequest` had drifted onto a chain (a
+/// fresh-apply CID — never through `DEFAULT_STEPS`, of either kind:
+/// [`MigrationStep::PatchVersioned`] chains the version DAG so the CIDs can
+/// never match again, and [`MigrationStep::PatchInPlace`] keeps the CID
+/// while diverging the server's indexes/policies from what a bare fresh
+/// apply mints — a silent divergence no CID comparison can detect. PR #1125
+/// is the worked example: `AgentRequest` had drifted onto a chain (a
 /// `PatchVersioned` step appended fields after the baseline), which broke
 /// fresh mobile stores against a v0.11 server; the fix folded the fields
 /// into the baseline SDL and re-pinned the root to the fresh-apply CID.
 ///
-/// `tests/fresh_apply_parity.rs` enforces this for every collection listed
-/// here; `default_baseline_matches_ordered_protocol_catalog`
-/// (`tests/baseline_ensure.rs`) enforces per-collection that no
-/// `PatchVersioned` step exists for `AgentRequest` specifically.
+/// `tests/fresh_apply_parity.rs` enforces CID parity for every collection
+/// listed here; the step guard in
+/// `default_baseline_matches_ordered_protocol_catalog`
+/// (`tests/baseline_ensure.rs`) statically rejects a `DEFAULT_STEPS` entry
+/// of any kind targeting any of them. The
+/// `client_authored_collections_fence` test in the `gents` crate keeps this
+/// list synced with the client push surface that gents actually configures.
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,
     gents_protocol::schemas::AGENT_RESPONSE_NAME,

@@ -1323,4 +1323,21 @@ mod tests {
         assert!(mutation.contains("binding_sig"));
         assert!(!mutation.contains("[]"));
     }
+
+    #[test]
+    fn bearer_control_plane_collections_are_guarded_client_authored_collections() {
+        // A claimant device bootstrap-pushes these collections before any
+        // scope template applies, so each must be fresh-apply guarded
+        // (#1123/#1125). This ties the constant to the guard list; the
+        // `client_authored_collections_fence` test in the gents crate holds
+        // the reverse direction (the guard list matching the full surface).
+        for name in BEARER_CONTROL_PLANE_COLLECTIONS {
+            assert!(
+                gents_migration::CLIENT_AUTHORED_COLLECTIONS.contains(name),
+                "{name} is bootstrap-pushed by claimant devices but missing from \
+                 gents_migration::CLIENT_AUTHORED_COLLECTIONS — add it so \
+                 fresh_apply_parity.rs guards it against chained schema evolution"
+            );
+        }
+    }
 }

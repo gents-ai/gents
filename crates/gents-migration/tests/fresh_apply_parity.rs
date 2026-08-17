@@ -1,106 +1,111 @@
 //! Guard for #1123/#1125: client-authored (conversation-plane) collections
 //! MUST remain fresh-apply compatible. A paired client mints its store from
 //! a collection's *current* SDL with no server history — one `add_schema`
-//! call, a genesis version whose DAG-CBOR block has empty `heads`. If a
-//! collection in `CLIENT_AUTHORED_COLLECTIONS` ever gains a post-baseline
-//! `MigrationStep::PatchVersioned` step (or its baseline pin drifts from the
-//! fresh-apply root), the server's active version becomes a chain tip whose
-//! CID structurally can never equal the client's genesis CID — DefraDB's
-//! version CID hashes a DAG-CBOR block that includes `heads`, and a
-//! chain-tip block's heads are never empty. See
-//! `.superpowers/sdd/task-1123-report.md` for the three-way probe that
-//! discovered this for `AgentRequest`, and PR #1125 for the fix.
+//! call producing a genesis version — while the server arrives at its active
+//! version through the `ensure_migrations` chain replay. Why those can only
+//! match while the collection carries no chained steps (the
+//! genesis-vs-chain-tip CID mechanism) is documented once, on
+//! `CLIENT_AUTHORED_COLLECTIONS` in `src/registry.rs`.
+//!
+//! The client model: `EmbeddedNode::add_schema` here and a paired client's
+//! FFI both ingest SDL into an empty store and converge on the same
+//! collection-creation path in the pinned defradb
+//! (`create_collections_atomic_with_acp_registration`), so the genesis CIDs
+//! minted here stand in for what a phone mints. The two apply paths seed
+//! their SDL parsers with different known-type sets, which is only
+//! guaranteed equivalent while every client-authored SDL is single-type and
+//! relation-free — a relation field's CID embeds the target collection's
+//! identity, making genesis CIDs depend on the co-registered set.
+//! `client_authored_sdls_are_relation_free` pins that precondition.
+//!
+//! Limitation: the parity comparison is by version CID, so it cannot detect
+//! server-side `PatchInPlace` divergence (index/policy/embedding patches
+//! keep the CID). The static step guard in `baseline_ensure.rs`
+//! (`default_baseline_matches_ordered_protocol_catalog`) closes that gap by
+//! rejecting DEFAULT_STEPS entries of any kind for these collections.
 
-use std::sync::Arc;
-
-use defra_node::EmbeddedNode;
 use gents_migration::{ensure_migrations, CLIENT_AUTHORED_COLLECTIONS};
 
-async fn fresh_node() -> Arc<EmbeddedNode> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let node = EmbeddedNode::builder()
-        .data_path(dir.path())
-        .build()
-        .await
-        .expect("build node");
-    // Keep tempdir alive for the node lifetime by leaking (test process short).
-    std::mem::forget(dir);
-    Arc::new(node)
-}
+mod common;
+use common::fresh_node;
 
-/// The live SDL a fresh client mints its store from for one client-authored
-/// collection. Mirrors the mapping the deleted `schema_cid_probe.rs` probe
-/// used (`gents_protocol::schemas::AGENT_ALL`, one `add_schema` call per
-/// SDL, in registry order) — see the task-1123 report.
+/// The live SDL a fresh client mints its store from, looked up by position
+/// in the protocol catalog (the same order-aligned name/SDL arrays
+/// `baseline_ensure.rs` reconciles) so that a collection added to
+/// `CLIENT_AUTHORED_COLLECTIONS` is covered here automatically.
 fn current_sdl(name: &str) -> &'static str {
-    match name {
-        n if n == gents_protocol::schemas::AGENT_REQUEST_NAME => {
-            gents_protocol::schemas::AGENT_REQUEST
+    gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
+        .iter()
+        .copied()
+        .zip(gents_protocol::schemas::RUNTIME_ALL.iter().copied())
+        .chain(
+            gents_protocol::schemas::ALL_COLLECTION_NAMES
+                .iter()
+                .copied()
+                .zip(gents_protocol::schemas::ALL.iter().copied()),
+        )
+        .find_map(|(catalog_name, sdl)| (catalog_name == name).then_some(sdl))
+        .unwrap_or_else(|| panic!("{name} is not in the protocol schema catalog"))
+}
+
+/// Precondition of the client model (see module doc): every client-authored
+/// SDL uses only scalar field types. A relation field would make the genesis
+/// CID depend on which other types are co-registered, and the per-collection
+/// apply below would no longer model a client's batch apply.
+#[test]
+fn client_authored_sdls_are_relation_free() {
+    const SCALAR_KINDS: &[&str] = &["String", "Int", "Float", "Boolean", "DateTime"];
+    for &name in CLIENT_AUTHORED_COLLECTIONS {
+        for line in current_sdl(name).lines() {
+            // GraphQL SDL comments run from `#` to end of line; a colon
+            // inside one is not a field type.
+            let code = line.split('#').next().unwrap_or_default();
+            let Some((_, after_colon)) = code.split_once(": ") else {
+                continue;
+            };
+            let kind = after_colon
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim_matches(|c| matches!(c, '[' | ']' | '!'));
+            assert!(
+                SCALAR_KINDS.contains(&kind),
+                "{name} field `{}` uses non-scalar type {kind:?}; client-authored \
+                 collections must stay relation-free (or, if DefraDB gained a new scalar \
+                 kind, extend SCALAR_KINDS) — see the module doc",
+                line.trim()
+            );
         }
-        n if n == gents_protocol::schemas::AGENT_RESPONSE_NAME => {
-            gents_protocol::schemas::AGENT_RESPONSE
-        }
-        n if n == gents_protocol::schemas::AGENT_MESSAGE_NAME => {
-            gents_protocol::schemas::AGENT_MESSAGE
-        }
-        n if n == gents_protocol::schemas::AGENT_TOOL_CALL_NAME => {
-            gents_protocol::schemas::AGENT_TOOL_CALL
-        }
-        n if n == gents_protocol::schemas::AGENT_TOOL_RESULT_NAME => {
-            gents_protocol::schemas::AGENT_TOOL_RESULT
-        }
-        n if n == gents_protocol::schemas::AGENT_SESSION_NAME => {
-            gents_protocol::schemas::AGENT_SESSION
-        }
-        n if n == gents_protocol::schemas::AGENT_CONVERSATION_NAME => {
-            gents_protocol::schemas::AGENT_CONVERSATION
-        }
-        n if n == gents_protocol::schemas::COMPACTION_ENTRY_NAME => {
-            gents_protocol::schemas::COMPACTION_ENTRY
-        }
-        n if n == gents_protocol::schemas::BEARER_PAIRING_READY_NAME => {
-            gents_protocol::schemas::BEARER_PAIRING_READY
-        }
-        n if n == gents_protocol::schemas::PAIRING_BEARER_CLAIM_NAME => {
-            gents_protocol::schemas::PAIRING_BEARER_CLAIM
-        }
-        n if n == gents_protocol::schemas::PEER_ENDPOINT_NAME => {
-            gents_protocol::schemas::PEER_ENDPOINT
-        }
-        n if n == gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME => {
-            gents_protocol::schemas::PERSONA_CONFIG_REQUEST
-        }
-        n if n == gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME => {
-            gents_protocol::schemas::AGENT_DIRECTORY_ENTRY
-        }
-        other => panic!(
-            "no live SDL mapped in fresh_apply_parity.rs for {other} — add one when \
-             extending CLIENT_AUTHORED_COLLECTIONS"
-        ),
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn client_authored_collections_stay_fresh_apply_compatible() {
-    // Node A: the real server boot path — full ensure_migrations chain
-    // replay (baseline registration + every DEFAULT_STEPS entry).
-    let server = fresh_node().await;
-    ensure_migrations(server.as_ref())
-        .await
-        .expect("server ensure_migrations");
-
-    // Node B: a fresh node standing in for a paired client, applying each
-    // client-authored collection's CURRENT SDL directly — the same
-    // single-call `add_schema` genesis path a mobile client's FFI takes
-    // (`EmbeddedNode::add_schema` is the same code path as the FFI's
-    // `add_schema`, per the task-1123 probe).
-    let client = fresh_node().await;
-    for &name in CLIENT_AUTHORED_COLLECTIONS {
-        client
-            .add_schema(current_sdl(name))
+    // The two arms are independent until the comparison; run them
+    // concurrently — this is the crate's most expensive test.
+    let server_arm = async {
+        // Node A: the real server boot path — full ensure_migrations chain
+        // replay (baseline registration + every DEFAULT_STEPS entry).
+        let server = fresh_node().await;
+        ensure_migrations(server.as_ref())
             .await
-            .unwrap_or_else(|error| panic!("client fresh-apply {name}: {error}"));
-    }
+            .expect("server ensure_migrations");
+        server
+    };
+    let client_arm = async {
+        // Node B: a fresh node standing in for a paired client, applying each
+        // client-authored collection's CURRENT SDL directly — the single-call
+        // add_schema genesis path a paired client takes (see module doc).
+        let client = fresh_node().await;
+        for &name in CLIENT_AUTHORED_COLLECTIONS {
+            client
+                .add_schema(current_sdl(name))
+                .await
+                .unwrap_or_else(|error| panic!("client fresh-apply {name}: {error}"));
+        }
+        client
+    };
+    let (server, client) = tokio::join!(server_arm, client_arm);
 
     let mut mismatches = Vec::new();
     for &name in CLIENT_AUTHORED_COLLECTIONS {

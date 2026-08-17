@@ -1,35 +1,50 @@
 //! List-sync fence for #1123/#1125.
 //!
 //! `gents_migration::CLIENT_AUTHORED_COLLECTIONS` names every collection a
-//! paired client fresh-applies its bundled SDL into and authors documents
-//! into directly — `fresh_apply_parity.rs` (in `gents-migration`) guards
-//! those collections against chained schema evolution. That guard is only as
-//! good as its coverage: this test asserts the list exactly matches gents's
-//! actual client push surface, so adding a collection to the client surface
-//! without adding it to the guard fails a build instead of silently shipping
-//! an un-guarded collection.
+//! paired client fresh-applies its bundled SDL into and then syncs documents
+//! through — `fresh_apply_parity.rs` (in `gents-migration`) guards those
+//! collections against chained schema evolution. That guard is only as good
+//! as its coverage: this test asserts the list matches the client push
+//! surface gents itself configures, so extending that surface without
+//! extending the guard fails a build instead of silently shipping an
+//! un-guarded collection.
 //!
-//! The client push surface is two parts:
+//! The load-bearing property is "a client store fresh-applies this
+//! collection's SDL and replicates documents in it", not strict client
+//! authorship: some rows in these collections are minted server-side
+//! (`BearerPairingReady` is written by the reconcile engine on the issuer,
+//! and the `AgentDirectoryEntry` rule filters on the home DID), but they
+//! replicate through client stores all the same, and a client store can
+//! only merge a collection whose fresh-applied version identity matches the
+//! server's.
+//!
+//! The surface this fence derives is two parts:
 //! - The `machine` `ScopeTemplate`'s `PerCollection` rules
-//!   (`crates/gents/src/agent/p2p_reconcile/templates.rs`): each rule filters
-//!   a collection on a client-owned DID field (requester/claimant/source),
-//!   which is exactly the set of collections scoped to one client's own
-//!   documents. Collections the template declares but leaves unfiltered
-//!   (`AgentBehavior`, `ToolSelection`, ...) are deliberately shared config
-//!   pushed identically to every peer, not client-authored, and excluded.
-//! - Control-plane claim collections a client authors directly, outside any
-//!   `ScopeTemplate`'s collection list: `PairingBearerClaim` (a claimant
-//!   device's self-signed redemption row —
-//!   `crates/gents/src/agent/p2p_reconcile/bearer_claim.rs`) and
-//!   `PeerEndpoint` (a client's signed heartbeat —
-//!   `crates/gents/src/agent/p2p_reconcile/endpoint.rs`).
+//!   (`crates/gents/src/agent/p2p_reconcile/templates.rs`): the collections
+//!   replicated per-pairing to client devices. Collections the template
+//!   lists but leaves unfiltered (`AgentBehavior`, `ToolSelection`, ...) are
+//!   deliberately shared config pushed identically to every peer, not part
+//!   of the client-authored plane, and excluded.
+//! - Control-plane claim collections a claimant device bootstrap-pushes
+//!   before any template applies: `PairingBearerClaim` and `PeerEndpoint`,
+//!   mirroring `gents-desktop-core`'s `BEARER_CONTROL_PLANE_COLLECTIONS`
+//!   (the subset test in `bearer_pairing.rs` ties that constant to the
+//!   guard list, so the mirror cannot drift silently).
+//!
+//! Not derived here: bring-your-own data-plane pairings —
+//! `DataPlanePairingDesired` rows can name arbitrary collections for app
+//! templates (`p2p_reconcile/engine.rs`) with no protocol-collection
+//! exclusion; closing that hole is #1137.
 
 use std::collections::BTreeSet;
 
 use gents::agent::p2p_reconcile::templates::{resolve_template, Scope, MACHINE_TEMPLATE};
 use gents_migration::CLIENT_AUTHORED_COLLECTIONS;
 
-const CONTROL_PLANE_CLAIM_COLLECTIONS: &[&str] = &["PairingBearerClaim", "PeerEndpoint"];
+const CONTROL_PLANE_CLAIM_COLLECTIONS: &[&str] = &[
+    gents_protocol::schemas::PAIRING_BEARER_CLAIM_NAME,
+    gents_protocol::schemas::PEER_ENDPOINT_NAME,
+];
 
 #[test]
 fn machine_template_push_set_matches_client_authored_collections_guard() {

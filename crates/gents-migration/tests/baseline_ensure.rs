@@ -1,13 +1,15 @@
 //! Phase A conformance: baseline registration, idempotence, single-version DAG.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::collections::BTreeSet;
 
-use defra_node::EmbeddedNode;
 use gents_migration::{
     ensure_migrations, ensure_migrations_dynamic, ensure_migrations_with_registry,
     BaselineCollectionOwned, CollectionExpectation, DynamicRegistry, Error, MigrationStep,
-    Registry,
+    Registry, CLIENT_AUTHORED_COLLECTIONS,
 };
+
+mod common;
+use common::fresh_node;
 
 #[test]
 fn default_baseline_matches_ordered_protocol_catalog() {
@@ -40,7 +42,12 @@ fn default_baseline_matches_ordered_protocol_catalog() {
     {
         assert_eq!(actual_name, expected_name);
         if versioned_collections.contains(actual_name) {
-            assert_ne!(actual_sdl, expected_sdl, "changed schema must be frozen");
+            assert_ne!(
+                actual_sdl, expected_sdl,
+                "changed schema must be frozen — unless the collection is in \
+                 CLIENT_AUTHORED_COLLECTIONS, which must instead fold the change into the \
+                 live SDL and re-pin the baseline (see registry.rs, #1123/#1125)"
+            );
         } else {
             assert_eq!(actual_sdl, expected_sdl, "baseline drift for {actual_name}");
         }
@@ -50,28 +57,31 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         MigrationStep::PatchVersioned { collection, .. }
             if *collection == gents_protocol::schemas::INFERENCE_PROFILE_NAME
     )));
-    // AgentRequest (#1123): a client-authored plane collection, deliberately
-    // kept OFF the step chain so a fresh client store's genesis version
-    // matches the server's. It must stay fresh-apply-equivalent, not
-    // versioned.
-    assert!(!versioned_collections.contains(gents_protocol::schemas::AGENT_REQUEST_NAME));
+    // Client-authored plane (#1123/#1125): these collections must stay
+    // fresh-apply compatible, so they evolve by baseline re-pin only. Any
+    // DEFAULT_STEPS entry targeting one recreates the breakage:
+    // PatchVersioned chains the version DAG so a fresh client's genesis CID
+    // can never match, and PatchInPlace diverges the server's indexes or
+    // policies from a bare fresh apply WITHOUT moving the version CID — a
+    // divergence the CID-comparing parity test cannot see, which is why this
+    // guard must stay step-kind-agnostic.
+    let stepped_client_collections = gents_migration::DEFAULT_STEPS
+        .iter()
+        .filter_map(MigrationStep::collection)
+        .filter(|collection| CLIENT_AUTHORED_COLLECTIONS.contains(collection))
+        .collect::<BTreeSet<_>>();
+    assert!(
+        stepped_client_collections.is_empty(),
+        "client-authored collections gained migration steps: {stepped_client_collections:?} — \
+         do not freeze-and-chain these; fold the change into the live SDL and re-pin the \
+         baseline to the fresh-apply CID (see CLIENT_AUTHORED_COLLECTIONS in registry.rs, \
+         #1123/#1125)"
+    );
     assert!(gents_migration::DEFAULT_STEPS.iter().any(|step| matches!(
         step,
         MigrationStep::PatchVersioned { collection, .. }
             if *collection == gents_protocol::schemas::TOOL_SELECTION_NAME
     )));
-}
-
-async fn fresh_node() -> Arc<EmbeddedNode> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let node = EmbeddedNode::builder()
-        .data_path(dir.path())
-        .build()
-        .await
-        .expect("build node");
-    // Keep tempdir alive for the node lifetime by leaking (test process short).
-    std::mem::forget(dir);
-    Arc::new(node)
 }
 
 #[test]
@@ -275,6 +285,27 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     assert!(rows[0]["max_total_tokens"].is_null());
     assert!(rows[0]["background_completion_input_through_sequence"].is_null());
     assert!(rows[0]["background_completion_notification_keys_json"].is_null());
+
+    // The idempotence half of the test name: this store's AgentRequest was
+    // first registered by raw add_schema (the client-like genesis path), not
+    // by ensure_migrations — a re-run over it must still be a pure no-op.
+    let rerun = ensure_migrations(node.as_ref())
+        .await
+        .expect("re-run ensure_migrations");
+    assert_eq!(rerun.steps_applied, 0, "re-run applied steps: {rerun:?}");
+    assert_eq!(
+        rerun.steps_already_current,
+        gents_migration::DEFAULT_STEPS.len()
+    );
+    let cv = node
+        .get_collection(gents_protocol::schemas::AGENT_REQUEST_NAME)
+        .expect("get_collection")
+        .expect("AgentRequest present after re-run");
+    assert_eq!(
+        Some(cv.version_id.as_str()),
+        baseline.expected_version,
+        "re-run must not move AgentRequest off its baseline root"
+    );
 
     node.shutdown().await;
 }
