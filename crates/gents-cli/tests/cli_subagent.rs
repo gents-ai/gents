@@ -40,7 +40,7 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
     let second_child_request_id = format!("child-b-{}", Uuid::new_v4().simple());
     let grandchild_request_id = format!("grandchild-{}", Uuid::new_v4().simple());
 
-    seed_request(
+    let root_doc_id = seed_request(
         &graphql,
         &test_agent_did,
         &root_request_id,
@@ -50,14 +50,37 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
         "2026-05-20T12:00:00Z",
     )
     .await?;
-    seed_request(
+    let (first_tool_call_id, first_bridge_doc_id) = seed_spawn_bridge(
+        &graphql,
+        &test_agent_did,
+        &root_request_id,
+        &root_doc_id,
+        &first_child_request_id,
+        "2026-05-20T12:00:01Z",
+    )
+    .await?;
+    let first_child_doc_id = seed_request(
         &graphql,
         &test_agent_did,
         &first_child_request_id,
         "first-child-behavior",
-        Some(&root_request_id),
+        Some(&ParentLink {
+            parent_request_id: &root_request_id,
+            parent_doc_id: &root_doc_id,
+            tool_call_id: &first_tool_call_id,
+            tool_call_doc_id: &first_bridge_doc_id,
+        }),
         1,
         "2026-05-20T12:00:01Z",
+    )
+    .await?;
+    let (second_tool_call_id, second_bridge_doc_id) = seed_spawn_bridge(
+        &graphql,
+        &test_agent_did,
+        &root_request_id,
+        &root_doc_id,
+        &second_child_request_id,
+        "2026-05-20T12:00:02Z",
     )
     .await?;
     seed_request(
@@ -65,9 +88,23 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
         &test_agent_did,
         &second_child_request_id,
         "second-child-behavior",
-        Some(&root_request_id),
+        Some(&ParentLink {
+            parent_request_id: &root_request_id,
+            parent_doc_id: &root_doc_id,
+            tool_call_id: &second_tool_call_id,
+            tool_call_doc_id: &second_bridge_doc_id,
+        }),
         1,
         "2026-05-20T12:00:02Z",
+    )
+    .await?;
+    let (grandchild_tool_call_id, grandchild_bridge_doc_id) = seed_spawn_bridge(
+        &graphql,
+        &test_agent_did,
+        &first_child_request_id,
+        &first_child_doc_id,
+        &grandchild_request_id,
+        "2026-05-20T12:00:03Z",
     )
     .await?;
     seed_request(
@@ -75,7 +112,12 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
         &test_agent_did,
         &grandchild_request_id,
         "grandchild-behavior",
-        Some(&first_child_request_id),
+        Some(&ParentLink {
+            parent_request_id: &first_child_request_id,
+            parent_doc_id: &first_child_doc_id,
+            tool_call_id: &grandchild_tool_call_id,
+            tool_call_doc_id: &grandchild_bridge_doc_id,
+        }),
         2,
         "2026-05-20T12:00:03Z",
     )
@@ -293,32 +335,48 @@ fn assert_tree_node_id(node: &Value, request_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Full physical linkage from a child request back to the parent request and
+/// the spawn bridge, matching what the runtime stamps on real dispatches. The
+/// durable descendant graph fails closed on any missing or contradictory
+/// value (`child_corroborates` in `gents::descendant_graph`), so seeded
+/// lineage must carry all four references.
+struct ParentLink<'a> {
+    parent_request_id: &'a str,
+    parent_doc_id: &'a str,
+    tool_call_id: &'a str,
+    tool_call_doc_id: &'a str,
+}
+
 async fn seed_request(
     graphql: &str,
     agent_did: &str,
     request_id: &str,
     behavior_id: &str,
-    parent_request_id: Option<&str>,
+    parent: Option<&ParentLink<'_>>,
     subagent_depth: i64,
     created_at: &str,
-) -> Result<()> {
+) -> Result<String> {
     let session_id = format!("session-{request_id}");
-    let parent_fields = parent_request_id
-        .map(|parent| {
+    let parent_fields = parent
+        .map(|link| {
             format!(
                 r#"
                     ,
                     caused_by_parent_request_id: "{}",
-                    caused_by_parent_tool_call_id: "spawn-{}",
-                    caused_by_trigger_id: "spawn-{}",
+                    caused_by_parent_request_doc_id: "{}",
+                    caused_by_parent_tool_call_id: "{}",
+                    caused_by_parent_tool_call_doc_id: "{}",
+                    caused_by_trigger_id: "{}",
                     caused_by_trigger_kind: "subagent","#,
-                escape_graphql_string(parent),
-                escape_graphql_string(request_id),
-                escape_graphql_string(request_id),
+                escape_graphql_string(link.parent_request_id),
+                escape_graphql_string(link.parent_doc_id),
+                escape_graphql_string(link.tool_call_id),
+                escape_graphql_string(link.tool_call_doc_id),
+                escape_graphql_string(link.tool_call_id),
             )
         })
         .unwrap_or_default();
-    graphql_query(
+    let response = graphql_query(
         graphql,
         &format!(
             r#"mutation {{
@@ -350,7 +408,64 @@ async fn seed_request(
         ),
     )
     .await?;
-    Ok(())
+    doc_id_from_create(&response, "add_AgentRequest")
+}
+
+/// Seed the durable spawn bridge (`AgentToolCall` with `child_request_id`)
+/// that the descendant graph walks; `subagent list --root` discovers children
+/// exclusively through these since #1136. Returns `(tool_call_id, _docID)`
+/// for stamping the child's `caused_by_parent_tool_call*` fields.
+async fn seed_spawn_bridge(
+    graphql: &str,
+    agent_did: &str,
+    parent_request_id: &str,
+    parent_doc_id: &str,
+    child_request_id: &str,
+    started_at: &str,
+) -> Result<(String, String)> {
+    let tool_call_id = format!("spawn-{child_request_id}");
+    let session_id = format!("session-{parent_request_id}");
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "bridge-{child_request_id}",
+                    request_id: "{parent_request_id}",
+                    request_doc_id: "{parent_doc_id}",
+                    session_id: "{session_id}",
+                    agent_did: "{agent_did}",
+                    tool_name: "task",
+                    tool_call_id: "{tool_call_id}",
+                    args: "{{}}",
+                    status: "pending",
+                    lifecycle_state: "pending",
+                    started_at: "{started_at}",
+                    await_mode: "foreground",
+                    child_request_id: "{child_request_id}",
+                    spawn_target_did: "{agent_did}"
+                }}) {{ _docID }}
+            }}"#,
+            child_request_id = escape_graphql_string(child_request_id),
+            parent_request_id = escape_graphql_string(parent_request_id),
+            parent_doc_id = escape_graphql_string(parent_doc_id),
+            session_id = escape_graphql_string(&session_id),
+            agent_did = escape_graphql_string(agent_did),
+            tool_call_id = escape_graphql_string(&tool_call_id),
+            started_at = escape_graphql_string(started_at),
+        ),
+    )
+    .await?;
+    let doc_id = doc_id_from_create(&response, "add_AgentToolCall")?;
+    Ok((tool_call_id, doc_id))
+}
+
+fn doc_id_from_create(response: &Value, field: &str) -> Result<String> {
+    response
+        .pointer(&format!("/data/{field}/0/_docID"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .with_context(|| format!("missing _docID in {field} response: {response}"))
 }
 
 fn assert_lineage_row(
