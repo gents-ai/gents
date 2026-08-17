@@ -52,6 +52,8 @@ pub struct RunTimeline {
     pub child_request_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub descendant_edges: Vec<crate::DescendantEdge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descendant_graph_diagnostics_error: Option<String>,
     #[serde(default)]
     pub inference_calls: Vec<TimelineInferenceCallRow>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -916,6 +918,7 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         conversation: rows.conversation,
         child_request_ids,
         descendant_edges: Vec::new(),
+        descendant_graph_diagnostics_error: None,
         inference_calls,
         rendered_request_refs: rows.rendered_request_refs,
         background_completions: Vec::new(),

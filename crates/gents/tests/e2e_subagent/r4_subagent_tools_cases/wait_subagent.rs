@@ -447,6 +447,26 @@ async fn corrupt_materialized_child_is_nonretryable_and_remains_listed() {
         .as_str()
         .is_some_and(|message| message.contains("does not corroborate")));
 
+    let steer_action = hook
+        .on_tool_call(
+            "steer_subagent",
+            Some("model-call-steer-corrupt".to_string()),
+            "internal-steer-corrupt",
+            &json!({
+                "child_request_id": child_request_id,
+                "message": "do not retry rejected lineage"
+            })
+            .to_string(),
+        )
+        .await;
+    let steer_error = skip_reason_json(steer_action);
+    assert_eq!(steer_error["ok"], false);
+    assert_eq!(steer_error["failure_class"], "service_unavailable");
+    assert_eq!(steer_error["retryable"], false);
+    assert!(steer_error["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("does not corroborate")));
+
     let list_action = hook
         .on_tool_call(
             "list_subagents",

@@ -20,6 +20,7 @@ abbrev DeploymentId := Nat
 abbrev ToolCallId := Nat
 abbrev LineageId := Nat
 abbrev WorkflowGroupId := Nat
+abbrev Cursor := ToolCallId × RequestId
 
 inductive AwaitMode where
   | foreground
@@ -132,6 +133,18 @@ def inScope (scope : Scope) (group : Option WorkflowGroupId) (edge : Edge) : Boo
   | .descendants => true
   | .workflowGroup => edge.workflowGroup == group && group.isSome
 
+/-- A page cursor is derived only from durable edge identity, never from the
+    edge's mutable lifecycle/materialization projection. -/
+def cursor (edge : Edge) : Cursor :=
+  (edge.parentToolCallId, edge.childRequestId)
+
+/-- Cursor lookup runs over the stable scoped edge sequence. Volatile filters
+    such as `includeTerminal` are applied only to the returned suffix. -/
+def afterCursor (target : Cursor) : List Edge → Option (List Edge)
+  | [] => none
+  | edge :: rest =>
+      if cursor edge == target then some rest else afterCursor target rest
+
 theorem behavior_change_preserves_visibility
     (viewer : Viewer) (edge : Edge) (behavior : BehaviorId) :
     visible viewer { edge with behaviorId := behavior } = visible viewer edge := by
@@ -151,6 +164,17 @@ theorem workflow_role_change_preserves_visibility
     (viewer : Viewer) (edge : Edge) (role : WorkflowRole) :
     visible viewer { edge with workflowRole := role } = visible viewer edge := by
   rfl
+
+theorem lifecycle_change_preserves_cursor
+    (edge : Edge) (lifecycle : Lifecycle) :
+    cursor { edge with lifecycle := lifecycle } = cursor edge := by
+  rfl
+
+theorem terminal_transition_preserves_cursor_anchor
+    (edge next : Edge) :
+    afterCursor (cursor edge) [{ edge with lifecycle := .completed }, next] =
+      some [next] := by
+  simp [afterCursor, lifecycle_change_preserves_cursor]
 
 theorem pending_bridge_visible_without_child
     (viewer : Viewer) (edge : Edge)

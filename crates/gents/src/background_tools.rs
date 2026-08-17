@@ -418,6 +418,7 @@ pub enum SteerSubagentTarget {
     /// explains the bridge state instead of collapsing into not-authorized.
     AwaitingMaterialization {
         message: String,
+        retryable: bool,
     },
     Terminal(String),
 }
@@ -1099,6 +1100,7 @@ pub async fn load_steer_subagent_target(
     }
     if !canonical.readable() {
         return Ok(SteerSubagentTarget::AwaitingMaterialization {
+            retryable: canonical.retryable(),
             message: canonical
                 .diagnostic
                 .unwrap_or_else(|| format!("child request {child_request_id} is not materialized")),

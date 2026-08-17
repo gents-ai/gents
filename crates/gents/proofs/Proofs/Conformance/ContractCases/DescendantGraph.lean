@@ -19,6 +19,7 @@ structure DescendantGraphCase where
   retryable : Bool
   listedByDefault : Bool
   controllable : Bool
+  cursorAnchorSurvivesTerminal : Bool
   deriving Repr
 
 def viewer : Viewer :=
@@ -86,7 +87,11 @@ def descendantCase (name : String) (edge : Edge) : DescendantGraphCase :=
   , readable := DescendantGraph.readable viewer edge
   , retryable := DescendantGraph.retryable viewer edge
   , listedByDefault := DescendantGraph.listedByDefault viewer edge
-  , controllable := DescendantGraph.controllable viewer edge }
+  , controllable := DescendantGraph.controllable viewer edge
+  , cursorAnchorSurvivesTerminal :=
+      (DescendantGraph.afterCursor
+        (DescendantGraph.cursor edge)
+        [{ edge with lifecycle := .completed }, baseEdge]).isSome }
 
 def descendantGraphCases : List DescendantGraphCase :=
   [ descendantCase "background_direct" baseEdge

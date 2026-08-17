@@ -445,7 +445,8 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         .await
         .expect("load_steer_subagent_target must not error")
     {
-        SteerSubagentTarget::AwaitingMaterialization { message } => {
+        SteerSubagentTarget::AwaitingMaterialization { message, retryable } => {
+            assert!(retryable);
             assert!(
                 message.contains(child_request_id),
                 "steer explanation names the child: {message}"

@@ -20,7 +20,9 @@ def descendantGraphCaseJson (value : DescendantGraphCase) : String :=
     ++ "\"readable\":" ++ boolString value.readable ++ ","
     ++ "\"retryable\":" ++ boolString value.retryable ++ ","
     ++ "\"listed_by_default\":" ++ boolString value.listedByDefault ++ ","
-    ++ "\"controllable\":" ++ boolString value.controllable
+    ++ "\"controllable\":" ++ boolString value.controllable ++ ","
+    ++ "\"cursor_anchor_survives_terminal\":"
+      ++ boolString value.cursorAnchorSurvivesTerminal
     ++ "}"
 
 def descendantGraphCasesJson : String :=

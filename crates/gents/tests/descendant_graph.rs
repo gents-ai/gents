@@ -327,3 +327,93 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
     .unwrap();
     assert_eq!(second.edges[0].child_request_id, "request-reviewer");
 }
+
+#[tokio::test]
+async fn running_page_cursor_survives_anchor_becoming_terminal() {
+    let db = support::test_db("descendant-running-cursor-terminal-transition").await;
+    let root_id = "cursor-root";
+    let root_session = "cursor-root-session";
+    let root_did = "did:test:cursor-root";
+    let root_doc =
+        create_request(db.node.as_ref(), root_id, root_session, root_did, "default").await;
+    let deadline = Utc::now() + Duration::minutes(5);
+
+    let mut first = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        root_id.to_string(),
+        root_session.to_string(),
+        root_did.to_string(),
+        "cursor-call-a".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        r#"{"name":"worker-a","behavior_id":"worker-a"}"#.to_string(),
+        deadline,
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        "cursor-child-a".to_string(),
+        root_did.to_string(),
+    )
+    .with_request_doc_id(Some(root_doc.clone()));
+    first.start_running().await.unwrap();
+
+    let mut second = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        root_id.to_string(),
+        root_session.to_string(),
+        root_did.to_string(),
+        "cursor-call-b".to_string(),
+        2,
+        "spawn_subagent".to_string(),
+        r#"{"name":"worker-b","behavior_id":"worker-b"}"#.to_string(),
+        deadline,
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        "cursor-child-b".to_string(),
+        root_did.to_string(),
+    )
+    .with_request_doc_id(Some(root_doc));
+    second.start_running().await.unwrap();
+
+    let first_page = resolve_descendant_graph(
+        DescendantGraphAccess::Local(db.node.as_ref()),
+        &DescendantQuery {
+            limit: 1,
+            include_terminal: false,
+            ..DescendantQuery::direct(root_id)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(first_page.edges.len(), 1);
+    assert!(first_page.has_more);
+    let anchor_child = first_page.edges[0].child_request_id.clone();
+    let after = first_page.next_cursor.expect("running page cursor");
+
+    let terminalized = match anchor_child.as_str() {
+        "cursor-child-a" => first
+            .bridge_complete("worker a complete".to_string())
+            .await
+            .unwrap(),
+        "cursor-child-b" => second
+            .bridge_complete("worker b complete".to_string())
+            .await
+            .unwrap(),
+        other => panic!("unexpected cursor anchor {other}"),
+    };
+    assert!(terminalized);
+
+    let second_page = resolve_descendant_graph(
+        DescendantGraphAccess::Local(db.node.as_ref()),
+        &DescendantQuery {
+            after: Some(after),
+            limit: 1,
+            include_terminal: false,
+            ..DescendantQuery::direct(root_id)
+        },
+    )
+    .await
+    .expect("terminal transition must not invalidate the stable cursor anchor");
+    assert_eq!(second_page.edges.len(), 1);
+    assert_ne!(second_page.edges[0].child_request_id, anchor_child);
+    assert!(!second_page.has_more);
+}

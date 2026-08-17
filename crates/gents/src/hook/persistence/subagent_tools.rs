@@ -286,12 +286,12 @@ impl DefraSessionHook {
                     ),
                 ));
             }
-            SteerSubagentTarget::AwaitingMaterialization { message } => {
+            SteerSubagentTarget::AwaitingMaterialization { message, retryable } => {
                 let result = service_unavailable_payload(
                     STEER_SUBAGENT_TOOL_NAME,
                     "/child_request_id",
                     message,
-                    true,
+                    retryable,
                 );
                 return Ok(self.skip_tool_result(STEER_SUBAGENT_TOOL_NAME, result));
             }

@@ -423,11 +423,11 @@ pub async fn resolve_descendant_graph(
             edge.workflow_group_id.as_deref() == nonempty(query.workflow_group_id.as_deref())
         }
     });
-    if !query.include_terminal {
-        edges.retain(|edge| !edge.is_terminal());
-    }
     edges.sort_by(|left, right| left.cursor.cmp(&right.cursor));
 
+    // Resolve the cursor against the stable scoped edge set before applying
+    // lifecycle filters. Otherwise an edge that becomes terminal between
+    // pages disappears along with the client's valid pagination anchor.
     let start = match query
         .after
         .as_deref()
@@ -441,12 +441,13 @@ pub async fn resolve_descendant_graph(
             .with_context(|| format!("descendant cursor {after:?} is not in this graph scope"))?,
     };
     let limit = query.validated_limit();
-    let has_more = start.saturating_add(limit) < edges.len();
-    let page_edges = edges
+    let eligible_edges = edges
         .into_iter()
         .skip(start)
-        .take(limit)
+        .filter(|edge| query.include_terminal || !edge.is_terminal())
         .collect::<Vec<_>>();
+    let has_more = eligible_edges.len() > limit;
+    let page_edges = eligible_edges.into_iter().take(limit).collect::<Vec<_>>();
     let next_cursor = has_more
         .then(|| page_edges.last().map(|edge| edge.cursor.clone()))
         .flatten();
@@ -1080,6 +1081,7 @@ mod tests {
             if !case.direct || case.materialization == "pending" {
                 assert!(!case.controllable, "{}", case.name);
             }
+            assert!(case.cursor_anchor_survives_terminal, "{}", case.name);
             assert_eq!(
                 case.retryable,
                 case.visible

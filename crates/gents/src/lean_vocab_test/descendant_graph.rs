@@ -16,4 +16,5 @@ pub(crate) struct LeanDescendantGraphCase {
     pub(crate) retryable: bool,
     pub(crate) listed_by_default: bool,
     pub(crate) controllable: bool,
+    pub(crate) cursor_anchor_survives_terminal: bool,
 }
