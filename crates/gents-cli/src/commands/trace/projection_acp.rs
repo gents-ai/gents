@@ -214,7 +214,9 @@ pub(super) fn projection_binding_scope_mask(
     Some(scope_mask)
 }
 
-pub(super) fn validate_projection_binding_operational_state(row: &ProjectionAcpBindingRow) -> Result<()> {
+pub(super) fn validate_projection_binding_operational_state(
+    row: &ProjectionAcpBindingRow,
+) -> Result<()> {
     let status = normalize_projection_binding_field(row.publication_status.as_deref())
         .unwrap_or("published");
     let staged_policy_id = normalize_projection_binding_field(row.staged_policy_id.as_deref());
@@ -641,7 +643,10 @@ pub(super) fn apply_projection_document_scope(
     Ok(timeline)
 }
 
-pub(super) fn timeline_root_matches_scope(timeline: &RunTimeline, scope: &ProjectionDocumentScope) -> bool {
+pub(super) fn timeline_root_matches_scope(
+    timeline: &RunTimeline,
+    scope: &ProjectionDocumentScope,
+) -> bool {
     scope_value_matches(
         scope.agent_did.as_deref(),
         [
@@ -667,7 +672,10 @@ pub(super) fn timeline_root_matches_scope(timeline: &RunTimeline, scope: &Projec
     )
 }
 
-pub(super) fn scoped_request_ids(timeline: &RunTimeline, scope: &ProjectionDocumentScope) -> BTreeSet<String> {
+pub(super) fn scoped_request_ids(
+    timeline: &RunTimeline,
+    scope: &ProjectionDocumentScope,
+) -> BTreeSet<String> {
     let mut allowed = BTreeSet::from([timeline.request_id.clone()]);
     for event in &timeline.events {
         if let RunTimelineEvent::Request(request) = event {

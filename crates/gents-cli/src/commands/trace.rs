@@ -253,10 +253,13 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     )
     .await?;
     let rows = match acp_scope.as_ref() {
-        Some(acp_scope) => projection_acp::apply_projection_acp_read_filter(rows, acp_scope).await?,
+        Some(acp_scope) => {
+            projection_acp::apply_projection_acp_read_filter(rows, acp_scope).await?
+        }
         None => rows,
     };
-    let timeline = projection_acp::apply_projection_document_scope(build_run_timeline(rows), &scope)?;
+    let timeline =
+        projection_acp::apply_projection_document_scope(build_run_timeline(rows), &scope)?;
     let context = ProjectionContext {
         actor_did,
         redaction_mode: projection_redaction_mode(args.redaction),
