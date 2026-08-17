@@ -255,56 +255,6 @@ type InferenceProfile {
 }
 "#;
 
-// Frozen at the correlated fan-in cutover. Background completion snapshot
-// fields advance through DEFAULT_STEPS so stores retain that known root.
-const AGENT_REQUEST_BASELINE_SDL: &str = r#"
-type AgentRequest @branchable {
-    request_id: String @index
-    agent_did: String @index @immutable
-    requester_did: String @index @immutable
-    behavior_id: String @index
-    session_id: String @index
-    retry_parent_request: String
-    retry_parent_request_doc_id: String @index @immutable
-    retry_root_request: String
-    retry_key: String @index(unique: true) @immutable
-    superseded_by_request: String
-    superseded_by_request_doc_id: String @index
-    content: String
-    temperature: Float
-    top_p: Float
-    top_k: Int
-    seed: Int
-    max_tokens: Int
-    max_total_tokens: Int
-    metadata: String
-    status: String @index
-    lifecycle_state: String @index
-    backend_id: String @index
-    execution_origin: String
-    caused_by_trigger_id: String @index @immutable
-    caused_by_trigger_kind: String @index @immutable
-    caused_by_correlation: String @index @immutable
-    caused_by_trigger_context: String @immutable
-    caused_by_source_doc_id: String @index @immutable
-    failure_reason: String
-    terminalized_at: String @index
-    terminal_redrive_attempts: Int @index
-    created_at: String @index
-    claimed_at: String
-    deadline: String
-    retry_count: Int
-    max_retries: Int
-    interrupt_requested_at: String
-    valid_until: String
-    subagent_depth: Int
-    caused_by_parent_request_id: String @index
-    caused_by_parent_request_doc_id: String @index @immutable
-    caused_by_parent_tool_call_id: String @index
-    caused_by_parent_tool_call_doc_id: String @index @immutable
-}
-"#;
-
 const INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH: &str = r#"[
   {"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"reasoning_effort","Kind":"String"}},
   {"op":"replace","path":"/IsActive","value":false}
@@ -312,12 +262,6 @@ const INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH: &str = r#"[
 
 const INFERENCE_PROFILE_ADD_SEED_PATCH: &str = r#"[
   {"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"seed","Kind":"Int"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const AGENT_REQUEST_ADD_BACKGROUND_COMPLETION_SNAPSHOT_PATCH: &str = r#"[
-  {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"background_completion_input_through_sequence","Kind":"Int"}},
-  {"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"background_completion_notification_keys_json","Kind":"String"}},
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
@@ -414,10 +358,16 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::AGENT_CONVERSATION,
         "bafyreide7lgaj6zensfdbrhhafhpj3yxedj3luuhmnttt23qoma7isnnoa"
     ),
+    // Client-authored plane (#1123): kept chain-free so a fresh client store
+    // fresh-applying the live SDL mints the same version identity as the
+    // server. Do not add DEFAULT_STEPS entries for this collection — neither
+    // PatchVersioned nor PatchInPlace (see CLIENT_AUTHORED_COLLECTIONS) —
+    // any future change must land directly in the live SDL and this pin
+    // must move with it.
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
-        AGENT_REQUEST_BASELINE_SDL,
-        "bafyreic6nbycwtmqjwtvw65gvdcpgl4hwtnqch3a5iogvgzihckzc74f2a"
+        gents_protocol::schemas::AGENT_REQUEST,
+        "bafyreic7me42vx5n742f6aygvtybwzxrpu6rnlxcemchlsdrydtw2mibcu"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
@@ -593,18 +543,6 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         expected_state: CollectionExpectation::fields(&["reasoning_effort", "seed"]),
     },
     MigrationStep::PatchVersioned {
-        id: "agent-request-add-background-completion-snapshot",
-        collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
-        patch: AGENT_REQUEST_ADD_BACKGROUND_COMPLETION_SNAPSHOT_PATCH,
-        lens: None,
-        expected_version: Some("bafyreieal27jce2xey2ypnhxgbpbx2xjsfx3v5qdt6nt5ap2doium4hkt4"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&[
-            "background_completion_input_through_sequence",
-            "background_completion_notification_keys_json",
-        ]),
-    },
-    MigrationStep::PatchVersioned {
         id: "tool-selection-add-lsp-fields",
         collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
         patch: TOOL_SELECTION_ADD_LSP_FIELDS_PATCH,
@@ -626,3 +564,62 @@ pub static DEFAULT_REGISTRY: Registry<'static> = Registry {
 pub fn fixture_lens_wasm() -> &'static [u8] {
     include_bytes!(env!("GENTS_LENS_FIXTURE_ADD_LABEL_WASM_PATH"))
 }
+
+// ---------------------------------------------------------------------------
+// Client-authored (conversation-plane) collections (#1123 / #1125)
+// ---------------------------------------------------------------------------
+
+/// Collections a paired client fresh-applies its bundled SDL into and then
+/// authors documents into directly: the conversation-plane transcript
+/// (`AgentRequest`, `AgentResponse`, `AgentMessage`, `AgentToolCall`,
+/// `AgentToolResult`, `AgentSession`, `AgentConversation`,
+/// `CompactionEntry`), pairing readiness/claim rows (`BearerPairingReady`,
+/// `PairingBearerClaim`), the signed `PeerEndpoint` heartbeat,
+/// `PersonaConfigRequest`, and the fleet-discovery `AgentDirectoryEntry`.
+///
+/// A client mints its store from the collection's *current* SDL with no
+/// server-side history: a single `add_schema` call produces a genesis
+/// version whose DAG-CBOR block has empty `heads`. A server-side
+/// [`MigrationStep::PatchVersioned`] step instead chains a new version onto
+/// its predecessor's CID as `heads`. Because a version's CID is the hash of
+/// that DAG-CBOR block, a chain-tip CID (non-empty heads) can never equal a
+/// fresh client's genesis CID (empty heads) — even when the two collections
+/// end up with byte-identical fields. This is a structural property of
+/// DefraDB's version DAG, not something schema authoring discipline alone
+/// can avoid.
+///
+/// Until #1123's option 1 or 2 lands (a mechanism that lets `ensure_migrations`
+/// accept more than one known root/tip per collection), every collection in
+/// this list MUST evolve by **re-pinning its baseline** to the new
+/// fresh-apply CID — never through `DEFAULT_STEPS`, of either kind:
+/// [`MigrationStep::PatchVersioned`] chains the version DAG so the CIDs can
+/// never match again, and [`MigrationStep::PatchInPlace`] keeps the CID
+/// while diverging the server's indexes/policies from what a bare fresh
+/// apply mints — a silent divergence no CID comparison can detect. PR #1125
+/// is the worked example: `AgentRequest` had drifted onto a chain (a
+/// `PatchVersioned` step appended fields after the baseline), which broke
+/// fresh mobile stores against a v0.11 server; the fix folded the fields
+/// into the baseline SDL and re-pinned the root to the fresh-apply CID.
+///
+/// `tests/fresh_apply_parity.rs` enforces CID parity for every collection
+/// listed here; the step guard in
+/// `default_baseline_matches_ordered_protocol_catalog`
+/// (`tests/baseline_ensure.rs`) statically rejects a `DEFAULT_STEPS` entry
+/// of any kind targeting any of them. The
+/// `client_authored_collections_fence` test in the `gents` crate keeps this
+/// list synced with the client push surface that gents actually configures.
+pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
+    gents_protocol::schemas::AGENT_REQUEST_NAME,
+    gents_protocol::schemas::AGENT_RESPONSE_NAME,
+    gents_protocol::schemas::AGENT_MESSAGE_NAME,
+    gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
+    gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
+    gents_protocol::schemas::AGENT_SESSION_NAME,
+    gents_protocol::schemas::AGENT_CONVERSATION_NAME,
+    gents_protocol::schemas::COMPACTION_ENTRY_NAME,
+    gents_protocol::schemas::BEARER_PAIRING_READY_NAME,
+    gents_protocol::schemas::PAIRING_BEARER_CLAIM_NAME,
+    gents_protocol::schemas::PEER_ENDPOINT_NAME,
+    gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
+    gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,
+];

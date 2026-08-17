@@ -35,8 +35,8 @@ pub use expectation::{descriptor_digest, normalize_descriptor, CollectionExpecta
 pub use lens::{lens_config, predict_transform_id};
 pub use registry::{
     fixture_lens_wasm, BaselineCollection, BaselineCollectionOwned, DynamicRegistry, LensSpec,
-    LensSpecOwned, MigrationStep, MigrationStepOwned, Registry, DEFAULT_BASELINE, DEFAULT_REGISTRY,
-    DEFAULT_STEPS,
+    LensSpecOwned, MigrationStep, MigrationStepOwned, Registry, CLIENT_AUTHORED_COLLECTIONS,
+    DEFAULT_BASELINE, DEFAULT_REGISTRY, DEFAULT_STEPS,
 };
 pub use report::{MaterializationStats, MigrationReport};
 pub use upgrade::{is_unknown_version_read_error, ROLLING_UPGRADE_GUIDANCE};
