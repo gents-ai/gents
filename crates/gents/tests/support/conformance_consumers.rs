@@ -568,6 +568,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_subagent_delegation_graph_cases_pin_gap2_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "descendant_graph::tests::generated_descendant_graph_cases_fence_visibility_and_control",
+            package: "gents",
+            source_path: "crates/gents/src/descendant_graph.rs",
+            module_path: "descendant_graph::tests",
+            function: "generated_descendant_graph_cases_fence_visibility_and_control",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::generated_r4c_background_work_cases_pin_observable_shapes",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",

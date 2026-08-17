@@ -1,10 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents::{
+    ConfigAccess, DescendantEdge, DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
+};
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde::Deserialize;
 use serde_json::Value;
@@ -17,19 +20,13 @@ pub const HARD_SUBAGENT_TREE_MAX_DEPTH: usize = 32;
 const TERMINAL_STATES: &[&str] = &[
     "completed",
     "failed",
+    "error",
+    "timedout",
     "cancelled",
     "interrupted",
     "superseded",
     "dead",
 ];
-
-#[derive(Debug, Deserialize)]
-struct LevelQueryEnvelope {
-    #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
-    #[serde(rename = "AgentToolCall", default)]
-    bridges: Vec<BridgeRow>,
-}
 
 #[derive(Debug, Deserialize)]
 struct RootRequestEnvelope {
@@ -59,32 +56,6 @@ struct RequestRow {
     caused_by_parent_tool_call_id: Option<String>,
     #[serde(default)]
     backend_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct BridgeRow {
-    #[serde(default)]
-    request_id: String,
-    #[serde(default)]
-    tool_call_id: Option<String>,
-    #[serde(default)]
-    tool_name: Option<String>,
-    #[serde(default)]
-    args: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-    #[serde(default)]
-    child_request_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SpawnSubagentArgs {
-    #[serde(default)]
-    await_mode: Option<String>,
-    #[serde(default)]
-    cancel_policy: Option<String>,
 }
 
 pub fn effective_subagent_tree_max_depth(max_depth: Option<u32>) -> usize {
@@ -154,8 +125,6 @@ pub async fn build_subagent_tree(
     max_depth: usize,
 ) -> Result<SubagentTreeView> {
     let mut nodes: BTreeMap<String, SubagentNodeView> = BTreeMap::new();
-    let mut edges: Vec<SubagentEdgeView> = Vec::new();
-    let mut seen_edges: BTreeSet<(String, String)> = BTreeSet::new();
     let mut partial_errors: Vec<String> = Vec::new();
     let mut dead_accesses: BTreeSet<usize> = BTreeSet::new();
 
@@ -179,25 +148,29 @@ pub async fn build_subagent_tree(
         }
     }
 
-    let mut frontier: VecDeque<String> = VecDeque::from([root_request_id.to_string()]);
-    let mut depth = 0;
-    let mut truncated = false;
-
-    while !frontier.is_empty() && depth < max_depth {
-        let level = frontier.drain(..).collect::<Vec<_>>();
-        let mut level_requests = Vec::new();
-        let mut level_bridges = Vec::new();
-        for (index, entry) in accesses.iter().enumerate() {
-            if dead_accesses.contains(&index) {
-                continue;
-            }
-            match fetch_level(&entry.access, &level).await {
-                Ok(envelope) => {
-                    for request in envelope.requests {
-                        level_requests.push((entry.label.clone(), request));
-                    }
-                    level_bridges.extend(envelope.bridges);
-                }
+    let mut canonical =
+        BTreeMap::<(String, String, String), (Option<String>, DescendantEdge)>::new();
+    for (index, entry) in accesses.iter().enumerate() {
+        if dead_accesses.contains(&index) {
+            continue;
+        }
+        let access = match &entry.access {
+            TreeQueryAccess::Local(node) => ConfigAccess::Local(node.clone()),
+            TreeQueryAccess::Graphql(endpoint) => ConfigAccess::Graphql(endpoint.clone()),
+        };
+        let mut after = None;
+        loop {
+            let page = match gents::resolve_descendant_graph(
+                DescendantGraphAccess::Config(&access),
+                &DescendantQuery {
+                    after: after.clone(),
+                    limit: MAX_DESCENDANT_PAGE_LIMIT,
+                    ..DescendantQuery::all(root_request_id)
+                },
+            )
+            .await
+            {
+                Ok(page) => page,
                 Err(error) => {
                     record_dead_access(
                         &mut partial_errors,
@@ -206,59 +179,60 @@ pub async fn build_subagent_tree(
                         entry,
                         &error,
                     );
+                    break;
+                }
+            };
+            for edge in page.edges {
+                let key = (
+                    edge.immediate_parent_request_id.clone(),
+                    edge.immediate_parent_tool_call_id.clone(),
+                    edge.child_request_id.clone(),
+                );
+                match canonical.get(&key) {
+                    Some((_, existing)) if existing.readable() || !edge.readable() => {}
+                    _ => {
+                        canonical.insert(key, (entry.label.clone(), edge));
+                    }
                 }
             }
-        }
-
-        for (label, request) in level_requests {
-            if request.request_id.trim().is_empty() {
-                continue;
+            if !page.has_more {
+                break;
             }
-            let mut node = request_row_into_node(request);
-            node.resolved_via = label;
-            nodes.entry(node.request_id.clone()).or_insert(node);
+            after = page.next_cursor;
         }
-
-        let envelope = LevelQueryEnvelope {
-            requests: Vec::new(),
-            bridges: level_bridges,
-        };
-
-        let mut next_frontier: BTreeSet<String> = BTreeSet::new();
-        for bridge in envelope.bridges {
-            let parent_request_id = clean_string(&bridge.request_id);
-            let child_request_id = match clean_optional_string(bridge.child_request_id.as_deref()) {
-                Some(value) => value,
-                None => continue,
-            };
-            if parent_request_id.is_empty() {
-                continue;
-            }
-            if !seen_edges.insert((parent_request_id.clone(), child_request_id.clone())) {
-                continue;
-            }
-
-            let (await_mode, cancel_policy) = parse_spawn_args(bridge.args.as_deref());
-            let bridge_state = clean_optional_string(bridge.lifecycle_state.as_deref())
-                .or_else(|| clean_optional_string(bridge.status.as_deref()));
-            edges.push(SubagentEdgeView {
-                parent_request_id,
-                child_request_id: child_request_id.clone(),
-                parent_tool_call_id: clean_optional_string(bridge.tool_call_id.as_deref()),
-                tool_name: clean_optional_string(bridge.tool_name.as_deref()),
-                await_mode,
-                cancel_policy,
-                lifecycle_state: bridge_state,
-            });
-            next_frontier.insert(child_request_id);
-        }
-
-        frontier.extend(next_frontier);
-        depth += 1;
     }
 
-    if !frontier.is_empty() {
-        truncated = true;
+    let truncated = canonical.values().any(|(_, edge)| edge.depth > max_depth);
+    let mut edges = Vec::new();
+    for (resolved_via, edge) in canonical
+        .into_values()
+        .filter(|(_, edge)| edge.depth <= max_depth)
+    {
+        nodes.insert(
+            edge.child_request_id.clone(),
+            SubagentNodeView {
+                request_id: edge.child_request_id.clone(),
+                resolved_via,
+                session_id: edge.child_session_id.clone(),
+                agent_did: edge.principal_did.clone(),
+                behavior_id: edge.behavior_id.clone(),
+                lifecycle_state: Some(edge.lifecycle_state.clone()),
+                status: Some(edge.lifecycle_state.clone()),
+                subagent_depth: Some(edge.depth as i64),
+                caused_by_parent_request_id: Some(edge.immediate_parent_request_id.clone()),
+                caused_by_parent_tool_call_id: Some(edge.immediate_parent_tool_call_id.clone()),
+                backend_id: None,
+            },
+        );
+        edges.push(SubagentEdgeView {
+            parent_request_id: edge.immediate_parent_request_id,
+            child_request_id: edge.child_request_id,
+            parent_tool_call_id: Some(edge.immediate_parent_tool_call_id),
+            tool_name: Some("spawn_subagent".to_string()),
+            await_mode: Some(edge.await_mode),
+            cancel_policy: edge.cancel_policy,
+            lifecycle_state: Some(edge.lifecycle_state),
+        });
     }
 
     if !include_terminal {
@@ -347,55 +321,6 @@ async fn fetch_root_request(
     Ok(envelope.requests.into_iter().next())
 }
 
-async fn fetch_level(
-    access: &TreeQueryAccess,
-    parent_request_ids: &[String],
-) -> Result<LevelQueryEnvelope> {
-    let list = parent_request_ids
-        .iter()
-        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ caused_by_parent_request_id: {{ _in: [{list}] }} }},
-                order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
-            ) {{
-                request_id
-                session_id
-                agent_did
-                behavior_id
-                lifecycle_state
-                status
-                subagent_depth
-                caused_by_parent_request_id
-                caused_by_parent_tool_call_id
-                backend_id
-            }}
-            AgentToolCall(
-                filter: {{
-                    _and: [
-                        {{ request_id: {{ _in: [{list}] }} }},
-                        {{ tool_name: {{ _eq: "spawn_subagent" }} }},
-                        {{ child_request_id: {{ _ne: "" }} }}
-                    ]
-                }},
-                order: [{{ started_at: ASC }}, {{ child_request_id: ASC }}]
-            ) {{
-                request_id
-                tool_call_id
-                tool_name
-                args
-                status
-                lifecycle_state
-                child_request_id
-            }}
-        }}"#
-    );
-    execute_access_query(access, &query, "subagent tree level fetch").await
-}
-
 async fn execute_access_query<T: serde::de::DeserializeOwned>(
     access: &TreeQueryAccess,
     query: &str,
@@ -410,24 +335,6 @@ async fn execute_access_query<T: serde::de::DeserializeOwned>(
         .cloned()
         .with_context(|| format!("{context} response missing object data"))?;
     serde_json::from_value(data).with_context(|| format!("decoding {context}"))
-}
-
-fn parse_spawn_args(args: Option<&str>) -> (Option<String>, Option<String>) {
-    let args = match args {
-        Some(value) => value.trim(),
-        None => return (None, None),
-    };
-    if args.is_empty() {
-        return (None, None);
-    }
-    let parsed = match serde_json::from_str::<SpawnSubagentArgs>(args) {
-        Ok(parsed) => parsed,
-        Err(_) => return (None, None),
-    };
-    (
-        clean_optional_string(parsed.await_mode.as_deref()),
-        clean_optional_string(parsed.cancel_policy.as_deref()),
-    )
 }
 
 fn prune_terminal_subtrees(

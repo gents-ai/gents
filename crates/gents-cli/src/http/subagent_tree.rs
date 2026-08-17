@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -8,7 +8,10 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use gents::graphql::escape_graphql_string;
+use gents::{
+    graphql::escape_graphql_string, ConfigAccess, DescendantGraphAccess, DescendantQuery,
+    MAX_DESCENDANT_PAGE_LIMIT,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,6 +23,8 @@ const HARD_MAX_DEPTH: usize = 32;
 const TERMINAL_STATES: &[&str] = &[
     "completed",
     "failed",
+    "error",
+    "timedout",
     "cancelled",
     "interrupted",
     "superseded",
@@ -73,14 +78,6 @@ pub(crate) struct SubagentTreeQuery {
 }
 
 #[derive(Debug, Deserialize)]
-struct LevelQueryEnvelope {
-    #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
-    #[serde(rename = "AgentToolCall", default)]
-    bridges: Vec<BridgeRow>,
-}
-
-#[derive(Debug, Deserialize)]
 struct RootRequestEnvelope {
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<RequestRow>,
@@ -106,32 +103,6 @@ struct RequestRow {
     caused_by_parent_request_id: Option<String>,
     #[serde(default)]
     caused_by_parent_tool_call_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct BridgeRow {
-    #[serde(default)]
-    request_id: String,
-    #[serde(default)]
-    tool_call_id: Option<String>,
-    #[serde(default)]
-    tool_name: Option<String>,
-    #[serde(default)]
-    args: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-    #[serde(default)]
-    child_request_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SpawnSubagentArgs {
-    #[serde(default)]
-    await_mode: Option<String>,
-    #[serde(default)]
-    cancel_policy: Option<String>,
 }
 
 pub(crate) async fn subagent_tree_handler(
@@ -180,74 +151,60 @@ pub(crate) async fn load_subagent_tree_snapshot(
     max_depth: usize,
 ) -> Result<SubagentTreeSnapshot> {
     let generated_at = Utc::now();
-
     let mut nodes: BTreeMap<String, SubagentTreeNode> = BTreeMap::new();
-    let mut edges: Vec<SubagentTreeEdge> = Vec::new();
-    let mut seen_edges: BTreeSet<(String, String)> = BTreeSet::new();
-
     if let Some(root) = fetch_root_request(graphql, root_request_id).await? {
         nodes.insert(root.request_id.clone(), request_row_into_node(root));
     }
-
-    let mut frontier: VecDeque<String> = VecDeque::new();
-    frontier.push_back(root_request_id.to_string());
-
-    let mut depth: usize = 0;
-    let mut truncated = false;
-
-    while !frontier.is_empty() && depth < max_depth {
-        let level: Vec<String> = frontier.drain(..).collect();
-        let envelope = fetch_level(graphql, &level).await?;
-
-        for request in envelope.requests {
-            if request.request_id.is_empty() {
-                continue;
-            }
-            let node = request_row_into_node(request);
-            nodes.entry(node.request_id.clone()).or_insert(node);
+    let access = ConfigAccess::Graphql(graphql.to_string());
+    let mut canonical_edges = Vec::new();
+    let mut after = None;
+    loop {
+        let page = gents::resolve_descendant_graph(
+            DescendantGraphAccess::Config(&access),
+            &DescendantQuery {
+                after: after.clone(),
+                limit: MAX_DESCENDANT_PAGE_LIMIT,
+                ..DescendantQuery::all(root_request_id)
+            },
+        )
+        .await?;
+        canonical_edges.extend(page.edges);
+        if !page.has_more {
+            break;
         }
-
-        let mut next_frontier: BTreeSet<String> = BTreeSet::new();
-        for bridge in envelope.bridges {
-            let parent_request_id = clean_string(&bridge.request_id);
-            let child_request_id = match clean_optional_string(bridge.child_request_id.as_deref()) {
-                Some(value) => value,
-                None => continue,
-            };
-            if parent_request_id.is_empty() {
-                continue;
-            }
-            if !seen_edges.insert((parent_request_id.clone(), child_request_id.clone())) {
-                continue;
-            }
-            let (await_mode, cancel_policy) = parse_spawn_args(bridge.args.as_deref());
-            let bridge_state = clean_optional_string(bridge.lifecycle_state.as_deref())
-                .or_else(|| clean_optional_string(bridge.status.as_deref()));
-            edges.push(SubagentTreeEdge {
-                parent_request_id,
-                child_request_id: child_request_id.clone(),
-                parent_tool_call_id: clean_optional_string(bridge.tool_call_id.as_deref()),
-                tool_name: clean_optional_string(bridge.tool_name.as_deref()),
-                await_mode,
-                cancel_policy,
-                lifecycle_state: bridge_state,
-            });
-            if !nodes.contains_key(&child_request_id) {
-                next_frontier.insert(child_request_id);
-            } else {
-                next_frontier.insert(child_request_id);
-            }
-        }
-
-        for child in next_frontier {
-            frontier.push_back(child);
-        }
-        depth += 1;
+        after = page.next_cursor;
     }
 
-    if !frontier.is_empty() {
-        truncated = true;
-    }
+    let truncated = canonical_edges.iter().any(|edge| edge.depth > max_depth);
+    canonical_edges.retain(|edge| edge.depth <= max_depth);
+    let mut edges = canonical_edges
+        .iter()
+        .map(|edge| {
+            nodes.insert(
+                edge.child_request_id.clone(),
+                SubagentTreeNode {
+                    request_id: edge.child_request_id.clone(),
+                    session_id: edge.child_session_id.clone(),
+                    agent_did: edge.principal_did.clone(),
+                    behavior_id: edge.behavior_id.clone(),
+                    lifecycle_state: Some(edge.lifecycle_state.clone()),
+                    status: Some(edge.lifecycle_state.clone()),
+                    subagent_depth: Some(edge.depth as i64),
+                    caused_by_parent_request_id: Some(edge.immediate_parent_request_id.clone()),
+                    caused_by_parent_tool_call_id: Some(edge.immediate_parent_tool_call_id.clone()),
+                },
+            );
+            SubagentTreeEdge {
+                parent_request_id: edge.immediate_parent_request_id.clone(),
+                child_request_id: edge.child_request_id.clone(),
+                parent_tool_call_id: Some(edge.immediate_parent_tool_call_id.clone()),
+                tool_name: Some("spawn_subagent".to_string()),
+                await_mode: Some(edge.await_mode.clone()),
+                cancel_policy: edge.cancel_policy.clone(),
+                lifecycle_state: Some(edge.lifecycle_state.clone()),
+            }
+        })
+        .collect::<Vec<_>>();
 
     if !include_terminal {
         prune_terminal_subtrees(&mut nodes, &mut edges, root_request_id);
@@ -319,52 +276,6 @@ async fn fetch_root_request(graphql: &str, root_request_id: &str) -> Result<Opti
     Ok(envelope.requests.into_iter().next())
 }
 
-async fn fetch_level(graphql: &str, parent_request_ids: &[String]) -> Result<LevelQueryEnvelope> {
-    let list = parent_request_ids
-        .iter()
-        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ caused_by_parent_request_id: {{ _in: [{list}] }} }},
-                order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
-            ) {{
-                request_id
-                session_id
-                agent_did
-                behavior_id
-                lifecycle_state
-                status
-                subagent_depth
-                caused_by_parent_request_id
-                caused_by_parent_tool_call_id
-            }}
-            AgentToolCall(
-                filter: {{
-                    _and: [
-                        {{ request_id: {{ _in: [{list}] }} }},
-                        {{ tool_name: {{ _eq: "spawn_subagent" }} }},
-                        {{ child_request_id: {{ _ne: "" }} }}
-                    ]
-                }},
-                order: [{{ started_at: ASC }}, {{ child_request_id: ASC }}]
-            ) {{
-                request_id
-                tool_call_id
-                tool_name
-                args
-                status
-                lifecycle_state
-                child_request_id
-            }}
-        }}"#
-    );
-    let response = post_graphql(graphql, &query).await?;
-    decode_data_object(response, "subagent tree level fetch")
-}
-
 fn decode_data_object<T: serde::de::DeserializeOwned>(response: Value, context: &str) -> Result<T> {
     let data = response
         .get("data")
@@ -372,24 +283,6 @@ fn decode_data_object<T: serde::de::DeserializeOwned>(response: Value, context: 
         .cloned()
         .with_context(|| format!("{context} response missing object data: {response}"))?;
     serde_json::from_value(data).with_context(|| format!("decoding {context}"))
-}
-
-fn parse_spawn_args(args: Option<&str>) -> (Option<String>, Option<String>) {
-    let args = match args {
-        Some(value) => value.trim(),
-        None => return (None, None),
-    };
-    if args.is_empty() {
-        return (None, None);
-    }
-    let parsed = match serde_json::from_str::<SpawnSubagentArgs>(args) {
-        Ok(parsed) => parsed,
-        Err(_) => return (None, None),
-    };
-    (
-        clean_optional_string(parsed.await_mode.as_deref()),
-        clean_optional_string(parsed.cancel_policy.as_deref()),
-    )
 }
 
 fn prune_terminal_subtrees(
@@ -552,55 +445,158 @@ mod tests {
         })
     }
 
-    fn level_one_response() -> Value {
+    fn canonical_root_response(
+        request_id: &str,
+        doc_id: &str,
+        session_id: &str,
+        agent_did: &str,
+        behavior_id: &str,
+        lifecycle_state: &str,
+        status: &str,
+    ) -> Value {
         json!({
-            "data": {
-                "AgentRequest": [
-                    {
-                        "request_id": "req-child",
-                        "session_id": "sess-child",
-                        "agent_did": "deployment-b",
-                        "behavior_id": "amy-code",
-                        "lifecycle_state": "Processing",
-                        "status": "processing",
-                        "subagent_depth": 1,
-                        "caused_by_parent_request_id": "req-root",
-                        "caused_by_parent_tool_call_id": "tc-bridge"
-                    }
-                ],
-                "AgentToolCall": [
-                    {
-                        "request_id": "req-root",
-                        "tool_call_id": "tc-bridge",
-                        "tool_name": "spawn_subagent",
-                        "args": "{\"await_mode\":\"background\",\"cancel_policy\":\"cascade\"}",
-                        "status": "running",
-                        "lifecycle_state": "running",
-                        "child_request_id": "req-child"
-                    }
-                ]
-            }
+            "data": { "AgentRequest": [{
+                "_docID": doc_id,
+                "request_id": request_id,
+                "agent_did": agent_did,
+                "requester_did": null,
+                "behavior_id": behavior_id,
+                "session_id": session_id,
+                "status": status,
+                "lifecycle_state": lifecycle_state,
+                "caused_by_parent_request_id": null,
+                "caused_by_parent_request_doc_id": null,
+                "caused_by_parent_tool_call_id": null,
+                "caused_by_parent_tool_call_doc_id": null
+            }]}
         })
     }
 
-    fn level_two_empty() -> Value {
+    #[allow(clippy::too_many_arguments)]
+    fn canonical_bridge_row(
+        doc_id: &str,
+        parent_request_id: &str,
+        parent_doc_id: &str,
+        parent_session_id: &str,
+        parent_agent_did: &str,
+        tool_call_id: &str,
+        child_request_id: &str,
+        await_mode: &str,
+        lifecycle_state: &str,
+    ) -> Value {
         json!({
-            "data": {
-                "AgentRequest": [],
-                "AgentToolCall": []
-            }
+            "_docID": doc_id,
+            "request_id": parent_request_id,
+            "request_doc_id": parent_doc_id,
+            "session_id": parent_session_id,
+            "agent_did": parent_agent_did,
+            "requester_did": null,
+            "tool_call_id": tool_call_id,
+            "args": format!(r#"{{"name":"{child_request_id}"}}"#),
+            "result": if lifecycle_state == "completed" { "done" } else { "" },
+            "status": lifecycle_state,
+            "lifecycle_state": lifecycle_state,
+            "started_at": "2026-08-01T00:00:00Z",
+            "completed_at": if lifecycle_state == "completed" {
+                Some("2026-08-01T00:00:01Z")
+            } else {
+                None
+            },
+            "await_mode": await_mode,
+            "cancel_policy": "cascade",
+            "child_request_id": child_request_id,
+            "spawn_target_did": null,
+            "workflow_group_id": null,
+            "workflow_role": null,
+            "unclaimed_deadline_at": null
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn canonical_child_row(
+        doc_id: &str,
+        request_id: &str,
+        session_id: &str,
+        agent_did: &str,
+        behavior_id: &str,
+        lifecycle_state: &str,
+        parent_request_id: &str,
+        parent_doc_id: &str,
+        parent_tool_call_id: &str,
+        parent_tool_doc_id: &str,
+    ) -> Value {
+        json!({
+            "_docID": doc_id,
+            "request_id": request_id,
+            "agent_did": agent_did,
+            "requester_did": null,
+            "behavior_id": behavior_id,
+            "session_id": session_id,
+            "status": lifecycle_state,
+            "lifecycle_state": lifecycle_state,
+            "caused_by_parent_request_id": parent_request_id,
+            "caused_by_parent_request_doc_id": parent_doc_id,
+            "caused_by_parent_tool_call_id": parent_tool_call_id,
+            "caused_by_parent_tool_call_doc_id": parent_tool_doc_id
+        })
+    }
+
+    fn canonical_bridges_response(rows: Vec<Value>) -> Value {
+        json!({ "data": { "AgentToolCall": rows } })
+    }
+
+    fn canonical_children_response(rows: Vec<Value>) -> Value {
+        json!({ "data": { "AgentRequest": rows } })
+    }
+
+    fn canonical_messages_empty() -> Value {
+        json!({ "data": { "AgentMessage": [] } })
+    }
+
+    fn canonical_standard_walk_responses() -> Vec<Value> {
+        vec![
+            root_response(),
+            canonical_root_response(
+                "req-root",
+                "doc-root",
+                "sess-root",
+                "deployment-a",
+                "amy-general",
+                "processing",
+                "processing",
+            ),
+            canonical_bridges_response(vec![canonical_bridge_row(
+                "doc-tc-bridge",
+                "req-root",
+                "doc-root",
+                "sess-root",
+                "deployment-a",
+                "tc-bridge",
+                "req-child",
+                "background",
+                "running",
+            )]),
+            canonical_children_response(vec![canonical_child_row(
+                "doc-child",
+                "req-child",
+                "sess-child",
+                "deployment-b",
+                "amy-code",
+                "processing",
+                "req-root",
+                "doc-root",
+                "tc-bridge",
+                "doc-tc-bridge",
+            )]),
+            canonical_bridges_response(Vec::new()),
+            canonical_messages_empty(),
+        ]
     }
 
     #[tokio::test]
     async fn tree_walks_cross_deployment_bridge_and_carries_await_mode_metadata(
     ) -> anyhow::Result<()> {
-        let (graphql, _queries) = spawn_mock_graphql(vec![
-            root_response(),
-            level_one_response(),
-            level_two_empty(),
-        ])
-        .await?;
+        let (graphql, _queries) = spawn_mock_graphql(canonical_standard_walk_responses()).await?;
         let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", false, 4).await?;
 
         assert_eq!(snapshot.root_request_id, "req-root");
@@ -657,32 +653,72 @@ mod tests {
                 ]
             }
         });
-        let level_one = json!({
-            "data": {
-                "AgentRequest": [
-                    {
-                        "request_id": "req-a",
-                        "agent_did": "deployment-a",
-                        "lifecycle_state": "Processing",
-                        "status": "processing",
-                        "subagent_depth": 1,
-                        "caused_by_parent_request_id": "req-root",
-                        "caused_by_parent_tool_call_id": "tc-a"
-                    }
-                ],
-                "AgentToolCall": [
-                    {
-                        "request_id": "req-root",
-                        "tool_call_id": "tc-a",
-                        "tool_name": "spawn_subagent",
-                        "args": "{\"await_mode\":\"background\",\"cancel_policy\":\"cascade\"}",
-                        "lifecycle_state": "running",
-                        "child_request_id": "req-a"
-                    }
-                ]
-            }
-        });
-        let (graphql, _queries) = spawn_mock_graphql(vec![root, level_one]).await?;
+        let canonical_root = canonical_root_response(
+            "req-root",
+            "doc-root",
+            "sess-root",
+            "deployment-a",
+            "amy-general",
+            "processing",
+            "processing",
+        );
+        let canonical_level_one = canonical_bridges_response(vec![canonical_bridge_row(
+            "doc-tc-a",
+            "req-root",
+            "doc-root",
+            "sess-root",
+            "deployment-a",
+            "tc-a",
+            "req-a",
+            "background",
+            "running",
+        )]);
+        let canonical_child_a = canonical_children_response(vec![canonical_child_row(
+            "doc-a",
+            "req-a",
+            "sess-a",
+            "deployment-a",
+            "amy-code",
+            "processing",
+            "req-root",
+            "doc-root",
+            "tc-a",
+            "doc-tc-a",
+        )]);
+        let canonical_level_two = canonical_bridges_response(vec![canonical_bridge_row(
+            "doc-tc-b",
+            "req-a",
+            "doc-a",
+            "sess-a",
+            "deployment-a",
+            "tc-b",
+            "req-b",
+            "foreground",
+            "running",
+        )]);
+        let canonical_child_b = canonical_children_response(vec![canonical_child_row(
+            "doc-b",
+            "req-b",
+            "sess-b",
+            "deployment-a",
+            "amy-review",
+            "processing",
+            "req-a",
+            "doc-a",
+            "tc-b",
+            "doc-tc-b",
+        )]);
+        let (graphql, _queries) = spawn_mock_graphql(vec![
+            root,
+            canonical_root,
+            canonical_level_one,
+            canonical_child_a,
+            canonical_level_two,
+            canonical_child_b,
+            canonical_bridges_response(Vec::new()),
+            canonical_messages_empty(),
+        ])
+        .await?;
         let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", true, 1).await?;
         assert!(snapshot.truncated, "max_depth=1 should set truncated");
         assert_eq!(snapshot.nodes.len(), 2);
@@ -692,12 +728,7 @@ mod tests {
 
     #[tokio::test]
     async fn tree_endpoint_routes_under_runtime_router() -> anyhow::Result<()> {
-        let (graphql, _queries) = spawn_mock_graphql(vec![
-            root_response(),
-            level_one_response(),
-            level_two_empty(),
-        ])
-        .await?;
+        let (graphql, _queries) = spawn_mock_graphql(canonical_standard_walk_responses()).await?;
         let runtime_addr = spawn_runtime_router(graphql).await?;
         let response = reqwest::Client::new()
             .get(format!(
@@ -747,54 +778,74 @@ mod tests {
                 ]
             }
         });
-        let level_one = json!({
-            "data": {
-                "AgentRequest": [
-                    {
-                        "request_id": "req-live",
-                        "agent_did": "deployment-a",
-                        "lifecycle_state": "Processing",
-                        "subagent_depth": 1,
-                        "caused_by_parent_request_id": "req-root",
-                        "caused_by_parent_tool_call_id": "tc-live"
-                    },
-                    {
-                        "request_id": "req-dead",
-                        "agent_did": "deployment-a",
-                        "lifecycle_state": "Completed",
-                        "subagent_depth": 1,
-                        "caused_by_parent_request_id": "req-root",
-                        "caused_by_parent_tool_call_id": "tc-dead"
-                    }
-                ],
-                "AgentToolCall": [
-                    {
-                        "request_id": "req-root",
-                        "tool_call_id": "tc-live",
-                        "tool_name": "spawn_subagent",
-                        "args": "{\"await_mode\":\"background\",\"cancel_policy\":\"cascade\"}",
-                        "lifecycle_state": "running",
-                        "child_request_id": "req-live"
-                    },
-                    {
-                        "request_id": "req-root",
-                        "tool_call_id": "tc-dead",
-                        "tool_name": "spawn_subagent",
-                        "args": "{\"await_mode\":\"foreground\",\"cancel_policy\":\"cascade\"}",
-                        "lifecycle_state": "completed",
-                        "child_request_id": "req-dead"
-                    }
-                ]
-            }
-        });
-        let level_two_empty = json!({
-            "data": {
-                "AgentRequest": [],
-                "AgentToolCall": []
-            }
-        });
-        let (graphql, _queries) =
-            spawn_mock_graphql(vec![root, level_one, level_two_empty]).await?;
+        let canonical_root = canonical_root_response(
+            "req-root",
+            "doc-root",
+            "sess-root",
+            "deployment-a",
+            "amy-general",
+            "processing",
+            "processing",
+        );
+        let bridges = canonical_bridges_response(vec![
+            canonical_bridge_row(
+                "doc-tc-live",
+                "req-root",
+                "doc-root",
+                "sess-root",
+                "deployment-a",
+                "tc-live",
+                "req-live",
+                "background",
+                "running",
+            ),
+            canonical_bridge_row(
+                "doc-tc-dead",
+                "req-root",
+                "doc-root",
+                "sess-root",
+                "deployment-a",
+                "tc-dead",
+                "req-dead",
+                "foreground",
+                "completed",
+            ),
+        ]);
+        let children = canonical_children_response(vec![
+            canonical_child_row(
+                "doc-live",
+                "req-live",
+                "sess-live",
+                "deployment-a",
+                "amy-code",
+                "processing",
+                "req-root",
+                "doc-root",
+                "tc-live",
+                "doc-tc-live",
+            ),
+            canonical_child_row(
+                "doc-dead",
+                "req-dead",
+                "sess-dead",
+                "deployment-a",
+                "amy-code",
+                "completed",
+                "req-root",
+                "doc-root",
+                "tc-dead",
+                "doc-tc-dead",
+            ),
+        ]);
+        let (graphql, _queries) = spawn_mock_graphql(vec![
+            root,
+            canonical_root,
+            bridges,
+            children,
+            canonical_bridges_response(Vec::new()),
+            canonical_messages_empty(),
+        ])
+        .await?;
         let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", false, 4).await?;
         let request_ids = snapshot
             .nodes

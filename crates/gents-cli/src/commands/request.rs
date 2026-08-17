@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::{graphql::escape_graphql_string, tool_call_lifecycle::CancelCause};
+use gents::{
+    graphql::escape_graphql_string, tool_call_lifecycle::CancelCause, ConfigAccess,
+    DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::time::Instant;
@@ -132,6 +135,7 @@ struct RequestShowSnapshot {
     backgrounded_tools: Vec<BackgroundedToolView>,
     native_executors_available: bool,
     native_executors: Vec<NativeExecutorView>,
+    descendant_edges: Vec<gents::DescendantEdge>,
     child_requests: Vec<ChildRequestView>,
 }
 
@@ -271,10 +275,26 @@ async fn load_request_show_snapshot(
         .with_context(|| format!("loading AgentToolCall rows for {request_id}"))?;
     let tool_rows = value_array(&tool_response, "/data/AgentToolCall");
 
-    let child_response = post_graphql(graphql, &request_show_child_requests_query(request_id))
+    let access = ConfigAccess::Graphql(graphql.to_string());
+    let mut descendant_edges = Vec::new();
+    let mut after = None;
+    loop {
+        let descendants = gents::resolve_descendant_graph(
+            DescendantGraphAccess::Config(&access),
+            &DescendantQuery {
+                after: after.clone(),
+                limit: MAX_DESCENDANT_PAGE_LIMIT,
+                ..DescendantQuery::direct(request_id)
+            },
+        )
         .await
-        .with_context(|| format!("loading child AgentRequest rows for {request_id}"))?;
-    let child_rows = value_array(&child_response, "/data/AgentRequest");
+        .with_context(|| format!("loading canonical descendants for {request_id}"))?;
+        descendant_edges.extend(descendants.edges);
+        if !descendants.has_more {
+            break;
+        }
+        after = descendants.next_cursor;
+    }
 
     let request_agent_did = string_field(&request_row, "agent_did").unwrap_or_default();
     let liveness = crate::commands::status::load_liveness_value(graphql, &request_agent_did).await;
@@ -347,7 +367,7 @@ async fn load_request_show_snapshot(
         terminal_cause.as_deref(),
     );
     let request = request_header_view(&request_row, terminal_cause, transition_history);
-    let child_requests = child_rows
+    let child_requests = descendant_edges
         .iter()
         .map(child_request_view)
         .collect::<Vec<_>>();
@@ -359,6 +379,7 @@ async fn load_request_show_snapshot(
         backgrounded_tools,
         native_executors_available,
         native_executors,
+        descendant_edges,
         child_requests,
     })
 }
@@ -475,26 +496,6 @@ fn request_show_tool_calls_query(request_id: &str, schema: &RequestShowSchema) -
                 order: {{ started_at: ASC }}
             ) {{
                 {fields}
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    )
-}
-
-fn request_show_child_requests_query(request_id: &str) -> String {
-    format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ caused_by_parent_request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ created_at: ASC }}
-            ) {{
-                request_id
-                behavior_id
-                status
-                lifecycle_state
-                created_at
-                caused_by_parent_tool_call_id
-                caused_by_trigger_kind
             }}
         }}"#,
         request_id = escape_graphql_string(request_id),
@@ -785,17 +786,18 @@ fn backgrounded_tool_view(tool: &RequestToolCallView) -> BackgroundedToolView {
     }
 }
 
-fn child_request_view(row: &Value) -> ChildRequestView {
+fn child_request_view(edge: &gents::DescendantEdge) -> ChildRequestView {
     ChildRequestView {
-        request_id: string_field_or_unknown(row, "request_id"),
-        state: string_field(row, "lifecycle_state")
-            .or_else(|| string_field(row, "status"))
+        request_id: edge.child_request_id.clone(),
+        state: edge.lifecycle_state.clone(),
+        status: edge.lifecycle_state.clone(),
+        behavior_id: edge
+            .behavior_id
+            .clone()
             .unwrap_or_else(|| "unknown".to_string()),
-        status: string_field_or_unknown(row, "status"),
-        behavior_id: string_field_or_unknown(row, "behavior_id"),
-        created_at: string_field(row, "created_at"),
-        caused_by_parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
-        caused_by_trigger_kind: string_field(row, "caused_by_trigger_kind"),
+        created_at: edge.created_at.clone(),
+        caused_by_parent_tool_call_id: Some(edge.immediate_parent_tool_call_id.clone()),
+        caused_by_trigger_kind: Some("subagent".to_string()),
     }
 }
 

@@ -40,43 +40,52 @@ impl DefraSessionHook {
             ));
         }
 
-        let parent_context = load_parent_subagent_context(&self.node, &request_id).await?;
-        let edge =
-            match load_authorized_child_edge(&self.node, &parent_context, child_request_id).await {
-                Ok(edge) => edge,
-                Err(error) => {
-                    // #593: if the edge failed to RESOLVE (child absent or
-                    // unlinked) and the caller owns a spawn bridge for this
-                    // child, the id is real — explain the bridge state
-                    // (retryable while non-terminal). Child-present
-                    // corruption and query failures keep the original error;
-                    // a probe failure falls through to the generic payload.
-                    if authorization_lookup_error(&error, &request_id, child_request_id) {
-                        if let Ok(Some(bridge)) =
-                            load_spawn_bridge_row(&self.node, &request_id, child_request_id).await
-                        {
-                            let (message, retryable) =
-                                bridge.unmaterialized_child_explanation(child_request_id);
-                            let result = service_unavailable_payload(
-                                WAIT_SUBAGENT_TOOL_NAME,
-                                "/child_request_id",
-                                message,
-                                retryable,
-                            );
-                            return Ok(self.skip_tool_result(WAIT_SUBAGENT_TOOL_NAME, result));
-                        }
-                    }
-                    let result = service_unavailable_payload(
-                        WAIT_SUBAGENT_TOOL_NAME,
-                        "/child_request_id",
-                        format!(
-                        "child subagent request is not available to this parent request: {error}"
-                    ),
-                        false,
-                    );
-                    return Ok(self.skip_tool_result(WAIT_SUBAGENT_TOOL_NAME, result));
-                }
-            };
+        let root_request_id = resolve_descendant_root_request_id(
+            DescendantGraphAccess::Local(&self.node),
+            &request_id,
+        )
+        .await?;
+        let Some(canonical) = resolve_descendant_edge(
+            DescendantGraphAccess::Local(&self.node),
+            &root_request_id,
+            child_request_id,
+        )
+        .await?
+        else {
+            let result = service_unavailable_payload(
+                WAIT_SUBAGENT_TOOL_NAME,
+                "/child_request_id",
+                "child subagent request is not available to this parent request",
+                false,
+            );
+            return Ok(self.skip_tool_result(WAIT_SUBAGENT_TOOL_NAME, result));
+        };
+        if !canonical.readable() {
+            let result = service_unavailable_payload(
+                WAIT_SUBAGENT_TOOL_NAME,
+                "/child_request_id",
+                canonical.diagnostic.clone().unwrap_or_else(|| {
+                    format!("child request {child_request_id} is not materialized")
+                }),
+                canonical.retryable(),
+            );
+            return Ok(self.skip_tool_result(WAIT_SUBAGENT_TOOL_NAME, result));
+        }
+        if !canonical.controllable() {
+            let result = tool_not_allowed_payload(
+                WAIT_SUBAGENT_TOOL_NAME,
+                "/child_request_id",
+                child_request_id,
+                "descendant is visible but control belongs to its immediate parent",
+                Vec::new(),
+            );
+            return Ok(self.skip_tool_result(WAIT_SUBAGENT_TOOL_NAME, result));
+        }
+        let edge = ChildEdge::from_descendant(&canonical).ok_or_else(|| {
+            anyhow::anyhow!("authorized descendant edge lacks materialized child identity")
+        })?;
+        let parent_context =
+            load_parent_subagent_context(&self.node, &edge.parent_request_id).await?;
 
         if edge.lifecycle_state == "running" {
             if edge.await_mode == AwaitMode::Background {
@@ -397,37 +406,50 @@ impl DefraSessionHook {
             ));
         }
 
-        let parent_context = load_parent_subagent_context(&self.node, &request_id).await?;
-        let edge =
-            match load_authorized_child_edge(&self.node, &parent_context, child_request_id).await {
-                Ok(edge) => edge,
-                Err(error) => {
-                    if authorization_lookup_error(&error, &request_id, child_request_id) {
-                        if let Ok(Some(bridge)) =
-                            load_spawn_bridge_row(&self.node, &request_id, child_request_id).await
-                        {
-                            let (message, retryable) =
-                                bridge.unmaterialized_child_explanation(child_request_id);
-                            let result = service_unavailable_payload(
-                                CANCEL_SUBAGENT_TOOL_NAME,
-                                "/child_request_id",
-                                message,
-                                retryable,
-                            );
-                            return Ok(self.skip_tool_result(CANCEL_SUBAGENT_TOOL_NAME, result));
-                        }
-                    }
-                    let result = service_unavailable_payload(
-                        CANCEL_SUBAGENT_TOOL_NAME,
-                        "/child_request_id",
-                        format!(
-                        "child subagent request is not available to this parent request: {error}"
-                    ),
-                        false,
-                    );
-                    return Ok(self.skip_tool_result(CANCEL_SUBAGENT_TOOL_NAME, result));
-                }
-            };
+        let root_request_id = resolve_descendant_root_request_id(
+            DescendantGraphAccess::Local(&self.node),
+            &request_id,
+        )
+        .await?;
+        let Some(canonical) = resolve_descendant_edge(
+            DescendantGraphAccess::Local(&self.node),
+            &root_request_id,
+            child_request_id,
+        )
+        .await?
+        else {
+            let result = service_unavailable_payload(
+                CANCEL_SUBAGENT_TOOL_NAME,
+                "/child_request_id",
+                "child subagent request is not available to this parent request",
+                false,
+            );
+            return Ok(self.skip_tool_result(CANCEL_SUBAGENT_TOOL_NAME, result));
+        };
+        if !canonical.readable() {
+            let result = service_unavailable_payload(
+                CANCEL_SUBAGENT_TOOL_NAME,
+                "/child_request_id",
+                canonical.diagnostic.clone().unwrap_or_else(|| {
+                    format!("child request {child_request_id} is not materialized")
+                }),
+                canonical.retryable(),
+            );
+            return Ok(self.skip_tool_result(CANCEL_SUBAGENT_TOOL_NAME, result));
+        }
+        if !canonical.controllable() {
+            let result = tool_not_allowed_payload(
+                CANCEL_SUBAGENT_TOOL_NAME,
+                "/child_request_id",
+                child_request_id,
+                "descendant is visible but control belongs to its immediate parent",
+                Vec::new(),
+            );
+            return Ok(self.skip_tool_result(CANCEL_SUBAGENT_TOOL_NAME, result));
+        }
+        let edge = ChildEdge::from_descendant(&canonical).ok_or_else(|| {
+            anyhow::anyhow!("authorized descendant edge lacks materialized child identity")
+        })?;
 
         let reason = parsed
             .reason
@@ -444,7 +466,7 @@ impl DefraSessionHook {
         )
         .await?;
         self.cancel_running_subagent_bridge(
-            &parent_context.session_id,
+            &edge.parent_session_id,
             &edge.parent_tool_call_id,
             "root",
             CancelCause::UserCancelled,

@@ -23,6 +23,7 @@ pub mod config;
 pub mod config_client;
 pub mod defra_query;
 pub mod defra_write;
+pub mod descendant_graph;
 pub mod desired_fields;
 pub mod document_config;
 pub mod error;
@@ -144,7 +145,14 @@ pub use config::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
     DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
+pub use config_client::ConfigAccess;
 pub use defra_node;
+pub use descendant_graph::{
+    resolve_descendant_edge, resolve_descendant_graph, resolve_descendant_root_request_id,
+    DescendantAuthorizationState, DescendantControlAuthority, DescendantEdge,
+    DescendantGraphAccess, DescendantMaterializationState, DescendantPage, DescendantQuery,
+    DescendantScope, MAX_DESCENDANT_PAGE_LIMIT,
+};
 pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,

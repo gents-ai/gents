@@ -10,6 +10,10 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::config_client::ConfigAccess;
+use crate::descendant_graph::{
+    resolve_descendant_graph, resolve_descendant_root_request_id, DescendantGraphAccess,
+    DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
+};
 use crate::graphql::escape_graphql_string;
 use crate::run_timeline::{
     build_run_timeline, RunTimeline, RunTimelineRows, TimelineCompactionRow,
@@ -21,6 +25,26 @@ use gents_protocol::graphql::graphql_rows_from_response;
 
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
     let mut timeline = build_run_timeline(load_run_timeline_rows(access, request_id).await?);
+    let descendant_root =
+        resolve_descendant_root_request_id(DescendantGraphAccess::Config(access), request_id)
+            .await?;
+    let mut after = None;
+    loop {
+        let page = resolve_descendant_graph(
+            DescendantGraphAccess::Config(access),
+            &DescendantQuery {
+                after: after.clone(),
+                limit: MAX_DESCENDANT_PAGE_LIMIT,
+                ..DescendantQuery::all(&descendant_root)
+            },
+        )
+        .await?;
+        timeline.descendant_edges.extend(page.edges);
+        if !page.has_more {
+            break;
+        }
+        after = page.next_cursor;
+    }
     if let Some(agent_did) = timeline.agent_did.as_deref() {
         match crate::load_background_completion_diagnostics(access, agent_did).await {
             Ok(diagnostics) => {

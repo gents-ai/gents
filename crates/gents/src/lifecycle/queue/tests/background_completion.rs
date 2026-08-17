@@ -10,6 +10,47 @@ fn root_parent(session_id: &str) -> AgentRequest {
     parent
 }
 
+async fn persist_completed_root_parent(node: &EmbeddedNode, parent: &mut AgentRequest) {
+    let request_id = escape_graphql_string(&parent.request_id);
+    let session_id = escape_graphql_string(&parent.session_id);
+    let created_at = escape_graphql_string(&parent.created_at);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{TEST_AGENT_DID}",
+                behavior_id: "{TEST_BEHAVIOR_ID}",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "completed parent",
+                metadata: "",
+                status: "completed",
+                lifecycle_state: "completed",
+                backend_id: "",
+                execution_origin: "interactive",
+                failure_reason: "",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: {max_retries},
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "persist completed root parent: {:?}",
+        response.errors
+    );
+    parent.doc_id = lookup_request_doc_id_optional(node, &parent.request_id)
+        .await
+        .unwrap()
+        .expect("persisted root parent document id");
+}
+
 fn background_hints(parent: &AgentRequest) -> QueueHints {
     QueueHints {
         source: QueueSource::BackgroundCompletion,
@@ -398,7 +439,8 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
 async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     let TestDb { node, _tempdir } = test_db("background-successor-ack").await;
     let node = std::sync::Arc::new(node);
-    let parent = root_parent("background-successor-ack-session");
+    let mut parent = root_parent("background-successor-ack-session");
+    persist_completed_root_parent(node.as_ref(), &mut parent).await;
     let hints = background_hints(&parent);
     let first = enqueue_background_completion_with_message(
         node.as_ref(),

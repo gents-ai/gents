@@ -7,7 +7,9 @@ use gents::__test_internals::{
 };
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
+use gents::tool_call_lifecycle::{
+    AwaitMode, CancelPolicy, ChildTerminal, FailureClass, ToolCallLifecycle,
+};
 use gents::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DocumentRuntimeOptions, Gents,
@@ -247,7 +249,7 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -350,7 +352,7 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -451,6 +453,60 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         }
         other => panic!("expected AwaitingMaterialization, got {other:?}"),
     }
+
+    assert!(lifecycle
+        .bridge_failure(ChildTerminal::Failed {
+            reason: "remote child never materialized".to_string(),
+            failure_class: FailureClass::ServiceUnavailable,
+        })
+        .await
+        .expect("terminalize the unmaterialized bridge"));
+    match load_steer_subagent_target(db.node.as_ref(), parent_request_id, child_request_id)
+        .await
+        .expect("load terminal steer target")
+    {
+        SteerSubagentTarget::Terminal(state) => assert_eq!(state, "failed"),
+        other => panic!("expected Terminal(failed), got {other:?}"),
+    }
+
+    let foreground_child_request_id = "unmat-fg-child";
+    let foreground_args = serde_json::json!({
+        "name": "remote-foreground-coder",
+        "agent_did": "did:key:z6MkUnclaimedRemoteTarget",
+        "behavior_id": "remote-coder-behavior",
+        "prompt": "cross-deployment foreground child work",
+        "await_mode": "foreground"
+    })
+    .to_string();
+    let mut foreground_lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        parent_session_id.to_string(),
+        agent_did.clone(),
+        "unmat-fg-tc".to_string(),
+        2,
+        "spawn_subagent".to_string(),
+        foreground_args,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        foreground_child_request_id.to_string(),
+        "did:key:z6MkUnclaimedRemoteTarget".to_string(),
+    )
+    .with_request_doc_id(Some(
+        crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await,
+    ));
+    foreground_lifecycle.start_running().await.unwrap();
+    assert!(matches!(
+        load_steer_subagent_target(
+            db.node.as_ref(),
+            parent_request_id,
+            foreground_child_request_id,
+        )
+        .await
+        .expect("load foreground steer target"),
+        SteerSubagentTarget::NotBackgrounded
+    ));
 
     let stranger = handle_read_subagent(
         db.node.as_ref(),

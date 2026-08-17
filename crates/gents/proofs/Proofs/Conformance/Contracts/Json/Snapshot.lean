@@ -7,6 +7,7 @@ import Proofs.Conformance.Contracts.Json.ToolPolicy
 import Proofs.Conformance.Contracts.Json.Lsp
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
+import Proofs.Conformance.Contracts.Json.DescendantGraph
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workflow
@@ -187,6 +188,8 @@ def snapshotJson : String :=
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
+    ++ "\"descendant_graph_cases\":"
+      ++ descendantGraphCasesJson ++ ","
     ++ "\"r5_cross_deployment_cases\":"
       ++ jsonArray
         (r5CrossDeploymentCases.map r5CrossDeploymentCaseJson) ++ ","

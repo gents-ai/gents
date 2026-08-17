@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
+use gents::{DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -681,24 +682,43 @@ async fn load_rooted_lineage(
         .await?
         .ok_or_else(|| anyhow::anyhow!("AgentRequest {root_request_id} not found"))?;
     let max_depth = max_depth.unwrap_or(usize::MAX);
-    let mut rows = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut stack = vec![(root, 0usize)];
-
-    while let Some((row, depth)) = stack.pop() {
-        let request_id = row.request_id.clone();
-        if !seen.insert(request_id.clone()) {
-            continue;
+    let mut rows = vec![LineageNode {
+        row: root,
+        depth: 0,
+    }];
+    let mut after = None;
+    loop {
+        let page = gents::resolve_descendant_graph(
+            DescendantGraphAccess::Config(access),
+            &DescendantQuery {
+                after: after.clone(),
+                limit: MAX_DESCENDANT_PAGE_LIMIT,
+                ..DescendantQuery::all(root_request_id)
+            },
+        )
+        .await?;
+        rows.extend(
+            page.edges
+                .into_iter()
+                .filter(|edge| edge.depth <= max_depth)
+                .map(|edge| LineageNode {
+                    depth: edge.depth,
+                    row: AgentRequestLineageRow {
+                        request_id: edge.child_request_id,
+                        agent_did: edge.principal_did,
+                        behavior_id: edge.behavior_id,
+                        status: Some(edge.lifecycle_state.clone()),
+                        lifecycle_state: Some(edge.lifecycle_state),
+                        created_at: edge.created_at,
+                        claimed_at: None,
+                        caused_by_parent_request_id: Some(edge.immediate_parent_request_id),
+                    },
+                }),
+        );
+        if !page.has_more {
+            break;
         }
-        rows.push(LineageNode { row, depth });
-        if depth >= max_depth {
-            continue;
-        }
-
-        let children = load_children(access, &request_id).await?;
-        for child in children.into_iter().rev() {
-            stack.push((child, depth + 1));
-        }
+        after = page.next_cursor;
     }
 
     Ok(rows)
@@ -837,24 +857,6 @@ async fn load_request_by_id(
     );
     let mut rows = load_request_rows(access, &query).await?;
     Ok(rows.pop())
-}
-
-async fn load_children(
-    access: &ConfigAccess,
-    parent_request_id: &str,
-) -> Result<Vec<AgentRequestLineageRow>> {
-    let escaped_parent_request_id = escape_graphql_string(parent_request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped_parent_request_id}" }} }},
-                order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
-            ) {{
-                {AGENT_REQUEST_FIELDS}
-            }}
-        }}"#
-    );
-    load_request_rows(access, &query).await
 }
 
 async fn load_all_requests(access: &ConfigAccess) -> Result<Vec<AgentRequestLineageRow>> {
