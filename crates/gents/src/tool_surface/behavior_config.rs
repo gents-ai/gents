@@ -16,7 +16,7 @@ use super::selection::{
     ToolSelection,
 };
 use super::ToolSurface;
-use crate::document_config::WriteToolDecl;
+use crate::document_config::{QueryToolDecl, WriteToolDecl};
 
 #[derive(Clone)]
 pub struct BehaviorToolConfig {
@@ -34,6 +34,7 @@ pub struct BehaviorToolConfig {
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
     write_tools: Vec<WriteToolDecl>,
+    query_tools: Vec<QueryToolDecl>,
     self_config: super::SelfConfigToolConfig,
     behavior_policy: ToolPolicySurface,
     ceiling_policy: ToolPolicySurface,
@@ -67,6 +68,7 @@ impl BehaviorToolConfig {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             self_config: super::SelfConfigToolConfig::default(),
             behavior_policy: behavior_policy.clone(),
             ceiling_policy: ToolPolicySurface::legacy_non_host_wide(
@@ -119,8 +121,9 @@ impl BehaviorToolConfig {
             .iter()
             .map(|tool| tool.name().to_string())
             .collect::<Vec<_>>();
-        crate::document_config::validate_write_tool_declarations(
+        crate::document_config::validate_surface_tool_names(
             &selection.write_tools,
+            &selection.query_tools,
             &selection.cli_tool_names,
             &custom_tool_names,
         )?;
@@ -152,6 +155,7 @@ impl BehaviorToolConfig {
             enable_defra_query: _,
             defra_query_collections: _,
             write_tools,
+            query_tools,
             enable_self_config: _,
             self_config_categories: _,
             self_config_no_lockout,
@@ -223,6 +227,7 @@ impl BehaviorToolConfig {
             enable_defra_query: static_policy.include_defra_query(),
             defra_query_collections: static_policy.defra_query_collections_for_runtime(),
             write_tools: static_policy.write_decls_for_runtime(&write_tools),
+            query_tools: static_policy.query_decls_for_runtime(&query_tools),
             // `behavior_name` is the behavior_id on the document path
             // (agent.rs `behavior_config_from_documents`): the identity anchor
             // for "my config". Programmatic builder surfaces that enable
@@ -351,6 +356,7 @@ impl BehaviorToolConfig {
             enable_defra_query: effective_policy.include_defra_query(),
             defra_query_scope: effective_policy.defra_query_collection_scope(),
             write_tools: effective_policy.write_decls_for_runtime(&self.write_tools),
+            query_tools: effective_policy.query_decls_for_runtime(&self.query_tools),
             enable_skills: effective_policy.skills,
             self_config: super::SelfConfigToolConfig {
                 enabled: effective_policy.include_self_config(),
@@ -519,6 +525,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_collections", &self.defra_query_collections)
             .field("write_tools", &self.write_tools)
+            .field("query_tools", &self.query_tools)
             .field("behavior_policy", &self.behavior_policy)
             .field("ceiling_policy", &self.ceiling_policy)
             .field("static_policy", &self.static_policy)

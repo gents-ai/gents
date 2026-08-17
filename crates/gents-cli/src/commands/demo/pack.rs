@@ -395,7 +395,7 @@ fn validate_prompt_tool_contracts_with(
                     .context("datastore tool entry has no collection")?;
                 if !schemas.contains(&format!("type {collection} {{")) {
                     bail!(
-                        "tool {tool_name} writes collection {collection}, but the pack has no matching schema"
+                        "tool {tool_name} targets collection {collection}, but the pack has no matching schema"
                     );
                 }
                 let type_start = schemas
@@ -405,8 +405,23 @@ fn validate_prompt_tool_contracts_with(
                     .split_once('}')
                     .map(|(body, _)| body)
                     .context("schema type has no closing brace")?;
+                let mut field_names = Vec::new();
                 for field in entry
                     .get("fields")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(name) = field.as_str() {
+                        field_names.push(name.to_string());
+                    } else if let Some(name) = field.get("name").and_then(Value::as_str) {
+                        field_names.push(name.to_string());
+                    } else {
+                        bail!("datastore tool field has no name");
+                    }
+                }
+                for field in entry
+                    .get("filter_fields")
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
@@ -414,10 +429,13 @@ fn validate_prompt_tool_contracts_with(
                     let field_name = field
                         .get("name")
                         .and_then(Value::as_str)
-                        .context("datastore tool field has no name")?;
+                        .context("datastore tool filter field has no name")?;
+                    field_names.push(field_name.to_string());
+                }
+                for field_name in field_names {
                     if !type_body.lines().any(|line| {
                         line.trim_start()
-                            .strip_prefix(field_name)
+                            .strip_prefix(&field_name)
                             .is_some_and(|rest| rest.trim_start().starts_with(':'))
                     }) {
                         bail!(

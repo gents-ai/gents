@@ -1059,6 +1059,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
                 enable_defra_query: false,
                 defra_query_collections: Vec::new(),
                 write_tools: Vec::new(),
+                query_tools: Vec::new(),
                 enable_self_config: false,
                 self_config_categories: None,
                 self_config_no_lockout: false,

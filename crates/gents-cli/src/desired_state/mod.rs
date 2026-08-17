@@ -247,6 +247,38 @@ where
     Ok(out)
 }
 
+fn deserialize_surface_tools_storage<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use gents::SurfaceToolDecl;
+    use serde_json::Value;
+
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let items = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(items) => items,
+        other => {
+            return Err(D::Error::custom(format!(
+                "DatastoreToolSurface.entries must be a list of create/query tool objects or JSON strings, got {other}"
+            )))
+        }
+    };
+
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let decl: SurfaceToolDecl = match item {
+            Value::String(s) => serde_json::from_str(&s).map_err(D::Error::custom)?,
+            other => serde_json::from_value(other).map_err(D::Error::custom)?,
+        };
+        out.push(serde_json::to_string(&decl).map_err(D::Error::custom)?);
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesiredSkill {
@@ -275,8 +307,8 @@ pub(crate) struct DesiredDatastoreToolSurface {
     #[serde(default)]
     pub(crate) display_name: Option<String>,
     pub(crate) enabled: bool,
-    /// WriteToolDecl entries (objects in manifest; same dual-shape as write_tools).
-    #[serde(default, deserialize_with = "deserialize_write_tools_storage")]
+    /// SurfaceToolDecl entries (create or query; objects in manifest).
+    #[serde(default, deserialize_with = "deserialize_surface_tools_storage")]
     pub(crate) entries: Vec<String>,
 }
 

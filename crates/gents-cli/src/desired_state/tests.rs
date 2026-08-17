@@ -3015,6 +3015,38 @@ fn sample_surface(surface_id: &str) -> DesiredDatastoreToolSurface {
 }
 
 #[test]
+fn validate_accepts_surface_query_entry() {
+    use gents::{QueryToolDecl, SurfaceToolDecl, WriteToolField, WriteToolFieldFill};
+    let mut manifest = manifest_with_default_behavior();
+    let mut surface = sample_surface("scan-reads");
+    surface.entries.push(
+        serde_json::to_string(&SurfaceToolDecl::Query(QueryToolDecl {
+            tool_name: "query_candidate_finding".to_string(),
+            collection: "CandidateFinding".to_string(),
+            description: "Load candidates".to_string(),
+            fields: vec!["finding_id".to_string(), "title".to_string()],
+            filter_fields: vec![WriteToolField {
+                name: "run_id".to_string(),
+                required: false,
+                fill: Some(WriteToolFieldFill::Correlation),
+            }],
+        }))
+        .unwrap(),
+    );
+    manifest.datastore_tool_surfaces.push(surface);
+    let mut sel = sample_tool_selection("stage-tools");
+    sel.agent_did = "did:test:test".to_string();
+    sel.datastore_tool_surface_ids = vec!["scan-reads".to_string()];
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.is_empty(),
+        "query surface entries should validate, got {errors:?}"
+    );
+}
+
+#[test]
 fn validate_accepts_surface_linked_tool_selection() {
     let mut manifest = manifest_with_default_behavior();
     manifest

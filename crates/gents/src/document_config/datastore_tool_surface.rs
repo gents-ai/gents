@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphql::escape_graphql_string;
 
 use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
-use super::tool_selection::{deserialize_optional_write_tools, WriteToolDecl};
+use super::surface_tool::{deserialize_optional_surface_tools, SurfaceToolDecl};
 
 /// Document-layer view of a `DatastoreToolSurface` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -17,9 +17,9 @@ pub struct DatastoreToolSurfaceDocument {
     pub display_name: Option<String>,
     #[serde(default)]
     pub enabled: bool,
-    /// Create-tool declarations (same dual-shape as `ToolSelection.write_tools`).
-    #[serde(default, deserialize_with = "deserialize_optional_write_tools")]
-    pub entries: Option<Vec<WriteToolDecl>>,
+    /// Create or query tool declarations (same dual-shape as `ToolSelection.write_tools`).
+    #[serde(default, deserialize_with = "deserialize_optional_surface_tools")]
+    pub entries: Option<Vec<SurfaceToolDecl>>,
     pub created_at: Option<String>,
 }
 

@@ -154,8 +154,8 @@ pub use document_config::{
     upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
     wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
-    ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
-    WriteToolOutputObligation, WriteToolOutputObligationScope,
+    QueryToolDecl, SurfaceToolDecl, ToolSelectionDocument, WriteToolDecl, WriteToolField,
+    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,

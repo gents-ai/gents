@@ -12,7 +12,8 @@ use crate::backend_registry::InferenceBackend;
 use crate::chatgpt_codex::OAuthCredential;
 use crate::document_config::{
     AgentBehavior, AgentPrincipal, DatastoreToolSurfaceDocument, EventTrigger, InferenceProfile,
-    Schedule, SkillDocument, Task, ToolSelectionDocument, WriteToolDecl,
+    QueryToolDecl, Schedule, SkillDocument, SurfaceToolDecl, Task, ToolSelectionDocument,
+    WriteToolDecl,
 };
 
 #[derive(Debug, Clone)]
@@ -271,18 +272,34 @@ fn validate_subagent_targets_resolve(
 #[cfg(test)]
 mod tests;
 
+/// Create and query tools after expanding linked `DatastoreToolSurface` docs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct MergedSurfaceTools {
+    pub write_tools: Vec<WriteToolDecl>,
+    pub query_tools: Vec<QueryToolDecl>,
+}
+
 /// Merge inline `write_tools` with entries from linked `DatastoreToolSurface`
 /// docs. Fail-closed on missing/disabled/foreign surfaces and name collisions.
+#[cfg(test)]
 pub(crate) fn merge_write_tools_with_surfaces(
     selection: &ToolSelectionDocument,
     view: &DocumentRuntimeView,
 ) -> anyhow::Result<Vec<WriteToolDecl>> {
+    Ok(merge_surface_tools(selection, view)?.write_tools)
+}
+
+pub(crate) fn merge_surface_tools(
+    selection: &ToolSelectionDocument,
+    view: &DocumentRuntimeView,
+) -> anyhow::Result<MergedSurfaceTools> {
     use anyhow::{anyhow, bail};
     use std::collections::HashSet;
 
-    let mut decls = selection.write_tools.clone().unwrap_or_default();
+    let mut write_tools = selection.write_tools.clone().unwrap_or_default();
+    let mut query_tools = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for decl in &decls {
+    for decl in &write_tools {
         if !seen.insert(decl.tool_name.clone()) {
             bail!(
                 "ToolSelection {} has duplicate write_tools tool_name {:?}",
@@ -342,27 +359,35 @@ pub(crate) fn merge_write_tools_with_surfaces(
         for entry in surface.entries.as_deref().unwrap_or(&[]) {
             if !entry.is_well_formed() {
                 bail!(
-                    "DatastoreToolSurface {} has a malformed entry (tool_name/collection required)",
+                    "DatastoreToolSurface {} has a malformed entry (tool_name/collection required; query entries also need a projection)",
                     surface_id
                 );
             }
-            if !entry.output_obligation_is_well_formed() {
-                bail!(
-                    "DatastoreToolSurface {} entry {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
-                    surface_id,
-                    entry.tool_name,
-                );
+            if let SurfaceToolDecl::Create(decl) = entry {
+                if !decl.output_obligation_is_well_formed() {
+                    bail!(
+                        "DatastoreToolSurface {} entry {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
+                        surface_id,
+                        decl.tool_name,
+                    );
+                }
             }
-            if !seen.insert(entry.tool_name.clone()) {
+            if !seen.insert(entry.tool_name().to_string()) {
                 bail!(
-                    "duplicate write tool_name {:?} after expanding DatastoreToolSurface {} for ToolSelection {}",
-                    entry.tool_name,
+                    "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for ToolSelection {}",
+                    entry.tool_name(),
                     surface_id,
                     selection.selection_id
                 );
             }
-            decls.push(entry.clone());
+            match entry {
+                SurfaceToolDecl::Create(decl) => write_tools.push(decl.clone()),
+                SurfaceToolDecl::Query(decl) => query_tools.push(decl.clone()),
+            }
         }
     }
-    Ok(decls)
+    Ok(MergedSurfaceTools {
+        write_tools,
+        query_tools,
+    })
 }
