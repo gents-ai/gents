@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::fleet::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
+use super::secscan;
 use super::util::{path_arg, run_cli_json};
 use crate::cli::args::DemoRunArgs;
 use crate::desired_state::interpolate::interpolate_with;
@@ -35,10 +36,54 @@ struct PackManifest {
     expect: PackExpect,
     #[serde(default = "default_timeout")]
     await_timeout_secs: u64,
+    #[serde(default)]
+    scan: Option<PackScan>,
 }
 
 fn default_timeout() -> u64 {
     240
+}
+
+#[derive(Debug, Deserialize)]
+struct PackScan {
+    root: String,
+    #[serde(default = "default_scan_payload_chars")]
+    max_payload_chars: String, // string for ${VAR:-default} interpolation parity
+}
+
+fn default_scan_payload_chars() -> String {
+    "49152".to_string()
+}
+
+/// Renders a scan's counters as `seed.fields` entries so the manifest can
+/// interpolate them into the seeded document without any special-casing in
+/// `seed_mutation`. `slug_counts` keeps the pre-sorted (count desc, then
+/// slug) order `format_payload` produced.
+fn scan_seed_fields(output: &secscan::ScanOutput) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    fields.insert("candidates".to_string(), output.payload.clone());
+    fields.insert(
+        "candidate_total".to_string(),
+        output.candidate_total.to_string(),
+    );
+    fields.insert(
+        "candidate_files".to_string(),
+        output.candidate_files.to_string(),
+    );
+    fields.insert(
+        "slug_counts".to_string(),
+        output
+            .slug_counts
+            .iter()
+            .map(|(slug, count)| format!("{slug}={count}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    fields.insert(
+        "overflow_count".to_string(),
+        output.overflow_count.to_string(),
+    );
+    fields
 }
 
 #[derive(Debug, Deserialize)]
@@ -2232,7 +2277,7 @@ fn default_job_id() -> String {
 pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let pack = resolve_pack(&args.pack)?;
-    let manifest = load_manifest(&pack)?;
+    let mut manifest = load_manifest(&pack)?;
     let observed_collections = trigger_source_collections(&pack, &manifest.expect.trigger_ids)?;
     let job_id = args.job_id.clone().unwrap_or_else(default_job_id);
     let prompt = args
@@ -2348,6 +2393,22 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             )
             .await?;
             println!("observing {collection}");
+        }
+
+        if let Some(scan) = &manifest.scan {
+            let scan_root_path = std::path::Path::new(&scan.root);
+            let max_chars: usize = scan
+                .max_payload_chars
+                .parse()
+                .context("scan.max_payload_chars")?;
+            println!("scanning {} …", scan.root);
+            let files = secscan::scan_root(scan_root_path)?;
+            let output = secscan::format_payload(&files, max_chars);
+            println!(
+                "scanned  {} candidate files, {} candidates ({} overflow)",
+                output.candidate_files, output.candidate_total, output.overflow_count
+            );
+            manifest.seed.fields.extend(scan_seed_fields(&output));
         }
 
         let mutation = seed_mutation(&manifest.seed, &job_id, &prompt);
@@ -2769,6 +2830,7 @@ mod tests {
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
+            scan: None,
         };
 
         let error = validate_manifest(&manifest).expect_err("unsigned source edges must fail");
@@ -3321,6 +3383,7 @@ mod tests {
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
+            scan: None,
         };
         let error = validate_manifest(&manifest).expect_err("readonly needs tool_root");
         assert!(error.to_string().contains("tool_root"), "{error}");
@@ -3396,5 +3459,48 @@ mod tests {
             "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
         });
         assert!(!tool_call_matches(&failed_lifecycle, &expected));
+    }
+
+    #[test]
+    fn manifest_parses_optional_scan_section() {
+        let manifest: PackManifest = serde_json::from_value(serde_json::json!({
+            "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
+            "seed": {"collection": "ScanJob", "job_id_field": "run_id", "prompt_field": "focus"},
+            "expect": {"trigger_ids": []},
+            "scan": {"root": ".", "max_payload_chars": "1024"}
+        }))
+        .expect("manifest with scan");
+        let scan = manifest.scan.expect("scan section");
+        assert_eq!(scan.root, ".");
+        assert_eq!(scan.max_payload_chars, "1024");
+
+        let bare: PackManifest = serde_json::from_value(serde_json::json!({
+            "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
+            "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
+            "expect": {"trigger_ids": []}
+        }))
+        .expect("manifest without scan");
+        assert!(bare.scan.is_none());
+    }
+
+    #[test]
+    fn scan_seed_fields_render_all_counters() {
+        let output = secscan::ScanOutput {
+            payload: "files: 1  candidates: 2\nsrc/a.rs\n  [precise] graphql-injection L3: x"
+                .to_string(),
+            candidate_total: 2,
+            candidate_files: 1,
+            slug_counts: vec![("graphql-injection".to_string(), 2)],
+            overflow_count: 0,
+        };
+        let fields = scan_seed_fields(&output);
+        assert_eq!(fields.get("candidate_total").map(String::as_str), Some("2"));
+        assert_eq!(fields.get("candidate_files").map(String::as_str), Some("1"));
+        assert_eq!(fields.get("overflow_count").map(String::as_str), Some("0"));
+        assert_eq!(
+            fields.get("slug_counts").map(String::as_str),
+            Some("graphql-injection=2")
+        );
+        assert!(fields.get("candidates").unwrap().contains("src/a.rs"));
     }
 }
