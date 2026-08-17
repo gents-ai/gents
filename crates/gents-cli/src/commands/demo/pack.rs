@@ -3071,8 +3071,14 @@ mod tests {
         )
         .expect("maintenance execute prompt should load");
         assert!(execute_prompt.contains("single execution owner"));
+        assert!(execute_prompt.contains("On a fresh execution with no prior results"));
+        assert!(execute_prompt.contains("On a valid completed-prefix resume"));
         assert!(execute_prompt.contains("Process packages strictly in numeric order"));
         assert!(execute_prompt.contains("write_maintenance_execution_summary"));
+
+        let makefile = std::fs::read_to_string(pack.join("../../Makefile"))
+            .expect("repository Makefile should load");
+        assert!(makefile.contains("test \"$(MAINTENANCE_AREAS)\" -ge \"$(MAINTENANCE_MIN_AREAS)\""));
 
         let publish_trigger = read_pack_json_defaults(
             &pack

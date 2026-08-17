@@ -208,7 +208,7 @@ maintain:
 	@case "$(MAINTENANCE_MAX_AREAS)" in ''|*[!0-9]*) echo "MAINTENANCE_MAX_AREAS must be a positive integer: $(MAINTENANCE_MAX_AREAS)" >&2; exit 2;; esac
 	@case "$(MAINTENANCE_HISTORY_DEPTH)" in ''|*[!0-9]*) echo "MAINTENANCE_HISTORY_DEPTH must be a positive integer: $(MAINTENANCE_HISTORY_DEPTH)" >&2; exit 2;; esac
 	@test "$(MAINTENANCE_MIN_AREAS)" -ge 5 && test "$(MAINTENANCE_MAX_AREAS)" -ge "$(MAINTENANCE_MIN_AREAS)" || { echo "maintenance area bounds must satisfy 5 <= MAINTENANCE_MIN_AREAS <= MAINTENANCE_MAX_AREAS" >&2; exit 2; }
-	@if test "$(MAINTENANCE_AREAS)" != auto; then test "$(MAINTENANCE_AREAS)" -ge 5 && test "$(MAINTENANCE_AREAS)" -le "$(MAINTENANCE_MAX_AREAS)" || { echo "MAINTENANCE_AREAS must satisfy 5 <= MAINTENANCE_AREAS <= MAINTENANCE_MAX_AREAS" >&2; exit 2; }; fi
+	@if test "$(MAINTENANCE_AREAS)" != auto; then test "$(MAINTENANCE_AREAS)" -ge "$(MAINTENANCE_MIN_AREAS)" && test "$(MAINTENANCE_AREAS)" -le "$(MAINTENANCE_MAX_AREAS)" || { echo "MAINTENANCE_AREAS must satisfy MAINTENANCE_MIN_AREAS <= MAINTENANCE_AREAS <= MAINTENANCE_MAX_AREAS" >&2; exit 2; }; fi
 	@test "$(MAINTENANCE_HISTORY_DEPTH)" -gt 0 || { echo "MAINTENANCE_HISTORY_DEPTH must be greater than zero" >&2; exit 2; }
 	@cd "$(MAINTENANCE_ROOT)" && git rev-parse --verify "$(MAINTENANCE_HEAD)^{commit}" >/dev/null || { echo "MAINTENANCE_HEAD is not a commit: $(MAINTENANCE_HEAD)" >&2; exit 2; }
 	@command -v rust-analyzer >/dev/null 2>&1 || echo "warning: rust-analyzer not found on PATH; maintenance will fall back to file/search tools" >&2
