@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents::agent::p2p_reconcile::templates::CLIENT_INDEX_COLLECTIONS;
 use gents_protocol::schemas::{ALL_COLLECTION_NAMES, RUNTIME_COLLECTION_NAMES};
 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
@@ -58,7 +59,7 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
 
 /// The lightweight session index eagerly hydrated by paired clients.
 pub fn index_collection_names() -> [&'static str; 2] {
-    ["AgentConversation", "AgentSession"]
+    CLIENT_INDEX_COLLECTIONS
 }
 
 #[cfg(test)]

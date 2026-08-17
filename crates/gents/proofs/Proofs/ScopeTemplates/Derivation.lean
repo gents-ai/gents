@@ -263,8 +263,10 @@ theorem clientIndex_filters_requester_lineage (peerDid localDid : Did) :
       (fun k => k.value = peerDid ∧ k.field = "requester_did") = true := by
   simp [scopeFilter, clientIndexTemplate, clientIndexRules]
 
-theorem clientIndex_covers_exactly_index_collections :
-    clientIndexTemplate.collections = clientIndexCollections.toFinset := rfl
+theorem clientIndex_covers_exactly_literal_index_collections :
+    clientIndexTemplate.collections =
+      ["AgentConversation", "AgentSession"].toFinset := by
+  decide
 
 theorem subagent_filter_values_local_or_peer
     (rules : List CollectionRule) (peerDid localDid : Did)

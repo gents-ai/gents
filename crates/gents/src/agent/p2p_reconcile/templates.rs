@@ -193,7 +193,7 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
 
 /// Requester-scoped session-index grant. Complete historical index hydration
 /// is handled separately by the desktop's node-global branchable pull.
-const CLIENT_INDEX_COLLECTIONS: &[&str] = &["AgentConversation", "AgentSession"];
+pub const CLIENT_INDEX_COLLECTIONS: [&str; 2] = ["AgentConversation", "AgentSession"];
 
 const CLIENT_INDEX_RULES: &[CollectionRule] = &[
     CollectionRule {
@@ -444,7 +444,7 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     },
     ScopeTemplate {
         id: CLIENT_INDEX_TEMPLATE,
-        collections: CLIENT_INDEX_COLLECTIONS,
+        collections: &CLIENT_INDEX_COLLECTIONS,
         scope: Scope::PerCollection(CLIENT_INDEX_RULES),
         delivery: Delivery::Push,
     },
@@ -617,7 +617,7 @@ mod tests {
 
         let filter = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:home");
         assert_eq!(filter.len(), 2);
-        for collection in CLIENT_INDEX_COLLECTIONS {
+        for collection in &CLIENT_INDEX_COLLECTIONS {
             let predicate = filter
                 .get(*collection)
                 .expect("indexed collection is filtered");

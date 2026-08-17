@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -11,7 +11,8 @@ use defra_p2p_adapter::{
 };
 
 use super::supervisor::{
-    p2p_health_materially_changed, probe_p2p_health, repair_saved_peer, saved_peer_needs_repair,
+    p2p_health_materially_changed, probe_p2p_health, repair_saved_peer,
+    request_index_for_ready_peers, saved_peer_needs_repair,
 };
 use super::writes::cleanup_saved_peer_p2p;
 use super::*;
@@ -288,7 +289,7 @@ impl P2POps for RecordingP2P {
 }
 
 #[tokio::test]
-async fn index_sync_requests_exactly_the_session_index() {
+async fn index_sync_request_targets_exactly_the_session_index() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -299,16 +300,13 @@ async fn index_sync_requests_exactly_the_session_index() {
     .await
     .expect("client core");
     let recording = Arc::new(RecordingP2P::default());
+    recording.set_connected_peers(vec!["peer-alpha".to_string()]);
     let p2p: Arc<dyn P2POps> = recording.clone();
 
-    let synced = super::bootstrap::sync_index_collections_with_retry(
-        core.node(),
-        &p2p,
-        Duration::from_secs(1),
-    )
-    .await
-    .expect("sync index");
-    assert_eq!(synced, ["AgentConversation", "AgentSession"]);
+    let requested = super::bootstrap::request_index_sync(core.node(), &p2p)
+        .await
+        .expect("request index sync");
+    assert_eq!(requested, ["AgentConversation", "AgentSession"]);
 
     let mut expected = crate::client::schema::index_collection_names()
         .into_iter()
@@ -324,6 +322,75 @@ async fn index_sync_requests_exactly_the_session_index() {
     expected.sort();
     actual.sort();
     assert_eq!(actual, expected);
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_failures() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().to_path_buf()),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let recording = Arc::new(RecordingP2P::default());
+    recording.set_connected_peers(vec!["peer-alpha".to_string()]);
+    let p2p: Arc<dyn P2POps> = recording.clone();
+    let node = core.node_arc();
+    let statuses = Arc::new(StdRwLock::new(vec![ClientPeerStatus {
+        peer_id: "saved-alpha".to_string(),
+        label: "Alpha".to_string(),
+        agent_did: "did:key:alpha".to_string(),
+        addr: "peer-alpha".to_string(),
+        dial_succeeded: true,
+        last_error: None,
+        pairing: Vec::new(),
+    }]));
+    let mut saved = BTreeSet::from(["saved-alpha".to_string()]);
+    let mut requested_for = BTreeSet::new();
+
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    assert_eq!(recording.sync_branchable_calls().len(), 2);
+    assert_eq!(requested_for, saved);
+
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    assert_eq!(recording.sync_branchable_calls().len(), 2);
+
+    statuses
+        .write()
+        .expect("peer statuses lock poisoned")
+        .push(ClientPeerStatus {
+            peer_id: "saved-beta".to_string(),
+            label: "Beta".to_string(),
+            agent_did: "did:key:beta".to_string(),
+            addr: "peer-beta".to_string(),
+            dial_succeeded: true,
+            last_error: None,
+            pairing: Vec::new(),
+        });
+    saved.insert("saved-beta".to_string());
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    assert_eq!(recording.sync_branchable_calls().len(), 4);
+    assert_eq!(requested_for, saved);
+
+    requested_for.remove("saved-alpha");
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    assert_eq!(recording.sync_branchable_calls().len(), 6);
+
+    requested_for.remove("saved-alpha");
+    recording.set_connected_peers(Vec::new());
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    let statuses = statuses.read().expect("peer statuses lock poisoned");
+    assert!(statuses
+        .iter()
+        .find(|status| status.peer_id == "saved-alpha")
+        .and_then(|status| status.last_error.as_deref())
+        .is_some_and(|error| error.contains("no connected peers")));
+    assert!(!requested_for.contains("saved-alpha"));
 
     core.shutdown().await.expect("shutdown");
 }

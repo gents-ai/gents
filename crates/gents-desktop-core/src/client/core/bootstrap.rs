@@ -50,7 +50,6 @@ impl ClientCore {
         gents::storage_backend::reject_legacy_rocksdb_store(paths.node_data_dir())?;
 
         let principal = PrincipalIdentity::load_or_create(&paths).await?;
-        let bootstrap_errors = Vec::new();
         let node = Arc::new(
             NodeBuilder::default()
                 .data_path(paths.node_data_dir())
@@ -97,7 +96,7 @@ impl ClientCore {
             .await
             .context("reading desktop P2P listen addresses")?;
 
-        let (peer_statuses, _peer_errors) = {
+        let (peer_statuses, bootstrap_errors) = {
             let records = peer_directory.read().await.records().to_vec();
             bootstrap_saved_peers(node.as_ref(), &p2p, &records, &options, &principal).await
         };
@@ -256,25 +255,6 @@ pub(super) async fn bootstrap_saved_peers(
         }
 
         statuses.push(status);
-    }
-
-    if options.install_replicators_on_bootstrap
-        && statuses.iter().any(|status| status.dial_succeeded)
-    {
-        match sync_index_collections_with_retry(node, p2p, BOOTSTRAP_OPERATION_TIMEOUT).await {
-            Ok(synced) => {
-                tracing::info!(
-                    target: "gents_desktop_core::peer",
-                    synced_collections = ?synced,
-                    "session index sync complete"
-                );
-            }
-            Err(error) => {
-                let message = format!("session index sync failed: {error}");
-                tracing::warn!(target: "gents_desktop_core::peer", %message);
-                errors.push(message);
-            }
-        }
     }
 
     (statuses, errors)
@@ -509,12 +489,14 @@ pub(super) async fn add_replicator_with_retry_until(
     }
 }
 
-pub(super) async fn sync_index_collections_with_retry(
+pub(super) async fn request_index_sync(
     node: &EmbeddedNode,
     p2p: &Arc<dyn P2POps>,
-    timeout: Duration,
 ) -> Result<Vec<String>> {
-    let deadline = Instant::now() + timeout;
+    if p2p_connected_peers(p2p).await?.is_empty() {
+        anyhow::bail!("no connected peers available for session index request");
+    }
+
     let [conversation_name, session_name] = index_collection_names();
     let resolve_id = |collection_name| -> Result<String> {
         let collection = node
@@ -529,33 +511,14 @@ pub(super) async fn sync_index_collections_with_retry(
     let session_id = resolve_id(session_name)?;
 
     tokio::try_join!(
-        sync_index_collection_with_retry(p2p, conversation_name, &conversation_id, deadline),
-        sync_index_collection_with_retry(p2p, session_name, &session_id, deadline),
+        p2p_sync_branchable_collection(p2p, &conversation_id),
+        p2p_sync_branchable_collection(p2p, &session_id),
     )?;
 
     Ok(vec![
         conversation_name.to_string(),
         session_name.to_string(),
     ])
-}
-
-async fn sync_index_collection_with_retry(
-    p2p: &Arc<dyn P2POps>,
-    collection_name: &str,
-    collection_id: &str,
-    deadline: Instant,
-) -> Result<()> {
-    loop {
-        match p2p_sync_branchable_collection(p2p, collection_id).await {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                if Instant::now() >= deadline {
-                    anyhow::bail!("timed out syncing index collection {collection_name}: {error}");
-                }
-                sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
-            }
-        }
-    }
 }
 
 pub(super) async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {

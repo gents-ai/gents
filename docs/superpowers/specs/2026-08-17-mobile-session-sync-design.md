@@ -53,18 +53,47 @@ facts:
 
 Three mechanisms, split by job:
 
-### 1. Standing scope — filtered replicators (#1141)
+### 1. Standing scope and eager index request (#1141)
 
-A new `client-index` scope template: `AgentConversation` + `AgentSession`,
-`PerCollection` rules on `@immutable` identity fields, `delivery = Push`.
-Bootstrap replaces the env-gated 16-collection bulk sync with an ungated,
-once-per-bootstrap, concurrent branchable sync of exactly those two
-collections. `write_peer_pairing_desired` gains an explicit `template` field
-(today the server silently falls back to `conversation`) and drops the dead
-`collections` list. The session list (`AgentConversation` carries title,
-preview_text, updated_at, fork lineage; `AgentSession` carries live status)
-renders fully with no transcript-plane replication. ~2 small docs per session,
-one row each per new session.
+A new `client-index` scope template formalizes the requester-scoped index
+contract: `AgentConversation` + `AgentSession`, `PerCollection` rules on
+`@immutable` identity fields, `delivery = Push`. Full desktop pairings continue
+to select `machine`; #1141 registers `client-index` for narrower consumers but
+does not select it for the desktop pairing row.
+
+The desktop P2P supervisor replaces the env-gated 16-collection bulk pull with
+an ungated, concurrent BranchableSync request for exactly those two index
+collections. It requests once after startup, for newly added peers, and again
+after reconnect/repair, off the launch and add-peer critical paths. The pinned
+IROH adapter acknowledges dispatch, not merge completion, so logs say
+"requested" and the supervisor supplies new request opportunities at the
+events it can observe. Exact progress/completion remains #1144/upstream work.
+
+**Trust boundary:** BranchableSync authorizes at collection granularity and
+returns every head in the collection; it does not apply the template's
+document predicate. A paired full client therefore receives session cards for
+all requester lineages on that agent. This is intentional for the current
+single-user/full-client product, but it is not a tenant-safe use of the
+`client-index` predicate and must not be reused for an untrusted peer class.
+
+`write_peer_pairing_desired` explicitly selects `machine` instead of the old
+implicit `conversation` fallback and drops the dead `collections` list. On the
+first upgrade reconcile, existing template-absent pairings incur one teardown,
+reinstall, and replay because their effective filter changes. This is an
+accepted migration cost, not an index-hydration mechanism. The removed
+`GENTS_DESKTOP_SYNC_BRANCHABLE_ON_PAIR` escape hatch has no 16-collection
+replacement; transcript history remains lazy until #1142.
+
+The session list (`AgentConversation` carries title, preview_text, updated_at,
+fork lineage; `AgentSession` carries live status) renders with no eager
+transcript-plane pull: about two small documents per session.
+
+**Preferred end state:** replace the collection-wide index pull with a
+paginated, cursor-based index protocol. The server should apply the explicitly
+chosen lineage policy, return bounded pages of index document IDs, and let the
+client fetch those pages with observable progress and resumable cursors. That
+removes the current collection-level trust exception and scales without a
+single all-head response; it is deliberately outside #1141.
 
 ### 2. Per-session hydration — `SessionHydrationRequest` (#1142, #1143)
 

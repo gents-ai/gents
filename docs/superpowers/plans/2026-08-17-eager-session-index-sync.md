@@ -4,7 +4,7 @@
 
 **Goal:** A freshly paired client renders the full session list (AgentConversation + AgentSession) with no transcript-plane replication and no env gate.
 
-**Architecture:** Follow the foundation flow: first repair the small pre-existing Lean/Rust catalog drift and extend the Lean scope-template catalog, then mirror the new template in Rust and pin conformance. Finally, replace the env-gated bulk pull with a concurrent sync of exactly the two index collections: once after the saved-peer bootstrap loop, plus once after a successful interactive peer add (branchable-collection DAG pull is node-global and unfiltered, so the client sees *all* sessions, not just its requester slice). Make the pairing row request the `machine` template explicitly.
+**Architecture:** Follow the foundation flow: first repair the small pre-existing Lean/Rust catalog drift and extend the Lean scope-template catalog, then mirror the new template in Rust and pin conformance. Finally, replace the env-gated bulk pull with a supervisor-owned concurrent request for exactly the two index collections. The supervisor dispatches after startup, for a new peer, and after reconnect/repair without blocking launch or add-peer. BranchableSync is node-global and unfiltered, so the trusted full client sees all sessions rather than only its requester slice. Make the pairing row request the `machine` template explicitly.
 
 **Tech Stack:** Rust (gents workspace), Lean 4 (crates/gents/proofs), DefraDB embedded node (defradb.rs pinned rev).
 
@@ -15,8 +15,12 @@
 - The Lean catalog currently predates `DatastoreToolSurface` in the shared config plane and `PersonaConfigRequest` in `machine`. Task 1 repairs that drift before adding `client-index`; otherwise the claim that Lean and Rust mirror one another would remain false.
 - #1141 registers `client-index`, but does not select it for the desktop pairing row. The eager unfiltered DAG pull is what supplies the complete historical index in this issue; the pairing row remains `machine` so the existing requester-authored control plane keeps working. Wiring a pairing to `client-index` is outside this issue.
 - In this plan, “no transcript-plane replication” means the eager historical catch-up requests only the two index collections. The existing `machine` grant still has requester-scoped transcript routes, and the desktop still subscribes to new collection heads. If the acceptance criterion instead means *zero transcript transport of any kind*, the approved design and Task 5 conflict and must be redesigned before implementation.
-- The old env-gated bulk sync is called both during saved-peer bootstrap (`bootstrap.rs`) and interactive peer add (`writes.rs`). Both paths must be rewired. `supervisor.rs` does not call the helper and is not part of this change.
-- “Concurrent” is an acceptance detail, not just a comment: the fixed two collection sync/retry futures run together with `tokio::try_join!` under one shared deadline.
+- The pinned IROH adapter returns when it dispatches per-peer sends; it does not expose merge completion. Logs and return values therefore say “requested,” never “complete.” Supervisor lifecycle events provide re-request opportunities, while exact progress remains #1144/upstream work.
+- BranchableSync checks collection-level access but does not apply the `client-index` requester predicate. Cross-requester session-card visibility is an explicit trust decision for the current full-client product, not a tenant-safe property proved by the template.
+- Existing template-absent pairings previously resolved to `conversation`. Writing `machine` changes their effective filter and causes one teardown/reinstall/full replay on upgrade; this migration cost is explicitly accepted.
+- `GENTS_DESKTOP_SYNC_BRANCHABLE_ON_PAIR` is removed with no 16-collection replacement. Transcript history remains lazy until #1142.
+- “Concurrent” is an acceptance detail: the fixed two collection request futures run together with `tokio::try_join!`.
+- The preferred follow-up is a paginated, cursor-based index protocol with bounded document-ID pages, explicit lineage policy, observable progress, and resumability.
 
 ## Global Constraints
 
@@ -147,8 +151,10 @@ theorem clientIndex_filters_requester_lineage (peerDid localDid : Did) :
       (fun k => k.value = peerDid ∧ k.field = "requester_did") = true := by
   simp [scopeFilter, clientIndexTemplate, clientIndexRules]
 
-theorem clientIndex_covers_exactly_index_collections :
-    clientIndexTemplate.collections = clientIndexCollections.toFinset := rfl
+theorem clientIndex_covers_exactly_literal_index_collections :
+    clientIndexTemplate.collections =
+      ["AgentConversation", "AgentSession"].toFinset := by
+  decide
 ```
 
 If any existing theorem in `Derivation.lean` enumerates the whole catalog (e.g. a totality or count theorem proved by `decide`), re-run it unchanged — `decide` re-evaluates against the new 10-entry list; fix only if the statement hard-codes `9`.
@@ -344,117 +350,60 @@ git commit -m "test(conformance): pin client-index template contract (#1141)"
 
 ---
 
-### Task 4: Bootstrap — ungated index sync, once per bootstrap
+### Task 4: Supervisor — resilient, non-blocking index requests
 
 **Files:**
 - Modify: `crates/gents-desktop-core/src/client/schema.rs`
 - Modify: `crates/gents-desktop-core/src/client/core/bootstrap.rs`
+- Modify: `crates/gents-desktop-core/src/client/core/supervisor.rs`
 - Modify: `crates/gents-desktop-core/src/client/core/writes.rs`
 - Modify: `crates/gents-desktop-core/src/client/core/tests.rs`
 
 **Interfaces:**
-- Produces: `pub fn index_collection_names() -> [&'static str; 2]` in `schema.rs`; `sync_index_collections_with_retry(node, p2p, timeout) -> Result<Vec<String>>` in `bootstrap.rs` (label parameter dropped — the operation is node-global, not per-peer). The two per-collection retry futures run concurrently and return names in stable index-list order.
+- Produces: public Rust `CLIENT_INDEX_COLLECTIONS`; `index_collection_names()` reuses it; `request_index_sync(node, p2p) -> Result<Vec<String>>` validates that a peer is connected and concurrently dispatches exactly two collection requests; the supervisor tracks which saved-peer connection epochs have received a request.
 - Consumes: `p2p_sync_branchable_collection(p2p, &collection_id)` (existing, `core/p2p_ops.rs`).
 
-- [ ] **Step 1: Write the failing test for the index list**
+- [ ] **Step 1: Keep one Rust source of truth for the index list**
 
-In `crates/gents-desktop-core/src/client/schema.rs`'s existing `#[cfg(test)] mod tests`:
+Export `CLIENT_INDEX_COLLECTIONS` from the Rust template catalog and return it from `schema::index_collection_names()`. Keep the existing test that pins the literal names and verifies both are branchable. Lean remains the formal mirror, with a theorem against the literal collection names rather than against the definition used to construct the template.
 
-```rust
-    #[test]
-    fn index_collections_are_the_session_index_and_are_branchable() {
-        let index = super::index_collection_names();
-        assert_eq!(index, ["AgentConversation", "AgentSession"]);
-        for name in index {
-            assert!(
-                gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&name),
-                "{name} must be branchable for DAG sync"
-            );
-        }
-    }
-```
-
-- [ ] **Step 2: Run to verify failure**
-
-```bash
-cargo test -p gents-desktop-core index_collections_are
-```
-Expected: FAIL — `index_collection_names` not found.
-
-- [ ] **Step 3: Implement `index_collection_names`**
-
-In `schema.rs`, after `branchable_collection_names`:
-
-```rust
-/// The eager session index: conversation cards (title, preview, lineage)
-/// and session lifecycle rows. Synced unfiltered at bootstrap so a paired
-/// client renders the complete session list; everything transcript-shaped
-/// stays lazy (#1142).
-pub fn index_collection_names() -> [&'static str; 2] {
-    ["AgentConversation", "AgentSession"]
-}
-```
-
-- [ ] **Step 4: Rewire bootstrap**
+- [ ] **Step 2: Remove the old inline paths and ineffective retry ladder**
 
 In `bootstrap.rs`:
 
-a. Rename `sync_branchable_collections_with_retry` to `sync_index_collections_with_retry` and drop the `label: &str` parameter. Resolve the two collection IDs up front, then run one retry future per collection with `tokio::try_join!` under the same deadline. Preserve deterministic output order (`AgentConversation`, then `AgentSession`) and use the error message `"timed out syncing index collection {collection_name}: {error}"`.
+- remove the old env gate and 16-collection helper;
+- remove index requests from `bootstrap_saved_peers` and `ClientCore::add_peer` so neither critical path waits on them;
+- replace the retrying helper with `request_index_sync`, which refuses zero connected peers, resolves the two collection IDs once, and dispatches the two requests with `tokio::try_join!` once; and
+- preserve `bootstrap_saved_peers` errors in `ClientCore::bootstrap_errors` rather than discarding them.
 
-b. Delete `branchable_pair_sync_enabled()` and the `BRANCHABLE_PAIR_SYNC_ENV` constant. Confirm with `rg -n "env_flag_enabled|env_flag_value" crates/gents-desktop-core/src` that the private parsing helpers have no other callers, then delete them too.
+- [ ] **Step 3: Let the supervisor own request opportunities**
 
-c. In the peer loop, delete the entire `if branchable_pair_sync_enabled() { … } else { tracing::debug!(… "skipping opt-in branchable collection sync after pairing") }` block (the `configure_local_runtime_pairing` match keeps its `Ok(()) => {}` arm trivial and its `Err` arm unchanged).
+Maintain a small in-memory set of saved peer IDs whose current healthy connection epoch has received an index request. The supervisor:
 
-d. After the peer loop completes (immediately after the `statuses.push(status);` loop ends), add a single node-global index sync, gated only on at least one successful dial. Because this call is outside the loop, multiple saved peers still trigger only one pair of collection requests:
+1. begins with the set empty, causing one request after startup for healthy saved peers;
+2. requests again when a newly saved healthy peer is absent from the set;
+3. removes a peer from the set whenever that peer enters repair, causing a fresh request after successful reconnect; and
+4. records request failures in `ClientPeerStatus.last_error`, where the UI and `saved_peer_needs_repair` already look. A successful dispatch logs that merges continue asynchronously; it never claims completion.
 
-```rust
-    if options.install_replicators_on_bootstrap
-        && statuses.iter().any(|s| s.dial_succeeded)
-    {
-        match sync_index_collections_with_retry(node, p2p, BOOTSTRAP_OPERATION_TIMEOUT).await {
-            Ok(synced) => {
-                tracing::info!(
-                    target: "gents_desktop_core::peer",
-                    synced_collections = ?synced,
-                    "session index sync complete"
-                );
-            }
-            Err(error) => {
-                let message = format!("session index sync failed: {error}");
-                tracing::warn!(target: "gents_desktop_core::peer", %message);
-                errors.push(message);
-            }
-        }
-    }
-```
+- [ ] **Step 4: Add focused regression coverage**
 
-Remove the now-unused `branchable_collection_names` import from `bootstrap.rs` and delete the helper itself now that it has no production callers; the schema test can check `BRANCHABLE_COLLECTION_NAMES` directly.
+Extend `RecordingP2P` to record collection IDs. Pin that the direct request targets exactly the two real index collection IDs. Add a supervisor-state regression covering initial request, steady-state dedupe, newly saved peer, reconnect re-arm, and visible failure when transport state reports no connected peers. Avoid timing assertions.
 
-e. In `writes.rs`, replace the second env-gated call site in `ClientCore::add_peer`. After reverse pairing succeeds, call `sync_index_collections_with_retry` ungated when `connected` is true, using `PEER_ADD_OPERATION_TIMEOUT`. If the peer was saved but did not connect, skip the immediate pull; the next successful bootstrap performs it. Update the log/warning text from “branchable” to “session index”, and remove the deleted env-helper imports.
-
-- [ ] **Step 5: Add focused sync regression coverage**
-
-Extend `RecordingP2P` in `core/tests.rs` (or add a narrow test double) to record `sync_branchable_collection` IDs. Add a test that:
-
-1. starts a local test node so the real collection-name → collection-ID lookup is exercised;
-2. calls `sync_index_collections_with_retry`;
-3. asserts exactly the `AgentConversation` and `AgentSession` collection IDs were requested, with no transcript collection, and the returned names retain stable index-list order; and
-4. keeps the concurrency implementation explicit with `tokio::try_join!`, without adding timing-sensitive test scaffolding.
-
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 5: Run the tests**
 
 ```bash
 cargo test -p gents-desktop-core index_collections_are
-cargo test -p gents-desktop-core index_sync_requests_exactly
+cargo test -p gents-desktop-core index_sync_request_targets_exactly
+cargo test -p gents-desktop-core supervisor_requests_index
 cargo test -p gents-desktop-core
 ```
-Expected: PASS. `core/supervisor.rs` has no old-helper call site and should remain unchanged.
+Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add crates/gents-desktop-core/src/client/schema.rs crates/gents-desktop-core/src/client/core/bootstrap.rs crates/gents-desktop-core/src/client/core/writes.rs crates/gents-desktop-core/src/client/core/tests.rs
-git commit -m "feat(desktop-core): ungated eager session-index sync at bootstrap, replacing the env-gated 16-collection pull (#1141)"
+git add crates/gents-desktop-core/src/client/schema.rs crates/gents-desktop-core/src/client/core/bootstrap.rs crates/gents-desktop-core/src/client/core/supervisor.rs crates/gents-desktop-core/src/client/core/writes.rs crates/gents-desktop-core/src/client/core/tests.rs
+git commit -m "fix(desktop-core): retry session-index requests from the P2P supervisor (#1141)"
 ```
 
 ---
@@ -576,7 +525,7 @@ With the amy runtime on studio-1 reachable (see memory note / spec):
 2. Build the desktop app, wipe only its local application store, and `/status`-pair against `http://100.69.4.79:9191/status`.
 3. Verify the local index docIDs/counts match the contemporaneous remote baseline for amy and that titles/previews render. Do not use the stale “129 conversations” observation as an assertion.
 4. Before creating any new activity, verify historical `AgentRequest`, `AgentResponse`, `AgentMessage`, `AgentToolCall`, `AgentToolResult`, `AgentToolApproval`, and `CompactionEntry` rows were not bulk-pulled.
-5. Verify logs show one two-collection index sync, not the old 16-collection pass, and inspect the resulting `PeerPairingDesired` row (`template: "machine"`, `collections: null`).
+5. Verify logs show a two-collection index request (without claiming merge completion), not the old 16-collection pass, and inspect the resulting `PeerPairingDesired` row (`template: "machine"`, `collections: null`).
 
 - [ ] **Step 6: Review the final diff and commits**
 
