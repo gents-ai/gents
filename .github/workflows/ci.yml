@@ -284,14 +284,14 @@ jobs:
           cargo test -p gents --lib toolset::tests::read_only_bash
           # The client-authored list-sync fence (#1123/#1125) must fail the
           # PR that drifts the surface, not the post-merge main run.
-          cargo test -p gents --test client_authored_collections_fence
+          cargo test -p gents --test misc client_authored_collections_fence::
 
       - name: Run PR CLI smoke tests
         if: matrix.suite == 'cli' && github.event_name == 'pull_request'
         run: |
           cargo test -p gents-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
-          cargo test -p gents-cli --test cli_status -- --nocapture --test-threads=1
-          cargo test -p gents-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
+          cargo test -p gents-cli --test cli_runtime cli_status:: -- --nocapture --test-threads=1
+          cargo test -p gents-cli --test cli_runtime cli_reconciliation::reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
 
       - name: Run full library and integration tests
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'

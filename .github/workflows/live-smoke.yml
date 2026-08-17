@@ -50,7 +50,7 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Run live CLI smoke test
-        run: cargo test -p gents-cli --test cli_live standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
+        run: cargo test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
 
       - name: Show Rust build cache stats
         if: always()

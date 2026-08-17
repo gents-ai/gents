@@ -86,7 +86,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "cli_goal::goal_set_get_pause_resume_and_clear_are_durable",
             package: "gents-cli",
-            source_path: "crates/gents-cli/tests/cli_goal.rs",
+            source_path: "crates/gents-cli/tests/suites/cli_goal.rs",
             module_path: "cli_goal",
             function: "goal_set_get_pause_resume_and_clear_are_durable",
         },
@@ -199,14 +199,14 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "cli_mcp_probe::mcp_probe_json_reports_health_snapshot_for_registry_service",
             package: "gents-cli",
-            source_path: "crates/gents-cli/tests/cli_mcp_probe.rs",
+            source_path: "crates/gents-cli/tests/suites/cli_mcp_probe.rs",
             module_path: "cli_mcp_probe",
             function: "mcp_probe_json_reports_health_snapshot_for_registry_service",
         },
         ConformanceConsumer::RustTest {
             id: "cli_config_task_run::config_task_run_matches_lean_manual_dispatch_contract",
             package: "gents-cli",
-            source_path: "crates/gents-cli/tests/cli_config_task_run.rs",
+            source_path: "crates/gents-cli/tests/suites/cli_config_task_run.rs",
             module_path: "cli_config_task_run",
             function: "config_task_run_matches_lean_manual_dispatch_contract",
         },
@@ -682,7 +682,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "cli_trace_export::trace_capture_fetches_metadata_with_field_commit_cid",
             package: "gents-cli",
-            source_path: "crates/gents-cli/tests/cli_trace_export.rs",
+            source_path: "crates/gents-cli/tests/suites/cli_trace_export.rs",
             module_path: "cli_trace_export",
             function: "trace_capture_fetches_metadata_with_field_commit_cid",
         },
