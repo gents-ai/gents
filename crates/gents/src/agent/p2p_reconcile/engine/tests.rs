@@ -76,6 +76,27 @@ fn bearer_readiness_requires_exact_applied_conversation_replicator() {
 }
 
 #[test]
+fn bearer_readiness_accepts_merged_conversation_layers() {
+    let control = bearer_desired("conversation", "did:key:claimant", "iroh-ticket");
+    let data = control.clone();
+    let desired = merge_layered_desired(Some(control), Some(data)).expect("merged desired");
+    let applied = PairingApplied {
+        replicator_addresses: desired.replicator_addresses.clone(),
+        replicator_filter: desired.replicator_filter.clone(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
+        Some((
+            "did:key:claimant".to_string(),
+            "iroh-ticket".to_string(),
+            "conversation".to_string()
+        ))
+    );
+}
+
+#[test]
 fn bearer_readiness_mutation_escapes_signed_fields() {
     let record = BearerPairingReadyRecord {
         issuer_did: "did:key:issuer".to_string(),

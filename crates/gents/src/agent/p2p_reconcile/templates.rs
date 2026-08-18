@@ -117,7 +117,17 @@ impl FilterPredicate {
             Self::All(nested) => filters.extend(nested),
             predicate => filters.push(predicate),
         }
-        Self::All(filters)
+        let mut unique = Vec::with_capacity(filters.len());
+        for filter in filters {
+            if !unique.contains(&filter) {
+                unique.push(filter);
+            }
+        }
+        if unique.len() == 1 {
+            unique.pop().expect("one filter")
+        } else {
+            Self::All(unique)
+        }
     }
 
     /// Convert recursive `All` nodes into DefraDB query-filter `_and` syntax.
