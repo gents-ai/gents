@@ -787,7 +787,16 @@ fn observes_collection(line: &str, collection: &str) -> bool {
         .is_none_or(|next| !next.is_alphanumeric() && next != '_')
 }
 
-fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> String {
+fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> Result<String> {
+    // The collection and every field key below are interpolated in identifier
+    // position; validate them so a malformed pack manifest cannot inject
+    // GraphQL through the seed create.
+    validate_collection_identifier(&seed.collection)?;
+    gents::graphql::validate_graphql_name(&seed.job_id_field)?;
+    gents::graphql::validate_graphql_name(&seed.prompt_field)?;
+    for key in seed.fields.keys() {
+        gents::graphql::validate_graphql_name(key)?;
+    }
     let mut fields = vec![
         format!(
             "{}: \"{}\"",
@@ -803,11 +812,11 @@ fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> String {
     for (key, value) in &seed.fields {
         fields.push(format!("{key}: \"{}\"", escape_graphql_string(value)));
     }
-    format!(
+    Ok(format!(
         "mutation {{ create_{}(input: {{ {} }}) {{ _docID }} }}",
         seed.collection,
         fields.join(", ")
-    )
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -2411,7 +2420,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             manifest.seed.fields.extend(scan_seed_fields(&output));
         }
 
-        let mutation = seed_mutation(&manifest.seed, &job_id, &prompt);
+        let mutation = seed_mutation(&manifest.seed, &job_id, &prompt)?;
         post_graphql(&graphql, &mutation)
             .await
             .context("seeding the pack")?;
@@ -3502,5 +3511,31 @@ mod tests {
             Some("graphql-injection=2")
         );
         assert!(fields.get("candidates").unwrap().contains("src/a.rs"));
+    }
+
+    /// Regression for audit finding `seed-mutation-unvalidated-identifiers`:
+    /// the seed collection and field keys are interpolated as bare GraphQL
+    /// identifiers, so a malformed pack manifest must be rejected instead of
+    /// producing an injectable mutation.
+    #[test]
+    fn seed_mutation_validates_identifiers() {
+        let seed = |collection: &str, fields: BTreeMap<String, String>| PackSeed {
+            collection: collection.to_string(),
+            job_id_field: "run_id".to_string(),
+            prompt_field: "focus".to_string(),
+            fields,
+        };
+
+        assert!(seed_mutation(&seed("ScanJob", BTreeMap::new()), "job-1", "hi").is_ok());
+
+        let bad_collection = seed(
+            "ScanJob) { _docID } } mutation evil { x(input: { a",
+            BTreeMap::new(),
+        );
+        assert!(seed_mutation(&bad_collection, "job-1", "hi").is_err());
+
+        let mut bad_fields = BTreeMap::new();
+        bad_fields.insert("a\": \"x\", evil".to_string(), "v".to_string());
+        assert!(seed_mutation(&seed("ScanJob", bad_fields), "job-1", "hi").is_err());
     }
 }
