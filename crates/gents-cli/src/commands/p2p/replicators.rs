@@ -52,8 +52,7 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
                 (
                     col.clone(),
                     crate::shared::P2pReplicatorFilter {
-                        field: pred.field.clone(),
-                        value: Value::String(pred.value.clone()),
+                        conditions: pred.conditions(),
                     },
                 )
             })
@@ -71,7 +70,7 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
         .map(|(col, pred)| {
             (
                 col.clone(),
-                json!({ "field": pred.field, "value": pred.value }),
+                serde_json::to_value(pred).unwrap_or(Value::Null),
             )
         })
         .collect();
@@ -119,13 +118,15 @@ pub(super) fn parse_replicator_filters(filters: &[String]) -> Result<PairingFilt
         if value.is_empty() {
             anyhow::bail!("invalid --filter {raw:?}: filter value must not be empty");
         }
-        map.insert(
-            collection.to_string(),
-            FilterPredicate {
-                field: field.to_string(),
-                value: value.to_string(),
-            },
-        );
+        let predicate = FilterPredicate::eq(field, value);
+        match map.remove(collection) {
+            Some(existing) => {
+                map.insert(collection.to_string(), existing.and(predicate));
+            }
+            None => {
+                map.insert(collection.to_string(), predicate);
+            }
+        }
     }
     Ok(map)
 }
@@ -184,17 +185,34 @@ mod tests {
 
         assert_eq!(filters.len(), 2);
         let req = filters.get("AgentRequest").unwrap();
-        assert_eq!(req.field, "agent_did");
-        assert_eq!(req.value, "did:key:alice");
+        assert_eq!(req.single_string_eq(), Some(("agent_did", "did:key:alice")));
         let resp = filters.get("AgentResponse").unwrap();
-        assert_eq!(resp.field, "agent_did");
-        assert_eq!(resp.value, "did:key:bob");
+        assert_eq!(resp.single_string_eq(), Some(("agent_did", "did:key:bob")));
     }
 
     #[test]
     fn parse_replicator_filters_empty_is_ok() {
         let filters = parse_replicator_filters(&[]).expect("empty filters should parse");
         assert!(filters.is_empty());
+    }
+
+    #[test]
+    fn repeated_collection_filters_are_conjunctive() {
+        let filters = parse_replicator_filters(&[
+            "AgentRequest:requester_did=did:key:alice".to_string(),
+            "AgentRequest:status=pending".to_string(),
+        ])
+        .expect("valid filters");
+
+        assert_eq!(
+            Value::Object(filters["AgentRequest"].conditions()),
+            serde_json::json!({
+                "_and": [
+                    { "requester_did": { "_eq": "did:key:alice" } },
+                    { "status": { "_eq": "pending" } }
+                ]
+            })
+        );
     }
 
     #[test]
@@ -258,7 +276,9 @@ mod tests {
             parse_replicator_filters(&["AgentRequest:agent_did=did:key:z=abc".to_string()])
                 .expect("filter value with = should parse");
         let pred = filters.get("AgentRequest").unwrap();
-        assert_eq!(pred.field, "agent_did");
-        assert_eq!(pred.value, "did:key:z=abc");
+        assert_eq!(
+            pred.single_string_eq(),
+            Some(("agent_did", "did:key:z=abc"))
+        );
     }
 }

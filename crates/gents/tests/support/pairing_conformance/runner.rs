@@ -371,10 +371,7 @@ fn scenario_filter_to_pairing_filters(
         .map(|(collection, predicate)| {
             (
                 collection.clone(),
-                FilterPredicate {
-                    field: predicate.field.clone(),
-                    value: predicate.value.clone(),
-                },
+                FilterPredicate::eq(predicate.field.clone(), predicate.value.clone()),
             )
         })
         .collect()

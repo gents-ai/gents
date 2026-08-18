@@ -9,9 +9,11 @@ abbrev PeerId := String
 structure CollectionFilterKey where
   collection : String
   field : String
+  operator : String := "_eq"
   value : String
   deriving DecidableEq, Repr
 
+/-- Filter atoms are interpreted conjunctively for each collection. -/
 abbrev ReplicatorFilter := Finset CollectionFilterKey
 
 abbrev ReplicatorCollections := Finset String

@@ -1,11 +1,11 @@
-import Proofs.Basic
-import Mathlib.Data.Finset.Basic
+import Proofs.PairingReconcile.State
 
 namespace PairingReconcile.Layering
 
 structure Layer where
   subscriptions : Finset String
   replicatorCollections : Finset String
+  filters : ReplicatorFilter := ∅
   isAppCollections : Bool
   deriving DecidableEq
 
@@ -20,6 +20,7 @@ def mergeLayered (base : Option Layer) (dataPlane : Option Layer) : Option Layer
   | some b, some d =>
       some { subscriptions := b.subscriptions ∪ d.subscriptions
            , replicatorCollections := b.replicatorCollections ∪ d.replicatorCollections
+           , filters := b.filters ∪ d.filters
            , isAppCollections := b.isAppCollections || d.isAppCollections }
 
 theorem appCollections_subscription_survives
@@ -68,5 +69,39 @@ theorem base_preserved
           simp [mergeLayered, clampDataPlane, h] at hm
           subst hm
           exact ⟨Finset.subset_union_left, Finset.subset_union_left⟩
+
+/-- Layering is conjunctive: no base predicate can be overwritten by a
+    data-plane predicate on the same collection. -/
+theorem base_filters_preserved
+    (b : Layer) (dp : Option Layer) (m : Layer)
+    (hm : mergeLayered (some b) dp = some m) :
+    b.filters ⊆ m.filters := by
+  cases dp with
+  | none =>
+      simp [mergeLayered] at hm
+      subst hm
+      exact Finset.Subset.refl _
+  | some d =>
+      cases h : d.isAppCollections <;>
+        simp [mergeLayered, clampDataPlane, h] at hm <;>
+        subst hm <;> exact Finset.subset_union_left
+
+/-- Every data-plane predicate also survives a two-layer merge. Together with
+    `base_filters_preserved`, overlapping collection predicates are ANDed. -/
+theorem data_plane_filters_preserved
+    (b d m : Layer) (hm : mergeLayered (some b) (some d) = some m) :
+    d.filters ⊆ m.filters := by
+  cases h : d.isAppCollections <;>
+    simp [mergeLayered, clampDataPlane, h] at hm <;>
+    subst hm <;> exact Finset.subset_union_right
+
+theorem overlapping_collection_filters_compose
+    (b d m : Layer) (baseFilter dataFilter : CollectionFilterKey)
+    (hm : mergeLayered (some b) (some d) = some m)
+    (hbase : baseFilter ∈ b.filters) (hdata : dataFilter ∈ d.filters)
+    (_hoverlap : baseFilter.collection = dataFilter.collection) :
+    baseFilter ∈ m.filters ∧ dataFilter ∈ m.filters := by
+  exact ⟨base_filters_preserved b (some d) m hm hbase,
+    data_plane_filters_preserved b d m hm hdata⟩
 
 end PairingReconcile.Layering

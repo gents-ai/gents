@@ -672,10 +672,7 @@ async fn replay_and_wait_for_bridge(
     let mut filters = PairingFilters::new();
     filters.insert(
         "AgentToolCall".to_string(),
-        FilterPredicate {
-            field: "spawn_target_did".to_string(),
-            value: receiver_did.to_string(),
-        },
+        FilterPredicate::eq("spawn_target_did", receiver_did),
     );
     admin
         .add_replicator(&[receiver_addr.to_string()], &collections, &filters)

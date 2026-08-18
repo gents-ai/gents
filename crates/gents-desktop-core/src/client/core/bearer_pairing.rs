@@ -719,7 +719,7 @@ fn bearer_replicator_filters(
     .map(|(collection, predicate)| {
         (
             collection,
-            ReplicationFilter::eq(&predicate.field, serde_json::Value::String(predicate.value)),
+            ReplicationFilter::predicate(predicate.conditions()),
         )
     })
     .collect::<ReplicationFilters>();

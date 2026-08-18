@@ -132,10 +132,8 @@ struct AddReplicatorBody<'a> {
 
 #[derive(Debug, Serialize)]
 struct HttpReplicationFilter {
-    #[serde(rename = "Field")]
-    field: String,
-    #[serde(rename = "Value")]
-    value: serde_json::Value,
+    #[serde(rename = "Conditions")]
+    conditions: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -250,8 +248,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
                     (
                         collection.clone(),
                         HttpReplicationFilter {
-                            field: predicate.field.clone(),
-                            value: serde_json::Value::String(predicate.value.clone()),
+                            conditions: predicate.conditions(),
                         },
                     )
                 })
@@ -896,6 +893,44 @@ mod tests {
             )
             .await
             .expect("add_replicator");
+    }
+
+    #[tokio::test]
+    async fn add_replicator_posts_composed_conditions() {
+        let server = MockServer::start().await;
+        let expected = serde_json::json!({
+            "Collections": ["AgentRequest"],
+            "Addresses": ["peer1"],
+            "Filters": {
+                "AgentRequest": {
+                    "Conditions": {
+                        "_and": [
+                            { "requester_did": { "_eq": "did:key:phone" } },
+                            { "status": { "_eq": "pending" } }
+                        ]
+                    }
+                }
+            }
+        });
+        Mock::given(method("POST"))
+            .and(path("/api/v0/p2p/replicators"))
+            .and(body_json(expected))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let filters = [(
+            "AgentRequest".to_string(),
+            gents::agent::p2p_reconcile::FilterPredicate::eq("requester_did", "did:key:phone").and(
+                gents::agent::p2p_reconcile::FilterPredicate::eq("status", "pending"),
+            ),
+        )]
+        .into_iter()
+        .collect();
+
+        admin_for(&server)
+            .add_replicator(&["peer1".into()], &["AgentRequest".into()], &filters)
+            .await
+            .expect("add composed replicator");
     }
 
     #[tokio::test]

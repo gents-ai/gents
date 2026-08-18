@@ -4,7 +4,9 @@ use anyhow::anyhow;
 use events::Bus;
 
 use super::*;
-use crate::agent::p2p_reconcile::{RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
+use crate::agent::p2p_reconcile::{
+    FilterPredicate, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+};
 
 fn set(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| value.to_string()).collect()
@@ -14,10 +16,7 @@ fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     let mut filters = PairingFilters::new();
     filters.insert(
         collection.to_string(),
-        crate::agent::p2p_reconcile::FilterPredicate {
-            field: field.to_string(),
-            value: value.to_string(),
-        },
+        crate::agent::p2p_reconcile::FilterPredicate::eq(field, value),
     );
     filters
 }
@@ -66,11 +65,10 @@ fn bearer_readiness_requires_exact_applied_conversation_replicator() {
     );
 
     let mut wrong_filter = applied;
-    wrong_filter
-        .replicator_filter
-        .get_mut("AgentRequest")
-        .expect("request filter")
-        .value = "did:key:someone-else".to_string();
+    wrong_filter.replicator_filter.insert(
+        "AgentRequest".to_string(),
+        FilterPredicate::eq("requester_did", "did:key:someone-else"),
+    );
     assert_eq!(
         earned_bearer_readiness(Some(&desired), &wrong_filter, "did:key:issuer"),
         None
@@ -131,7 +129,7 @@ fn merge_desired_unions_control_and_data_plane_state() {
         merged
             .replicator_filter
             .get("AgentRequest")
-            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            .and_then(FilterPredicate::single_string_eq),
         Some(("agent_did", "did:key:a"))
     );
     assert!(!merged.replicator_filter.contains_key("AgentNetwork"));
@@ -242,7 +240,7 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
         desired
             .replicator_filter
             .get("AgentRequest")
-            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            .and_then(FilterPredicate::single_string_eq),
         Some(("requester_did", "did:key:peer-b"))
     );
 }
@@ -274,7 +272,7 @@ fn data_plane_subagent_coordinator_uses_signed_peer_for_targeted_bridge() {
         desired
             .replicator_filter
             .get("AgentToolCall")
-            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            .and_then(FilterPredicate::single_string_eq),
         Some(("spawn_target_did", "did:key:host"))
     );
 }
@@ -311,8 +309,10 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
     );
     assert_eq!(desired.replicator_filter.len(), 4);
     for predicate in desired.replicator_filter.values() {
-        assert_eq!(predicate.field, "requester_did");
-        assert_eq!(predicate.value, "did:key:coord");
+        assert_eq!(
+            predicate.single_string_eq(),
+            Some(("requester_did", "did:key:coord"))
+        );
     }
 }
 
@@ -1621,8 +1621,10 @@ fn push_template_resolves_to_filter_without_subscription() {
         .replicator_filter
         .get("AgentRequest")
         .expect("AgentRequest filter");
-    assert_eq!(pred.field, "requester_did");
-    assert_eq!(pred.value, "did:key:bob");
+    assert_eq!(
+        pred.single_string_eq(),
+        Some(("requester_did", "did:key:bob"))
+    );
 }
 
 /// A `Replicate` template (agent-config) subscribes to its collection set
@@ -1683,7 +1685,7 @@ fn subagent_coordinator_template_filters_only_targeted_bridge() {
         desired
             .replicator_filter
             .get("AgentToolCall")
-            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            .and_then(FilterPredicate::single_string_eq),
         Some(("spawn_target_did", "did:key:host"))
     );
 }
@@ -1709,8 +1711,10 @@ fn subagent_host_template_filters_return_projection_to_requester() {
     );
     assert_eq!(desired.replicator_filter.len(), 4);
     for predicate in desired.replicator_filter.values() {
-        assert_eq!(predicate.field, "requester_did");
-        assert_eq!(predicate.value, "did:key:coord");
+        assert_eq!(
+            predicate.single_string_eq(),
+            Some(("requester_did", "did:key:coord"))
+        );
     }
 }
 
@@ -1858,8 +1862,10 @@ async fn push_template_installs_filtered_replicator_without_subscription() {
         .1
         .get("AgentRequest")
         .expect("AgentRequest filter on installed replicator");
-    assert_eq!(pred.field, "requester_did");
-    assert_eq!(pred.value, "did:key:bob");
+    assert_eq!(
+        pred.single_string_eq(),
+        Some(("requester_did", "did:key:bob"))
+    );
 }
 
 /// End-to-end reconcile of a `Replicate` (agent-config) template: it both
@@ -1922,10 +1928,10 @@ async fn changing_scoped_did_reinstalls_replicator() {
     for col in resolve_template("conversation").unwrap().collections.iter() {
         alice_filter.insert(
             (*col).to_string(),
-            crate::agent::p2p_reconcile::templates::FilterPredicate {
-                field: "requester_did".to_string(),
-                value: "did:key:alice".to_string(),
-            },
+            crate::agent::p2p_reconcile::templates::FilterPredicate::eq(
+                "requester_did",
+                "did:key:alice",
+            ),
         );
     }
     *store.applied.lock().unwrap() = PairingApplied {
@@ -1961,9 +1967,8 @@ async fn changing_scoped_did_reinstalls_replicator() {
     assert_eq!(
         last.1
             .get("AgentRequest")
-            .expect("AgentRequest filter")
-            .value,
-        "did:key:bob"
+            .and_then(FilterPredicate::single_string_eq),
+        Some(("requester_did", "did:key:bob"))
     );
 }
 
@@ -2001,10 +2006,7 @@ async fn add_replicator_records_filters_at_seam() {
     let mut filters = PairingFilters::default();
     filters.insert(
         "AgentRequest".to_string(),
-        FilterPredicate {
-            field: "agent_did".to_string(),
-            value: "did:key:alice".to_string(),
-        },
+        FilterPredicate::eq("agent_did", "did:key:alice"),
     );
     admin
         .add_replicator(&addresses, &collections, &filters)
@@ -2016,8 +2018,10 @@ async fn add_replicator_records_filters_at_seam() {
     let recorded = &calls[1].1;
     assert_eq!(recorded.len(), 1);
     let pred = recorded.get("AgentRequest").expect("AgentRequest filter");
-    assert_eq!(pred.field, "agent_did");
-    assert_eq!(pred.value, "did:key:alice");
+    assert_eq!(
+        pred.single_string_eq(),
+        Some(("agent_did", "did:key:alice"))
+    );
 }
 
 #[test]
@@ -2082,7 +2086,7 @@ fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
             desired
                 .replicator_filter
                 .get(col)
-                .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+                .and_then(FilterPredicate::single_string_eq),
             Some(("requester_did", "did:key:peer-b")),
             "conversation collection {col} must be requester-scoped exactly like `conversation`"
         );
@@ -2091,7 +2095,7 @@ fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
         desired
             .replicator_filter
             .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
-            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            .and_then(FilterPredicate::single_string_eq),
         Some(("source_did", "did:key:self"))
     );
 }
@@ -2129,14 +2133,16 @@ fn control_plane_desired_machine_scopes_conversation_and_owned_directory() {
             .replicator_filter
             .get(col)
             .unwrap_or_else(|| panic!("missing filter for conversation collection {col}"));
-        assert_eq!(pred.field, "requester_did");
-        assert_eq!(pred.value, "did:key:phone");
+        assert_eq!(
+            pred.single_string_eq(),
+            Some(("requester_did", "did:key:phone"))
+        );
     }
     assert_eq!(
         desired
             .replicator_filter
             .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
-            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            .and_then(FilterPredicate::single_string_eq),
         Some(("source_did", "did:key:server"))
     );
 }

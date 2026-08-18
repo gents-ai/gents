@@ -21,8 +21,8 @@ use super::graphql_helpers::{ensure_no_errors, first_row, graphql_string_list_li
 use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
 use super::reciprocal::GraphqlReciprocalStore;
 use super::templates::{
-    resolve_template, scope_filter, Delivery, DidSource, PairingFilters, Scope,
-    APP_COLLECTIONS_TEMPLATE,
+    merge_pairing_filters, resolve_template, scope_filter, Delivery, DidSource, PairingFilters,
+    Scope, APP_COLLECTIONS_TEMPLATE,
 };
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
@@ -1331,10 +1331,7 @@ fn data_plane_scope_filter(
             .map(|&col| {
                 (
                     col.to_string(),
-                    super::templates::FilterPredicate {
-                        field: (*field).to_string(),
-                        value: local_did.to_string(),
-                    },
+                    super::templates::FilterPredicate::eq(*field, local_did),
                 )
             })
             .collect(),
@@ -1349,10 +1346,7 @@ fn data_plane_scope_filter(
                 };
                 (
                     rule.collection.to_string(),
-                    super::templates::FilterPredicate {
-                        field: rule.field.to_string(),
-                        value: value.to_string(),
-                    },
+                    super::templates::FilterPredicate::eq(rule.field, value),
                 )
             })
             .collect(),
@@ -1377,7 +1371,7 @@ pub fn merge_layered_desired(
             left.replicator_addresses.extend(right.replicator_addresses);
             left.replicator_collections
                 .extend(right.replicator_collections);
-            left.replicator_filter.extend(right.replicator_filter);
+            merge_pairing_filters(&mut left.replicator_filter, right.replicator_filter);
             left.template_ids.extend(right.template_ids);
             Some(left)
         }
@@ -1410,10 +1404,13 @@ fn earned_bearer_readiness(
         return None;
     }
     let readiness_filter = desired.replicator_filter.get("BearerPairingReady")?;
-    if readiness_filter.field != "claimant_did" {
+    let Some((field, claimant_did)) = readiness_filter.single_string_eq() else {
+        return None;
+    };
+    if field != "claimant_did" {
         return None;
     }
-    let claimant_did = readiness_filter.value.trim();
+    let claimant_did = claimant_did.trim();
     if claimant_did.is_empty() {
         return None;
     }

@@ -29,13 +29,7 @@ fn set(values: &[&str]) -> BTreeSet<String> {
 
 fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     let mut filters = PairingFilters::new();
-    filters.insert(
-        collection.to_string(),
-        FilterPredicate {
-            field: field.to_string(),
-            value: value.to_string(),
-        },
-    );
+    filters.insert(collection.to_string(), FilterPredicate::eq(field, value));
     filters
 }
 
@@ -155,19 +149,50 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
         merged
             .replicator_filter
             .get("AgentRequest")
-            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            .and_then(FilterPredicate::single_string_eq),
         Some(("requester_did", "did:key:a"))
     );
     assert_eq!(
         merged
             .replicator_filter
             .get("AgentResponse")
-            .map(|filter| (filter.field.as_str(), filter.value.as_str())),
+            .and_then(FilterPredicate::single_string_eq),
         Some(("requester_did", "did:key:a"))
     );
     assert!(
         !merged.replicator_filter.contains_key("AgentNetwork"),
         "network-control collections stay unfiltered inside the mixed replicator"
+    );
+}
+
+/// Mirrors Lean `overlapping_collection_filters_compose`: independently
+/// derived predicates on the same collection are conjunctive, not last-writer-wins.
+#[test]
+fn layered_desired_merge_ands_overlapping_collection_filters() {
+    let base_filter = FilterPredicate::eq("requester_did", "did:key:phone");
+    let data_filter = FilterPredicate::predicate(
+        serde_json::json!({ "status": { "_in": ["pending", "processing"] } })
+            .as_object()
+            .expect("object")
+            .clone(),
+    );
+    let layer = |filter| PairingDesired {
+        collections: BTreeSet::new(),
+        replicator_addresses: set(&["addr"]),
+        replicator_collections: set(&["AgentRequest"]),
+        replicator_filter: [("AgentRequest".to_string(), filter)].into_iter().collect(),
+        template_ids: BTreeSet::new(),
+    };
+
+    let merged = merge_layered_desired(
+        Some(layer(base_filter.clone())),
+        Some(layer(data_filter.clone())),
+    )
+    .expect("merged desired state");
+
+    assert_eq!(
+        merged.replicator_filter.get("AgentRequest"),
+        Some(&FilterPredicate::All(vec![base_filter, data_filter]))
     );
 }
 

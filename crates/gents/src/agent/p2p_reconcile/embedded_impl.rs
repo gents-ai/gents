@@ -247,11 +247,7 @@ fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
         .map(|(collection, predicate)| {
             (
                 collection.clone(),
-                ReplicationFilter {
-                    field: predicate.field.clone(),
-                    value: serde_json::Value::String(predicate.value.clone()),
-                    conditions: None,
-                },
+                ReplicationFilter::predicate(predicate.conditions()),
             )
         })
         .collect()
@@ -304,6 +300,29 @@ mod tests {
     struct TestNode {
         node: Arc<EmbeddedNode>,
         _tempdir: tempfile::TempDir,
+    }
+
+    #[test]
+    fn adapter_preserves_conjunctive_filters_as_conditions() {
+        let filters = [(
+            "AgentRequest".to_string(),
+            FilterPredicate::eq("requester_did", "did:key:phone")
+                .and(FilterPredicate::eq("status", "pending")),
+        )]
+        .into_iter()
+        .collect();
+
+        let converted = to_defra_filters(&filters);
+        assert_eq!(
+            converted["AgentRequest"].conditions.as_ref(),
+            serde_json::json!({
+                "_and": [
+                    { "requester_did": { "_eq": "did:key:phone" } },
+                    { "status": { "_eq": "pending" } }
+                ]
+            })
+            .as_object()
+        );
     }
 
     async fn p2p_node() -> TestNode {
@@ -750,17 +769,11 @@ mod tests {
         let mut filters = PairingFilters::new();
         filters.insert(
             "AgentRequest".to_string(),
-            FilterPredicate {
-                field: "requester_did".to_string(),
-                value: "did:key:coord".to_string(),
-            },
+            FilterPredicate::eq("requester_did", "did:key:coord"),
         );
         filters.insert(
             "AgentToolCall".to_string(),
-            FilterPredicate {
-                field: "spawn_target_did".to_string(),
-                value: "did:key:host".to_string(),
-            },
+            FilterPredicate::eq("spawn_target_did", "did:key:host"),
         );
         sender_admin
             .add_replicator(&receiver_addresses, &collections, &filters)

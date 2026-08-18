@@ -217,7 +217,7 @@ pub(crate) struct P2pReplicatorRequest {
     #[serde(rename = "Addresses")]
     pub(crate) addresses: Vec<String>,
     /// Per-collection replication filters. Serialized to defradb's
-    /// `ReplicatorRequest.Filters` shape (`{Collection: {Field, Value}}`); the
+    /// `ReplicatorRequest.Filters` shape (`{Collection: {Conditions}}`); the
     /// node installs a filtered replicator that pushes only matching documents.
     /// Omitted entirely when empty so an unfiltered replicator is requested.
     #[serde(
@@ -229,10 +229,8 @@ pub(crate) struct P2pReplicatorRequest {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct P2pReplicatorFilter {
-    #[serde(rename = "Field")]
-    pub(crate) field: String,
-    #[serde(rename = "Value")]
-    pub(crate) value: Value,
+    #[serde(rename = "Conditions")]
+    pub(crate) conditions: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Serialize)]

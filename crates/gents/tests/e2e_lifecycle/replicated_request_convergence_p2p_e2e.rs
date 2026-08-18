@@ -93,10 +93,7 @@ async fn install_one_way_replicator(
     let mut filters = PairingFilters::new();
     filters.insert(
         "AgentRequest".to_string(),
-        FilterPredicate {
-            field: "requester_did".to_string(),
-            value: PEER_DID.to_string(),
-        },
+        FilterPredicate::eq("requester_did", PEER_DID),
     );
     sender_admin
         .add_replicator(&[receiver_addr], &collection_names, &filters)
