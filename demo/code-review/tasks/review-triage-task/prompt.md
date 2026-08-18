@@ -2,6 +2,6 @@ Run {{ event.correlation }} has a closed verification ledger: {{ doc.candidate_c
 
 Verifier summary: {{ doc.summary }}
 
-Call `defra_query` for `FindingVerdict` with `run_id == "{{ event.correlation }}"`. Check that its counts agree with the source summary. For every row whose verdict is exactly `confirmed`, including Cleanup findings, call `write_finding` preserving all content, confidence, evidence, and verification fields. Do not call `write_finding` for `refuted` rows.
+The verifier already persisted every FindingVerdict and promoted every confirmed row to Finding. Do not query the datastore and do not write findings. Your only job is the operator-facing merge report.
 
-Finally call `write_triage_report` exactly once. Its `confirmed_count` and `refuted_count` must match the closed ledger, and `high_priority_count` is the number of confirmed Critical/Major findings. The summary should lead with the merge verdict and rank the confirmed defects by severity and practical impact. Do not supply `run_id`: the tool intentionally hides it and the runtime fills it from this request's `{{ event.correlation }}` correlation.
+Call `write_triage_report` exactly once. `confirmed_count` and `refuted_count` must match the ledger above. `high_priority_count` is the number of confirmed Critical/Major findings named in the verifier summary (zero if none). The summary should lead with the merge verdict and rank the confirmed defects by severity and practical impact. If there are no confirmed findings, say so and recommend merge unless the verifier summary names a blocking process failure. Do not supply `run_id`: the tool hides it and the runtime fills it from `{{ event.correlation }}`.

@@ -5,25 +5,6 @@
   "enabled": true,
   "entries": [
     {
-      "tool_name": "write_finding",
-      "collection": "Finding",
-      "description": "Promote one confirmed verification verdict into the final review.",
-      "fields": [
-        {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "finding_id", "required": true},
-        {"name": "area_id", "required": true},
-        {"name": "severity", "required": true},
-        {"name": "confidence", "required": true},
-        {"name": "path", "required": true},
-        {"name": "line", "required": false},
-        {"name": "title", "required": true},
-        {"name": "detail", "required": true},
-        {"name": "verdict", "required": true},
-        {"name": "evidence", "required": true},
-        {"name": "verification", "required": true}
-      ]
-    },
-    {
       "tool_name": "write_triage_report",
       "collection": "TriageReport",
       "description": "Create the single count-balanced final report for this correlated review run; run_id is filled by the runtime.",

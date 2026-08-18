@@ -16,8 +16,12 @@ REVIEW_MIN_LENSES ?= 4
 REVIEW_MAX_LENSES ?= 12
 REVIEW_PR ?= auto
 REVIEW_PORT ?= 19191
+REVIEW_PAGE_PORT ?= 19190
+REVIEW_HOME ?= $(CURDIR)/demo/code-review/runs/demo-home
+REVIEW_PACK ?= $(CURDIR)/demo/code-review
 REVIEW_JOB_ID ?=
 REVIEW_KEEP_HOME ?=
+REVIEW_RESET ?=
 REVIEW_CONTEXT_WINDOW ?= 262144
 REVIEW_MAX_OUTPUT_TOKENS ?= 65536
 REVIEW_MAX_TURNS ?= 1000000
@@ -115,13 +119,16 @@ help:
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
 	@echo "Review:"
-	@echo "  make review                Review REVIEW_BASE...REVIEW_HEAD in REVIEW_ROOT"
+	@echo "  make review-page           Open the talk page on :$(REVIEW_PAGE_PORT)"
+	@echo "  make review-serve          Start a durable pack node on :$(REVIEW_PORT)"
+	@echo "    REVIEW_RESET=1           Wipe REVIEW_HOME before init"
+	@echo "  make review                Seed a ReviewJob against the running pack node"
 	@echo "    REVIEW_PROMPT='...'       Override the review focus"
 	@echo "    REVIEW_LENSES=auto        Let recon choose the review-lens count"
 	@echo "    REVIEW_MIN_LENSES=4       Set the automatic lower bound"
 	@echo "    REVIEW_MAX_LENSES=12      Set the automatic upper bound"
 	@echo "    REVIEW_PR=auto            Discover the current branch's GitHub PR"
-	@echo "    REVIEW_KEEP_HOME=1        Keep the generated runtime home"
+	@echo "    REVIEW_KEEP_HOME=1        Unused for the talk kick; kept for gents demo run"
 	@echo "    REVIEW_CONTEXT_WINDOW=N   Match the serving endpoint's context window"
 	@echo "    REVIEW_MAX_OUTPUT_TOKENS=N Reserve output tokens per model turn"
 	@echo "    REVIEW_TEMPERATURE=N      Set the provider sampling temperature"
@@ -158,6 +165,58 @@ build:
 build-cli:
 	$(CARGO) build -p gents-cli
 
+export GENTS_REVIEW_ROOT := $(abspath $(REVIEW_ROOT))
+export GENTS_REVIEW_BASE_REF := $(REVIEW_BASE)
+export GENTS_REVIEW_HEAD_REF := $(REVIEW_HEAD)
+export GENTS_REVIEW_PROMPT := $(REVIEW_PROMPT)
+export GENTS_REVIEW_LENS_COUNT := $(REVIEW_LENSES)
+export GENTS_REVIEW_MIN_LENSES := $(REVIEW_MIN_LENSES)
+export GENTS_REVIEW_MAX_LENSES := $(REVIEW_MAX_LENSES)
+export GENTS_REVIEW_CONTEXT_WINDOW := $(REVIEW_CONTEXT_WINDOW)
+export GENTS_REVIEW_MAX_OUTPUT_TOKENS := $(REVIEW_MAX_OUTPUT_TOKENS)
+export GENTS_REVIEW_MAX_TURNS := $(REVIEW_MAX_TURNS)
+export GENTS_REVIEW_TEMPERATURE := $(REVIEW_TEMPERATURE)
+export GENTS_REVIEW_TOP_P := $(REVIEW_TOP_P)
+export GENTS_REVIEW_COMPACTION_THRESHOLD := $(REVIEW_COMPACTION_THRESHOLD)
+export GENTS_REVIEW_DEADLINE_SECS := $(REVIEW_DEADLINE_SECS)
+export GENTS_REVIEW_AWAIT_TIMEOUT_SECS := $(REVIEW_AWAIT_TIMEOUT_SECS)
+export GENTS_REVIEW_STREAM_LIVENESS_SECS := $(REVIEW_STREAM_LIVENESS_SECS)
+export GENTS_REVIEW_STREAM_BATCH_MS := $(REVIEW_STREAM_BATCH_MS)
+export GENTS_REVIEW_RETRY_MAX_TRANSPORT := $(REVIEW_RETRY_MAX_TRANSPORT)
+export GENTS_REVIEW_RETRY_MAX_RESAMPLE := $(REVIEW_RETRY_MAX_RESAMPLE)
+
+.PHONY: review-page
+review-page:
+	@echo "page     http://127.0.0.1:$(REVIEW_PAGE_PORT)"
+	@echo "runtime  http://127.0.0.1:$(REVIEW_PORT)  (start with make review-serve)"
+	@REVIEW_PORT="$(REVIEW_PORT)" $(NPM) --prefix apps/review-demo run dev
+
+.PHONY: review-serve
+review-serve:
+	@test -d "$(REVIEW_ROOT)" || { echo "REVIEW_ROOT is not a directory: $(REVIEW_ROOT)" >&2; exit 2; }
+	@if test -n "$(REVIEW_RESET)"; then rm -rf "$(REVIEW_HOME)"; fi
+	@mkdir -p "$(REVIEW_HOME)"
+	@if ! test -f "$(REVIEW_HOME)/init.json"; then \
+		echo "init     $(REVIEW_HOME)"; \
+		$(CARGO) run -p gents-cli -- init \
+			--home "$(REVIEW_HOME)" \
+			--inference-url "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" inference_url)" \
+			--model-name "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" model_name)" \
+			--tool-package "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" tool_package)" \
+			--tool-root "$(abspath $(REVIEW_ROOT))" \
+			--backend-preset "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" backend_preset)" \
+			--openai-wire-api "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" openai_wire_api)"; \
+	fi
+	@echo "page     http://127.0.0.1:$(REVIEW_PAGE_PORT)"
+	@echo "graphql  http://127.0.0.1:$(REVIEW_PORT)/api/v0/graphql"
+	@echo "home     $(REVIEW_HOME)"
+	@$(CARGO) run -p gents-cli -- server \
+		--home "$(REVIEW_HOME)" \
+		--http-port "$(REVIEW_PORT)" \
+		--apply-root "$(REVIEW_PACK)" \
+		--p2p-transport none \
+		--no-codex-shim
+
 .PHONY: review
 review:
 	@test -d "$(REVIEW_ROOT)" || { echo "REVIEW_ROOT is not a directory: $(REVIEW_ROOT)" >&2; exit 2; }
@@ -174,30 +233,11 @@ review:
 		if command -v gh >/dev/null 2>&1; then review_pr=$$(cd "$(REVIEW_ROOT)" && gh pr view --json number --jq .number 2>/dev/null || true); else review_pr=; fi; \
 	fi; \
 	if test -n "$$review_pr"; then echo "reviewing GitHub PR $$review_pr"; else echo "no GitHub PR detected; reviewing the local ref diff"; fi; \
-	GENTS_REVIEW_ROOT="$(abspath $(REVIEW_ROOT))" \
-	GENTS_REVIEW_BASE_REF="$(REVIEW_BASE)" \
-	GENTS_REVIEW_HEAD_REF="$(REVIEW_HEAD)" \
-	GENTS_REVIEW_PROMPT="$(REVIEW_PROMPT)" \
-	GENTS_REVIEW_LENS_COUNT="$(REVIEW_LENSES)" \
-	GENTS_REVIEW_MIN_LENSES="$(REVIEW_MIN_LENSES)" \
-	GENTS_REVIEW_MAX_LENSES="$(REVIEW_MAX_LENSES)" \
 	GENTS_REVIEW_PR_NUMBER="$$review_pr" \
-	GENTS_REVIEW_CONTEXT_WINDOW="$(REVIEW_CONTEXT_WINDOW)" \
-	GENTS_REVIEW_MAX_OUTPUT_TOKENS="$(REVIEW_MAX_OUTPUT_TOKENS)" \
-	GENTS_REVIEW_MAX_TURNS="$(REVIEW_MAX_TURNS)" \
-	GENTS_REVIEW_TEMPERATURE="$(REVIEW_TEMPERATURE)" \
-	GENTS_REVIEW_TOP_P="$(REVIEW_TOP_P)" \
-	GENTS_REVIEW_COMPACTION_THRESHOLD="$(REVIEW_COMPACTION_THRESHOLD)" \
-	GENTS_REVIEW_DEADLINE_SECS="$(REVIEW_DEADLINE_SECS)" \
-	GENTS_REVIEW_AWAIT_TIMEOUT_SECS="$(REVIEW_AWAIT_TIMEOUT_SECS)" \
-	GENTS_REVIEW_STREAM_LIVENESS_SECS="$(REVIEW_STREAM_LIVENESS_SECS)" \
-	GENTS_REVIEW_STREAM_BATCH_MS="$(REVIEW_STREAM_BATCH_MS)" \
-	GENTS_REVIEW_RETRY_MAX_TRANSPORT="$(REVIEW_RETRY_MAX_TRANSPORT)" \
-	GENTS_REVIEW_RETRY_MAX_RESAMPLE="$(REVIEW_RETRY_MAX_RESAMPLE)" \
-	$(CARGO) run -p gents-cli -- demo run "$(CURDIR)/demo/code-review" \
-		--http-port "$(REVIEW_PORT)" \
-		$(if $(REVIEW_JOB_ID),--job-id "$(REVIEW_JOB_ID)",) \
-		$(if $(REVIEW_KEEP_HOME),--keep-home,)
+	GENTS_REVIEW_JOB_ID="$(REVIEW_JOB_ID)" \
+	REVIEW_PORT="$(REVIEW_PORT)" \
+	REVIEW_PAGE_PORT="$(REVIEW_PAGE_PORT)" \
+	node "$(REVIEW_PACK)/scripts/seed-review-job.mjs"
 
 .PHONY: maintain
 maintain:

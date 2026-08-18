@@ -148,16 +148,17 @@ Side writes that are **not** trigger edges, shown as badges on the producing
 node when present:
 
 - scan: `write_candidate_finding` → `CandidateFinding`
-- verify: `write_finding_verdict` → `FindingVerdict`
-- triage: `write_finding` → `Finding`, `write_triage_report` → `TriageReport`
+- verify: `write_finding_verdict` → `FindingVerdict`, `write_finding` → `Finding`
+- triage: `write_triage_report` → `TriageReport`
 
 ### Enabling features
 
 Three cards. Each has: short definition, timeline with links, how it composes.
 
-**Collection tools.** A `DatastoreToolSurface` grants named create/query tools
-onto a collection. The model calls `write_review_area`; the runtime does one
-validated write.
+**Collection tools.** A `DatastoreToolSurface` grants named create and read
+tools onto a collection. The model calls `write_review_area` or
+`read_candidate_finding`; the runtime does one validated write or a bound
+collection read.
 
 - Timeline: inline `write_tools` [#431](https://github.com/source-inc/gents/pull/431)
   (2026-06-08). Reusable surfaces [#1081](https://github.com/source-inc/gents/pull/1081)
@@ -330,7 +331,7 @@ list is explicit — add the entry).
 
 Seed helper: `demo/code-review/scripts/seed-review-job.mjs`. Makefile
 `review` invokes it. String escape must match `escape_graphql_string`
-(backslash, then `"`).
+(backslash, `"`, newline, CR, and tab).
 
 ## Testing
 
