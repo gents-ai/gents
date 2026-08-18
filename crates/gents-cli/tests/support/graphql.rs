@@ -5,14 +5,9 @@ use gents::retry::{
 };
 use serde_json::Value;
 
-pub fn escape_graphql_string(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
-}
+// Re-export the canonical escaper instead of duplicating it, so test-support
+// escaping can never drift from production (audit/code-review finding).
+pub use gents::graphql::escape_graphql_string;
 
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
     let client = reqwest::Client::new();
