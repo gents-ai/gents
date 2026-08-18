@@ -31,7 +31,7 @@ not status or a completed-but-empty call—prove the server actually started
 and answered:
 
 ```bash
-GENTS_LIVE_LSP=1 cargo test -p gents --test e2e_live \
+GENTS_LIVE_LSP=1 cargo test -p gents --features live-e2e --test e2e_live \
   lsp_live_model_uses_rust_analyzer \
   -- --ignored --test-threads=1 --nocapture
 ```
