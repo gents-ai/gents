@@ -357,7 +357,7 @@ impl RequestLifecycle {
             .and_then(parse_rfc3339_utc)
             .unwrap_or(synthesized_deadline_at);
         let deadline = deadline_at.to_rfc3339();
-        let doc_id = self.request.doc_id.clone();
+        let doc_id = escape_graphql_string(&self.request.doc_id);
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);

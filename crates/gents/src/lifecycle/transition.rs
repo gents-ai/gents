@@ -455,7 +455,7 @@ impl RequestLifecycle {
         target_status: &str,
         target_lifecycle_state: PersistedLifecycleState,
     ) -> Result<()> {
-        let doc_id = &self.request.doc_id;
+        let doc_id = escape_graphql_string(&self.request.doc_id);
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(

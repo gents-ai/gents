@@ -197,7 +197,7 @@ pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> 
                     }}
                 ) {{ _docID }}
             }}"#,
-            doc_id = session.doc_id,
+            doc_id = escape_graphql_string(&session.doc_id),
         );
 
         execute_mutation_with_retry(node, &mutation, "close_session").await?;
