@@ -38,7 +38,10 @@ use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
 use crate::document_config::{WriteToolDecl, WriteToolFieldFill};
-use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
+use crate::graphql::{
+    escape_graphql_string, graphql_mutation_with_transaction_retry, validate_collection_identifier,
+    validate_graphql_name,
+};
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
@@ -97,6 +100,27 @@ impl BoundedWriteTool {
 
     fn build_mutation(&self, args: &Map<String, Value>) -> Result<String> {
         self.ensure_well_formed()?;
+
+        // Collection and field names are interpolated as bare GraphQL
+        // identifiers below; validate them like the query-tool path does
+        // (`defra_query::render::validate_identifier`) so a malformed
+        // declaration cannot inject identifier-position GraphQL.
+        validate_collection_identifier(&self.decl.collection).map_err(|e| {
+            anyhow!(
+                "tool `{}` has invalid collection `{}`: {e}",
+                self.decl.tool_name,
+                self.decl.collection
+            )
+        })?;
+        for field in &self.decl.fields {
+            validate_graphql_name(&field.name).map_err(|e| {
+                anyhow!(
+                    "tool `{}` has invalid field name `{}`: {e}",
+                    self.decl.tool_name,
+                    field.name
+                )
+            })?;
+        }
 
         for key in args.keys() {
             let field = self.decl.fields.iter().find(|field| &field.name == key);

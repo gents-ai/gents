@@ -144,6 +144,32 @@ async fn rejects_write_with_empty_collection_decl() {
     );
 }
 
+/// Regression for audit finding `write-tool-graphql-identifier-injection`:
+/// collection and field names are interpolated as bare GraphQL identifiers,
+/// so a non-identifier field name must be rejected before the mutation is
+/// built (mirroring the query-tool path's `validate_identifier`).
+#[tokio::test]
+async fn rejects_decl_with_non_identifier_field_name() {
+    let node = node_with_actionrequest().await;
+    let bad = WriteToolDecl {
+        tool_name: "broken".into(),
+        collection: "ActionRequest".into(),
+        description: "field name breaks out of identifier position".into(),
+        fields: vec![WriteToolField {
+            name: "summary\" }) { _docID } } mutation evil { drop(input: { x".into(),
+            required: false,
+            fill: None,
+        }],
+        output_obligation: None,
+    };
+    let tool = BoundedWriteTool::new(node, bad);
+    assert!(
+        Tool::call(&tool, serde_json::from_value(json!({})).unwrap())
+            .await
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_time() {
     let node = node_with_actionrequest().await;
