@@ -19,6 +19,7 @@
 
   .shortcuts-help {
     min-width: 320px;
+    padding: var(--space-7) var(--space-9);
   }
 
   .shortcuts-list {
