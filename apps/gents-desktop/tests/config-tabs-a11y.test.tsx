@@ -4,15 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import { ConfigWorkspace } from "../src/components/ConfigWorkspace";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-function renderWorkspace() {
+function renderWorkspace(backLabel?: string, onBack = vi.fn()) {
   render(
     <ConfigWorkspace
+      backLabel={backLabel}
       bootstrap={null}
       selectedDeployment={deployment}
       selectedBehaviorId={null}
       saving={false}
       runningTask={false}
-      onBack={vi.fn()}
+      onBack={onBack}
       onDeleteSkillConfig={vi.fn()}
       onSaveAgentConfig={vi.fn()}
       onRunTask={vi.fn()}
@@ -32,6 +33,17 @@ function renderWorkspace() {
 }
 
 describe("config tabs keyboard navigation", () => {
+  it("keeps the Fleet return path visible across config tabs", () => {
+    const onBack = vi.fn();
+    renderWorkspace("Back to Fleet", onBack);
+
+    const back = screen.getByRole("button", { name: "← Back to Fleet" });
+    fireEvent.click(screen.getByTestId("config-tab-backends"));
+    expect(back).toBeVisible();
+    fireEvent.click(back);
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
   it("ArrowRight moves selection and focus; Home/End jump; wraps around", () => {
     renderWorkspace();
     const tablist = screen.getByRole("tablist", { name: "Configuration" });

@@ -285,6 +285,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
         <section className="config-page">
           <ConfigWorkspace
             api={bridge.api}
+            backLabel={configReturnView === "fleet" ? "Back to Fleet" : "Back to Chat"}
             bootstrap={shell.snapshot?.bootstrap ?? null}
             onBack={navigateBack}
             onDeleteSkillConfig={shell.onDeleteSkillConfig}

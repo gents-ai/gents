@@ -181,6 +181,10 @@
     flex: 0 0 auto;
   }
 
+  .config-back-button {
+    white-space: nowrap;
+  }
+
   .config-status-dot {
     width: 10px;
     height: 10px;

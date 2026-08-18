@@ -53,6 +53,7 @@ type ConfigWorkspaceProps = {
   saving: boolean;
   runningTask: boolean;
   onBack: () => void;
+  backLabel?: string;
   onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
   onSaveInferenceProfileConfig: (
@@ -93,6 +94,7 @@ export function ConfigWorkspace({
   saving,
   runningTask,
   onBack,
+  backLabel = "Back to Chat",
   onSaveAgentConfig,
   onSaveBackendConfig,
   onSaveInferenceProfileConfig,
@@ -193,8 +195,12 @@ export function ConfigWorkspace({
       <article className="panel centered-panel">
         <p className="eyebrow">Config</p>
         <h2>Select a deployment</h2>
-        <button className="ghost-button" onClick={onBack} type="button">
-          Back to Chat
+        <button
+          className="ghost-button config-back-button"
+          onClick={onBack}
+          type="button"
+        >
+          ← {backLabel}
         </button>
       </article>
     );
@@ -219,6 +225,14 @@ export function ConfigWorkspace({
             </div>
           </div>
           <div className="config-header-actions">
+            <button
+              className="ghost-button config-back-button"
+              data-testid="config-back-tab"
+              onClick={() => requestNavigation(onBack)}
+              type="button"
+            >
+              ← {backLabel}
+            </button>
             <span
               aria-hidden="true"
               className={
@@ -235,14 +249,6 @@ export function ConfigWorkspace({
             <span className="chip">
               {selectedDeployment.dialSucceeded ? "connected" : "saved"}
             </span>
-            <button
-              className="ghost-button"
-              data-testid="config-back-tab"
-              onClick={() => requestNavigation(onBack)}
-              type="button"
-            >
-              Back to Chat
-            </button>
           </div>
         </header>
 
