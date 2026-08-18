@@ -1192,18 +1192,36 @@ pub(crate) async fn validate_manifest_against_live(
 
         if let Some(filter) = trig.filter.as_deref().map(str::trim) {
             if !filter.is_empty() {
-                let probe = format!(
-                    r#"query {{ {collection}(filter: {filter}, limit: 1) {{ _docID }} }}"#,
-                    collection = source_collection,
-                    filter = filter,
-                );
-                match access.execute(&probe).await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        errors.push(format!(
-                            "event_trigger {} filter syntax error: {}",
-                            trigger_id, err
-                        ));
+                // `source_collection` and `filter` are interpolated into the
+                // probe query as an identifier and a raw filter fragment.
+                // Validate both exactly as the runtime trigger engine does
+                // (`trigger_engine::event_source`) before building the probe,
+                // so a malformed trigger cannot inject GraphQL through the
+                // live-validation path.
+                if let Err(err) = gents::graphql::validate_collection_identifier(source_collection) {
+                    errors.push(format!(
+                        "event_trigger {} source_collection is not a valid identifier: {}",
+                        trigger_id, err
+                    ));
+                } else if let Err(err) = gents::graphql::validate_graphql_filter_fragment(filter) {
+                    errors.push(format!(
+                        "event_trigger {} filter is not a valid filter fragment: {}",
+                        trigger_id, err
+                    ));
+                } else {
+                    let probe = format!(
+                        r#"query {{ {collection}(filter: {filter}, limit: 1) {{ _docID }} }}"#,
+                        collection = source_collection,
+                        filter = filter,
+                    );
+                    match access.execute(&probe).await {
+                        Ok(_) => {}
+                        Err(err) => {
+                            errors.push(format!(
+                                "event_trigger {} filter syntax error: {}",
+                                trigger_id, err
+                            ));
+                        }
                     }
                 }
             }
