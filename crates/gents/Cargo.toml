@@ -17,6 +17,17 @@ default = [
 ]
 agent-memory = []
 lark = ["defra-node/lark"]
+# Gates the e2e_live test binary out of default builds: every test in it is
+# live-inference-gated, so default runs paid a ~160MB link to execute nothing.
+live-e2e = []
+
+# All other test binaries are auto-discovered; this explicit target overrides
+# autodiscovery for e2e_live so the link only happens on live runs
+# (`cargo test -p gents --features live-e2e --test e2e_live -- --ignored`).
+[[test]]
+name = "e2e_live"
+path = "tests/e2e_live.rs"
+required-features = ["live-e2e"]
 
 [dependencies]
 anyhow.workspace = true

@@ -51,7 +51,7 @@ use lean_vocab_test::{
     lean_codex_shim_thread_status_cases, lean_codex_shim_tool_metadata_cases,
     lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
     lean_command_sandbox_case, lean_compaction_reducer_cases, lean_composed_invariant_witnesses,
-    lean_contract_snapshot, lean_event_delivery_convergence_traces,
+    lean_contract_snapshot, lean_descendant_graph_cases, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
     lean_inference_slot_accounting_cases, lean_managed_exec_liveness_cases,

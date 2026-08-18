@@ -1,13 +1,14 @@
 //! Phase B: inactive+fields lock, PatchVersioned (lensless + fixture lens),
 //! crash-window resume, chain-replay pin authoring.
 
-use std::sync::Arc;
-
 use defra_node::EmbeddedNode;
 use gents_migration::{
     ensure_migrations_dynamic, fixture_lens_wasm, predict_transform_id, BaselineCollectionOwned,
     CollectionExpectation, DynamicRegistry, LensSpec, LensSpecOwned, MigrationStepOwned,
 };
+
+mod common;
+use common::fresh_node;
 
 const FIXTURE_SDL: &str = r#"
 type FixtureDoc {
@@ -19,17 +20,6 @@ const ADD_LABEL_PATCH: &str = r#"[
   {"op":"add","path":"/FixtureDoc/Fields/-","value":{"Name":"label","Kind":"String"}},
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
-
-async fn fresh_node() -> Arc<EmbeddedNode> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let node = EmbeddedNode::builder()
-        .data_path(dir.path())
-        .build()
-        .await
-        .expect("build node");
-    std::mem::forget(dir);
-    Arc::new(node)
-}
 
 /// Discover the destination CID of an inactive field-add patch (authoring tool).
 async fn discover_inactive_patch_pin(node: &EmbeddedNode) -> (String, String) {

@@ -64,6 +64,8 @@ pub(super) const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
     "AgentToolCall",
+    "AgentToolApproval",
+    "Goal",
     "AgentResponse",
     "InferenceCall",
     "CompactionEntry",
@@ -375,6 +377,50 @@ pub(super) async fn apply_projection_acp_read_filter(
             filtered_tool_calls.push(tool_call);
         }
     }
+    let allowed_tool_call_doc_ids = filtered_tool_calls
+        .iter()
+        .filter_map(|tool_call| tool_call.doc_id.as_deref())
+        .collect::<BTreeSet<_>>();
+    let mut filtered_tool_approvals = Vec::new();
+    for approval in rows.tool_approvals {
+        if !allowed_tool_call_doc_ids.contains(approval.tool_call_doc_id.as_str()) {
+            continue;
+        }
+        let doc_id = required_doc_id(
+            "AgentToolApproval",
+            approval.approval_id.as_str(),
+            &approval.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("AgentToolApproval"), doc_id)
+            .await?
+        {
+            filtered_tool_approvals.push(approval);
+        }
+    }
+
+    let goal_doc_ids = rows
+        .goal_versions
+        .iter()
+        .map(|version| version.goal_doc_id.trim())
+        .collect::<BTreeSet<_>>();
+    if goal_doc_ids.contains("") {
+        anyhow::bail!("DefraDB ACP projection decisions require _docID for Goal history");
+    }
+    let mut allowed_goal_doc_ids = BTreeSet::new();
+    for doc_id in goal_doc_ids {
+        if decider
+            .read_allowed(scope.resource_name("Goal"), doc_id)
+            .await?
+        {
+            allowed_goal_doc_ids.insert(doc_id.to_string());
+        }
+    }
+    let filtered_goal_versions = rows
+        .goal_versions
+        .into_iter()
+        .filter(|version| allowed_goal_doc_ids.contains(version.goal_doc_id.as_str()))
+        .collect();
 
     let mut filtered_responses = Vec::new();
     for response in rows.responses {
@@ -507,6 +553,8 @@ pub(super) async fn apply_projection_acp_read_filter(
         requests: filtered_requests,
         messages: filtered_messages,
         tool_calls: filtered_tool_calls,
+        tool_approvals: filtered_tool_approvals,
+        goal_versions: filtered_goal_versions,
         inference_calls: filtered_inference_calls,
         compactions: filtered_compactions,
         provider_context_reductions: filtered_provider_context_reductions,
@@ -736,6 +784,16 @@ pub(super) fn should_keep_scoped_timeline_event(
         RunTimelineEvent::ToolCall(tool_call) => {
             scoped_tool_call_allowed(tool_call, allowed_request_ids, scope)
         }
+        RunTimelineEvent::ToolApproval(approval) => {
+            allowed_request_ids.contains(&approval.request_id)
+        }
+        RunTimelineEvent::GoalTransition(goal) => {
+            scope_value_matches(scope.agent_did.as_deref(), [Some(goal.agent_did.as_str())])
+                && scope_value_matches(
+                    scope.session_id.as_deref(),
+                    [Some(goal.session_id.as_str())],
+                )
+        }
         RunTimelineEvent::Response(response) => allowed_request_ids.contains(&response.request_id),
     }
 }
@@ -787,8 +845,9 @@ mod tests {
 
     use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
     use gents::run_timeline::{
-        TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow,
-        TimelineRenderedRequestRef, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+        TimelineConversationRow, TimelineGoalVersionRow, TimelineInferenceCallRow,
+        TimelineMessageRow, TimelineRenderedRequestRef, TimelineResponseRow, TimelineSessionRow,
+        TimelineToolApprovalRow, TimelineToolCallRow,
     };
     use serde::Deserialize;
     use serde_json::{json, Value};
@@ -1032,6 +1091,8 @@ mod tests {
             ("AgentRequest", "doc-request-root"),
             ("AgentMessage", "doc-message-allowed"),
             ("AgentToolCall", "doc-tool-allowed"),
+            ("AgentToolApproval", "doc-approval-allowed"),
+            ("Goal", "doc-goal-allowed"),
             ("AgentResponse", "doc-response-allowed"),
             ("InferenceCall", "doc-inference-allowed"),
             ("AgentConversation", "doc-conversation"),
@@ -1067,6 +1128,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["call-allowed"]
         );
+        assert_eq!(
+            filtered
+                .tool_approvals
+                .iter()
+                .map(|approval| approval.approval_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["approval-allowed"]
+        );
+        assert_eq!(filtered.goal_versions.len(), 1);
+        assert_eq!(filtered.goal_versions[0].goal_id, "goal-allowed");
         assert_eq!(
             filtered
                 .responses
@@ -1106,6 +1177,8 @@ mod tests {
             ("runtime_request", "doc-request-root"),
             ("runtime_message", "doc-message-allowed"),
             ("runtime_tool_call", "doc-tool-allowed"),
+            ("runtime_tool_approval", "doc-approval-allowed"),
+            ("runtime_goal", "doc-goal-allowed"),
             ("runtime_response", "doc-response-allowed"),
             ("runtime_inference_call", "doc-inference-allowed"),
             ("runtime_conversation", "doc-conversation"),
@@ -1118,6 +1191,11 @@ mod tests {
             ("AgentRequest".to_string(), "runtime_request".to_string()),
             ("AgentMessage".to_string(), "runtime_message".to_string()),
             ("AgentToolCall".to_string(), "runtime_tool_call".to_string()),
+            (
+                "AgentToolApproval".to_string(),
+                "runtime_tool_approval".to_string(),
+            ),
+            ("Goal".to_string(), "runtime_goal".to_string()),
             ("AgentResponse".to_string(), "runtime_response".to_string()),
             (
                 "InferenceCall".to_string(),
@@ -1138,6 +1216,8 @@ mod tests {
         assert_eq!(filtered.requests.len(), 1);
         assert_eq!(filtered.messages.len(), 1);
         assert_eq!(filtered.tool_calls.len(), 1);
+        assert_eq!(filtered.tool_approvals.len(), 1);
+        assert_eq!(filtered.goal_versions.len(), 1);
         assert_eq!(filtered.inference_calls.len(), 1);
         assert_eq!(filtered.responses.len(), 1);
         assert!(filtered.conversation.is_some());
@@ -1237,6 +1317,46 @@ mod tests {
                     tool_name: "review".to_string(),
                     status: "completed".to_string(),
                     ..TimelineToolCallRow::default()
+                },
+            ],
+            tool_approvals: vec![
+                TimelineToolApprovalRow {
+                    doc_id: Some("doc-approval-allowed".to_string()),
+                    approval_id: "approval-allowed".to_string(),
+                    tool_call_doc_id: "doc-tool-allowed".to_string(),
+                    tool_call_id: "call-allowed".to_string(),
+                    request_id: Some("req-root".to_string()),
+                    decision: "approved".to_string(),
+                    ..TimelineToolApprovalRow::default()
+                },
+                TimelineToolApprovalRow {
+                    doc_id: Some("doc-approval-denied".to_string()),
+                    approval_id: "approval-denied".to_string(),
+                    tool_call_doc_id: "doc-tool-denied".to_string(),
+                    tool_call_id: "call-denied".to_string(),
+                    request_id: Some("req-child".to_string()),
+                    decision: "denied".to_string(),
+                    ..TimelineToolApprovalRow::default()
+                },
+            ],
+            goal_versions: vec![
+                TimelineGoalVersionRow {
+                    goal_doc_id: "doc-goal-allowed".to_string(),
+                    goal_id: "goal-allowed".to_string(),
+                    session_id: "session-acp".to_string(),
+                    agent_did: "did:test:agent".to_string(),
+                    commit_cid: "bafy-goal-allowed".to_string(),
+                    status: "active".to_string(),
+                    ..TimelineGoalVersionRow::default()
+                },
+                TimelineGoalVersionRow {
+                    goal_doc_id: "doc-goal-denied".to_string(),
+                    goal_id: "goal-denied".to_string(),
+                    session_id: "session-acp".to_string(),
+                    agent_did: "did:test:agent".to_string(),
+                    commit_cid: "bafy-goal-denied".to_string(),
+                    status: "blocked".to_string(),
+                    ..TimelineGoalVersionRow::default()
                 },
             ],
             responses: vec![

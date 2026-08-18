@@ -179,6 +179,123 @@ fn open_extension_surfaces_carry_capture_metadata() {
     assert_eq!(captures[1]["provenance_status"], "unsupported_manifest");
 }
 
+fn projection_descendant_edge(
+    child_request_id: &str,
+    materialization_state: crate::DescendantMaterializationState,
+    authorization_state: crate::DescendantAuthorizationState,
+    control_authority: crate::DescendantControlAuthority,
+) -> crate::DescendantEdge {
+    crate::DescendantEdge {
+        cursor: format!("cursor-{child_request_id}"),
+        root_request_id: "req-root".to_string(),
+        immediate_parent_request_id: "req-root".to_string(),
+        immediate_parent_session_id: "session-root".to_string(),
+        immediate_parent_tool_call_id: format!("tool-{child_request_id}"),
+        child_request_id: child_request_id.to_string(),
+        child_session_id: Some(format!("session-{child_request_id}")),
+        principal_did: Some(format!("did:test:{child_request_id}")),
+        behavior_id: Some(format!("behavior-{child_request_id}")),
+        deployment_id: Some(format!("deployment-{child_request_id}")),
+        target: Some(format!("target-{child_request_id}")),
+        await_mode: "background".to_string(),
+        cancel_policy: Some("cascade".to_string()),
+        lifecycle_state: "running".to_string(),
+        materialization_state,
+        workflow_group_id: None,
+        workflow_task_id: None,
+        workflow_role: Some("worker".to_string()),
+        terminal_result_ref: None,
+        transcript_cursor: 0,
+        authorization_state,
+        control_authority,
+        diagnostic: None,
+        depth: 1,
+        created_at: Some("2026-08-16T00:00:00Z".to_string()),
+        updated_at: Some("2026-08-16T00:00:01Z".to_string()),
+    }
+}
+
+#[test]
+fn external_descendant_projections_only_promote_readable_edges() {
+    let mut timeline = build_run_timeline(RunTimelineRows {
+        request: TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            agent_did: Some("did:test:root".to_string()),
+            behavior_id: Some("root".to_string()),
+            session_id: Some("session-root".to_string()),
+            status: Some("running".to_string()),
+            lifecycle_state: Some("running".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    timeline.descendant_edges = vec![
+        projection_descendant_edge(
+            "child-readable",
+            crate::DescendantMaterializationState::MaterializedRemote,
+            crate::DescendantAuthorizationState::Authorized,
+            crate::DescendantControlAuthority::Authorized,
+        ),
+        projection_descendant_edge(
+            "child-pending-private",
+            crate::DescendantMaterializationState::AwaitingChild,
+            crate::DescendantAuthorizationState::PendingMaterialization,
+            crate::DescendantControlAuthority::PendingMaterialization,
+        ),
+        projection_descendant_edge(
+            "child-rejected-private",
+            crate::DescendantMaterializationState::AuthorizationPending,
+            crate::DescendantAuthorizationState::RejectedPhysicalLineage,
+            crate::DescendantControlAuthority::RejectedPhysicalLineage,
+        ),
+    ];
+
+    let context = ProjectionContext::default();
+    let codex = build_adapter_projection(
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        &timeline,
+        &context,
+    );
+    let AdapterProjection::OpenAiCodexRunTrace(codex) = codex.output else {
+        panic!("Codex projection");
+    };
+    assert_eq!(codex.child_run_ids, vec!["child-readable"]);
+
+    let langgraph = build_adapter_projection(
+        AdapterProjectionKind::LangGraphStateHistory,
+        &timeline,
+        &context,
+    );
+    let AdapterProjection::LangGraphStateHistory(langgraph) = langgraph.output else {
+        panic!("LangGraph projection");
+    };
+    assert_eq!(
+        langgraph.values.get("child_request_ids"),
+        Some(&json!(["child-readable"]))
+    );
+    assert!(langgraph
+        .nodes
+        .iter()
+        .any(|node| node.request_id.as_deref() == Some("child-readable")));
+    assert!(langgraph
+        .tasks
+        .iter()
+        .any(|task| { task.child_request_id.as_deref() == Some("child-readable") }));
+
+    let multi =
+        build_adapter_projection(AdapterProjectionKind::MultiAgentTask, &timeline, &context);
+    let AdapterProjection::MultiAgentTask(multi) = multi.output else {
+        panic!("multi-agent projection");
+    };
+    assert_eq!(multi.delegations.len(), 1);
+    assert_eq!(multi.delegations[0].child_request_id, "child-readable");
+
+    let serialized = serde_json::to_string(&(codex, langgraph, multi)).unwrap();
+    assert!(!serialized.contains("child-pending-private"));
+    assert!(!serialized.contains("child-rejected-private"));
+}
+
 fn workspace_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

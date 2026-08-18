@@ -357,12 +357,9 @@ pub(crate) fn merge_surface_tools(
             );
         }
         for entry in surface.entries.as_deref().unwrap_or(&[]) {
-            if !entry.is_well_formed() {
-                bail!(
-                    "DatastoreToolSurface {} has a malformed entry (tool_name/collection required; query entries also need a projection)",
-                    surface_id
-                );
-            }
+            entry.validate().map_err(|error| {
+                anyhow::anyhow!("DatastoreToolSurface {surface_id} has a malformed entry: {error}")
+            })?;
             if let SurfaceToolDecl::Create(decl) = entry {
                 if !decl.output_obligation_is_well_formed() {
                     bail!(

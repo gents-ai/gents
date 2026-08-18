@@ -15,6 +15,20 @@ path = "src/lib.rs"
 name = "gents"
 path = "src/main.rs"
 
+[features]
+# Gates the live-inference test binary out of default builds: every test in
+# cli_live_suite is #[ignore]d behind env gates, so default runs paid a
+# full gents+defradb+iroh link to execute nothing.
+live-e2e = []
+
+# All other test binaries are auto-discovered; this explicit target overrides
+# autodiscovery for cli_live_suite so its link only happens on live runs
+# (`cargo test -p gents-cli --features live-e2e --test cli_live_suite -- --ignored`).
+[[test]]
+name = "cli_live_suite"
+path = "tests/cli_live_suite.rs"
+required-features = ["live-e2e"]
+
 [dependencies]
 anyhow.workspace = true
 axum = { version = "0.8", features = ["ws"] }

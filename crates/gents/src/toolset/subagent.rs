@@ -286,10 +286,9 @@ impl Tool for ListSubagentsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List this parent request's visible background child subagents. \
-A background child spawned by this request stays listed even before its child request \
-materializes: such an entry has status `awaiting_child_materialization` (matched by the \
-`running` and `all` filters) and a `diagnostic` explaining the bridge state."
+            description: "List the canonical descendant graph owned by this parent lineage. \
+Foreground, background, workflow, cross-behavior, and pending remote children use the same edge \
+shape. Use `scope=all_descendants` for nested children or `scope=workflow_group` with a group id."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -306,6 +305,20 @@ materializes: such an entry has status `awaiting_child_materialization` (matched
                         "maximum": 50,
                         "default": 20,
                         "description": "Maximum entries to return."
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["direct_children", "all_descendants", "workflow_group"],
+                        "default": "direct_children",
+                        "description": "Graph scope to enumerate."
+                    },
+                    "workflow_group_id": {
+                        "type": "string",
+                        "description": "Required when scope is workflow_group."
+                    },
+                    "after": {
+                        "type": "string",
+                        "description": "Opaque cursor returned as next_cursor by a previous page."
                     }
                 }
             }),
@@ -329,7 +342,7 @@ impl Tool for ReadSubagentTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description:
-                "Read an incremental transcript slice from a visible background subagent. \
+                "Read an incremental transcript slice from any visible canonical descendant. \
 Paging is cursor-based and content-honest: pass `since_sequence` to resume, and the response \
 returns `next_sequence` (the exact cursor to pass next), `has_more` (true when the token budget \
 capped the read and more messages remain past `next_sequence`), and `terminal`/`lifecycle_state` \

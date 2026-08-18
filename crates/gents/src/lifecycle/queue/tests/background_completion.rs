@@ -486,4 +486,9 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         .unwrap();
     assert_eq!(timeline.background_completions.len(), 2);
     assert!(timeline.background_completion_diagnostics_error.is_none());
+    assert!(timeline.descendant_edges.is_empty());
+    assert!(timeline
+        .descendant_graph_diagnostics_error
+        .as_deref()
+        .is_some_and(|error| error.contains("points to missing parent")));
 }

@@ -528,7 +528,7 @@ export GENTS_CLI_E2E_MODEL_NAME=google/gemma-4-12B-it-qat-q4_0-gguf
 # export GENTS_CLI_E2E_API_KEY="$OPENAI_API_KEY"
 
 cargo test -p gents-cli \
-  --test cli_live \
+  --features live-e2e --test cli_live_suite \
   cli_flow_runs_real_tool_loop_against_live_endpoint \
   -- --ignored --nocapture --test-threads=1
 

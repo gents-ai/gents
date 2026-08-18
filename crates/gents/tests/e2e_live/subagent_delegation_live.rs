@@ -30,9 +30,12 @@
 //!
 //! ## Cross-node delegation (Test 3)
 //!
-//! `live_cross_node_subagent_delegation` exercises orchestrator-on-A delegating
-//! to a behavior hosted on B over REAL in-process P2P replication installed by
-//! declarative `PeerPairingDesired` rows — no test "pump".
+//! `live_cross_node_subagent_delegation` exercises default-on-A delegating to
+//! fast-worker-on-B, which delegates again to reviewer-on-B, over REAL
+//! in-process P2P replication installed by declarative `PeerPairingDesired`
+//! rows — no test "pump". It then restarts both runtimes so the pairing
+//! reconcilers reconnect and proves the canonical graph converges without
+//! duplicate edges.
 //!
 //! Subagent targets are named `(agent_did, behavior_id)` pairs. The orchestrator
 //! on A writes a targeted bridge; B's SubagentSource materializes the child
@@ -52,8 +55,10 @@ use gents::graphql::escape_graphql_string;
 use gents::{
     agent::p2p_reconcile::resolve_template, default_behavior_id_for_agent,
     default_inference_profile_id_for_behavior, ensure_agent_principal, load_agent_behavior,
-    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity,
-    DocumentRuntimeOptions, Gents, SubagentTarget, ToolCeiling, ToolSelectionDocument,
+    resolve_descendant_graph, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
+    AgentIdentity, DescendantGraphAccess, DescendantMaterializationState, DescendantPage,
+    DescendantQuery, DocumentRuntimeOptions, Gents, SubagentTarget, ToolCeiling,
+    ToolSelectionDocument,
 };
 use serde::Deserialize;
 
@@ -66,9 +71,13 @@ const DEFAULT_LIVE_MODEL: &str = "d4f";
 const DEFAULT_BACKGROUNDING_MODEL: &str = "GLM-5.2";
 const LIVE_BACKEND_ID: &str = "backend-live-subagent";
 const RESEARCHER_BEHAVIOR_ID: &str = "live-researcher";
+const FAST_WORKER_BEHAVIOR_ID: &str = "live-fast-worker";
+const REVIEWER_BEHAVIOR_ID: &str = "live-reviewer";
 const BACKGROUND_WORKER_BEHAVIOR_ID: &str = "live-background-worker";
 /// Friendly, model-facing subagent target name (the model never sees behavior ids).
 const RESEARCHER_TARGET_NAME: &str = "researcher";
+const FAST_WORKER_TARGET_NAME: &str = "fast-worker";
+const REVIEWER_TARGET_NAME: &str = "reviewer";
 const BACKGROUND_WORKER_TARGET_NAME: &str = "background-worker";
 
 fn live_enabled() -> bool {
@@ -904,7 +913,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     let did_b = identity_b.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&did_a);
 
-    // --- Node B: host the researcher behavior owned by DID-B. ---
+    // --- Node B: host the fast-worker and reviewer behaviors owned by DID-B. ---
     ensure_agent_principal(db_b.node.as_ref(), &did_b)
         .await
         .expect("ensure principal B");
@@ -913,12 +922,37 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     upsert_live_backend(db_b.node.as_ref(), &endpoint, &model).await;
     configure_behavior(
         db_b.node.as_ref(),
-        RESEARCHER_BEHAVIOR_ID,
+        FAST_WORKER_BEHAVIOR_ID,
         &did_b,
         &model,
         &profile_b,
-        "You answer the user's question concisely and factually in one short sentence.",
-        Some("Researches factual questions and returns a concise factual answer."),
+        CROSS_NODE_FAST_WORKER_SYSTEM_PROMPT,
+        Some("Delegates its draft to the reviewer before returning it."),
+    )
+    .await;
+    configure_behavior(
+        db_b.node.as_ref(),
+        REVIEWER_BEHAVIOR_ID,
+        &did_b,
+        &model,
+        &profile_b,
+        "When asked to review the capital of France, reply exactly REVIEWER_OK: Paris is the capital of France.",
+        Some("Reviews the fast worker's factual answer."),
+    )
+    .await;
+    authorize_subagents(
+        db_b.node.as_ref(),
+        &did_b,
+        FAST_WORKER_BEHAVIOR_ID,
+        vec![SubagentTarget {
+            name: REVIEWER_TARGET_NAME.to_string(),
+            agent_did: did_b.clone(),
+            behavior_id: REVIEWER_BEHAVIOR_ID.to_string(),
+            description: Some("Reviews the fast worker's answer.".to_string()),
+        }],
+        /* spawn */ true,
+        /* background */ true,
+        /* allow_cross_deployment */ false,
     )
     .await;
 
@@ -934,7 +968,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         &did_a,
         &model,
         &profile_a,
-        CROSS_NODE_ORCHESTRATOR_SYSTEM_PROMPT,
+        CROSS_NODE_NESTED_ORCHESTRATOR_SYSTEM_PROMPT,
         None,
     )
     .await;
@@ -948,10 +982,10 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         &did_a,
         &orchestrator_behavior_id,
         vec![SubagentTarget {
-            name: RESEARCHER_TARGET_NAME.to_string(),
+            name: FAST_WORKER_TARGET_NAME.to_string(),
             agent_did: did_b.clone(),
-            behavior_id: RESEARCHER_BEHAVIOR_ID.to_string(),
-            description: Some("Researches factual questions.".to_string()),
+            behavior_id: FAST_WORKER_BEHAVIOR_ID.to_string(),
+            description: Some("Produces a reviewed factual answer.".to_string()),
         }],
         /* spawn */ true,
         /* background */ true,
@@ -990,8 +1024,8 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
 
     // Boot full agents on both nodes. B owns DID-B: its daemon + SubagentSource
     // claim and run the replicated child request against the live model.
-    let agent_b = boot_document_agent(&db_b, identity_b).await?;
-    let agent_a = boot_document_agent(&db_a, identity_a).await?;
+    let agent_b = boot_document_agent(&db_b, identity_b.clone()).await?;
+    let agent_a = boot_document_agent(&db_a, identity_a.clone()).await?;
     wait_for_replicator_installed(db_a.node.as_ref(), "peer-b", Duration::from_secs(120)).await;
     wait_for_replicator_installed(db_b.node.as_ref(), "peer-a", Duration::from_secs(120)).await;
 
@@ -1003,7 +1037,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         &orchestrator_behavior_id,
         request_id,
         session_id,
-        "Use your research subagent to find the capital of France, then tell me the answer.",
+        "Run the nested review workflow for the capital of France.",
     )
     .await;
 
@@ -1059,7 +1093,40 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         Some(did_a.as_str()),
         "child request must route only to its DID-A coordinator"
     );
-    assert_eq!(child_on_b.behavior_id, RESEARCHER_BEHAVIOR_ID);
+    assert_eq!(child_on_b.behavior_id, FAST_WORKER_BEHAVIOR_ID);
+
+    // The live fast-worker must itself delegate to reviewer. This is a local
+    // child on B, but requester_did remains DID-A so its bridge and result are
+    // part of the same authorization-safe return projection.
+    let reviewer_on_b = wait_for_child_of_parent(
+        db_b.node.as_ref(),
+        &child_request_id,
+        Duration::from_secs(120),
+    )
+    .await
+    .expect("fast-worker must materialize its reviewer child on node B");
+    assert_eq!(reviewer_on_b.behavior_id, REVIEWER_BEHAVIOR_ID);
+    assert_eq!(
+        reviewer_on_b.caused_by_parent_request_id.as_deref(),
+        Some(child_request_id.as_str())
+    );
+    let reviewer_terminal_b = wait_for_request_terminal(
+        db_b.node.as_ref(),
+        &reviewer_on_b.request_id,
+        Duration::from_secs(150),
+    )
+    .await;
+    assert_eq!(reviewer_terminal_b, "completed");
+    let reviewer_answer_b = wait_for_assistant_answer(
+        db_b.node.as_ref(),
+        &reviewer_on_b.request_id,
+        Duration::from_secs(30),
+    )
+    .await;
+    assert!(
+        reviewer_answer_b.contains("REVIEWER_OK"),
+        "reviewer did not produce its live completion marker: {reviewer_answer_b:?}"
+    );
 
     // B runs the child to completion with a non-empty live response.
     let child_terminal_b = wait_for_request_terminal(
@@ -1116,8 +1183,64 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         "orchestrator request on A must terminalize; got {parent_terminal_a}"
     );
 
+    // #836: the model-facing and operator projections consume this same edge.
+    // Its identity survives remote materialization and completion without a
+    // second lineage reconstruction from child request labels.
+    let graph =
+        wait_for_descendant_graph(db_a.node.as_ref(), request_id, 2, Duration::from_secs(120))
+            .await;
+    assert_eq!(graph.edges.len(), 2, "both remote edges must converge once");
+    let edge = &graph.edges[0];
+    assert_eq!(edge.child_request_id, child_request_id);
+    assert_eq!(edge.principal_did.as_deref(), Some(did_b.as_str()));
+    assert_eq!(edge.behavior_id.as_deref(), Some(FAST_WORKER_BEHAVIOR_ID));
+    assert_eq!(
+        edge.materialization_state,
+        DescendantMaterializationState::MaterializedRemote
+    );
+    assert!(edge.readable());
+    assert!(edge.is_terminal());
+    assert!(edge.terminal_result_ref.is_some());
+    let reviewer_edge = &graph.edges[1];
+    assert_eq!(reviewer_edge.child_request_id, reviewer_on_b.request_id);
+    assert_eq!(reviewer_edge.immediate_parent_request_id, child_request_id);
+    assert_eq!(
+        reviewer_edge.behavior_id.as_deref(),
+        Some(REVIEWER_BEHAVIOR_ID)
+    );
+    assert_eq!(reviewer_edge.depth, 2);
+    assert!(reviewer_edge.readable());
+    assert!(!reviewer_edge.controllable());
+    assert!(reviewer_edge.is_terminal());
+
+    // Stop and restart both runtimes. Their pairing reconcilers reconnect to
+    // the already-running P2P nodes and re-project the same durable facts.
+    // The graph must remain exactly-once after restart/replay convergence.
     agent_a.shutdown().await;
     agent_b.shutdown().await;
+    let restarted_b = boot_document_agent(&db_b, identity_b).await?;
+    let restarted_a = boot_document_agent(&db_a, identity_a).await?;
+    wait_for_replicator_installed(db_a.node.as_ref(), "peer-b", Duration::from_secs(120)).await;
+    wait_for_replicator_installed(db_b.node.as_ref(), "peer-a", Duration::from_secs(120)).await;
+    let reconnected_graph =
+        wait_for_descendant_graph(db_a.node.as_ref(), request_id, 2, Duration::from_secs(120))
+            .await;
+    let reconnected_ids = reconnected_graph
+        .edges
+        .iter()
+        .map(|edge| edge.child_request_id.as_str())
+        .collect::<HashSet<_>>();
+    assert_eq!(reconnected_graph.edges.len(), 2);
+    assert_eq!(
+        reconnected_ids.len(),
+        2,
+        "reconnect must not duplicate edges"
+    );
+    assert!(reconnected_ids.contains(child_request_id.as_str()));
+    assert!(reconnected_ids.contains(reviewer_on_b.request_id.as_str()));
+
+    restarted_a.shutdown().await;
+    restarted_b.shutdown().await;
     // BootedAgent only stops Gents::run; P2P belongs to the embedded node.
     db_a.node.shutdown().await;
     db_b.node.shutdown().await;
@@ -1134,12 +1257,18 @@ MUST delegate it by calling the `spawn_subagent` tool with name exactly \"resear
 `prompt` describing the question. Do not answer factual questions yourself; always delegate them. After \
 the subagent returns its answer, relay that answer to the user.";
 
-const CROSS_NODE_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator agent. You have a remote \
-research subagent available named `researcher`. For ANY research or factual lookup the \
-user asks for, you MUST delegate it by calling the `spawn_subagent` tool with name exactly \
-\"researcher\", await_mode exactly \"background\", and a `prompt` describing the question. The \
-subagent runs on a different node, so you MUST use await_mode=\"background\" (foreground is rejected). Do \
-not answer factual questions yourself; always delegate them.";
+const CROSS_NODE_NESTED_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are the root of a deterministic nested \
+delegation test. When asked to run the nested review workflow, call `spawn_subagent` exactly once with \
+name exactly \"fast-worker\", await_mode exactly \"background\", and prompt exactly \
+\"RESEARCH_AND_REVIEW_FRANCE\". The worker is remote, so foreground is rejected. Do not answer the \
+question yourself. After its completion notification arrives, report its reviewed answer without spawning \
+another worker.";
+
+const CROSS_NODE_FAST_WORKER_SYSTEM_PROMPT: &str = "You are the fast worker in a deterministic nested \
+delegation test. When the request is exactly RESEARCH_AND_REVIEW_FRANCE, call `spawn_subagent` exactly \
+once with name exactly \"reviewer\", await_mode exactly \"foreground\", and prompt exactly \
+\"Review this claim: Paris is the capital of France.\" After the reviewer returns, reply with its answer. \
+Do not answer before the reviewer completes.";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -1610,6 +1739,37 @@ async fn wait_for_child_of_parent(
         if tokio::time::Instant::now() >= deadline {
             return None;
         }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn wait_for_descendant_graph(
+    node: &EmbeddedNode,
+    root_request_id: &str,
+    expected_edges: usize,
+    timeout: Duration,
+) -> DescendantPage {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Ok(graph) = resolve_descendant_graph(
+            DescendantGraphAccess::Local(node),
+            &DescendantQuery::all(root_request_id),
+        )
+        .await
+        {
+            let unique = graph
+                .edges
+                .iter()
+                .map(|edge| edge.child_request_id.as_str())
+                .collect::<HashSet<_>>();
+            if graph.edges.len() == expected_edges && unique.len() == expected_edges {
+                return graph;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {expected_edges} unique canonical descendant edges under {root_request_id}"
+        );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }

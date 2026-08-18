@@ -1189,21 +1189,21 @@ pub(crate) async fn validate_manifest_against_live(
         if source_collection.is_empty() || trigger_id.is_empty() {
             continue;
         }
+        if let Err(error) = gents::graphql::validate_collection_identifier(source_collection) {
+            errors.push(format!(
+                "event_trigger {} has invalid source_collection {:?}: {}",
+                trigger_id, trig.source_collection, error
+            ));
+            continue;
+        }
 
         if let Some(filter) = trig.filter.as_deref().map(str::trim) {
             if !filter.is_empty() {
-                // `source_collection` and `filter` are interpolated into the
-                // probe query as an identifier and a raw filter fragment.
-                // Validate both exactly as the runtime trigger engine does
-                // (`trigger_engine::event_source`) before building the probe,
-                // so a malformed trigger cannot inject GraphQL through the
-                // live-validation path.
-                if let Err(err) = gents::graphql::validate_collection_identifier(source_collection) {
-                    errors.push(format!(
-                        "event_trigger {} source_collection is not a valid identifier: {}",
-                        trigger_id, err
-                    ));
-                } else if let Err(err) = gents::graphql::validate_graphql_filter_fragment(filter) {
+                // `filter` is interpolated into the probe query as a raw filter
+                // fragment; validate it like the runtime trigger engine does
+                // (`trigger_engine::event_source`) before building the probe.
+                // `source_collection` is already validated by the guard above.
+                if let Err(err) = gents::graphql::validate_graphql_filter_fragment(filter) {
                     errors.push(format!(
                         "event_trigger {} filter is not a valid filter fragment: {}",
                         trigger_id, err
@@ -1254,7 +1254,7 @@ pub(crate) async fn validate_manifest_against_live(
 
         let introspect = format!(
             r#"query {{ __type(name: "{name}") {{ fields {{ name type {{ name kind }} }} }} }}"#,
-            name = source_collection,
+            name = gents::graphql::escape_graphql_string(source_collection),
         );
         let response = match access.execute(&introspect).await {
             Ok(response) => response,
@@ -1556,10 +1556,9 @@ fn validate_datastore_surface_links(
         for entry in &surface.entries {
             match serde_json::from_str::<SurfaceToolDecl>(entry) {
                 Ok(decl) => {
-                    if !decl.is_well_formed() {
+                    if let Err(error) = decl.validate() {
                         errors.push(format!(
-                            "DatastoreToolSurface {} has a malformed entry (tool_name/collection required; query entries also need a projection)",
-                            surface_id
+                            "DatastoreToolSurface {surface_id} has a malformed entry: {error}"
                         ));
                         continue;
                     }
@@ -1676,14 +1675,9 @@ fn validate_write_tools(
                 continue;
             }
         };
-        if decl.tool_name.trim().is_empty() {
+        if let Err(error) = decl.validate() {
             errors.push(format!(
-                "tool selection {selection_id} write_tools entry {entry:?} must have a non-empty tool_name"
-            ));
-        }
-        if decl.collection.trim().is_empty() {
-            errors.push(format!(
-                "tool selection {selection_id} write_tools tool {:?} must have a non-empty collection",
+                "tool selection {selection_id} write_tools entry for tool {:?} is malformed: {error}",
                 decl.tool_name
             ));
         }
@@ -1711,12 +1705,7 @@ fn validate_write_tools(
         }
         let mut seen_field_names: HashSet<String> = HashSet::new();
         for field in &decl.fields {
-            if field.name.trim().is_empty() {
-                errors.push(format!(
-                    "tool selection {selection_id} write_tools tool {:?} has a field with an empty name",
-                    decl.tool_name
-                ));
-            } else if !seen_field_names.insert(field.name.trim().to_string()) {
+            if !seen_field_names.insert(field.name.trim().to_string()) {
                 errors.push(format!(
                     "tool selection {selection_id} write_tools tool {:?} has a duplicate field name {:?}",
                     decl.tool_name,

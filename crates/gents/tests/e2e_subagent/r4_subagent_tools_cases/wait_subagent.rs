@@ -341,7 +341,7 @@ async fn wait_subagent_explains_unmaterialized_child_bridge() {
 }
 
 #[tokio::test]
-async fn wait_subagent_preserves_error_for_corrupt_materialized_child() {
+async fn corrupt_materialized_child_is_nonretryable_and_remains_listed() {
     let fixture = setup_spawn_fixture(
         "wait_subagent_corrupt_child",
         vec![CHILD_BEHAVIOR_ID],
@@ -423,13 +423,63 @@ async fn wait_subagent_preserves_error_for_corrupt_materialized_child() {
     assert_eq!(error["retryable"], false);
     let message = error["message"].as_str().expect("message");
     assert!(
-        message.contains("has no behavior_id"),
-        "preserves the original error: {message}"
+        message.contains("does not corroborate") && message.contains(bridge_tool_call_id),
+        "rejects corrupt physical provenance: {message}"
     );
     assert!(
         !message.contains("has no materialized row yet"),
         "must not be masked as materialization lag: {message}"
     );
+
+    let cancel_action = hook
+        .on_tool_call(
+            "cancel_subagent",
+            Some("model-call-cancel-corrupt".to_string()),
+            "internal-cancel-corrupt",
+            &json!({ "child_request_id": child_request_id }).to_string(),
+        )
+        .await;
+    let cancel_error = skip_reason_json(cancel_action);
+    assert_eq!(cancel_error["ok"], false);
+    assert_eq!(cancel_error["failure_class"], "service_unavailable");
+    assert_eq!(cancel_error["retryable"], false);
+    assert!(cancel_error["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("does not corroborate")));
+
+    let steer_action = hook
+        .on_tool_call(
+            "steer_subagent",
+            Some("model-call-steer-corrupt".to_string()),
+            "internal-steer-corrupt",
+            &json!({
+                "child_request_id": child_request_id,
+                "message": "do not retry rejected lineage"
+            })
+            .to_string(),
+        )
+        .await;
+    let steer_error = skip_reason_json(steer_action);
+    assert_eq!(steer_error["ok"], false);
+    assert_eq!(steer_error["failure_class"], "service_unavailable");
+    assert_eq!(steer_error["retryable"], false);
+    assert!(steer_error["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("does not corroborate")));
+
+    let list_action = hook
+        .on_tool_call(
+            "list_subagents",
+            Some("model-call-list-corrupt".to_string()),
+            "internal-list-corrupt",
+            "{}",
+        )
+        .await;
+    let list_result = skip_reason_json(list_action);
+    let entries = list_result["entries"].as_array().expect("list entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["child_request_id"], child_request_id);
+    assert_eq!(entries[0]["status"], "pending_child_authorization");
 }
 
 #[tokio::test]

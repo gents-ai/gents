@@ -105,6 +105,24 @@ impl SurfaceToolDecl {
             Self::Query(decl) => decl.is_well_formed(),
         }
     }
+
+    /// Structured validation for the surface boundary: returns a descriptive
+    /// error when the entry is not well-formed so callers can report the
+    /// specific problem, matching the centralized identifier-validation
+    /// boundary.
+    pub fn validate(&self) -> Result<()> {
+        if self.is_well_formed() {
+            return Ok(());
+        }
+        match self {
+            Self::Create(_) => {
+                anyhow::bail!("create entry requires a non-empty tool_name and collection")
+            }
+            Self::Query(_) => anyhow::bail!(
+                "query entry requires a non-empty tool_name, collection, and at least one projection field"
+            ),
+        }
+    }
 }
 
 impl Serialize for SurfaceToolDecl {

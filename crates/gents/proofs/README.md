@@ -24,6 +24,8 @@ The proofs are strongest where the runtime is a state machine:
 - command/tool execution policy for bash argv, network, sandbox, and shell env
 - MCP/tool execution preflight and retry eligibility boundaries
 - managed native executor deadline/cancel liveness and tool composition
+- canonical descendant visibility, materialization authorization, and
+  direct-parent control authority (`DescendantGraph`, #836)
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
   #448 / #992): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
@@ -85,7 +87,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers sixteen practical areas:
+The current proof suite covers seventeen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -110,6 +112,13 @@ The current proof suite covers sixteen practical areas:
 15. Provider-input and token-budget enforcement: prompt assembly and
     sanitization, per-turn context clamps, and the request-wide aggregate
     ledger across tool turns and retracted attempts
+16. Canonical descendant graphs: durable pending bridge visibility,
+    logical-plus-physical materialization authorization, behavior/deployment/
+    await/workflow-role independence, replicated authorization equivalence,
+    and the separation between ancestor visibility and direct-parent control
+17. Agent self-configuration writes: per-collection writable/protected field
+    partitions, patch-merge identity immutability and containment,
+    transactional accept/reject totality, and no-lockout recoverability
 
 Separately, **obligation models** (no Rust refinement tests yet):
 
@@ -130,9 +139,6 @@ The proof boundary matters:
 - External assumptions such as "DefraDB eventually makes an acked mutation
   visible" or "provider streamed bytes" are not proven here.
 
-16. Agent self-configuration writes: per-collection writable/protected field
-    partitions, patch-merge identity immutability and containment,
-    transactional accept/reject totality, and no-lockout recoverability
 ## Cross-node TLA+ specs
 
 The `tla/` sibling directory contains TLA+ specifications for cross-node properties beyond per-node Lean coverage. See `tla/README.md`.
@@ -168,6 +174,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | File | Contents |
 |------|----------|
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
+| `Proofs/DescendantGraph.lean` | Canonical descendant-edge visibility/read/control authorization, materialization and scope properties (#836) |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |

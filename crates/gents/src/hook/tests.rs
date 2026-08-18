@@ -580,6 +580,8 @@ async fn fetch_tool_call_row(
                     result
                     status
                     tool_failure_class
+                    selected_service_id
+                    selected_tool_name
                     cancel_cause
                     await_mode
                     cancel_policy
@@ -599,6 +601,64 @@ async fn fetch_tool_call_row(
         .and_then(|rows| rows.first())
         .cloned()
         .expect("tool call row")
+}
+
+#[tokio::test]
+async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Query metrics"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    hook.set_active_request_id(Some("request-selected-tool".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+
+    let args =
+        r#"{"service_id":"metrics-prod","tool_name":"query_metrics","arguments":{"window":"5m"}}"#;
+    assert!(matches!(
+        hook.on_tool_call("call_tool", None, "call-selected", args)
+            .await,
+        ToolCallHookAction::Continue
+    ));
+    let selected = fetch_tool_call_row(&node, &session_id, "call-selected").await;
+    assert_eq!(
+        selected
+            .get("selected_service_id")
+            .and_then(serde_json::Value::as_str),
+        Some("metrics-prod")
+    );
+    assert_eq!(
+        selected
+            .get("selected_tool_name")
+            .and_then(serde_json::Value::as_str),
+        Some("query_metrics")
+    );
+
+    assert!(matches!(
+        hook.on_tool_call("read_file", None, "call-native", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+    let native = fetch_tool_call_row(&node, &session_id, "call-native").await;
+    assert!(native
+        .get("selected_service_id")
+        .is_none_or(serde_json::Value::is_null));
+    assert!(native
+        .get("selected_tool_name")
+        .is_none_or(serde_json::Value::is_null));
+
+    node.shutdown().await;
 }
 
 async fn fetch_tool_result_spill_row(

@@ -138,55 +138,65 @@ fn validate_rejects_write_tool_with_empty_tool_name() {
 }
 
 #[test]
-fn validate_rejects_write_tool_with_empty_collection() {
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        write_tools: Some(vec![WriteToolDecl {
-            tool_name: "request_action".to_string(),
-            collection: "  ".to_string(),
-            description: String::new(),
-            fields: Vec::new(),
-            output_obligation: None,
-        }]),
-        datastore_tool_surface_ids: None,
-        ..Default::default()
-    };
-    let result = doc.validate();
-    assert!(result.is_err(), "empty collection must be rejected");
-    let err = format!("{}", result.unwrap_err());
-    assert!(
-        err.contains("write_tools") && err.contains("request_action"),
-        "error must name write_tools and the offending tool: {err}"
-    );
+fn validate_rejects_invalid_write_tool_collection_identifiers() {
+    for collection in ["  ", "ActionRequest) { _docID } mutation {"] {
+        let doc = ToolSelectionDocument {
+            selection_id: "test-tools".to_string(),
+            agent_did: "did:test:test".to_string(),
+            write_tools: Some(vec![WriteToolDecl {
+                tool_name: "request_action".to_string(),
+                collection: collection.to_string(),
+                description: String::new(),
+                fields: Vec::new(),
+                output_obligation: None,
+            }]),
+            datastore_tool_surface_ids: None,
+            ..Default::default()
+        };
+        let err = doc
+            .validate()
+            .expect_err("invalid collection identifier must be rejected")
+            .to_string();
+        assert!(
+            err.contains("write_tools")
+                && err.contains("request_action")
+                && err.contains("invalid collection"),
+            "error must identify the declaration and invalid collection: {err}"
+        );
+    }
 }
 
 #[test]
-fn validate_rejects_write_tool_field_with_empty_name() {
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        write_tools: Some(vec![WriteToolDecl {
-            tool_name: "request_action".to_string(),
-            collection: "ActionRequest".to_string(),
-            description: String::new(),
-            fields: vec![WriteToolField {
-                name: "  ".to_string(),
-                required: true,
-                fill: None,
-            }],
-            output_obligation: None,
-        }]),
-        datastore_tool_surface_ids: None,
-        ..Default::default()
-    };
-    let result = doc.validate();
-    assert!(result.is_err(), "empty field name must be rejected");
-    let err = format!("{}", result.unwrap_err());
-    assert!(
-        err.contains("write_tools") && err.contains("request_action"),
-        "error must name write_tools and the offending tool: {err}"
-    );
+fn validate_rejects_invalid_write_tool_field_identifiers() {
+    for field_name in ["  ", "title: \"escaped\""] {
+        let doc = ToolSelectionDocument {
+            selection_id: "test-tools".to_string(),
+            agent_did: "did:test:test".to_string(),
+            write_tools: Some(vec![WriteToolDecl {
+                tool_name: "request_action".to_string(),
+                collection: "ActionRequest".to_string(),
+                description: String::new(),
+                fields: vec![WriteToolField {
+                    name: field_name.to_string(),
+                    required: true,
+                    fill: None,
+                }],
+                output_obligation: None,
+            }]),
+            datastore_tool_surface_ids: None,
+            ..Default::default()
+        };
+        let err = doc
+            .validate()
+            .expect_err("invalid field identifier must be rejected")
+            .to_string();
+        assert!(
+            err.contains("write_tools")
+                && err.contains("request_action")
+                && err.contains("invalid field[0] name"),
+            "error must identify the declaration and invalid field: {err}"
+        );
+    }
 }
 
 #[test]

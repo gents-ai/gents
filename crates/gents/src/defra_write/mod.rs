@@ -38,10 +38,7 @@ use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
 use crate::document_config::{WriteToolDecl, WriteToolFieldFill};
-use crate::graphql::{
-    escape_graphql_string, graphql_mutation_with_transaction_retry, validate_collection_identifier,
-    validate_graphql_name,
-};
+use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
@@ -86,41 +83,17 @@ impl BoundedWriteTool {
     }
 
     fn ensure_well_formed(&self) -> Result<()> {
-        if self.decl.tool_name.trim().is_empty() {
-            bail!("bounded write tool declaration has an empty tool_name");
-        }
-        if self.decl.collection.trim().is_empty() {
-            bail!(
-                "bounded write tool {:?} has an empty collection and cannot write",
-                self.decl.tool_name
-            );
-        }
-        Ok(())
+        self.decl
+            .validate()
+            .map_err(|error| anyhow!("invalid bounded write tool declaration: {error}"))
     }
 
     fn build_mutation(&self, args: &Map<String, Value>) -> Result<String> {
+        // `ensure_well_formed` delegates to `WriteToolDecl::validate`, which
+        // validates the collection and every field name as GraphQL identifiers
+        // (the centralized identifier-validation boundary), so bare-identifier
+        // interpolation below is safe without a second per-site check here.
         self.ensure_well_formed()?;
-
-        // Collection and field names are interpolated as bare GraphQL
-        // identifiers below; validate them like the query-tool path does
-        // (`defra_query::render::validate_identifier`) so a malformed
-        // declaration cannot inject identifier-position GraphQL.
-        validate_collection_identifier(&self.decl.collection).map_err(|e| {
-            anyhow!(
-                "tool `{}` has invalid collection `{}`: {e}",
-                self.decl.tool_name,
-                self.decl.collection
-            )
-        })?;
-        for field in &self.decl.fields {
-            validate_graphql_name(&field.name).map_err(|e| {
-                anyhow!(
-                    "tool `{}` has invalid field name `{}`: {e}",
-                    self.decl.tool_name,
-                    field.name
-                )
-            })?;
-        }
 
         for key in args.keys() {
             let field = self.decl.fields.iter().find(|field| &field.name == key);
