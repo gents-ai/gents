@@ -17,6 +17,9 @@
 /third_party/*/target/
 /third_party/*/Cargo.lock
 
+# Visual brainstorm companion (session mockups)
+.superpowers/
+
 # npm workspace package builds
 packages/*/dist/
 node_modules/
