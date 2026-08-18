@@ -357,7 +357,8 @@ impl RequestLifecycle {
             .and_then(parse_rfc3339_utc)
             .unwrap_or(synthesized_deadline_at);
         let deadline = deadline_at.to_rfc3339();
-        let doc_id = escape_graphql_string(&self.request.doc_id);
+        let doc_id = self.request.doc_id.clone();
+        let escaped_doc_id = escape_graphql_string(&doc_id);
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);
@@ -370,7 +371,7 @@ impl RequestLifecycle {
                 r#"mutation {{
                 update_AgentRequest(
                     filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
                         status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},

@@ -455,12 +455,13 @@ impl RequestLifecycle {
         target_status: &str,
         target_lifecycle_state: PersistedLifecycleState,
     ) -> Result<()> {
-        let doc_id = escape_graphql_string(&self.request.doc_id);
+        let doc_id = self.request.doc_id.clone();
+        let escaped_doc_id = escape_graphql_string(&doc_id);
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
                         status: {{ _eq: "{from_status}" }},
                         lifecycle_state: {{ _eq: "{from_lifecycle_state}" }}
                     }},
