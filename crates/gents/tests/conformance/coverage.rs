@@ -1041,6 +1041,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.callback_cases.is_empty() {
         emitted.insert(("callback_cases".to_string(), "CallbackCases".to_string()));
     }
+    if !snapshot.session_hydration_decision_cases.is_empty() {
+        emitted.insert((
+            "session_hydration_cases".to_string(),
+            "SessionHydrationDecisionCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -1120,6 +1126,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "workspace_cases",
         "workspace_binding_cases",
         "callback_cases",
+        "session_hydration_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();

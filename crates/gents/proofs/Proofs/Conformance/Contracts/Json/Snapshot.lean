@@ -14,6 +14,7 @@ import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
+import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
@@ -55,6 +56,8 @@ def snapshotJson : String :=
       ++ goalDecisionCasesJson ++ ","
     ++ "\"goal_transition_cases\":"
       ++ goalTransitionCasesJson ++ ","
+    ++ "\"session_hydration_decision_cases\":"
+      ++ sessionHydrationDecisionCasesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"
