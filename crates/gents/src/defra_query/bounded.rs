@@ -65,7 +65,9 @@ impl BoundedQueryTool {
             .filter(|field| field.fill.is_none())
     }
 
-    fn filled_filter_fields(&self) -> impl Iterator<Item = &crate::document_config::WriteToolField> {
+    fn filled_filter_fields(
+        &self,
+    ) -> impl Iterator<Item = &crate::document_config::WriteToolField> {
         self.decl
             .filter_fields
             .iter()
@@ -120,12 +122,19 @@ impl BoundedQueryTool {
         match args.get("limit") {
             None | Some(Value::Null) => Ok(MAX_LIMIT),
             Some(Value::Number(number)) => {
-                let Some(limit) = number.as_u64().and_then(|value| u32::try_from(value).ok()) else {
-                    bail!("tool `{}` limit must be a positive integer", self.decl.tool_name);
+                let Some(limit) = number.as_u64().and_then(|value| u32::try_from(value).ok())
+                else {
+                    bail!(
+                        "tool `{}` limit must be a positive integer",
+                        self.decl.tool_name
+                    );
                 };
                 Ok(limit.clamp(1, MAX_LIMIT))
             }
-            Some(_) => bail!("tool `{}` limit must be a positive integer", self.decl.tool_name),
+            Some(_) => bail!(
+                "tool `{}` limit must be a positive integer",
+                self.decl.tool_name
+            ),
         }
     }
 
@@ -134,10 +143,7 @@ impl BoundedQueryTool {
             if key == "fields" || key == "limit" {
                 continue;
             }
-            if self
-                .filled_filter_fields()
-                .any(|field| field.name == *key)
-            {
+            if self.filled_filter_fields().any(|field| field.name == *key) {
                 bail!(
                     "filter `{key}` is runtime-filled and must not be supplied to tool `{}`",
                     self.decl.tool_name
@@ -156,11 +162,11 @@ impl BoundedQueryTool {
             let value = if let Some(fill) = &field.fill {
                 let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
                     .ok_or_else(|| {
-                        anyhow!(
-                            "runtime-filled filter `{}` requires an AgentRequest trigger context",
-                            field.name
-                        )
-                    })?;
+                    anyhow!(
+                        "runtime-filled filter `{}` requires an AgentRequest trigger context",
+                        field.name
+                    )
+                })?;
                 let filled = match fill {
                     WriteToolFieldFill::Correlation => runtime
                         .correlation
@@ -392,22 +398,23 @@ mod tests {
     async fn queries_only_the_correlated_run() {
         let node = node_with_findings().await;
         let tool = BoundedQueryTool::new(Arc::clone(&node), decl());
-        let out = crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            None,
-            Some("run-42".to_string()),
-            Default::default(),
-            false,
-            async {
-                Tool::call(&tool, BoundedQueryParams(Map::new()))
-                    .await
-                    .expect("query")
-            },
-        )
-        .await;
+        let out =
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                None,
+                None,
+                Some("run-42".to_string()),
+                Default::default(),
+                false,
+                async {
+                    Tool::call(&tool, BoundedQueryParams(Map::new()))
+                        .await
+                        .expect("query")
+                },
+            )
+            .await;
         assert!(out.contains("f1"));
         assert!(!out.contains("other-run"));
         assert!(out.contains("\"count\": 1"));
@@ -425,7 +432,9 @@ mod tests {
 
         let mut args = Map::new();
         args.insert("run_id".into(), json!("model-value"));
-        let err = Tool::call(&tool, BoundedQueryParams(args)).await.unwrap_err();
+        let err = Tool::call(&tool, BoundedQueryParams(args))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("runtime-filled"));
     }
 
@@ -445,7 +454,9 @@ mod tests {
             Default::default(),
             false,
             async {
-                let err = Tool::call(&tool, BoundedQueryParams(args)).await.unwrap_err();
+                let err = Tool::call(&tool, BoundedQueryParams(args))
+                    .await
+                    .unwrap_err();
                 assert!(err.to_string().contains("allowlist"));
             },
         )

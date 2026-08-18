@@ -1761,9 +1761,9 @@ fn merge_surface_entries_match_inline_write_tools() {
                 agent_did: agent_did.to_string(),
                 display_name: Some("experiment writes".to_string()),
                 enabled: true,
-                entries: Some(vec![
-                    crate::document_config::SurfaceToolDecl::Create(decl.clone()),
-                ]),
+                entries: Some(vec![crate::document_config::SurfaceToolDecl::Create(
+                    decl.clone(),
+                )]),
                 created_at: None,
             },
         },
@@ -1917,9 +1917,9 @@ fn merge_fails_closed_on_name_collision() {
                 agent_did: agent_did.to_string(),
                 display_name: None,
                 enabled: true,
-                entries: Some(vec![
-                    crate::document_config::SurfaceToolDecl::Create(decl.clone()),
-                ]),
+                entries: Some(vec![crate::document_config::SurfaceToolDecl::Create(
+                    decl.clone(),
+                )]),
                 created_at: None,
             },
         },

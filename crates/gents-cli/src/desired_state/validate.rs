@@ -8,8 +8,8 @@ use gents::template::{
 };
 use gents::{
     is_reserved_builtin_tool_name, parse_template_for_validation,
-    schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
-    QueryToolDecl, SubagentTarget, SurfaceToolDecl, VariableRef, WriteToolDecl,
+    schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode, QueryToolDecl,
+    SubagentTarget, SurfaceToolDecl, VariableRef, WriteToolDecl,
 };
 
 use super::{DesiredDatastoreToolSurface, DesiredStateManifest, DesiredToolSelection};

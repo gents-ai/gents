@@ -136,7 +136,11 @@ mod tests {
     #[test]
     fn every_matcher_example_fires() {
         for matcher in registry() {
-            assert!(!matcher.examples.is_empty(), "{}: no examples", matcher.slug);
+            assert!(
+                !matcher.examples.is_empty(),
+                "{}: no examples",
+                matcher.slug
+            );
             // Pick a path admitted by the extension gate.
             let path = match matcher.extensions.first() {
                 Some(ext) => format!("example.{ext}"),
@@ -157,9 +161,16 @@ mod tests {
     fn registry_slugs_are_unique_and_complete() {
         let mut slugs: Vec<&str> = registry().iter().map(|m| m.slug).collect();
         let expected = [
-            "graphql-injection", "defra-empty-array", "secrets-exposure",
-            "secret-in-fallback", "insecure-crypto", "secret-in-log",
-            "command-injection", "webhook-handler", "path-traversal", "missing-auth",
+            "graphql-injection",
+            "defra-empty-array",
+            "secrets-exposure",
+            "secret-in-fallback",
+            "insecure-crypto",
+            "secret-in-log",
+            "command-injection",
+            "webhook-handler",
+            "path-traversal",
+            "missing-auth",
         ];
         slugs.sort_unstable();
         let mut want = expected.to_vec();

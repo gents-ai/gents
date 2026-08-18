@@ -43,5 +43,8 @@ fn demo_run_security_scan_live() {
         .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
         .expect("at least one run dir");
     let meta = std::fs::read_to_string(newest.path().join("meta.json")).expect("meta.json");
-    assert!(meta.contains("scan-report"), "meta.json missing final stage: {meta}");
+    assert!(
+        meta.contains("scan-report"),
+        "meta.json missing final stage: {meta}"
+    );
 }

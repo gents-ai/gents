@@ -57,7 +57,8 @@ pub(crate) fn format_payload(files: &[FileCandidates], max_chars: usize) -> Scan
     let candidate_total: usize = files.iter().map(|f| f.matches.len()).sum();
     let candidate_files = files.len();
 
-    let mut slug_counts_map: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut slug_counts_map: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
     for file in files {
         for m in &file.matches {
             *slug_counts_map.entry(m.slug).or_insert(0) += 1;
@@ -70,7 +71,8 @@ pub(crate) fn format_payload(files: &[FileCandidates], max_chars: usize) -> Scan
     slug_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     // Also compute per-slug best tier for the header's `slug=count(tier)` display.
-    let mut slug_tier_map: std::collections::HashMap<&str, NoiseTier> = std::collections::HashMap::new();
+    let mut slug_tier_map: std::collections::HashMap<&str, NoiseTier> =
+        std::collections::HashMap::new();
     for file in files {
         for m in &file.matches {
             slug_tier_map
@@ -81,7 +83,11 @@ pub(crate) fn format_payload(files: &[FileCandidates], max_chars: usize) -> Scan
     }
 
     let mut sorted_files: Vec<&FileCandidates> = files.iter().collect();
-    sorted_files.sort_by(|a, b| best_tier(a).cmp(&best_tier(b)).then_with(|| a.path.cmp(&b.path)));
+    sorted_files.sort_by(|a, b| {
+        best_tier(a)
+            .cmp(&best_tier(b))
+            .then_with(|| a.path.cmp(&b.path))
+    });
 
     let mut header = String::new();
     let _ = writeln!(
@@ -91,7 +97,10 @@ pub(crate) fn format_payload(files: &[FileCandidates], max_chars: usize) -> Scan
     let slugs_line: Vec<String> = slug_counts
         .iter()
         .map(|(slug, count)| {
-            let tier = slug_tier_map.get(slug.as_str()).copied().unwrap_or(NoiseTier::Noisy);
+            let tier = slug_tier_map
+                .get(slug.as_str())
+                .copied()
+                .unwrap_or(NoiseTier::Noisy);
             format!("{slug}={count}({})", tier.label())
         })
         .collect();
@@ -133,17 +142,21 @@ pub(crate) fn format_payload(files: &[FileCandidates], max_chars: usize) -> Scan
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::{CandidateMatch, FileCandidates};
     use super::super::matchers::NoiseTier;
+    use super::super::{CandidateMatch, FileCandidates};
+    use super::*;
 
     fn file(path: &str, slug: &'static str, tier: NoiseTier, lines: usize) -> FileCandidates {
         FileCandidates {
             path: path.to_string(),
-            matches: (1..=lines).map(|line| CandidateMatch {
-                slug, tier, line,
-                excerpt: format!("let x = {line}; // {}", "y".repeat(80)),
-            }).collect(),
+            matches: (1..=lines)
+                .map(|line| CandidateMatch {
+                    slug,
+                    tier,
+                    line,
+                    excerpt: format!("let x = {line}; // {}", "y".repeat(80)),
+                })
+                .collect(),
         }
     }
 
@@ -160,13 +173,23 @@ mod tests {
         let precise_pos = out.payload.find("a/precise.rs").unwrap();
         let noisy_pos = out.payload.find("z/noisy.rs").unwrap();
         assert!(precise_pos < noisy_pos, "precise files must sort first");
-        assert!(out.slug_counts.iter().any(|(s, n)| s == "graphql-injection" && *n == 2));
+        assert!(out
+            .slug_counts
+            .iter()
+            .any(|(s, n)| s == "graphql-injection" && *n == 2));
     }
 
     #[test]
     fn cap_demotes_to_inventory_and_counts_overflow() {
         let files: Vec<FileCandidates> = (0..50)
-            .map(|i| file(&format!("src/f{i:02}.rs"), "secret-in-log", NoiseTier::Normal, 3))
+            .map(|i| {
+                file(
+                    &format!("src/f{i:02}.rs"),
+                    "secret-in-log",
+                    NoiseTier::Normal,
+                    3,
+                )
+            })
             .collect();
         let generous = format_payload(&files, 1_000_000);
         let tight = format_payload(&files, generous.payload.len() / 4);
@@ -174,7 +197,10 @@ mod tests {
         // Inventory is complete: every file path still appears.
         for i in 0..50 {
             let path = format!("src/f{i:02}.rs");
-            assert!(tight.payload.contains(&path), "missing inventory for {path}");
+            assert!(
+                tight.payload.contains(&path),
+                "missing inventory for {path}"
+            );
         }
         // Counters are cap-independent.
         assert_eq!(tight.candidate_total, generous.candidate_total);

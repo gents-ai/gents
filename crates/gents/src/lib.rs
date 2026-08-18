@@ -161,8 +161,8 @@ pub use document_config::{
     load_agent_principal, load_inference_profile, load_tool_selection, subagent_target_entry,
     upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile, upsert_tool_selection,
     wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
-    AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
-    QueryToolDecl, SurfaceToolDecl, ToolSelectionDocument, WriteToolDecl, WriteToolField,
+    AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, QueryToolDecl,
+    SubagentTarget, SurfaceToolDecl, ToolSelectionDocument, WriteToolDecl, WriteToolField,
     WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
