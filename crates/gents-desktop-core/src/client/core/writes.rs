@@ -20,9 +20,8 @@ use super::super::query::load_chat_patch;
 use super::super::schema::subscribed_collection_names;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::{
-    add_replicator_with_retry_until, branchable_pair_sync_enabled, connect_peer_with_retry_until,
-    is_connected_peer, normalize_required, sync_branchable_collections_with_retry,
-    BRANCHABLE_PAIR_SYNC_ENV,
+    add_replicator_with_retry_until, connect_peer_with_retry_until, is_connected_peer,
+    normalize_required,
 };
 use super::p2p_ops;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
@@ -1256,7 +1255,7 @@ impl ClientCore {
             }
         };
 
-        match super::bootstrap::configure_local_runtime_pairing(
+        if let Err(error) = super::bootstrap::configure_local_runtime_pairing(
             self.node.as_ref(),
             &self.p2p,
             &self.principal,
@@ -1264,55 +1263,15 @@ impl ClientCore {
         )
         .await
         {
-            Ok(()) => {
-                if branchable_pair_sync_enabled() {
-                    match sync_branchable_collections_with_retry(
-                        self.node.as_ref(),
-                        &self.p2p,
-                        &record.label,
-                        PEER_ADD_OPERATION_TIMEOUT,
-                    )
-                    .await
-                    {
-                        Ok(synced) => {
-                            tracing::info!(
-                                target: "gents_desktop_core::peer",
-                                peer_id = %record.peer_id,
-                                label = %record.label,
-                                synced_collections = ?synced,
-                                "desktop requested branchable collection sync after peer add"
-                            );
-                        }
-                        Err(error) => {
-                            append_warning(
-                                &mut warning,
-                                format!(
-                                    "deployment paired but existing branchable sync failed: {error}"
-                                ),
-                            );
-                        }
-                    }
-                } else {
-                    tracing::debug!(
-                        target: "gents_desktop_core::peer",
-                        peer_id = %record.peer_id,
-                        label = %record.label,
-                        env = BRANCHABLE_PAIR_SYNC_ENV,
-                        "skipping opt-in branchable collection sync after peer add"
-                    );
-                }
-            }
-            Err(error) => {
-                let prefix = if connected {
-                    "deployment connected"
-                } else {
-                    "deployment saved"
-                };
-                append_warning(
-                    &mut warning,
-                    format!("{prefix} but reverse pairing failed: {error}"),
-                );
-            }
+            let prefix = if connected {
+                "deployment connected"
+            } else {
+                "deployment saved"
+            };
+            append_warning(
+                &mut warning,
+                format!("{prefix} but reverse pairing failed: {error}"),
+            );
         }
         if let Err(error) = self.refresh_agent(&record.agent_did).await {
             append_warning(

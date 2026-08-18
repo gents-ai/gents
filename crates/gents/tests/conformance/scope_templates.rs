@@ -83,6 +83,39 @@ fn conversation_scope_excludes_another_requester_on_the_same_agent() {
     assert_ne!(classifier_request.1, Some(predicate.value.as_str()));
 }
 
+/// Mirrors Lean `clientIndex_filter_eq` and
+/// `clientIndex_filters_requester_lineage`.
+#[test]
+fn client_index_scope_is_exactly_the_requester_scoped_session_index() {
+    let template = resolve_template("client-index").expect("client-index in catalog");
+    assert_eq!(template.delivery, Delivery::Push);
+    assert_eq!(template.collections, &["AgentConversation", "AgentSession"]);
+
+    let phone = scope_filter(
+        &template.scope,
+        template.collections,
+        "did:key:phone",
+        "did:key:home",
+    );
+    assert_eq!(phone.len(), 2);
+    for collection in template.collections {
+        let predicate = phone.get(*collection).expect("collection filtered");
+        assert_eq!(predicate.field, "requester_did");
+        assert_eq!(predicate.value, "did:key:phone");
+    }
+
+    let laptop = scope_filter(
+        &template.scope,
+        template.collections,
+        "did:key:laptop",
+        "did:key:home",
+    );
+    assert_ne!(
+        phone.get("AgentSession").unwrap().value,
+        laptop.get("AgentSession").unwrap().value
+    );
+}
+
 #[test]
 fn machine_scope_covers_conversation_and_home_owned_directory() {
     let template = resolve_template("machine").expect("machine in catalog");

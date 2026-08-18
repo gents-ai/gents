@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::time::SystemTime;
@@ -24,7 +25,7 @@ use super::bearer_pairing::{
 };
 use super::bootstrap::{
     add_replicator_with_retry, connect_peer_with_retry, force_connect_peer_with_retry,
-    is_connected_peer,
+    is_connected_peer, request_index_sync,
 };
 use super::p2p_ops::{
     p2p_connected_peers, p2p_get_replicators, p2p_listen_addresses, p2p_local_peer_id,
@@ -52,6 +53,7 @@ pub(super) fn spawn_p2p_supervisor_task(
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let endpoint_refresh_interval = endpoint_interval();
         let mut last_endpoint_refresh = Instant::now() - endpoint_refresh_interval;
+        let mut index_requests = BTreeSet::new();
 
         loop {
             let manual_repair = tokio::select! {
@@ -88,6 +90,7 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &remote_admin_actor,
                 install_replicators_on_bootstrap,
                 manual_repair,
+                &mut index_requests,
             )
             .await;
 
@@ -153,9 +156,16 @@ async fn run_saved_peer_repair_cycle(
     remote_admin_actor: &Arc<PrincipalIdentity>,
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
+    index_requests: &mut BTreeSet<String>,
 ) {
     let records = peer_directory.read().await.records().to_vec();
-    for record in records {
+    let saved_peer_ids = records
+        .iter()
+        .map(|record| record.peer_id.clone())
+        .collect::<BTreeSet<_>>();
+    index_requests.retain(|peer_id| saved_peer_ids.contains(peer_id));
+
+    for record in &records {
         let current_status = peer_statuses
             .read()
             .expect("peer status lock poisoned")
@@ -164,7 +174,7 @@ async fn run_saved_peer_repair_cycle(
             .cloned();
 
         let needs_repair =
-            force_repair || saved_peer_needs_repair(p2p, &record, current_status.as_ref()).await;
+            force_repair || saved_peer_needs_repair(p2p, record, current_status.as_ref()).await;
 
         let mut still_saved = peer_directory
             .read()
@@ -173,9 +183,10 @@ async fn run_saved_peer_repair_cycle(
             .iter()
             .any(|candidate| candidate.peer_id == record.peer_id);
         if needs_repair {
+            index_requests.remove(&record.peer_id);
             let updated = repair_saved_peer(
                 p2p,
-                &record,
+                record,
                 current_status,
                 remote_admin_actor.did(),
                 install_replicators_on_bootstrap,
@@ -193,14 +204,14 @@ async fn run_saved_peer_repair_cycle(
             }
         }
 
-        if still_saved && is_bearer_peer(&record) {
+        if still_saved && is_bearer_peer(record) {
             revalidate_bearer_pairing_readiness(
                 node,
                 p2p,
                 peer_directory,
                 peer_statuses,
                 remote_admin_actor,
-                &record,
+                record,
             )
             .await;
         }
@@ -208,11 +219,66 @@ async fn run_saved_peer_repair_cycle(
         if still_saved {
             run_pairing_reconcile_for_peer(
                 node,
-                &record,
+                record,
                 peer_statuses,
                 Arc::clone(remote_admin_actor),
             )
             .await;
+        }
+    }
+
+    if install_replicators_on_bootstrap {
+        request_index_for_ready_peers(node, p2p, peer_statuses, &saved_peer_ids, index_requests)
+            .await;
+    }
+}
+
+pub(super) async fn request_index_for_ready_peers(
+    node: &Arc<EmbeddedNode>,
+    p2p: &Arc<dyn P2POps>,
+    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    saved_peer_ids: &BTreeSet<String>,
+    requested_for: &mut BTreeSet<String>,
+) {
+    let pending = peer_statuses
+        .read()
+        .expect("peer status lock poisoned")
+        .iter()
+        .filter(|status| {
+            saved_peer_ids.contains(&status.peer_id)
+                && status.dial_succeeded
+                && status.last_error.is_none()
+                && !requested_for.contains(&status.peer_id)
+        })
+        .map(|status| status.peer_id.clone())
+        .collect::<BTreeSet<_>>();
+    if pending.is_empty() {
+        return;
+    }
+
+    match request_index_sync(node.as_ref(), p2p).await {
+        Ok(collections) => {
+            requested_for.extend(pending);
+            tracing::info!(
+                target: "gents_desktop_core::peer_maintenance",
+                requested_collections = ?collections,
+                "session index sync request dispatched; merges continue asynchronously"
+            );
+        }
+        Err(error) => {
+            let message = format!("session index sync request failed: {error}");
+            let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
+            for status in statuses
+                .iter_mut()
+                .filter(|status| pending.contains(&status.peer_id))
+            {
+                status.last_error = Some(message.clone());
+            }
+            tracing::warn!(
+                target: "gents_desktop_core::peer_maintenance",
+                error = %error,
+                "session index sync request failed; supervisor will retry after repair"
+            );
         }
     }
 }

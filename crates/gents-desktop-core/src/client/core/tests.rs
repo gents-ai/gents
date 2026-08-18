@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -11,7 +11,8 @@ use defra_p2p_adapter::{
 };
 
 use super::supervisor::{
-    p2p_health_materially_changed, probe_p2p_health, repair_saved_peer, saved_peer_needs_repair,
+    p2p_health_materially_changed, probe_p2p_health, repair_saved_peer,
+    request_index_for_ready_peers, saved_peer_needs_repair,
 };
 use super::writes::cleanup_saved_peer_p2p;
 use super::*;
@@ -27,6 +28,7 @@ struct RecordingP2P {
     connected_peers_error: StdRwLock<Option<String>>,
     connect_calls: StdRwLock<Vec<String>>,
     add_replicator_calls: StdRwLock<Vec<String>>,
+    sync_branchable_calls: StdRwLock<Vec<String>>,
     cleanup_calls: StdRwLock<Vec<String>>,
     replicators: StdRwLock<Vec<ReplicatorInfo>>,
     replicators_error: StdRwLock<Option<String>>,
@@ -91,6 +93,13 @@ impl RecordingP2P {
         self.add_replicator_calls
             .read()
             .expect("add replicator calls lock poisoned")
+            .clone()
+    }
+
+    fn sync_branchable_calls(&self) -> Vec<String> {
+        self.sync_branchable_calls
+            .read()
+            .expect("sync branchable calls lock poisoned")
             .clone()
     }
 
@@ -266,13 +275,124 @@ impl P2POps for RecordingP2P {
         Ok(())
     }
 
-    async fn sync_branchable_collection(&self, _collection_id: &str) -> P2PResult<()> {
+    async fn sync_branchable_collection(&self, collection_id: &str) -> P2PResult<()> {
+        self.sync_branchable_calls
+            .write()
+            .expect("sync branchable calls lock poisoned")
+            .push(collection_id.to_string());
         Ok(())
     }
 
     async fn sync_collection_versions(&self, _version_ids: Vec<String>) -> P2PResult<()> {
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn index_sync_request_targets_exactly_the_session_index() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().to_path_buf()),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let recording = Arc::new(RecordingP2P::default());
+    recording.set_connected_peers(vec!["peer-alpha".to_string()]);
+    let p2p: Arc<dyn P2POps> = recording.clone();
+
+    let requested = super::bootstrap::request_index_sync(core.node(), &p2p)
+        .await
+        .expect("request index sync");
+    assert_eq!(requested, ["AgentConversation", "AgentSession"]);
+
+    let mut expected = crate::client::schema::index_collection_names()
+        .into_iter()
+        .map(|name| {
+            core.node()
+                .get_collection(name)
+                .expect("get collection")
+                .expect("collection exists")
+                .collection_id
+        })
+        .collect::<Vec<_>>();
+    let mut actual = recording.sync_branchable_calls();
+    expected.sort();
+    actual.sort();
+    assert_eq!(actual, expected);
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_failures() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().to_path_buf()),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let recording = Arc::new(RecordingP2P::default());
+    recording.set_connected_peers(vec!["peer-alpha".to_string()]);
+    let p2p: Arc<dyn P2POps> = recording.clone();
+    let node = core.node_arc();
+    let statuses = Arc::new(StdRwLock::new(vec![ClientPeerStatus {
+        peer_id: "saved-alpha".to_string(),
+        label: "Alpha".to_string(),
+        agent_did: "did:key:alpha".to_string(),
+        addr: "peer-alpha".to_string(),
+        dial_succeeded: true,
+        last_error: None,
+        pairing: Vec::new(),
+    }]));
+    let mut saved = BTreeSet::from(["saved-alpha".to_string()]);
+    let mut requested_for = BTreeSet::new();
+
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    assert_eq!(recording.sync_branchable_calls().len(), 2);
+    assert_eq!(requested_for, saved);
+
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    assert_eq!(recording.sync_branchable_calls().len(), 2);
+
+    statuses
+        .write()
+        .expect("peer statuses lock poisoned")
+        .push(ClientPeerStatus {
+            peer_id: "saved-beta".to_string(),
+            label: "Beta".to_string(),
+            agent_did: "did:key:beta".to_string(),
+            addr: "peer-beta".to_string(),
+            dial_succeeded: true,
+            last_error: None,
+            pairing: Vec::new(),
+        });
+    saved.insert("saved-beta".to_string());
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    assert_eq!(recording.sync_branchable_calls().len(), 4);
+    assert_eq!(requested_for, saved);
+
+    requested_for.remove("saved-alpha");
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    assert_eq!(recording.sync_branchable_calls().len(), 6);
+
+    requested_for.remove("saved-alpha");
+    recording.set_connected_peers(Vec::new());
+    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    let statuses = statuses.read().expect("peer statuses lock poisoned");
+    assert!(statuses
+        .iter()
+        .find(|status| status.peer_id == "saved-alpha")
+        .and_then(|status| status.last_error.as_deref())
+        .is_some_and(|error| error.contains("no connected peers")));
+    assert!(!requested_for.contains("saved-alpha"));
+
+    core.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -328,6 +448,14 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
     )
     .await
     .expect("save pairing desired fixture");
+    super::bootstrap::write_peer_pairing_desired(
+        core.node(),
+        &record,
+        "did:key:desktop-requester",
+        "endpoint-requester-ticket-updated",
+    )
+    .await
+    .expect("update pairing desired fixture");
 
     let error = core
         .remove_peer(&record.peer_id)
@@ -352,17 +480,18 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
     let response = core
         .node()
         .execute(&format!(
-            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID agent_did replicator_addresses }} }}"#
+            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID agent_did collections template replicator_addresses }} }}"#
         ))
         .await;
     assert!(!response.has_errors());
-    let row = response
+    let rows = response
         .data
         .as_ref()
         .and_then(|data| data.get("PeerPairingDesired"))
         .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .expect("saved pairing desired row");
+        .expect("saved pairing desired rows");
+    assert_eq!(rows.len(), 1, "writer must update the existing row");
+    let row = rows.first().expect("saved pairing desired row");
     assert_eq!(
         row.get("agent_did").and_then(serde_json::Value::as_str),
         Some("did:key:desktop-requester")
@@ -372,7 +501,14 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
             .and_then(serde_json::Value::as_array)
             .and_then(|addresses| addresses.first())
             .and_then(serde_json::Value::as_str),
-        Some("endpoint-requester-ticket")
+        Some("endpoint-requester-ticket-updated")
+    );
+    assert!(row
+        .get("collections")
+        .is_some_and(serde_json::Value::is_null));
+    assert_eq!(
+        row.get("template").and_then(serde_json::Value::as_str),
+        Some("machine")
     );
 
     core.shutdown().await.expect("shutdown");

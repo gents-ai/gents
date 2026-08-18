@@ -57,24 +57,27 @@ def conversationTranscriptCollections : List String :=
 
 def agentConfigCollections : List String :=
   ["AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
-   "ToolServiceRegistry", "Skill"]
+   "ToolServiceRegistry", "Skill", "DatastoreToolSurface"]
 
 def conversationCollections : List String :=
   conversationTranscriptCollections ++ agentConfigCollections
 
 def machineCollections : List String :=
-  conversationCollections ++ ["AgentDirectoryEntry"]
+  conversationCollections ++ ["PersonaConfigRequest", "AgentDirectoryEntry"]
 
 def discoveryCollections : List String :=
   ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest",
    "AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
-   "ToolServiceRegistry", "Skill"]
+   "ToolServiceRegistry", "Skill", "DatastoreToolSurface"]
 
 def networkControlCollections : List String :=
   ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest"]
 
 def subagentHostCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall"]
+
+def clientIndexCollections : List String :=
+  ["AgentConversation", "AgentSession"]
 
 def conversationRules : List CollectionRule :=
   [ { collection := "AgentRequest",      field := "requester_did", source := .peerDid }
@@ -89,7 +92,8 @@ def conversationRules : List CollectionRule :=
 
 def machineRules : List CollectionRule :=
   conversationRules ++
-    [ { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
+    [ { collection := "PersonaConfigRequest", field := "requester_did", source := .peerDid }
+    , { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
 
 def subagentCoordinatorRules : List CollectionRule :=
   [ { collection := "AgentToolCall", field := "spawn_target_did", source := .peerDid } ]
@@ -99,6 +103,10 @@ def subagentHostRules : List CollectionRule :=
   , { collection := "AgentResponse",     field := "requester_did", source := .peerDid }
   , { collection := "AgentMessage",      field := "requester_did", source := .peerDid }
   , { collection := "AgentToolCall",     field := "requester_did", source := .peerDid } ]
+
+def clientIndexRules : List CollectionRule :=
+  [ { collection := "AgentConversation", field := "requester_did", source := .peerDid }
+  , { collection := "AgentSession",      field := "requester_did", source := .peerDid } ]
 
 def conversationTemplate : Template :=
   { id := "conversation"
@@ -154,6 +162,12 @@ def appCollectionsTemplate : Template :=
   , scope := .unscoped
   , delivery := .replicate }
 
+def clientIndexTemplate : Template :=
+  { id := "client-index"
+  , collections := clientIndexCollections.toFinset
+  , scope := .perCollection clientIndexRules
+  , delivery := .push }
+
 def builtinCatalog : Catalog :=
   [ conversationTemplate
   , machineTemplate
@@ -163,6 +177,7 @@ def builtinCatalog : Catalog :=
   , networkControlTemplate
   , subagentCoordinatorTemplate
   , subagentHostTemplate
-  , appCollectionsTemplate ]
+  , appCollectionsTemplate
+  , clientIndexTemplate ]
 
 end ScopeTemplates
