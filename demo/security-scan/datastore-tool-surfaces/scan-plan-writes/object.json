@@ -1,0 +1,23 @@
+{
+  "surface_id": "scan-plan-writes",
+  "agent_did": "did:key:zSecurityScanAgentPlaceholder00000000000000000000000",
+  "display_name": "Investigation batch writes",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_investigation_batch",
+      "collection": "InvestigationBatch",
+      "description": "Create one member of the closed investigation-batch set.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1, "expected_count_field": "expected_total"},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "batch_id", "required": true},
+        {"name": "scan_root", "required": true},
+        {"name": "paths", "required": true},
+        {"name": "hits", "required": true},
+        {"name": "instructions", "required": true},
+        {"name": "expected_total", "required": true}
+      ]
+    }
+  ]
+}

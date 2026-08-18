@@ -1,0 +1,53 @@
+{
+  "surface_id": "scan-report-io",
+  "agent_did": "did:key:zSecurityScanAgentPlaceholder00000000000000000000000",
+  "display_name": "Report reads and confirmed finding writes",
+  "enabled": true,
+  "entries": [
+    {
+      "kind": "query",
+      "tool_name": "query_finding_verdict",
+      "collection": "FindingVerdict",
+      "description": "Load every revalidation verdict for this run.",
+      "fields": ["finding_id", "batch_id", "severity", "confidence", "path", "line", "title", "detail", "verdict", "evidence", "verification"],
+      "filter_fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"}
+      ]
+    },
+    {
+      "tool_name": "write_finding",
+      "collection": "Finding",
+      "description": "Publish one confirmed finding.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "finding_id", "required": true},
+        {"name": "batch_id", "required": true},
+        {"name": "severity", "required": true},
+        {"name": "confidence", "required": true},
+        {"name": "path", "required": true},
+        {"name": "line", "required": false},
+        {"name": "title", "required": true},
+        {"name": "detail", "required": true},
+        {"name": "verdict", "required": true},
+        {"name": "evidence", "required": true},
+        {"name": "verification", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_scan_report",
+      "collection": "ScanReport",
+      "description": "Publish the final scan report.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "candidate_total", "required": true},
+        {"name": "batch_count", "required": true},
+        {"name": "confirmed_count", "required": true},
+        {"name": "refuted_count", "required": true},
+        {"name": "severity_counts", "required": true},
+        {"name": "slug_counts", "required": true},
+        {"name": "summary", "required": true}
+      ]
+    }
+  ]
+}

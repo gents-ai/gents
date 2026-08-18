@@ -54,8 +54,10 @@ decls ∪ inline write_tools → BehaviorToolConfig → BoundedWriteTool  (uncha
 
 Three reuse commitments (these are the design, not implementation detail):
 
-1. **Entries *are* `WriteToolDecl`s.** No new entry struct: the surface's
-   `entries` column reuses `WriteToolDecl` / `WriteToolField`
+1. **Entries are create or query decls.** Create entries remain
+   `WriteToolDecl`s (no `kind`, backward compatible). Query entries set
+   `"kind": "query"` and deserialize as `QueryToolDecl`. The `entries`
+   column is unchanged.
    (`document_config/tool_selection.rs`) including the existing dual-shape
    deserializer (JSON objects in manifests, JSON strings in the Defra
    `[String]` column) and the `graphql_string_list_field` encoder that
@@ -75,8 +77,9 @@ Three reuse commitments (these are the design, not implementation detail):
 - **Richer EventTrigger conditions** (status transitions, barriers/joins,
   `event_kind: updated`). Separate work; this design does not depend on it.
 - Auto-tooling every collection on the node (explicit allowlist only).
-- Update / delete / arbitrary query tools (create-only v1; bounded reads are
-  already covered by `defra_query`, see the recipe below).
+- Update / delete tools. Single-collection **query** entries now live on the
+  same `entries` column (`"kind": "query"`); the generic `defra_query` console
+  remains available for multi-collection reads.
 - Free-form GraphQL for models.
 - Generating SDL from the surface (SDL stays the source of truth for types;
   the surface only references collections/fields).
@@ -215,13 +218,14 @@ write tools, defeating the allowlist.
 
 The target persona: a subagent whose only capabilities are **reading pipeline
 documents and making the discrete transitions we allow** — everything else
-off. One surface + one selection:
+off. One surface + one selection. Prefer a bound query entry over
+`defra_query` when the stage only needs one collection:
 
-`datastore-tool-surfaces/experiment-writes/object.json`:
+`datastore-tool-surfaces/experiment-io/object.json`:
 
 ```json
 {
-  "surface_id": "experiment-writes",
+  "surface_id": "experiment-io",
   "agent_did": "did:key:PLACEHOLDER",
   "enabled": true,
   "entries": [
@@ -235,19 +239,32 @@ off. One surface + one selection:
         {"name": "content", "required": true},
         {"name": "stage", "required": true}
       ]
+    },
+    {
+      "kind": "query",
+      "tool_name": "query_experiment_finding",
+      "collection": "ExperimentFinding",
+      "description": "Load findings for this run.",
+      "fields": ["finding_id", "content", "stage"],
+      "filter_fields": [
+        {"name": "run_id", "fill": "correlation"}
+      ]
     }
   ]
 }
 ```
+
+Existing create entries omit `kind` and stay writes. Query entries set
+`"kind": "query"`. The model never names the collection; filled filter
+fields are hidden and applied as `_eq`. Default row cap is 1000.
 
 Tool selection (the interesting bits):
 
 ```json
 {
   "selection_id": "exp-stage-datastore-only",
-  "datastore_tool_surface_ids": ["experiment-writes"],
-  "enable_defra_query": true,
-  "defra_query_collections": ["ExperimentJob", "ExperimentFinding"],
+  "datastore_tool_surface_ids": ["experiment-io"],
+  "enable_defra_query": false,
   "enable_file_tools": false,
   "enable_bash": false,
   "enable_meta_tools": false,
@@ -266,7 +283,8 @@ feature):
 - `enable_meta_tools` and `enable_context_budget` are version-gated
   **default-true** — write `false` explicitly or the agent gets them.
 - An **empty** `defra_query_collections` list means **all collections**.
-  Least-privilege reads require naming the collections.
+  Least-privilege reads should use a surface query entry instead of
+  `defra_query` whenever a single collection is enough.
 - There is no `enable_write_tools` flag: a well-formed decl (inline or via
   surface) *is* the enablement.
 

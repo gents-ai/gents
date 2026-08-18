@@ -89,6 +89,10 @@ impl BoundedWriteTool {
     }
 
     fn build_mutation(&self, args: &Map<String, Value>) -> Result<String> {
+        // `ensure_well_formed` delegates to `WriteToolDecl::validate`, which
+        // validates the collection and every field name as GraphQL identifiers
+        // (the centralized identifier-validation boundary), so bare-identifier
+        // interpolation below is safe without a second per-site check here.
         self.ensure_well_formed()?;
 
         for key in args.keys() {

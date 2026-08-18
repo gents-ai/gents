@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::fleet::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
+use super::secscan;
 use super::util::{path_arg, run_cli_json};
 use crate::cli::args::DemoRunArgs;
 use crate::desired_state::interpolate::interpolate_with;
@@ -35,10 +36,54 @@ struct PackManifest {
     expect: PackExpect,
     #[serde(default = "default_timeout")]
     await_timeout_secs: u64,
+    #[serde(default)]
+    scan: Option<PackScan>,
 }
 
 fn default_timeout() -> u64 {
     240
+}
+
+#[derive(Debug, Deserialize)]
+struct PackScan {
+    root: String,
+    #[serde(default = "default_scan_payload_chars")]
+    max_payload_chars: String, // string for ${VAR:-default} interpolation parity
+}
+
+fn default_scan_payload_chars() -> String {
+    "49152".to_string()
+}
+
+/// Renders a scan's counters as `seed.fields` entries so the manifest can
+/// interpolate them into the seeded document without any special-casing in
+/// `seed_mutation`. `slug_counts` keeps the pre-sorted (count desc, then
+/// slug) order `format_payload` produced.
+fn scan_seed_fields(output: &secscan::ScanOutput) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    fields.insert("candidates".to_string(), output.payload.clone());
+    fields.insert(
+        "candidate_total".to_string(),
+        output.candidate_total.to_string(),
+    );
+    fields.insert(
+        "candidate_files".to_string(),
+        output.candidate_files.to_string(),
+    );
+    fields.insert(
+        "slug_counts".to_string(),
+        output
+            .slug_counts
+            .iter()
+            .map(|(slug, count)| format!("{slug}={count}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    fields.insert(
+        "overflow_count".to_string(),
+        output.overflow_count.to_string(),
+    );
+    fields
 }
 
 #[derive(Debug, Deserialize)]
@@ -395,7 +440,7 @@ fn validate_prompt_tool_contracts_with(
                     .context("datastore tool entry has no collection")?;
                 if !schemas.contains(&format!("type {collection} {{")) {
                     bail!(
-                        "tool {tool_name} writes collection {collection}, but the pack has no matching schema"
+                        "tool {tool_name} targets collection {collection}, but the pack has no matching schema"
                     );
                 }
                 let type_start = schemas
@@ -405,8 +450,23 @@ fn validate_prompt_tool_contracts_with(
                     .split_once('}')
                     .map(|(body, _)| body)
                     .context("schema type has no closing brace")?;
+                let mut field_names = Vec::new();
                 for field in entry
                     .get("fields")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(name) = field.as_str() {
+                        field_names.push(name.to_string());
+                    } else if let Some(name) = field.get("name").and_then(Value::as_str) {
+                        field_names.push(name.to_string());
+                    } else {
+                        bail!("datastore tool field has no name");
+                    }
+                }
+                for field in entry
+                    .get("filter_fields")
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
@@ -414,10 +474,13 @@ fn validate_prompt_tool_contracts_with(
                     let field_name = field
                         .get("name")
                         .and_then(Value::as_str)
-                        .context("datastore tool field has no name")?;
+                        .context("datastore tool filter field has no name")?;
+                    field_names.push(field_name.to_string());
+                }
+                for field_name in field_names {
                     if !type_body.lines().any(|line| {
                         line.trim_start()
-                            .strip_prefix(field_name)
+                            .strip_prefix(&field_name)
                             .is_some_and(|rest| rest.trim_start().starts_with(':'))
                     }) {
                         bail!(
@@ -724,7 +787,16 @@ fn observes_collection(line: &str, collection: &str) -> bool {
         .is_none_or(|next| !next.is_alphanumeric() && next != '_')
 }
 
-fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> String {
+fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> Result<String> {
+    // The collection and every field key below are interpolated in identifier
+    // position; validate them so a malformed pack manifest cannot inject
+    // GraphQL through the seed create.
+    validate_collection_identifier(&seed.collection)?;
+    gents::graphql::validate_graphql_name(&seed.job_id_field)?;
+    gents::graphql::validate_graphql_name(&seed.prompt_field)?;
+    for key in seed.fields.keys() {
+        gents::graphql::validate_graphql_name(key)?;
+    }
     let mut fields = vec![
         format!(
             "{}: \"{}\"",
@@ -740,11 +812,11 @@ fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> String {
     for (key, value) in &seed.fields {
         fields.push(format!("{key}: \"{}\"", escape_graphql_string(value)));
     }
-    format!(
+    Ok(format!(
         "mutation {{ create_{}(input: {{ {} }}) {{ _docID }} }}",
         seed.collection,
         fields.join(", ")
-    )
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -2214,7 +2286,7 @@ fn default_job_id() -> String {
 pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let pack = resolve_pack(&args.pack)?;
-    let manifest = load_manifest(&pack)?;
+    let mut manifest = load_manifest(&pack)?;
     let observed_collections = trigger_source_collections(&pack, &manifest.expect.trigger_ids)?;
     let job_id = args.job_id.clone().unwrap_or_else(default_job_id);
     let prompt = args
@@ -2332,7 +2404,23 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             println!("observing {collection}");
         }
 
-        let mutation = seed_mutation(&manifest.seed, &job_id, &prompt);
+        if let Some(scan) = &manifest.scan {
+            let scan_root_path = std::path::Path::new(&scan.root);
+            let max_chars: usize = scan
+                .max_payload_chars
+                .parse()
+                .context("scan.max_payload_chars")?;
+            println!("scanning {} …", scan.root);
+            let files = secscan::scan_root(scan_root_path)?;
+            let output = secscan::format_payload(&files, max_chars);
+            println!(
+                "scanned  {} candidate files, {} candidates ({} overflow)",
+                output.candidate_files, output.candidate_total, output.overflow_count
+            );
+            manifest.seed.fields.extend(scan_seed_fields(&output));
+        }
+
+        let mutation = seed_mutation(&manifest.seed, &job_id, &prompt)?;
         post_graphql(&graphql, &mutation)
             .await
             .context("seeding the pack")?;
@@ -2751,6 +2839,7 @@ mod tests {
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
+            scan: None,
         };
 
         let error = validate_manifest(&manifest).expect_err("unsigned source edges must fail");
@@ -3303,6 +3392,7 @@ mod tests {
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
+            scan: None,
         };
         let error = validate_manifest(&manifest).expect_err("readonly needs tool_root");
         assert!(error.to_string().contains("tool_root"), "{error}");
@@ -3378,5 +3468,74 @@ mod tests {
             "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
         });
         assert!(!tool_call_matches(&failed_lifecycle, &expected));
+    }
+
+    #[test]
+    fn manifest_parses_optional_scan_section() {
+        let manifest: PackManifest = serde_json::from_value(serde_json::json!({
+            "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
+            "seed": {"collection": "ScanJob", "job_id_field": "run_id", "prompt_field": "focus"},
+            "expect": {"trigger_ids": []},
+            "scan": {"root": ".", "max_payload_chars": "1024"}
+        }))
+        .expect("manifest with scan");
+        let scan = manifest.scan.expect("scan section");
+        assert_eq!(scan.root, ".");
+        assert_eq!(scan.max_payload_chars, "1024");
+
+        let bare: PackManifest = serde_json::from_value(serde_json::json!({
+            "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
+            "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
+            "expect": {"trigger_ids": []}
+        }))
+        .expect("manifest without scan");
+        assert!(bare.scan.is_none());
+    }
+
+    #[test]
+    fn scan_seed_fields_render_all_counters() {
+        let output = secscan::ScanOutput {
+            payload: "files: 1  candidates: 2\nsrc/a.rs\n  [precise] graphql-injection L3: x"
+                .to_string(),
+            candidate_total: 2,
+            candidate_files: 1,
+            slug_counts: vec![("graphql-injection".to_string(), 2)],
+            overflow_count: 0,
+        };
+        let fields = scan_seed_fields(&output);
+        assert_eq!(fields.get("candidate_total").map(String::as_str), Some("2"));
+        assert_eq!(fields.get("candidate_files").map(String::as_str), Some("1"));
+        assert_eq!(fields.get("overflow_count").map(String::as_str), Some("0"));
+        assert_eq!(
+            fields.get("slug_counts").map(String::as_str),
+            Some("graphql-injection=2")
+        );
+        assert!(fields.get("candidates").unwrap().contains("src/a.rs"));
+    }
+
+    /// Regression for audit finding `seed-mutation-unvalidated-identifiers`:
+    /// the seed collection and field keys are interpolated as bare GraphQL
+    /// identifiers, so a malformed pack manifest must be rejected instead of
+    /// producing an injectable mutation.
+    #[test]
+    fn seed_mutation_validates_identifiers() {
+        let seed = |collection: &str, fields: BTreeMap<String, String>| PackSeed {
+            collection: collection.to_string(),
+            job_id_field: "run_id".to_string(),
+            prompt_field: "focus".to_string(),
+            fields,
+        };
+
+        assert!(seed_mutation(&seed("ScanJob", BTreeMap::new()), "job-1", "hi").is_ok());
+
+        let bad_collection = seed(
+            "ScanJob) { _docID } } mutation evil { x(input: { a",
+            BTreeMap::new(),
+        );
+        assert!(seed_mutation(&bad_collection, "job-1", "hi").is_err());
+
+        let mut bad_fields = BTreeMap::new();
+        bad_fields.insert("a\": \"x\", evil".to_string(), "v".to_string());
+        assert!(seed_mutation(&seed("ScanJob", bad_fields), "job-1", "hi").is_err());
     }
 }

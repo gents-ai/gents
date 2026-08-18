@@ -1,0 +1,38 @@
+{
+  "surface_id": "scan-investigate-writes",
+  "agent_did": "did:key:zSecurityScanAgentPlaceholder00000000000000000000000",
+  "display_name": "Candidate finding and sentinel writes",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_candidate_finding",
+      "collection": "CandidateFinding",
+      "description": "Record one evidenced security or bug finding for adversarial revalidation.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "finding_id", "required": true},
+        {"name": "batch_id", "required": true},
+        {"name": "severity", "required": true},
+        {"name": "confidence", "required": true},
+        {"name": "path", "required": true},
+        {"name": "line", "required": false},
+        {"name": "title", "required": true},
+        {"name": "detail", "required": true},
+        {"name": "evidence", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_investigation_result",
+      "collection": "InvestigationResult",
+      "description": "Signal that one investigation batch is complete.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "batch_id", "required": true},
+        {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}},
+        {"name": "finding_count", "required": true},
+        {"name": "summary", "required": true}
+      ]
+    }
+  ]
+}

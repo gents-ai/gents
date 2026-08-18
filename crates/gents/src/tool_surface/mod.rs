@@ -24,9 +24,11 @@ use std::path::PathBuf;
 use crate::llm::tool::ToolDyn;
 use anyhow::Result;
 
-use crate::defra_query::{build_defra_query_tool, CollectionScope, DEFRA_QUERY_TOOL_NAME};
+use crate::defra_query::{
+    build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
+};
 use crate::defra_write::BoundedWriteTool;
-use crate::document_config::{SubagentTarget, WriteToolDecl};
+use crate::document_config::{QueryToolDecl, SubagentTarget, WriteToolDecl};
 use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
 use crate::toolset::{
     background_tool_names, build_background_tools, build_context_budget_tool, build_goal_tools,
@@ -55,6 +57,7 @@ pub struct ToolSurface {
     pub(super) enable_defra_query: bool,
     pub(super) defra_query_scope: CollectionScope,
     pub(super) write_tools: Vec<WriteToolDecl>,
+    pub(super) query_tools: Vec<QueryToolDecl>,
     pub(super) enable_skills: bool,
     pub(super) self_config: SelfConfigToolConfig,
     pub(super) lsp: Option<crate::toolset::lsp::LspToolConfig>,
@@ -74,6 +77,11 @@ impl ToolSurface {
         self.write_tools
             .iter()
             .flat_map(|decl| decl.fields.iter())
+            .chain(
+                self.query_tools
+                    .iter()
+                    .flat_map(|decl| decl.filter_fields.iter()),
+            )
             .filter_map(|field| match &field.fill {
                 Some(crate::document_config::WriteToolFieldFill::SourceField(source)) => {
                     Some(source.clone())
@@ -192,6 +200,11 @@ impl ToolSurface {
                 names.push(decl.tool_name.clone());
             }
         }
+        for decl in &self.query_tools {
+            if decl.is_well_formed() {
+                names.push(decl.tool_name.clone());
+            }
+        }
         build::dedupe_strings(names)
     }
 
@@ -283,6 +296,22 @@ impl ToolSurface {
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
+        for decl in &self.query_tools {
+            let tool = BoundedQueryTool::new(runtime.node.clone(), decl.clone());
+            if !tool.is_well_formed() {
+                anyhow::bail!(
+                    "query tool `{}` reached registration with an invalid declaration",
+                    decl.tool_name
+                );
+            }
+            if !registered_names.insert(tool.name()) {
+                anyhow::bail!(
+                    "query tool `{}` reached registration with a duplicate tool name",
+                    decl.tool_name
+                );
+            }
+            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+        }
         Ok(tools)
     }
 }
@@ -316,6 +345,7 @@ impl std::fmt::Debug for ToolSurface {
             .field("enable_defra_query", &self.enable_defra_query)
             .field("defra_query_scope", &self.defra_query_scope)
             .field("write_tools", &self.write_tools)
+            .field("query_tools", &self.query_tools)
             .field("enable_skills", &self.enable_skills)
             .field("self_config", &self.self_config)
             .finish()

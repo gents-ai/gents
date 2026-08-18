@@ -1,0 +1,12 @@
+type ScanJob {
+  run_id: String @index(unique: true) @immutable
+  scan_root: String
+  focus: String
+  candidates: String
+  candidate_total: String
+  candidate_files: String
+  slug_counts: String
+  overflow_count: String
+  batch_min: String
+  batch_max: String
+}

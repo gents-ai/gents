@@ -1,0 +1,9 @@
+{
+  "task_id": "scan-plan-task",
+  "name": "Plan investigation batches",
+  "description": null,
+  "behavior_id": "scan-plan",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

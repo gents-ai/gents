@@ -1761,7 +1761,9 @@ fn merge_surface_entries_match_inline_write_tools() {
                 agent_did: agent_did.to_string(),
                 display_name: Some("experiment writes".to_string()),
                 enabled: true,
-                entries: Some(vec![decl.clone()]),
+                entries: Some(vec![crate::document_config::SurfaceToolDecl::Create(
+                    decl.clone(),
+                )]),
                 created_at: None,
             },
         },
@@ -1810,7 +1812,9 @@ fn merge_fails_closed_on_disabled_surface() {
                 agent_did: agent_did.to_string(),
                 display_name: None,
                 enabled: false,
-                entries: Some(vec![finding_decl()]),
+                entries: Some(vec![crate::document_config::SurfaceToolDecl::Create(
+                    finding_decl(),
+                )]),
                 created_at: None,
             },
         },
@@ -1848,7 +1852,7 @@ fn merge_reports_invalid_output_obligation_fields() {
                 agent_did: agent_did.to_string(),
                 display_name: None,
                 enabled: true,
-                entries: Some(vec![decl]),
+                entries: Some(vec![crate::document_config::SurfaceToolDecl::Create(decl)]),
                 created_at: None,
             },
         },
@@ -1879,7 +1883,9 @@ fn merge_fails_closed_on_foreign_agent_surface() {
                 agent_did: "did:key:zOtherAgent".to_string(),
                 display_name: None,
                 enabled: true,
-                entries: Some(vec![finding_decl()]),
+                entries: Some(vec![crate::document_config::SurfaceToolDecl::Create(
+                    finding_decl(),
+                )]),
                 created_at: None,
             },
         },
@@ -1911,7 +1917,9 @@ fn merge_fails_closed_on_name_collision() {
                 agent_did: agent_did.to_string(),
                 display_name: None,
                 enabled: true,
-                entries: Some(vec![decl.clone()]),
+                entries: Some(vec![crate::document_config::SurfaceToolDecl::Create(
+                    decl.clone(),
+                )]),
                 created_at: None,
             },
         },
@@ -1928,6 +1936,50 @@ fn merge_fails_closed_on_name_collision() {
         err.to_string().contains("duplicate"),
         "expected duplicate name error, got: {err}"
     );
+}
+
+#[test]
+fn merge_expands_query_entries_separately_from_creates() {
+    let agent_did = "did:key:zSurfaceQuery";
+    let write = finding_decl();
+    let query = crate::document_config::QueryToolDecl {
+        tool_name: "query_experiment_finding".to_string(),
+        collection: "ExperimentFinding".to_string(),
+        description: "Load findings for this run.".to_string(),
+        fields: vec!["finding_id".into(), "content".into()],
+        filter_fields: vec![crate::document_config::WriteToolField {
+            name: "run_id".into(),
+            required: false,
+            fill: Some(crate::document_config::WriteToolFieldFill::Correlation),
+        }],
+    };
+    let mut view = empty_runtime_view(agent_did);
+    view.datastore_tool_surfaces.insert(
+        "experiment-io".to_string(),
+        DocumentRecord {
+            doc_id: "surf-doc".to_string(),
+            value: crate::document_config::DatastoreToolSurfaceDocument {
+                surface_id: "experiment-io".to_string(),
+                agent_did: agent_did.to_string(),
+                display_name: None,
+                enabled: true,
+                entries: Some(vec![
+                    crate::document_config::SurfaceToolDecl::Create(write.clone()),
+                    crate::document_config::SurfaceToolDecl::Query(query.clone()),
+                ]),
+                created_at: None,
+            },
+        },
+    );
+    let selection = ToolSelectionDocument {
+        selection_id: "sel".to_string(),
+        agent_did: agent_did.to_string(),
+        datastore_tool_surface_ids: Some(vec!["experiment-io".to_string()]),
+        ..Default::default()
+    };
+    let merged = super::merge_surface_tools(&selection, &view).unwrap();
+    assert_eq!(merged.write_tools, vec![write]);
+    assert_eq!(merged.query_tools, vec![query]);
 }
 
 #[tokio::test]

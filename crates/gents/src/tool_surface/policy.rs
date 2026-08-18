@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::defra_query::CollectionScope;
-use crate::document_config::{SubagentTarget, WriteToolDecl, WriteToolField};
+use crate::document_config::{QueryToolDecl, SubagentTarget, WriteToolDecl, WriteToolField};
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 
 use super::modes::{BashMode, FileToolMode};
@@ -423,7 +423,7 @@ impl ToolPolicySurface {
                     .iter()
                     .map(|name| name.trim().to_string()),
             ),
-            write_tools: write_scope_from_decls(&selection.write_tools),
+            write_tools: write_scope_from_decls(&selection.write_tools, &selection.query_tools),
         }
     }
 
@@ -546,6 +546,39 @@ impl ToolPolicySurface {
             .collect()
     }
 
+    pub fn query_decls_for_runtime(&self, decls: &[QueryToolDecl]) -> Vec<QueryToolDecl> {
+        decls
+            .iter()
+            .filter_map(|decl| {
+                let key = (
+                    decl.tool_name.trim().to_string(),
+                    decl.collection.trim().to_string(),
+                );
+                match &self.write_tools {
+                    EndpointScope::None => None,
+                    EndpointScope::All => Some(decl.clone()),
+                    EndpointScope::Only(grants) => grants.get(&key).map(|fields| {
+                        let mut narrowed = decl.clone();
+                        narrowed.fields = decl
+                            .fields
+                            .iter()
+                            .filter(|field| fields.contains(field.trim()))
+                            .cloned()
+                            .collect();
+                        narrowed.filter_fields = decl
+                            .filter_fields
+                            .iter()
+                            .filter(|field| fields.contains(field.name.trim()))
+                            .cloned()
+                            .collect();
+                        narrowed
+                    }),
+                }
+            })
+            .filter(|decl| decl.is_well_formed())
+            .collect()
+    }
+
     pub fn filter_background_tools(&self, names: Vec<String>) -> Vec<String> {
         filter_unit_scope(names, &self.background_tools)
     }
@@ -620,16 +653,38 @@ where
 }
 
 fn write_scope_from_decls(
-    decls: &[WriteToolDecl],
+    write_tools: &[WriteToolDecl],
+    query_tools: &[QueryToolDecl],
 ) -> EndpointScope<(String, String), BTreeSet<String>> {
     let mut grants = BTreeMap::new();
-    for decl in decls {
+    for decl in write_tools {
         let fields = decl
             .fields
             .iter()
             .map(|field| field.name.trim().to_string())
             .filter(|field| !field.is_empty())
             .collect::<BTreeSet<_>>();
+        grants.insert(
+            (
+                decl.tool_name.trim().to_string(),
+                decl.collection.trim().to_string(),
+            ),
+            fields,
+        );
+    }
+    for decl in query_tools {
+        let mut fields = decl
+            .fields
+            .iter()
+            .map(|field| field.trim().to_string())
+            .filter(|field| !field.is_empty())
+            .collect::<BTreeSet<_>>();
+        fields.extend(
+            decl.filter_fields
+                .iter()
+                .map(|field| field.name.trim().to_string())
+                .filter(|field| !field.is_empty()),
+        );
         grants.insert(
             (
                 decl.tool_name.trim().to_string(),

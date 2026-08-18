@@ -31,6 +31,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -98,6 +99,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -142,6 +144,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -185,6 +188,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -227,6 +231,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -269,6 +274,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -309,6 +315,7 @@ fn readonly_ceiling_clamps_unrestricted_bash_policy() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -347,6 +354,7 @@ fn selection_without_root_inherits_operator_root() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -398,6 +406,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -446,6 +455,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -497,6 +507,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -536,6 +547,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -575,6 +587,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -622,6 +635,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -763,6 +777,55 @@ async fn write_tools_register_under_declared_names() {
         built.iter().any(|tool| tool.name() == "request_action"),
         "registered dynamic tool should advertise decl.tool_name"
     );
+}
+
+#[tokio::test]
+async fn query_tool_is_advertised_and_registered() {
+    use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
+
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let surface = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_defra_query: false,
+            query_tools: vec![QueryToolDecl {
+                tool_name: "query_candidate_finding".to_string(),
+                collection: "CandidateFinding".to_string(),
+                description: "Load candidates".to_string(),
+                fields: vec!["finding_id".to_string()],
+                filter_fields: vec![WriteToolField {
+                    name: "run_id".to_string(),
+                    required: false,
+                    fill: Some(WriteToolFieldFill::Correlation),
+                }],
+            }],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    let names = surface.tool_names();
+    assert!(
+        names.contains(&"query_candidate_finding".to_string()),
+        "declared query tool should be advertised; got {names:?}"
+    );
+    assert!(
+        !names.contains(&"defra_query".to_string()),
+        "bound query tools must not imply the generic defra_query console"
+    );
+
+    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let built = surface.build_tools(&runtime).unwrap();
+    assert!(built
+        .iter()
+        .any(|tool| tool.name() == "query_candidate_finding"));
 }
 
 #[test]
