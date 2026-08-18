@@ -1901,6 +1901,8 @@ async fn projection_graphql_mock(
         json!({ "data": { "RenderedRequest": [] } })
     } else if query.contains("CompactionEntry(") {
         json!({ "data": { "CompactionEntry": [] } })
+    } else if query.contains("ProviderContextReduction(") {
+        json!({ "data": { "ProviderContextReduction": [] } })
     } else {
         json!({
             "errors": [{
