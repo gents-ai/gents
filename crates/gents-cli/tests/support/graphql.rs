@@ -11,6 +11,7 @@ pub fn escape_graphql_string(value: &str) -> String {
         .replace('"', "\\\"")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
