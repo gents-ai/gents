@@ -120,6 +120,7 @@ pub struct ToolSelection {
     pub enable_defra_query: bool,
     pub defra_query_collections: Vec<String>,
     pub write_tools: Vec<crate::document_config::WriteToolDecl>,
+    pub query_tools: Vec<crate::document_config::QueryToolDecl>,
     pub enable_self_config: bool,
     pub self_config_categories: Option<Vec<String>>,
     pub self_config_no_lockout: bool,
@@ -147,6 +148,7 @@ impl Default for ToolSelection {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
+            query_tools: Vec::new(),
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -208,6 +210,7 @@ impl ToolSelection {
                 .clone()
                 .unwrap_or_default(),
             write_tools: selection.write_tools.clone().unwrap_or_default(),
+            query_tools: Vec::new(),
             enable_self_config: selection.enable_self_config.unwrap_or(false),
             self_config_categories: selection.self_config_categories.clone(),
             self_config_no_lockout: selection.self_config_no_lockout.unwrap_or(false),

@@ -67,6 +67,20 @@ impl ToolSurfaceExplanation {
         );
         explain_memory(config, &mut builder);
         explain_builtin_reads(config, surface, &mut builder);
+        builder.include_many(
+            "write_tools",
+            surface
+                .write_tools
+                .iter()
+                .map(|decl| decl.tool_name.clone()),
+        );
+        builder.include_many(
+            "query_tools",
+            surface
+                .query_tools
+                .iter()
+                .map(|decl| decl.tool_name.clone()),
+        );
 
         let tool_names = surface.tool_names();
         if surface.host_tools.tool_names().is_empty()

@@ -4,6 +4,7 @@ type DatastoreToolSurface @branchable {
     display_name: String
     enabled: Boolean @index
     # JSON-serialized WriteToolDecl entries (same dual-shape as ToolSelection.write_tools).
+    # Query entries set "kind": "query" and share this column.
     entries: [String]
     created_at: String
     updated_at: DateTime @index(direction: DESC)

@@ -9,7 +9,7 @@ use gents::template::{
 use gents::{
     is_reserved_builtin_tool_name, parse_template_for_validation,
     schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
-    SubagentTarget, VariableRef, WriteToolDecl,
+    QueryToolDecl, SubagentTarget, SurfaceToolDecl, VariableRef, WriteToolDecl,
 };
 
 use super::{DesiredDatastoreToolSurface, DesiredStateManifest, DesiredToolSelection};
@@ -142,10 +142,9 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 surface.surface_id
             ));
         }
-        validate_write_tools(
+        validate_surface_entries(
             &format!("surface:{}", surface.surface_id),
             &surface.entries,
-            &[],
             errors,
         );
     }
@@ -1485,7 +1484,7 @@ fn validate_datastore_surface_links(
     selection: &DesiredToolSelection,
     errors: &mut Vec<String>,
 ) {
-    use gents::{is_reserved_builtin_tool_name, WriteToolDecl};
+    use gents::{is_reserved_builtin_tool_name, SurfaceToolDecl};
     use std::collections::{BTreeMap, BTreeSet};
 
     // Trimmed to match the uniqueness check above and the lookup below.
@@ -1544,7 +1543,7 @@ fn validate_datastore_surface_links(
             continue;
         }
         for entry in &surface.entries {
-            match serde_json::from_str::<WriteToolDecl>(entry) {
+            match serde_json::from_str::<SurfaceToolDecl>(entry) {
                 Ok(decl) => {
                     if let Err(error) = decl.validate() {
                         errors.push(format!(
@@ -1552,35 +1551,99 @@ fn validate_datastore_surface_links(
                         ));
                         continue;
                     }
-                    if is_reserved_builtin_tool_name(&decl.tool_name) {
+                    if is_reserved_builtin_tool_name(decl.tool_name()) {
                         errors.push(format!(
                             "DatastoreToolSurface {} tool_name {:?} collides with a built-in tool",
-                            surface_id, decl.tool_name
+                            surface_id,
+                            decl.tool_name()
                         ));
                     }
-                    if !seen_names.insert(decl.tool_name.clone()) {
+                    if !seen_names.insert(decl.tool_name().to_string()) {
                         errors.push(format!(
-                            "duplicate write tool_name {:?} after expanding DatastoreToolSurface {} for tool selection {}",
-                            decl.tool_name, surface_id, selection.selection_id
+                            "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for tool selection {}",
+                            decl.tool_name(),
+                            surface_id,
+                            selection.selection_id
                         ));
                     }
-                    merged.push(entry.clone());
+                    match decl {
+                        SurfaceToolDecl::Create(_) => merged.push(entry.clone()),
+                        SurfaceToolDecl::Query(_) => {}
+                    }
                 }
                 Err(error) => errors.push(format!(
-                    "DatastoreToolSurface {} entry is not valid WriteToolDecl JSON: {error}",
+                    "DatastoreToolSurface {} entry is not valid create/query tool JSON: {error}",
                     surface_id
                 )),
             }
         }
     }
 
-    // Re-run field-level checks over the merged list.
+    // Re-run field-level checks over the merged create list.
     validate_write_tools(
         &selection.selection_id,
         &merged,
         &selection.cli_tool_names,
         errors,
     );
+}
+
+fn validate_surface_entries(label: &str, entries: &[String], errors: &mut Vec<String>) {
+    let mut seen_tool_names: HashSet<String> = HashSet::new();
+    for entry in entries {
+        let decl: SurfaceToolDecl = match serde_json::from_str(entry) {
+            Ok(decl) => decl,
+            Err(error) => {
+                errors.push(format!(
+                    "{label} entry {entry:?} is not valid create/query tool JSON: {error}"
+                ));
+                continue;
+            }
+        };
+        if !decl.is_well_formed() {
+            errors.push(format!(
+                "{label} entry {entry:?} is malformed (tool_name/collection required; query entries also need a projection)"
+            ));
+            continue;
+        }
+        if is_reserved_builtin_tool_name(decl.tool_name()) {
+            errors.push(format!(
+                "{label} tool_name {:?} collides with a built-in tool",
+                decl.tool_name()
+            ));
+        }
+        if !seen_tool_names.insert(decl.tool_name().to_string()) {
+            errors.push(format!(
+                "{label} has a duplicate tool_name {:?}",
+                decl.tool_name()
+            ));
+        }
+        match decl {
+            SurfaceToolDecl::Create(create) => {
+                if !create.output_obligation_is_well_formed() {
+                    errors.push(format!(
+                        "{label} tool {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
+                        create.tool_name
+                    ));
+                }
+            }
+            SurfaceToolDecl::Query(query) => {
+                if let Err(error) = validate_one_query_decl(&query) {
+                    errors.push(format!("{label} {error}"));
+                }
+            }
+        }
+    }
+}
+
+fn validate_one_query_decl(decl: &QueryToolDecl) -> Result<(), String> {
+    if decl.fields.is_empty() {
+        return Err(format!(
+            "query tool {:?} must declare at least one projection field",
+            decl.tool_name
+        ));
+    }
+    Ok(())
 }
 
 fn validate_write_tools(

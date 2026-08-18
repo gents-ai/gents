@@ -8,6 +8,7 @@ mod schedule;
 mod serde_helpers;
 mod skill;
 mod subagent_target;
+mod surface_tool;
 mod task;
 mod tool_selection;
 
@@ -33,11 +34,17 @@ pub(crate) use inference_profile::{
 };
 
 pub use tool_selection::default_tool_selection_id_for_behavior;
+pub use surface_tool::{QueryToolDecl, SurfaceToolDecl};
 pub use tool_selection::{
     is_reserved_builtin_tool_name, load_tool_selection, upsert_tool_selection,
     wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
     OutputObligationDecision, ToolSelectionDocument, WriteToolDecl, WriteToolField,
     WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
+};
+#[allow(unused_imports)]
+pub(crate) use surface_tool::{
+    deserialize_optional_surface_tools, validate_query_tool_declarations,
+    validate_surface_tool_names,
 };
 #[allow(unused_imports)]
 pub(crate) use tool_selection::{
