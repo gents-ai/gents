@@ -62,9 +62,19 @@ fn d4f_enabled() -> bool {
     std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
 }
 
-const D4F_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
-const D4F_MODEL: &str = "d4f";
 const D4F_BACKEND_ID: &str = "backend-d4f-live";
+
+/// Live backend endpoint/model for the D4F suite, overridable so it can run
+/// against whatever the workstation currently serves — the `d4f` vLLM alias
+/// comes and goes with server restarts (#1147).
+fn d4f_endpoint() -> String {
+    std::env::var("GENTS_D4F_ENDPOINT")
+        .unwrap_or_else(|_| "http://100.73.235.38:8000/v1".to_string())
+}
+
+fn d4f_model() -> String {
+    std::env::var("GENTS_D4F_MODEL").unwrap_or_else(|_| "d4f".to_string())
+}
 
 pub async fn bind_d4f_backend(
     node: &EmbeddedNode,
@@ -83,7 +93,7 @@ pub async fn bind_d4f_backend(
         .expect("load default behavior")
         .expect("default behavior document exists after bootstrap");
     behavior.backend_id = Some(D4F_BACKEND_ID.to_string());
-    behavior.model_name = Some(D4F_MODEL.to_string());
+    behavior.model_name = Some(d4f_model());
     behavior.inference_profile_id = Some(default_inference_profile_id_for_behavior(&behavior_id));
     behavior.enabled = true;
     upsert_agent_behavior(node, &behavior)
@@ -96,8 +106,8 @@ pub async fn bind_d4f_backend(
 
 async fn upsert_d4f_backend(node: &EmbeddedNode) {
     let escaped_backend_id = escape_graphql_string(D4F_BACKEND_ID);
-    let escaped_endpoint = escape_graphql_string(D4F_ENDPOINT);
-    let escaped_model = escape_graphql_string(D4F_MODEL);
+    let escaped_endpoint = escape_graphql_string(&d4f_endpoint());
+    let escaped_model = escape_graphql_string(&d4f_model());
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
@@ -156,7 +166,7 @@ pub async fn boot_d4f_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Re
 }
 
 async fn assert_d4f_reachable() {
-    let url = format!("{}/models", D4F_ENDPOINT.trim_end_matches('/'));
+    let url = format!("{}/models", d4f_endpoint().trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()

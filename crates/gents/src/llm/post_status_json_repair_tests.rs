@@ -49,7 +49,7 @@
 //! These tests are deterministic and need no live backend; they exercise the
 //! real `ToolDyn::call` seam directly.
 
-use gents::llm::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
+use crate::llm::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]

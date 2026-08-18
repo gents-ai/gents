@@ -521,6 +521,9 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
 /// bump: enable it (remove `#[ignore]`) as the closeout of the #1033 pin bump.
 /// Do NOT delete it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "acceptance test for the defra.rs #1033 pin bump: filtered replication is stubbed \
+            (non-empty filter falls back to an unfiltered install), so a pass today is a \
+            false pass — enable as the closeout of the pin bump"]
 async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_src = tempdir.path().join("e2e-src");

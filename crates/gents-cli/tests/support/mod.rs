@@ -35,8 +35,12 @@ pub use waits::{
     wait_for_tool_call,
 };
 
-pub const DEFAULT_MODEL_ENDPOINT: &str = "http://192.168.1.78:8000/v1";
-pub const DEFAULT_MODEL_NAME: &str = "MiniMax-M2.7-NVFP4";
+// Matches the DEFAULT_LIVE_ENDPOINT the gents e2e_live suite uses
+// (workstation-1 over Tailscale). The previous default was a LAN address
+// unroutable from anywhere else, so tests falling through the
+// GENTS_CLI_E2E_MODEL_* overrides hung until their deadlines.
+pub const DEFAULT_MODEL_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
+pub const DEFAULT_MODEL_NAME: &str = "GLM-5.2";
 
 /// Initialize an agent home through `gents init --identity-only` and open its
 /// embedded node with the registered signing identity. Homes assembled without
