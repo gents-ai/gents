@@ -46,8 +46,9 @@ test.describe("desktop responsive layout guardrails", () => {
 
     await page.getByTestId("app-navigation-collapse").click();
     await expect(navigation).toHaveClass(/collapsed/);
-    const collapsedWidth = (await navigation.boundingBox())?.width ?? expandedWidth;
-    expect(collapsedWidth).toBeLessThan(expandedWidth);
+    await expect
+      .poll(async () => (await navigation.boundingBox())?.width ?? expandedWidth)
+      .toBeLessThan(expandedWidth);
 
     await page.getByTestId("app-navigation-collapse").click();
     await expect(navigation).toHaveClass(/expanded/);
