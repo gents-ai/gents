@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Result};
-use gents::agent::p2p_reconcile::templates::{FilterPredicate, PairingFilters};
+use gents::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
 use gents::agent::p2p_reconcile::{
     compute_owned_pairing_diff, update_applied_after_success, DiffOp,
     PairingActual as RuntimePairingActual,
@@ -373,7 +373,7 @@ fn scenario_filter_to_pairing_filters(
         .map(|(collection, predicate)| {
             (
                 collection.clone(),
-                FilterPredicate::eq(predicate.field.clone(), predicate.value.clone()),
+                equality_filter(predicate.field.clone(), predicate.value.clone()),
             )
         })
         .collect()

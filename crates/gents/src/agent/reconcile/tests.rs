@@ -292,7 +292,7 @@ fn operator_delete_yields_teardown_diff() -> bool {
 /// store whose desired read errors (the admin is never reached on this path).
 async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> bool {
     use crate::agent::p2p_reconcile::{
-        reconcile_peer_tick, EmbeddedRemoteP2pAdmin, PairingApplied, PairingDesired,
+        reconcile_peer_tick, EmbeddedRemoteP2pAdmin, LoadedPairingApplied, PairingDesired,
         PairingStateStore,
     };
 
@@ -302,13 +302,13 @@ async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> 
         async fn load_desired(&self, _peer_id: &str) -> anyhow::Result<Option<PairingDesired>> {
             anyhow::bail!("simulated desired-state read failure")
         }
-        async fn load_applied(&self, _peer_id: &str) -> anyhow::Result<PairingApplied> {
-            Ok(PairingApplied::default())
+        async fn load_applied(&self, _peer_id: &str) -> anyhow::Result<LoadedPairingApplied> {
+            Ok(LoadedPairingApplied::default())
         }
         async fn persist_applied(
             &self,
             _peer_id: &str,
-            _applied: &PairingApplied,
+            _applied: &LoadedPairingApplied,
         ) -> anyhow::Result<()> {
             Ok(())
         }

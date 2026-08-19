@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use gents::agent::p2p_reconcile::{
-    merge_layered_desired, DiffOp, FilterPredicate, PairingDesired, PairingFilters,
-    MAX_CONCURRENT_PEER_PREPARATIONS,
+    equality_filter, merge_layered_desired, single_string_eq, DiffOp, FilterPredicate,
+    PairingDesired, PairingFilters, MAX_CONCURRENT_PEER_PREPARATIONS,
 };
 
 use crate::lean_vocab_test::{
@@ -29,7 +29,7 @@ fn set(values: &[&str]) -> BTreeSet<String> {
 
 fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     let mut filters = PairingFilters::new();
-    filters.insert(collection.to_string(), FilterPredicate::eq(field, value));
+    filters.insert(collection.to_string(), equality_filter(field, value));
     filters
 }
 
@@ -149,14 +149,14 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
         merged
             .replicator_filter
             .get("AgentRequest")
-            .and_then(FilterPredicate::single_string_eq),
+            .and_then(single_string_eq),
         Some(("requester_did", "did:key:a"))
     );
     assert_eq!(
         merged
             .replicator_filter
             .get("AgentResponse")
-            .and_then(FilterPredicate::single_string_eq),
+            .and_then(single_string_eq),
         Some(("requester_did", "did:key:a"))
     );
     assert!(
@@ -169,7 +169,7 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
 /// derived predicates on the same collection are conjunctive, not last-writer-wins.
 #[test]
 fn layered_desired_merge_ands_overlapping_collection_filters() {
-    let base_filter = FilterPredicate::eq("requester_did", "did:key:phone");
+    let base_filter = equality_filter("requester_did", "did:key:phone");
     let data_filter = FilterPredicate::predicate(
         serde_json::json!({ "status": { "_in": ["pending", "processing"] } })
             .as_object()
@@ -193,6 +193,27 @@ fn layered_desired_merge_ands_overlapping_collection_filters() {
     assert_eq!(
         merged.replicator_filter.get("AgentRequest"),
         Some(&FilterPredicate::All(vec![base_filter, data_filter]))
+    );
+}
+
+#[test]
+fn layered_desired_merge_keeps_control_readiness_claimant() {
+    let layer = |claimant| PairingDesired {
+        replicator_filter: one_filter("BearerPairingReady", "claimant_did", claimant),
+        ..Default::default()
+    };
+    let merged = merge_layered_desired(
+        Some(layer("did:key:claimant")),
+        Some(layer("did:key:stale")),
+    )
+    .expect("merged desired state");
+
+    assert_eq!(
+        merged
+            .replicator_filter
+            .get("BearerPairingReady")
+            .and_then(single_string_eq),
+        Some(("claimant_did", "did:key:claimant"))
     );
 }
 

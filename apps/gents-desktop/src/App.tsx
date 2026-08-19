@@ -95,6 +95,12 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
 
   useAppShortcuts({
     setView: (view) => {
+      if (view === "config") {
+        if (workspaceView !== "config") {
+          openConfig();
+        }
+        return;
+      }
       if (view === "chat" || view === "code") {
         setMobileChatPane("conversation");
       }

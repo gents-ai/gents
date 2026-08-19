@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use gents::agent::p2p_reconcile::templates::{FilterPredicate, PairingFilters};
+use gents::agent::p2p_reconcile::templates::{
+    combine_filters, equality_filter, filter_conditions, PairingFilters,
+};
 use serde_json::{json, Value};
 
 use crate::cli::args::{P2pAccessArgs, P2pReplicatorAddArgs, P2pReplicatorRemoveArgs};
@@ -45,15 +47,13 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     // them in the request body. The node installs a filtered replicator (#1033)
     // that pushes only matching documents; an empty map requests an unfiltered
     // replicator (the field is omitted on the wire).
-    let wire_filters: std::collections::BTreeMap<String, crate::shared::P2pReplicatorFilter> =
+    let wire_filters: std::collections::BTreeMap<String, defra_p2p_adapter::ReplicationFilter> =
         filters
             .iter()
             .map(|(col, pred)| {
                 (
                     col.clone(),
-                    crate::shared::P2pReplicatorFilter {
-                        conditions: pred.conditions(),
-                    },
+                    defra_p2p_adapter::ReplicationFilter::predicate(filter_conditions(pred)),
                 )
             })
             .collect();
@@ -65,12 +65,13 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     http_post_json(&client, &format!("{api_base}/p2p/replicators"), &request).await?;
     let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
-    let filters_json: serde_json::Map<String, Value> = filters
+    let filters_json: serde_json::Map<String, Value> = request
+        .filters
         .iter()
-        .map(|(col, pred)| {
+        .map(|(col, filter)| {
             (
                 col.clone(),
-                serde_json::to_value(pred).unwrap_or(Value::Null),
+                serde_json::to_value(filter).unwrap_or(Value::Null),
             )
         })
         .collect();
@@ -118,10 +119,10 @@ pub(super) fn parse_replicator_filters(filters: &[String]) -> Result<PairingFilt
         if value.is_empty() {
             anyhow::bail!("invalid --filter {raw:?}: filter value must not be empty");
         }
-        let predicate = FilterPredicate::eq(field, value);
+        let predicate = equality_filter(field, value);
         match map.remove(collection) {
             Some(existing) => {
-                map.insert(collection.to_string(), existing.and(predicate));
+                map.insert(collection.to_string(), combine_filters(existing, predicate));
             }
             None => {
                 map.insert(collection.to_string(), predicate);
@@ -155,6 +156,7 @@ pub(super) async fn p2p_replicators_remove(args: P2pReplicatorRemoveArgs) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::agent::p2p_reconcile::single_string_eq;
     use std::collections::BTreeMap;
 
     #[test]
@@ -185,9 +187,9 @@ mod tests {
 
         assert_eq!(filters.len(), 2);
         let req = filters.get("AgentRequest").unwrap();
-        assert_eq!(req.single_string_eq(), Some(("agent_did", "did:key:alice")));
+        assert_eq!(single_string_eq(req), Some(("agent_did", "did:key:alice")));
         let resp = filters.get("AgentResponse").unwrap();
-        assert_eq!(resp.single_string_eq(), Some(("agent_did", "did:key:bob")));
+        assert_eq!(single_string_eq(resp), Some(("agent_did", "did:key:bob")));
     }
 
     #[test]
@@ -205,7 +207,7 @@ mod tests {
         .expect("valid filters");
 
         assert_eq!(
-            Value::Object(filters["AgentRequest"].conditions()),
+            Value::Object(filter_conditions(&filters["AgentRequest"])),
             serde_json::json!({
                 "_and": [
                     { "requester_did": { "_eq": "did:key:alice" } },
@@ -276,9 +278,6 @@ mod tests {
             parse_replicator_filters(&["AgentRequest:agent_did=did:key:z=abc".to_string()])
                 .expect("filter value with = should parse");
         let pred = filters.get("AgentRequest").unwrap();
-        assert_eq!(
-            pred.single_string_eq(),
-            Some(("agent_did", "did:key:z=abc"))
-        );
+        assert_eq!(single_string_eq(pred), Some(("agent_did", "did:key:z=abc")));
     }
 }

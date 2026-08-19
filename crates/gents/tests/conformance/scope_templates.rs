@@ -1,10 +1,10 @@
 use gents::agent::p2p_reconcile::templates::{
-    builtin_templates, resolve_template, scope_filter, Delivery, FilterPredicate, Scope,
-    AGENT_DIRECTORY_COLLECTION,
+    builtin_templates, equality_filter, resolve_template, scope_filter, single_string_eq, Delivery,
+    FilterPredicate, Scope, AGENT_DIRECTORY_COLLECTION,
 };
 
 fn assert_eq_filter(predicate: &FilterPredicate, field: &str, value: &str) {
-    assert_eq!(predicate.single_string_eq(), Some((field, value)));
+    assert_eq!(single_string_eq(predicate), Some((field, value)));
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
     }
     assert_eq!(
         filters.get(AGENT_DIRECTORY_COLLECTION),
-        Some(&FilterPredicate::eq("source_did", "did:key:issuer"))
+        Some(&equality_filter("source_did", "did:key:issuer"))
     );
 }
 
@@ -187,7 +187,7 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
     assert!(!coord_filter.contains_key("AgentRequest"));
     assert_eq!(
         coord_filter.get("AgentToolCall"),
-        Some(&FilterPredicate::eq("spawn_target_did", "did:key:host"))
+        Some(&equality_filter("spawn_target_did", "did:key:host"))
     );
 
     let host = resolve_template("subagent-host").expect("host template");
@@ -202,12 +202,12 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
     assert_eq!(host_filter.len(), RETURN_PROJECTION.len());
     assert_eq!(
         host_filter.get("AgentRequest"),
-        Some(&FilterPredicate::eq("requester_did", "did:key:coord"))
+        Some(&equality_filter("requester_did", "did:key:coord"))
     );
     for collection in RETURN_PROJECTION {
         assert_eq!(
             host_filter.get(*collection),
-            Some(&FilterPredicate::eq("requester_did", "did:key:coord")),
+            Some(&equality_filter("requester_did", "did:key:coord")),
             "unexpected host filter for {collection}"
         );
     }
@@ -222,9 +222,7 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
     }
 
     for predicate in coord_filter.values().chain(host_filter.values()) {
-        let (_, value) = predicate
-            .single_string_eq()
-            .expect("single equality filter");
+        let (_, value) = single_string_eq(predicate).expect("single equality filter");
         assert!(value == "did:key:coord" || value == "did:key:host");
     }
 }
@@ -273,7 +271,7 @@ fn sixteen_peer_request_wave_is_reduced_to_one_target() {
             scope_filter(&host.scope, host.collections, &peer_did, "did:key:host")
                 .get("AgentRequest")
                 .is_some_and(|predicate| {
-                    predicate.single_string_eq() == Some(("requester_did", requester_did))
+                    single_string_eq(predicate) == Some(("requester_did", requester_did))
                 })
         })
         .count();

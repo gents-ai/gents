@@ -12,6 +12,11 @@ structure Layer where
 def clampDataPlane (l : Layer) : Layer :=
   if l.isAppCollections then l else { l with subscriptions := (∅ : Finset String) }
 
+def mergeFilters (base dataPlane : Layer) : ReplicatorFilter :=
+  base.filters ∪ dataPlane.filters.filter (fun f =>
+    f.collection ≠ "BearerPairingReady" ∨
+      ∀ baseFilter ∈ base.filters, baseFilter.collection ≠ "BearerPairingReady")
+
 def mergeLayered (base : Option Layer) (dataPlane : Option Layer) : Option Layer :=
   match base, dataPlane.map clampDataPlane with
   | none, none => none
@@ -20,7 +25,7 @@ def mergeLayered (base : Option Layer) (dataPlane : Option Layer) : Option Layer
   | some b, some d =>
       some { subscriptions := b.subscriptions ∪ d.subscriptions
            , replicatorCollections := b.replicatorCollections ∪ d.replicatorCollections
-           , filters := b.filters ∪ d.filters
+           , filters := mergeFilters b d
            , isAppCollections := b.isAppCollections || d.isAppCollections }
 
 theorem appCollections_subscription_survives
@@ -86,22 +91,59 @@ theorem base_filters_preserved
         simp [mergeLayered, clampDataPlane, h] at hm <;>
         subst hm <;> exact Finset.subset_union_left
 
-/-- Every data-plane predicate also survives a two-layer merge. Together with
-    `base_filters_preserved`, overlapping collection predicates are ANDed. -/
+/-- Data-plane predicates survive unless a control-plane readiness predicate
+    already names the claimant. Other overlaps remain conjunctive. -/
 theorem data_plane_filters_preserved
-    (b d m : Layer) (hm : mergeLayered (some b) (some d) = some m) :
+    (b d m : Layer) (hm : mergeLayered (some b) (some d) = some m)
+    (hready : ∀ f ∈ d.filters, f.collection = "BearerPairingReady" →
+      ∀ baseFilter ∈ b.filters, baseFilter.collection ≠ "BearerPairingReady") :
     d.filters ⊆ m.filters := by
   cases h : d.isAppCollections <;>
     simp [mergeLayered, clampDataPlane, h] at hm <;>
-    subst hm <;> exact Finset.subset_union_right
+    subst hm <;>
+    intro f hf <;>
+    simp only [mergeFilters, Finset.mem_union, Finset.mem_filter] <;>
+    exact Or.inr ⟨hf, by
+      by_cases hc : f.collection = "BearerPairingReady"
+      · exact Or.inr (hready f hf hc)
+      · exact Or.inl hc⟩
 
 theorem overlapping_collection_filters_compose
     (b d m : Layer) (baseFilter dataFilter : CollectionFilterKey)
     (hm : mergeLayered (some b) (some d) = some m)
     (hbase : baseFilter ∈ b.filters) (hdata : dataFilter ∈ d.filters)
+    (hnotReady : dataFilter.collection ≠ "BearerPairingReady")
     (_hoverlap : baseFilter.collection = dataFilter.collection) :
     baseFilter ∈ m.filters ∧ dataFilter ∈ m.filters := by
-  exact ⟨base_filters_preserved b (some d) m hm hbase,
-    data_plane_filters_preserved b d m hm hdata⟩
+  refine ⟨base_filters_preserved b (some d) m hm hbase, ?_⟩
+  cases h : d.isAppCollections <;>
+    simp [mergeLayered, clampDataPlane, h] at hm <;>
+    subst hm <;>
+    exact Finset.mem_union_right _ (Finset.mem_filter.mpr ⟨hdata, Or.inl hnotReady⟩)
+
+theorem base_readiness_filter_is_authoritative
+    (b d m : Layer) (baseFilter : CollectionFilterKey)
+    (hm : mergeLayered (some b) (some d) = some m)
+    (hbase : baseFilter ∈ b.filters)
+    (hready : baseFilter.collection = "BearerPairingReady") :
+    m.filters.filter (fun f => f.collection = "BearerPairingReady") =
+      b.filters.filter (fun f => f.collection = "BearerPairingReady") := by
+  have hmerge :
+      (mergeFilters b d).filter (fun f => f.collection = "BearerPairingReady") =
+        b.filters.filter (fun f => f.collection = "BearerPairingReady") := by
+    ext f
+    simp only [mergeFilters, Finset.mem_filter, Finset.mem_union]
+    constructor
+    · rintro ⟨hf | ⟨_hdata, hallowed⟩, hcollection⟩
+      · exact ⟨hf, hcollection⟩
+      · rcases hallowed with hnot | hall
+        · exact False.elim (hnot hcollection)
+        · exact False.elim (hall baseFilter hbase hready)
+    · rintro ⟨hf, hcollection⟩
+      exact ⟨Or.inl hf, hcollection⟩
+  cases h : d.isAppCollections <;>
+    simp [mergeLayered, clampDataPlane, h] at hm <;>
+    subst hm <;>
+    exact hmerge
 
 end PairingReconcile.Layering

@@ -224,13 +224,7 @@ pub(crate) struct P2pReplicatorRequest {
         rename = "Filters",
         skip_serializing_if = "std::collections::BTreeMap::is_empty"
     )]
-    pub(crate) filters: std::collections::BTreeMap<String, P2pReplicatorFilter>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct P2pReplicatorFilter {
-    #[serde(rename = "Conditions")]
-    pub(crate) conditions: serde_json::Map<String, Value>,
+    pub(crate) filters: std::collections::BTreeMap<String, defra_p2p_adapter::ReplicationFilter>,
 }
 
 #[derive(Debug, Serialize)]

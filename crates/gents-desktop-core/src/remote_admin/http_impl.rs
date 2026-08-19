@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use defra_p2p_adapter::ReplicationFilter;
 use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
@@ -127,13 +128,7 @@ struct AddReplicatorBody<'a> {
     #[serde(rename = "Addresses")]
     addresses: &'a [String],
     #[serde(rename = "Filters", skip_serializing_if = "BTreeMap::is_empty")]
-    filters: BTreeMap<String, HttpReplicationFilter>,
-}
-
-#[derive(Debug, Serialize)]
-struct HttpReplicationFilter {
-    #[serde(rename = "Conditions")]
-    conditions: serde_json::Map<String, serde_json::Value>,
+    filters: BTreeMap<String, ReplicationFilter>,
 }
 
 #[derive(Debug, Serialize)]
@@ -247,9 +242,9 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
                 .map(|(collection, predicate)| {
                     (
                         collection.clone(),
-                        HttpReplicationFilter {
-                            conditions: predicate.conditions(),
-                        },
+                        ReplicationFilter::predicate(
+                            gents::agent::p2p_reconcile::templates::filter_conditions(predicate),
+                        ),
                     )
                 })
                 .collect(),
@@ -506,6 +501,7 @@ async fn check_status(resp: reqwest::Response) -> RemoteP2pAdminResult<reqwest::
 mod tests {
     use super::*;
     use crate::client::{DesktopPaths, PrincipalIdentity};
+    use gents::agent::p2p_reconcile::combine_filters;
     use wiremock::matchers::{body_bytes, body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -920,8 +916,9 @@ mod tests {
             .await;
         let filters = [(
             "AgentRequest".to_string(),
-            gents::agent::p2p_reconcile::FilterPredicate::eq("requester_did", "did:key:phone").and(
-                gents::agent::p2p_reconcile::FilterPredicate::eq("status", "pending"),
+            combine_filters(
+                gents::agent::p2p_reconcile::equality_filter("requester_did", "did:key:phone"),
+                gents::agent::p2p_reconcile::equality_filter("status", "pending"),
             ),
         )]
         .into_iter()

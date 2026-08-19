@@ -12,7 +12,7 @@ use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
 
-use super::templates::PairingFilters;
+use super::templates::{filter_conditions, PairingFilters};
 use super::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
 
 const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -247,7 +247,7 @@ fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
         .map(|(collection, predicate)| {
             (
                 collection.clone(),
-                ReplicationFilter::predicate(predicate.conditions()),
+                ReplicationFilter::predicate(filter_conditions(predicate)),
             )
         })
         .collect()
@@ -286,7 +286,8 @@ mod tests {
 
     use super::*;
     use crate::agent::p2p_reconcile::templates::{Scope, SUBAGENT_HOST_TEMPLATE};
-    use crate::agent::p2p_reconcile::{resolve_template, scope_filter, FilterPredicate};
+    use crate::agent::p2p_reconcile::{combine_filters, equality_filter};
+    use crate::agent::p2p_reconcile::{resolve_template, scope_filter};
     use crate::defra_node::P2PConfig;
     use crate::ensure_runtime_schemas;
     use crate::graphql::escape_graphql_string;
@@ -306,8 +307,10 @@ mod tests {
     fn adapter_preserves_conjunctive_filters_as_conditions() {
         let filters = [(
             "AgentRequest".to_string(),
-            FilterPredicate::eq("requester_did", "did:key:phone")
-                .and(FilterPredicate::eq("status", "pending")),
+            combine_filters(
+                equality_filter("requester_did", "did:key:phone"),
+                equality_filter("status", "pending"),
+            ),
         )]
         .into_iter()
         .collect();
@@ -769,11 +772,11 @@ mod tests {
         let mut filters = PairingFilters::new();
         filters.insert(
             "AgentRequest".to_string(),
-            FilterPredicate::eq("requester_did", "did:key:coord"),
+            equality_filter("requester_did", "did:key:coord"),
         );
         filters.insert(
             "AgentToolCall".to_string(),
-            FilterPredicate::eq("spawn_target_did", "did:key:host"),
+            equality_filter("spawn_target_did", "did:key:host"),
         );
         sender_admin
             .add_replicator(&receiver_addresses, &collections, &filters)

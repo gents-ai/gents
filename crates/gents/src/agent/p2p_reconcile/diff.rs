@@ -242,7 +242,7 @@ mod tests {
         let mut f = PairingFilters::new();
         f.insert(
             "AgentRequest".to_string(),
-            super::super::templates::FilterPredicate::eq(field, value),
+            super::super::templates::equality_filter(field, value),
         );
         f
     }

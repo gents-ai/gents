@@ -4,9 +4,7 @@ use anyhow::anyhow;
 use events::Bus;
 
 use super::*;
-use crate::agent::p2p_reconcile::{
-    FilterPredicate, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
-};
+use crate::agent::p2p_reconcile::{RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
 
 fn set(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| value.to_string()).collect()
@@ -16,7 +14,7 @@ fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     let mut filters = PairingFilters::new();
     filters.insert(
         collection.to_string(),
-        crate::agent::p2p_reconcile::FilterPredicate::eq(field, value),
+        crate::agent::p2p_reconcile::equality_filter(field, value),
     );
     filters
 }
@@ -67,7 +65,7 @@ fn bearer_readiness_requires_exact_applied_conversation_replicator() {
     let mut wrong_filter = applied;
     wrong_filter.replicator_filter.insert(
         "AgentRequest".to_string(),
-        FilterPredicate::eq("requester_did", "did:key:someone-else"),
+        equality_filter("requester_did", "did:key:someone-else"),
     );
     assert_eq!(
         earned_bearer_readiness(Some(&desired), &wrong_filter, "did:key:issuer"),
@@ -150,7 +148,7 @@ fn merge_desired_unions_control_and_data_plane_state() {
         merged
             .replicator_filter
             .get("AgentRequest")
-            .and_then(FilterPredicate::single_string_eq),
+            .and_then(single_string_eq),
         Some(("agent_did", "did:key:a"))
     );
     assert!(!merged.replicator_filter.contains_key("AgentNetwork"));
@@ -260,7 +258,7 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
         desired
             .replicator_filter
             .get("AgentRequest")
-            .and_then(FilterPredicate::single_string_eq),
+            .and_then(single_string_eq),
         Some(("requester_did", "did:key:peer-b"))
     );
 }
@@ -291,7 +289,7 @@ fn data_plane_subagent_coordinator_uses_signed_peer_for_targeted_bridge() {
         desired
             .replicator_filter
             .get("AgentToolCall")
-            .and_then(FilterPredicate::single_string_eq),
+            .and_then(single_string_eq),
         Some(("spawn_target_did", "did:key:host"))
     );
 }
@@ -328,7 +326,7 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
     assert_eq!(desired.replicator_filter.len(), 4);
     for predicate in desired.replicator_filter.values() {
         assert_eq!(
-            predicate.single_string_eq(),
+            single_string_eq(predicate),
             Some(("requester_did", "did:key:coord"))
         );
     }
@@ -414,16 +412,19 @@ impl PairingStateStore for MockStore {
             .map_err(|message| anyhow!(message))
     }
 
-    async fn load_applied(&self, _peer_id: &str) -> Result<PairingApplied> {
-        Ok(self.applied.lock().unwrap().clone())
+    async fn load_applied(&self, _peer_id: &str) -> Result<LoadedPairingApplied> {
+        Ok(LoadedPairingApplied {
+            state: self.applied.lock().unwrap().clone(),
+            ..Default::default()
+        })
     }
 
-    async fn persist_applied(&self, _peer_id: &str, applied: &PairingApplied) -> Result<()> {
-        *self.applied.lock().unwrap() = applied.clone();
-        if applied.is_empty() {
+    async fn persist_applied(&self, _peer_id: &str, applied: &LoadedPairingApplied) -> Result<()> {
+        *self.applied.lock().unwrap() = applied.state.clone();
+        if applied.state.is_empty() {
             *self.deleted.lock().unwrap() += 1;
         } else {
-            self.saved.lock().unwrap().push(applied.clone());
+            self.saved.lock().unwrap().push(applied.state.clone());
             if let Some(completed) = &self.persist_applied_completed {
                 completed.notify_one();
             }
@@ -466,22 +467,25 @@ impl PairingStateStore for MultiPeerStore {
         Ok(self.desired.get(peer_id).cloned())
     }
 
-    async fn load_applied(&self, peer_id: &str) -> Result<PairingApplied> {
-        Ok(self
-            .applied
-            .lock()
-            .unwrap()
-            .get(peer_id)
-            .cloned()
-            .unwrap_or_default())
+    async fn load_applied(&self, peer_id: &str) -> Result<LoadedPairingApplied> {
+        Ok(LoadedPairingApplied {
+            state: self
+                .applied
+                .lock()
+                .unwrap()
+                .get(peer_id)
+                .cloned()
+                .unwrap_or_default(),
+            ..Default::default()
+        })
     }
 
-    async fn persist_applied(&self, peer_id: &str, applied: &PairingApplied) -> Result<()> {
+    async fn persist_applied(&self, peer_id: &str, applied: &LoadedPairingApplied) -> Result<()> {
         let mut states = self.applied.lock().unwrap();
-        if applied.is_empty() {
+        if applied.state.is_empty() {
             states.remove(peer_id);
         } else {
-            states.insert(peer_id.to_string(), applied.clone());
+            states.insert(peer_id.to_string(), applied.state.clone());
         }
         Ok(())
     }
@@ -1288,12 +1292,8 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
     assert_eq!(recorded[0].1, conversation_filter);
 }
 
-/// A stable peer id is not enough to prove that the live transport route
-/// survived an app relaunch. The phone republishes a signed endpoint with
-/// the same peer id and a fresh ticket; if applied still records the old
-/// ticket, the tick must dial the fresh address even when `active_peers`
-/// contains that peer. Otherwise the subsequent replicator install can
-/// reuse the stale route and the response never reaches the relaunched app.
+/// Route rotation is peer-scoped even with other replicators present or an
+/// address-less restored record.
 #[tokio::test]
 async fn changed_endpoint_redials_without_replacing_same_peer_replicator() {
     let old_address = "stable-peer@127.0.0.1:4100";
@@ -1314,9 +1314,17 @@ async fn changed_endpoint_redials_without_replacing_same_peer_replicator() {
     admin.replicators.lock().unwrap().insert(
         old_address.into(),
         RemoteReplicator {
-            id: Some("id-addr1".into()),
+            id: Some("stable-peer".into()),
             collections: vec![mock_collection_id("AgentRequest")],
-            address: Some(old_address.into()),
+            address: None,
+        },
+    );
+    admin.replicators.lock().unwrap().insert(
+        "other-peer@127.0.0.1:4300".into(),
+        RemoteReplicator {
+            id: Some("other-peer".into()),
+            collections: vec![mock_collection_id("AgentRequest")],
+            address: Some("other-peer@127.0.0.1:4300".into()),
         },
     );
 
@@ -1377,14 +1385,13 @@ async fn applied_state_persist_targets_one_canonical_document_when_duplicates_ex
             .unwrap(),
     );
     let store = GraphqlPairingStateStore::new(node.clone(), identity);
+    let mut applied = store.load_applied("peer-a").await.expect("load duplicates");
+    applied.state = PairingApplied {
+        replicator_addresses: set(&["fresh"]),
+        ..Default::default()
+    };
     store
-        .persist_applied(
-            "peer-a",
-            &PairingApplied {
-                replicator_addresses: set(&["fresh"]),
-                ..Default::default()
-            },
-        )
+        .persist_applied("peer-a", &applied)
         .await
         .expect("duplicate-tolerant save");
 
@@ -1400,9 +1407,8 @@ async fn applied_state_persist_targets_one_canonical_document_when_duplicates_ex
         .await;
     let mut rows = rows::<AppliedStateRow>(&response, "PeerPairingApplied").unwrap();
     rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].replicator_addresses, Some(vec!["fresh".into()]));
-    assert_ne!(rows[1].replicator_addresses, Some(vec!["fresh".into()]));
 }
 
 #[tokio::test]
@@ -1558,18 +1564,7 @@ async fn other_active_peer_does_not_suppress_dial() {
     assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr1"]]);
 }
 
-/// Review Finding #1: the remote subscription set is tracked in *id*-space by
-/// the adapter (`list_p2p_collections` returns ids), while desired state and
-/// the persisted `PeerPairingApplied` row are in *name*-space. `read_actual`
-/// reverse-resolves the ids to names so the diff compares like with like. A
-/// first tick installs the collection; a SECOND tick must observe convergence
-/// (zero ops). With the pre-fix code the desired name never matched the actual
-/// id, so every sweep re-emitted `InstallCollection` forever.
-///
-/// The teeth: the mock's `list_p2p_collections` returns a distinct id
-/// (`col_<name>_id`), so convergence only holds because reverse-resolution
-/// maps that id back to the name. If `resolve_collection_name` echoed the id,
-/// actual(id) would never equal desired(name) and this test would fail.
+/// Collection IDs are reverse-resolved before diffing against desired names.
 #[tokio::test]
 async fn second_tick_converges_across_name_and_id_spaces() {
     let store = MockStore::with_desired(Some(PairingDesired {
@@ -1737,7 +1732,7 @@ fn push_template_resolves_to_filter_without_subscription() {
         .get("AgentRequest")
         .expect("AgentRequest filter");
     assert_eq!(
-        pred.single_string_eq(),
+        single_string_eq(pred),
         Some(("requester_did", "did:key:bob"))
     );
 }
@@ -1800,7 +1795,7 @@ fn subagent_coordinator_template_filters_only_targeted_bridge() {
         desired
             .replicator_filter
             .get("AgentToolCall")
-            .and_then(FilterPredicate::single_string_eq),
+            .and_then(single_string_eq),
         Some(("spawn_target_did", "did:key:host"))
     );
 }
@@ -1827,7 +1822,7 @@ fn subagent_host_template_filters_return_projection_to_requester() {
     assert_eq!(desired.replicator_filter.len(), 4);
     for predicate in desired.replicator_filter.values() {
         assert_eq!(
-            predicate.single_string_eq(),
+            single_string_eq(predicate),
             Some(("requester_did", "did:key:coord"))
         );
     }
@@ -1974,7 +1969,7 @@ async fn push_template_installs_filtered_replicator_without_subscription() {
         .get("AgentRequest")
         .expect("AgentRequest filter on installed replicator");
     assert_eq!(
-        pred.single_string_eq(),
+        single_string_eq(pred),
         Some(("requester_did", "did:key:bob"))
     );
 }
@@ -2039,7 +2034,7 @@ async fn changing_scoped_did_reinstalls_replicator() {
     for col in resolve_template("conversation").unwrap().collections.iter() {
         alice_filter.insert(
             (*col).to_string(),
-            crate::agent::p2p_reconcile::templates::FilterPredicate::eq(
+            crate::agent::p2p_reconcile::templates::equality_filter(
                 "requester_did",
                 "did:key:alice",
             ),
@@ -2076,9 +2071,7 @@ async fn changing_scoped_did_reinstalls_replicator() {
     let calls = admin.recorded_filters.lock().unwrap();
     let last = calls.last().expect("an install happened");
     assert_eq!(
-        last.1
-            .get("AgentRequest")
-            .and_then(FilterPredicate::single_string_eq),
+        last.1.get("AgentRequest").and_then(single_string_eq),
         Some(("requester_did", "did:key:bob"))
     );
 }
@@ -2092,8 +2085,6 @@ async fn changing_scoped_did_reinstalls_replicator() {
 /// (back-compat) while a non-empty one is faithfully recorded.
 #[tokio::test]
 async fn add_replicator_records_filters_at_seam() {
-    use crate::agent::p2p_reconcile::templates::FilterPredicate;
-
     let admin = MockAdmin::default();
     let addresses = vec!["addr-a".to_string()];
     let collections: Vec<String> = vec![];
@@ -2117,7 +2108,7 @@ async fn add_replicator_records_filters_at_seam() {
     let mut filters = PairingFilters::default();
     filters.insert(
         "AgentRequest".to_string(),
-        FilterPredicate::eq("agent_did", "did:key:alice"),
+        equality_filter("agent_did", "did:key:alice"),
     );
     admin
         .add_replicator(&addresses, &collections, &filters)
@@ -2129,10 +2120,7 @@ async fn add_replicator_records_filters_at_seam() {
     let recorded = &calls[1].1;
     assert_eq!(recorded.len(), 1);
     let pred = recorded.get("AgentRequest").expect("AgentRequest filter");
-    assert_eq!(
-        pred.single_string_eq(),
-        Some(("agent_did", "did:key:alice"))
-    );
+    assert_eq!(single_string_eq(pred), Some(("agent_did", "did:key:alice")));
 }
 
 #[test]
@@ -2196,7 +2184,7 @@ fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
             desired
                 .replicator_filter
                 .get(col)
-                .and_then(FilterPredicate::single_string_eq),
+                .and_then(single_string_eq),
             Some(("requester_did", "did:key:peer-b")),
             "conversation collection {col} must be requester-scoped exactly like `conversation`"
         );
@@ -2205,7 +2193,7 @@ fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
         desired
             .replicator_filter
             .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
-            .and_then(FilterPredicate::single_string_eq),
+            .and_then(single_string_eq),
         Some(("source_did", "did:key:self"))
     );
 }
@@ -2244,7 +2232,7 @@ fn control_plane_desired_machine_scopes_conversation_and_owned_directory() {
             .get(col)
             .unwrap_or_else(|| panic!("missing filter for conversation collection {col}"));
         assert_eq!(
-            pred.single_string_eq(),
+            single_string_eq(pred),
             Some(("requester_did", "did:key:phone"))
         );
     }
@@ -2252,7 +2240,7 @@ fn control_plane_desired_machine_scopes_conversation_and_owned_directory() {
         desired
             .replicator_filter
             .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
-            .and_then(FilterPredicate::single_string_eq),
+            .and_then(single_string_eq),
         Some(("source_did", "did:key:server"))
     );
 }

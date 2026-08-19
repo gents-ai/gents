@@ -36,8 +36,9 @@ pub use embedded_impl::EmbeddedRemoteP2pAdmin;
 pub use endpoint::{peer_endpoint_upsert_mutation, run_endpoint_heartbeat};
 pub use engine::{
     merge_layered_desired, reconcile_peer_tick, run_pairing_reconciler,
-    update_applied_after_success, GraphqlPairingStateStore, PairingStateStore, PairingTickOutcome,
-    MAX_CONCURRENT_PEER_PREPARATIONS, PAIRING_SWEEP_INTERVAL,
+    update_applied_after_success, GraphqlPairingStateStore, LoadedPairingApplied,
+    PairingStateStore, PairingTickOutcome, MAX_CONCURRENT_PEER_PREPARATIONS,
+    PAIRING_SWEEP_INTERVAL,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use network::{
@@ -58,7 +59,8 @@ pub use registry::{
     UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,
 };
 pub use templates::{
-    builtin_templates, conversation_like, resolve_template, scope_filter, Delivery, DidSource,
+    builtin_templates, combine_filters, conversation_like, decode_pairing_filters, equality_filter,
+    filter_conditions, resolve_template, scope_filter, single_string_eq, Delivery, DidSource,
     FilterPredicate, PairingFilters, Scope, ScopeTemplate, AGENT_DIRECTORY_COLLECTION,
 };
 pub use trait_def::{

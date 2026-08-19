@@ -719,7 +719,9 @@ fn bearer_replicator_filters(
     .map(|(collection, predicate)| {
         (
             collection,
-            ReplicationFilter::predicate(predicate.conditions()),
+            ReplicationFilter::predicate(
+                gents::agent::p2p_reconcile::templates::filter_conditions(&predicate),
+            ),
         )
     })
     .collect::<ReplicationFilters>();
@@ -1210,6 +1212,14 @@ mod tests {
 
     #[test]
     fn combined_replicator_contains_scoped_conversation_and_claim_control_plane() {
+        let predicate = |field: &str, value: &str| {
+            ReplicationFilter::predicate(
+                serde_json::json!({ (field): { "_eq": value } })
+                    .as_object()
+                    .expect("predicate")
+                    .clone(),
+            )
+        };
         let collections = bearer_replicator_collections("conversation");
         let filters = bearer_replicator_filters("conversation", "did:key:phone", "did:key:issuer");
         assert!(collections.contains(&"AgentRequest".to_string()));
@@ -1238,10 +1248,7 @@ mod tests {
             };
             assert_eq!(
                 filters.get(collection),
-                Some(&ReplicationFilter::eq(
-                    field,
-                    serde_json::json!("did:key:phone")
-                ))
+                Some(&predicate(field, "did:key:phone"))
             );
         }
         for collection in [
@@ -1270,39 +1277,35 @@ mod tests {
         );
         assert_eq!(
             filters.get("AgentRequest"),
-            Some(&ReplicationFilter::eq(
-                "requester_did",
-                serde_json::json!("did:key:phone")
-            ))
+            Some(&predicate("requester_did", "did:key:phone"))
         );
     }
 
     #[test]
     fn machine_replicator_adds_only_issuer_owned_directory_rows() {
+        let predicate = |field: &str, value: &str| {
+            ReplicationFilter::predicate(
+                serde_json::json!({ (field): { "_eq": value } })
+                    .as_object()
+                    .expect("predicate")
+                    .clone(),
+            )
+        };
         let collections = bearer_replicator_collections("machine");
         let filters = bearer_replicator_filters("machine", "did:key:phone", "did:key:issuer");
 
         assert!(collections.contains(&AGENT_DIRECTORY_COLLECTION.to_string()));
         assert_eq!(
             filters.get(AGENT_DIRECTORY_COLLECTION),
-            Some(&ReplicationFilter::eq(
-                "source_did",
-                serde_json::json!("did:key:issuer")
-            ))
+            Some(&predicate("source_did", "did:key:issuer"))
         );
         assert_eq!(
             filters.get("AgentRequest"),
-            Some(&ReplicationFilter::eq(
-                "requester_did",
-                serde_json::json!("did:key:phone")
-            ))
+            Some(&predicate("requester_did", "did:key:phone"))
         );
         assert_eq!(
             filters.get("BearerPairingReady"),
-            Some(&ReplicationFilter::eq(
-                "claimant_did",
-                serde_json::json!("did:key:phone")
-            ))
+            Some(&predicate("claimant_did", "did:key:phone"))
         );
     }
 
