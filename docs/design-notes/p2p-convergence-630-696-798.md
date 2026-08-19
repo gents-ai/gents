@@ -1,7 +1,7 @@
 # P2P convergence diagnosis: #630, #696, and #798
 
-Qualified with Gents based on `7a992d59` and DefraDB PR
-[#1502](https://github.com/sourcenetwork/defradb.rs/pull/1502) at `c340eaf2`.
+Qualified with this Gents candidate and merged DefraDB PR
+[#1502](https://github.com/sourcenetwork/defradb.rs/pull/1502) at `f928b300`.
 
 ## Conclusion
 
@@ -106,8 +106,10 @@ one second while unchanged leases renew every 100 seconds.
 | stage 3 after lease suppression | failed upstream recovery | 387.45 s | 0 | 60 | 0 | 0 | 76 endpoint / 76 registry |
 | `c340eaf2` + final Gents, run 1 | passed | 382.13 s | 0 | 0 | 0 | 0 | at most 16 of each per node |
 | `c340eaf2` + final Gents, run 2 | passed | 388.73 s | 0 | 0 | 0 | 0 | at most 16 of each per node |
+| merged `f928b300` + final Gents, run 1 | passed | 383.12 s | 0 | 0 | 0 | 0 | at most 16 of each per node |
+| merged `f928b300` + final Gents, run 2 | passed | 374.34 s | 0 | 0 | 0 | 0 | at most 16 of each per node |
 
-Both passing runs started from new temporary roots and crossed coordinator
+The two merged-revision runs started from new temporary roots and crossed coordinator
 restart/remesh. At every quiet fence they had empty in-memory and persisted
 pending-DAG sets, no durable retry markers, no pending resync, no
 non-authoritative broadcast tasks, no queued or active push jobs, and stable
