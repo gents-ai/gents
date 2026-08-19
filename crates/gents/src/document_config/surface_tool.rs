@@ -8,9 +8,10 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use super::serde_helpers;
 use super::tool_selection::{
-    is_reserved_builtin_tool_name, validate_write_tool_declarations, WriteToolDecl, WriteToolField,
-    WriteToolFieldFill,
+    reject_tool_name_surface_collisions, validate_write_tool_declarations, WriteToolDecl,
+    WriteToolField, WriteToolFieldFill,
 };
 
 /// One bound read tool: one collection, a fixed projection, optional filter
@@ -100,27 +101,15 @@ impl SurfaceToolDecl {
     }
 
     pub fn is_well_formed(&self) -> bool {
-        match self {
-            Self::Create(decl) => decl.is_well_formed(),
-            Self::Query(decl) => decl.is_well_formed(),
-        }
+        self.validate().is_ok()
     }
 
-    /// Structured validation for the surface boundary: returns a descriptive
-    /// error when the entry is not well-formed so callers can report the
-    /// specific problem, matching the centralized identifier-validation
-    /// boundary.
     pub fn validate(&self) -> Result<()> {
-        if self.is_well_formed() {
-            return Ok(());
-        }
         match self {
-            Self::Create(_) => {
-                anyhow::bail!("create entry requires a non-empty tool_name and collection")
+            Self::Create(decl) => decl.validate(),
+            Self::Query(decl) => {
+                validate_query_tool_declarations(std::slice::from_ref(decl), &[], &[])
             }
-            Self::Query(_) => anyhow::bail!(
-                "query entry requires a non-empty tool_name, collection, and at least one projection field"
-            ),
         }
     }
 }
@@ -183,35 +172,15 @@ where
     use serde_json::Value;
 
     let value = Option::<Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
+    if matches!(value, None | Some(Value::Null)) {
         return Ok(None);
-    };
-    match value {
-        Value::Null => Ok(None),
-        Value::String(s) if s.trim().is_empty() => Ok(Some(Vec::new())),
-        Value::String(s) => {
-            let decl: SurfaceToolDecl = serde_json::from_str(&s).map_err(D::Error::custom)?;
-            Ok(Some(vec![decl]))
-        }
-        Value::Array(items) => {
-            let mut decls = Vec::with_capacity(items.len());
-            for item in items {
-                let decl = match item {
-                    Value::String(s) => {
-                        serde_json::from_str::<SurfaceToolDecl>(&s).map_err(D::Error::custom)?
-                    }
-                    other => {
-                        serde_json::from_value::<SurfaceToolDecl>(other).map_err(D::Error::custom)?
-                    }
-                };
-                decls.push(decl);
-            }
-            Ok(Some(decls))
-        }
-        other => Err(D::Error::custom(format!(
-            "DatastoreToolSurface.entries must be a list of create/query tool objects or JSON strings, got {other}"
-        ))),
     }
+    serde_helpers::deserialize_dual_shape(
+        value,
+        "DatastoreToolSurface.entries must be a list of create/query tool objects or JSON strings",
+    )
+    .map(Some)
+    .map_err(D::Error::custom)
 }
 
 pub(crate) fn validate_query_tool_declarations(
@@ -237,24 +206,14 @@ pub(crate) fn validate_query_tool_declarations(
                 decl.fields.len()
             ));
         }
-        if is_reserved_builtin_tool_name(&decl.tool_name) {
-            return Err(anyhow::anyhow!(
-                "query_tools[{i}] tool_name {:?} collides with a built-in tool; declared query tools must use a unique name",
-                decl.tool_name.trim()
-            ));
-        }
-        if cli_tool_names.contains(decl.tool_name.trim()) {
-            return Err(anyhow::anyhow!(
-                "query_tools[{i}] tool_name {:?} collides with a cli_tool_names entry in the same tool selection; each tool must have a unique name",
-                decl.tool_name.trim()
-            ));
-        }
-        if additional_tool_names.contains(decl.tool_name.trim()) {
-            return Err(anyhow::anyhow!(
-                "query_tools[{i}] tool_name {:?} collides with another runtime-provided tool; each tool must have a unique name",
-                decl.tool_name.trim()
-            ));
-        }
+        reject_tool_name_surface_collisions(
+            "query_tools",
+            i,
+            &decl.tool_name,
+            "query tools",
+            &cli_tool_names,
+            &additional_tool_names,
+        )?;
         crate::graphql::validate_collection_identifier(&decl.collection).map_err(|error| {
             anyhow::anyhow!(
                 "query_tools[{i}] (tool {:?}) has invalid collection {:?}: {error}",
@@ -294,6 +253,13 @@ pub(crate) fn validate_query_tool_declarations(
                     field.name
                 )
             })?;
+            if matches!(field.name.trim(), "fields" | "limit") {
+                return Err(anyhow::anyhow!(
+                    "query_tools[{i}] (tool {:?}) filter_fields[{j}] {:?} collides with a reserved query argument",
+                    decl.tool_name,
+                    field.name.trim()
+                ));
+            }
             if !seen_filter_names.insert(field.name.trim()) {
                 return Err(anyhow::anyhow!(
                     "query_tools[{i}] (tool {:?}) has a duplicate filter field {:?}; each filter_fields name must be unique",
@@ -395,5 +361,22 @@ mod tests {
         assert!(!decl.is_well_formed());
         let err = validate_query_tool_declarations(&[decl], &[], &[]).unwrap_err();
         assert!(err.to_string().contains("at least one projection"));
+    }
+
+    #[test]
+    fn query_decl_rejects_reserved_filter_names() {
+        let decl = QueryToolDecl {
+            tool_name: "query_finding".into(),
+            collection: "Finding".into(),
+            description: String::new(),
+            fields: vec!["title".into()],
+            filter_fields: vec![WriteToolField {
+                name: "limit".into(),
+                required: true,
+                fill: None,
+            }],
+        };
+        let err = validate_query_tool_declarations(&[decl], &[], &[]).unwrap_err();
+        assert!(err.to_string().contains("reserved query argument"));
     }
 }

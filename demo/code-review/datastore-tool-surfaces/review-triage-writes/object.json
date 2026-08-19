@@ -1,26 +1,17 @@
 {
   "surface_id": "review-triage-writes",
   "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
-  "display_name": "Triage report writes",
+  "display_name": "Triage reads and report writes",
   "enabled": true,
   "entries": [
     {
-      "tool_name": "write_finding",
+      "kind": "read",
+      "tool_name": "read_finding",
       "collection": "Finding",
-      "description": "Promote one confirmed verification verdict into the final review.",
-      "fields": [
-        {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "finding_id", "required": true},
-        {"name": "area_id", "required": true},
-        {"name": "severity", "required": true},
-        {"name": "confidence", "required": true},
-        {"name": "path", "required": true},
-        {"name": "line", "required": false},
-        {"name": "title", "required": true},
-        {"name": "detail", "required": true},
-        {"name": "verdict", "required": true},
-        {"name": "evidence", "required": true},
-        {"name": "verification", "required": true}
+      "description": "Load every operator-facing Finding for this run. run_id is filled by the runtime.",
+      "fields": ["finding_id", "area_id", "severity", "confidence", "title", "verdict"],
+      "filter_fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"}
       ]
     },
     {

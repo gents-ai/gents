@@ -100,11 +100,4 @@ pub(super) fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
     })
 }
 
-pub(super) fn escape_graphql_string(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
-}
+pub(super) use gents_protocol::graphql::escape_graphql_string;

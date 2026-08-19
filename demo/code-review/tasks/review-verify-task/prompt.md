@@ -2,7 +2,7 @@ Review run {{ group.correlation_value }} has {{ group.count }} completed lens sc
 
 {{ group.docs }}
 
-Call `defra_query` for `CandidateFinding` with `run_id == "{{ group.correlation_value }}"`. Apply these gates to every candidate:
+Call `read_candidate_finding` once to load every CandidateFinding for this run (`run_id` is filled from the group correlation). Apply these gates to every candidate:
 
 1. Quote the exact `path:line` artifact after reading it in this request.
 2. Read the complete changed file plus the enclosing function, impl, or module and relevant callers/usages.
@@ -25,4 +25,4 @@ Every successful tool result remains authoritative for this request. Never repea
 identical tool call or reread the same artifact range; use the prior result. If
 exploration begins to repeat, stop inspecting and persist the current verdict.
 
-Call `write_finding_verdict` exactly once per candidate. Preserve its identity and content fields; reassess `confidence` as an integer string from `0` through `100`; set `verdict` to exactly `confirmed` or `refuted`; replace `evidence` with fresh verification evidence; and explain the refute-or-promote reasoning in `verification`. A confidence below 80 must be refuted. Then call `write_verification_summary` exactly once with candidate, confirmed, and refuted counts that balance exactly. Do not supply `run_id`; both write tools runtime-fill it from the group correlation.
+Call `write_finding_verdict` exactly once per candidate. Preserve its identity and content fields; reassess `confidence` as an integer string from `0` through `100`; set `verdict` to exactly `confirmed` or `refuted`; replace `evidence` with fresh verification evidence; and explain the refute-or-promote reasoning in `verification`. A confidence below 80 must be refuted. Immediately after a `confirmed` verdict, call `write_finding` with the same identity and content fields and `verdict` exactly `confirmed`. Do not call `write_finding` for a refuted candidate. Then call `write_verification_summary` exactly once with candidate, confirmed, and refuted counts that balance exactly. Do not supply `run_id`; the write tools runtime-fill it from the group correlation.

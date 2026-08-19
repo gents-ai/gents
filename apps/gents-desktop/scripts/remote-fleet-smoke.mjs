@@ -744,8 +744,14 @@ function arrayValue(value) {
   return Array.isArray(value) ? value : [];
 }
 
+/** Must match `gents_protocol::graphql::escape_graphql_string`. */
 function escapeGraphql(value) {
-  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return String(value)
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\t", "\\t");
 }
 
 function shorten(value, maxLength) {

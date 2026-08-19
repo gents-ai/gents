@@ -8,9 +8,9 @@ ReviewJob -> GLM pre-scan + lens planning
           -> N x ReviewArea -> N x GLM specialized scanners
                             -> CandidateFinding* + N x ScanResult
                             -> GLM adversarial verifier
-                            -> N x FindingVerdict + VerificationSummary
-                            -> GLM final triage
-                            -> confirmed Finding* + TriageReport
+                            -> N x FindingVerdict + confirmed Finding* + VerificationSummary
+                            -> GLM merge report
+                            -> TriageReport
 ```
 
 All graph rows and requests carry the same `run_id`. Recon runs Cargo check and
@@ -26,7 +26,10 @@ ordering, and writes exactly one confirmed/refuted verdict for every candidate.
 Its expected cardinality comes from recon's immutable output, so a slow scanner
 can delay verification but can never burn the durable group marker with a
 partial ledger.
-Final triage consumes the closed ledger and publishes only confirmed findings.
+The verifier promotes confirmed rows to `Finding` as it decides. Final triage
+does not re-query or copy the ledger: it only writes the operator-facing
+`TriageReport` (merge verdict and ranking) from the summary already in its
+task prompt.
 
 The scan write tools hide `run_id` and `expected_total` from model input.
 `fill: correlation` stamps the run, while
@@ -39,16 +42,18 @@ inspection, and background process tools rooted initially at
 the broad shell exists for Cargo, targeted tests, repository history, PR
 metadata/diffs/checks, and dependency API evidence. Recon owns the full-workspace
 check and Clippy baseline; each scanner gets its evidence packet and may inspect
-full changed files, semantic callsites, and targeted tests. Triage has no shell
-or network access. DefraDB reads and writes remain stage-specific.
+full changed files, semantic callsites, and targeted tests. Triage has no shell,
+network, file, or query tools — only `write_triage_report`. DefraDB writes
+remain stage-specific.
 
 The verify-to-triage edge intentionally is not a second group barrier. A single
 verifier owns the complete candidate set, writes every `FindingVerdict`, and
-then writes `VerificationSummary` as its final tool call. That completion record
-triggers triage per document. The runner independently checks the exact
-candidate-to-verdict bijection and summary count balance, so a verifier that
-violates the write-last contract fails acceptance instead of publishing a
-plausible but incomplete review.
+promotes each confirmed row with `write_finding`, and then writes
+`VerificationSummary` as its final tool call. That completion record triggers
+triage per document. The runner independently checks the exact
+candidate-to-verdict bijection, the confirmed `Finding` export, and summary
+count balance, so a verifier that violates the write-last contract fails
+acceptance instead of publishing a plausible but incomplete review.
 
 The default uses `GLM-5.2` on workstation-2 for every review stage. The
 coordinator and parallel scanner backends remain separately configurable so
@@ -82,6 +87,16 @@ duplicate pathways and removable comments or documentation that repeat code,
 implementation history, or another canonical source. Rationale, invariants,
 safety arguments, operator contracts, and formal-design records remain valuable.
 
+For the company talk, three terminals from the repository root:
+
+```bash
+make review-page    # Vite companion on :19190
+make review-serve   # durable pack node on :19191
+make review         # seed one ReviewJob; the page hydrates
+```
+
+`gents demo run demo/code-review` remains the unattended path (await, accept, kill).
+
 Run the checked-out branch against `origin/main` from the repository root:
 
 ```bash
@@ -103,9 +118,10 @@ reviewers do not turn token streaming into database write pressure. Override
 that cadence with `REVIEW_STREAM_BATCH_MS` when needed; terminal and tool-call
 boundaries still flush immediately.
 
-`make review` builds and runs the workspace CLI, roots file and LSP tools at
-`REVIEW_ROOT` (the current repository by default), and fails before inference if
-the base or head ref is invalid. Reviewer stages also receive the intentionally
+`make review` runs `gents demo seed` against the node from `make review-serve`. It
+roots file and LSP tools at `REVIEW_ROOT` (the current repository by default),
+and fails before inference if the base or head ref is invalid. The unattended
+`gents demo run demo/code-review` path still builds and runs the workspace CLI. Reviewer stages also receive the intentionally
 unrestricted bash tool described above. The endpoint/model environment variables
 shown above retarget either role without editing the pack.
 

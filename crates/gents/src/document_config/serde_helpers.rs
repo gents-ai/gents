@@ -86,6 +86,41 @@ where
 /// mapping null / unit / empty-string / missing to an empty vec. DefraDB returns
 /// `null` for an unset `[String!]` field, which a bare `Vec<String>` cannot
 /// deserialize; this keeps such fields null-safe without an `Option` wrapper.
+/// Walk a JSON value that is either a list of `T` objects, a list of JSON
+/// strings encoding `T`, a single JSON string, null, or missing.
+///
+/// Shared by write-tool and surface-entry deserializers in this crate and the
+/// CLI storage walkers so the dual-shape contract cannot drift.
+pub fn deserialize_dual_shape<T: DeserializeOwned>(
+    value: Option<Value>,
+    label: &str,
+) -> std::result::Result<Vec<T>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::String(s) if s.trim().is_empty() => Ok(Vec::new()),
+        Value::String(s) => {
+            let item = serde_json::from_str(&s).map_err(|error| error.to_string())?;
+            Ok(vec![item])
+        }
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let parsed = match item {
+                    Value::String(s) => serde_json::from_str(&s),
+                    other => serde_json::from_value(other),
+                }
+                .map_err(|error| error.to_string())?;
+                out.push(parsed);
+            }
+            Ok(out)
+        }
+        other => Err(format!("{label}, got {other}")),
+    }
+}
+
 pub(super) fn deserialize_string_vec_or_null<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Vec<String>, D::Error>

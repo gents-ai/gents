@@ -960,6 +960,67 @@ fn defra_query_deny_all_collection_scope_gates_tool_off() {
 }
 
 #[test]
+fn query_decls_for_runtime_drops_tool_when_filled_filter_would_be_stripped() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::policy::{EndpointScope, ToolPolicySurface};
+    use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
+
+    let decl = QueryToolDecl {
+        tool_name: "query_candidate_finding".to_string(),
+        collection: "CandidateFinding".to_string(),
+        description: "Load candidates".to_string(),
+        fields: vec!["finding_id".to_string(), "title".to_string()],
+        filter_fields: vec![WriteToolField {
+            name: "run_id".to_string(),
+            required: false,
+            fill: Some(WriteToolFieldFill::Correlation),
+        }],
+    };
+    let mut policy = ToolPolicySurface::runtime_all();
+    let mut grants = BTreeMap::new();
+    grants.insert(
+        (
+            "query_candidate_finding".to_string(),
+            "CandidateFinding".to_string(),
+        ),
+        BTreeSet::from(["finding_id".to_string(), "title".to_string()]),
+    );
+    policy.query_tools = EndpointScope::Only(grants);
+
+    assert!(
+        policy.query_decls_for_runtime(&[decl.clone()]).is_empty(),
+        "narrowing away a correlation filter must drop the tool, not un-scope the read"
+    );
+
+    let mut lossless = ToolPolicySurface::runtime_all();
+    let mut full = BTreeMap::new();
+    full.insert(
+        (
+            "query_candidate_finding".to_string(),
+            "CandidateFinding".to_string(),
+        ),
+        BTreeSet::from([
+            "finding_id".to_string(),
+            "title".to_string(),
+            "run_id".to_string(),
+        ]),
+    );
+    lossless.query_tools = EndpointScope::Only(full);
+    let kept = lossless.query_decls_for_runtime(&[decl.clone()]);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].filter_fields.len(), 1);
+
+    let mut write_all = ToolPolicySurface::runtime_all();
+    write_all.write_tools = EndpointScope::all();
+    write_all.query_tools = EndpointScope::none();
+    assert!(
+        write_all.query_decls_for_runtime(&[decl]).is_empty(),
+        "write_tools: All must not grant bound read tools"
+    );
+}
+
+#[test]
 fn from_document_read_only_allowlist_override_and_fallback() {
     // (a) A doc that sets ONLY read_only_command_allowlist (no other command_*
     // field) with enable_bash + ReadOnly must materialize a Some(command_policy)

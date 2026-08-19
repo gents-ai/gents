@@ -1,6 +1,6 @@
 {
   "name": "code-review",
-  "description": "Four-stage Gents PR review: pre-scan -> lens swarm -> adversarial verification -> triage",
+  "description": "Four-stage Gents PR review: pre-scan -> lens swarm -> adversarial verification -> merge report",
   "init": {
     "inference_url": "${GENTS_REVIEW_COORDINATOR_ENDPOINT:-http://100.87.27.25:8000/v1}",
     "model_name": "${GENTS_REVIEW_COORDINATOR_MODEL:-GLM-5.2}",
@@ -48,13 +48,11 @@
       },
       {
         "task_id": "review-verify-task",
-        "required_tool_names": ["defra_query", "write_finding_verdict", "write_verification_summary"],
-        "required_query_collections": ["CandidateFinding"]
+        "required_tool_names": ["read_candidate_finding", "write_finding_verdict", "write_finding", "write_verification_summary"]
       },
       {
         "task_id": "review-triage-task",
-        "required_tool_names": ["defra_query", "write_finding", "write_triage_report"],
-        "required_query_collections": ["FindingVerdict"]
+        "required_tool_names": ["read_finding", "write_triage_report"]
       }
     ],
     "source_edges": [],

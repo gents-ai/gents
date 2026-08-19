@@ -33,7 +33,8 @@ def Surface.meet (a b : Surface) : Surface :=
   , selfConfigCategories := a.selfConfigCategories.meet unitVM b.selfConfigCategories
   , subagentTargets := a.subagentTargets.meet unitVM b.subagentTargets
   , backgroundTools := a.backgroundTools.meet unitVM b.backgroundTools
-  , writeTools := a.writeTools.meet fieldsVM b.writeTools }
+  , writeTools := a.writeTools.meet fieldsVM b.writeTools
+  , queryTools := a.queryTools.meet fieldsVM b.queryTools }
 
 def effective (behavior ceiling : Surface) (runtime : Avail) : Surface :=
   (behavior.meet ceiling).meet runtime
@@ -361,6 +362,38 @@ theorem effective_within_ceiling :
     effective_meta_le_ceiling behavior ceiling runtime,
     effective_defraQuery_le_ceiling behavior ceiling runtime,
     effective_skills_le_ceiling behavior ceiling runtime⟩
+
+theorem effective_query_keys_subset_ceiling (k : String × String) :
+    (effective behavior ceiling runtime).queryTools.permits k →
+      ceiling.queryTools.permits k := by
+  unfold effective Surface.meet
+  intro h
+  have hin := EndpointScope.meet_permits_left fieldsVM
+    (behavior.queryTools.meet fieldsVM ceiling.queryTools) runtime.queryTools k h
+  exact EndpointScope.meet_permits_right fieldsVM behavior.queryTools ceiling.queryTools k hin
+
+theorem effective_query_keys_subset_behavior (k : String × String) :
+    (effective behavior ceiling runtime).queryTools.permits k →
+      behavior.queryTools.permits k := by
+  unfold effective Surface.meet
+  intro h
+  have hin := EndpointScope.meet_permits_left fieldsVM
+    (behavior.queryTools.meet fieldsVM ceiling.queryTools) runtime.queryTools k h
+  exact EndpointScope.meet_permits_left fieldsVM behavior.queryTools ceiling.queryTools k hin
+
+theorem effective_query_fields_narrow
+    (behavior ceiling : Surface) (runtime : Avail)
+    (hrt : runtime.queryTools = .all)
+    (k : String × String) (vc ve : Finset String)
+    (hck : ceiling.queryTools.lookup k = some vc)
+    (hek : (effective behavior ceiling runtime).queryTools.lookup k = some ve) :
+    ve ⊆ vc := by
+  unfold effective Surface.meet at hek
+  rw [hrt] at hek
+  have hek' : (behavior.queryTools.meet fieldsVM ceiling.queryTools).lookup k = some ve := by
+    simpa using hek
+  exact EndpointScope.meet_lookup_vle_right fieldsVM
+    behavior.queryTools ceiling.queryTools k ve vc hek' hck
 
 theorem effective_write_fields_narrow
     (behavior ceiling : Surface) (runtime : Avail)

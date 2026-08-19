@@ -428,6 +428,7 @@ mod tests {
     use axum::routing::{get, post};
     use axum::Router;
     use gents::default_behavior_id_for_agent;
+    use gents::graphql::escape_graphql_string;
     use gents_desktop_core::client::ClientCore;
     use serde_json::Value;
     use tokio::sync::oneshot;
@@ -888,15 +889,6 @@ mod tests {
             return Vec::new();
         };
         string_list(value.get("selected_skill_ids"))
-    }
-
-    fn escape_graphql_string(value: &str) -> String {
-        value
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\t', "\\t")
     }
 
     #[derive(Clone)]

@@ -281,14 +281,6 @@ pub(crate) struct MergedSurfaceTools {
 
 /// Merge inline `write_tools` with entries from linked `DatastoreToolSurface`
 /// docs. Fail-closed on missing/disabled/foreign surfaces and name collisions.
-#[cfg(test)]
-pub(crate) fn merge_write_tools_with_surfaces(
-    selection: &ToolSelectionDocument,
-    view: &DocumentRuntimeView,
-) -> anyhow::Result<Vec<WriteToolDecl>> {
-    Ok(merge_surface_tools(selection, view)?.write_tools)
-}
-
 pub(crate) fn merge_surface_tools(
     selection: &ToolSelectionDocument,
     view: &DocumentRuntimeView,

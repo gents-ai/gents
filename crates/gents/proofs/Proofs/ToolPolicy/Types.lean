@@ -66,6 +66,7 @@ structure Surface where
   subagentTargets : EndpointScope (String × String) Unit
   backgroundTools : EndpointScope ToolId Unit
   writeTools : EndpointScope (String × String) (Finset String)
+  queryTools : EndpointScope (String × String) (Finset String)
 
 abbrev Avail := Surface
 

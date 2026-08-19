@@ -1,0 +1,46 @@
+{
+  "jobs": [{ "run_id": "run-1", "_docID": "job-1" }],
+  "areas": [
+    {
+      "run_id": "run-1",
+      "area_id": "run-1:lean",
+      "lens": "lean",
+      "expected_total": "2",
+      "_docID": "area-lean"
+    },
+    {
+      "run_id": "run-1",
+      "area_id": "run-1:auth",
+      "lens": "auth",
+      "expected_total": "2",
+      "_docID": "area-auth"
+    }
+  ],
+  "scans": [{ "run_id": "run-1", "area_id": "run-1:lean", "_docID": "scan-lean" }],
+  "candidates": [
+    { "run_id": "run-1", "finding_id": "run-1:lean:dup", "area_id": "run-1:lean" }
+  ],
+  "verdicts": [],
+  "summaries": [],
+  "findings": [],
+  "reports": [],
+  "requests": [
+    {
+      "request_id": "req-recon",
+      "caused_by_trigger_id": "review-recon",
+      "lifecycle_state": "completed"
+    },
+    {
+      "request_id": "req-lean",
+      "caused_by_trigger_id": "review-scan",
+      "caused_by_source_doc_id": "area-lean",
+      "lifecycle_state": "completed"
+    },
+    {
+      "request_id": "req-auth",
+      "caused_by_trigger_id": "review-scan",
+      "caused_by_source_doc_id": "area-auth",
+      "lifecycle_state": "processing"
+    }
+  ]
+}

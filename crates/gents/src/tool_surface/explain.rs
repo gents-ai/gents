@@ -485,5 +485,9 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         "write_tools".to_string(),
         vec![format!("scope:{}", policy.write_tools.kind())],
     );
+    summary.insert(
+        "query_tools".to_string(),
+        vec![format!("scope:{}", policy.query_tools.kind())],
+    );
     summary
 }

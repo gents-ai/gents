@@ -637,6 +637,61 @@ fn p2p_replicator_add_no_filter_is_empty() {
     assert!(args.filters.is_empty());
 }
 
+fn parse_demo(argv: &[&str]) -> DemoArgs {
+    let mut args = vec!["gents", "demo"];
+    args.extend_from_slice(argv);
+    let cli = Cli::try_parse_from(args).expect("demo should parse");
+    match cli.command {
+        Command::Demo(args) => args,
+        _ => panic!("expected `demo`"),
+    }
+}
+
+#[test]
+fn demo_seed_parses_pack_port_home_and_page() {
+    let args = parse_demo(&[
+        "seed",
+        "demo/code-review",
+        "--http-port",
+        "19191",
+        "--home",
+        "/tmp/review-home",
+        "--page-port",
+        "19190",
+        "--prompt",
+        "review the diff",
+        "--job-id",
+        "review-1",
+    ]);
+    match args.command {
+        Some(DemoCommand::Seed(seed)) => {
+            assert_eq!(seed.pack, "demo/code-review");
+            assert_eq!(seed.http_port, 19191);
+            assert_eq!(
+                seed.home.as_deref(),
+                Some(std::path::Path::new("/tmp/review-home"))
+            );
+            assert_eq!(seed.page_port, Some(19190));
+            assert_eq!(seed.prompt.as_deref(), Some("review the diff"));
+            assert_eq!(seed.job_id.as_deref(), Some("review-1"));
+        }
+        _ => panic!("expected demo seed"),
+    }
+}
+
+#[test]
+fn demo_init_parses_pack_and_home() {
+    let args = parse_demo(&["init", "demo/code-review", "--home", "/tmp/review-home"]);
+    match args.command {
+        Some(DemoCommand::Init(init)) => {
+            assert_eq!(init.pack, "demo/code-review");
+            assert_eq!(init.home, std::path::PathBuf::from("/tmp/review-home"));
+            assert!(!init.overwrite);
+        }
+        _ => panic!("expected demo init"),
+    }
+}
+
 #[test]
 fn every_deprecated_path_warns() {
     use crate::cli::deprecations::{deprecation_warning, DEPRECATED};

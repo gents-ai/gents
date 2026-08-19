@@ -6,7 +6,8 @@
   "workspaces": [
     "packages/*",
     "apps/gents-desktop",
-    "apps/fixture-host"
+    "apps/fixture-host",
+    "apps/review-demo"
   ],
   "scripts": {
     "build:packages": "npm run build --if-present -w @source-inc/gents-desktop-tokens -w @source-inc/gents-desktop-client -w @source-inc/gents-desktop-ui -w @source-inc/gents-desktop-chat -w @source-inc/gents-desktop-fleet -w @source-inc/gents-desktop-operations",

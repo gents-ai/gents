@@ -22,6 +22,8 @@ const NODE_A_NAME: &str = "demo";
 pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
     match args.command {
         Some(DemoCommand::Run(run_args)) => return pack::run(run_args).await,
+        Some(DemoCommand::Init(init_args)) => return pack::init_pack(init_args).await,
+        Some(DemoCommand::Seed(seed_args)) => return pack::seed(seed_args).await,
         Some(DemoCommand::List(list_args)) => return pack::list(&list_args.root).await,
         None => {}
     }

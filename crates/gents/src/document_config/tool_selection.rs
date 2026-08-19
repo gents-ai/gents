@@ -75,6 +75,41 @@ impl<'de> serde::Deserialize<'de> for WriteToolFieldFill {
     }
 }
 
+impl WriteToolFieldFill {
+    /// Resolve this fill from the current tool-call runtime context.
+    ///
+    /// Shared by [`crate::defra_write::BoundedWriteTool`] and
+    /// [`crate::defra_query::bounded::BoundedQueryTool`] so the correlation /
+    /// source-field vocabulary cannot drift.
+    pub fn resolve(&self, field_name: &str) -> Result<String> {
+        let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "runtime-filled field `{field_name}` requires an AgentRequest trigger context"
+                )
+            })?;
+        match self {
+            Self::Correlation => runtime
+                .correlation
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "runtime-filled field `{field_name}` requires a non-empty correlation"
+                    )
+                }),
+            Self::SourceField(source_field) => runtime
+                .source_fields
+                .get(source_field)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "runtime-filled field `{field_name}` requires source field `{source_field}` in trigger context"
+                    )
+                }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct WriteToolField {
     pub name: String,
@@ -303,24 +338,14 @@ pub(crate) fn validate_write_tool_declarations(
                 decl.tool_name
             ));
         }
-        if is_reserved_builtin_tool_name(&decl.tool_name) {
-            return Err(anyhow::anyhow!(
-                "write_tools[{i}] tool_name {:?} collides with a built-in tool; declared write tools must use a unique name",
-                decl.tool_name.trim()
-            ));
-        }
-        if cli_tool_names.contains(decl.tool_name.trim()) {
-            return Err(anyhow::anyhow!(
-                "write_tools[{i}] tool_name {:?} collides with a cli_tool_names entry in the same tool selection; each tool must have a unique name",
-                decl.tool_name.trim()
-            ));
-        }
-        if additional_tool_names.contains(decl.tool_name.trim()) {
-            return Err(anyhow::anyhow!(
-                "write_tools[{i}] tool_name {:?} collides with another runtime-provided tool; each tool must have a unique name",
-                decl.tool_name.trim()
-            ));
-        }
+        reject_tool_name_surface_collisions(
+            "write_tools",
+            i,
+            &decl.tool_name,
+            "write tools",
+            &cli_tool_names,
+            &additional_tool_names,
+        )?;
         let mut seen_field_names = std::collections::HashSet::new();
         for (j, field) in decl.fields.iter().enumerate() {
             if !seen_field_names.insert(field.name.trim()) {
@@ -432,38 +457,44 @@ where
     use serde_json::Value;
 
     let value = Option::<Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
+    if matches!(value, None | Some(Value::Null)) {
         return Ok(None);
-    };
-    match value {
-        Value::Null => Ok(None),
-        Value::String(s) if s.trim().is_empty() => Ok(Some(Vec::new())),
-        Value::String(s) => {
-            // A single JSON-string entry (defensive; the column is a list).
-            let decl: WriteToolDecl = serde_json::from_str(&s).map_err(D::Error::custom)?;
-            Ok(Some(vec![decl]))
-        }
-        Value::Array(items) => {
-            let mut decls = Vec::with_capacity(items.len());
-            for item in items {
-                let decl = match item {
-                    // DefraDB `[String]` column: each entry is a JSON string.
-                    Value::String(s) => {
-                        serde_json::from_str::<WriteToolDecl>(&s).map_err(D::Error::custom)?
-                    }
-                    // Manifest input: each entry is a JSON object.
-                    other => {
-                        serde_json::from_value::<WriteToolDecl>(other).map_err(D::Error::custom)?
-                    }
-                };
-                decls.push(decl);
-            }
-            Ok(Some(decls))
-        }
-        other => Err(D::Error::custom(format!(
-            "write_tools must be a list of WriteToolDecl objects or JSON strings, got {other}"
-        ))),
     }
+    serde_helpers::deserialize_dual_shape(
+        value,
+        "write_tools must be a list of WriteToolDecl objects or JSON strings",
+    )
+    .map(Some)
+    .map_err(D::Error::custom)
+}
+
+/// Reject a declared write/query tool name that collides with a built-in,
+/// a `cli_tool_names` entry, or another runtime-provided tool.
+pub(crate) fn reject_tool_name_surface_collisions(
+    field: &str,
+    index: usize,
+    tool_name: &str,
+    role: &str,
+    cli_tool_names: &std::collections::HashSet<&str>,
+    additional_tool_names: &std::collections::HashSet<&str>,
+) -> Result<()> {
+    let name = tool_name.trim();
+    if is_reserved_builtin_tool_name(tool_name) {
+        return Err(anyhow::anyhow!(
+            "{field}[{index}] tool_name {name:?} collides with a built-in tool; declared {role} must use a unique name"
+        ));
+    }
+    if cli_tool_names.contains(name) {
+        return Err(anyhow::anyhow!(
+            "{field}[{index}] tool_name {name:?} collides with a cli_tool_names entry in the same tool selection; each tool must have a unique name"
+        ));
+    }
+    if additional_tool_names.contains(name) {
+        return Err(anyhow::anyhow!(
+            "{field}[{index}] tool_name {name:?} collides with another runtime-provided tool; each tool must have a unique name"
+        ));
+    }
+    Ok(())
 }
 
 /// Encode the `write_tools` field for a GraphQL document mutation: each

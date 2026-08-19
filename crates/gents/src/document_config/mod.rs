@@ -33,6 +33,7 @@ pub(crate) use inference_profile::{
     load_inference_profile_by_doc_id, load_inference_profile_record,
 };
 
+pub use serde_helpers::deserialize_dual_shape;
 #[allow(unused_imports)]
 pub(crate) use surface_tool::{
     deserialize_optional_surface_tools, validate_query_tool_declarations,

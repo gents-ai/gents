@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Result};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
-use crate::document_config::{QueryToolDecl, WriteToolFieldFill};
+use crate::document_config::QueryToolDecl;
 use crate::llm::tool::{Tool, ToolDefinition};
 
 use super::query::{self, CollectionScope, DefraQueryParams, MAX_LIMIT};
@@ -129,7 +129,13 @@ impl BoundedQueryTool {
                         self.decl.tool_name
                     );
                 };
-                Ok(limit.clamp(1, MAX_LIMIT))
+                if limit == 0 {
+                    bail!(
+                        "tool `{}` limit must be a positive integer",
+                        self.decl.tool_name
+                    );
+                }
+                Ok(limit.min(MAX_LIMIT))
             }
             Some(_) => bail!(
                 "tool `{}` limit must be a positive integer",
@@ -160,38 +166,17 @@ impl BoundedQueryTool {
         let mut filter = Map::new();
         for field in &self.decl.filter_fields {
             let value = if let Some(fill) = &field.fill {
-                let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-                    .ok_or_else(|| {
-                    anyhow!(
-                        "runtime-filled filter `{}` requires an AgentRequest trigger context",
-                        field.name
-                    )
-                })?;
-                let filled = match fill {
-                    WriteToolFieldFill::Correlation => runtime
-                        .correlation
-                        .filter(|value| !value.trim().is_empty())
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "runtime-filled filter `{}` requires a non-empty correlation",
-                                field.name
-                            )
-                        })?,
-                    WriteToolFieldFill::SourceField(source_field) => runtime
-                        .source_fields
-                        .get(source_field)
-                        .cloned()
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "runtime-filled filter `{}` requires source field `{}` in trigger context",
-                                field.name,
-                                source_field
-                            )
-                        })?,
-                };
-                Some(Value::String(filled))
+                Some(Value::String(fill.resolve(&field.name)?))
             } else {
-                args.get(&field.name).cloned()
+                match args.get(&field.name) {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(text)) => Some(Value::String(text.clone())),
+                    Some(_) => bail!(
+                        "filter `{}` for tool `{}` must be a string",
+                        field.name,
+                        self.decl.tool_name
+                    ),
+                }
             };
             match value {
                 Some(Value::Null) | None => {
@@ -336,9 +321,9 @@ impl Tool for BoundedQueryTool {
                 MAX_FIELD_STRING_BYTES, total_bytes
             ));
         }
-        if count as u32 == limit && limit == MAX_LIMIT {
+        if count as u32 == limit {
             payload["limit_note"] = json!(format!(
-                "Result set hit the {MAX_LIMIT}-row cap; narrow the filter if more rows exist."
+                "Result set hit the {limit}-row cap; raise limit or narrow the filter if more rows exist."
             ));
         }
         serde_json::to_string_pretty(&payload)
@@ -461,5 +446,56 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn rejects_non_string_model_filter() {
+        let node = node_with_findings().await;
+        let tool = BoundedQueryTool::new(
+            node,
+            QueryToolDecl {
+                tool_name: "query_candidate_finding".into(),
+                collection: "CandidateFinding".into(),
+                description: String::new(),
+                fields: vec!["finding_id".into(), "title".into()],
+                filter_fields: vec![WriteToolField {
+                    name: "title".into(),
+                    required: false,
+                    fill: None,
+                }],
+            },
+        );
+        let mut args = Map::new();
+        args.insert("title".into(), json!(1));
+        let err = Tool::call(&tool, BoundedQueryParams(args))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must be a string"));
+    }
+
+    #[tokio::test]
+    async fn rejects_zero_limit() {
+        let node = node_with_findings().await;
+        let tool = BoundedQueryTool::new(node, decl());
+        let mut args = Map::new();
+        args.insert("limit".into(), json!(0));
+        let err =
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                None,
+                None,
+                Some("run-42".to_string()),
+                Default::default(),
+                false,
+                async {
+                    Tool::call(&tool, BoundedQueryParams(args))
+                        .await
+                        .unwrap_err()
+                },
+            )
+            .await;
+        assert!(err.to_string().contains("positive integer"));
     }
 }

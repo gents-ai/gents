@@ -207,6 +207,14 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
             &view.background_tools_keys,
         ),
         write_tools: write_scope_from_grants(&view.write_scope_kind, &view.write_grants),
+        query_tools: write_scope_from_grants(
+            if view.query_scope_kind.is_empty() {
+                "none"
+            } else {
+                &view.query_scope_kind
+            },
+            &view.query_grants,
+        ),
     }
 }
 
@@ -222,6 +230,7 @@ fn view_from_surface(
         .lookup(&write_probe)
         .map(|fields| fields.iter().cloned().collect())
         .unwrap_or_default();
+    let query_probe = ("qt".to_string(), "coll".to_string());
 
     View {
         file_rank: file_rank(surface.file),
@@ -270,6 +279,15 @@ fn view_from_surface(
         write_scope_kind: surface.write_tools.kind().to_string(),
         write_grants: grants_from_write_scope(&surface.write_tools),
         write_fields,
+        query_probe_tool: query_probe.0.clone(),
+        query_probe_collection: query_probe.1.clone(),
+        query_scope_kind: surface.query_tools.kind().to_string(),
+        query_grants: grants_from_write_scope(&surface.query_tools),
+        query_fields: surface
+            .query_tools
+            .lookup(&query_probe)
+            .map(|fields| fields.iter().cloned().collect())
+            .unwrap_or_default(),
     }
 }
 
