@@ -305,14 +305,11 @@ async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> 
         async fn load_applied(&self, _peer_id: &str) -> anyhow::Result<PairingApplied> {
             Ok(PairingApplied::default())
         }
-        async fn save_applied(
+        async fn persist_applied(
             &self,
             _peer_id: &str,
             _applied: &PairingApplied,
         ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn delete_applied(&self, _peer_id: &str) -> anyhow::Result<()> {
             Ok(())
         }
         async fn list_peer_ids(&self) -> anyhow::Result<BTreeSet<String>> {

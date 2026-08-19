@@ -46,9 +46,7 @@ pub trait PairingStateStore: Send + Sync {
 
     async fn load_applied(&self, peer_id: &str) -> Result<PairingApplied>;
 
-    async fn save_applied(&self, peer_id: &str, applied: &PairingApplied) -> Result<()>;
-
-    async fn delete_applied(&self, peer_id: &str) -> Result<()>;
+    async fn persist_applied(&self, peer_id: &str, applied: &PairingApplied) -> Result<()>;
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>>;
 
@@ -210,7 +208,41 @@ async fn reconcile_prepared_peer(
         });
     };
     let desired_state = desired.clone().unwrap_or_default();
-    let actual = read_actual(admin).await?;
+    let mut actual = read_actual(admin).await?;
+
+    if applied.replicator_addresses != desired_state.replicator_addresses
+        && same_replicator_peers(
+            &applied.replicator_addresses,
+            &desired_state.replicator_addresses,
+        )
+        && normalize_replicator_routes(&mut actual, &desired_state.replicator_addresses)
+    {
+        applied.replicator_addresses = desired_state.replicator_addresses.clone();
+        store.persist_applied(&peer_id, &applied).await?;
+        tracing::info!(
+            peer_id = %peer_id,
+            "refreshed route for existing replicator peer"
+        );
+    }
+
+    if desired.is_some() {
+        let previous_count = applied.replicator_addresses.len();
+        applied.replicator_addresses.retain(|address| {
+            desired_state.replicator_addresses.contains(address)
+                || actual.state.replicator_addresses.contains(address)
+        });
+        if applied.replicator_addresses.len() != previous_count {
+            if applied.replicator_addresses.is_empty() {
+                applied.replicator_filter.clear();
+            }
+            store.persist_applied(&peer_id, &applied).await?;
+            tracing::info!(
+                peer_id = %peer_id,
+                pruned = previous_count - applied.replicator_addresses.len(),
+                "pruned stale applied replicator endpoints"
+            );
+        }
+    }
 
     let ops = compute_owned_pairing_diff(&desired_state, &actual.state, &applied);
     let mut ops_applied = Vec::new();
@@ -249,12 +281,14 @@ async fn reconcile_prepared_peer(
     for op in ops {
         apply_op(admin, &op, &desired_state, &actual).await?;
         update_applied_after_success(&mut applied, &op, &desired_state);
-        persist_applied(store, &peer_id, &applied).await?;
+        store.persist_applied(&peer_id, &applied).await?;
         ops_applied.push(op);
     }
 
     if desired.is_none() && !applied.is_empty() {
-        store.delete_applied(&peer_id).await?;
+        store
+            .persist_applied(&peer_id, &PairingApplied::default())
+            .await?;
     }
     store
         .reconcile_bearer_readiness(&peer_id, desired.as_ref(), &applied)
@@ -285,6 +319,63 @@ async fn peer_already_active(admin: &dyn RemoteP2pAdmin, peer_id: &str) -> bool 
             .map(|(parsed, _)| parsed.as_str() == peer_id)
             .unwrap_or_else(|_| entry.contains(peer_id))
     })
+}
+
+fn replicator_peers(addresses: &BTreeSet<String>) -> Option<BTreeSet<String>> {
+    addresses
+        .iter()
+        .map(|address| {
+            parse_public_peer_addr(address)
+                .ok()
+                .map(|(peer_id, _)| peer_id.to_string())
+        })
+        .collect()
+}
+
+fn same_replicator_peers(left: &BTreeSet<String>, right: &BTreeSet<String>) -> bool {
+    !left.is_empty()
+        && replicator_peers(left)
+            .zip(replicator_peers(right))
+            .is_some_and(|(left, right)| left == right)
+}
+
+fn normalize_replicator_routes(
+    actual: &mut ActualSnapshot,
+    desired_addresses: &BTreeSet<String>,
+) -> bool {
+    if !same_replicator_peers(&actual.state.replicator_addresses, desired_addresses) {
+        return false;
+    }
+
+    let desired_by_peer = desired_addresses
+        .iter()
+        .filter_map(|address| {
+            parse_public_peer_addr(address)
+                .ok()
+                .map(|(peer_id, _)| (peer_id.to_string(), address.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let normalize_key = |address: &str| {
+        parse_public_peer_addr(address)
+            .ok()
+            .and_then(|(peer_id, _)| desired_by_peer.get(&peer_id.to_string()).cloned())
+            .unwrap_or_else(|| address.to_string())
+    };
+    actual.state.replicator_addresses = desired_addresses.clone();
+    actual.state.replicator_collections = std::mem::take(&mut actual.state.replicator_collections)
+        .into_iter()
+        .map(|(address, collections)| (normalize_key(&address), collections))
+        .collect();
+    actual.replicator_ids_by_addr = std::mem::take(&mut actual.replicator_ids_by_addr)
+        .into_iter()
+        .map(|(address, id)| (normalize_key(&address), id))
+        .collect();
+    actual.replicator_collections_by_addr =
+        std::mem::take(&mut actual.replicator_collections_by_addr)
+            .into_iter()
+            .map(|(address, collections)| (normalize_key(&address), collections))
+            .collect();
+    true
 }
 
 pub async fn run_pairing_reconciler(
@@ -687,18 +778,6 @@ pub fn update_applied_after_success(
     }
 }
 
-async fn persist_applied(
-    store: &dyn PairingStateStore,
-    peer_id: &str,
-    applied: &PairingApplied,
-) -> Result<()> {
-    if applied.is_empty() {
-        store.delete_applied(peer_id).await
-    } else {
-        store.save_applied(peer_id, applied).await
-    }
-}
-
 #[derive(Clone)]
 pub struct GraphqlPairingStateStore {
     node: Arc<EmbeddedNode>,
@@ -755,6 +834,25 @@ impl GraphqlPairingStateStore {
             peer_id,
             self.identity.did(),
         ))
+    }
+
+    async fn load_canonical_applied(&self, peer_id: &str) -> Result<Option<AppliedStateRow>> {
+        let peer_id = escape_graphql_string(peer_id);
+        let query = format!(
+            r#"{{
+                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
+                    _docID
+                    collections
+                    replicator_addresses
+                    replicator_filter
+                }}
+            }}"#
+        );
+        let response = self.node.execute(&query).await;
+        ensure_no_errors(&response, "query PeerPairingApplied")?;
+        Ok(rows::<AppliedStateRow>(&response, "PeerPairingApplied")?
+            .into_iter()
+            .min_by(|left, right| left.doc_id.cmp(&right.doc_id)))
     }
 
     async fn bearer_readiness_is_current(
@@ -929,82 +1027,73 @@ impl PairingStateStore for GraphqlPairingStateStore {
     }
 
     async fn load_applied(&self, peer_id: &str) -> Result<PairingApplied> {
-        let peer_id = escape_graphql_string(peer_id);
-        let query = format!(
-            r#"{{
-                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    collections
-                    replicator_addresses
-                    replicator_filter
-                }}
-            }}"#
-        );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "query PeerPairingApplied")?;
-        Ok(
-            first_row::<PairingStateRow>(&response, "PeerPairingApplied")?
-                .map(|row| PairingApplied {
-                    collections: row.collections.unwrap_or_default().into_iter().collect(),
-                    replicator_addresses: row
-                        .replicator_addresses
-                        .unwrap_or_default()
-                        .into_iter()
-                        .collect(),
-                    replicator_filter: decode_replicator_filter(row.replicator_filter.as_deref()),
-                })
-                .unwrap_or_default(),
-        )
+        Ok(self
+            .load_canonical_applied(peer_id)
+            .await?
+            .map(AppliedStateRow::into_applied)
+            .unwrap_or_default())
     }
 
-    async fn save_applied(&self, peer_id: &str, applied: &PairingApplied) -> Result<()> {
+    async fn persist_applied(&self, peer_id: &str, applied: &PairingApplied) -> Result<()> {
+        if applied.is_empty() {
+            let peer_id = escape_graphql_string(peer_id);
+            let mutation = format!(
+                r#"mutation {{
+                    delete_PeerPairingApplied(
+                        filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}
+                    ) {{ _docID }}
+                }}"#
+            );
+            return crate::graphql::graphql_mutation_with_transaction_retry(
+                &self.node,
+                &mutation,
+                "delete PeerPairingApplied",
+            )
+            .await
+            .map(|_| ());
+        }
+
+        let existing_doc_id = self
+            .load_canonical_applied(peer_id)
+            .await?
+            .map(|row| row.doc_id);
         let peer_id = escape_graphql_string(peer_id);
         let collections = graphql_nullable_string_array(&applied.collections);
         let replicator_addresses = graphql_nullable_string_array(&applied.replicator_addresses);
         let replicator_filter = graphql_nullable_filter_literal(&applied.replicator_filter);
         let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let mutation = format!(
-            r#"mutation {{
-                upsert_PeerPairingApplied(
-                    filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
-                    add: {{
+        let mutation = match existing_doc_id {
+            Some(doc_id) => format!(
+                r#"mutation {{
+                    update_PeerPairingApplied(
+                        filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                        input: {{
+                            collections: {collections},
+                            replicator_addresses: {replicator_addresses},
+                            replicator_filter: {replicator_filter},
+                            updated_at: "{now}"
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                doc_id = escape_graphql_string(&doc_id),
+            ),
+            None => format!(
+                r#"mutation {{
+                    create_PeerPairingApplied(input: {{
                         peer_id: "{peer_id}",
                         collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         replicator_filter: {replicator_filter},
                         created_at: "{now}",
                         updated_at: "{now}"
-                    }},
-                    update: {{
-                        collections: {collections},
-                        replicator_addresses: {replicator_addresses},
-                        replicator_filter: {replicator_filter},
-                        updated_at: "{now}"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
+                    }}) {{ _docID }}
+                }}"#,
+            ),
+        };
         crate::graphql::graphql_mutation_with_transaction_retry(
             &self.node,
             &mutation,
-            "upsert PeerPairingApplied",
-        )
-        .await
-        .map(|_| ())
-    }
-
-    async fn delete_applied(&self, peer_id: &str) -> Result<()> {
-        let peer_id = escape_graphql_string(peer_id);
-        let mutation = format!(
-            r#"mutation {{
-                delete_PeerPairingApplied(
-                    filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}
-                ) {{ _docID }}
-            }}"#
-        );
-        crate::graphql::graphql_mutation_with_transaction_retry(
-            &self.node,
-            &mutation,
-            "delete PeerPairingApplied",
+            "save PeerPairingApplied",
         )
         .await
         .map(|_| ())
@@ -1095,8 +1184,30 @@ struct PairingStateRow {
     replicator_addresses: Option<Vec<String>>,
     #[serde(default)]
     template: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AppliedStateRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    collections: Option<Vec<String>>,
+    replicator_addresses: Option<Vec<String>>,
     #[serde(default)]
     replicator_filter: Option<String>,
+}
+
+impl AppliedStateRow {
+    fn into_applied(self) -> PairingApplied {
+        PairingApplied {
+            collections: self.collections.unwrap_or_default().into_iter().collect(),
+            replicator_addresses: self
+                .replicator_addresses
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+            replicator_filter: decode_replicator_filter(self.replicator_filter.as_deref()),
+        }
+    }
 }
 
 pub const DEFAULT_PAIRING_TEMPLATE: &str = "conversation";

@@ -323,6 +323,8 @@ struct DesiredRow {
 
 #[derive(Deserialize)]
 struct AppliedRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     collections: Option<Vec<String>>,
     replicator_addresses: Option<Vec<String>>,
 }
@@ -455,20 +457,7 @@ async fn delete_peer_pairing_desired(node: &HarnessNode, peer: &str) -> Result<(
 }
 
 async fn read_peer_pairing_applied(node: &HarnessNode, peer: &str) -> Result<PairingApplied> {
-    let peer = escape_graphql_string(peer);
-    let query = format!(
-        r#"{{
-            PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer}" }} }}) {{
-                collections
-                replicator_addresses
-            }}
-        }}"#
-    );
-    let resp = node.db.node.execute(&query).await;
-    if resp.has_errors() {
-        bail!("read PeerPairingApplied failed: {:?}", resp.errors);
-    }
-    let row = first_optional_row::<AppliedRow>(&resp, "PeerPairingApplied");
+    let row = read_peer_pairing_applied_row(node, peer).await?;
     Ok(PairingApplied {
         collections: row
             .as_ref()
@@ -485,44 +474,79 @@ async fn read_peer_pairing_applied(node: &HarnessNode, peer: &str) -> Result<Pai
     })
 }
 
+async fn read_peer_pairing_applied_row(
+    node: &HarnessNode,
+    peer: &str,
+) -> Result<Option<AppliedRow>> {
+    let peer = escape_graphql_string(peer);
+    let query = format!(
+        r#"{{
+            PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer}" }} }}) {{
+                _docID
+                collections
+                replicator_addresses
+            }}
+        }}"#
+    );
+    let resp = node.db.node.execute(&query).await;
+    if resp.has_errors() {
+        bail!("read PeerPairingApplied failed: {:?}", resp.errors);
+    }
+    Ok(
+        gents::graphql::rows::<AppliedRow>(&resp, "PeerPairingApplied")?
+            .into_iter()
+            .min_by(|left, right| left.doc_id.cmp(&right.doc_id)),
+    )
+}
+
 async fn write_peer_pairing_applied(
     node: &HarnessNode,
     peer: &str,
     applied: &PairingApplied,
 ) -> Result<()> {
-    let peer = escape_graphql_string(peer);
+    let escaped_peer = escape_graphql_string(peer);
     let mutation = if applied.is_empty() {
         format!(
             r#"mutation {{
                 delete_PeerPairingApplied(
-                    filter: {{ peer_id: {{ _eq: "{peer}" }} }}
+                    filter: {{ peer_id: {{ _eq: "{escaped_peer}" }} }}
                 ) {{ _docID }}
             }}"#
         )
     } else {
+        let existing_doc_id = read_peer_pairing_applied_row(node, peer)
+            .await?
+            .map(|row| row.doc_id);
         let collections = graphql_string_set_literal(&applied.collections);
         let replicator_addresses = graphql_string_set_literal(&applied.replicator_addresses);
         let now = chrono::Utc::now().to_rfc3339();
         let now = escape_graphql_string(&now);
-        format!(
-            r#"mutation {{
-                upsert_PeerPairingApplied(
-                    filter: {{ peer_id: {{ _eq: "{peer}" }} }},
-                    add: {{
-                        peer_id: "{peer}",
+        match existing_doc_id {
+            Some(doc_id) => format!(
+                r#"mutation {{
+                    update_PeerPairingApplied(
+                        filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                        input: {{
+                            collections: {collections},
+                            replicator_addresses: {replicator_addresses},
+                            updated_at: "{now}"
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                doc_id = escape_graphql_string(&doc_id),
+            ),
+            None => format!(
+                r#"mutation {{
+                    create_PeerPairingApplied(input: {{
+                        peer_id: "{escaped_peer}",
                         collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         created_at: "{now}",
                         updated_at: "{now}"
-                    }},
-                    update: {{
-                        collections: {collections},
-                        replicator_addresses: {replicator_addresses},
-                        updated_at: "{now}"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        )
+                    }}) {{ _docID }}
+                }}"#,
+            ),
+        }
     };
     let resp = node.db.node.execute(&mutation).await;
     if resp.has_errors() {

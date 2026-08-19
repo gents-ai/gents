@@ -38,6 +38,13 @@ def teardownReplicatorState (pre : ReconcileState) (r : ReplicatorId) : Reconcil
     } : PairingActual),
     applied := ({ collections := pre.applied.collections, replicators := pre.applied.replicators.erase r } : PairingApplied) }
 
+def pruneMissingAppliedReplicatorState (pre : ReconcileState) (r : ReplicatorId) : ReconcileState :=
+  { pre with
+    applied := ({
+      collections := pre.applied.collections,
+      replicators := pre.applied.replicators.erase r
+    } : PairingApplied) }
+
 def dialState (pre : ReconcileState) : ReconcileState :=
   { pre with
     actual := ({
@@ -119,6 +126,14 @@ inductive Transition : ReconcileState → ReconcileState → Prop where
       r ∈ pre.applied.replicators →
       post = teardownReplicatorState pre r →
       Transition pre post
+  | pruneMissingAppliedReplicator {pre post : ReconcileState}
+      (desired : PairingDesired) (r : ReplicatorId) :
+      pre.desired = some desired →
+      r ∈ pre.applied.replicators →
+      r ∉ desired.replicators →
+      r ∉ pre.actual.replicators →
+      post = pruneMissingAppliedReplicatorState pre r →
+      Transition pre post
   | crash {pre post : ReconcileState} :
       post = { pre with pairing := [] } →
       Transition pre post
@@ -160,6 +175,13 @@ theorem reconcileTeardownReplicator_removes_target
     r ∉ post.actual.replicators := by
   cases h_post
   exact Finset.not_mem_erase r pre.actual.replicators
+
+theorem pruneMissingAppliedReplicator_preserves_actual_and_removes_target
+    {pre post : ReconcileState} {r : ReplicatorId}
+    (h_post : post = pruneMissingAppliedReplicatorState pre r) :
+    post.actual = pre.actual ∧ r ∉ post.applied.replicators := by
+  cases h_post
+  exact ⟨rfl, Finset.not_mem_erase r pre.applied.replicators⟩
 
 theorem readFailure_preserves_actual_applied
     {pre post : ReconcileState}
@@ -213,6 +235,9 @@ theorem unmanaged_collection_survives
   | reconcileTeardownReplicator desired target h_desired h_actual h_not_desired h_applied h_post =>
       cases h_post
       exact hc
+  | pruneMissingAppliedReplicator desired target h_desired h_applied h_not_desired h_missing h_post =>
+      cases h_post
+      exact hc
   | crash h_post =>
       cases h_post
       exact hc
@@ -259,6 +284,9 @@ theorem unmanaged_replicator_survives
       · subst h_eq
         exact False.elim (hunmanaged h_applied)
       · exact Finset.mem_erase.mpr ⟨h_eq, hr⟩
+  | pruneMissingAppliedReplicator desired target h_desired h_applied h_not_desired h_missing h_post =>
+      cases h_post
+      exact hr
   | crash h_post =>
       cases h_post
       exact hr

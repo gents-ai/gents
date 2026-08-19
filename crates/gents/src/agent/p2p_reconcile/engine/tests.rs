@@ -245,7 +245,6 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
             collections: None,
             replicator_addresses: Some(vec!["/ip4/192.0.2.1/tcp/9999/p2p/forged".to_string()]),
             template: Some("conversation".to_string()),
-            replicator_filter: None,
         },
         &signed_endpoint,
         "did:key:self",
@@ -279,7 +278,6 @@ fn data_plane_subagent_coordinator_uses_signed_peer_for_targeted_bridge() {
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("subagent-coordinator".to_string()),
-            replicator_filter: None,
         },
         &signed_endpoint,
         "did:key:coord",
@@ -311,7 +309,6 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("subagent-host".to_string()),
-            replicator_filter: None,
         },
         &signed_endpoint,
         "did:key:host",
@@ -350,7 +347,6 @@ fn data_plane_desired_rejects_foreign_agent_did_scope() {
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("conversation".to_string()),
-            replicator_filter: None,
         },
         &signed_endpoint,
         "did:key:self",
@@ -380,7 +376,7 @@ struct MockStore {
     list_peer_ids_calls: Mutex<usize>,
     list_peer_ids_retry_started: Option<Arc<tokio::sync::Notify>>,
     list_peer_ids_retry_release: Option<Arc<tokio::sync::Notify>>,
-    save_applied_completed: Option<Arc<tokio::sync::Notify>>,
+    persist_applied_completed: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl Default for MockStore {
@@ -394,7 +390,7 @@ impl Default for MockStore {
             list_peer_ids_calls: Mutex::new(0),
             list_peer_ids_retry_started: None,
             list_peer_ids_retry_release: None,
-            save_applied_completed: None,
+            persist_applied_completed: None,
         }
     }
 }
@@ -422,18 +418,16 @@ impl PairingStateStore for MockStore {
         Ok(self.applied.lock().unwrap().clone())
     }
 
-    async fn save_applied(&self, _peer_id: &str, applied: &PairingApplied) -> Result<()> {
+    async fn persist_applied(&self, _peer_id: &str, applied: &PairingApplied) -> Result<()> {
         *self.applied.lock().unwrap() = applied.clone();
-        self.saved.lock().unwrap().push(applied.clone());
-        if let Some(completed) = &self.save_applied_completed {
-            completed.notify_one();
+        if applied.is_empty() {
+            *self.deleted.lock().unwrap() += 1;
+        } else {
+            self.saved.lock().unwrap().push(applied.clone());
+            if let Some(completed) = &self.persist_applied_completed {
+                completed.notify_one();
+            }
         }
-        Ok(())
-    }
-
-    async fn delete_applied(&self, _peer_id: &str) -> Result<()> {
-        *self.applied.lock().unwrap() = PairingApplied::default();
-        *self.deleted.lock().unwrap() += 1;
         Ok(())
     }
 
@@ -482,16 +476,13 @@ impl PairingStateStore for MultiPeerStore {
             .unwrap_or_default())
     }
 
-    async fn save_applied(&self, peer_id: &str, applied: &PairingApplied) -> Result<()> {
-        self.applied
-            .lock()
-            .unwrap()
-            .insert(peer_id.to_string(), applied.clone());
-        Ok(())
-    }
-
-    async fn delete_applied(&self, peer_id: &str) -> Result<()> {
-        self.applied.lock().unwrap().remove(peer_id);
+    async fn persist_applied(&self, peer_id: &str, applied: &PairingApplied) -> Result<()> {
+        let mut states = self.applied.lock().unwrap();
+        if applied.is_empty() {
+            states.remove(peer_id);
+        } else {
+            states.insert(peer_id.to_string(), applied.clone());
+        }
         Ok(())
     }
 
@@ -774,7 +765,7 @@ async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cle
         list_peer_ids_failures: Mutex::new(1),
         list_peer_ids_retry_started: Some(retry_started.clone()),
         list_peer_ids_retry_release: Some(retry_release.clone()),
-        save_applied_completed: Some(convergence_completed.clone()),
+        persist_applied_completed: Some(convergence_completed.clone()),
         ..Default::default()
     };
     let admin = MockAdmin::default();
@@ -1304,14 +1295,16 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
 /// contains that peer. Otherwise the subsequent replicator install can
 /// reuse the stale route and the response never reaches the relaunched app.
 #[tokio::test]
-async fn changed_endpoint_redials_active_peer_before_replacing_replicator() {
+async fn changed_endpoint_redials_without_replacing_same_peer_replicator() {
+    let old_address = "stable-peer@127.0.0.1:4100";
+    let fresh_address = "stable-peer@127.0.0.1:4200";
     let store = MockStore::with_desired(Some(PairingDesired {
-        replicator_addresses: set(&["addr2"]),
+        replicator_addresses: set(&[fresh_address]),
         replicator_collections: set(&["AgentRequest"]),
         ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[old_address]),
         ..Default::default()
     };
     let admin = MockAdmin {
@@ -1319,11 +1312,11 @@ async fn changed_endpoint_redials_active_peer_before_replacing_replicator() {
         ..Default::default()
     };
     admin.replicators.lock().unwrap().insert(
-        "addr1".into(),
+        old_address.into(),
         RemoteReplicator {
             id: Some("id-addr1".into()),
             collections: vec![mock_collection_id("AgentRequest")],
-            address: Some("addr1".into()),
+            address: Some(old_address.into()),
         },
     );
 
@@ -1331,14 +1324,116 @@ async fn changed_endpoint_redials_active_peer_before_replacing_replicator() {
         .await
         .expect("changed endpoint reconcile");
 
-    assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr2"]]);
     assert_eq!(
-        outcome.ops_applied,
-        vec![
-            DiffOp::InstallReplicator("addr2".into()),
-            DiffOp::TeardownReplicator("addr1".into()),
-        ]
+        *admin.connects.lock().unwrap(),
+        vec![vec![fresh_address.to_string()]]
     );
+    assert!(outcome.ops_applied.is_empty());
+    assert_eq!(
+        store.applied.lock().unwrap().replicator_addresses,
+        set(&[fresh_address])
+    );
+}
+
+#[tokio::test]
+async fn applied_state_persist_targets_one_canonical_document_when_duplicates_exist() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema(
+        r#"
+        type PeerPairingApplied {
+            peer_id: String
+            collections: [String!]
+            replicator_addresses: [String!]
+            replicator_filter: String
+            created_at: DateTime
+            updated_at: DateTime
+        }
+        "#,
+    )
+    .await
+    .unwrap();
+    for (address, timestamp) in [
+        ("old-a", "2026-08-19T00:00:00Z"),
+        ("old-b", "2026-08-19T00:01:00Z"),
+    ] {
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_PeerPairingApplied(input: {{
+                        peer_id: "peer-a",
+                        replicator_addresses: ["{address}"],
+                        created_at: "{timestamp}",
+                        updated_at: "{timestamp}"
+                    }}) {{ _docID }}
+                }}"#
+            ))
+            .await;
+        assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+    }
+
+    let tempdir = tempfile::tempdir().unwrap();
+    let identity = Arc::new(
+        crate::identity::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
+            .unwrap(),
+    );
+    let store = GraphqlPairingStateStore::new(node.clone(), identity);
+    store
+        .persist_applied(
+            "peer-a",
+            &PairingApplied {
+                replicator_addresses: set(&["fresh"]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("duplicate-tolerant save");
+
+    let response = node
+        .execute(
+            r#"{
+                PeerPairingApplied(filter: { peer_id: { _eq: "peer-a" } }) {
+                    _docID
+                    replicator_addresses
+                }
+            }"#,
+        )
+        .await;
+    let mut rows = rows::<AppliedStateRow>(&response, "PeerPairingApplied").unwrap();
+    rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].replicator_addresses, Some(vec!["fresh".into()]));
+    assert_ne!(rows[1].replicator_addresses, Some(vec!["fresh".into()]));
+}
+
+#[tokio::test]
+async fn stale_applied_endpoint_absent_from_actual_is_pruned_once() {
+    let desired = PairingDesired {
+        replicator_addresses: set(&["addr2"]),
+        replicator_collections: set(&["AgentRequest"]),
+        ..Default::default()
+    };
+    let store = MockStore::with_desired(Some(desired));
+    *store.applied.lock().unwrap() = PairingApplied {
+        replicator_addresses: set(&["addr1", "addr2"]),
+        ..Default::default()
+    };
+    let admin = MockAdmin {
+        active: Mutex::new(vec!["peer-a".into()]),
+        ..Default::default()
+    };
+    let first = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("first reconcile");
+    let second = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("second reconcile");
+
+    assert_eq!(
+        first.ops_applied,
+        vec![DiffOp::InstallReplicator("addr2".into())]
+    );
+    assert!(second.ops_applied.is_empty());
+    assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr2"]]);
     assert_eq!(
         store.applied.lock().unwrap().replicator_addresses,
         set(&["addr2"])
@@ -1618,7 +1713,6 @@ fn desired_row(template: Option<&str>, agent_did: Option<&str>) -> PairingStateR
         collections: None,
         replicator_addresses: Some(vec!["addr1".into()]),
         template: template.map(str::to_string),
-        replicator_filter: None,
     }
 }
 
@@ -1750,7 +1844,6 @@ fn app_collections_on_control_plane_path_soft_skips() {
             collections: None,
             replicator_addresses: Some(vec!["addr-b".to_string()]),
             template: Some("app-collections".to_string()),
-            replicator_filter: None,
         },
         "did:key:self",
     )
@@ -1774,7 +1867,6 @@ fn app_collections_row_resolves_row_collections_as_subscription_and_replicator()
             collections: Some(vec!["ChangeProposed".to_string()]),
             replicator_addresses: None,
             template: Some("app-collections".to_string()),
-            replicator_filter: None,
         },
         &signed_endpoint,
         "did:key:self",
@@ -1803,7 +1895,6 @@ fn app_collections_empty_collections_soft_skips() {
             collections: Some(vec!["   ".to_string()]),
             replicator_addresses: None,
             template: Some("app-collections".to_string()),
-            replicator_filter: None,
         },
         &signed_endpoint,
         "did:key:self",
@@ -1831,7 +1922,6 @@ fn foreign_agent_did_still_hard_fails_whole_peer_load() {
             collections: Some(vec!["ChangeProposed".to_string()]),
             replicator_addresses: None,
             template: Some("app-collections".to_string()),
-            replicator_filter: None,
         },
         &signed_endpoint,
         "did:key:self",
@@ -2082,7 +2172,6 @@ fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("machine".to_string()),
-            replicator_filter: None,
         },
         &signed_endpoint,
         "did:key:self",

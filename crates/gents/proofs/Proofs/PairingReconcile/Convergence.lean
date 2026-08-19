@@ -136,6 +136,11 @@ theorem no_flap_on_converged_step
       unfold ReconcileState.converged at h
       simp [h_desired] at h
       exact h_not_desired (h.2.2.2.1 h_applied)
+  | pruneMissingAppliedReplicator desired target h_desired h_applied h_not_desired h_missing h_post =>
+      exfalso
+      unfold ReconcileState.converged at h
+      simp [h_desired] at h
+      exact h_missing (h.2.1 (h.2.2.2.1 h_applied))
   | crash h_post =>
       subst h_post
       simp [managedWiringUnchanged]
@@ -296,6 +301,19 @@ theorem partial_applied_replicator_stuck
       Finset.card_pos.mpr ⟨_, h_mem⟩
     simp only [disagreementCount, h_desired]
     omega
+
+theorem stale_applied_replicator_can_be_pruned
+    {s : ReconcileState} {desired : PairingDesired} {r : ReplicatorId}
+    (h_desired : s.desired = some desired)
+    (h_applied : r ∈ s.applied.replicators)
+    (h_not_desired : r ∉ desired.replicators)
+    (h_missing : r ∉ s.actual.replicators) :
+    Transition s (pruneMissingAppliedReplicatorState s r) ∧
+      (pruneMissingAppliedReplicatorState s r).actual = s.actual ∧
+      r ∉ (pruneMissingAppliedReplicatorState s r).applied.replicators := by
+  refine ⟨Transition.pruneMissingAppliedReplicator desired r h_desired h_applied h_not_desired h_missing rfl,
+    rfl, ?_⟩
+  exact Finset.not_mem_erase r s.applied.replicators
 
 theorem convergence_requires_successful_install
     {s post : ReconcileState} {desired : PairingDesired} {r : ReplicatorId}

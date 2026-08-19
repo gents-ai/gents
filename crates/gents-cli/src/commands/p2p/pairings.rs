@@ -219,6 +219,7 @@ fn pairings_list_query() -> &'static str {
 fn applied_list_query() -> &'static str {
     r#"query {
         PeerPairingApplied {
+            _docID
             peer_id
             collections
             replicator_addresses
@@ -362,21 +363,32 @@ fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
 }
 
 fn parse_applied_rows(rows: Vec<Value>) -> Vec<PeerPairingAppliedRow> {
-    rows.into_iter()
+    let mut rows = rows
+        .into_iter()
         .filter_map(|row| {
+            let doc_id = row.get("_docID")?.as_str()?.to_string();
             let peer_id = row
                 .get("peer_id")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())?
                 .to_string();
-            Some(PeerPairingAppliedRow {
-                peer_id,
-                collections: string_list(&row, "collections"),
-                replicator_addresses: string_list(&row, "replicator_addresses"),
-            })
+            Some((
+                doc_id,
+                PeerPairingAppliedRow {
+                    peer_id,
+                    collections: string_list(&row, "collections"),
+                    replicator_addresses: string_list(&row, "replicator_addresses"),
+                },
+            ))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut canonical = BTreeMap::new();
+    for (_, row) in rows {
+        canonical.entry(row.peer_id.clone()).or_insert(row);
+    }
+    canonical.into_values().collect()
 }
 
 fn annotate_pairing_health(
@@ -697,6 +709,17 @@ mod tests {
         assert!(mutation.contains("collections: null"));
         assert!(!mutation.contains("collections: ["));
         assert!(!mutation.contains("[]"));
+    }
+
+    #[test]
+    fn applied_rows_use_the_canonical_document() {
+        let rows = parse_applied_rows(vec![
+            json!({"_docID": "b", "peer_id": "peer-a", "replicator_addresses": ["stale"]}),
+            json!({"_docID": "a", "peer_id": "peer-a", "replicator_addresses": ["fresh"]}),
+        ]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].replicator_addresses, ["fresh"]);
     }
 
     fn applied(peer_id: &str, collections: &[&str], addresses: &[&str]) -> PeerPairingAppliedRow {
