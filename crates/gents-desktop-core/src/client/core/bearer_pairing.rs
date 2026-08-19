@@ -278,8 +278,7 @@ pub(super) async fn observe_bearer_pairing_readiness(
                 admin_sig
             }}
             BearerPairingReady(
-                filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }},
-                limit: 1
+                filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }}
             ) {{
                 issuer_did
                 claimant_did
@@ -319,19 +318,26 @@ pub(super) async fn observe_bearer_pairing_readiness(
     let readiness_rows =
         serde_json::from_value::<Vec<BearerPairingReadyObservationRow>>(readiness_rows)
             .context("decoding the replicated bearer readiness acknowledgement")?;
-    let Some(readiness) = readiness_rows.first() else {
+    if readiness_rows.is_empty() {
         return Ok(false);
-    };
-    verify_bearer_pairing_ready_row(
-        identity,
-        issuer_did,
-        identity.did(),
-        template,
-        local_endpoint,
-        readiness,
-    )
-    .await?;
-    Ok(true)
+    }
+    let mut readiness_error = None;
+    for readiness in &readiness_rows {
+        match verify_bearer_pairing_ready_row(
+            identity,
+            issuer_did,
+            identity.did(),
+            template,
+            local_endpoint,
+            readiness,
+        )
+        .await
+        {
+            Ok(()) => return Ok(true),
+            Err(error) => readiness_error = Some(error),
+        }
+    }
+    Err(readiness_error.expect("non-empty readiness rows produced an error"))
 }
 
 async fn verify_bearer_pairing_ready_row(

@@ -95,6 +95,22 @@ fn bearer_readiness_accepts_merged_conversation_layers() {
 }
 
 #[test]
+fn self_pairing_row_is_not_materialized() {
+    let desired = desired_from_pairing_row(
+        PairingStateRow {
+            agent_did: Some("did:key:self".to_string()),
+            collections: None,
+            replicator_addresses: Some(vec!["iroh-ticket".to_string()]),
+            template: Some("machine".to_string()),
+        },
+        "did:key:self",
+    )
+    .expect("pairing row parses");
+
+    assert!(desired.is_none());
+}
+
+#[test]
 fn bearer_readiness_mutation_escapes_signed_fields() {
     let record = BearerPairingReadyRecord {
         issuer_did: "did:key:issuer".to_string(),

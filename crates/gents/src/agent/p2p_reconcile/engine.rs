@@ -874,8 +874,7 @@ impl GraphqlPairingStateStore {
         let query = format!(
             r#"{{
                 BearerPairingReady(
-                    filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }},
-                    limit: 1
+                    filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }}
                 ) {{
                     issuer_did
                     claimant_did
@@ -889,39 +888,45 @@ impl GraphqlPairingStateStore {
         );
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "query BearerPairingReady")?;
-        let Some(row) = first_row::<BearerPairingReadyRow>(&response, "BearerPairingReady")? else {
-            return Ok(false);
-        };
-        let Some(existing) = bearer_pairing_ready_record(&row)? else {
-            return Ok(false);
-        };
-        if existing.issuer_did != expected.issuer_did
-            || existing.claimant_did != expected.claimant_did
-            || existing.peer_id != expected.peer_id
-            || existing.address != expected.address
-            || existing.template != expected.template
-        {
-            return Ok(false);
-        }
-        match self
-            .identity
-            .verify(
-                &existing.issuer_did,
-                &existing.signing_payload(),
-                &existing.sig,
-            )
-            .await
-        {
-            Ok(valid) => Ok(valid),
-            Err(error) => {
-                tracing::warn!(
+        for row in rows::<BearerPairingReadyRow>(&response, "BearerPairingReady")? {
+            let existing = match bearer_pairing_ready_record(&row) {
+                Ok(Some(existing)) => existing,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "failed to decode existing bearer readiness acknowledgement"
+                    );
+                    continue;
+                }
+            };
+            if existing.issuer_did != expected.issuer_did
+                || existing.claimant_did != expected.claimant_did
+                || existing.peer_id != expected.peer_id
+                || existing.address != expected.address
+                || existing.template != expected.template
+            {
+                continue;
+            }
+            match self
+                .identity
+                .verify(
+                    &existing.issuer_did,
+                    &existing.signing_payload(),
+                    &existing.sig,
+                )
+                .await
+            {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
                     error = %error,
                     claimant_did = %existing.claimant_did,
-                    "failed to verify existing bearer readiness acknowledgement; rewriting it"
-                );
-                Ok(false)
+                    "failed to verify existing bearer readiness acknowledgement"
+                ),
             }
         }
+        Ok(false)
     }
 
     async fn upsert_bearer_readiness(
@@ -964,10 +969,14 @@ impl GraphqlPairingStateStore {
 
     async fn delete_bearer_readiness_for_peer(&self, peer_id: &str) -> Result<()> {
         let peer_id = escape_graphql_string(peer_id);
+        let issuer_did = escape_graphql_string(self.identity.did());
         let mutation = format!(
             r#"mutation {{
                 delete_BearerPairingReady(
-                    filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}
+                    filter: {{
+                        peer_id: {{ _eq: "{peer_id}" }},
+                        issuer_did: {{ _eq: "{issuer_did}" }}
+                    }}
                 ) {{ _docID }}
             }}"#
         );
@@ -1292,6 +1301,9 @@ fn desired_from_pairing_row(
     }
 
     let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
+    if peer_did == local_did {
+        return Ok(None);
+    }
     if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
         anyhow::bail!(
             "pairing row for peer-DID-dependent template {template_id:?} has a blank \

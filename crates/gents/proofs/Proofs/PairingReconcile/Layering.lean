@@ -9,6 +9,13 @@ structure Layer where
   isAppCollections : Bool
   deriving DecidableEq
 
+def materializeBase (localDid peerDid : String) (layer : Layer) : Option Layer :=
+  if peerDid = localDid then none else some layer
+
+theorem self_pairing_is_not_materialized (localDid : String) (layer : Layer) :
+    materializeBase localDid localDid layer = none := by
+  simp [materializeBase]
+
 def clampDataPlane (l : Layer) : Layer :=
   if l.isAppCollections then l else { l with subscriptions := (∅ : Finset String) }
 
