@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use gents::agent::p2p_reconcile::{
-    equality_filter, materialize_base_desired, merge_layered_desired, single_string_eq, DiffOp,
-    FilterPredicate, PairingDesired, PairingFilters, MAX_CONCURRENT_PEER_PREPARATIONS,
+    equality_filter, merge_layered_desired, single_string_eq, DiffOp, FilterPredicate,
+    PairingDesired, PairingFilters, MAX_CONCURRENT_PEER_PREPARATIONS,
 };
 
 use crate::lean_vocab_test::{
@@ -31,6 +31,13 @@ fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     let mut filters = PairingFilters::new();
     filters.insert(collection.to_string(), equality_filter(field, value));
     filters
+}
+
+fn merge_desired(
+    base: Option<PairingDesired>,
+    data_plane: Option<PairingDesired>,
+) -> Option<PairingDesired> {
+    merge_layered_desired("did:key:local", "did:key:peer", base, data_plane)
 }
 
 #[tokio::test]
@@ -126,8 +133,7 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
         template_ids: BTreeSet::new(),
     };
 
-    let merged =
-        merge_layered_desired(Some(control), Some(data_plane)).expect("merged desired state");
+    let merged = merge_desired(Some(control), Some(data_plane)).expect("merged desired state");
 
     assert_eq!(
         merged.collections,
@@ -182,7 +188,7 @@ fn layered_desired_merge_prefers_signed_data_plane_filter() {
         template_ids: BTreeSet::new(),
     };
 
-    let merged = merge_layered_desired(
+    let merged = merge_desired(
         Some(layer(base_filter.clone())),
         Some(layer(data_filter.clone())),
     )
@@ -200,7 +206,7 @@ fn layered_desired_merge_uses_signed_readiness_claimant() {
         replicator_filter: one_filter("BearerPairingReady", "claimant_did", claimant),
         ..Default::default()
     };
-    let merged = merge_layered_desired(
+    let merged = merge_desired(
         Some(layer("did:key:claimant")),
         Some(layer("did:key:signed")),
     )
@@ -217,10 +223,13 @@ fn layered_desired_merge_uses_signed_readiness_claimant() {
 
 #[test]
 fn self_pairing_base_is_not_materialized() {
-    assert!(
-        materialize_base_desired("did:key:self", "did:key:self", PairingDesired::default())
-            .is_none()
-    );
+    assert!(merge_layered_desired(
+        "did:key:self",
+        "did:key:self",
+        Some(PairingDesired::default()),
+        None
+    )
+    .is_none());
 }
 
 #[test]
@@ -233,7 +242,7 @@ fn layered_desired_merge_absent_data_plane_preserves_control_only() {
         template_ids: BTreeSet::new(),
     };
 
-    let merged = merge_layered_desired(Some(control.clone()), None).expect("control desired state");
+    let merged = merge_desired(Some(control.clone()), None).expect("control desired state");
 
     assert_eq!(merged, control);
 }
@@ -247,7 +256,7 @@ fn merge_preserves_app_collections_subscription_only() {
         replicator_filter: Default::default(),
         template_ids: set(&["app-collections"]),
     };
-    let merged = merge_layered_desired(None, Some(app_layer)).expect("merged");
+    let merged = merge_desired(None, Some(app_layer)).expect("merged");
     assert!(
         merged.collections.contains("ChangeProposed"),
         "app-collections subscription must survive the merge: {merged:?}"
@@ -260,7 +269,7 @@ fn merge_preserves_app_collections_subscription_only() {
         replicator_filter: Default::default(),
         template_ids: set(&["network-control"]),
     };
-    let merged_nc = merge_layered_desired(None, Some(nc_layer)).expect("merged nc");
+    let merged_nc = merge_desired(None, Some(nc_layer)).expect("merged nc");
     assert!(
         merged_nc.collections.is_empty(),
         "non-app-collections data-plane subscription must be cleared: {merged_nc:?}"
@@ -283,7 +292,7 @@ fn app_collections_coexists_with_control_pairing() {
         replicator_filter: Default::default(),
         template_ids: set(&["app-collections"]),
     };
-    let merged = merge_layered_desired(Some(base), Some(app_layer)).expect("merged");
+    let merged = merge_desired(Some(base), Some(app_layer)).expect("merged");
     assert!(merged.collections.contains("AgentNetwork"));
     assert!(merged.collections.contains("NetworkMembership"));
     assert!(merged.collections.contains("ChangeProposed"));

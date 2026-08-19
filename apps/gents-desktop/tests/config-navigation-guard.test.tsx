@@ -38,6 +38,7 @@ function GuardedWorkspace({ handlers }: { handlers: ReturnType<typeof makeHandle
         onDirtyChange={navigation.reportDirty}
         requestNavigation={navigation.requestNavigation}
         {...handlers}
+        onBack={() => navigation.requestNavigation(handlers.onBack)}
       />
       <ConfirmDialog
         cancelLabel="Keep editing"

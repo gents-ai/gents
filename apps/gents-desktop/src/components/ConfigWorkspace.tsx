@@ -191,7 +191,7 @@ export function ConfigWorkspace({
             <button
               className="ghost-button config-back-button"
               data-testid="config-back-tab"
-              onClick={() => requestNavigation(onBack)}
+              onClick={onBack}
               type="button"
             >
               ← {backLabel}

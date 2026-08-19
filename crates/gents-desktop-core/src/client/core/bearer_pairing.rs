@@ -322,7 +322,7 @@ pub(super) async fn observe_bearer_pairing_readiness(
         return Ok(false);
     }
     for readiness in &readiness_rows {
-        if verify_bearer_pairing_ready_row(
+        match verify_bearer_pairing_ready_row(
             identity,
             issuer_did,
             identity.did(),
@@ -331,9 +331,13 @@ pub(super) async fn observe_bearer_pairing_readiness(
             readiness,
         )
         .await
-        .is_ok()
         {
-            return Ok(true);
+            Ok(()) => return Ok(true),
+            Err(error) => tracing::warn!(
+                error = %error,
+                issuer_did,
+                "ignoring invalid bearer pairing readiness acknowledgement"
+            ),
         }
     }
     Ok(false)

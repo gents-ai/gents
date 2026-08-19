@@ -4,7 +4,9 @@ use anyhow::anyhow;
 use events::Bus;
 
 use super::*;
-use crate::agent::p2p_reconcile::{RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
+use crate::agent::p2p_reconcile::{
+    single_string_eq, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+};
 
 fn set(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| value.to_string()).collect()
@@ -17,6 +19,13 @@ fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
         crate::agent::p2p_reconcile::equality_filter(field, value),
     );
     filters
+}
+
+fn merge_desired(
+    base: Option<PairingDesired>,
+    data_plane: Option<PairingDesired>,
+) -> Option<PairingDesired> {
+    merge_layered_desired("did:key:local", "did:key:peer", base, data_plane)
 }
 
 fn bearer_desired(template_id: &str, claimant_did: &str, address: &str) -> PairingDesired {
@@ -77,7 +86,15 @@ fn bearer_readiness_requires_exact_applied_conversation_replicator() {
 fn bearer_readiness_accepts_merged_conversation_layers() {
     let control = bearer_desired("conversation", "did:key:claimant", "iroh-ticket");
     let data = control.clone();
-    let desired = merge_layered_desired(Some(control), Some(data)).expect("merged desired");
+    let mut desired = merge_desired(Some(control), Some(data)).expect("merged desired");
+    let claimant = desired
+        .replicator_filter
+        .remove("BearerPairingReady")
+        .expect("readiness filter");
+    desired.replicator_filter.insert(
+        "BearerPairingReady".to_string(),
+        FilterPredicate::All(vec![claimant, equality_filter("template", "conversation")]),
+    );
     let applied = PairingApplied {
         replicator_addresses: desired.replicator_addresses.clone(),
         replicator_filter: desired.replicator_filter.clone(),
@@ -96,7 +113,7 @@ fn bearer_readiness_accepts_merged_conversation_layers() {
 
 #[test]
 fn self_pairing_row_is_not_materialized() {
-    let desired = desired_from_pairing_row(
+    let base = desired_from_pairing_row(
         PairingStateRow {
             agent_did: Some("did:key:self".to_string()),
             collections: None,
@@ -107,7 +124,7 @@ fn self_pairing_row_is_not_materialized() {
     )
     .expect("pairing row parses");
 
-    assert!(desired.is_none());
+    assert!(merge_layered_desired("did:key:self", "did:key:self", base, None).is_none());
 }
 
 #[test]
@@ -123,6 +140,10 @@ fn bearer_readiness_mutation_escapes_signed_fields() {
     };
 
     let mutation = bearer_pairing_ready_upsert_mutation("ready\"key", &record);
+    assert!(
+        mutation.find("delete_BearerPairingReady").unwrap()
+            < mutation.find("upsert_BearerPairingReady").unwrap()
+    );
     assert!(mutation.contains(r#"readiness_key: "ready\"key""#));
     assert!(mutation.contains(r#"claimant_did: "did:key:claimant\"quoted""#));
     assert!(mutation.contains(r#"address: "ticket\\route""#));
@@ -146,7 +167,7 @@ fn merge_desired_unions_control_and_data_plane_state() {
         template_ids: BTreeSet::new(),
     };
 
-    let merged = merge_layered_desired(Some(control), Some(data)).expect("merged desired");
+    let merged = merge_desired(Some(control), Some(data)).expect("merged desired");
     assert_eq!(
         merged.replicator_collections,
         set(&["AgentNetwork", "NetworkMembership", "AgentRequest"])
@@ -180,7 +201,7 @@ fn data_plane_only_desired_is_replicator_only() {
         template_ids: BTreeSet::new(),
     };
 
-    let merged = merge_layered_desired(None, Some(data)).expect("data-plane desired");
+    let merged = merge_desired(None, Some(data)).expect("data-plane desired");
     assert!(
         merged.collections.is_empty(),
         "data-plane-only desired must not subscribe to conversation collections"
@@ -519,6 +540,7 @@ struct MockAdmin {
     connects: Mutex<Vec<Vec<String>>>,
     /// Filters recorded per `add_replicator` call: (addresses, filters).
     recorded_filters: Mutex<Vec<(Vec<String>, PairingFilters)>>,
+    deleted_replicator_collections: Mutex<Vec<Vec<String>>>,
     /// Entries returned by `active_peers` (bare peer ids or dial addresses,
     /// like the real adapters).
     active: Mutex<Vec<String>>,
@@ -630,8 +652,12 @@ impl RemoteP2pAdmin for MockAdmin {
     async fn delete_replicator(
         &self,
         id: &str,
-        _collections: &[String],
+        collections: &[String],
     ) -> RemoteP2pAdminResult<()> {
+        self.deleted_replicator_collections
+            .lock()
+            .unwrap()
+            .push(collections.to_vec());
         let key = self
             .replicators
             .lock()
@@ -1365,23 +1391,51 @@ async fn changed_endpoint_replaces_same_peer_replicator_teardown_first() {
     );
 }
 
-#[tokio::test]
-async fn empty_persist_forgets_deleted_canonical_document() {
-    let store = MockStore::default();
-    let mut applied = LoadedPairingApplied {
-        canonical_doc_id: Some("deleted-doc".to_string()),
-        ..Default::default()
+#[test]
+fn addressless_replicator_is_not_aliased_across_multiple_applied_routes() {
+    let replicator = RemoteReplicator {
+        id: Some("stable-peer".to_string()),
+        collections: Vec::new(),
+        address: None,
     };
+    let applied = set(&["stable-peer@127.0.0.1:4100", "stable-peer@127.0.0.1:4200"]);
 
-    persist_applied_record(&store, "peer-a", &mut applied)
-        .await
-        .expect("empty persist");
-
-    assert_eq!(applied.canonical_doc_id, None);
+    assert_eq!(
+        canonical_replicator_address(&replicator, &applied),
+        Some("stable-peer".to_string())
+    );
 }
 
 #[tokio::test]
-async fn applied_state_persist_targets_one_canonical_document_when_duplicates_exist() {
+async fn duplicate_remote_routes_merge_their_collection_sets() {
+    let admin = MockAdmin::default();
+    for (key, id, collection) in [
+        ("row-a", "id-a", "AgentRequest"),
+        ("row-b", "id-b", "AgentResponse"),
+    ] {
+        admin.replicators.lock().unwrap().insert(
+            key.to_string(),
+            RemoteReplicator {
+                id: Some(id.to_string()),
+                collections: vec![mock_collection_id(collection)],
+                address: Some("shared-route".to_string()),
+            },
+        );
+    }
+
+    let actual = read_actual(&admin, &BTreeSet::new())
+        .await
+        .expect("read actual routes");
+
+    assert_eq!(
+        actual.state.replicator_collections["shared-route"],
+        set(&["AgentRequest", "AgentResponse"])
+    );
+    assert_eq!(actual.replicator_ids_by_addr["shared-route"], "id-a");
+}
+
+#[tokio::test]
+async fn applied_state_persist_collapses_duplicates_and_recovers_a_missing_row() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_schema(
         r#"
@@ -1442,10 +1496,46 @@ async fn applied_state_persist_targets_one_canonical_document_when_duplicates_ex
             }"#,
         )
         .await;
-    let mut rows = rows::<AppliedStateRow>(&response, "PeerPairingApplied").unwrap();
-    rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
+    let mut persisted_rows = rows::<AppliedStateRow>(&response, "PeerPairingApplied").unwrap();
+    persisted_rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
+    assert_eq!(persisted_rows.len(), 1);
+    assert_eq!(
+        persisted_rows[0].replicator_addresses,
+        Some(vec!["fresh".into()])
+    );
+
+    let mut applied = store.load_applied("peer-a").await.expect("reload applied");
+    let response = node
+        .execute(
+            r#"mutation {
+                delete_PeerPairingApplied(filter: { peer_id: { _eq: "peer-a" } }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "delete failed: {:?}",
+        response.errors
+    );
+    applied.state.replicator_addresses = set(&["recovered"]);
+    store
+        .persist_applied("peer-a", &applied)
+        .await
+        .expect("save after concurrent delete");
+
+    let response = node
+        .execute(
+            r#"{
+                PeerPairingApplied(filter: { peer_id: { _eq: "peer-a" } }) {
+                    _docID
+                    replicator_addresses
+                }
+            }"#,
+        )
+        .await;
+    let rows = rows::<AppliedStateRow>(&response, "PeerPairingApplied").unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].replicator_addresses, Some(vec!["fresh".into()]));
+    assert_eq!(rows[0].replicator_addresses, Some(vec!["recovered".into()]));
 }
 
 #[tokio::test]
@@ -1480,6 +1570,10 @@ async fn stale_applied_endpoint_absent_from_actual_is_torn_down_once() {
     );
     assert!(second.ops_applied.is_empty());
     assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr2"]]);
+    assert_eq!(
+        *admin.deleted_replicator_collections.lock().unwrap(),
+        vec![vec!["AgentRequest".to_string()]]
+    );
     assert_eq!(
         store.applied.lock().unwrap().replicator_addresses,
         set(&["addr2"])
