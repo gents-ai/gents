@@ -1199,18 +1199,29 @@ pub(crate) async fn validate_manifest_against_live(
 
         if let Some(filter) = trig.filter.as_deref().map(str::trim) {
             if !filter.is_empty() {
-                let probe = format!(
-                    r#"query {{ {collection}(filter: {filter}, limit: 1) {{ _docID }} }}"#,
-                    collection = source_collection,
-                    filter = filter,
-                );
-                match access.execute(&probe).await {
-                    Ok(_) => {}
-                    Err(err) => {
-                        errors.push(format!(
-                            "event_trigger {} filter syntax error: {}",
-                            trigger_id, err
-                        ));
+                // `filter` is interpolated into the probe query as a raw filter
+                // fragment; validate it like the runtime trigger engine does
+                // (`trigger_engine::event_source`) before building the probe.
+                // `source_collection` is already validated by the guard above.
+                if let Err(err) = gents::graphql::validate_graphql_filter_fragment(filter) {
+                    errors.push(format!(
+                        "event_trigger {} filter is not a valid filter fragment: {}",
+                        trigger_id, err
+                    ));
+                } else {
+                    let probe = format!(
+                        r#"query {{ {collection}(filter: {filter}, limit: 1) {{ _docID }} }}"#,
+                        collection = source_collection,
+                        filter = filter,
+                    );
+                    match access.execute(&probe).await {
+                        Ok(_) => {}
+                        Err(err) => {
+                            errors.push(format!(
+                                "event_trigger {} filter syntax error: {}",
+                                trigger_id, err
+                            ));
+                        }
                     }
                 }
             }

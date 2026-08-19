@@ -46,6 +46,7 @@ defra-node.workspace = true
 defra-p2p-adapter.workspace = true
 futures-util = "0.3"
 flate2 = "1"
+ignore = "0.4"
 iroh.workspace = true
 query.workspace = true
 hostname.workspace = true
@@ -53,6 +54,7 @@ opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
 p2p.workspace = true
+regex = "1"
 reqwest.workspace = true
 rmcp = { version = "1.2.0", features = [
     "server",
@@ -80,6 +82,5 @@ async-trait = "0.1"
 gents-lean-contract.workspace = true
 identity.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }
-regex = "1"
 tempfile = "3"
 tokio-tungstenite = "0.26.2"

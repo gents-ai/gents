@@ -1,6 +1,7 @@
 mod backend;
 mod fleet;
 pub(crate) mod pack;
+pub(crate) mod secscan;
 mod setup;
 mod shell;
 mod util;

@@ -1,0 +1,7 @@
+type InvestigationResult {
+  run_id: String @index @immutable
+  batch_id: String @index(unique: true) @immutable
+  expected_total: String @immutable
+  finding_count: String
+  summary: String
+}

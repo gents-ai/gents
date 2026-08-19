@@ -20,6 +20,7 @@ impl DefraSpillTruncator {
         let escaped_output = escape_graphql_string(output);
         let escaped_input = escape_graphql_string(tool_input);
         let escaped_metadata = escape_graphql_string(metadata);
+        let escaped_tool_name = escape_graphql_string(tool_name);
         let tool_call_doc_id_field = tool_call_doc_id
             .map(escape_graphql_string)
             .map(|doc_id| format!(r#"tool_call_doc_id: "{doc_id}","#))
@@ -33,7 +34,7 @@ impl DefraSpillTruncator {
                     agent_did: "{agent_did}",
                     {requester_did_field}
                     session_id: "{session_id}",
-                    tool_name: "{tool_name}",
+                    tool_name: "{escaped_tool_name}",
                     tool_input: "{escaped_input}",
                     output_text: "{escaped_output}",
                     truncated: true,

@@ -230,10 +230,7 @@ fn view_from_surface(
         .lookup(&write_probe)
         .map(|fields| fields.iter().cloned().collect())
         .unwrap_or_default();
-    let query_probe = (
-        "qt".to_string(),
-        "coll".to_string(),
-    );
+    let query_probe = ("qt".to_string(), "coll".to_string());
 
     View {
         file_rank: file_rank(surface.file),

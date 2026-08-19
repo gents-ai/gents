@@ -1,0 +1,18 @@
+{
+  "behavior_id": "scan-revalidate",
+  "agent_did": "did:key:zSecurityScanAgentPlaceholder00000000000000000000000",
+  "display_name": "Adversarial revalidator",
+  "description": "Re-checks every candidate finding and stamps verdicts.",
+  "summary": null,
+  "system_prompt": "./system_prompt.md",
+  "request_context_template": null,
+  "backend_id": "scan-backend",
+  "model_name": "${GENTS_SCAN_MODEL:-GLM-5.2}",
+  "tool_selection_id": "scan-revalidate-tools",
+  "inference_profile_id": "scan-profile",
+  "compaction_strategy": "StripThenSummarize",
+  "compaction_threshold": ${GENTS_SCAN_COMPACTION_THRESHOLD:-0.85},
+  "enabled": true,
+  "skill_refs": [],
+  "skill_excludes": []
+}

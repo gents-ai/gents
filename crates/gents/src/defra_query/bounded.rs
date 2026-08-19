@@ -93,6 +93,12 @@ impl BoundedQueryTool {
                             self.decl.tool_name
                         );
                     }
+                    if query::is_restricted_field(&self.decl.collection, name) {
+                        bail!(
+                            "field `{name}` on {:?} is restricted and cannot be queried",
+                            self.decl.collection
+                        );
+                    }
                     if !fields.iter().any(|existing| existing == name) {
                         fields.push(name.to_string());
                     }
@@ -192,6 +198,13 @@ impl BoundedQueryTool {
                     }
                 }
                 Some(value) => {
+                    if query::is_restricted_field(&self.decl.collection, &field.name) {
+                        bail!(
+                            "filter `{}` on {:?} is restricted and cannot be queried",
+                            field.name,
+                            self.decl.collection
+                        );
+                    }
                     filter.insert(field.name.clone(), json!({ "_eq": value }));
                 }
             }

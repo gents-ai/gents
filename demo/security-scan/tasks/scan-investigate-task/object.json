@@ -1,0 +1,9 @@
+{
+  "task_id": "scan-investigate-task",
+  "name": "Investigate a candidate batch",
+  "description": null,
+  "behavior_id": "scan-investigate",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

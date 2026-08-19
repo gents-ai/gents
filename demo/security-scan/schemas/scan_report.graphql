@@ -1,0 +1,10 @@
+type ScanReport {
+  run_id: String @index(unique: true) @immutable
+  candidate_total: String
+  batch_count: String
+  confirmed_count: String
+  refuted_count: String
+  severity_counts: String
+  slug_counts: String
+  summary: String
+}

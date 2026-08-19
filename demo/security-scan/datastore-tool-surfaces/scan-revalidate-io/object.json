@@ -1,0 +1,50 @@
+{
+  "surface_id": "scan-revalidate-io",
+  "agent_did": "did:key:zSecurityScanAgentPlaceholder00000000000000000000000",
+  "display_name": "Revalidation reads and verdict writes",
+  "enabled": true,
+  "entries": [
+    {
+      "kind": "query",
+      "tool_name": "query_candidate_finding",
+      "collection": "CandidateFinding",
+      "description": "Load every candidate finding for this run.",
+      "fields": ["finding_id", "batch_id", "severity", "confidence", "path", "line", "title", "detail", "evidence"],
+      "filter_fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"}
+      ]
+    },
+    {
+      "tool_name": "write_finding_verdict",
+      "collection": "FindingVerdict",
+      "description": "Persist one confirmed or refuted decision for a candidate finding.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "finding_id", "required": true},
+        {"name": "batch_id", "required": true},
+        {"name": "severity", "required": true},
+        {"name": "confidence", "required": true},
+        {"name": "path", "required": true},
+        {"name": "line", "required": false},
+        {"name": "title", "required": true},
+        {"name": "detail", "required": true},
+        {"name": "verdict", "required": true},
+        {"name": "evidence", "required": true},
+        {"name": "verification", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_revalidation_summary",
+      "collection": "RevalidationSummary",
+      "description": "Close the revalidation ledger and trigger the report stage.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "candidate_count", "required": true},
+        {"name": "confirmed_count", "required": true},
+        {"name": "refuted_count", "required": true},
+        {"name": "summary", "required": true}
+      ]
+    }
+  ]
+}

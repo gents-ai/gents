@@ -162,6 +162,7 @@ mod tests {
                 "subagent-coordinator",
                 "subagent-host",
                 "app-collections",
+                "client-index",
             ]
         );
     }
