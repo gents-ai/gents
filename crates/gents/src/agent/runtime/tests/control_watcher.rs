@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use crate::runtime_status::ReconcilePhase;
 use crate::ProcessLifecycleState;
 
 async fn update_agent_principal_enabled(
@@ -100,6 +101,16 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     );
     let resolving = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
     assert_eq!(resolving.reconcile_phase, "resolving");
+
+    runtime_status
+        .set_reconcile_phase(ReconcilePhase::Idle)
+        .await;
+    let settled = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
+    tokio::time::advance(CONTROL_RECONCILE_SETTLE_RETRY + Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    let retried = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
+    assert_eq!(retried.reconcile_phase, "idle");
+    assert_eq!(retried.updated_at, settled.updated_at);
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();

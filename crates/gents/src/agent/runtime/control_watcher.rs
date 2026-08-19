@@ -11,7 +11,7 @@ use super::super::document_view;
 use super::super::DocumentResolveContext;
 
 pub(super) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
-const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_secs(1);
+pub(super) const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_secs(1);
 const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(60);
 const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 365);
 
@@ -33,6 +33,7 @@ pub(super) async fn run_control_watcher(
     let mut pending_visibility = false;
     let mut settle_deadline = None;
     let mut last_proposed_fingerprint = None::<String>;
+    let mut phase_transition_pending = false;
 
     loop {
         tokio::select! {
@@ -83,9 +84,13 @@ pub(super) async fn run_control_watcher(
                     sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_RETRY);
                     continue;
                 }
-                runtime_status
-                    .set_reconcile_phase(ReconcilePhase::Resolving)
-                    .await;
+                let phase_announced = phase_transition_pending;
+                if phase_announced {
+                    runtime_status
+                        .set_reconcile_phase(ReconcilePhase::Resolving)
+                        .await;
+                    phase_transition_pending = false;
+                }
                 let mut proposed_update = false;
                 match document_view::resolve_document_runtime_snapshot_from_view(
                     node.as_ref(),
@@ -97,6 +102,11 @@ pub(super) async fn run_control_watcher(
                     Ok(snapshot) => {
                         let fingerprint = snapshot.configuration_fingerprint();
                         if last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+                            if !phase_announced {
+                                runtime_status
+                                    .set_reconcile_phase(ReconcilePhase::Resolving)
+                                    .await;
+                            }
                             if proposals_tx.send(snapshot).await.is_err() {
                                 return Ok(());
                             }
@@ -133,6 +143,7 @@ pub(super) async fn run_control_watcher(
                     "backend measured-health transition detected; scheduling reconcile"
                 );
                 dirty = true;
+                phase_transition_pending = true;
                 runtime_status
                     .set_reconcile_phase(ReconcilePhase::Debouncing)
                     .await;
@@ -166,6 +177,7 @@ pub(super) async fn run_control_watcher(
                         }
                     }
                     dirty = true;
+                    phase_transition_pending = true;
                     settle_deadline =
                         Some(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_WINDOW);
                     runtime_status
@@ -228,6 +240,7 @@ pub(super) async fn run_control_watcher(
                     "runtime control update detected"
                 );
                 dirty = true;
+                phase_transition_pending = true;
                 settle_deadline =
                     Some(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_WINDOW);
                 runtime_status

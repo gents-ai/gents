@@ -40,14 +40,17 @@ The final causal split is:
 3. One-second qualification intervals rewrote unchanged `PeerEndpoint` and
    `PeerRegistry` leases every second even though the freshness window was five
    minutes.
-4. The old DefraDB sender expanded every new head into per-peer full-DAG work.
-5. Receiver recovery and terminal cleanup also acted on the same roots, causing
+4. Each relevant runtime-control update opened a 60-second settle window.
+   Unchanged one-second probes toggled `AgentRuntime` from idle to resolving and
+   back, producing roughly 110 status mutations after the initial reconcile.
+5. The old DefraDB sender expanded every new head into per-peer full-DAG work.
+6. Receiver recovery and terminal cleanup also acted on the same roots, causing
    CAR/provider storms and pending-store contention.
 
 DefraDB #1502 removes steps 4 and 5 by transferring one current-head hint into
 one durable receiver obligation, pacing rooted CAR recovery, qualifying
 providers, and serializing the P2P merge owner. This Gents change removes the
-avoidable production in steps 2 and 3 and suppresses a repeated no-match
+avoidable production in steps 2 through 4 and suppresses a repeated no-match
 `BearerPairingReady` delete.
 
 ## Gents changes
@@ -62,6 +65,9 @@ avoidable production in steps 2 and 3 and suppresses a repeated no-match
   sorted and deduplicated before comparison.
 - `BearerPairingReady` deletion first proves an issuer-and-peer row exists, so a
   settled sweep does not open an empty delete mutation.
+- Runtime-control settle probes rederive the snapshot without publishing phase
+  changes when its fingerprint is unchanged. An externally triggered reconcile
+  still publishes the complete phase lifecycle once.
 - Successful GraphQL mutations log their operation and affected-document count
   at debug level, making remaining write sources attributable.
 - The release fence reads DefraDB's effective replicator collection IDs instead
@@ -72,8 +78,8 @@ avoidable production in steps 2 and 3 and suppresses a repeated no-match
 
 The mutation-site audit found no other settled write clock in this bundle.
 Desired/applied pairing, bearer claims, network derivation, reciprocal intent,
-directory projection, and runtime status already converge to write-free
-fixpoints when their inputs are unchanged.
+directory projection, and runtime status now converge to write-free fixpoints
+when their inputs are unchanged.
 
 ## Reproduction and acceptance
 
@@ -115,7 +121,10 @@ used by join is the executable path already modeled and proved in
 `Proofs/PairingReconcile/Layering.lean` by merged PR #1156. The remaining Gents
 changes affect write timing, no-match plumbing, diagnostics, and acceptance
 observation without changing freshness thresholds, legal pairing transitions,
-admission bounds, retry dispositions, or convergence claims.
+admission bounds, retry dispositions, or convergence claims. Suppressing phase
+writes for implementation-internal settle probes does not remove a modeled
+document-observation transition; externally triggered reconciles retain the
+modeled `debouncing` and `resolving` phases.
 
 DefraDB #1502 carries the formal ownership change: TLA models the durable
 receiver obligation, provider qualification, bounded retry/admission, and
