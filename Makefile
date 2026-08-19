@@ -128,7 +128,6 @@ help:
 	@echo "    REVIEW_MIN_LENSES=4       Set the automatic lower bound"
 	@echo "    REVIEW_MAX_LENSES=12      Set the automatic upper bound"
 	@echo "    REVIEW_PR=auto            Discover the current branch's GitHub PR"
-	@echo "    REVIEW_KEEP_HOME=1        Unused for the talk kick; kept for gents demo run"
 	@echo "    REVIEW_CONTEXT_WINDOW=N   Match the serving endpoint's context window"
 	@echo "    REVIEW_MAX_OUTPUT_TOKENS=N Reserve output tokens per model turn"
 	@echo "    REVIEW_TEMPERATURE=N      Set the provider sampling temperature"
@@ -189,13 +188,14 @@ export GENTS_REVIEW_RETRY_MAX_RESAMPLE := $(REVIEW_RETRY_MAX_RESAMPLE)
 review-page:
 	@echo "page     http://127.0.0.1:$(REVIEW_PAGE_PORT)"
 	@echo "runtime  http://127.0.0.1:$(REVIEW_PORT)  (start with make review-serve)"
-	@REVIEW_PORT="$(REVIEW_PORT)" $(NPM) --prefix apps/review-demo run dev
+	@REVIEW_PORT="$(REVIEW_PORT)" REVIEW_PAGE_PORT="$(REVIEW_PAGE_PORT)" $(NPM) --prefix apps/review-demo run dev
 
 .PHONY: review-serve
 review-serve:
 	@test -d "$(REVIEW_ROOT)" || { echo "REVIEW_ROOT is not a directory: $(REVIEW_ROOT)" >&2; exit 2; }
 	@if test -n "$(REVIEW_RESET)"; then rm -rf "$(REVIEW_HOME)"; fi
 	@mkdir -p "$(REVIEW_HOME)"
+	@if ! test -f "$(REVIEW_HOME)/review-root"; then printf '%s\n' "$(abspath $(REVIEW_ROOT))" > "$(REVIEW_HOME)/review-root"; fi
 	@if ! test -f "$(REVIEW_HOME)/init.json"; then \
 		echo "init     $(REVIEW_HOME)"; \
 		$(CARGO) run -p gents-cli -- init \
@@ -237,6 +237,7 @@ review:
 	GENTS_REVIEW_JOB_ID="$(REVIEW_JOB_ID)" \
 	REVIEW_PORT="$(REVIEW_PORT)" \
 	REVIEW_PAGE_PORT="$(REVIEW_PAGE_PORT)" \
+	REVIEW_HOME="$(REVIEW_HOME)" \
 	node "$(REVIEW_PACK)/scripts/seed-review-job.mjs"
 
 .PHONY: maintain

@@ -51,6 +51,16 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) write_scope_kind: String,
     pub(crate) write_grants: Vec<LeanToolPolicyWriteGrant>,
     pub(crate) write_fields: Vec<String>,
+    #[serde(default)]
+    pub(crate) query_probe_tool: String,
+    #[serde(default)]
+    pub(crate) query_probe_collection: String,
+    #[serde(default)]
+    pub(crate) query_scope_kind: String,
+    #[serde(default)]
+    pub(crate) query_grants: Vec<LeanToolPolicyWriteGrant>,
+    #[serde(default)]
+    pub(crate) query_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

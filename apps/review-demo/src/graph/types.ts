@@ -111,7 +111,8 @@ export type NodeState =
   | "live"
   | "done"
   | "failed"
-  | "waiting-group";
+  | "waiting-group"
+  | "input-required";
 
 export type NodeKind = "job" | "area" | "scan" | "verify" | "verdict" | "triage";
 
@@ -128,13 +129,7 @@ export type GraphNode = {
   badges: string[];
 };
 
-export type GraphEdge = {
-  from: string;
-  to: string;
-};
-
 export type ReviewGraph = {
   runId: string | null;
   nodes: GraphNode[];
-  edges: GraphEdge[];
 };

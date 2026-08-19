@@ -52,12 +52,7 @@ export async function probeHealth(): Promise<boolean> {
 }
 
 export async function loadSnapshot(): Promise<ReviewSnapshot> {
-  const data = await postGraphql<
-    JobList &
-      RunData & {
-        AgentRequest?: ReviewSnapshot["requests"];
-      }
-  >(`{
+  const data = await postGraphql<JobList & RunData>(`{
     ReviewJob { _docID run_id focus repository_path base_ref head_ref lens_count lens_min lens_max pr_number }
     ReviewArea { _docID run_id area_id lens expected_total repository_path path instructions baseline }
     CandidateFinding { finding_id area_id run_id }

@@ -210,6 +210,7 @@ pub struct ToolPolicySurface {
     pub subagent_targets: EndpointScope<(String, String), ()>,
     pub background_tools: EndpointScope<String, ()>,
     pub write_tools: EndpointScope<(String, String), BTreeSet<String>>,
+    pub query_tools: EndpointScope<(String, String), BTreeSet<String>>,
 }
 
 impl ToolPolicySurface {
@@ -237,6 +238,7 @@ impl ToolPolicySurface {
             subagent_targets: EndpointScope::none(),
             background_tools: EndpointScope::none(),
             write_tools: EndpointScope::none(),
+            query_tools: EndpointScope::none(),
         }
     }
 
@@ -275,6 +277,7 @@ impl ToolPolicySurface {
             subagent_targets: EndpointScope::all(),
             background_tools: EndpointScope::all(),
             write_tools: EndpointScope::all(),
+            query_tools: EndpointScope::all(),
         }
     }
 
@@ -302,6 +305,7 @@ impl ToolPolicySurface {
             subagent_targets: EndpointScope::all(),
             background_tools: EndpointScope::all(),
             write_tools: EndpointScope::all(),
+            query_tools: EndpointScope::all(),
         }
     }
 
@@ -423,7 +427,8 @@ impl ToolPolicySurface {
                     .iter()
                     .map(|name| name.trim().to_string()),
             ),
-            write_tools: write_scope_from_decls(&selection.write_tools, &selection.query_tools),
+            write_tools: write_scope_from_decls(&selection.write_tools),
+            query_tools: query_scope_from_decls(&selection.query_tools),
         }
     }
 
@@ -465,6 +470,11 @@ impl ToolPolicySurface {
             write_tools: self
                 .write_tools
                 .meet_with(&other.write_tools, |left, right| {
+                    left.intersection(right).cloned().collect()
+                }),
+            query_tools: self
+                .query_tools
+                .meet_with(&other.query_tools, |left, right| {
                     left.intersection(right).cloned().collect()
                 }),
         }
@@ -554,10 +564,17 @@ impl ToolPolicySurface {
                     decl.tool_name.trim().to_string(),
                     decl.collection.trim().to_string(),
                 );
-                match &self.write_tools {
+                match &self.query_tools {
                     EndpointScope::None => None,
                     EndpointScope::All => Some(decl.clone()),
-                    EndpointScope::Only(grants) => grants.get(&key).map(|fields| {
+                    EndpointScope::Only(grants) => grants.get(&key).and_then(|fields| {
+                        // Dropping a runtime-filled filter would un-scope the
+                        // read (fail-open). Drop the whole tool instead.
+                        if decl.filter_fields.iter().any(|field| {
+                            field.fill.is_some() && !fields.contains(field.name.trim())
+                        }) {
+                            return None;
+                        }
                         let mut narrowed = decl.clone();
                         narrowed.fields = decl
                             .fields
@@ -571,7 +588,7 @@ impl ToolPolicySurface {
                             .filter(|field| fields.contains(field.name.trim()))
                             .cloned()
                             .collect();
-                        narrowed
+                        Some(narrowed)
                     }),
                 }
             })
@@ -654,7 +671,6 @@ where
 
 fn write_scope_from_decls(
     write_tools: &[WriteToolDecl],
-    query_tools: &[QueryToolDecl],
 ) -> EndpointScope<(String, String), BTreeSet<String>> {
     let mut grants = BTreeMap::new();
     for decl in write_tools {
@@ -672,6 +688,13 @@ fn write_scope_from_decls(
             fields,
         );
     }
+    EndpointScope::Only(grants)
+}
+
+fn query_scope_from_decls(
+    query_tools: &[QueryToolDecl],
+) -> EndpointScope<(String, String), BTreeSet<String>> {
+    let mut grants = BTreeMap::new();
     for decl in query_tools {
         let mut fields = decl
             .fields

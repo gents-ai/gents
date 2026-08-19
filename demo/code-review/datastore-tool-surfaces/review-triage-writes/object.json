@@ -1,9 +1,19 @@
 {
   "surface_id": "review-triage-writes",
   "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
-  "display_name": "Triage report writes",
+  "display_name": "Triage reads and report writes",
   "enabled": true,
   "entries": [
+    {
+      "kind": "read",
+      "tool_name": "read_finding",
+      "collection": "Finding",
+      "description": "Load every operator-facing Finding for this run. run_id is filled by the runtime.",
+      "fields": ["finding_id", "area_id", "severity", "confidence", "title", "verdict"],
+      "filter_fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"}
+      ]
+    },
     {
       "tool_name": "write_triage_report",
       "collection": "TriageReport",

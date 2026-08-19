@@ -59,7 +59,13 @@ def surfaceViewJson (v : SurfaceView) : String :=
     ++ "\"write_scope_kind\":" ++ jsonString v.writeScopeKind ++ ","
     ++ "\"write_grants\":"
       ++ jsonArray (v.writeGrants.map writeGrantViewJson) ++ ","
-    ++ "\"write_fields\":" ++ jsonArray (v.writeFields.map jsonString)
+    ++ "\"write_fields\":" ++ jsonArray (v.writeFields.map jsonString) ++ ","
+    ++ "\"query_probe_tool\":" ++ jsonString v.queryProbe.1 ++ ","
+    ++ "\"query_probe_collection\":" ++ jsonString v.queryProbe.2 ++ ","
+    ++ "\"query_scope_kind\":" ++ jsonString v.queryScopeKind ++ ","
+    ++ "\"query_grants\":"
+      ++ jsonArray (v.queryGrants.map writeGrantViewJson) ++ ","
+    ++ "\"query_fields\":" ++ jsonArray (v.queryFields.map jsonString)
   ++ "}"
 
 def toolPolicyCaseJson (c : Case) : String :=

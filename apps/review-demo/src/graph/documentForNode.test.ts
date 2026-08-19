@@ -47,4 +47,24 @@ describe("documentForNode", () => {
       fields: { summary: "one candidate" },
     });
   });
+
+  it("does not return another run's document when area ids collide", () => {
+    const twoRuns: ReviewSnapshot = {
+      ...snapshot,
+      areas: [
+        { run_id: "run-2", area_id: "area-1", lens: "other" },
+        { run_id: "run-1", area_id: "area-1", lens: "lean" },
+      ],
+      scans: [
+        { run_id: "run-2", area_id: "area-1", summary: "wrong run" },
+        { run_id: "run-1", area_id: "area-1", summary: "this run" },
+      ],
+    };
+    expect(
+      documentForNode(node({ id: "area:area-1", kind: "area" }), twoRuns)?.fields.lens,
+    ).toBe("lean");
+    expect(
+      documentForNode(node({ id: "scan:area-1", kind: "scan" }), twoRuns)?.fields.summary,
+    ).toBe("this run");
+  });
 });

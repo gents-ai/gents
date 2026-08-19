@@ -1,33 +1,27 @@
 import type {
   AgentRequestRow,
-  GraphEdge,
   GraphNode,
   NodeState,
   ReviewGraph,
   ReviewSnapshot,
 } from "./types.ts";
 
-const FAILED = new Set([
-  "failed",
-  "error",
-  "timedout",
-  "cancelled",
-  "interrupted",
-  "superseded",
-  "dead",
-]);
-
+const FAILED = new Set(["failed", "dead", "interrupted", "superseded"]);
 const DONE = new Set(["completed"]);
 
 function requestState(request: AgentRequestRow | undefined, exists: boolean): NodeState {
   if (!exists) {
     return "expected";
   }
-  const lifecycle = request?.lifecycle_state?.toLowerCase() ?? "";
-  if (FAILED.has(lifecycle)) {
+  const lifecycle = request?.lifecycle_state ?? "";
+  if (lifecycle === "inputRequired") {
+    return "input-required";
+  }
+  const normalized = lifecycle.toLowerCase();
+  if (FAILED.has(normalized)) {
     return "failed";
   }
-  if (DONE.has(lifecycle)) {
+  if (DONE.has(normalized)) {
     return "done";
   }
   return "live";
@@ -38,31 +32,14 @@ export type ProjectOptions = {
 };
 
 function jobRecency(snapshot: ReviewSnapshot, runId: string): string {
-  const job = snapshot.jobs.find((row) => row.run_id === runId);
-  if (job?.created_at) {
-    return job.created_at;
+  const times = snapshot.requests
+    .filter((request) => request.caused_by_correlation === runId)
+    .map((request) => request.created_at)
+    .filter((value): value is string => Boolean(value));
+  if (times.length === 0) {
+    return "";
   }
-  const recon = snapshot.requests.find(
-    (request) =>
-      request.caused_by_trigger_id === "review-recon" &&
-      (request.caused_by_correlation === runId || !request.caused_by_correlation),
-  );
-  return recon?.created_at ?? "";
-}
-
-function jobActivity(snapshot: ReviewSnapshot, runId: string): number {
-  const count = (rows: { run_id: string }[]) => rows.filter((row) => row.run_id === runId).length;
-  const requests = snapshot.requests.filter((request) => request.caused_by_correlation === runId)
-    .length;
-  return (
-    count(snapshot.areas) * 10 +
-    count(snapshot.scans) * 10 +
-    count(snapshot.candidates) +
-    count(snapshot.verdicts) +
-    count(snapshot.summaries) * 5 +
-    count(snapshot.reports) * 5 +
-    requests
-  );
+  return times.slice().sort().at(-1) ?? "";
 }
 
 function selectJob(snapshot: ReviewSnapshot, pinnedRunId?: string | null) {
@@ -76,10 +53,6 @@ function selectJob(snapshot: ReviewSnapshot, pinnedRunId?: string | null) {
     }
   }
   return [...snapshot.jobs].sort((left, right) => {
-    const activity = jobActivity(snapshot, left.run_id) - jobActivity(snapshot, right.run_id);
-    if (activity !== 0) {
-      return activity;
-    }
     const leftAt = jobRecency(snapshot, left.run_id);
     const rightAt = jobRecency(snapshot, right.run_id);
     if (leftAt !== rightAt) {
@@ -140,15 +113,6 @@ export function projectReviewGraph(
           runId: "",
         }),
       ],
-      edges: [
-        { from: "job:pending", to: "area:pending-0" },
-        { from: "area:pending-0", to: "scan:pending-0" },
-        { from: "scan:pending-0", to: "verify:pending" },
-        { from: "job:pending", to: "area:pending-1" },
-        { from: "area:pending-1", to: "scan:pending-1" },
-        { from: "scan:pending-1", to: "verify:pending" },
-        { from: "verify:pending", to: "triage:pending" },
-      ],
     };
   }
 
@@ -174,14 +138,6 @@ export function projectReviewGraph(
   const verifyReq = findRequest(requests, "review-verify");
   const triageReq = findRequest(requests, "review-triage");
 
-  const expectedTotal = Number.parseInt(areas[0]?.expected_total ?? "", 10);
-  const areaSlots =
-    areas.length > 0
-      ? areas
-      : Number.isFinite(expectedTotal) && expectedTotal > 0
-        ? []
-        : [];
-
   const nodes: GraphNode[] = [
     node({
       id: `job:${runId}`,
@@ -194,87 +150,69 @@ export function projectReviewGraph(
       sourceDocId: job._docID,
     }),
   ];
-  const edges: GraphEdge[] = [];
 
-  const areaNodes =
-    areaSlots.length > 0
-      ? areaSlots.map((area, index) => {
-          const request = findRequest(requests, "review-scan", area._docID);
-          const scan = scans.find((row) => row.area_id === area.area_id);
-          const findingCount = candidates.filter((row) => row.area_id === area.area_id).length;
-          const areaId = `area:${area.area_id}`;
-          const scanId = `scan:${area.area_id}`;
-          const areaState = requestState(request, true);
-          const badges: string[] = [];
-          if (scan) {
-            badges.push("scanned");
-          }
-          if (findingCount > 0) {
-            badges.push(`${findingCount} candidate${findingCount === 1 ? "" : "s"}`);
-          }
-          nodes.push(
-            node({
-              id: areaId,
-              kind: "area",
-              label: `Area ${index + 1}`,
-              detail: area.lens || area.area_id,
-              state: areaState,
-              runId,
-              requestId: request?.request_id,
-              sessionId: request?.session_id ?? undefined,
-              sourceDocId: area._docID,
-              badges,
-            }),
-          );
-          edges.push({ from: `job:${runId}`, to: areaId });
-          nodes.push(
-            node({
-              id: scanId,
-              kind: "scan",
-              label: `Scan ${index + 1}`,
-              detail: area.lens || area.area_id,
-              state: scan ? requestState(request, true) : "expected",
-              runId,
-              requestId: request?.request_id,
-              sessionId: request?.session_id ?? undefined,
-              sourceDocId: scan?._docID,
-            }),
-          );
-          edges.push({ from: areaId, to: scanId });
-          edges.push({ from: scanId, to: `verify:${runId}` });
-          return areaId;
-        })
-      : (() => {
-          const placeholders = ["pending-0", "pending-1"];
-          for (const [index, key] of placeholders.entries()) {
-            const areaId = `area:${key}`;
-            const scanId = `scan:${key}`;
-            nodes.push(
-              node({
-                id: areaId,
-                kind: "area",
-                label: `Area ${index + 1}`,
-                state: "expected",
-                runId,
-              }),
-            );
-            nodes.push(
-              node({
-                id: scanId,
-                kind: "scan",
-                label: `Scan ${index + 1}`,
-                state: "expected",
-                runId,
-              }),
-            );
-            edges.push({ from: `job:${runId}`, to: areaId });
-            edges.push({ from: areaId, to: scanId });
-            edges.push({ from: scanId, to: `verify:${runId}` });
-          }
-          return placeholders.map((key) => `area:${key}`);
-        })();
-
-  void areaNodes;
+  if (areas.length > 0) {
+    for (const [index, area] of areas.entries()) {
+      const request = findRequest(requests, "review-scan", area._docID);
+      const scan = scans.find((row) => row.area_id === area.area_id);
+      const findingCount = candidates.filter((row) => row.area_id === area.area_id).length;
+      const badges: string[] = [];
+      if (scan) {
+        badges.push("scanned");
+      }
+      if (findingCount > 0) {
+        badges.push(`${findingCount} candidate${findingCount === 1 ? "" : "s"}`);
+      }
+      nodes.push(
+        node({
+          id: `area:${area.area_id}`,
+          kind: "area",
+          label: `Area ${index + 1}`,
+          detail: area.lens || area.area_id,
+          state: requestState(request, true),
+          runId,
+          requestId: request?.request_id,
+          sessionId: request?.session_id ?? undefined,
+          sourceDocId: area._docID,
+          badges,
+        }),
+      );
+      nodes.push(
+        node({
+          id: `scan:${area.area_id}`,
+          kind: "scan",
+          label: `Scan ${index + 1}`,
+          detail: area.lens || area.area_id,
+          state: scan ? requestState(request, true) : "expected",
+          runId,
+          requestId: request?.request_id,
+          sessionId: request?.session_id ?? undefined,
+          sourceDocId: scan?._docID,
+        }),
+      );
+    }
+  } else {
+    for (const [index, key] of ["pending-0", "pending-1"].entries()) {
+      nodes.push(
+        node({
+          id: `area:${key}`,
+          kind: "area",
+          label: `Area ${index + 1}`,
+          state: "expected",
+          runId,
+        }),
+      );
+      nodes.push(
+        node({
+          id: `scan:${key}`,
+          kind: "scan",
+          label: `Scan ${index + 1}`,
+          state: "expected",
+          runId,
+        }),
+      );
+    }
+  }
 
   let verifyState: NodeState = "expected";
   if (summary) {
@@ -325,11 +263,6 @@ export function projectReviewGraph(
         sessionId: verifyReq?.session_id ?? undefined,
       }),
     );
-    edges.push({ from: `verify:${runId}`, to: verdictId });
-    edges.push({ from: verdictId, to: `triage:${runId}` });
-  }
-  if (sortedVerdicts.length === 0) {
-    edges.push({ from: `verify:${runId}`, to: `triage:${runId}` });
   }
 
   const triageState = report || triageReq ? requestState(triageReq, Boolean(report || triageReq)) : "expected";
@@ -351,5 +284,5 @@ export function projectReviewGraph(
     }),
   );
 
-  return { runId, nodes, edges };
+  return { runId, nodes };
 }

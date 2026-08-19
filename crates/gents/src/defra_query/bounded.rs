@@ -91,12 +91,6 @@ impl BoundedQueryTool {
                             self.decl.tool_name
                         );
                     }
-                    if query::is_restricted_field(&self.decl.collection, name) {
-                        bail!(
-                            "field `{name}` on {:?} is restricted and cannot be queried",
-                            self.decl.collection
-                        );
-                    }
                     if !fields.iter().any(|existing| existing == name) {
                         fields.push(name.to_string());
                     }
@@ -123,7 +117,10 @@ impl BoundedQueryTool {
                 let Some(limit) = number.as_u64().and_then(|value| u32::try_from(value).ok()) else {
                     bail!("tool `{}` limit must be a positive integer", self.decl.tool_name);
                 };
-                Ok(limit.clamp(1, MAX_LIMIT))
+                if limit == 0 {
+                    bail!("tool `{}` limit must be a positive integer", self.decl.tool_name);
+                }
+                Ok(limit.min(MAX_LIMIT))
             }
             Some(_) => bail!("tool `{}` limit must be a positive integer", self.decl.tool_name),
         }
@@ -185,7 +182,15 @@ impl BoundedQueryTool {
                 };
                 Some(Value::String(filled))
             } else {
-                args.get(&field.name).cloned()
+                match args.get(&field.name) {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(text)) => Some(Value::String(text.clone())),
+                    Some(_) => bail!(
+                        "filter `{}` for tool `{}` must be a string",
+                        field.name,
+                        self.decl.tool_name
+                    ),
+                }
             };
             match value {
                 Some(Value::Null) | None => {
@@ -207,13 +212,6 @@ impl BoundedQueryTool {
                     }
                 }
                 Some(value) => {
-                    if query::is_restricted_field(&self.decl.collection, &field.name) {
-                        bail!(
-                            "filter `{}` on {:?} is restricted and cannot be queried",
-                            field.name,
-                            self.decl.collection
-                        );
-                    }
                     filter.insert(field.name.clone(), json!({ "_eq": value }));
                 }
             }
@@ -330,9 +328,9 @@ impl Tool for BoundedQueryTool {
                 MAX_FIELD_STRING_BYTES, total_bytes
             ));
         }
-        if count as u32 == limit && limit == MAX_LIMIT {
+        if count as u32 == limit {
             payload["limit_note"] = json!(format!(
-                "Result set hit the {MAX_LIMIT}-row cap; narrow the filter if more rows exist."
+                "Result set hit the {limit}-row cap; raise limit or narrow the filter if more rows exist."
             ));
         }
         serde_json::to_string_pretty(&payload)
@@ -450,5 +448,49 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn rejects_non_string_model_filter() {
+        let node = node_with_findings().await;
+        let tool = BoundedQueryTool::new(
+            node,
+            QueryToolDecl {
+                tool_name: "query_candidate_finding".into(),
+                collection: "CandidateFinding".into(),
+                description: String::new(),
+                fields: vec!["finding_id".into(), "title".into()],
+                filter_fields: vec![WriteToolField {
+                    name: "title".into(),
+                    required: false,
+                    fill: None,
+                }],
+            },
+        );
+        let mut args = Map::new();
+        args.insert("title".into(), json!(1));
+        let err = Tool::call(&tool, BoundedQueryParams(args)).await.unwrap_err();
+        assert!(err.to_string().contains("must be a string"));
+    }
+
+    #[tokio::test]
+    async fn rejects_zero_limit() {
+        let node = node_with_findings().await;
+        let tool = BoundedQueryTool::new(node, decl());
+        let mut args = Map::new();
+        args.insert("limit".into(), json!(0));
+        let err = crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            None,
+            Some("run-42".to_string()),
+            Default::default(),
+            false,
+            async { Tool::call(&tool, BoundedQueryParams(args)).await.unwrap_err() },
+        )
+        .await;
+        assert!(err.to_string().contains("positive integer"));
     }
 }

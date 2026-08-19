@@ -9,7 +9,7 @@ use gents::template::{
 use gents::{
     is_reserved_builtin_tool_name, parse_template_for_validation,
     schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
-    QueryToolDecl, SubagentTarget, SurfaceToolDecl, VariableRef, WriteToolDecl,
+    SubagentTarget, SurfaceToolDecl, VariableRef, WriteToolDecl,
 };
 
 use super::{DesiredDatastoreToolSurface, DesiredStateManifest, DesiredToolSelection};
@@ -1566,6 +1566,18 @@ fn validate_datastore_surface_links(
                             selection.selection_id
                         ));
                     }
+                    if selection
+                        .cli_tool_names
+                        .iter()
+                        .any(|name| name.trim() == decl.tool_name())
+                    {
+                        errors.push(format!(
+                            "DatastoreToolSurface {} tool_name {:?} collides with a cli_tool_names entry in tool selection {}",
+                            surface_id,
+                            decl.tool_name(),
+                            selection.selection_id
+                        ));
+                    }
                     match decl {
                         SurfaceToolDecl::Create(_) => merged.push(entry.clone()),
                         SurfaceToolDecl::Query(_) => {}
@@ -1618,32 +1630,15 @@ fn validate_surface_entries(label: &str, entries: &[String], errors: &mut Vec<St
                 decl.tool_name()
             ));
         }
-        match decl {
-            SurfaceToolDecl::Create(create) => {
-                if !create.output_obligation_is_well_formed() {
-                    errors.push(format!(
-                        "{label} tool {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
-                        create.tool_name
-                    ));
-                }
-            }
-            SurfaceToolDecl::Query(query) => {
-                if let Err(error) = validate_one_query_decl(&query) {
-                    errors.push(format!("{label} {error}"));
-                }
+        if let SurfaceToolDecl::Create(create) = decl {
+            if !create.output_obligation_is_well_formed() {
+                errors.push(format!(
+                    "{label} tool {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
+                    create.tool_name
+                ));
             }
         }
     }
-}
-
-fn validate_one_query_decl(decl: &QueryToolDecl) -> Result<(), String> {
-    if decl.fields.is_empty() {
-        return Err(format!(
-            "query tool {:?} must declare at least one projection field",
-            decl.tool_name
-        ));
-    }
-    Ok(())
 }
 
 fn validate_write_tools(

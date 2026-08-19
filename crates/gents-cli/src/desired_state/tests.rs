@@ -3049,6 +3049,35 @@ fn validate_accepts_surface_query_entry() {
 }
 
 #[test]
+fn validate_rejects_query_tool_name_colliding_with_cli_tool() {
+    use gents::{QueryToolDecl, SurfaceToolDecl};
+    let mut manifest = manifest_with_default_behavior();
+    let mut surface = sample_surface("scan-reads");
+    surface.entries.push(
+        serde_json::to_string(&SurfaceToolDecl::Query(QueryToolDecl {
+            tool_name: "gh".to_string(),
+            collection: "CandidateFinding".to_string(),
+            description: "Load candidates".to_string(),
+            fields: vec!["finding_id".to_string()],
+            filter_fields: Vec::new(),
+        }))
+        .unwrap(),
+    );
+    manifest.datastore_tool_surfaces.push(surface);
+    let mut sel = sample_tool_selection("stage-tools");
+    sel.agent_did = "did:test:test".to_string();
+    sel.datastore_tool_surface_ids = vec!["scan-reads".to_string()];
+    sel.cli_tool_names = vec!["gh".to_string()];
+    manifest.tool_selections.push(sel);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|error| error.contains("cli_tool_names")),
+        "query/cli name collision should fail apply validation, got {errors:?}"
+    );
+}
+
+#[test]
 fn validate_accepts_surface_linked_tool_selection() {
     let mut manifest = manifest_with_default_behavior();
     manifest

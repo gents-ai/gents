@@ -30,8 +30,21 @@ export function App() {
   const [health, setHealth] = useState<RuntimeHealth>("offline");
   const [snapshot, setSnapshot] = useState<ReviewSnapshot>(EMPTY);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [followedRunId, setFollowedRunId] = useState<string | null>(null);
+  const [followedRunId, setFollowedRunId] = useState<string | null>(() => {
+    return new URLSearchParams(window.location.search).get("run");
+  });
   const seenJobIds = useMemo(() => new Set<string>(), []);
+
+  const followRun = (runId: string | null) => {
+    setFollowedRunId(runId);
+    const url = new URL(window.location.href);
+    if (runId) {
+      url.searchParams.set("run", runId);
+    } else {
+      url.searchParams.delete("run");
+    }
+    window.history.replaceState(null, "", url);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -74,7 +87,7 @@ export function App() {
             known.add(runId);
           }
           if (fresh.length === 1 && known.size > fresh.length) {
-            setFollowedRunId(fresh[0]!);
+            followRun(fresh[0]!);
           }
           setSnapshot(next);
           setHealth("ready");
@@ -95,14 +108,9 @@ export function App() {
     };
   }, [health === "offline"]);
 
-  const urlRunId = useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get("run");
-  }, []);
-  const pinnedRunId = urlRunId ?? followedRunId;
   const graph = useMemo(
-    () => projectReviewGraph(snapshot, { pinnedRunId }),
-    [pinnedRunId, snapshot],
+    () => projectReviewGraph(snapshot, { pinnedRunId: followedRunId }),
+    [followedRunId, snapshot],
   );
   const selected = graph.nodes.find((node) => node.id === selectedId) ?? null;
   const tokens = useMemo(
@@ -138,7 +146,7 @@ export function App() {
                   key={job.run_id}
                   type="button"
                   className={`run-chip${graph.runId === job.run_id ? " on" : ""}`}
-                  onClick={() => setFollowedRunId(job.run_id)}
+                  onClick={() => followRun(job.run_id)}
                 >
                   {job.run_id}
                 </button>

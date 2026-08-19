@@ -4,9 +4,9 @@
   "version": "0.11.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 19190 --strictPort --host 127.0.0.1",
+    "dev": "vite --strictPort --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --port 19190 --strictPort",
+    "preview": "vite preview --strictPort",
     "test": "vitest run"
   },
   "dependencies": {

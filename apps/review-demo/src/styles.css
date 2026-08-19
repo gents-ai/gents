@@ -302,7 +302,8 @@ a:hover {
   color: var(--color-error);
 }
 
-.dag-node.state-waiting-group {
+.dag-node.state-waiting-group,
+.dag-node.state-input-required {
   border-style: solid;
   border-color: var(--color-warning);
   color: var(--color-warning-soft);

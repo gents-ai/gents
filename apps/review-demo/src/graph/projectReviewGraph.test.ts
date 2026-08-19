@@ -34,15 +34,6 @@ describe("projectReviewGraph", () => {
       ["verify", "expected"],
       ["triage", "expected"],
     ]);
-    expect(graph.edges).toEqual([
-      { from: "job:pending", to: "area:pending-0" },
-      { from: "area:pending-0", to: "scan:pending-0" },
-      { from: "scan:pending-0", to: "verify:pending" },
-      { from: "job:pending", to: "area:pending-1" },
-      { from: "area:pending-1", to: "scan:pending-1" },
-      { from: "scan:pending-1", to: "verify:pending" },
-      { from: "verify:pending", to: "triage:pending" },
-    ]);
   });
 
   it("marks recon live when only the newest job exists", () => {
@@ -240,13 +231,10 @@ describe("projectReviewGraph", () => {
     });
   });
 
-  it("does not let an empty newer job hide an active run", () => {
+  it("follows the newest request, not the most active finished run", () => {
     const graph = projectReviewGraph({
       ...emptySnapshot(),
-      jobs: [
-        { run_id: "exp-live", created_at: "2026-08-18T10:00:00Z" },
-        { run_id: "review-later", created_at: "2026-08-18T18:30:00Z" },
-      ],
+      jobs: [{ run_id: "exp-live" }, { run_id: "review-later" }],
       areas: [
         {
           run_id: "exp-live",
@@ -273,8 +261,7 @@ describe("projectReviewGraph", () => {
         },
       ],
     });
-    expect(graph.runId).toBe("exp-live");
-    expect(graph.nodes.find((node) => node.kind === "area")?.label).toBe("Area 1");
+    expect(graph.runId).toBe("review-later");
   });
 
   it("watches a pinned run_id even when another job is newer", () => {

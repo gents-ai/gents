@@ -1769,16 +1769,19 @@ fn merge_surface_entries_match_inline_write_tools() {
         },
     );
 
-    let from_inline = merge_write_tools_with_surfaces(&inline_selection, &view).unwrap();
-    let from_surface = merge_write_tools_with_surfaces(&surface_selection, &view).unwrap();
+    let from_inline = merge_surface_tools(&inline_selection, &view).unwrap();
+    let from_surface = merge_surface_tools(&surface_selection, &view).unwrap();
     assert_eq!(
         from_inline, from_surface,
         "surface expand must produce the same WriteToolDecl list as equivalent inline write_tools"
     );
-    assert_eq!(from_surface.len(), 1);
-    assert_eq!(from_surface[0].tool_name, "write_experiment_finding");
-    assert_eq!(from_surface[0].collection, "ExperimentFinding");
-    assert_eq!(from_surface[0].fields.len(), 4);
+    assert_eq!(from_surface.write_tools.len(), 1);
+    assert_eq!(
+        from_surface.write_tools[0].tool_name,
+        "write_experiment_finding"
+    );
+    assert_eq!(from_surface.write_tools[0].collection, "ExperimentFinding");
+    assert_eq!(from_surface.write_tools[0].fields.len(), 4);
 }
 
 #[test]
@@ -1791,7 +1794,7 @@ fn merge_fails_closed_on_missing_surface() {
         ..Default::default()
     };
     let view = empty_runtime_view(agent_did);
-    let err = merge_write_tools_with_surfaces(&selection, &view).unwrap_err();
+    let err = merge_surface_tools(&selection, &view).unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("missing") && msg.contains("does-not-exist"),
@@ -1825,7 +1828,7 @@ fn merge_fails_closed_on_disabled_surface() {
         datastore_tool_surface_ids: Some(vec!["disabled-writes".to_string()]),
         ..Default::default()
     };
-    let err = merge_write_tools_with_surfaces(&selection, &view).unwrap_err();
+    let err = merge_surface_tools(&selection, &view).unwrap_err();
     assert!(
         err.to_string().contains("disabled"),
         "expected disabled error, got: {err}"
@@ -1864,7 +1867,7 @@ fn merge_reports_invalid_output_obligation_fields() {
         ..Default::default()
     };
 
-    let error = merge_write_tools_with_surfaces(&selection, &view).unwrap_err();
+    let error = merge_surface_tools(&selection, &view).unwrap_err();
     let message = error.to_string();
     assert!(message.contains("expected_count_field"), "got: {message}");
     assert!(!message.contains("zero minimum_writes"), "got: {message}");
@@ -1896,7 +1899,7 @@ fn merge_fails_closed_on_foreign_agent_surface() {
         datastore_tool_surface_ids: Some(vec!["foreign-writes".to_string()]),
         ..Default::default()
     };
-    let err = merge_write_tools_with_surfaces(&selection, &view).unwrap_err();
+    let err = merge_surface_tools(&selection, &view).unwrap_err();
     assert!(
         err.to_string().contains("different agent"),
         "expected foreign agent error, got: {err}"
@@ -1931,7 +1934,7 @@ fn merge_fails_closed_on_name_collision() {
         datastore_tool_surface_ids: Some(vec!["experiment-writes".to_string()]),
         ..Default::default()
     };
-    let err = merge_write_tools_with_surfaces(&selection, &view).unwrap_err();
+    let err = merge_surface_tools(&selection, &view).unwrap_err();
     assert!(
         err.to_string().contains("duplicate"),
         "expected duplicate name error, got: {err}"

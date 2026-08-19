@@ -282,6 +282,13 @@ pub(crate) fn validate_query_tool_declarations(
                     field.name
                 )
             })?;
+            if matches!(field.name.trim(), "fields" | "limit") {
+                return Err(anyhow::anyhow!(
+                    "query_tools[{i}] (tool {:?}) filter_fields[{j}] {:?} collides with a reserved query argument",
+                    decl.tool_name,
+                    field.name.trim()
+                ));
+            }
             if !seen_filter_names.insert(field.name.trim()) {
                 return Err(anyhow::anyhow!(
                     "query_tools[{i}] (tool {:?}) has a duplicate filter field {:?}; each filter_fields name must be unique",
@@ -383,5 +390,22 @@ mod tests {
         assert!(!decl.is_well_formed());
         let err = validate_query_tool_declarations(&[decl], &[], &[]).unwrap_err();
         assert!(err.to_string().contains("at least one projection"));
+    }
+
+    #[test]
+    fn query_decl_rejects_reserved_filter_names() {
+        let decl = QueryToolDecl {
+            tool_name: "query_finding".into(),
+            collection: "Finding".into(),
+            description: String::new(),
+            fields: vec!["title".into()],
+            filter_fields: vec![WriteToolField {
+                name: "limit".into(),
+                required: true,
+                fill: None,
+            }],
+        };
+        let err = validate_query_tool_declarations(&[decl], &[], &[]).unwrap_err();
+        assert!(err.to_string().contains("reserved query argument"));
     }
 }

@@ -52,7 +52,7 @@
       },
       {
         "task_id": "review-triage-task",
-        "required_tool_names": ["write_triage_report"]
+        "required_tool_names": ["read_finding", "write_triage_report"]
       }
     ],
     "source_edges": [],

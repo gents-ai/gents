@@ -23,11 +23,15 @@ export function documentForNode(
       return row ? { collection: "ReviewJob", fields: compact(row) } : null;
     }
     case "area": {
-      const row = snapshot.areas.find((area) => area.area_id === areaId);
+      const row = snapshot.areas.find(
+        (area) => area.area_id === areaId && area.run_id === node.runId,
+      );
       return row ? { collection: "ReviewArea", fields: compact(row) } : null;
     }
     case "scan": {
-      const row = snapshot.scans.find((scan) => scan.area_id === areaId);
+      const row = snapshot.scans.find(
+        (scan) => scan.area_id === areaId && scan.run_id === node.runId,
+      );
       return row ? { collection: "ScanResult", fields: compact(row) } : null;
     }
     case "verify": {
@@ -36,7 +40,9 @@ export function documentForNode(
     }
     case "verdict": {
       const findingId = node.id.slice("verdict:".length);
-      const row = snapshot.verdicts.find((verdict) => verdict.finding_id === findingId);
+      const row = snapshot.verdicts.find(
+        (verdict) => verdict.finding_id === findingId && verdict.run_id === node.runId,
+      );
       return row ? { collection: "FindingVerdict", fields: compact(row) } : null;
     }
     case "triage": {

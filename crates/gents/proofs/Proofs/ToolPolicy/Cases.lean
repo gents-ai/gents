@@ -51,6 +51,10 @@ structure SurfaceView where
   writeScopeKind : String
   writeGrants : List WriteGrantView
   writeFields : List String
+  queryProbe : String × String
+  queryScopeKind : String
+  queryGrants : List WriteGrantView
+  queryFields : List String
   deriving Repr
 
 structure Case where
@@ -83,6 +87,11 @@ def knownReadOnlyCmds : List String :=
 
 def knownWriteKeys : List (String × String) :=
   [("wt", "coll"), ("wt", "coll1"), ("wt", "coll2")]
+
+def knownQueryKeys : List (String × String) :=
+  [("qt", "coll")]
+
+def probeQuery : String × String := ("qt", "coll")
 
 def knownSelfConfigCategories : List String :=
   ["automation", "backend", "behavior", "mcp_service", "profile", "tools"]
@@ -131,6 +140,20 @@ def writeGrantViews :
     EndpointScope (String × String) (Finset String) → List WriteGrantView
   | .only keys val =>
       knownWriteKeys.filterMap (fun key =>
+        if key ∈ keys then
+          some
+            { tool := key.1
+            , collection := key.2
+            , fields := fieldList (val key) }
+        else
+          none)
+  | .all => []
+  | .none => []
+
+def queryGrantViews :
+    EndpointScope (String × String) (Finset String) → List WriteGrantView
+  | .only keys val =>
+      knownQueryKeys.filterMap (fun key =>
         if key ∈ keys then
           some
             { tool := key.1
@@ -212,7 +235,8 @@ def surface (file : FileCap) (bash : BashPolicy)
   , selfConfigCategories := .all
   , subagentTargets := .all
   , backgroundTools := .all
-  , writeTools := write }
+  , writeTools := write
+  , queryTools := .all }
 
 def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : SurfaceView :=
   { fileRank := s.file.rank
@@ -255,6 +279,12 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , writeScopeKind := scopeKind s.writeTools
   , writeGrants := writeGrantViews s.writeTools
   , writeFields := match s.writeTools.lookup writeProbe with
+      | some fields => fieldList fields
+      | none => []
+  , queryProbe := probeQuery
+  , queryScopeKind := scopeKind s.queryTools
+  , queryGrants := queryGrantViews s.queryTools
+  , queryFields := match s.queryTools.lookup probeQuery with
       | some fields => fieldList fields
       | none => [] }
 
@@ -377,6 +407,37 @@ def ceilingBashRich : Surface :=
     (bashPolicyRich [["curl"]] (readOnlyOnly ["ls", "pwd"]))
     true true true .all writeA
 
+def queryA : EndpointScope (String × String) (Finset String) :=
+  writeOnly probeQuery ["field_a"]
+
+def queryB : EndpointScope (String × String) (Finset String) :=
+  writeOnly probeQuery ["field_b"]
+
+def behaviorQueryA : Surface :=
+  { surface .readWrite
+      (bashPolicy .unrestricted .enabled .all)
+      true true true .all writeA with
+    queryTools := queryA }
+
+def behaviorQueryB : Surface :=
+  { surface .readWrite
+      (bashPolicy .unrestricted .enabled .all)
+      true true true .all writeA with
+    queryTools := queryB }
+
+def ceilingQueryA : Surface :=
+  { surface .readWrite
+      (bashPolicy .unrestricted .enabled .all)
+      true true true .all writeA with
+    queryTools := queryA }
+
+def writeAllNoQuery : Surface :=
+  { surface .readWrite
+      (bashPolicy .unrestricted .enabled .all)
+      true true true .all writeA with
+    writeTools := .all
+    queryTools := .none }
+
 def mkCase (name : String) (b c : Surface) (r : Avail)
     (mcpProbe : String) (writeProbe : String × String) : Case :=
   { name := name
@@ -406,6 +467,10 @@ def cases : List Case :=
       wideOpen ceilingScopesOnly wideOpen "svc-a" probeWrite
   , mkCase "bash_forbidden_union_and_readonly_intersection"
       behaviorBashRich ceilingBashRich wideOpen "svc-a" probeWrite
+  , mkCase "query_fields_narrowed_by_ceiling"
+      behaviorQueryB ceilingQueryA wideOpen "svc-a" probeWrite
+  , mkCase "write_all_does_not_grant_query"
+      behaviorQueryA writeAllNoQuery wideOpen "svc-a" probeWrite
   ]
 
 end ToolPolicy.ContractCases

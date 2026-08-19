@@ -8,17 +8,18 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
-    port: 19190,
+    port: Number(process.env.REVIEW_PAGE_PORT || 19190),
     strictPort: true,
     host: "127.0.0.1",
     open: true,
     proxy: {
       "/api": { target: runtime, changeOrigin: true },
       "/healthz": { target: runtime, changeOrigin: true },
-      "/sessions": { target: runtime, changeOrigin: true },
-      "/status": { target: runtime, changeOrigin: true },
-      "/self": { target: runtime, changeOrigin: true },
     },
+  },
+  preview: {
+    port: Number(process.env.REVIEW_PAGE_PORT || 19190),
+    strictPort: true,
   },
   build: {
     target: "esnext",

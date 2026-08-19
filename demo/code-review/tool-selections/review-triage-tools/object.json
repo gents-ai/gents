@@ -1,7 +1,7 @@
 {
   "selection_id": "review-triage-tools",
   "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
-  "display_name": "Triage: write the merge report from the closed ledger",
+  "display_name": "Triage: read findings and write the merge report",
   "enable_file_tools": false,
   "file_tools_mode": "Off",
   "file_tool_root": null,
