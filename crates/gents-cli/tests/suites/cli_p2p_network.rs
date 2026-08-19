@@ -411,6 +411,80 @@ fn pair_via_signed_invite(joiner: &Node, token: &str) -> Result<()> {
     Ok(())
 }
 
+async fn wait_for_replicated_network_bootstrap(
+    node: &Node,
+    issuer: &Node,
+    timeout: Duration,
+) -> Result<()> {
+    let member_did = escape_graphql_string(&node.agent_did);
+    let query = format!(
+        r#"{{
+            AgentNetwork {{ _docID network_id }}
+            NetworkMembership(
+                filter: {{ member_did: {{ _eq: "{member_did}" }} }}
+            ) {{ _docID member_did }}
+            PeerEndpoint {{ did node_id address updated_at }}
+            PeerPairingDesired {{ peer_id source template }}
+            PeerPairingApplied {{ peer_id replicator_addresses }}
+        }}"#
+    );
+    let deadline = Instant::now() + timeout;
+    loop {
+        let response = graphql_query(&node.graphql, &query).await?;
+        let network_count = response
+            .pointer("/data/AgentNetwork")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default();
+        let membership_count = response
+            .pointer("/data/NetworkMembership")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default();
+        anyhow::ensure!(
+            network_count <= 1 && membership_count <= 1,
+            "join created duplicate bootstrap records: {response}"
+        );
+        if network_count == 1 && membership_count == 1 {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let issuer_state = graphql_query(
+                &issuer.graphql,
+                r#"{
+                    AgentNetwork { network_id admin_did }
+                    NetworkMembership { network_id member_did status }
+                    PeerEndpoint { did node_id address updated_at binding_sig }
+                    PeerPairingDesired { peer_id source template }
+                    PeerPairingApplied { peer_id replicator_addresses }
+                }"#,
+            )
+            .await?;
+            let api_base = node
+                .graphql
+                .strip_suffix("/graphql")
+                .context("joiner GraphQL URL has no /graphql suffix")?;
+            let effective_replicators = reqwest::get(format!("{api_base}/p2p/replicators"))
+                .await?
+                .error_for_status()?
+                .json::<Value>()
+                .await?;
+            let sync_status = reqwest::get(format!("{api_base}/p2p/sync/status"))
+                .await?
+                .error_for_status()?
+                .json::<Value>()
+                .await?;
+            let (issuer_stdout, issuer_stderr) = issuer.serve.captured_output()?;
+            let (joiner_stdout, joiner_stderr) = node.serve.captured_output()?;
+            bail!(
+                "timed out waiting for issuer-owned bootstrap records: joiner_did={}; joiner={response}; effective_replicators={effective_replicators}; sync_status={sync_status}; issuer={issuer_state}; joiner stdout={joiner_stdout}; joiner stderr={joiner_stderr}; issuer stdout={issuer_stdout}; issuer stderr={issuer_stderr}",
+                node.agent_did
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 async fn desired_source(graphql: &str, peer_id: &str) -> Result<Option<String>> {
     let escaped = escape_graphql_string(peer_id);
     let response = graphql_query(
@@ -543,6 +617,8 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
         Duration::from_secs(90),
     )
     .await?;
+
+    wait_for_replicated_network_bootstrap(&node_a, &seed, Duration::from_secs(120)).await?;
 
     let (collections, addresses) = desired_payload(&node_a.graphql, &peer_b)
         .await?

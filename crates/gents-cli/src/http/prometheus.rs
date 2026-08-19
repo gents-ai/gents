@@ -680,11 +680,6 @@ fn render_p2p_sync_metrics(lines: &mut Vec<String>, status: Option<&gents::P2pSy
             backlog.per_peer_active_cap,
         ),
         (
-            "gents_p2p_push_encode_cache_entries",
-            "Encoded DAG payloads currently retained by DefraDB push coalescing.",
-            status.encode_cache_entries,
-        ),
-        (
             "gents_p2p_pending_dags",
             "Live in-memory pending DAG registrations.",
             status.pending_dags,
@@ -773,11 +768,6 @@ fn render_p2p_sync_metrics(lines: &mut Vec<String>, status: Option<&gents::P2pSy
             backlog.peer_capacity_parks_total,
         ),
         (
-            "gents_p2p_push_encode_cache_hits_total",
-            "Outbound pushes that reused a cached encoded DAG payload.",
-            status.encode_cache_hits_total,
-        ),
-        (
             "gents_p2p_broadcast_coalesced_total",
             "Redundant DefraDB broadcast updates coalesced before outbound push.",
             status.broadcast_coalesced_total,
@@ -813,6 +803,16 @@ fn render_p2p_sync_metrics(lines: &mut Vec<String>, status: Option<&gents::P2pSy
             status.pending_dag_capacity_shed,
         ),
         (
+            "gents_p2p_pending_dag_fetch_deferred_unavailable_total",
+            "Due pending DAG fetches deferred because no qualified provider was connected.",
+            status.pending_dag_fetch_deferred_unavailable,
+        ),
+        (
+            "gents_p2p_pending_dag_fetch_deferred_contention_total",
+            "Useful CAR ingests deferred behind an existing local storage owner.",
+            status.pending_dag_fetch_deferred_contention,
+        ),
+        (
             "gents_p2p_single_flight_suppressed_total",
             "Duplicate concurrent receives of the same CID suppressed by DefraDB sync.",
             status.single_flight_suppressed,
@@ -830,20 +830,6 @@ fn render_p2p_sync_metrics(lines: &mut Vec<String>, status: Option<&gents::P2pSy
     ] {
         push_metric_prelude_with_type(lines, name, help, "counter");
         push_metric_sample(lines, name, &[], value);
-    }
-
-    push_metric_prelude(
-        lines,
-        "gents_p2p_push_cid_retry_count",
-        "Current outbound retry count retained for one CID.",
-    );
-    for retry in &backlog.per_cid_retry_counts {
-        push_metric_sample(
-            lines,
-            "gents_p2p_push_cid_retry_count",
-            &[("cid", retry.cid.clone())],
-            retry.retry_count,
-        );
     }
 
     for (name, help) in [
@@ -1540,10 +1526,6 @@ mod tests {
                         failed_total: 4,
                         stale_head_retirements_total: 17,
                         peer_capacity_parks_total: 13,
-                        per_cid_retry_counts: vec![gents::P2pCidRetrySnapshot {
-                            cid: "bafy-retry".to_string(),
-                            retry_count: 19,
-                        }],
                         per_peer: vec![gents::P2pPeerBacklogSnapshot {
                             peer_id: "peer-a".to_string(),
                             queued_items: 4,
@@ -1552,9 +1534,8 @@ mod tests {
                             consecutive_failures: 3,
                             cooldown_remaining_ms: 750,
                         }],
+                        ..Default::default()
                     },
-                    encode_cache_hits_total: 37,
-                    encode_cache_entries: 5,
                     broadcast_coalesced_total: 41,
                     push_updates_coalesced_total: 43,
                     gossip_direction_filtered_total: 47,
@@ -1572,9 +1553,12 @@ mod tests {
                     pending_dag_capacity_shed: 59,
                     pending_dag_retry_dispatched: 61,
                     pending_dag_retry_suppressed: 67,
+                    pending_dag_fetch_deferred_unavailable: 69,
+                    pending_dag_fetch_deferred_contention: 68,
                     next_pending_retry_in_ms: Some(71),
                     pending_dag_terminal_quarantined: 73,
                     quarantined_pending_dags: 79,
+                    ..Default::default()
                 }),
                 stale: false,
             }),
@@ -1593,23 +1577,22 @@ mod tests {
         assert!(rendered.contains("gents_p2p_push_queue_items 7"));
         assert!(rendered.contains("gents_p2p_push_queue_bytes 4096"));
         assert!(rendered.contains("gents_p2p_push_active_jobs 3"));
-        assert!(rendered.contains("gents_p2p_push_encode_cache_entries 5"));
         assert!(rendered.contains("gents_p2p_pending_dags 13"));
         assert!(rendered.contains("gents_p2p_persisted_pending_dags 17"));
         assert!(rendered.contains("gents_p2p_quarantined_pending_dags 79"));
         assert!(rendered.contains("gents_p2p_push_rejected_items_total 5"));
         assert!(rendered.contains("gents_p2p_push_stale_head_retirements_total 17"));
         assert!(rendered.contains("gents_p2p_push_peer_capacity_parks_total 13"));
-        assert!(rendered.contains("gents_p2p_push_encode_cache_hits_total 37"));
         assert!(rendered.contains("gents_p2p_broadcast_coalesced_total 41"));
         assert!(rendered.contains("gents_p2p_push_updates_coalesced_total 43"));
         assert!(rendered.contains("gents_p2p_missing_link_retries_total 23"));
         assert!(rendered.contains("gents_p2p_gossip_direction_filtered_total 47"));
         assert!(rendered.contains("gents_p2p_pending_dag_capacity_shed_total 59"));
+        assert!(rendered.contains("gents_p2p_pending_dag_fetch_deferred_unavailable_total 69"));
+        assert!(rendered.contains("gents_p2p_pending_dag_fetch_deferred_contention_total 68"));
         assert!(rendered.contains("gents_p2p_single_flight_suppressed_total 37"));
         assert!(rendered.contains("gents_p2p_already_merged_fast_path_total 53"));
         assert!(rendered.contains("gents_p2p_pending_dag_terminal_quarantined_total 73"));
-        assert!(rendered.contains(r#"gents_p2p_push_cid_retry_count{cid="bafy-retry"} 19"#));
         assert!(rendered.contains(r#"gents_p2p_peer_consecutive_failures{peer_id="peer-a"} 3"#));
         assert!(rendered
             .contains(r#"gents_p2p_peer_cooldown_remaining_milliseconds{peer_id="peer-a"} 750"#));

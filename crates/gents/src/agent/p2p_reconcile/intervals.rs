@@ -1,7 +1,7 @@
 //! Env-overridable reconciler intervals.
 //!
 //! Production defaults match the historic constants; tests and live e2e runs can
-//! compress convergence by setting the env vars. Lean-neutral: no transition,
+//! compress observation by setting the env vars. Lean-neutral: no transition,
 //! invariant, or provider-input depends on these wall-clock values.
 
 use std::time::Duration;
@@ -36,6 +36,11 @@ pub fn sweep_interval() -> Duration {
 
 pub fn endpoint_interval() -> Duration {
     env_ms("GENTS_ENDPOINT_HEARTBEAT_MS").unwrap_or_else(heartbeat_interval)
+}
+
+/// Renew unchanged leases three times inside the configured freshness window.
+pub fn lease_renewal_interval() -> Duration {
+    (stale_after() / DEFAULT_STALE_MULTIPLE).max(Duration::from_millis(1))
 }
 
 pub fn stale_after() -> Duration {
@@ -107,6 +112,7 @@ mod tests {
         assert_eq!(heartbeat_interval(), Duration::from_secs(30));
         assert_eq!(sweep_interval(), Duration::from_secs(30));
         assert_eq!(endpoint_interval(), Duration::from_secs(30));
+        assert_eq!(lease_renewal_interval(), Duration::from_secs(30));
         assert_eq!(stale_after(), Duration::from_secs(90));
         assert_eq!(reciprocal_stale_after(), Duration::from_secs(24 * 60 * 60));
     }
@@ -123,6 +129,10 @@ mod tests {
         assert_eq!(heartbeat_interval(), Duration::from_millis(1250));
         assert_eq!(sweep_interval(), Duration::from_millis(500));
         assert_eq!(endpoint_interval(), Duration::from_millis(750));
+        assert_eq!(
+            lease_renewal_interval(),
+            Duration::from_millis(2500) / DEFAULT_STALE_MULTIPLE
+        );
         assert_eq!(stale_after(), Duration::from_millis(2500));
         assert_eq!(reciprocal_stale_after(), Duration::from_millis(4500));
     }
@@ -133,6 +143,7 @@ mod tests {
         std::env::set_var("GENTS_REGISTRY_HEARTBEAT_MS", "2000");
 
         assert_eq!(endpoint_interval(), Duration::from_secs(2));
+        assert_eq!(lease_renewal_interval(), Duration::from_secs(2));
         assert_eq!(stale_after(), Duration::from_secs(6));
     }
 

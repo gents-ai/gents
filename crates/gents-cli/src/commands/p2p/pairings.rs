@@ -246,6 +246,65 @@ pub(super) async fn write_pairing_desired(
         .context("reading PeerPairingDesired mutation doc id")
 }
 
+pub(super) async fn write_layered_join_desired(
+    access: &ConfigAccess,
+    peer_id: &str,
+    agent_did: &str,
+    control_collections: &[String],
+    data_collections: &[String],
+    addresses: &[String],
+    data_template: &str,
+    now: &str,
+) -> Result<(String, Option<String>)> {
+    let control = pairing_upsert_field(
+        "control: upsert_PeerPairingDesired",
+        peer_id,
+        Some(agent_did),
+        control_collections,
+        addresses,
+        "network-control",
+        now,
+        true,
+    );
+    let data = (data_template != "network-control").then(|| {
+        pairing_upsert_field(
+            "data_plane: upsert_DataPlanePairingDesired",
+            peer_id,
+            Some(agent_did),
+            data_collections,
+            addresses,
+            data_template,
+            now,
+            false,
+        )
+    });
+    let mutation = format!(
+        "mutation {{ {control} {} }}",
+        data.as_deref().unwrap_or_default()
+    );
+    let response = access
+        .execute(&mutation)
+        .await
+        .context("writing layered join pairing rows")?;
+    let control_doc_id = aliased_mutation_doc_id(&response, "control")?;
+    let data_doc_id = data
+        .as_ref()
+        .map(|_| aliased_mutation_doc_id(&response, "data_plane"))
+        .transpose()?;
+    Ok((control_doc_id, data_doc_id))
+}
+
+fn aliased_mutation_doc_id(response: &Value, alias: &str) -> Result<String> {
+    let doc_ids = mutation_doc_ids(response, alias);
+    match doc_ids.as_slice() {
+        [doc_id] => Ok(doc_id.clone()),
+        [] => anyhow::bail!("graphql mutation returned no _docID for {alias}: {response}"),
+        _ => anyhow::bail!(
+            "graphql mutation returned multiple _docID values for {alias}: {response}"
+        ),
+    }
+}
+
 pub(super) async fn peer_pairing_exists(access: &ConfigAccess, peer_id: &str) -> Result<bool> {
     let peer_id = escape_graphql_string(peer_id);
     let query = format!(
@@ -274,6 +333,30 @@ pub(super) fn upsert_pairing_mutation(
     template: &str,
     now: &str,
 ) -> String {
+    let field = pairing_upsert_field(
+        "upsert_PeerPairingDesired",
+        peer_id,
+        agent_did,
+        collections,
+        addresses,
+        template,
+        now,
+        true,
+    );
+    format!("mutation {{ {field} }}")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pairing_upsert_field(
+    operation: &str,
+    peer_id: &str,
+    agent_did: Option<&str>,
+    collections: &[String],
+    addresses: &[String],
+    template: &str,
+    now: &str,
+    include_profiles: bool,
+) -> String {
     let peer_id = escape_graphql_string(peer_id);
     let agent_did = graphql_nullable_string_literal(agent_did);
     let agent_did_update = if agent_did == "null" {
@@ -285,17 +368,19 @@ pub(super) fn upsert_pairing_mutation(
     let addresses = graphql_nullable_string_list_literal(addresses);
     let template = escape_graphql_string(template);
     let now = escape_graphql_string(now);
+    let profiles = include_profiles
+        .then_some("profiles: null,")
+        .unwrap_or_default();
 
     format!(
-        r#"mutation {{
-            upsert_PeerPairingDesired(
+        r#"{operation}(
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: {agent_did},
                     collections: {collections},
                     replicator_addresses: {addresses},
-                    profiles: null,
+                    {profiles}
                     template: "{template}",
                     source: "operator",
                     created_at: "{now}",
@@ -305,13 +390,12 @@ pub(super) fn upsert_pairing_mutation(
                     {agent_did_update}
                     collections: {collections},
                     replicator_addresses: {addresses},
-                    profiles: null,
+                    {profiles}
                     template: "{template}",
                     source: "operator",
                     updated_at: "{now}"
                 }}
-            ) {{ _docID }}
-        }}"#
+            ) {{ _docID }}"#
     )
 }
 

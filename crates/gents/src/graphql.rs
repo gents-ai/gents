@@ -154,7 +154,34 @@ where
 {
     let gate = mutation_write_gate(node);
     let _write_guard = gate.lock().await;
-    graphql_response_with_policy(executor, graphql, operation, retry_policy).await
+    let response = graphql_response_with_policy(executor, graphql, operation, retry_policy).await;
+    if !response.has_errors() {
+        let affected_documents = mutation_affected_documents(&response);
+        tracing::debug!(
+            operation,
+            affected_documents,
+            "DefraDB GraphQL mutation completed"
+        );
+    }
+    response
+}
+
+fn mutation_affected_documents(response: &QueryResponse) -> usize {
+    response
+        .data
+        .as_ref()
+        .and_then(Value::as_object)
+        .map(|fields| {
+            fields
+                .values()
+                .map(|value| match value {
+                    Value::Array(rows) => rows.len(),
+                    Value::Object(_) => 1,
+                    _ => 0,
+                })
+                .sum()
+        })
+        .unwrap_or_default()
 }
 
 /// Execute an auto-committed GraphQL mutation through the single node-scoped

@@ -6,6 +6,7 @@
 //! network-derived pairings from cryptographically bound reachability.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -14,6 +15,18 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EndpointBinding {
+    peer_id: String,
+    address: String,
+}
+
+#[derive(Clone, Debug)]
+struct PublishedEndpoint {
+    binding: EndpointBinding,
+    at: Instant,
+}
 
 pub async fn run_endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
@@ -28,8 +41,18 @@ pub async fn run_endpoint_heartbeat(
 
     let mut interval = tokio::time::interval(super::intervals::endpoint_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let renewal_interval = super::intervals::lease_renewal_interval();
+    let mut published = None;
 
-    if let Err(error) = tick_endpoint(&node, &p2p, identity.as_ref()).await {
+    if let Err(error) = tick_endpoint(
+        &node,
+        &p2p,
+        identity.as_ref(),
+        &mut published,
+        renewal_interval,
+    )
+    .await
+    {
         tracing::warn!(
             did = %identity.did(),
             error = %error,
@@ -43,7 +66,13 @@ pub async fn run_endpoint_heartbeat(
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                if let Err(error) = tick_endpoint(&node, &p2p, identity.as_ref()).await {
+                if let Err(error) = tick_endpoint(
+                    &node,
+                    &p2p,
+                    identity.as_ref(),
+                    &mut published,
+                    renewal_interval,
+                ).await {
                     tracing::warn!(
                         did = %identity.did(),
                         error = %error,
@@ -59,6 +88,8 @@ async fn tick_endpoint(
     node: &EmbeddedNode,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
     identity: &dyn AgentIdentity,
+    published: &mut Option<PublishedEndpoint>,
+    renewal_interval: Duration,
 ) -> Result<()> {
     let peer_id = p2p
         .local_peer_id()
@@ -69,12 +100,24 @@ async fn tick_endpoint(
         .await
         .map_err(|e| anyhow::anyhow!("shareable_address: {e}"))?
         .context("P2P node reported no shareable address for PeerEndpoint")?;
+    let binding = EndpointBinding { peer_id, address };
+    let observed_at = Instant::now();
+    let Some(publish_reason) =
+        endpoint_publish_reason(published.as_ref(), &binding, observed_at, renewal_interval)
+    else {
+        tracing::trace!(
+            did = %identity.did(),
+            node_id = %binding.peer_id,
+            "PeerEndpoint heartbeat: unchanged signed lease is not yet due for renewal"
+        );
+        return Ok(());
+    };
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut record = EndpointRecord {
         did: identity.did().to_string(),
-        node_id: peer_id,
-        address,
+        node_id: binding.peer_id.clone(),
+        address: binding.address.clone(),
         updated_at: now,
         sig: Vec::new(),
     };
@@ -89,12 +132,35 @@ async fn tick_endpoint(
         "upsert_peer_endpoint_heartbeat",
     )
     .await?;
+    *published = Some(PublishedEndpoint {
+        binding,
+        at: Instant::now(),
+    });
     tracing::debug!(
         did = %record.did,
         node_id = %record.node_id,
+        reason = publish_reason,
         "PeerEndpoint heartbeat: signed endpoint written"
     );
     Ok(())
+}
+
+fn endpoint_publish_reason(
+    published: Option<&PublishedEndpoint>,
+    binding: &EndpointBinding,
+    now: Instant,
+    renewal_interval: Duration,
+) -> Option<&'static str> {
+    let Some(published) = published else {
+        return Some("initial");
+    };
+    if published.binding != *binding {
+        Some("binding_changed")
+    } else if now.duration_since(published.at) >= renewal_interval {
+        Some("renewal")
+    } else {
+        None
+    }
 }
 
 pub fn peer_endpoint_upsert_mutation(record: &EndpointRecord) -> String {
@@ -128,6 +194,55 @@ pub fn peer_endpoint_upsert_mutation(record: &EndpointRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_binding_publishes_only_when_needed() {
+        let now = Instant::now();
+        let original = EndpointBinding {
+            peer_id: "peer-one".into(),
+            address: "endpoint-one".into(),
+        };
+        let published = PublishedEndpoint {
+            binding: original.clone(),
+            at: now,
+        };
+
+        assert_eq!(
+            endpoint_publish_reason(None, &original, now, Duration::from_secs(30)),
+            Some("initial")
+        );
+        assert_eq!(
+            endpoint_publish_reason(
+                Some(&published),
+                &original,
+                now + Duration::from_secs(29),
+                Duration::from_secs(30)
+            ),
+            None
+        );
+        assert_eq!(
+            endpoint_publish_reason(
+                Some(&published),
+                &original,
+                now + Duration::from_secs(30),
+                Duration::from_secs(30)
+            ),
+            Some("renewal")
+        );
+        let changed = EndpointBinding {
+            peer_id: "peer-one".into(),
+            address: "endpoint-two".into(),
+        };
+        assert_eq!(
+            endpoint_publish_reason(
+                Some(&published),
+                &changed,
+                now + Duration::from_secs(1),
+                Duration::from_secs(30)
+            ),
+            Some("binding_changed")
+        );
+    }
 
     #[test]
     fn endpoint_upsert_escapes_and_has_no_empty_lists() {
