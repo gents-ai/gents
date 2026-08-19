@@ -1,3 +1,4 @@
+/** Must match `gents_protocol::graphql::escape_graphql_string`. */
 export function escapeGraphqlString(value: string): string {
   return value
     .replaceAll("\\", "\\\\")
