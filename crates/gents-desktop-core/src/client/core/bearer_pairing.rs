@@ -321,9 +321,8 @@ pub(super) async fn observe_bearer_pairing_readiness(
     if readiness_rows.is_empty() {
         return Ok(false);
     }
-    let mut readiness_error = None;
     for readiness in &readiness_rows {
-        match verify_bearer_pairing_ready_row(
+        if verify_bearer_pairing_ready_row(
             identity,
             issuer_did,
             identity.did(),
@@ -332,12 +331,12 @@ pub(super) async fn observe_bearer_pairing_readiness(
             readiness,
         )
         .await
+        .is_ok()
         {
-            Ok(()) => return Ok(true),
-            Err(error) => readiness_error = Some(error),
+            return Ok(true);
         }
     }
-    Err(readiness_error.expect("non-empty readiness rows produced an error"))
+    Ok(false)
 }
 
 async fn verify_bearer_pairing_ready_row(
@@ -691,7 +690,7 @@ async fn install_bearer_replicator(
     issuer_did: &str,
     template_id: &str,
 ) -> Result<()> {
-    let filters = bearer_replicator_filters(template_id, requester_did, issuer_did);
+    let filters = bearer_replicator_filters(template_id, requester_did, issuer_did)?;
     let collections = bearer_replicator_collections(template_id);
 
     match timeout(
@@ -711,26 +710,18 @@ fn bearer_replicator_filters(
     template_id: &str,
     requester_did: &str,
     issuer_did: &str,
-) -> ReplicationFilters {
+) -> Result<ReplicationFilters> {
     let template = resolve_template(template_id)
         .filter(|template| conversation_like(template.id))
         .unwrap_or_else(|| resolve_template("conversation").expect("conversation template"));
-    let mut filters = scope_filter(
+    let pairing_filters = scope_filter(
         &template.scope,
         template.collections,
         requester_did,
         issuer_did,
-    )
-    .into_iter()
-    .map(|(collection, predicate)| {
-        (
-            collection,
-            ReplicationFilter::predicate(
-                gents::agent::p2p_reconcile::templates::filter_conditions(&predicate),
-            ),
-        )
-    })
-    .collect::<ReplicationFilters>();
+    );
+    let mut filters = gents::agent::p2p_reconcile::to_replication_filters(&pairing_filters)
+        .map_err(anyhow::Error::msg)?;
     filters.insert(
         "PairingBearerClaim".to_string(),
         ReplicationFilter::eq(
@@ -742,7 +733,7 @@ fn bearer_replicator_filters(
         "PeerEndpoint".to_string(),
         ReplicationFilter::eq("did", serde_json::Value::String(requester_did.to_string())),
     );
-    filters
+    Ok(filters)
 }
 
 pub(super) async fn publish_local_endpoint(
@@ -1227,7 +1218,8 @@ mod tests {
             )
         };
         let collections = bearer_replicator_collections("conversation");
-        let filters = bearer_replicator_filters("conversation", "did:key:phone", "did:key:issuer");
+        let filters = bearer_replicator_filters("conversation", "did:key:phone", "did:key:issuer")
+            .expect("conversation filters");
         assert!(collections.contains(&"AgentRequest".to_string()));
         assert!(collections.contains(&"AgentResponse".to_string()));
         assert!(collections.contains(&"AgentBehavior".to_string()));
@@ -1298,7 +1290,8 @@ mod tests {
             )
         };
         let collections = bearer_replicator_collections("machine");
-        let filters = bearer_replicator_filters("machine", "did:key:phone", "did:key:issuer");
+        let filters = bearer_replicator_filters("machine", "did:key:phone", "did:key:issuer")
+            .expect("machine filters");
 
         assert!(collections.contains(&AGENT_DIRECTORY_COLLECTION.to_string()));
         assert_eq!(

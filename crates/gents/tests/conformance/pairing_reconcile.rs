@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use gents::agent::p2p_reconcile::{
-    equality_filter, merge_layered_desired, single_string_eq, DiffOp, FilterPredicate,
-    PairingDesired, PairingFilters, MAX_CONCURRENT_PEER_PREPARATIONS,
+    equality_filter, materialize_base_desired, merge_layered_desired, single_string_eq, DiffOp,
+    FilterPredicate, PairingDesired, PairingFilters, MAX_CONCURRENT_PEER_PREPARATIONS,
 };
 
 use crate::lean_vocab_test::{
@@ -165,10 +165,8 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
     );
 }
 
-/// Mirrors Lean `overlapping_collection_filters_compose`: independently
-/// derived predicates on the same collection are conjunctive, not last-writer-wins.
 #[test]
-fn layered_desired_merge_ands_overlapping_collection_filters() {
+fn layered_desired_merge_prefers_signed_data_plane_filter() {
     let base_filter = equality_filter("requester_did", "did:key:phone");
     let data_filter = FilterPredicate::predicate(
         serde_json::json!({ "status": { "_in": ["pending", "processing"] } })
@@ -192,19 +190,19 @@ fn layered_desired_merge_ands_overlapping_collection_filters() {
 
     assert_eq!(
         merged.replicator_filter.get("AgentRequest"),
-        Some(&FilterPredicate::All(vec![base_filter, data_filter]))
+        Some(&data_filter)
     );
 }
 
 #[test]
-fn layered_desired_merge_keeps_control_readiness_claimant() {
+fn layered_desired_merge_uses_signed_readiness_claimant() {
     let layer = |claimant| PairingDesired {
         replicator_filter: one_filter("BearerPairingReady", "claimant_did", claimant),
         ..Default::default()
     };
     let merged = merge_layered_desired(
         Some(layer("did:key:claimant")),
-        Some(layer("did:key:stale")),
+        Some(layer("did:key:signed")),
     )
     .expect("merged desired state");
 
@@ -213,7 +211,15 @@ fn layered_desired_merge_keeps_control_readiness_claimant() {
             .replicator_filter
             .get("BearerPairingReady")
             .and_then(single_string_eq),
-        Some(("claimant_did", "did:key:claimant"))
+        Some(("claimant_did", "did:key:signed"))
+    );
+}
+
+#[test]
+fn self_pairing_base_is_not_materialized() {
+    assert!(
+        materialize_base_desired("did:key:self", "did:key:self", PairingDesired::default())
+            .is_none()
     );
 }
 

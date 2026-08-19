@@ -127,11 +127,11 @@ pub fn compute_owned_pairing_diff(
     // collection set after the control-plane layer merged in.
     let filter_changed = desired.replicator_filter != applied.replicator_filter;
     let desired_replicator_collections = desired.effective_replicator_collections();
-    for r in desired
+    for r in applied
         .replicator_addresses
-        .difference(&actual.replicator_addresses)
+        .difference(&desired.replicator_addresses)
     {
-        ops.push(DiffOp::InstallReplicator(r.clone()));
+        ops.push(DiffOp::TeardownReplicator(r.clone()));
     }
     for r in actual
         .replicator_addresses
@@ -147,12 +147,11 @@ pub fn compute_owned_pairing_diff(
             ops.push(DiffOp::InstallReplicator(r.clone()));
         }
     }
-    for r in actual
+    for r in desired
         .replicator_addresses
-        .intersection(&applied.replicator_addresses)
-        .filter(|r| !desired.replicator_addresses.contains(*r))
+        .difference(&actual.replicator_addresses)
     {
-        ops.push(DiffOp::TeardownReplicator(r.clone()));
+        ops.push(DiffOp::InstallReplicator(r.clone()));
     }
     ops
 }

@@ -21,12 +21,12 @@ use super::graphql_helpers::{ensure_no_errors, first_row, graphql_string_list_li
 use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
 use super::reciprocal::GraphqlReciprocalStore;
 use super::templates::{
-    decode_pairing_filters, equality_filter, merge_pairing_filters, resolve_template, scope_filter,
-    single_string_eq, Delivery, DidSource, PairingFilters, Scope, APP_COLLECTIONS_TEMPLATE,
+    decode_pairing_filters, equality_filter, resolve_template, scope_filter, single_string_eq,
+    Delivery, DidSource, PairingFilters, Scope, APP_COLLECTIONS_TEMPLATE,
 };
 use super::{
     compute_owned_pairing_diff, DiffOp, EmbeddedRemoteP2pAdmin, PairingActual, PairingApplied,
-    PairingDesired, RemoteP2pAdmin,
+    PairingDesired, RemoteP2pAdmin, RemoteP2pAdminError,
 };
 
 pub const PAIRING_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
@@ -215,54 +215,10 @@ async fn reconcile_prepared_peer(
         });
     };
     let desired_state = desired.clone().unwrap_or_default();
-    let actual = read_actual(
-        admin,
-        &desired_state.replicator_addresses,
-        &applied_record.state.replicator_addresses,
-    )
-    .await?;
+    let actual = read_actual(admin, &applied_record.state.replicator_addresses).await?;
 
-    let mut applied_changed = !applied_record.duplicate_doc_ids.is_empty();
-
-    if applied_record.state.replicator_addresses != desired_state.replicator_addresses
-        && same_replicator_peers(
-            &applied_record.state.replicator_addresses,
-            &desired_state.replicator_addresses,
-        )
-        && desired_state
-            .replicator_addresses
-            .is_subset(&actual.state.replicator_addresses)
-    {
-        applied_record.state.replicator_addresses = desired_state.replicator_addresses.clone();
-        applied_changed = true;
-        tracing::info!(
-            peer_id = %peer_id,
-            "refreshed route for existing replicator peer"
-        );
-    }
-
-    if desired.is_some() {
-        let previous_count = applied_record.state.replicator_addresses.len();
-        applied_record.state.replicator_addresses.retain(|address| {
-            desired_state.replicator_addresses.contains(address)
-                || actual.state.replicator_addresses.contains(address)
-        });
-        if applied_record.state.replicator_addresses.len() != previous_count {
-            if applied_record.state.replicator_addresses.is_empty() {
-                applied_record.state.replicator_filter.clear();
-            }
-            applied_changed = true;
-            tracing::info!(
-                peer_id = %peer_id,
-                pruned = previous_count - applied_record.state.replicator_addresses.len(),
-                "pruned stale applied replicator endpoints"
-            );
-        }
-    }
-
-    if applied_changed {
-        store.persist_applied(&peer_id, &applied_record).await?;
-        applied_record.duplicate_doc_ids.clear();
+    if !applied_record.duplicate_doc_ids.is_empty() {
+        persist_applied_record(store, &peer_id, &mut applied_record).await?;
     }
 
     let ops = compute_owned_pairing_diff(&desired_state, &actual.state, &applied_record.state);
@@ -302,13 +258,13 @@ async fn reconcile_prepared_peer(
     for op in ops {
         apply_op(admin, &op, &desired_state, &actual).await?;
         update_applied_after_success(&mut applied_record.state, &op, &desired_state);
-        store.persist_applied(&peer_id, &applied_record).await?;
+        persist_applied_record(store, &peer_id, &mut applied_record).await?;
         ops_applied.push(op);
     }
 
     if desired.is_none() && !applied_record.state.is_empty() {
         applied_record.state = PairingApplied::default();
-        store.persist_applied(&peer_id, &applied_record).await?;
+        persist_applied_record(store, &peer_id, &mut applied_record).await?;
     }
     store
         .reconcile_bearer_readiness(&peer_id, desired.as_ref(), &applied_record.state)
@@ -320,6 +276,19 @@ async fn reconcile_prepared_peer(
         replayed_replicators,
         desired_read_failed: false,
     })
+}
+
+async fn persist_applied_record(
+    store: &dyn PairingStateStore,
+    peer_id: &str,
+    applied: &mut LoadedPairingApplied,
+) -> Result<()> {
+    store.persist_applied(peer_id, applied).await?;
+    if applied.state.is_empty() {
+        applied.canonical_doc_id = None;
+    }
+    applied.duplicate_doc_ids.clear();
+    Ok(())
 }
 
 async fn peer_already_active(admin: &dyn RemoteP2pAdmin, peer_id: &str) -> bool {
@@ -339,24 +308,6 @@ async fn peer_already_active(admin: &dyn RemoteP2pAdmin, peer_id: &str) -> bool 
             .map(|(parsed, _)| parsed.as_str() == peer_id)
             .unwrap_or_else(|_| entry.contains(peer_id))
     })
-}
-
-fn replicator_peers(addresses: &BTreeSet<String>) -> Option<BTreeSet<String>> {
-    addresses
-        .iter()
-        .map(|address| {
-            parse_public_peer_addr(address)
-                .ok()
-                .map(|(peer_id, _)| peer_id.to_string())
-        })
-        .collect()
-}
-
-fn same_replicator_peers(left: &BTreeSet<String>, right: &BTreeSet<String>) -> bool {
-    !left.is_empty()
-        && replicator_peers(left)
-            .zip(replicator_peers(right))
-            .is_some_and(|(left, right)| left == right)
 }
 
 pub async fn run_pairing_reconciler(
@@ -562,7 +513,6 @@ struct ActualSnapshot {
 
 async fn read_actual(
     admin: &dyn RemoteP2pAdmin,
-    desired_addresses: &BTreeSet<String>,
     applied_addresses: &BTreeSet<String>,
 ) -> Result<ActualSnapshot> {
     let mut collections = BTreeSet::new();
@@ -597,8 +547,7 @@ async fn read_actual(
     let mut replicator_ids_by_addr = BTreeMap::new();
     let mut replicator_collections_by_addr = BTreeMap::new();
     for replicator in remote_replicators {
-        let address =
-            canonical_replicator_address(&replicator, desired_addresses, applied_addresses);
+        let address = canonical_replicator_address(&replicator, applied_addresses);
         let Some(address) = address else {
             tracing::warn!("remote replicator has neither a peer id nor an address; ignoring it");
             continue;
@@ -648,22 +597,22 @@ async fn read_actual(
 
 fn canonical_replicator_address(
     replicator: &super::RemoteReplicator,
-    desired_addresses: &BTreeSet<String>,
     applied_addresses: &BTreeSet<String>,
 ) -> Option<String> {
-    let Some(id) = replicator.id.as_deref() else {
+    if replicator.address.is_some() {
         return replicator.address.clone();
+    }
+    let Some(id) = replicator.id.as_deref() else {
+        return None;
     };
-    desired_addresses
+    applied_addresses
         .iter()
-        .chain(applied_addresses)
         .find(|address| {
             parse_public_peer_addr(address)
                 .map(|(peer_id, _)| peer_id.as_str() == id)
                 .unwrap_or(false)
         })
         .cloned()
-        .or_else(|| replicator.address.clone())
         .or_else(|| Some(id.to_string()))
 }
 
@@ -703,9 +652,13 @@ async fn apply_op(
             Ok(())
         }
         DiffOp::TeardownReplicator(address) => {
+            let parsed_peer_id = parse_public_peer_addr(address)
+                .ok()
+                .map(|(peer_id, _)| peer_id.to_string());
             let id = actual
                 .replicator_ids_by_addr
                 .get(address)
+                .or(parsed_peer_id.as_ref())
                 .map(String::as_str)
                 .unwrap_or(address.as_str());
             let collections = actual
@@ -714,10 +667,12 @@ async fn apply_op(
                 .cloned()
                 .filter(|collections| !collections.is_empty())
                 .unwrap_or_else(|| desired.collections.iter().cloned().collect());
-            admin
-                .delete_replicator(id, &collections)
-                .await
-                .with_context(|| format!("teardown P2P replicator {address}"))
+            match admin.delete_replicator(id, &collections).await {
+                Ok(()) | Err(RemoteP2pAdminError::RemoteNotFound(_)) => Ok(()),
+                Err(error) => {
+                    Err(error).with_context(|| format!("teardown P2P replicator {address}"))
+                }
+            }
         }
     }
 }
@@ -1301,9 +1256,6 @@ fn desired_from_pairing_row(
     }
 
     let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
-    if peer_did == local_did {
-        return Ok(None);
-    }
     if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
         anyhow::bail!(
             "pairing row for peer-DID-dependent template {template_id:?} has a blank \
@@ -1323,13 +1275,25 @@ fn desired_from_pairing_row(
         Delivery::Replicate => replicator_collections.clone(),
     };
 
-    Ok(Some(PairingDesired {
-        collections: subscription_collections,
-        replicator_addresses,
-        replicator_collections,
-        replicator_filter,
-        template_ids: BTreeSet::from([template.id.to_string()]),
-    }))
+    Ok(materialize_base_desired(
+        local_did,
+        peer_did,
+        PairingDesired {
+            collections: subscription_collections,
+            replicator_addresses,
+            replicator_collections,
+            replicator_filter,
+            template_ids: BTreeSet::from([template.id.to_string()]),
+        },
+    ))
+}
+
+pub fn materialize_base_desired(
+    local_did: &str,
+    peer_did: &str,
+    desired: PairingDesired,
+) -> Option<PairingDesired> {
+    (peer_did != local_did).then_some(desired)
 }
 
 fn data_plane_desired_from_pairing_row(
@@ -1517,11 +1481,7 @@ pub fn merge_layered_desired(
             left.replicator_addresses.extend(right.replicator_addresses);
             left.replicator_collections
                 .extend(right.replicator_collections);
-            let mut data_plane_filters = right.replicator_filter;
-            if left.replicator_filter.contains_key("BearerPairingReady") {
-                data_plane_filters.remove("BearerPairingReady");
-            }
-            merge_pairing_filters(&mut left.replicator_filter, data_plane_filters);
+            left.replicator_filter.extend(right.replicator_filter);
             left.template_ids.extend(right.template_ids);
             Some(left)
         }

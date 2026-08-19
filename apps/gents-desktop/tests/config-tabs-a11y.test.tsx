@@ -14,6 +14,7 @@ function renderWorkspace(backLabel?: string, onBack = vi.fn()) {
       saving={false}
       runningTask={false}
       onBack={onBack}
+      onDirtyChange={() => undefined}
       onDeleteSkillConfig={vi.fn()}
       onSaveAgentConfig={vi.fn()}
       onRunTask={vi.fn()}
@@ -28,6 +29,7 @@ function renderWorkspace(backLabel?: string, onBack = vi.fn()) {
       onSaveToolServiceConfig={vi.fn()}
       onTestToolService={vi.fn()}
       onRunSchedule={vi.fn()}
+      requestNavigation={(navigate) => navigate()}
     />,
   );
 }

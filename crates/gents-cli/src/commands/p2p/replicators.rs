@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gents::agent::p2p_reconcile::templates::{
-    combine_filters, equality_filter, filter_conditions, PairingFilters,
+    combine_filters, equality_filter, to_replication_filters, PairingFilters,
 };
 use serde_json::{json, Value};
 
@@ -47,16 +47,7 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     // them in the request body. The node installs a filtered replicator (#1033)
     // that pushes only matching documents; an empty map requests an unfiltered
     // replicator (the field is omitted on the wire).
-    let wire_filters: std::collections::BTreeMap<String, defra_p2p_adapter::ReplicationFilter> =
-        filters
-            .iter()
-            .map(|(col, pred)| {
-                (
-                    col.clone(),
-                    defra_p2p_adapter::ReplicationFilter::predicate(filter_conditions(pred)),
-                )
-            })
-            .collect();
+    let wire_filters = to_replication_filters(&filters).map_err(anyhow::Error::msg)?;
     let request = P2pReplicatorRequest {
         collections: collections.clone(),
         addresses: vec![args.peer.clone()],
@@ -207,7 +198,12 @@ mod tests {
         .expect("valid filters");
 
         assert_eq!(
-            Value::Object(filter_conditions(&filters["AgentRequest"])),
+            Value::Object(
+                gents::agent::p2p_reconcile::templates::filter_conditions(
+                    &filters["AgentRequest"],
+                )
+                .expect("predicate conditions"),
+            ),
             serde_json::json!({
                 "_and": [
                     { "requester_did": { "_eq": "did:key:alice" } },

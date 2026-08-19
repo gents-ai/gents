@@ -5,14 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use defra_p2p_adapter::{
-    P2PError, P2PResult, P2pDocumentRequest, ReplicationFilter, ReplicationFilters,
-};
+use defra_p2p_adapter::{P2PError, P2PResult, P2pDocumentRequest};
 use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
 
-use super::templates::{filter_conditions, PairingFilters};
+use super::templates::{to_replication_filters, PairingFilters};
 use super::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
 
 const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -105,7 +103,8 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     ) -> RemoteP2pAdminResult<()> {
         let p2p = self.p2p()?;
         let addr = addresses.first().map(String::as_str);
-        let defra_filters = to_defra_filters(filters);
+        let defra_filters =
+            to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?;
         self.run(
             "add_replicator",
             p2p.add_replicator(collections.to_vec(), addr, defra_filters, Vec::new(), None),
@@ -241,18 +240,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 }
 
-fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
-    filters
-        .iter()
-        .map(|(collection, predicate)| {
-            (
-                collection.clone(),
-                ReplicationFilter::predicate(filter_conditions(predicate)),
-            )
-        })
-        .collect()
-}
-
 fn document_requests(doc_ids: &[String]) -> Vec<P2pDocumentRequest> {
     doc_ids
         .iter()
@@ -315,7 +302,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let converted = to_defra_filters(&filters);
+        let converted = to_replication_filters(&filters).expect("supported filters");
         assert_eq!(
             converted["AgentRequest"].conditions.as_ref(),
             serde_json::json!({

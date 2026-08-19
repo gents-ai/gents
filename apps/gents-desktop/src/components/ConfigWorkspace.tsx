@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
@@ -41,7 +41,6 @@ import {
   ToolSelectionConfigPanel,
   ToolServiceConfigPanel,
 } from "./config";
-import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { ConfigNavigationGuardProvider } from "./config/ConfigNavigationGuard";
 import sourceMarkUrl from "../assets/source-mark-light.png";
 
@@ -54,6 +53,8 @@ type ConfigWorkspaceProps = {
   runningTask: boolean;
   onBack: () => void;
   backLabel?: string;
+  onDirtyChange: (dirty: boolean) => void;
+  requestNavigation: (navigate: () => void) => void;
   onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
   onSaveInferenceProfileConfig: (
@@ -95,6 +96,8 @@ export function ConfigWorkspace({
   runningTask,
   onBack,
   backLabel = "Back to Chat",
+  onDirtyChange,
+  requestNavigation,
   onSaveAgentConfig,
   onSaveBackendConfig,
   onSaveInferenceProfileConfig,
@@ -118,9 +121,6 @@ export function ConfigWorkspace({
   onSaveEventTriggerConfig,
   onRunTask,
 }: ConfigWorkspaceProps) {
-  const [configDirty, setConfigDirty] = useState(false);
-  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
-  const pendingNavigation = useRef<(() => void) | null>(null);
   const {
     activeTab,
     savedStatus,
@@ -148,47 +148,10 @@ export function ConfigWorkspace({
     setSelectedToolServiceId,
   } = useConfigWorkspaceSelection(selectedDeployment, selectedBehaviorId);
 
-  const requestNavigation = useCallback(
-    (navigate: () => void) => {
-      if (!configDirty) {
-        navigate();
-        return;
-      }
-      pendingNavigation.current = navigate;
-      setConfirmingDiscard(true);
-    },
-    [configDirty],
-  );
-
   const navigationGuard = useMemo(
-    () => ({ reportDirty: setConfigDirty, requestNavigation }),
-    [requestNavigation],
+    () => ({ reportDirty: onDirtyChange, requestNavigation }),
+    [onDirtyChange, requestNavigation],
   );
-
-  useEffect(() => {
-    if (!configDirty) {
-      return;
-    }
-    const preventAccidentalClose = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", preventAccidentalClose);
-    return () => window.removeEventListener("beforeunload", preventAccidentalClose);
-  }, [configDirty]);
-
-  const cancelDiscard = useCallback(() => {
-    pendingNavigation.current = null;
-    setConfirmingDiscard(false);
-  }, []);
-
-  const confirmDiscard = useCallback(() => {
-    const navigate = pendingNavigation.current;
-    pendingNavigation.current = null;
-    setConfirmingDiscard(false);
-    setConfigDirty(false);
-    navigate?.();
-  }, []);
 
   if (!selectedDeployment) {
     return (
@@ -502,16 +465,6 @@ export function ConfigWorkspace({
           ) : null}
         </section>
       </section>
-      <ConfirmDialog
-        cancelLabel="Keep editing"
-        confirmLabel="Discard changes"
-        danger
-        message="This configuration has unsaved changes. Discard them and continue?"
-        onCancel={cancelDiscard}
-        onConfirm={confirmDiscard}
-        open={confirmingDiscard}
-        title="Discard unsaved changes?"
-      />
     </ConfigNavigationGuardProvider>
   );
 }

@@ -35,7 +35,7 @@ pub use discovery::{
 pub use embedded_impl::EmbeddedRemoteP2pAdmin;
 pub use endpoint::{peer_endpoint_upsert_mutation, run_endpoint_heartbeat};
 pub use engine::{
-    merge_layered_desired, reconcile_peer_tick, run_pairing_reconciler,
+    materialize_base_desired, merge_layered_desired, reconcile_peer_tick, run_pairing_reconciler,
     update_applied_after_success, GraphqlPairingStateStore, LoadedPairingApplied,
     PairingStateStore, PairingTickOutcome, MAX_CONCURRENT_PEER_PREPARATIONS,
     PAIRING_SWEEP_INTERVAL,
@@ -60,8 +60,9 @@ pub use registry::{
 };
 pub use templates::{
     builtin_templates, combine_filters, conversation_like, decode_pairing_filters, equality_filter,
-    filter_conditions, resolve_template, scope_filter, single_string_eq, Delivery, DidSource,
-    FilterPredicate, PairingFilters, Scope, ScopeTemplate, AGENT_DIRECTORY_COLLECTION,
+    filter_conditions, resolve_template, scope_filter, single_string_eq, to_replication_filters,
+    Delivery, DidSource, FilterPredicate, PairingFilters, Scope, ScopeTemplate,
+    AGENT_DIRECTORY_COLLECTION,
 };
 pub use trait_def::{
     RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteP2pDocument, RemoteReplicator,

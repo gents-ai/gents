@@ -112,9 +112,9 @@ pub fn combine_filters(left: FilterPredicate, right: FilterPredicate) -> FilterP
     }
 }
 
-pub fn filter_conditions(filter: &FilterPredicate) -> Map<String, Value> {
+pub fn filter_conditions(filter: &FilterPredicate) -> Option<Map<String, Value>> {
     match filter {
-        FilterPredicate::Predicate(conditions) => conditions.clone(),
+        FilterPredicate::Predicate(conditions) => Some(conditions.clone()),
         FilterPredicate::All(filters) => {
             let mut conditions = Map::new();
             conditions.insert(
@@ -122,14 +122,31 @@ pub fn filter_conditions(filter: &FilterPredicate) -> Map<String, Value> {
                 Value::Array(
                     filters
                         .iter()
-                        .map(|filter| Value::Object(filter_conditions(filter)))
-                        .collect(),
+                        .map(|filter| filter_conditions(filter).map(Value::Object))
+                        .collect::<Option<Vec<_>>>()?,
                 ),
             );
-            conditions
+            Some(conditions)
         }
-        FilterPredicate::Acp { .. } => Map::new(),
+        FilterPredicate::Acp { .. } => None,
     }
+}
+
+pub fn to_replication_filters(
+    filters: &PairingFilters,
+) -> Result<defra_p2p_adapter::ReplicationFilters, String> {
+    filters
+        .iter()
+        .map(|(collection, filter)| {
+            let conditions = filter_conditions(filter).ok_or_else(|| {
+                format!("ACP filter for {collection} is not supported by the replication API")
+            })?;
+            Ok((
+                collection.clone(),
+                defra_p2p_adapter::ReplicationFilter::predicate(conditions),
+            ))
+        })
+        .collect()
 }
 
 pub fn single_string_eq(filter: &FilterPredicate) -> Option<(&str, &str)> {
@@ -169,19 +186,6 @@ pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
         }
     }
     serde_json::from_value(value)
-}
-
-pub fn merge_pairing_filters(left: &mut PairingFilters, right: PairingFilters) {
-    for (collection, predicate) in right {
-        match left.remove(&collection) {
-            Some(existing) => {
-                left.insert(collection, combine_filters(existing, predicate));
-            }
-            None => {
-                left.insert(collection, predicate);
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -651,7 +655,7 @@ mod tests {
         let combined = combine_filters(equality_filter("requester_did", "did:key:phone"), rich);
 
         assert_eq!(
-            Value::Object(filter_conditions(&combined)),
+            Value::Object(filter_conditions(&combined).expect("predicate conditions")),
             serde_json::json!({
                 "_and": [
                     { "requester_did": { "_eq": "did:key:phone" } },
@@ -659,6 +663,20 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[test]
+    fn unsupported_acp_filter_is_rejected() {
+        let filters = [(
+            "AgentRequest".to_string(),
+            FilterPredicate::Acp {
+                relation: "reader".to_string(),
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        assert!(to_replication_filters(&filters).is_err());
     }
 
     #[test]

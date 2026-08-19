@@ -441,10 +441,12 @@ fn filter_mentions_agent_request(filter: &str, peer_agent_did: &str) -> bool {
     let Ok(filters) = gents::agent::p2p_reconcile::templates::decode_pairing_filters(filter) else {
         return false;
     };
-    filters.get("AgentRequest").is_some_and(|filter| {
-        let conditions = gents::agent::p2p_reconcile::templates::filter_conditions(filter);
-        condition_mentions_value(&Value::Object(conditions), peer_agent_did)
-    })
+    filters
+        .get("AgentRequest")
+        .and_then(gents::agent::p2p_reconcile::templates::filter_conditions)
+        .is_some_and(|conditions| {
+            condition_mentions_value(&Value::Object(conditions), peer_agent_did)
+        })
 }
 
 fn condition_mentions_value(value: &Value, expected: &str) -> bool {

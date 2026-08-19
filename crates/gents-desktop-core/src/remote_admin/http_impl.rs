@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use defra_node::EmbeddedNode;
 use gents::agent::p2p_reconcile::{
-    PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+    to_replication_filters, PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError,
+    RemoteP2pAdminResult, RemoteReplicator,
 };
 
 use crate::client::PrincipalIdentity;
@@ -237,17 +238,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         let body = AddReplicatorBody {
             collections,
             addresses,
-            filters: filters
-                .iter()
-                .map(|(collection, predicate)| {
-                    (
-                        collection.clone(),
-                        ReplicationFilter::predicate(
-                            gents::agent::p2p_reconcile::templates::filter_conditions(predicate),
-                        ),
-                    )
-                })
-                .collect(),
+            filters: to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?,
         };
         let resp = self
             .json_request(Method::POST, "/p2p/replicators", &body)?

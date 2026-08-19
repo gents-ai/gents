@@ -1,4 +1,13 @@
-import { createContext, useContext, useLayoutEffect, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 type ConfigNavigationGuardValue = {
   reportDirty: (dirty: boolean) => void;
@@ -29,6 +38,55 @@ export function ConfigNavigationGuardProvider({
 
 export function useConfigNavigationGuard() {
   return useContext(ConfigNavigationGuardContext);
+}
+
+export function useConfigNavigationController() {
+  const [dirty, reportDirty] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const pendingNavigation = useRef<(() => void) | null>(null);
+
+  const requestNavigation = useCallback(
+    (navigate: () => void) => {
+      if (!dirty) {
+        navigate();
+        return;
+      }
+      pendingNavigation.current = navigate;
+      setConfirmingDiscard(true);
+    },
+    [dirty],
+  );
+
+  const cancelDiscard = useCallback(() => {
+    pendingNavigation.current = null;
+    setConfirmingDiscard(false);
+  }, []);
+
+  const confirmDiscard = useCallback(() => {
+    const navigate = pendingNavigation.current;
+    pendingNavigation.current = null;
+    setConfirmingDiscard(false);
+    reportDirty(false);
+    navigate?.();
+  }, []);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const preventAccidentalClose = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventAccidentalClose);
+    return () => window.removeEventListener("beforeunload", preventAccidentalClose);
+  }, [dirty]);
+
+  return {
+    cancelDiscard,
+    confirmDiscard,
+    confirmingDiscard,
+    reportDirty,
+    requestNavigation,
+  };
 }
 
 export function useReportConfigDirty(dirty: boolean) {

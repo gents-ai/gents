@@ -1311,7 +1311,7 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
 /// Route rotation is peer-scoped even with other replicators present or an
 /// address-less restored record.
 #[tokio::test]
-async fn changed_endpoint_redials_without_replacing_same_peer_replicator() {
+async fn changed_endpoint_replaces_same_peer_replicator_teardown_first() {
     let old_address = "stable-peer@127.0.0.1:4100";
     let fresh_address = "stable-peer@127.0.0.1:4200";
     let store = MockStore::with_desired(Some(PairingDesired {
@@ -1352,11 +1352,32 @@ async fn changed_endpoint_redials_without_replacing_same_peer_replicator() {
         *admin.connects.lock().unwrap(),
         vec![vec![fresh_address.to_string()]]
     );
-    assert!(outcome.ops_applied.is_empty());
+    assert_eq!(
+        outcome.ops_applied,
+        vec![
+            DiffOp::TeardownReplicator(old_address.to_string()),
+            DiffOp::InstallReplicator(fresh_address.to_string()),
+        ]
+    );
     assert_eq!(
         store.applied.lock().unwrap().replicator_addresses,
         set(&[fresh_address])
     );
+}
+
+#[tokio::test]
+async fn empty_persist_forgets_deleted_canonical_document() {
+    let store = MockStore::default();
+    let mut applied = LoadedPairingApplied {
+        canonical_doc_id: Some("deleted-doc".to_string()),
+        ..Default::default()
+    };
+
+    persist_applied_record(&store, "peer-a", &mut applied)
+        .await
+        .expect("empty persist");
+
+    assert_eq!(applied.canonical_doc_id, None);
 }
 
 #[tokio::test]
@@ -1428,7 +1449,7 @@ async fn applied_state_persist_targets_one_canonical_document_when_duplicates_ex
 }
 
 #[tokio::test]
-async fn stale_applied_endpoint_absent_from_actual_is_pruned_once() {
+async fn stale_applied_endpoint_absent_from_actual_is_torn_down_once() {
     let desired = PairingDesired {
         replicator_addresses: set(&["addr2"]),
         replicator_collections: set(&["AgentRequest"]),
@@ -1452,7 +1473,10 @@ async fn stale_applied_endpoint_absent_from_actual_is_pruned_once() {
 
     assert_eq!(
         first.ops_applied,
-        vec![DiffOp::InstallReplicator("addr2".into())]
+        vec![
+            DiffOp::TeardownReplicator("addr1".into()),
+            DiffOp::InstallReplicator("addr2".into()),
+        ]
     );
     assert!(second.ops_applied.is_empty());
     assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr2"]]);
@@ -1621,7 +1645,7 @@ async fn second_tick_converges_across_name_and_id_spaces() {
 }
 
 #[tokio::test]
-async fn teardown_is_restricted_to_applied_actual_extras() {
+async fn teardown_is_restricted_to_applied_extras() {
     // Applied holds collection *names* (the observable contract). The remote
     // subscription set is tracked in id-space internally by the mock, but
     // `read_actual` reverse-resolves it to names for the diff.
