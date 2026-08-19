@@ -77,17 +77,19 @@ is captured when the server starts. Seeding does not re-apply.
 
 ### `make review`
 
-1. `GET http://127.0.0.1:$(REVIEW_PORT)/healthz` must succeed. If not:
+1. `gents demo seed demo/code-review --http-port $(REVIEW_PORT)
+   --home $(REVIEW_HOME)`. The command waits for `/healthz` and an enabled
+   EventTrigger on `ReviewJob`; if the node is down:
    `start the pack node first: make review-serve`.
-2. Allocate a unique `run_id` (`REVIEW_JOB_ID` or
-   `review-YYYYMMDDTHHMMSSZ-<pid>`).
-3. POST the same `create_ReviewJob` mutation `gents demo run` uses today
+2. Allocate a unique `run_id` (`REVIEW_JOB_ID` or the pack runner's
+   `exp-<unix-secs>` default).
+3. POST the same `create_ReviewJob` mutation `gents demo run` uses
    (`run_id`, `focus`, `repository_path`, `base_ref`, `head_ref`,
-   `lens_count`, `lens_min`, `lens_max`, `pr_number`), with
-   `graphql::escape_graphql_string` (or the equivalent) on every interpolated
-   value.
-4. Print `seeded ReviewJob run_id=…` and exit 0. Do not await stages. Do not
-   kill anything.
+   `lens_count`, `lens_min`, `lens_max`, `pr_number`), via
+   `graphql::escape_graphql_string`.
+4. Wait until an `AgentRequest` with `caused_by_correlation=run_id` exists,
+   then print `seeded ReviewJob run_id=…` and exit 0. Do not await stages.
+   Do not kill anything.
 
 A new `run_id` creates new source rows, so first-seen EventTriggers fire again
 on a reused home.
@@ -329,9 +331,9 @@ Root `package.json` workspaces already include `apps/*` via the two existing
 apps; add `apps/review-demo` explicitly if the glob is not used (today the
 list is explicit — add the entry).
 
-Seed helper: `demo/code-review/scripts/seed-review-job.mjs`. Makefile
-`review` invokes it. String escape must match `escape_graphql_string`
-(backslash, `"`, newline, CR, and tab).
+Seed helper: `gents demo seed <pack> --http-port N`. Makefile
+`review` invokes it. The command reuses pack interpolation, GraphQL
+escape, and EventTrigger readiness from `demo run`.
 
 ## Testing
 

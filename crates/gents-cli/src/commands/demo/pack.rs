@@ -1,4 +1,5 @@
-//! Non-interactive pack runs: `gents demo run <pack>`.
+//! Non-interactive pack runs: `gents demo run <pack>`, `gents demo init`,
+//! and `gents demo seed` against an already-serving node.
 //!
 //! A pack is a self-contained desired-state root (its own `schemas/` plus the
 //! config documents) with an `experiment.json` describing how to drive it.
@@ -7,7 +8,9 @@
 //! pack applies *after* the runtime is ready, so its backend is unprobed for up
 //! to one probe interval while the server already reports `serving`; and a seed
 //! written before the event source observes its collection is dropped in
-//! silence, because triggers are created/first-seen only.
+//! silence, because triggers are created/first-seen only. `demo seed` waits
+//! for `/healthz` and an enabled EventTrigger, then confirms a correlated
+//! AgentRequest actually fired.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -18,7 +21,7 @@ use serde_json::{json, Value};
 
 use super::fleet::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
 use super::util::{path_arg, run_cli_json};
-use crate::cli::args::DemoRunArgs;
+use crate::cli::args::{DemoInitArgs, DemoRunArgs, DemoSeedArgs};
 use crate::desired_state::interpolate::interpolate_with;
 use crate::graphql_access::post_graphql;
 use gents::graphql::{escape_graphql_string, validate_collection_identifier};
@@ -763,6 +766,130 @@ fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> String {
         seed.collection,
         fields.join(", ")
     )
+}
+
+fn pack_init_cli_args(
+    home: &Path,
+    manifest: &PackManifest,
+    tool_root: Option<&Path>,
+) -> Vec<String> {
+    let mut init_args: Vec<String> = vec![
+        "init".into(),
+        "--home".into(),
+        path_arg(home),
+        "--dangerously-overwrite".into(),
+        "--inference-url".into(),
+        manifest.init.inference_url.clone(),
+        "--model-name".into(),
+        manifest.init.model_name.clone(),
+        "--tool-package".into(),
+        manifest.init.tool_package.clone(),
+    ];
+    if let Some(root) = tool_root {
+        init_args.push("--tool-root".into());
+        init_args.push(path_arg(root));
+    }
+    if let Some(preset) = manifest.init.backend_preset.as_deref() {
+        init_args.push("--backend-preset".into());
+        init_args.push(preset.into());
+    }
+    if let Some(wire) = manifest.init.openai_wire_api.as_deref() {
+        init_args.push("--openai-wire-api".into());
+        init_args.push(wire.into());
+    }
+    if let Some(api_key_env_var) = manifest.init.api_key_env_var.as_deref() {
+        init_args.push("--api-key-env-var".into());
+        init_args.push(api_key_env_var.into());
+    }
+    init_args
+}
+
+fn refuse_stale_review_root(home: &Path, env_root: Option<&Path>) -> Result<()> {
+    let stamp = home.join("review-root");
+    if !stamp.is_file() {
+        return Ok(());
+    }
+    let Some(env_root) = env_root else {
+        return Ok(());
+    };
+    let applied =
+        std::fs::read_to_string(&stamp).with_context(|| format!("reading {}", stamp.display()))?;
+    let applied = applied.trim();
+    if applied.is_empty() {
+        return Ok(());
+    }
+    if !same_path(Path::new(applied), env_root) {
+        bail!(
+            "REVIEW_ROOT {} does not match the pack node at {}; re-run make review-serve (REVIEW_RESET=1 if you meant to retarget)",
+            env_root.display(),
+            applied
+        );
+    }
+    Ok(())
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+fn event_trigger_ready(response: &Value, collection: &str) -> bool {
+    response
+        .pointer("/data/EventTrigger")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|row| {
+            row.get("source_collection").and_then(Value::as_str) == Some(collection)
+                && row.get("enabled").and_then(Value::as_bool) == Some(true)
+        })
+}
+
+fn has_correlated_request(response: &Value) -> bool {
+    response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty())
+}
+
+async fn wait_until<F, Fut>(label: &str, deadline: Duration, mut probe: F) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<bool>>,
+{
+    let started = Instant::now();
+    let mut last = None::<String>;
+    while started.elapsed() < deadline {
+        match probe().await {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => last = Some(error.to_string()),
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+    match last {
+        Some(error) => bail!("{label} timed out after {}s: {error}", deadline.as_secs()),
+        None => bail!("{label} timed out after {}s", deadline.as_secs()),
+    }
+}
+
+async fn wait_http_ok(url: &str, deadline: Duration) -> Result<()> {
+    let client = reqwest::Client::new();
+    wait_until(url, deadline, || {
+        let client = client.clone();
+        async move {
+            Ok(client
+                .get(url)
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+                .map(|response| response.status().is_success())
+                .unwrap_or(false))
+        }
+    })
+    .await
 }
 
 #[derive(Debug, Clone)]
@@ -2229,6 +2356,127 @@ fn default_job_id() -> String {
     format!("exp-{secs}")
 }
 
+fn resolve_manifest_tool_root(pack: &Path, manifest: &PackManifest) -> Result<Option<PathBuf>> {
+    if tool_package_needs_root(&manifest.init.tool_package) {
+        Ok(Some(resolve_pack_tool_root(
+            pack,
+            manifest.init.tool_root.as_deref(),
+            &manifest.init.tool_root_markers,
+        )?))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) async fn init_pack(args: DemoInitArgs) -> Result<()> {
+    let bin = std::env::current_exe().context("resolving the gents binary path")?;
+    let pack = resolve_pack(&args.pack)?;
+    let manifest = load_manifest(&pack)?;
+    let home = args.home;
+    if home.join("init.json").is_file() && !args.overwrite {
+        bail!(
+            "home {} already initialized; pass --overwrite to replace it",
+            home.display()
+        );
+    }
+    std::fs::create_dir_all(&home)
+        .with_context(|| format!("creating pack home {}", home.display()))?;
+    let tool_root = resolve_manifest_tool_root(&pack, &manifest)?;
+    let init = run_cli_json(
+        &bin,
+        &pack_init_cli_args(&home, &manifest, tool_root.as_deref()),
+    )
+    .await?;
+    let agent_did = init
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    println!(
+        "initialized pack {} at {} ({agent_did})",
+        manifest.name,
+        home.display()
+    );
+    Ok(())
+}
+
+pub(crate) async fn seed(args: DemoSeedArgs) -> Result<()> {
+    let pack = resolve_pack(&args.pack)?;
+    let manifest = load_manifest(&pack)?;
+    if let Some(home) = args.home.as_deref() {
+        let env_root = std::env::var_os("GENTS_REVIEW_ROOT").map(PathBuf::from);
+        refuse_stale_review_root(home, env_root.as_deref())?;
+    }
+
+    let port = args.http_port;
+    let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
+    let healthz = format!("http://127.0.0.1:{port}/healthz");
+    wait_http_ok(&healthz, Duration::from_secs(120))
+        .await
+        .with_context(|| format!("start the pack node first (waiting on {healthz})"))?;
+    wait_until(
+        &format!("EventTrigger on {}", manifest.seed.collection),
+        Duration::from_secs(60),
+        || {
+            let graphql = graphql.clone();
+            let collection = manifest.seed.collection.clone();
+            async move {
+                let response = post_graphql(
+                    &graphql,
+                    "{ EventTrigger { trigger_id source_collection enabled } }",
+                )
+                .await?;
+                Ok(event_trigger_ready(&response, &collection))
+            }
+        },
+    )
+    .await
+    .context("start the pack node first")?;
+
+    let job_id = args.job_id.clone().unwrap_or_else(default_job_id);
+    let prompt = args
+        .prompt
+        .clone()
+        .unwrap_or_else(|| manifest.default_prompt.clone());
+    if prompt.trim().is_empty() {
+        bail!("no prompt: pass --prompt or give the pack a default_prompt");
+    }
+
+    let mutation = seed_mutation(&manifest.seed, &job_id, &prompt);
+    post_graphql(&graphql, &mutation)
+        .await
+        .context("seeding the pack")?;
+
+    wait_until(
+        &format!("request for {job_id}"),
+        Duration::from_secs(60),
+        || {
+            let graphql = graphql.clone();
+            let job_id = job_id.clone();
+            async move {
+                let query = format!(
+                    "{{ AgentRequest(filter: {{ caused_by_correlation: {{ _eq: \"{}\" }} }}) {{ request_id }} }}",
+                    escape_graphql_string(&job_id)
+                );
+                let response = post_graphql(&graphql, &query).await?;
+                Ok(has_correlated_request(&response))
+            }
+        },
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "the {} was written but no request fired; the event source was not observing yet",
+            manifest.seed.collection
+        )
+    })?;
+
+    println!("seeded {} run_id={job_id}", manifest.seed.collection);
+    if let Some(page_port) = args.page_port {
+        println!("page     http://127.0.0.1:{page_port}/?run={job_id}");
+    }
+    Ok(())
+}
+
 pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let pack = resolve_pack(&args.pack)?;
@@ -2265,15 +2513,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     println!("endpoint {}", manifest.init.inference_url);
     println!("model    {}", manifest.init.model_name);
 
-    let tool_root = if tool_package_needs_root(&manifest.init.tool_package) {
-        Some(resolve_pack_tool_root(
-            &pack,
-            manifest.init.tool_root.as_deref(),
-            &manifest.init.tool_root_markers,
-        )?)
-    } else {
-        None
-    };
+    let tool_root = resolve_manifest_tool_root(&pack, &manifest)?;
     if let Some(root) = tool_root.as_ref() {
         println!(
             "tool     {} @ {}",
@@ -2284,35 +2524,11 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         println!("tool     {}", manifest.init.tool_package);
     }
 
-    let mut init_args: Vec<String> = vec![
-        "init".into(),
-        "--home".into(),
-        path_arg(&home),
-        "--dangerously-overwrite".into(),
-        "--inference-url".into(),
-        manifest.init.inference_url.clone(),
-        "--model-name".into(),
-        manifest.init.model_name.clone(),
-        "--tool-package".into(),
-        manifest.init.tool_package.clone(),
-    ];
-    if let Some(root) = tool_root.as_ref() {
-        init_args.push("--tool-root".into());
-        init_args.push(path_arg(root));
-    }
-    if let Some(preset) = manifest.init.backend_preset.as_deref() {
-        init_args.push("--backend-preset".into());
-        init_args.push(preset.into());
-    }
-    if let Some(wire) = manifest.init.openai_wire_api.as_deref() {
-        init_args.push("--openai-wire-api".into());
-        init_args.push(wire.into());
-    }
-    if let Some(api_key_env_var) = manifest.init.api_key_env_var.as_deref() {
-        init_args.push("--api-key-env-var".into());
-        init_args.push(api_key_env_var.into());
-    }
-    let init = run_cli_json(&bin, &init_args).await?;
+    let init = run_cli_json(
+        &bin,
+        &pack_init_cli_args(&home, &manifest, tool_root.as_deref()),
+    )
+    .await?;
     let agent_did = init
         .get("agent_did")
         .and_then(Value::as_str)
@@ -2675,6 +2891,68 @@ mod tests {
     #[test]
     fn observe_line_alone_is_not_ready_to_seed() {
         assert!(!event_source_ready(COLOURED, "ExperimentJob"));
+    }
+
+    #[test]
+    fn seed_mutation_escapes_prompt_and_extra_fields() {
+        let seed = PackSeed {
+            collection: "ReviewJob".into(),
+            job_id_field: "run_id".into(),
+            prompt_field: "focus".into(),
+            fields: BTreeMap::from([("repository_path".into(), "/tmp/\"repo\"".into())]),
+        };
+        let mutation = seed_mutation(&seed, "run-1", "say \"hi\"\nnext");
+        assert!(mutation.contains("create_ReviewJob"));
+        assert!(mutation.contains(r#"run_id: "run-1""#));
+        assert!(mutation.contains(r#"focus: "say \"hi\"\nnext""#));
+        assert!(mutation.contains(r#"repository_path: "/tmp/\"repo\"""#));
+    }
+
+    #[test]
+    fn event_trigger_ready_requires_enabled_matching_collection() {
+        let response = json!({
+            "data": {
+                "EventTrigger": [
+                    {"trigger_id": "other", "source_collection": "Other", "enabled": true},
+                    {"trigger_id": "recon", "source_collection": "ReviewJob", "enabled": false}
+                ]
+            }
+        });
+        assert!(!event_trigger_ready(&response, "ReviewJob"));
+        let response = json!({
+            "data": {
+                "EventTrigger": [
+                    {"trigger_id": "recon", "source_collection": "ReviewJob", "enabled": true}
+                ]
+            }
+        });
+        assert!(event_trigger_ready(&response, "ReviewJob"));
+    }
+
+    #[test]
+    fn has_correlated_request_requires_rows() {
+        assert!(!has_correlated_request(
+            &json!({"data": {"AgentRequest": []}})
+        ));
+        assert!(has_correlated_request(&json!({
+            "data": {"AgentRequest": [{"request_id": "r1"}]}
+        })));
+    }
+
+    #[test]
+    fn refuse_stale_review_root_when_both_sides_are_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let applied = dir.path().join("applied");
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&applied).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(home.join("review-root"), format!("{}\n", applied.display())).unwrap();
+        refuse_stale_review_root(&home, Some(&applied)).unwrap();
+        let error = refuse_stale_review_root(&home, Some(&other)).unwrap_err();
+        assert!(error.to_string().contains("does not match the pack node"));
+        refuse_stale_review_root(&home, None).unwrap();
     }
 
     #[test]

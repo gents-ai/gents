@@ -236,6 +236,10 @@ pub(crate) struct DemoArgs {
 pub(crate) enum DemoCommand {
     #[command(about = "Run a pack end to end without a human: apply, seed, await, report")]
     Run(DemoRunArgs),
+    #[command(about = "Initialize a home from a pack's experiment.json")]
+    Init(DemoInitArgs),
+    #[command(about = "Seed a pack document against an already-serving node")]
+    Seed(DemoSeedArgs),
     #[command(about = "List runnable packs")]
     List(DemoListArgs),
 }
@@ -258,6 +262,39 @@ pub(crate) struct DemoRunArgs {
         help = "Keep the generated home after the run (for debugging)"
     )]
     pub(crate) keep_home: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct DemoInitArgs {
+    #[arg(help = "Pack directory, or a name resolved under demo/")]
+    pub(crate) pack: String,
+    #[arg(long, help = "Home directory to initialize")]
+    pub(crate) home: PathBuf,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Replace an existing home instead of refusing"
+    )]
+    pub(crate) overwrite: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct DemoSeedArgs {
+    #[arg(help = "Pack directory, or a name resolved under demo/")]
+    pub(crate) pack: String,
+    #[arg(
+        long,
+        help = "Pack node home; used to refuse a stale review-root stamp"
+    )]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "Seed prompt. Defaults to the pack's default_prompt")]
+    pub(crate) prompt: Option<String>,
+    #[arg(long = "job-id", help = "Run id stamped on the seed document")]
+    pub(crate) job_id: Option<String>,
+    #[arg(long, default_value_t = 19191, help = "HTTP port for the pack node")]
+    pub(crate) http_port: u16,
+    #[arg(long, help = "If set, print the talk-page URL with ?run=")]
+    pub(crate) page_port: Option<u16>,
 }
 
 #[derive(clap::Args)]

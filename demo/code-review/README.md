@@ -118,7 +118,7 @@ reviewers do not turn token streaming into database write pressure. Override
 that cadence with `REVIEW_STREAM_BATCH_MS` when needed; terminal and tool-call
 boundaries still flush immediately.
 
-`make review` seeds a `ReviewJob` on the node from `make review-serve`. It
+`make review` runs `gents demo seed` against the node from `make review-serve`. It
 roots file and LSP tools at `REVIEW_ROOT` (the current repository by default),
 and fails before inference if the base or head ref is invalid. The unattended
 `gents demo run demo/code-review` path still builds and runs the workspace CLI. Reviewer stages also receive the intentionally

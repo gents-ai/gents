@@ -198,14 +198,7 @@ review-serve:
 	@if ! test -f "$(REVIEW_HOME)/review-root"; then printf '%s\n' "$(abspath $(REVIEW_ROOT))" > "$(REVIEW_HOME)/review-root"; fi
 	@if ! test -f "$(REVIEW_HOME)/init.json"; then \
 		echo "init     $(REVIEW_HOME)"; \
-		$(CARGO) run -p gents-cli -- init \
-			--home "$(REVIEW_HOME)" \
-			--inference-url "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" inference_url)" \
-			--model-name "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" model_name)" \
-			--tool-package "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" tool_package)" \
-			--tool-root "$(abspath $(REVIEW_ROOT))" \
-			--backend-preset "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" backend_preset)" \
-			--openai-wire-api "$$(node "$(REVIEW_PACK)/scripts/read-pack-init.mjs" openai_wire_api)"; \
+		$(CARGO) run -p gents-cli -- demo init "$(REVIEW_PACK)" --home "$(REVIEW_HOME)"; \
 	fi
 	@echo "page     http://127.0.0.1:$(REVIEW_PAGE_PORT)"
 	@echo "graphql  http://127.0.0.1:$(REVIEW_PORT)/api/v0/graphql"
@@ -234,11 +227,12 @@ review:
 	fi; \
 	if test -n "$$review_pr"; then echo "reviewing GitHub PR $$review_pr"; else echo "no GitHub PR detected; reviewing the local ref diff"; fi; \
 	GENTS_REVIEW_PR_NUMBER="$$review_pr" \
-	GENTS_REVIEW_JOB_ID="$(REVIEW_JOB_ID)" \
-	REVIEW_PORT="$(REVIEW_PORT)" \
-	REVIEW_PAGE_PORT="$(REVIEW_PAGE_PORT)" \
-	REVIEW_HOME="$(REVIEW_HOME)" \
-	node "$(REVIEW_PACK)/scripts/seed-review-job.mjs"
+	$(CARGO) run -p gents-cli -- demo seed "$(REVIEW_PACK)" \
+		--http-port "$(REVIEW_PORT)" \
+		--home "$(REVIEW_HOME)" \
+		--page-port "$(REVIEW_PAGE_PORT)" \
+		--prompt "$(REVIEW_PROMPT)" \
+		$(if $(REVIEW_JOB_ID),--job-id "$(REVIEW_JOB_ID)",)
 
 .PHONY: maintain
 maintain:
