@@ -32,12 +32,14 @@ inductive Scope where
 
 structure ScopeFilterKey where
   field : String
+  operator : String := "_eq"
   value : Did
   deriving DecidableEq, Repr
 
 structure CollectionScopeFilter where
   collection : String
   field : String
+  operator : String := "_eq"
   value : Did
   deriving DecidableEq, Repr
 

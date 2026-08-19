@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::{
-    resolve_template, EmbeddedRemoteP2pAdmin, FilterPredicate, PairingFilters, RemoteP2pAdmin,
+    equality_filter, resolve_template, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
 use gents::background_completion::{observe_cancel_cascade_ack, CancelAckOutcome};
 use gents::defra_node::EmbeddedNode;
@@ -672,10 +672,7 @@ async fn replay_and_wait_for_bridge(
     let mut filters = PairingFilters::new();
     filters.insert(
         "AgentToolCall".to_string(),
-        FilterPredicate {
-            field: "spawn_target_did".to_string(),
-            value: receiver_did.to_string(),
-        },
+        equality_filter("spawn_target_did", receiver_did),
     );
     admin
         .add_replicator(&[receiver_addr.to_string()], &collections, &filters)

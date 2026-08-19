@@ -3,12 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use defra_p2p_adapter::ReplicationFilter;
 use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
 use defra_node::EmbeddedNode;
 use gents::agent::p2p_reconcile::{
-    PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+    to_replication_filters, PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError,
+    RemoteP2pAdminResult, RemoteReplicator,
 };
 
 use crate::client::PrincipalIdentity;
@@ -127,15 +129,7 @@ struct AddReplicatorBody<'a> {
     #[serde(rename = "Addresses")]
     addresses: &'a [String],
     #[serde(rename = "Filters", skip_serializing_if = "BTreeMap::is_empty")]
-    filters: BTreeMap<String, HttpReplicationFilter>,
-}
-
-#[derive(Debug, Serialize)]
-struct HttpReplicationFilter {
-    #[serde(rename = "Field")]
-    field: String,
-    #[serde(rename = "Value")]
-    value: serde_json::Value,
+    filters: BTreeMap<String, ReplicationFilter>,
 }
 
 #[derive(Debug, Serialize)]
@@ -244,18 +238,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         let body = AddReplicatorBody {
             collections,
             addresses,
-            filters: filters
-                .iter()
-                .map(|(collection, predicate)| {
-                    (
-                        collection.clone(),
-                        HttpReplicationFilter {
-                            field: predicate.field.clone(),
-                            value: serde_json::Value::String(predicate.value.clone()),
-                        },
-                    )
-                })
-                .collect(),
+            filters: to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?,
         };
         let resp = self
             .json_request(Method::POST, "/p2p/replicators", &body)?
@@ -509,6 +492,7 @@ async fn check_status(resp: reqwest::Response) -> RemoteP2pAdminResult<reqwest::
 mod tests {
     use super::*;
     use crate::client::{DesktopPaths, PrincipalIdentity};
+    use gents::agent::p2p_reconcile::combine_filters;
     use wiremock::matchers::{body_bytes, body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -896,6 +880,45 @@ mod tests {
             )
             .await
             .expect("add_replicator");
+    }
+
+    #[tokio::test]
+    async fn add_replicator_posts_composed_conditions() {
+        let server = MockServer::start().await;
+        let expected = serde_json::json!({
+            "Collections": ["AgentRequest"],
+            "Addresses": ["peer1"],
+            "Filters": {
+                "AgentRequest": {
+                    "Conditions": {
+                        "_and": [
+                            { "requester_did": { "_eq": "did:key:phone" } },
+                            { "status": { "_eq": "pending" } }
+                        ]
+                    }
+                }
+            }
+        });
+        Mock::given(method("POST"))
+            .and(path("/api/v0/p2p/replicators"))
+            .and(body_json(expected))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let filters = [(
+            "AgentRequest".to_string(),
+            combine_filters(
+                gents::agent::p2p_reconcile::equality_filter("requester_did", "did:key:phone"),
+                gents::agent::p2p_reconcile::equality_filter("status", "pending"),
+            ),
+        )]
+        .into_iter()
+        .collect();
+
+        admin_for(&server)
+            .add_replicator(&["peer1".into()], &["AgentRequest".into()], &filters)
+            .await
+            .expect("add composed replicator");
     }
 
     #[tokio::test]

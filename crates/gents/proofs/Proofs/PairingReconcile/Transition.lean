@@ -114,7 +114,6 @@ inductive Transition : ReconcileState → ReconcileState → Prop where
       Transition pre post
   | reconcileTeardownReplicator {pre post : ReconcileState} (desired : PairingDesired) (r : ReplicatorId) :
       pre.desired = some desired →
-      r ∈ pre.actual.replicators →
       r ∉ desired.replicators →
       r ∈ pre.applied.replicators →
       post = teardownReplicatorState pre r →
@@ -210,7 +209,7 @@ theorem unmanaged_collection_survives
   | reconcileInstallReplicatorFailed desired target h_desired h_target h_missing h_connected h_post =>
       cases h_post
       exact hc
-  | reconcileTeardownReplicator desired target h_desired h_actual h_not_desired h_applied h_post =>
+  | reconcileTeardownReplicator desired target h_desired h_not_desired h_applied h_post =>
       cases h_post
       exact hc
   | crash h_post =>
@@ -253,7 +252,7 @@ theorem unmanaged_replicator_survives
   | reconcileInstallReplicatorFailed desired target h_desired h_target h_missing h_connected h_post =>
       cases h_post
       exact hr
-  | reconcileTeardownReplicator desired target h_desired h_actual h_not_desired h_applied h_post =>
+  | reconcileTeardownReplicator desired target h_desired h_not_desired h_applied h_post =>
       cases h_post
       by_cases h_eq : r = target
       · subst h_eq

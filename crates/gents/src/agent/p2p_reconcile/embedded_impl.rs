@@ -5,14 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use defra_p2p_adapter::{
-    P2PError, P2PResult, P2pDocumentRequest, ReplicationFilter, ReplicationFilters,
-};
+use defra_p2p_adapter::{P2PError, P2PResult, P2pDocumentRequest};
 use tokio::time::timeout;
 
 use crate::defra_node::EmbeddedNode;
 
-use super::templates::PairingFilters;
+use super::templates::{to_replication_filters, PairingFilters};
 use super::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
 
 const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -105,7 +103,8 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     ) -> RemoteP2pAdminResult<()> {
         let p2p = self.p2p()?;
         let addr = addresses.first().map(String::as_str);
-        let defra_filters = to_defra_filters(filters);
+        let defra_filters =
+            to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?;
         self.run(
             "add_replicator",
             p2p.add_replicator(collections.to_vec(), addr, defra_filters, Vec::new(), None),
@@ -241,22 +240,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 }
 
-fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
-    filters
-        .iter()
-        .map(|(collection, predicate)| {
-            (
-                collection.clone(),
-                ReplicationFilter {
-                    field: predicate.field.clone(),
-                    value: serde_json::Value::String(predicate.value.clone()),
-                    conditions: None,
-                },
-            )
-        })
-        .collect()
-}
-
 fn document_requests(doc_ids: &[String]) -> Vec<P2pDocumentRequest> {
     doc_ids
         .iter()
@@ -290,7 +273,8 @@ mod tests {
 
     use super::*;
     use crate::agent::p2p_reconcile::templates::{Scope, SUBAGENT_HOST_TEMPLATE};
-    use crate::agent::p2p_reconcile::{resolve_template, scope_filter, FilterPredicate};
+    use crate::agent::p2p_reconcile::{combine_filters, equality_filter};
+    use crate::agent::p2p_reconcile::{resolve_template, scope_filter};
     use crate::defra_node::P2PConfig;
     use crate::ensure_runtime_schemas;
     use crate::graphql::escape_graphql_string;
@@ -304,6 +288,31 @@ mod tests {
     struct TestNode {
         node: Arc<EmbeddedNode>,
         _tempdir: tempfile::TempDir,
+    }
+
+    #[test]
+    fn adapter_preserves_conjunctive_filters_as_conditions() {
+        let filters = [(
+            "AgentRequest".to_string(),
+            combine_filters(
+                equality_filter("requester_did", "did:key:phone"),
+                equality_filter("status", "pending"),
+            ),
+        )]
+        .into_iter()
+        .collect();
+
+        let converted = to_replication_filters(&filters).expect("supported filters");
+        assert_eq!(
+            converted["AgentRequest"].conditions.as_ref(),
+            serde_json::json!({
+                "_and": [
+                    { "requester_did": { "_eq": "did:key:phone" } },
+                    { "status": { "_eq": "pending" } }
+                ]
+            })
+            .as_object()
+        );
     }
 
     async fn p2p_node() -> TestNode {
@@ -750,17 +759,11 @@ mod tests {
         let mut filters = PairingFilters::new();
         filters.insert(
             "AgentRequest".to_string(),
-            FilterPredicate {
-                field: "requester_did".to_string(),
-                value: "did:key:coord".to_string(),
-            },
+            equality_filter("requester_did", "did:key:coord"),
         );
         filters.insert(
             "AgentToolCall".to_string(),
-            FilterPredicate {
-                field: "spawn_target_did".to_string(),
-                value: "did:key:host".to_string(),
-            },
+            equality_filter("spawn_target_did", "did:key:host"),
         );
         sender_admin
             .add_replicator(&receiver_addresses, &collections, &filters)

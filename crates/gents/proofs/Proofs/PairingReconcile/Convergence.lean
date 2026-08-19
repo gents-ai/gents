@@ -131,7 +131,7 @@ theorem no_flap_on_converged_step
   | reconcileInstallReplicatorFailed desired target h_desired h_target h_missing h_connected h_post =>
       subst h_post
       simp [managedWiringUnchanged]
-  | reconcileTeardownReplicator desired target h_desired h_actual h_not_desired h_applied h_post =>
+  | reconcileTeardownReplicator desired target h_desired h_not_desired h_applied h_post =>
       exfalso
       unfold ReconcileState.converged at h
       simp [h_desired] at h
@@ -181,7 +181,6 @@ theorem filter_change_forces_reinstall
     (hf : f1 ≠ f2)
     (h_new_desired : ((a, f2, cs) : ReplicatorId) ∈ desired.replicators)
     (h_old_not_desired : ((a, f1, cs) : ReplicatorId) ∉ desired.replicators)
-    (h_old_actual : ((a, f1, cs) : ReplicatorId) ∈ s.actual.replicators)
     (h_old_applied : ((a, f1, cs) : ReplicatorId) ∈ s.applied.replicators)
     (h_new_not_actual : ((a, f2, cs) : ReplicatorId) ∉ s.actual.replicators)
     (h_connected : s.actual.connected = true) :
@@ -201,7 +200,7 @@ theorem filter_change_forces_reinstall
     simp only [disagreementCount, h_desired]
     omega
   · exact Transition.reconcileTeardownReplicator desired (a, f1, cs)
-      h_desired h_old_actual h_old_not_desired h_old_applied rfl
+      h_desired h_old_not_desired h_old_applied rfl
   · exact Transition.reconcileInstallReplicator desired (a, f2, cs)
       h_desired h_new_desired h_new_not_actual h_connected rfl
   ·
@@ -219,7 +218,6 @@ theorem collections_change_forces_reinstall
     (hcs : cs1 ≠ cs2)
     (h_new_desired : ((a, f, cs2) : ReplicatorId) ∈ desired.replicators)
     (h_old_not_desired : ((a, f, cs1) : ReplicatorId) ∉ desired.replicators)
-    (h_old_actual : ((a, f, cs1) : ReplicatorId) ∈ s.actual.replicators)
     (h_old_applied : ((a, f, cs1) : ReplicatorId) ∈ s.applied.replicators)
     (h_new_not_actual : ((a, f, cs2) : ReplicatorId) ∉ s.actual.replicators)
     (h_connected : s.actual.connected = true) :
@@ -238,7 +236,7 @@ theorem collections_change_forces_reinstall
     simp only [disagreementCount, h_desired]
     omega
   · exact Transition.reconcileTeardownReplicator desired (a, f, cs1)
-      h_desired h_old_actual h_old_not_desired h_old_applied rfl
+      h_desired h_old_not_desired h_old_applied rfl
   · exact Transition.reconcileInstallReplicator desired (a, f, cs2)
       h_desired h_new_desired h_new_not_actual h_connected rfl
   · exact Finset.mem_insert_self _ _
@@ -296,6 +294,19 @@ theorem partial_applied_replicator_stuck
       Finset.card_pos.mpr ⟨_, h_mem⟩
     simp only [disagreementCount, h_desired]
     omega
+
+theorem stale_applied_replicator_can_be_torn_down
+    {s : ReconcileState} {desired : PairingDesired} {r : ReplicatorId}
+    (h_desired : s.desired = some desired)
+    (h_applied : r ∈ s.applied.replicators)
+    (h_not_desired : r ∉ desired.replicators) :
+    Transition s (teardownReplicatorState s r) ∧
+      r ∉ (teardownReplicatorState s r).actual.replicators ∧
+      r ∉ (teardownReplicatorState s r).applied.replicators := by
+  refine ⟨Transition.reconcileTeardownReplicator desired r h_desired h_not_desired h_applied rfl,
+    ?_, ?_⟩
+  · exact Finset.not_mem_erase r s.actual.replicators
+  · exact Finset.not_mem_erase r s.applied.replicators
 
 theorem convergence_requires_successful_install
     {s post : ReconcileState} {desired : PairingDesired} {r : ReplicatorId}

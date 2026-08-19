@@ -438,14 +438,28 @@ async fn wait_conversation_replicator(
 }
 
 fn filter_mentions_agent_request(filter: &str, peer_agent_did: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<Value>(filter) else {
+    let Ok(filters) = gents::agent::p2p_reconcile::templates::decode_pairing_filters(filter) else {
         return false;
     };
-    value
+    filters
         .get("AgentRequest")
-        .and_then(|entry| entry.get("value"))
-        .and_then(Value::as_str)
-        == Some(peer_agent_did)
+        .and_then(gents::agent::p2p_reconcile::templates::filter_conditions)
+        .is_some_and(|conditions| {
+            condition_mentions_value(&Value::Object(conditions), peer_agent_did)
+        })
+}
+
+fn condition_mentions_value(value: &Value, expected: &str) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            (key == "_eq" && value.as_str() == Some(expected))
+                || condition_mentions_value(value, expected)
+        }),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| condition_mentions_value(value, expected)),
+        _ => false,
+    }
 }
 
 async fn wait_replicator_filter(graphql: &str, peer_id: &str, needles: &[String]) -> Result<()> {
@@ -720,4 +734,22 @@ fn resolve_desktop_bin() -> Option<PathBuf> {
             .map(|dir| dir.join(name))
             .find(|candidate| candidate.is_file())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fleet_wait_recognizes_tagged_agent_request_filter() {
+        let filters = [(
+            "AgentRequest".to_string(),
+            gents::agent::p2p_reconcile::equality_filter("requester_did", "did:key:phone"),
+        )]
+        .into_iter()
+        .collect::<gents::agent::p2p_reconcile::PairingFilters>();
+        let encoded = serde_json::to_string(&filters).expect("filter json");
+
+        assert!(filter_mentions_agent_request(&encoded, "did:key:phone"));
+    }
 }

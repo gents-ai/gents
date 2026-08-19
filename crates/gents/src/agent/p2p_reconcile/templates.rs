@@ -2,17 +2,16 @@
 //!
 //! A `ScopeTemplate` is a named pairing intent: a fixed collection set, a
 //! `Scope` (how per-peer document filtering is derived), and a `Delivery`
-//! (push vs. replicate).  The catalog is static and hardcoded here; later
-//! tasks will wire it into the pairing reconciler and defradb.rs #1033.
+//! (push vs. replicate). The catalog is static and hardcoded here.
 //!
-//! `PairingFilters` is our own seam type that decouples this crate from the
-//! unmerged defradb.rs #1033 filter API.  It holds per-collection single-field
-//! equality predicates and can be translated by later tasks into whatever
-//! upstream shape emerges.
+//! Pairing filters use DefraDB's predicate type directly. Local helpers only
+//! derive, combine, and inspect those predicates.
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+pub use p2p::ReplicationFilter as FilterPredicate;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -83,27 +82,111 @@ pub struct ScopeTemplate {
 }
 
 // ---------------------------------------------------------------------------
-// PairingFilters seam type (#1033-independent)
+// Pairing filters
 // ---------------------------------------------------------------------------
 
-/// A single-field equality predicate for one collection.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct FilterPredicate {
-    /// The field name to filter on.
-    pub field: String,
-    /// The value the field must equal.
-    pub value: String,
+pub fn equality_filter(field: impl Into<String>, value: impl Into<String>) -> FilterPredicate {
+    FilterPredicate::eq(field, Value::String(value.into()))
+}
+
+pub fn combine_filters(left: FilterPredicate, right: FilterPredicate) -> FilterPredicate {
+    let mut filters = Vec::new();
+    match left {
+        FilterPredicate::All(nested) => filters.extend(nested),
+        predicate => filters.push(predicate),
+    }
+    match right {
+        FilterPredicate::All(nested) => filters.extend(nested),
+        predicate => filters.push(predicate),
+    }
+    let mut unique = Vec::with_capacity(filters.len());
+    for filter in filters {
+        if !unique.contains(&filter) {
+            unique.push(filter);
+        }
+    }
+    if unique.len() == 1 {
+        unique.pop().expect("one filter")
+    } else {
+        FilterPredicate::All(unique)
+    }
+}
+
+pub fn filter_conditions(filter: &FilterPredicate) -> Option<Map<String, Value>> {
+    match filter {
+        FilterPredicate::Predicate(conditions) => Some(conditions.clone()),
+        FilterPredicate::All(filters) => {
+            let mut conditions = Map::new();
+            conditions.insert(
+                "_and".to_string(),
+                Value::Array(
+                    filters
+                        .iter()
+                        .map(|filter| filter_conditions(filter).map(Value::Object))
+                        .collect::<Option<Vec<_>>>()?,
+                ),
+            );
+            Some(conditions)
+        }
+        FilterPredicate::Acp { .. } => None,
+    }
+}
+
+pub fn to_replication_filters(
+    filters: &PairingFilters,
+) -> Result<defra_p2p_adapter::ReplicationFilters, String> {
+    filters
+        .iter()
+        .map(|(collection, filter)| {
+            let conditions = filter_conditions(filter).ok_or_else(|| {
+                format!("ACP filter for {collection} is not supported by the replication API")
+            })?;
+            Ok((
+                collection.clone(),
+                defra_p2p_adapter::ReplicationFilter::predicate(conditions),
+            ))
+        })
+        .collect()
+}
+
+pub fn single_string_eq(filter: &FilterPredicate) -> Option<(&str, &str)> {
+    let FilterPredicate::Predicate(conditions) = filter else {
+        return None;
+    };
+    let (field, value) = conditions.iter().next()?;
+    if conditions.len() != 1 {
+        return None;
+    }
+    let operators = value.as_object()?;
+    let value = operators.get("_eq")?.as_str()?;
+    (operators.len() == 1).then_some((field.as_str(), value))
 }
 
 /// Per-collection filter predicates for a concrete pairing.
 ///
-/// `key` = collection name, `value` = equality predicate to apply when
+/// `key` = collection name, `value` = predicate to apply when
 /// subscribing / pushing documents for that collection.  An empty map means
 /// no filtering (Unscoped).
 ///
-/// This type is our own seam that later tasks will translate into whatever
-/// shape defradb.rs #1033 exposes.
 pub type PairingFilters = BTreeMap<String, FilterPredicate>;
+
+pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
+    let mut value: Value = serde_json::from_str(raw)?;
+    if let Some(filters) = value.as_object_mut() {
+        for filter in filters.values_mut() {
+            let legacy = filter.as_object().and_then(|object| {
+                Some((
+                    object.get("field")?.as_str()?.to_string(),
+                    object.get("value")?.as_str()?.to_string(),
+                ))
+            });
+            if let Some((field, value)) = legacy {
+                *filter = serde_json::to_value(equality_filter(field, value))?;
+            }
+        }
+    }
+    serde_json::from_value(value)
+}
 
 // ---------------------------------------------------------------------------
 // Built-in template catalog
@@ -482,15 +565,7 @@ pub fn scope_filter(
     match scope {
         Scope::PeerDid { field } => collections
             .iter()
-            .map(|&col| {
-                (
-                    col.to_string(),
-                    FilterPredicate {
-                        field: (*field).to_string(),
-                        value: peer_did.to_string(),
-                    },
-                )
-            })
+            .map(|&col| (col.to_string(), equality_filter(*field, peer_did)))
             .collect(),
         Scope::Unscoped => BTreeMap::new(),
         Scope::PerCollection(rules) => rules
@@ -503,10 +578,7 @@ pub fn scope_filter(
                 };
                 (
                     rule.collection.to_string(),
-                    FilterPredicate {
-                        field: rule.field.to_string(),
-                        value: value.to_string(),
-                    },
+                    equality_filter(rule.field, value),
                 )
             })
             .collect(),
@@ -564,11 +636,60 @@ mod tests {
         let f = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
         assert_eq!(f.len(), 9);
         let p = f.get("AgentRequest").unwrap();
-        assert_eq!(p.field, "requester_did");
-        assert_eq!(p.value, "did:key:bob");
+        assert_eq!(single_string_eq(p), Some(("requester_did", "did:key:bob")));
         let ready = f.get("BearerPairingReady").unwrap();
-        assert_eq!(ready.field, "claimant_did");
-        assert_eq!(ready.value, "did:key:bob");
+        assert_eq!(
+            single_string_eq(ready),
+            Some(("claimant_did", "did:key:bob"))
+        );
+    }
+
+    #[test]
+    fn rich_predicates_and_layered_equalities_keep_both_conditions() {
+        let rich = FilterPredicate::Predicate(
+            serde_json::json!({ "status": { "_in": ["pending", "processing"] } })
+                .as_object()
+                .expect("object")
+                .clone(),
+        );
+        let combined = combine_filters(equality_filter("requester_did", "did:key:phone"), rich);
+
+        assert_eq!(
+            Value::Object(filter_conditions(&combined).expect("predicate conditions")),
+            serde_json::json!({
+                "_and": [
+                    { "requester_did": { "_eq": "did:key:phone" } },
+                    { "status": { "_in": ["pending", "processing"] } }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_acp_filter_is_rejected() {
+        let filters = [(
+            "AgentRequest".to_string(),
+            FilterPredicate::Acp {
+                relation: "reader".to_string(),
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        assert!(to_replication_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn legacy_pairing_filter_decodes() {
+        let filters = decode_pairing_filters(
+            r#"{"AgentRequest":{"field":"requester_did","value":"did:key:phone"}}"#,
+        )
+        .expect("legacy filters");
+
+        assert_eq!(
+            filters.get("AgentRequest").and_then(single_string_eq),
+            Some(("requester_did", "did:key:phone"))
+        );
     }
 
     #[test]
@@ -621,8 +742,10 @@ mod tests {
             let predicate = filter
                 .get(*collection)
                 .expect("indexed collection is filtered");
-            assert_eq!(predicate.field, "requester_did");
-            assert_eq!(predicate.value, "did:key:phone");
+            assert_eq!(
+                single_string_eq(predicate),
+                Some(("requester_did", "did:key:phone"))
+            );
         }
     }
 
@@ -687,10 +810,7 @@ mod tests {
         assert!(!f.contains_key("AgentRequest"));
         assert_eq!(
             f.get("AgentToolCall"),
-            Some(&FilterPredicate {
-                field: "spawn_target_did".to_string(),
-                value: "did:key:host".to_string(),
-            })
+            Some(&equality_filter("spawn_target_did", "did:key:host"))
         );
     }
 
@@ -703,18 +823,12 @@ mod tests {
         assert_eq!(f.len(), SUBAGENT_HOST_COLLECTIONS.len());
         assert_eq!(
             f.get("AgentRequest"),
-            Some(&FilterPredicate {
-                field: "requester_did".to_string(),
-                value: "did:key:coord".to_string(),
-            })
+            Some(&equality_filter("requester_did", "did:key:coord"))
         );
         for col in SUBAGENT_HOST_COLLECTIONS {
             assert_eq!(
                 f.get(*col),
-                Some(&FilterPredicate {
-                    field: "requester_did".to_string(),
-                    value: "did:key:coord".to_string(),
-                }),
+                Some(&equality_filter("requester_did", "did:key:coord")),
                 "unexpected subagent-host filter for {col}"
             );
         }
@@ -744,25 +858,21 @@ mod tests {
             } else {
                 "requester_did"
             };
-            assert_eq!(predicate.field, expected_field);
-            assert_eq!(predicate.value, "did:key:phone");
+            assert_eq!(
+                single_string_eq(predicate),
+                Some((expected_field, "did:key:phone"))
+            );
         }
         assert_eq!(
             filters.get(AGENT_DIRECTORY_COLLECTION),
-            Some(&FilterPredicate {
-                field: "source_did".to_string(),
-                value: "did:key:server".to_string(),
-            })
+            Some(&equality_filter("source_did", "did:key:server"))
         );
         // Persona request rows carry requester-authored config picks and the
         // server's status_detail; losing this rule would push every
         // requester's rows to every machine peer (the #687 leak class).
         assert_eq!(
             filters.get("PersonaConfigRequest"),
-            Some(&FilterPredicate {
-                field: "requester_did".to_string(),
-                value: "did:key:phone".to_string(),
-            })
+            Some(&equality_filter("requester_did", "did:key:phone"))
         );
     }
 

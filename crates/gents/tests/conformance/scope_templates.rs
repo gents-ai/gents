@@ -1,7 +1,11 @@
 use gents::agent::p2p_reconcile::templates::{
-    builtin_templates, resolve_template, scope_filter, Delivery, FilterPredicate, Scope,
-    AGENT_DIRECTORY_COLLECTION,
+    builtin_templates, equality_filter, resolve_template, scope_filter, single_string_eq, Delivery,
+    FilterPredicate, Scope, AGENT_DIRECTORY_COLLECTION,
 };
+
+fn assert_eq_filter(predicate: &FilterPredicate, field: &str, value: &str) {
+    assert_eq!(single_string_eq(predicate), Some((field, value)));
+}
 
 #[test]
 fn resolve_template_is_total_over_catalog_and_id_faithful() {
@@ -52,8 +56,7 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
         } else {
             "requester_did"
         };
-        assert_eq!(pred.field, expected_field);
-        assert_eq!(pred.value, "did:key:bob");
+        assert_eq_filter(pred, expected_field, "did:key:bob");
     }
     for col in [
         "AgentBehavior",
@@ -78,9 +81,9 @@ fn conversation_scope_excludes_another_requester_on_the_same_agent() {
 
     let phone_request = ("did:key:amy", Some("did:key:phone"));
     let classifier_request = ("did:key:amy", None);
-    assert_eq!(predicate.field, "requester_did");
-    assert_eq!(phone_request.1, Some(predicate.value.as_str()));
-    assert_ne!(classifier_request.1, Some(predicate.value.as_str()));
+    assert_eq_filter(predicate, "requester_did", "did:key:phone");
+    assert_eq!(phone_request.1, Some("did:key:phone"));
+    assert_ne!(classifier_request.1, Some("did:key:phone"));
 }
 
 /// Mirrors Lean `clientIndex_filter_eq` and
@@ -100,8 +103,7 @@ fn client_index_scope_is_exactly_the_requester_scoped_session_index() {
     assert_eq!(phone.len(), 2);
     for collection in template.collections {
         let predicate = phone.get(*collection).expect("collection filtered");
-        assert_eq!(predicate.field, "requester_did");
-        assert_eq!(predicate.value, "did:key:phone");
+        assert_eq_filter(predicate, "requester_did", "did:key:phone");
     }
 
     let laptop = scope_filter(
@@ -111,8 +113,8 @@ fn client_index_scope_is_exactly_the_requester_scoped_session_index() {
         "did:key:home",
     );
     assert_ne!(
-        phone.get("AgentSession").unwrap().value,
-        laptop.get("AgentSession").unwrap().value
+        phone.get("AgentSession").unwrap(),
+        laptop.get("AgentSession").unwrap()
     );
 }
 
@@ -143,15 +145,11 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
         } else {
             "requester_did"
         };
-        assert_eq!(predicate.field, expected_field);
-        assert_eq!(predicate.value, "did:key:phone");
+        assert_eq_filter(predicate, expected_field, "did:key:phone");
     }
     assert_eq!(
         filters.get(AGENT_DIRECTORY_COLLECTION),
-        Some(&FilterPredicate {
-            field: "source_did".to_string(),
-            value: "did:key:issuer".to_string(),
-        })
+        Some(&equality_filter("source_did", "did:key:issuer"))
     );
 }
 
@@ -189,10 +187,7 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
     assert!(!coord_filter.contains_key("AgentRequest"));
     assert_eq!(
         coord_filter.get("AgentToolCall"),
-        Some(&FilterPredicate {
-            field: "spawn_target_did".to_string(),
-            value: "did:key:host".to_string(),
-        })
+        Some(&equality_filter("spawn_target_did", "did:key:host"))
     );
 
     let host = resolve_template("subagent-host").expect("host template");
@@ -207,18 +202,12 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
     assert_eq!(host_filter.len(), RETURN_PROJECTION.len());
     assert_eq!(
         host_filter.get("AgentRequest"),
-        Some(&FilterPredicate {
-            field: "requester_did".to_string(),
-            value: "did:key:coord".to_string(),
-        })
+        Some(&equality_filter("requester_did", "did:key:coord"))
     );
     for collection in RETURN_PROJECTION {
         assert_eq!(
             host_filter.get(*collection),
-            Some(&FilterPredicate {
-                field: "requester_did".to_string(),
-                value: "did:key:coord".to_string(),
-            }),
+            Some(&equality_filter("requester_did", "did:key:coord")),
             "unexpected host filter for {collection}"
         );
     }
@@ -233,10 +222,8 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
     }
 
     for predicate in coord_filter.values().chain(host_filter.values()) {
-        assert!(
-            predicate.value == "did:key:coord" || predicate.value == "did:key:host",
-            "subagent filters must not include third-party DIDs"
-        );
+        let (_, value) = single_string_eq(predicate).expect("single equality filter");
+        assert!(value == "did:key:coord" || value == "did:key:host");
     }
 }
 
@@ -253,9 +240,9 @@ fn subagent_host_message_filter_excludes_unrelated_host_history() {
 
     let child_requester_did = Some("did:key:coord");
     let unrelated_requester_did: Option<&str> = None;
-    assert_eq!(predicate.field, "requester_did");
-    assert_eq!(child_requester_did, Some(predicate.value.as_str()));
-    assert_ne!(unrelated_requester_did, Some(predicate.value.as_str()));
+    assert_eq_filter(predicate, "requester_did", "did:key:coord");
+    assert_eq!(child_requester_did, Some("did:key:coord"));
+    assert_ne!(unrelated_requester_did, Some("did:key:coord"));
 }
 
 #[test]
@@ -284,7 +271,7 @@ fn sixteen_peer_request_wave_is_reduced_to_one_target() {
             scope_filter(&host.scope, host.collections, &peer_did, "did:key:host")
                 .get("AgentRequest")
                 .is_some_and(|predicate| {
-                    predicate.field == "requester_did" && predicate.value == requester_did
+                    single_string_eq(predicate) == Some(("requester_did", requester_did))
                 })
         })
         .count();

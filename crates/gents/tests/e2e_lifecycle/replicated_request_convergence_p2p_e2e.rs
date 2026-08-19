@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::{
-    EmbeddedRemoteP2pAdmin, FilterPredicate, PairingFilters, RemoteP2pAdmin,
+    equality_filter, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -93,10 +93,7 @@ async fn install_one_way_replicator(
     let mut filters = PairingFilters::new();
     filters.insert(
         "AgentRequest".to_string(),
-        FilterPredicate {
-            field: "requester_did".to_string(),
-            value: PEER_DID.to_string(),
-        },
+        equality_filter("requester_did", PEER_DID),
     );
     sender_admin
         .add_replicator(&[receiver_addr], &collection_names, &filters)

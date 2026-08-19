@@ -278,8 +278,7 @@ pub(super) async fn observe_bearer_pairing_readiness(
                 admin_sig
             }}
             BearerPairingReady(
-                filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }},
-                limit: 1
+                filter: {{ readiness_key: {{ _eq: "{readiness_key}" }} }}
             ) {{
                 issuer_did
                 claimant_did
@@ -319,19 +318,29 @@ pub(super) async fn observe_bearer_pairing_readiness(
     let readiness_rows =
         serde_json::from_value::<Vec<BearerPairingReadyObservationRow>>(readiness_rows)
             .context("decoding the replicated bearer readiness acknowledgement")?;
-    let Some(readiness) = readiness_rows.first() else {
+    if readiness_rows.is_empty() {
         return Ok(false);
-    };
-    verify_bearer_pairing_ready_row(
-        identity,
-        issuer_did,
-        identity.did(),
-        template,
-        local_endpoint,
-        readiness,
-    )
-    .await?;
-    Ok(true)
+    }
+    for readiness in &readiness_rows {
+        match verify_bearer_pairing_ready_row(
+            identity,
+            issuer_did,
+            identity.did(),
+            template,
+            local_endpoint,
+            readiness,
+        )
+        .await
+        {
+            Ok(()) => return Ok(true),
+            Err(error) => tracing::warn!(
+                error = %error,
+                issuer_did,
+                "ignoring invalid bearer pairing readiness acknowledgement"
+            ),
+        }
+    }
+    Ok(false)
 }
 
 async fn verify_bearer_pairing_ready_row(
@@ -685,7 +694,7 @@ async fn install_bearer_replicator(
     issuer_did: &str,
     template_id: &str,
 ) -> Result<()> {
-    let filters = bearer_replicator_filters(template_id, requester_did, issuer_did);
+    let filters = bearer_replicator_filters(template_id, requester_did, issuer_did)?;
     let collections = bearer_replicator_collections(template_id);
 
     match timeout(
@@ -705,24 +714,18 @@ fn bearer_replicator_filters(
     template_id: &str,
     requester_did: &str,
     issuer_did: &str,
-) -> ReplicationFilters {
+) -> Result<ReplicationFilters> {
     let template = resolve_template(template_id)
         .filter(|template| conversation_like(template.id))
         .unwrap_or_else(|| resolve_template("conversation").expect("conversation template"));
-    let mut filters = scope_filter(
+    let pairing_filters = scope_filter(
         &template.scope,
         template.collections,
         requester_did,
         issuer_did,
-    )
-    .into_iter()
-    .map(|(collection, predicate)| {
-        (
-            collection,
-            ReplicationFilter::eq(&predicate.field, serde_json::Value::String(predicate.value)),
-        )
-    })
-    .collect::<ReplicationFilters>();
+    );
+    let mut filters = gents::agent::p2p_reconcile::to_replication_filters(&pairing_filters)
+        .map_err(anyhow::Error::msg)?;
     filters.insert(
         "PairingBearerClaim".to_string(),
         ReplicationFilter::eq(
@@ -734,7 +737,7 @@ fn bearer_replicator_filters(
         "PeerEndpoint".to_string(),
         ReplicationFilter::eq("did", serde_json::Value::String(requester_did.to_string())),
     );
-    filters
+    Ok(filters)
 }
 
 pub(super) async fn publish_local_endpoint(
@@ -1210,8 +1213,17 @@ mod tests {
 
     #[test]
     fn combined_replicator_contains_scoped_conversation_and_claim_control_plane() {
+        let predicate = |field: &str, value: &str| {
+            ReplicationFilter::predicate(
+                serde_json::json!({ (field): { "_eq": value } })
+                    .as_object()
+                    .expect("predicate")
+                    .clone(),
+            )
+        };
         let collections = bearer_replicator_collections("conversation");
-        let filters = bearer_replicator_filters("conversation", "did:key:phone", "did:key:issuer");
+        let filters = bearer_replicator_filters("conversation", "did:key:phone", "did:key:issuer")
+            .expect("conversation filters");
         assert!(collections.contains(&"AgentRequest".to_string()));
         assert!(collections.contains(&"AgentResponse".to_string()));
         assert!(collections.contains(&"AgentBehavior".to_string()));
@@ -1238,10 +1250,7 @@ mod tests {
             };
             assert_eq!(
                 filters.get(collection),
-                Some(&ReplicationFilter::eq(
-                    field,
-                    serde_json::json!("did:key:phone")
-                ))
+                Some(&predicate(field, "did:key:phone"))
             );
         }
         for collection in [
@@ -1270,39 +1279,36 @@ mod tests {
         );
         assert_eq!(
             filters.get("AgentRequest"),
-            Some(&ReplicationFilter::eq(
-                "requester_did",
-                serde_json::json!("did:key:phone")
-            ))
+            Some(&predicate("requester_did", "did:key:phone"))
         );
     }
 
     #[test]
     fn machine_replicator_adds_only_issuer_owned_directory_rows() {
+        let predicate = |field: &str, value: &str| {
+            ReplicationFilter::predicate(
+                serde_json::json!({ (field): { "_eq": value } })
+                    .as_object()
+                    .expect("predicate")
+                    .clone(),
+            )
+        };
         let collections = bearer_replicator_collections("machine");
-        let filters = bearer_replicator_filters("machine", "did:key:phone", "did:key:issuer");
+        let filters = bearer_replicator_filters("machine", "did:key:phone", "did:key:issuer")
+            .expect("machine filters");
 
         assert!(collections.contains(&AGENT_DIRECTORY_COLLECTION.to_string()));
         assert_eq!(
             filters.get(AGENT_DIRECTORY_COLLECTION),
-            Some(&ReplicationFilter::eq(
-                "source_did",
-                serde_json::json!("did:key:issuer")
-            ))
+            Some(&predicate("source_did", "did:key:issuer"))
         );
         assert_eq!(
             filters.get("AgentRequest"),
-            Some(&ReplicationFilter::eq(
-                "requester_did",
-                serde_json::json!("did:key:phone")
-            ))
+            Some(&predicate("requester_did", "did:key:phone"))
         );
         assert_eq!(
             filters.get("BearerPairingReady"),
-            Some(&ReplicationFilter::eq(
-                "claimant_did",
-                serde_json::json!("did:key:phone")
-            ))
+            Some(&predicate("claimant_did", "did:key:phone"))
         );
     }
 

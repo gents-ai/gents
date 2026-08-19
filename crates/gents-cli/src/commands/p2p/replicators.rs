@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use gents::agent::p2p_reconcile::templates::{FilterPredicate, PairingFilters};
+use gents::agent::p2p_reconcile::templates::{
+    combine_filters, equality_filter, to_replication_filters, PairingFilters,
+};
 use serde_json::{json, Value};
 
 use crate::cli::args::{P2pAccessArgs, P2pReplicatorAddArgs, P2pReplicatorRemoveArgs};
@@ -45,19 +47,7 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     // them in the request body. The node installs a filtered replicator (#1033)
     // that pushes only matching documents; an empty map requests an unfiltered
     // replicator (the field is omitted on the wire).
-    let wire_filters: std::collections::BTreeMap<String, crate::shared::P2pReplicatorFilter> =
-        filters
-            .iter()
-            .map(|(col, pred)| {
-                (
-                    col.clone(),
-                    crate::shared::P2pReplicatorFilter {
-                        field: pred.field.clone(),
-                        value: Value::String(pred.value.clone()),
-                    },
-                )
-            })
-            .collect();
+    let wire_filters = to_replication_filters(&filters).map_err(anyhow::Error::msg)?;
     let request = P2pReplicatorRequest {
         collections: collections.clone(),
         addresses: vec![args.peer.clone()],
@@ -66,12 +56,13 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     http_post_json(&client, &format!("{api_base}/p2p/replicators"), &request).await?;
     let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
-    let filters_json: serde_json::Map<String, Value> = filters
+    let filters_json: serde_json::Map<String, Value> = request
+        .filters
         .iter()
-        .map(|(col, pred)| {
+        .map(|(col, filter)| {
             (
                 col.clone(),
-                json!({ "field": pred.field, "value": pred.value }),
+                serde_json::to_value(filter).unwrap_or(Value::Null),
             )
         })
         .collect();
@@ -119,13 +110,15 @@ pub(super) fn parse_replicator_filters(filters: &[String]) -> Result<PairingFilt
         if value.is_empty() {
             anyhow::bail!("invalid --filter {raw:?}: filter value must not be empty");
         }
-        map.insert(
-            collection.to_string(),
-            FilterPredicate {
-                field: field.to_string(),
-                value: value.to_string(),
-            },
-        );
+        let predicate = equality_filter(field, value);
+        match map.remove(collection) {
+            Some(existing) => {
+                map.insert(collection.to_string(), combine_filters(existing, predicate));
+            }
+            None => {
+                map.insert(collection.to_string(), predicate);
+            }
+        }
     }
     Ok(map)
 }
@@ -154,6 +147,7 @@ pub(super) async fn p2p_replicators_remove(args: P2pReplicatorRemoveArgs) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::agent::p2p_reconcile::single_string_eq;
     use std::collections::BTreeMap;
 
     #[test]
@@ -184,17 +178,39 @@ mod tests {
 
         assert_eq!(filters.len(), 2);
         let req = filters.get("AgentRequest").unwrap();
-        assert_eq!(req.field, "agent_did");
-        assert_eq!(req.value, "did:key:alice");
+        assert_eq!(single_string_eq(req), Some(("agent_did", "did:key:alice")));
         let resp = filters.get("AgentResponse").unwrap();
-        assert_eq!(resp.field, "agent_did");
-        assert_eq!(resp.value, "did:key:bob");
+        assert_eq!(single_string_eq(resp), Some(("agent_did", "did:key:bob")));
     }
 
     #[test]
     fn parse_replicator_filters_empty_is_ok() {
         let filters = parse_replicator_filters(&[]).expect("empty filters should parse");
         assert!(filters.is_empty());
+    }
+
+    #[test]
+    fn repeated_collection_filters_are_conjunctive() {
+        let filters = parse_replicator_filters(&[
+            "AgentRequest:requester_did=did:key:alice".to_string(),
+            "AgentRequest:status=pending".to_string(),
+        ])
+        .expect("valid filters");
+
+        assert_eq!(
+            Value::Object(
+                gents::agent::p2p_reconcile::templates::filter_conditions(
+                    &filters["AgentRequest"],
+                )
+                .expect("predicate conditions"),
+            ),
+            serde_json::json!({
+                "_and": [
+                    { "requester_did": { "_eq": "did:key:alice" } },
+                    { "status": { "_eq": "pending" } }
+                ]
+            })
+        );
     }
 
     #[test]
@@ -258,7 +274,6 @@ mod tests {
             parse_replicator_filters(&["AgentRequest:agent_did=did:key:z=abc".to_string()])
                 .expect("filter value with = should parse");
         let pred = filters.get("AgentRequest").unwrap();
-        assert_eq!(pred.field, "agent_did");
-        assert_eq!(pred.value, "did:key:z=abc");
+        assert_eq!(single_string_eq(pred), Some(("agent_did", "did:key:z=abc")));
     }
 }

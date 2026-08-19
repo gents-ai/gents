@@ -1,15 +1,17 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { describe, expect, it, vi } from "vitest";
 
 import { ConfigWorkspace } from "../src/components/ConfigWorkspace";
+import { useConfigNavigationController } from "../src/components/config/ConfigNavigationGuard";
 import {
   bootstrap,
   deployment,
   workspaceHandlers,
 } from "./config-panel-wiring/fixtures";
 
-function renderWorkspace() {
-  const handlers = {
+function makeHandlers() {
+  return {
     ...workspaceHandlers(),
     onDeleteSkillConfig: vi.fn(),
     onDeleteTaskConfig: vi.fn(),
@@ -21,17 +23,41 @@ function renderWorkspace() {
     onDeleteToolServiceConfig: vi.fn(),
     onDeleteBehaviorConfig: vi.fn(),
   };
+}
 
-  render(
-    <ConfigWorkspace
-      bootstrap={bootstrap}
-      selectedBehaviorId="default"
-      selectedDeployment={deployment}
-      saving={false}
-      runningTask={false}
-      {...handlers}
-    />,
+function GuardedWorkspace({ handlers }: { handlers: ReturnType<typeof makeHandlers> }) {
+  const navigation = useConfigNavigationController();
+  return (
+    <>
+      <ConfigWorkspace
+        bootstrap={bootstrap}
+        selectedBehaviorId="default"
+        selectedDeployment={deployment}
+        saving={false}
+        runningTask={false}
+        onDirtyChange={navigation.reportDirty}
+        requestNavigation={navigation.requestNavigation}
+        {...handlers}
+        onBack={() => navigation.requestNavigation(handlers.onBack)}
+      />
+      <ConfirmDialog
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        danger
+        message="This configuration has unsaved changes. Discard them and continue?"
+        onCancel={navigation.cancelDiscard}
+        onConfirm={navigation.confirmDiscard}
+        open={navigation.confirmingDiscard}
+        title="Discard unsaved changes?"
+      />
+    </>
   );
+}
+
+function renderWorkspace() {
+  const handlers = makeHandlers();
+
+  render(<GuardedWorkspace handlers={handlers} />);
   return handlers;
 }
 
