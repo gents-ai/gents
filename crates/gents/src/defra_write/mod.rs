@@ -37,7 +37,7 @@ use anyhow::{anyhow, bail, Result};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
-use crate::document_config::{WriteToolDecl, WriteToolFieldFill};
+use crate::document_config::WriteToolDecl;
 use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
@@ -128,35 +128,7 @@ impl BoundedWriteTool {
                     value
                 }
                 Some(fill) => {
-                    let runtime =
-                        crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-                            .ok_or_else(|| {
-                                anyhow!(
-                            "runtime-filled field `{}` requires an AgentRequest trigger context",
-                            field.name
-                        )
-                            })?;
-                    let value = match fill {
-                        WriteToolFieldFill::Correlation => runtime
-                            .correlation
-                            .filter(|value| !value.trim().is_empty())
-                            .ok_or_else(|| {
-                                anyhow!(
-                                    "runtime-filled field `{}` requires a non-empty correlation",
-                                    field.name
-                                )
-                            })?,
-                        WriteToolFieldFill::SourceField(source_field) => runtime
-                            .source_fields
-                            .get(source_field)
-                            .cloned()
-                            .ok_or_else(|| anyhow!(
-                                "runtime-filled field `{}` requires source field `{}` in trigger context",
-                                field.name,
-                                source_field
-                            ))?,
-                    };
-                    filled = Value::String(value);
+                    filled = Value::String(fill.resolve(&field.name)?);
                     &filled
                 }
             };

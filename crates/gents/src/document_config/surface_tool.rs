@@ -8,9 +8,10 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use super::serde_helpers;
 use super::tool_selection::{
-    is_reserved_builtin_tool_name, validate_write_tool_declarations, WriteToolDecl, WriteToolField,
-    WriteToolFieldFill,
+    reject_tool_name_surface_collisions, validate_write_tool_declarations, WriteToolDecl,
+    WriteToolField, WriteToolFieldFill,
 };
 
 /// One bound read tool: one collection, a fixed projection, optional filter
@@ -171,35 +172,15 @@ where
     use serde_json::Value;
 
     let value = Option::<Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
+    if matches!(value, None | Some(Value::Null)) {
         return Ok(None);
-    };
-    match value {
-        Value::Null => Ok(None),
-        Value::String(s) if s.trim().is_empty() => Ok(Some(Vec::new())),
-        Value::String(s) => {
-            let decl: SurfaceToolDecl = serde_json::from_str(&s).map_err(D::Error::custom)?;
-            Ok(Some(vec![decl]))
-        }
-        Value::Array(items) => {
-            let mut decls = Vec::with_capacity(items.len());
-            for item in items {
-                let decl = match item {
-                    Value::String(s) => {
-                        serde_json::from_str::<SurfaceToolDecl>(&s).map_err(D::Error::custom)?
-                    }
-                    other => {
-                        serde_json::from_value::<SurfaceToolDecl>(other).map_err(D::Error::custom)?
-                    }
-                };
-                decls.push(decl);
-            }
-            Ok(Some(decls))
-        }
-        other => Err(D::Error::custom(format!(
-            "DatastoreToolSurface.entries must be a list of create/query tool objects or JSON strings, got {other}"
-        ))),
     }
+    serde_helpers::deserialize_dual_shape(
+        value,
+        "DatastoreToolSurface.entries must be a list of create/query tool objects or JSON strings",
+    )
+    .map(Some)
+    .map_err(D::Error::custom)
 }
 
 pub(crate) fn validate_query_tool_declarations(
@@ -225,24 +206,14 @@ pub(crate) fn validate_query_tool_declarations(
                 decl.fields.len()
             ));
         }
-        if is_reserved_builtin_tool_name(&decl.tool_name) {
-            return Err(anyhow::anyhow!(
-                "query_tools[{i}] tool_name {:?} collides with a built-in tool; declared query tools must use a unique name",
-                decl.tool_name.trim()
-            ));
-        }
-        if cli_tool_names.contains(decl.tool_name.trim()) {
-            return Err(anyhow::anyhow!(
-                "query_tools[{i}] tool_name {:?} collides with a cli_tool_names entry in the same tool selection; each tool must have a unique name",
-                decl.tool_name.trim()
-            ));
-        }
-        if additional_tool_names.contains(decl.tool_name.trim()) {
-            return Err(anyhow::anyhow!(
-                "query_tools[{i}] tool_name {:?} collides with another runtime-provided tool; each tool must have a unique name",
-                decl.tool_name.trim()
-            ));
-        }
+        reject_tool_name_surface_collisions(
+            "query_tools",
+            i,
+            &decl.tool_name,
+            "query tools",
+            &cli_tool_names,
+            &additional_tool_names,
+        )?;
         crate::graphql::validate_collection_identifier(&decl.collection).map_err(|error| {
             anyhow::anyhow!(
                 "query_tools[{i}] (tool {:?}) has invalid collection {:?}: {error}",

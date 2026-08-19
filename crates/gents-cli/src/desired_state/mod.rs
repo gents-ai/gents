@@ -219,64 +219,36 @@ fn deserialize_write_tools_storage<'de, D>(deserializer: D) -> Result<Vec<String
 where
     D: Deserializer<'de>,
 {
-    use gents::WriteToolDecl;
+    use gents::{deserialize_dual_shape, WriteToolDecl};
     use serde_json::Value;
 
-    let value = Option::<Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(Vec::new());
-    };
-    let items = match value {
-        Value::Null => return Ok(Vec::new()),
-        Value::Array(items) => items,
-        other => {
-            return Err(D::Error::custom(format!(
-                "write_tools must be a list of WriteToolDecl objects or JSON strings, got {other}"
-            )))
-        }
-    };
-
-    let mut out = Vec::with_capacity(items.len());
-    for item in items {
-        let decl: WriteToolDecl = match item {
-            Value::String(s) => serde_json::from_str(&s).map_err(D::Error::custom)?,
-            other => serde_json::from_value(other).map_err(D::Error::custom)?,
-        };
-        out.push(serde_json::to_string(&decl).map_err(D::Error::custom)?);
-    }
-    Ok(out)
+    let decls = deserialize_dual_shape::<WriteToolDecl>(
+        Option::<Value>::deserialize(deserializer)?,
+        "write_tools must be a list of WriteToolDecl objects or JSON strings",
+    )
+    .map_err(D::Error::custom)?;
+    decls
+        .iter()
+        .map(|decl| serde_json::to_string(decl).map_err(D::Error::custom))
+        .collect()
 }
 
 fn deserialize_surface_tools_storage<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    use gents::SurfaceToolDecl;
+    use gents::{deserialize_dual_shape, SurfaceToolDecl};
     use serde_json::Value;
 
-    let value = Option::<Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(Vec::new());
-    };
-    let items = match value {
-        Value::Null => return Ok(Vec::new()),
-        Value::Array(items) => items,
-        other => {
-            return Err(D::Error::custom(format!(
-                "DatastoreToolSurface.entries must be a list of create/query tool objects or JSON strings, got {other}"
-            )))
-        }
-    };
-
-    let mut out = Vec::with_capacity(items.len());
-    for item in items {
-        let decl: SurfaceToolDecl = match item {
-            Value::String(s) => serde_json::from_str(&s).map_err(D::Error::custom)?,
-            other => serde_json::from_value(other).map_err(D::Error::custom)?,
-        };
-        out.push(serde_json::to_string(&decl).map_err(D::Error::custom)?);
-    }
-    Ok(out)
+    let decls = deserialize_dual_shape::<SurfaceToolDecl>(
+        Option::<Value>::deserialize(deserializer)?,
+        "DatastoreToolSurface.entries must be a list of create/query tool objects or JSON strings",
+    )
+    .map_err(D::Error::custom)?;
+    decls
+        .iter()
+        .map(|decl| serde_json::to_string(decl).map_err(D::Error::custom))
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

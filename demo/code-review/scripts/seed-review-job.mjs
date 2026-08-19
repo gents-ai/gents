@@ -123,14 +123,10 @@ for (const [key, value] of Object.entries(seed.fields ?? {})) {
 }
 const mutation = `mutation { create_${seed.collection}(input: { ${fields.join(", ")} }) { _docID } }`;
 
-const response = await fetch(graphql, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ query: mutation }),
-});
-const payload = await response.json();
-if (!response.ok || payload.errors?.length) {
-  console.error(JSON.stringify(payload.errors ?? payload, null, 2));
+try {
+  await postGraphql(mutation);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 }
 

@@ -1551,13 +1551,6 @@ fn validate_datastore_surface_links(
                         ));
                         continue;
                     }
-                    if is_reserved_builtin_tool_name(decl.tool_name()) {
-                        errors.push(format!(
-                            "DatastoreToolSurface {} tool_name {:?} collides with a built-in tool",
-                            surface_id,
-                            decl.tool_name()
-                        ));
-                    }
                     if !seen_names.insert(decl.tool_name().to_string()) {
                         errors.push(format!(
                             "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for tool selection {}",
@@ -1566,21 +1559,31 @@ fn validate_datastore_surface_links(
                             selection.selection_id
                         ));
                     }
-                    if selection
-                        .cli_tool_names
-                        .iter()
-                        .any(|name| name.trim() == decl.tool_name())
-                    {
-                        errors.push(format!(
-                            "DatastoreToolSurface {} tool_name {:?} collides with a cli_tool_names entry in tool selection {}",
-                            surface_id,
-                            decl.tool_name(),
-                            selection.selection_id
-                        ));
-                    }
                     match decl {
                         SurfaceToolDecl::Create(_) => merged.push(entry.clone()),
-                        SurfaceToolDecl::Query(_) => {}
+                        SurfaceToolDecl::Query(_) => {
+                            // Creates are re-checked by `validate_write_tools`
+                            // below; query entries never enter that list.
+                            if is_reserved_builtin_tool_name(decl.tool_name()) {
+                                errors.push(format!(
+                                    "DatastoreToolSurface {} tool_name {:?} collides with a built-in tool",
+                                    surface_id,
+                                    decl.tool_name()
+                                ));
+                            }
+                            if selection
+                                .cli_tool_names
+                                .iter()
+                                .any(|name| name.trim() == decl.tool_name())
+                            {
+                                errors.push(format!(
+                                    "DatastoreToolSurface {} tool_name {:?} collides with a cli_tool_names entry in tool selection {}",
+                                    surface_id,
+                                    decl.tool_name(),
+                                    selection.selection_id
+                                ));
+                            }
+                        }
                     }
                 }
                 Err(error) => errors.push(format!(

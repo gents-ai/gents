@@ -136,10 +136,10 @@ def bashReadOnlyKeys : EndpointScope String Unit → List String
   | .all => []
   | .none => []
 
-def writeGrantViews :
+def grantViews (known : List (String × String)) :
     EndpointScope (String × String) (Finset String) → List WriteGrantView
   | .only keys val =>
-      knownWriteKeys.filterMap (fun key =>
+      known.filterMap (fun key =>
         if key ∈ keys then
           some
             { tool := key.1
@@ -150,19 +150,8 @@ def writeGrantViews :
   | .all => []
   | .none => []
 
-def queryGrantViews :
-    EndpointScope (String × String) (Finset String) → List WriteGrantView
-  | .only keys val =>
-      knownQueryKeys.filterMap (fun key =>
-        if key ∈ keys then
-          some
-            { tool := key.1
-            , collection := key.2
-            , fields := fieldList (val key) }
-        else
-          none)
-  | .all => []
-  | .none => []
+def writeGrantViews := grantViews knownWriteKeys
+def queryGrantViews := grantViews knownQueryKeys
 
 def unitOnly {K : Type} (keys : Finset K) : EndpointScope K Unit :=
   .only keys (fun _ => ())
