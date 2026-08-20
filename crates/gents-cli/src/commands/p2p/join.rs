@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents::agent::p2p_reconcile::network::{decide_v5_admission, V5AdmissionClaim};
-use gents::agent::p2p_reconcile::resolve_template;
+use gents::agent::p2p_reconcile::{resolve_template, NETWORK_CONTROL_TEMPLATE};
 use gents::graphql::escape_graphql_string;
 use gents::AgentIdentity;
 use gents_protocol::network_token::{derive_network_id, MembershipRecord};
@@ -16,12 +16,10 @@ use crate::request_helpers::parse_duration_suffix;
 use crate::{graphql_rows, print_json, resolve_config_access, resolve_graphql_endpoint};
 
 use super::invite::resolve_home_identity;
-use super::network_admin::{
-    load_membership_record, load_optional_network_record, write_agent_network, write_membership,
-};
+use super::network_admin::{load_membership_record, load_optional_network_record};
 use super::pairings::{
     complement_subagent_template, peer_pairing_exists, resolve_pairing_template,
-    wait_for_pairing_connected, write_pairing_desired,
+    wait_for_pairing_connected, write_layered_join_desired,
 };
 
 pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
@@ -55,6 +53,7 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
 
     let template = resolve_join_template(args.template.as_deref(), &remote.template)?;
     let collections = template_collections(&template);
+    let control_collections = template_collections(NETWORK_CONTROL_TEMPLATE);
     let addresses = vec![remote.ticket.clone()];
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
@@ -72,15 +71,17 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
 
     consume_invite_nonce(&access, &remote.nonce, &remote.issuer_did).await?;
 
-    write_agent_network(&access, &remote.network).await?;
-    write_membership(&access, &remote.grant).await?;
-
+    // The issuer is the single writer for the signed network root and grant.
+    // The network-control pairing below durably pulls those exact documents;
+    // recreating them locally gives the same logical record a second DefraDB
+    // document identity and multiplies every subsequent replication edge.
     let existed = peer_pairing_exists(&access, &remote.peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let doc_id = write_pairing_desired(
+    let (doc_id, data_plane_doc_id) = write_layered_join_desired(
         &access,
         &remote.peer_id,
-        Some(&remote.issuer_did),
+        &remote.issuer_did,
+        &control_collections,
         &collections,
         &addresses,
         &template,
@@ -115,6 +116,9 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     });
     if let Some(p2p) = p2p {
         output["p2p"] = p2p;
+    }
+    if let Some(data_plane_doc_id) = data_plane_doc_id {
+        output["data_plane_doc_id"] = data_plane_doc_id.into();
     }
 
     print_json(&output)?;

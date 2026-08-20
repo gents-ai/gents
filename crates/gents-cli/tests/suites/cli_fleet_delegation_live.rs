@@ -31,7 +31,8 @@
 //!
 //! The release acceptance composes the same primitives into a 19-fresh-store
 //! genesis mesh, a coordinator restart, and a 15-target delegation/readback
-//! sweep. It is intentionally a product E2E across both model instruction
+//! sweep. Its control-plane fence reads DefraDB's effective replicator scope.
+//! It is intentionally a product E2E across both model instruction
 //! following and the mesh; the hermetic two-process demo test isolates the pure
 //! transport/materialization contract. It is separately gated because it is
 //! intentionally expensive:
@@ -44,9 +45,8 @@
 //!     nineteen_process_release_acceptance_live -- --ignored --nocapture
 //! ```
 //!
-//! Known failure: the fresh-store control mesh can saturate DefraDB's pending
-//! DAG admission and fail to materialize an `AgentNetwork` applied scope. The
-//! release exception and removal criteria are tracked in #798.
+//! The fresh-store pending-DAG failure and release exception were tracked in
+//! #798.
 
 use crate::support::*;
 
@@ -99,8 +99,14 @@ const FAST_RECONCILE_ENVS: &[(&str, &str)] = &[
     ("GENTS_PAIRING_SWEEP_MS", "1000"),
     ("GENTS_REGISTRY_STALE_MS", "300000"),
     ("GENTS_ENDPOINT_HEARTBEAT_MS", "1000"),
-    ("RUST_LOG", "warn,gents::agent::p2p_reconcile=debug"),
+    (
+        "RUST_LOG",
+        "warn,gents::agent::p2p_reconcile=debug,gents::graphql=debug",
+    ),
 ];
+
+// Cover DefraDB's 30s, 1m, 2m durable retry ladder plus three quiet samples.
+const RELEASE_P2P_QUIET_TIMEOUT: Duration = Duration::from_secs(240);
 
 const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
@@ -124,7 +130,10 @@ const RELEASE_BAD_LOG_SIGNATURES: &[&str] = &[
     "Dropping GossipSub message outside accepted replication direction",
     "Collection-commit push failed; document retry ledger cannot replay CID-scoped work",
     "CAR handler: no exact blocks",
+    "skipping unparseable block in replicator push",
 ];
+
+const MAX_CONTROL_LEASE_WRITES_PER_NODE: usize = 16;
 
 struct FleetNode {
     home: PathBuf,
@@ -343,32 +352,55 @@ async fn five_process_filtered_conversation_delegation_live() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "known failing: fresh-store 19-node mesh storm tracked in #798"]
+#[ignore = "live: set GENTS_RELEASE_ACCEPTANCE=1 and pass --ignored"]
 async fn nineteen_process_release_acceptance_live() -> Result<()> {
     require_live_gate("GENTS_RELEASE_ACCEPTANCE")?;
 
-    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
-        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
-        .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_NAME"))
-        .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
+    let control_only = std::env::var("GENTS_RELEASE_CONTROL_ONLY").as_deref() == Ok("1");
+    let control_model_name = format!("release-control-only-{}", Uuid::new_v4().simple());
+    let control_model = control_only
+        .then(|| MockModelEndpoint::start(&control_model_name))
+        .transpose()?;
+    let endpoint = control_model
+        .as_ref()
+        .map(|mock| mock.endpoint().to_string())
+        .unwrap_or_else(|| {
+            std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
+                .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT"))
+                .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string())
+        });
+    let model = control_model
+        .as_ref()
+        .map(|_| control_model_name)
+        .unwrap_or_else(|| {
+            std::env::var("GENTS_LIVE_OPENAI_MODEL")
+                .or_else(|_| std::env::var("GENTS_CLI_E2E_MODEL_NAME"))
+                .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string())
+        });
     assert_endpoint_reachable(&endpoint).await?;
 
     let tempdir = tempfile::tempdir().context("creating release acceptance tempdir")?;
     let mut fleet =
         bring_up_fleet(tempdir.path(), RELEASE_FLEET_SIZE, &endpoint, &model, false).await?;
 
-    let result = run_release_acceptance(tempdir.path(), &mut fleet).await;
+    let result = run_release_acceptance(tempdir.path(), &mut fleet, control_only).await;
     if result.is_err() {
         dump_fleet_doc_state(&fleet).await;
         persist_fleet_logs(&fleet, "release-acceptance-fail");
         dump_fleet_logs(&fleet);
     }
+    if result.is_err() && std::env::var("GENTS_RELEASE_PRESERVE_STORES").as_deref() == Ok("1") {
+        let path = tempdir.keep();
+        tracing::warn!(path = %path.display(), "preserved failed release-acceptance stores");
+    }
     result
 }
 
-async fn run_release_acceptance(root: &Path, fleet: &mut [FleetNode]) -> Result<()> {
+async fn run_release_acceptance(
+    root: &Path,
+    fleet: &mut [FleetNode],
+    control_only: bool,
+) -> Result<()> {
     anyhow::ensure!(
         fleet.len() == RELEASE_FLEET_SIZE,
         "release acceptance requires exactly {RELEASE_FLEET_SIZE} fresh stores"
@@ -381,8 +413,9 @@ async fn run_release_acceptance(root: &Path, fleet: &mut [FleetNode]) -> Result<
         establish_control_plane(coord, spokes).await?;
         wait_for_fleet_control_plane(coord, spokes).await?;
     }
-    wait_for_p2p_fleet_quiet(fleet, Duration::from_secs(240)).await?;
+    wait_for_p2p_fleet_quiet(fleet, RELEASE_P2P_QUIET_TIMEOUT).await?;
     assert_no_fleet_log_signatures(fleet)?;
+    assert_bounded_control_lease_writes(fleet)?;
 
     restart_fleet_node(&mut fleet[0]).await?;
     {
@@ -392,8 +425,17 @@ async fn run_release_acceptance(root: &Path, fleet: &mut [FleetNode]) -> Result<
         wait_for_fleet_control_plane(coord, spokes).await?;
         wait_for_fleet_hub_remesh(coord, spokes, Duration::from_secs(120)).await?;
     }
-    wait_for_p2p_fleet_quiet(fleet, Duration::from_secs(240)).await?;
+    wait_for_p2p_fleet_quiet(fleet, RELEASE_P2P_QUIET_TIMEOUT).await?;
     assert_no_fleet_log_signatures(fleet)?;
+    assert_bounded_control_lease_writes(fleet)?;
+
+    if control_only {
+        tracing::info!(
+            fleet_size = fleet.len(),
+            "release control mesh converged across coordinator restart before model/delegation phases"
+        );
+        return Ok(());
+    }
 
     let (coord, spokes) = fleet
         .split_first()
@@ -469,7 +511,7 @@ async fn run_release_acceptance(root: &Path, fleet: &mut [FleetNode]) -> Result<
     assert_subagents_have_no_spawn_targets(delegates).await?;
     assert_no_subagent_data_plane_edges(spokes).await?;
 
-    wait_for_p2p_fleet_quiet(fleet, Duration::from_secs(240)).await?;
+    wait_for_p2p_fleet_quiet(fleet, RELEASE_P2P_QUIET_TIMEOUT).await?;
     assert_no_fleet_log_signatures(fleet)?;
     Ok(())
 }
@@ -497,9 +539,16 @@ struct P2pProgressSignature {
     rejected_bytes: u64,
     peer_capacity_parks: u64,
     missing_link_retries: u64,
+    provider_rotations: u64,
+    car_filtered_cids: u64,
+    pending_dag_registered: u64,
     pending_dag_expired: u64,
     pending_dag_capacity_shed: u64,
     pending_dag_retry_dispatched: u64,
+    pending_dag_fetch_deferred_contention: u64,
+    pending_dag_fetch_exhausted: u64,
+    pending_dag_terminal_merged: u64,
+    non_authoritative_broadcast_rejected: u64,
 }
 
 impl From<&P2pSyncStatusSnapshot> for P2pProgressSignature {
@@ -510,9 +559,17 @@ impl From<&P2pSyncStatusSnapshot> for P2pProgressSignature {
             rejected_bytes: snapshot.push_backlog.rejected_bytes_total,
             peer_capacity_parks: snapshot.push_backlog.peer_capacity_parks_total,
             missing_link_retries: snapshot.missing_link_retries,
+            provider_rotations: snapshot.provider_rotations,
+            car_filtered_cids: snapshot.car_filtered_cids,
+            pending_dag_registered: snapshot.pending_dag_registered,
             pending_dag_expired: snapshot.pending_dag_expired,
             pending_dag_capacity_shed: snapshot.pending_dag_capacity_shed,
             pending_dag_retry_dispatched: snapshot.pending_dag_retry_dispatched,
+            pending_dag_fetch_deferred_contention: snapshot.pending_dag_fetch_deferred_contention,
+            pending_dag_fetch_exhausted: snapshot.pending_dag_fetch_exhausted,
+            pending_dag_terminal_merged: snapshot.pending_dag_terminal_merged,
+            non_authoritative_broadcast_rejected: snapshot
+                .non_authoritative_broadcast_rejected_total,
         }
     }
 }
@@ -571,7 +628,11 @@ async fn fetch_connected_peer_ids(graphql: &str) -> Result<HashSet<String>> {
             row.get("id")
                 .and_then(Value::as_str)
                 .filter(|id| !id.trim().is_empty())
-                .map(ToOwned::to_owned)
+                .map(|id| {
+                    p2p::iroh::parse_public_peer_addr(id)
+                        .map(|(peer_id, _)| peer_id.to_string())
+                        .unwrap_or_else(|_| id.to_owned())
+                })
                 .with_context(|| format!("connected P2P peer row has no id: {row}"))
         })
         .collect()
@@ -660,6 +721,14 @@ fn assert_p2p_snapshot_bounded(label: &str, snapshot: &P2pSyncStatusSnapshot) ->
         snapshot.pending_dag_terminal_quarantined == 0 && snapshot.quarantined_pending_dags == 0,
         "{label} quarantined a deterministic pending-DAG failure: {snapshot:?}"
     );
+    anyhow::ensure!(
+        snapshot.pending_dag_capacity_shed == 0,
+        "{label} shed a pending DAG at its admission capacity: {snapshot:?}"
+    );
+    anyhow::ensure!(
+        snapshot.pending_dag_fetch_exhausted == 0,
+        "{label} exhausted a bounded pending-DAG fetch: {snapshot:?}"
+    );
     for peer in &backlog.per_peer {
         anyhow::ensure!(
             peer.active_jobs <= backlog.per_peer_active_cap,
@@ -681,10 +750,9 @@ fn p2p_snapshot_is_quiet(snapshot: &P2pSyncStatusSnapshot) -> bool {
     backlog.queued_items == 0
         && backlog.queued_bytes == 0
         && backlog.active_jobs == 0
-        && backlog.failed_total == 0
+        // Healed failures may remain cumulative; the progress fence must stabilize.
         && backlog.rejected_items_total == 0
         && backlog.rejected_bytes_total == 0
-        && backlog.per_cid_retry_counts.is_empty()
         && backlog.per_peer.iter().all(|peer| {
             peer.queued_items == 0
                 && peer.queued_bytes == 0
@@ -692,8 +760,16 @@ fn p2p_snapshot_is_quiet(snapshot: &P2pSyncStatusSnapshot) -> bool {
                 && peer.consecutive_failures == 0
                 && peer.cooldown_remaining_ms == 0
         })
+        && snapshot.push_retry_markers.document_markers == 0
+        && snapshot.push_retry_markers.collection_markers == 0
+        && snapshot.push_retry_markers.scheduled_peers == 0
+        && snapshot
+            .push_retry_markers
+            .oldest_scheduled_retry_unix
+            .is_none()
         && snapshot.pending_dags == 0
         && snapshot.persisted_pending_dags == 0
+        && snapshot.non_authoritative_broadcast_tasks == 0
         && !snapshot.pending_resync_in_flight
         && snapshot.next_pending_retry_in_ms.is_none()
         && snapshot.quarantined_pending_dags == 0
@@ -743,7 +819,7 @@ async fn wait_for_p2p_fleet_quiet(fleet: &[FleetNode], timeout: Duration) -> Res
                 .zip(&snapshots)
                 .map(|(node, snapshot)| {
                     format!(
-                        "{}: queued={}/{} active={} pending={}/{} persisted={}/{} retained={} missing_retries={} failed_pushes={} rejected_items={} rejected_bytes={}",
+                        "{}: queued={}/{} active={} pending={}/{} persisted={}/{} retained={} non_authoritative={} missing_retries={} provider_rotations={} car_filtered={} fetch_exhausted={} failed_pushes={} rejected_items={} rejected_bytes={}",
                         node.agent_did,
                         snapshot.push_backlog.queued_items,
                         snapshot.push_backlog.queued_bytes,
@@ -753,7 +829,11 @@ async fn wait_for_p2p_fleet_quiet(fleet: &[FleetNode], timeout: Duration) -> Res
                         snapshot.persisted_pending_dags,
                         snapshot.persisted_pending_dag_capacity,
                         snapshot.retained_background_tasks,
+                        snapshot.non_authoritative_broadcast_tasks,
                         snapshot.missing_link_retries,
+                        snapshot.provider_rotations,
+                        snapshot.car_filtered_cids,
+                        snapshot.pending_dag_fetch_exhausted,
                         snapshot.push_backlog.failed_total,
                         snapshot.push_backlog.rejected_items_total,
                         snapshot.push_backlog.rejected_bytes_total,
@@ -779,6 +859,41 @@ fn assert_no_fleet_log_signatures(fleet: &[FleetNode]) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+fn assert_bounded_control_lease_writes(fleet: &[FleetNode]) -> Result<()> {
+    let mut endpoint_writes = 0;
+    let mut registry_writes = 0;
+    for node in fleet {
+        let (stdout, stderr) = fleet_node_captured_output(node)?;
+        let combined = format!("{stdout}\n{stderr}");
+        let node_endpoint_writes = combined
+            .matches("PeerEndpoint heartbeat: signed endpoint written")
+            .count();
+        let node_registry_writes = combined
+            .matches("registry heartbeat: self-registration written")
+            .count();
+        anyhow::ensure!(
+            node_endpoint_writes <= MAX_CONTROL_LEASE_WRITES_PER_NODE,
+            "fleet node {} emitted {node_endpoint_writes} PeerEndpoint writes; bounded lease ceiling is {MAX_CONTROL_LEASE_WRITES_PER_NODE}",
+            node.agent_did
+        );
+        anyhow::ensure!(
+            node_registry_writes <= MAX_CONTROL_LEASE_WRITES_PER_NODE,
+            "fleet node {} emitted {node_registry_writes} PeerRegistry writes; bounded lease ceiling is {MAX_CONTROL_LEASE_WRITES_PER_NODE}",
+            node.agent_did
+        );
+        endpoint_writes += node_endpoint_writes;
+        registry_writes += node_registry_writes;
+    }
+    tracing::info!(
+        fleet_size = fleet.len(),
+        endpoint_writes,
+        registry_writes,
+        per_node_ceiling = MAX_CONTROL_LEASE_WRITES_PER_NODE,
+        "release control-plane lease-write budget satisfied"
+    );
     Ok(())
 }
 
@@ -3640,12 +3755,12 @@ async fn wait_for_fleet_control_plane_collection(
 
 async fn dump_fleet_doc_state(fleet: &[FleetNode]) {
     let query = r#"{
-        AgentNetwork { network_id admin_did }
-        NetworkMembership { member_did status }
-        PeerEndpoint { did }
-        PeerPairingDesired { peer_id source template replicator_addresses }
-        DataPlanePairingDesired { peer_id template replicator_addresses }
-        PeerPairingApplied { peer_id collections replicator_addresses replicator_filter }
+        AgentNetwork { _docID network_id admin_did }
+        NetworkMembership { _docID membership_key member_did status }
+        PeerEndpoint { _docID did }
+        PeerPairingDesired { _docID peer_id source template replicator_addresses }
+        DataPlanePairingDesired { _docID peer_id template replicator_addresses }
+        PeerPairingApplied { _docID peer_id collections replicator_addresses replicator_filter }
     }"#;
     for node in fleet {
         match graphql_query(&node.graphql, query).await {
@@ -3669,48 +3784,103 @@ async fn wait_for_subscription_replicator_installed(
     required_collection: &str,
     timeout: Duration,
 ) -> Result<()> {
-    let escaped = escape_graphql_string(peer_id);
-    let query = format!(
-        r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{escaped}" }} }}) {{ peer_id collections replicator_addresses }} }}"#
-    );
+    let api_base = graphql
+        .strip_suffix("/graphql")
+        .with_context(|| format!("unexpected GraphQL endpoint shape: {graphql}"))?;
+    let collection_versions_url = format!("{api_base}/collections/versions");
+    let replicators_url = format!("{api_base}/p2p/replicators");
     let deadline = Instant::now() + timeout;
-    let mut last = Value::Null;
+    let mut last_collection_versions = Value::Null;
+    let mut last_replicators = Value::Null;
     loop {
-        let response = graphql_query(graphql, &query).await?;
-        if let Some(rows) = response
-            .pointer("/data/PeerPairingApplied")
-            .and_then(Value::as_array)
-        {
-            last = Value::Array(rows.clone());
-            if rows.iter().any(|row| {
-                let has_address = row
-                    .get("replicator_addresses")
-                    .and_then(Value::as_array)
-                    .is_some_and(|addrs| {
-                        addrs
-                            .iter()
-                            .any(|address| address.as_str().is_some_and(|value| !value.is_empty()))
-                    });
-                let has_collection = row
-                    .get("collections")
-                    .and_then(Value::as_array)
-                    .is_some_and(|collections| {
-                        collections
-                            .iter()
-                            .any(|collection| collection.as_str() == Some(required_collection))
-                    });
-                has_address && has_collection
-            }) {
-                return Ok(());
-            }
+        let fetched = async {
+            let collection_versions = p2p_http_client()?
+                .get(&collection_versions_url)
+                .send()
+                .await
+                .with_context(|| {
+                    format!("fetching collection versions from {collection_versions_url}")
+                })?
+                .error_for_status()
+                .with_context(|| {
+                    format!("collection versions returned an error from {collection_versions_url}")
+                })?
+                .json::<Vec<Value>>()
+                .await
+                .with_context(|| {
+                    format!("decoding collection versions from {collection_versions_url}")
+                })?;
+            let replicators = p2p_http_client()?
+                .get(&replicators_url)
+                .send()
+                .await
+                .with_context(|| format!("fetching effective replicators from {replicators_url}"))?
+                .error_for_status()
+                .with_context(|| {
+                    format!("effective replicators returned an error from {replicators_url}")
+                })?
+                .json::<Vec<Value>>()
+                .await
+                .with_context(|| {
+                    format!("decoding effective replicators from {replicators_url}")
+                })?;
+            Ok::<_, anyhow::Error>((collection_versions, replicators))
         }
+        .await;
+        let last_error = match fetched {
+            Ok((collection_versions, replicators)) => {
+                last_collection_versions = Value::Array(collection_versions.clone());
+                last_replicators = Value::Array(replicators.clone());
+                if let Some(collection_id) =
+                    collection_id_from_versions(&collection_versions, required_collection)
+                {
+                    if effective_replicator_has_collection(&replicators, peer_id, collection_id) {
+                        return Ok(());
+                    }
+                }
+                "effective replicator did not yet contain the required collection".to_string()
+            }
+            Err(error) => error.to_string(),
+        };
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for replicator install containing {required_collection} on edge peer={peer_id} (graphql={graphql}); last PeerPairingApplied rows: {last}"
+                "timed out waiting for effective replicator scope containing {required_collection} on edge peer={peer_id} (graphql={graphql}); last error: {last_error}; last collection versions: {last_collection_versions}; last replicators: {last_replicators}"
             );
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
+}
+
+fn collection_id_from_versions<'a>(versions: &'a [Value], collection: &str) -> Option<&'a str> {
+    versions.iter().find_map(|version| {
+        let name = version
+            .get("Name")
+            .or_else(|| version.get("name"))
+            .and_then(Value::as_str)?;
+        (name == collection).then(|| {
+            version
+                .get("CollectionID")
+                .or_else(|| version.get("collection_id"))
+                .and_then(Value::as_str)
+        })?
+    })
+}
+
+fn effective_replicator_has_collection(
+    replicators: &[Value],
+    peer_id: &str,
+    required_collection_id: &str,
+) -> bool {
+    replicators.iter().any(|row| {
+        row.get("ID").and_then(Value::as_str) == Some(peer_id)
+            && row
+                .get("CollectionIDs")
+                .and_then(Value::as_array)
+                .is_some_and(|ids| {
+                    ids.iter()
+                        .any(|id| id.as_str() == Some(required_collection_id))
+                })
+    })
 }
 
 async fn wait_for_conversation_replicator_installed(
@@ -3779,6 +3949,31 @@ fn conversation_pairing_fence_requires_the_local_agent_request_scope() {
     assert!(conversation_filter_matches(filter, "did:key:local"));
     assert!(!conversation_filter_matches(filter, "did:key:other"));
     assert!(!conversation_filter_matches("not-json", "did:key:local"));
+}
+
+#[test]
+fn control_plane_fence_reads_effective_replicator_scope() {
+    let versions = vec![serde_json::json!({
+        "CollectionID": "bafy-agent-network",
+        "Name": "AgentNetwork"
+    })];
+    let replicators = vec![serde_json::json!({
+        "ID": "peer-b",
+        "Addresses": ["endpoint-b"],
+        "CollectionIDs": ["bafy-agent-network"]
+    })];
+
+    let collection_id = collection_id_from_versions(&versions, "AgentNetwork").unwrap();
+    assert!(effective_replicator_has_collection(
+        &replicators,
+        "peer-b",
+        collection_id
+    ));
+    assert!(!effective_replicator_has_collection(
+        &replicators,
+        "peer-c",
+        collection_id
+    ));
 }
 
 fn persist_fleet_logs(fleet: &[FleetNode], suffix: &str) {

@@ -62,7 +62,7 @@ pub use templates::{
     builtin_templates, combine_filters, conversation_like, decode_pairing_filters, equality_filter,
     filter_conditions, resolve_template, scope_filter, single_string_eq, to_replication_filters,
     Delivery, DidSource, FilterPredicate, PairingFilters, Scope, ScopeTemplate,
-    AGENT_DIRECTORY_COLLECTION,
+    AGENT_DIRECTORY_COLLECTION, NETWORK_CONTROL_TEMPLATE,
 };
 pub use trait_def::{
     RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteP2pDocument, RemoteReplicator,

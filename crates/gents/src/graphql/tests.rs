@@ -83,6 +83,22 @@ fn single_mutation_document_normalizes_create_to_add_response_key() {
 }
 
 #[test]
+fn mutation_write_ledger_counts_returned_documents_not_just_calls() {
+    let response = QueryResponse::success(serde_json::json!({
+        "upsert_One": { "_docID": "doc-1" },
+        "delete_Many": [
+            { "_docID": "doc-2" },
+            { "_docID": "doc-3" }
+        ],
+        "delete_None": []
+    }));
+    assert_eq!(mutation_affected_documents(&response), 3);
+
+    let no_match = QueryResponse::success(serde_json::json!({ "delete_None": [] }));
+    assert_eq!(mutation_affected_documents(&no_match), 0);
+}
+
+#[test]
 fn single_mutation_document_rejects_duplicate_normalized_keys() {
     let response = QueryResponse::success(serde_json::json!({
         "create_AgentRequest": { "_docID": "doc-create" },

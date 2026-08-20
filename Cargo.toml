@@ -56,9 +56,9 @@ clap = { version = "4", features = ["derive", "env"] }
 # DefraDB v0.18.0 includes signed explicit transactions and default node query
 # identity. Its iterative parent-DAG replay remains required on iOS:
 # a deep collection history otherwise exhausts even a 32 MiB Tokio worker stack.
-acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
-crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
-defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
+acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f928b30002c4af77c1ce3900a1e82650fdfefc14" }
+crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f928b30002c4af77c1ce3900a1e82650fdfefc14" }
+defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f928b30002c4af77c1ce3900a1e82650fdfefc14" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
 gents-codex-protocol = { path = "crates/gents-codex-protocol" }
@@ -68,12 +68,12 @@ gents-desktop-bridge = { path = "crates/gents-desktop-bridge" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
 # Keep DefraDB defaults off: Gents selects Iroh P2P and Lens execution without
 # SourceHub ACP or the legacy libp2p transport (defradb.rs#1431-#1435).
-defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e", default-features = false }
-defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e", default-features = false }
+defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f928b30002c4af77c1ce3900a1e82650fdfefc14", default-features = false }
+defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f928b30002c4af77c1ce3900a1e82650fdfefc14", default-features = false }
 dirs = "5"
-events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
+events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f928b30002c4af77c1ce3900a1e82650fdfefc14" }
 hostname = "0.4"
-identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
+identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f928b30002c4af77c1ce3900a1e82650fdfefc14" }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
@@ -81,8 +81,8 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
-query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e28586b08c7962b36d4d8f496676024a9167854e" }
+p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f928b30002c4af77c1ce3900a1e82650fdfefc14" }
+query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f928b30002c4af77c1ce3900a1e82650fdfefc14" }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig-core = "0.35.0"

@@ -73,6 +73,7 @@ pub(super) struct RuntimeStatusRow {
     pub(super) unavailable_behavior_count: i64,
     pub(super) last_reconcile_result: String,
     pub(super) last_reconcile_error: String,
+    pub(super) updated_at: String,
 }
 
 pub(super) async fn fetch_runtime_status(
@@ -90,6 +91,7 @@ pub(super) async fn fetch_runtime_status(
                 unavailable_behavior_count
                 last_reconcile_result
                 last_reconcile_error
+                updated_at
             }}
         }}"#
     );
@@ -128,6 +130,7 @@ pub(super) async fn wait_for_runtime_reconcile_phase(
                     unavailable_behavior_count
                     last_reconcile_result
                     last_reconcile_error
+                    updated_at
                 }}
             }}"#
         );

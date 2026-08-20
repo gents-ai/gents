@@ -516,6 +516,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     let mut updates = core.store_updates();
 
     assert_eq!(store.snapshot().agent_principals.len(), 0);
+    let baseline = *updates.borrow_and_update();
 
     let response = core
         .node()
@@ -534,7 +535,6 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
         "agent principal mutation should succeed"
     );
 
-    let baseline = *updates.borrow_and_update();
     timeout(Duration::from_secs(5), async {
         loop {
             updates.changed().await.context("watch channel closed")?;
@@ -688,18 +688,20 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         .await
         .expect("observer running and exposing metrics");
 
-    for i in 1..=100usize {
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentResponse(
+    let updates = (1..=100usize)
+        .map(|i| {
+            format!(
+                r#"update_{i}: update_AgentResponse(
                     filter: {{ response_key: {{ _eq: "long-req" }} }},
                     input: {{ progress_seq: {i} }}
-                ) {{ _docID }}
-            }}"#
-        );
-        let resp = core.node().execute(&mutation).await;
-        assert!(!resp.has_errors(), "update {i}: {:?}", resp.errors);
-    }
+                ) {{ _docID }}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mutation = format!("mutation {{ {updates} }}");
+    let resp = core.node().execute(&mutation).await;
+    assert!(!resp.has_errors(), "streaming updates: {:?}", resp.errors);
 
     timeout(Duration::from_millis(2000), async {
         loop {

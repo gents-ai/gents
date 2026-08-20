@@ -34,6 +34,7 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(&home_dir, &["status"])?;
     assert_eq!(

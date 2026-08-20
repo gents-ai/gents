@@ -941,6 +941,23 @@ impl GraphqlPairingStateStore {
     async fn delete_bearer_readiness_for_peer(&self, peer_id: &str) -> Result<()> {
         let peer_id = escape_graphql_string(peer_id);
         let issuer_did = escape_graphql_string(self.identity.did());
+        let query = format!(
+            r#"{{
+                BearerPairingReady(
+                    filter: {{
+                        peer_id: {{ _eq: "{peer_id}" }},
+                        issuer_did: {{ _eq: "{issuer_did}" }}
+                    }},
+                    limit: 1
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = self.node.execute(&query).await;
+        ensure_no_errors(&response, "query BearerPairingReady for deletion")?;
+        if rows::<DocIdRow>(&response, "BearerPairingReady")?.is_empty() {
+            return Ok(());
+        }
+
         let mutation = format!(
             r#"mutation {{
                 delete_BearerPairingReady(
@@ -1231,6 +1248,12 @@ struct BearerPairingReadyRow {
     template: Option<String>,
     acknowledged_at: Option<String>,
     issuer_sig: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DocIdRow {
+    #[serde(rename = "_docID")]
+    _doc_id: String,
 }
 
 fn desired_from_pairing_row(
