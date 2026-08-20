@@ -2867,7 +2867,7 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "fixture-domain-plugin"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3246,7 +3246,7 @@ dependencies = [
 
 [[package]]
 name = "gents"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "acp",
  "anyhow",
@@ -3304,7 +3304,7 @@ dependencies = [
 
 [[package]]
 name = "gents-chatgpt-login"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64 0.22.1",
  "rand 0.9.2",
@@ -3322,7 +3322,7 @@ dependencies = [
 
 [[package]]
 name = "gents-cli"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "acp",
  "anyhow",
@@ -3373,7 +3373,7 @@ dependencies = [
 
 [[package]]
 name = "gents-codex-protocol"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3384,7 +3384,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-bridge"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3426,7 +3426,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3456,7 +3456,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-tauri"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3481,7 +3481,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fixture-host"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "dirs 5.0.1",
  "fixture-domain-plugin",
@@ -3494,7 +3494,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fs-runner"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "globset",
@@ -3506,7 +3506,7 @@ dependencies = [
 
 [[package]]
 name = "gents-lean-contract"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -3523,7 +3523,7 @@ dependencies = [
 
 [[package]]
 name = "gents-migration"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "defra-node",
@@ -3541,7 +3541,7 @@ dependencies = [
 
 [[package]]
 name = "gents-protocol"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "gents-schemas"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "getrandom"

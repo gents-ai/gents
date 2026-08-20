@@ -6,6 +6,53 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.12.0 - 2026-08-20
+
+### Bridge contract
+
+- Keep the additive desktop bridge contract at 0.9 and advance the Rust and
+  npm desktop package train together to 0.12.0.
+
+### P2P and mobile
+
+- Make mobile pairing converge across reconnects, layered filters, reverse
+  pairings, and repeated reconcile passes; close fleet convergence
+  amplification and pin DefraDB's merged replication-ownership fix (#1145,
+  #1156, #1157).
+- Eagerly replicate the requester-scoped session index to paired mobile peers
+  and retry index synchronization from the P2P supervisor (#1141, #1148).
+- Clarify mobile configuration back-navigation and skip disabled P2P metrics
+  polling (#1146, #1130).
+
+### Runtime and formal foundation
+
+- Add correlated event-trigger fan-in, reliable background subagent
+  continuations, and an optional native LSP tool for coding behaviors (#1113,
+  #1117, #1115).
+- Unify durable descendant authorization and projections, bound terminal
+  GraphQL persistence retries, and centralize GraphQL validation and run
+  provenance (#1124, #1132, #1136).
+- Add bounded datastore query surfaces and keep client-authored conversation
+  collections compatible with fresh stores (#1125, #1151, #1155).
+
+### Agents, demos, and tooling
+
+- Add the repository review harness plus executable maintenance, security-scan,
+  and live code-review demo surfaces (#1121, #1135, #1151, #1155).
+- Replace cluster triage labels with program milestones and enforce roadmap
+  horizons through the issue-hygiene automation (#1107).
+
+### Build and reliability
+
+- Replace RocksDB with Lark, narrow DefraDB feature consumption, and improve
+  release build attribution and artifact measurement (#1101, #1109, #1119).
+- Consolidate integration-test binaries, make live gates explicit, and repair
+  the post-merge conformance and migration fences (#1140, #1149, #1150).
+
+### Dependencies
+
+- Advance DefraDB to the ownership-corrected `f928b300` revision.
+
 ## 0.11.0 - 2026-08-11
 
 ### Bridge contract
@@ -140,6 +187,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 | Tag        | Bridge crate | npm packages | contract_version | Notes                                         |
 | ---------- | ------------ | ------------ | ---------------- | --------------------------------------------- |
+| v0.12.0    | 0.12.0       | 0.12.0       | 0.9              | Mobile pairing convergence; eager session index; DefraDB `f928b300` |
 | v0.11.0    | 0.11.0       | 0.11.0       | 0.9              | DefraDB v0.18.0; signed provenance and build metrics |
 | v0.10.1    | 0.10.1       | 0.10.1       | 0.5              | DefraDB v0.17.4; mobile/subagent/migration fixes |
 | v0.10.0    | 0.10.0       | 0.10.0       | 0.5              | Reusable desktop packages implemented in #878 |
