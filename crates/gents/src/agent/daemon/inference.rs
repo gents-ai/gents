@@ -203,7 +203,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // the per-kind label sequence and hand the inference loop a label the
         // summarizer's scope had already used.
         let inference = Box::pin(async {
-                let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+                let hook = DefraSessionHook::resume_with_identity_policy(
                     self.node.clone(),
                     &request.session_id,
                     &self.behavior.behavior_id,

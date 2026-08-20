@@ -225,8 +225,15 @@ async fn setup_spawn_fixture_with_parent_fields(
         extra_parent_fields,
     )
     .await;
+    crate::support::create_agent_session(
+        db.node.as_ref(),
+        &session_id,
+        PARENT_BEHAVIOR_ID,
+        "2026-05-13T00:00:00Z",
+    )
+    .await;
 
-    let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+    let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         &session_id,
         PARENT_BEHAVIOR_ID,

@@ -139,9 +139,6 @@ def snapshotJson : String :=
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
-    ++ "\"recovery_outcome_cases\":"
-      ++ jsonArray
-        (Recovery.recoveryOutcomeCases.map recoveryOutcomeCaseJson) ++ ","
     ++ "\"recovery_equivalence_cases\":"
       ++ jsonArray
         (Recovery.recoveryEquivalenceCases.map recoveryEquivalenceCaseJson) ++ ","
