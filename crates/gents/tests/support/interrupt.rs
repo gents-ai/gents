@@ -17,6 +17,10 @@ const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
 // busy CI host, a healthy runtime can spend more than 60 seconds waiting for
 // startup and recovery I/O before it publishes its ready status row.
 pub const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
+// Shutdown also performs bounded watcher and subsystem cleanup. Keep this
+// comfortably above the 5-second control-settle windows exercised by the
+// runtime while preserving a hard failure for a genuinely stuck agent.
+const TEST_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -42,9 +46,11 @@ impl BootedAgent {
         let Some(handle) = self.handle.take() else {
             return;
         };
-        tokio::time::timeout(Duration::from_secs(5), handle)
+        tokio::time::timeout(TEST_RUNTIME_SHUTDOWN_TIMEOUT, handle)
             .await
-            .expect("agent did not shut down within 5s")
+            .unwrap_or_else(|error| {
+                panic!("agent did not shut down within {TEST_RUNTIME_SHUTDOWN_TIMEOUT:?}: {error}")
+            })
             .expect("agent task should join")
             .expect("agent run should return ok");
     }

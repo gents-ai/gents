@@ -34,6 +34,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     run_cli_text(
         &home_dir,

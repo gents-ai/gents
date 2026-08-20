@@ -40,6 +40,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Build desktop packages
+        run: npm run build:packages
+
       - name: Install Playwright browser
         working-directory: apps/gents-desktop
         run: npx playwright install chromium

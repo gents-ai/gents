@@ -45,6 +45,7 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let behaviors_dir = root.join("agent-behaviors");
     let behavior_entry = fs::read_dir(&behaviors_dir)
