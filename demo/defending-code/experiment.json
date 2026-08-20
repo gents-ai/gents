@@ -1,0 +1,144 @@
+{
+  "name": "defending-code",
+  "description": "Threat-model-driven static defense campaign: partition -> discover -> assignment-triggered verify -> triage reduce -> patch draft -> isolated review -> report",
+  "init": {
+    "inference_url": "${GENTS_DEFENDING_ENDPOINT:-http://100.73.235.38:8000/v1}",
+    "model_name": "${GENTS_DEFENDING_MODEL:-GLM-5.2}",
+    "tool_package": "write",
+    "tool_root": "${GENTS_DEFENDING_ROOT:-.}",
+    "tool_root_env_var": "GENTS_DEFENDING_ROOT",
+    "tool_root_markers": [],
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions"
+  },
+  "seed": {
+    "collection": "DefendingCodeJob",
+    "job_id_field": "run_id",
+    "prompt_field": "focus",
+    "fields": {
+      "repository_path": "${GENTS_DEFENDING_ROOT:-.}",
+      "area_min": "${GENTS_DEFENDING_MIN_AREAS:-4}",
+      "area_max": "${GENTS_DEFENDING_MAX_AREAS:-10}",
+      "engagement_context": "${GENTS_DEFENDING_ENGAGEMENT_CONTEXT:-Authorized defensive static review of code controlled by the operator. Do not execute target code or contact external systems.}"
+    }
+  },
+  "default_prompt": "${GENTS_DEFENDING_PROMPT:-Map the repository's trust boundaries, find plausible exploitable vulnerabilities, adversarially verify them, and draft minimal reviewable fixes for confirmed findings.}",
+  "expect": {
+    "trigger_ids": ["defend-threat-model", "defend-plan", "defend-scan", "defend-verification-plan", "defend-verifier", "defend-triage", "defend-patch", "defend-patch-review", "defend-report"],
+    "trigger_request_count_sources": {
+      "defend-scan": {
+        "collection": "DefenseReviewArea",
+        "correlation_field": "run_id",
+        "expected_count_field": "expected_total"
+      },
+      "defend-verifier": {
+        "collection": "DefenseVerificationAssignment",
+        "correlation_field": "run_id",
+        "expected_count_field": "expected_total"
+      },
+      "defend-patch": {
+        "collection": "DefensePatchAssignment",
+        "correlation_field": "run_id",
+        "expected_count_field": "expected_total"
+      },
+      "defend-patch-review": {
+        "collection": "DefensePatchCandidate",
+        "correlation_field": "run_id",
+        "expected_count_field": "expected_total"
+      }
+    },
+    "signed_provenance": true,
+    "required_tool_call_trigger_ids": ["defend-threat-model", "defend-plan", "defend-scan", "defend-verification-plan", "defend-verifier", "defend-triage", "defend-patch", "defend-patch-review", "defend-report"],
+    "prompt_tool_contracts": [
+      {"task_id": "defend-threat-model-task", "required_tool_names": ["write_defense_threat_model"]},
+      {"task_id": "defend-plan-task", "required_tool_names": ["write_defense_review_area"]},
+      {"task_id": "defend-scan-task", "required_tool_names": ["write_defense_candidate", "write_defense_scan_result"]},
+      {"task_id": "defend-verification-plan-task", "required_tool_names": ["read_defense_candidate", "write_defense_verification_assignment"]},
+      {"task_id": "defend-triage-task", "required_tool_names": ["read_defense_candidate", "read_defense_verdict", "read_defense_triage_summary", "write_defending_finding", "write_defense_patch_assignment", "write_defense_triage_summary"]},
+      {"task_id": "defend-verifier-task", "required_tool_names": ["read_defense_verification_assignment", "read_defense_threat_model", "read_defense_candidate", "read_defense_candidate_ledger", "write_defense_verdict", "write_defense_verification_completion"]},
+      {"task_id": "defend-patch-task", "required_tool_names": ["read_defending_finding", "write_defense_patch_candidate"]},
+      {"task_id": "defend-patch-review-task", "required_tool_names": ["write_defense_patch_review"]},
+      {"task_id": "defend-report-task", "required_tool_names": ["read_defense_threat_model", "read_defense_triage_summary", "read_defense_verdict", "read_defending_finding", "read_defense_patch_candidate", "read_defense_patch_review", "write_defense_report"]}
+    ],
+    "source_edges": [],
+    "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
+    "collection_counts": {
+      "DefenseThreatModel": 1,
+      "DefenseReviewArea": 1,
+      "DefenseScanResult": 1,
+      "DefenseVerificationAssignment": 1,
+      "DefenseVerificationCompletion": 1,
+      "DefenseTriageSummary": 1,
+      "DefensePatchAssignment": 1,
+      "DefensePatchCandidate": 1,
+      "DefensePatchReview": 1,
+      "DefenseReport": 1
+    },
+    "result_documents": [
+      {
+        "collection": "DefenseReport",
+        "correlation_field": "run_id",
+        "fields": ["candidate_count", "confirmed_count", "refuted_count", "patch_count", "accepted_patch_count", "rejected_patch_count", "severity_counts", "top_risks", "summary", "human_actions"]
+      },
+      {
+        "collection": "DefenseThreatModel",
+        "correlation_field": "run_id",
+        "fields": ["system_context", "assets", "entry_points", "threats", "deprioritized", "open_questions", "mitigations", "provenance"]
+      },
+      {
+        "collection": "DefendingFinding",
+        "correlation_field": "run_id",
+        "fields": ["finding_id", "area_id", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "preconditions", "access_level", "owner_hint", "threat_ids", "verdict"]
+      },
+      {
+        "collection": "DefenseVerificationAssignment",
+        "correlation_field": "run_id",
+        "fields": ["assignment_id", "finding_id", "area_id", "repository_path", "status", "expected_total"]
+      },
+      {
+        "collection": "DefenseVerificationCompletion",
+        "correlation_field": "run_id",
+        "fields": ["assignment_id", "finding_id", "repository_path", "status", "expected_total"]
+      },
+      {
+        "collection": "DefenseFindingVerdict",
+        "correlation_field": "run_id",
+        "fields": ["finding_id", "verdict", "severity", "confidence", "evidence", "verification", "duplicate_of", "preconditions", "access_level", "owner_hint", "expected_total"]
+      },
+      {
+        "collection": "DefensePatchCandidate",
+        "correlation_field": "run_id",
+        "fields": ["patch_id", "finding_id", "status", "path", "line", "category", "diff", "rationale", "variants_checked", "bypass_considered", "test_note"]
+      },
+      {
+        "collection": "DefensePatchReview",
+        "correlation_field": "run_id",
+        "fields": ["patch_id", "finding_id", "verdict", "style_score", "out_of_scope_hunks", "new_surface", "reason"]
+      }
+    ],
+    "fan_in": {
+      "member_collection": "DefenseReviewArea",
+      "result_collection": "DefenseScanResult",
+      "report_collection": "DefenseReport",
+      "correlation_field": "run_id",
+      "expected_count_field": "expected_total",
+      "min_expected_count": ${GENTS_DEFENDING_MIN_AREAS:-4},
+      "max_expected_count": ${GENTS_DEFENDING_MAX_AREAS:-10},
+      "consumer_trigger_id": "defend-verification-plan",
+      "member_required_fields": ["area_id", "repository_path", "focus", "trust_boundary", "reachable_assets", "instructions"],
+      "verification": {
+        "candidate_collection": "DefenseCandidateFinding",
+        "decision_collection": "DefenseFindingVerdict",
+        "summary_collection": "DefenseTriageSummary",
+        "confirmed_collection": "DefendingFinding",
+        "final_consumer_trigger_id": "defend-report",
+        "finding_id_field": "finding_id",
+        "verdict_field": "verdict",
+        "evidence_field": "evidence",
+        "confirmed_count_field": "confirmed_count",
+        "refuted_count_field": "refuted_count"
+      }
+    }
+  },
+  "await_timeout_secs": ${GENTS_DEFENDING_AWAIT_TIMEOUT_SECS:-86400}
+}

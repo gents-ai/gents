@@ -1,0 +1,13 @@
+type DefenseReport {
+  run_id: String @index(unique: true) @immutable
+  candidate_count: String
+  confirmed_count: String
+  refuted_count: String
+  patch_count: String
+  accepted_patch_count: String
+  rejected_patch_count: String
+  severity_counts: String
+  top_risks: String
+  summary: String
+  human_actions: String
+}

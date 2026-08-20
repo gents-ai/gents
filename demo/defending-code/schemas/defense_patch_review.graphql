@@ -1,0 +1,11 @@
+type DefensePatchReview {
+  run_id: String @index @immutable
+  patch_id: String @index(unique: true) @immutable
+  finding_id: String
+  verdict: String
+  style_score: String
+  out_of_scope_hunks: String
+  new_surface: String
+  reason: String
+  expected_total: String @immutable
+}

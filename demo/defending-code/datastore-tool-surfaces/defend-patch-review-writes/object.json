@@ -1,0 +1,25 @@
+{
+  "surface_id": "defend-patch-review-writes",
+  "agent_did": "did:key:zDefendingCodeAgentPlaceholder0000000000000000000000",
+  "display_name": "Isolated patch-review writes",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_defense_patch_review",
+      "collection": "DefensePatchReview",
+      "description": "Persist the independent review of one proposed patch or no-patch sentinel.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "patch_id", "required": false, "fill": {"source_field": "patch_id"}},
+        {"name": "finding_id", "required": false, "fill": {"source_field": "finding_id"}},
+        {"name": "verdict", "required": true},
+        {"name": "style_score", "required": true},
+        {"name": "out_of_scope_hunks", "required": true},
+        {"name": "new_surface", "required": true},
+        {"name": "reason", "required": true},
+        {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}}
+      ]
+    }
+  ]
+}

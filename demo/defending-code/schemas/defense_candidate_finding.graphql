@@ -1,0 +1,16 @@
+type DefenseCandidateFinding {
+  run_id: String @index @immutable
+  finding_id: String @index(unique: true) @immutable
+  area_id: String @immutable
+  category: String
+  claimed_severity: String
+  confidence: String
+  path: String
+  line: String
+  title: String
+  description: String
+  exploit_scenario: String
+  recommendation: String
+  evidence: String
+  threat_ids: String
+}

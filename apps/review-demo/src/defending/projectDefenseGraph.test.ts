@@ -1,0 +1,349 @@
+import { describe, expect, it } from "vitest";
+
+import { emptyDefenseSnapshot } from "./pollDefending.ts";
+import { projectDefenseGraph } from "./projectDefenseGraph.ts";
+
+describe("projectDefenseGraph", () => {
+  it("shows a compact expected campaign before a job exists", () => {
+    const graph = projectDefenseGraph(emptyDefenseSnapshot());
+    expect(graph.runId).toBeNull();
+    expect(graph.nodes.filter((node) => node.kind === "area")).toHaveLength(8);
+    expect(graph.nodes.filter((node) => node.kind === "scan")).toHaveLength(0);
+    expect(graph.nodes.at(-1)).toMatchObject({
+      kind: "report",
+      state: "expected",
+    });
+  });
+
+  it("shows the requested area fan-out while planning is live", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({
+      _docID: "job-1",
+      run_id: "defense-1",
+      area_min: "8",
+      area_max: "8",
+    });
+    snapshot.threats.push({ _docID: "threat-1", run_id: "defense-1" });
+    snapshot.requests.push(
+      {
+        request_id: "threat-request",
+        caused_by_correlation: "defense-1",
+        caused_by_trigger_id: "defend-threat-model",
+        caused_by_source_doc_id: "job-1",
+        lifecycle_state: "completed",
+      },
+      {
+        request_id: "plan-request",
+        caused_by_correlation: "defense-1",
+        caused_by_trigger_id: "defend-plan",
+        caused_by_source_doc_id: "threat-1",
+        lifecycle_state: "processing",
+      },
+    );
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(graph.nodes.find((node) => node.kind === "threat")?.state).toBe(
+      "done",
+    );
+    expect(graph.nodes.find((node) => node.kind === "plan")).toMatchObject({
+      state: "live",
+      requestId: "plan-request",
+      badges: ["0/8 areas"],
+    });
+    expect(graph.nodes.filter((node) => node.kind === "area")).toHaveLength(8);
+    expect(graph.nodes.filter((node) => node.kind === "scan")).toHaveLength(0);
+    expect(graph.nodes.find((node) => node.kind === "triage")?.state).toBe(
+      "waiting-group",
+    );
+  });
+
+  it("keeps expected slots visible while the planner streams area writes", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ run_id: "defense-1", area_min: "3", area_max: "3" });
+    snapshot.areas.push({
+      _docID: "area-1",
+      run_id: "defense-1",
+      area_id: "defense-1:area-01",
+      expected_total: "3",
+    });
+    snapshot.requests.push({
+      request_id: "scan-request",
+      caused_by_correlation: "defense-1",
+      caused_by_trigger_id: "defend-scan",
+      caused_by_source_doc_id: "area-1",
+      lifecycle_state: "processing",
+    });
+    snapshot.candidates.push({
+      _docID: "candidate-early",
+      run_id: "defense-1",
+      finding_id: "finding-early",
+    });
+
+    const graph = projectDefenseGraph(snapshot);
+    const areas = graph.nodes.filter((node) => node.kind === "area");
+    expect(areas).toHaveLength(3);
+    expect(areas.map((node) => node.state)).toEqual([
+      "live",
+      "expected",
+      "expected",
+    ]);
+    expect(areas[0]).toMatchObject({ requestId: "scan-request" });
+    expect(graph.nodes.filter((node) => node.kind === "scan")).toHaveLength(0);
+    expect(graph.nodes.filter((node) => node.kind === "candidate")).toHaveLength(
+      0,
+    );
+    expect(graph.nodes.find((node) => node.kind === "triage")).toMatchObject({
+      state: "waiting-group",
+      badges: ["0/3 scans", "1 candidates queued"],
+    });
+  });
+
+  it("nests real verifier requests under candidate documents", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ _docID: "job-1", run_id: "defense-1", area_min: "1" });
+    snapshot.areas.push({
+      _docID: "area-1",
+      run_id: "defense-1",
+      area_id: "defense-1:area-01",
+      expected_total: "1",
+    });
+    snapshot.scans.push({
+      _docID: "scan-1",
+      run_id: "defense-1",
+      area_id: "defense-1:area-01",
+    });
+    snapshot.candidates.push({
+      _docID: "candidate-1",
+      run_id: "defense-1",
+      finding_id: "finding-1",
+      title: "Candidate claim",
+    });
+    snapshot.verdicts.push({
+      _docID: "verdict-1",
+      run_id: "defense-1",
+      finding_id: "finding-1",
+      verdict: "confirmed",
+    });
+    snapshot.requests.push(
+      {
+        request_id: "triage-request",
+        caused_by_correlation: "defense-1",
+        caused_by_trigger_id: "defend-triage",
+        lifecycle_state: "processing",
+      },
+      {
+        request_id: "verifier-request",
+        session_id: "verifier-session",
+        behavior_id: "defend-verifier",
+        caused_by_correlation: "defense-1",
+        caused_by_parent_request_id: "triage-request",
+        content: "Verify exactly `finding-1` (finding_id: finding-1).",
+        lifecycle_state: "completed",
+      },
+    );
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(graph.nodes.find((node) => node.kind === "candidate")).toMatchObject(
+      {
+        sourceDocId: "candidate-1",
+        state: "done",
+        badges: ["verified"],
+      },
+    );
+    expect(graph.nodes.find((node) => node.kind === "verifier")).toMatchObject({
+      requestId: "verifier-request",
+      sessionId: "verifier-session",
+      state: "done",
+      badges: ["verified"],
+    });
+    expect(graph.nodes.find((node) => node.kind === "verdict")).toMatchObject({
+      sourceDocId: "verdict-1",
+      state: "done",
+    });
+  });
+
+  it("does not invent verifier agents for a legacy serial triage request", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ _docID: "job-1", run_id: "defense-1", area_min: "1" });
+    snapshot.areas.push({
+      _docID: "area-1",
+      run_id: "defense-1",
+      area_id: "defense-1:area-01",
+      expected_total: "1",
+    });
+    snapshot.scans.push({
+      _docID: "scan-1",
+      run_id: "defense-1",
+      area_id: "defense-1:area-01",
+    });
+    snapshot.candidates.push({
+      _docID: "candidate-1",
+      run_id: "defense-1",
+      finding_id: "finding-1",
+    });
+    snapshot.requests.push({
+      request_id: "triage-request",
+      caused_by_correlation: "defense-1",
+      caused_by_trigger_id: "defend-triage",
+      content: "Verify every candidate in stable order.",
+      lifecycle_state: "processing",
+    });
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(graph.nodes.find((node) => node.kind === "triage")).toMatchObject({
+      state: "live",
+      badges: [
+        "1/1 scans",
+        "serial triage",
+        "active candidate untracked",
+      ],
+    });
+    expect(graph.nodes.find((node) => node.kind === "candidate")?.badges).toEqual([
+      "activity untracked",
+    ]);
+    expect(graph.nodes.filter((node) => node.kind === "verifier")).toHaveLength(0);
+  });
+
+  it("projects assignment-triggered verifier requests without a parent coordinator", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ _docID: "job-1", run_id: "defense-1", area_min: "1" });
+    snapshot.areas.push({
+      _docID: "area-1",
+      run_id: "defense-1",
+      area_id: "defense-1:area-01",
+      expected_total: "1",
+    });
+    snapshot.scans.push({
+      _docID: "scan-1",
+      run_id: "defense-1",
+      area_id: "defense-1:area-01",
+    });
+    snapshot.candidates.push({
+      _docID: "candidate-1",
+      run_id: "defense-1",
+      finding_id: "finding-1",
+    });
+    snapshot.verificationAssignments.push({
+      _docID: "verify-assignment-1",
+      run_id: "defense-1",
+      assignment_id: "finding-1:verify",
+      finding_id: "finding-1",
+      status: "ready",
+      expected_total: "1",
+    });
+    snapshot.requests.push(
+      {
+        request_id: "plan-request",
+        caused_by_correlation: "defense-1",
+        caused_by_trigger_id: "defend-verification-plan",
+        lifecycle_state: "completed",
+      },
+      {
+        request_id: "verifier-request",
+        session_id: "verifier-session",
+        behavior_id: "defend-verifier",
+        caused_by_correlation: "defense-1",
+        caused_by_trigger_id: "defend-verifier",
+        caused_by_source_doc_id: "verify-assignment-1",
+        lifecycle_state: "processing",
+      },
+    );
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(graph.nodes.find((node) => node.kind === "verification-plan")).toMatchObject({
+      state: "done",
+      requestId: "plan-request",
+      badges: ["1 assignments", "document fan-out"],
+    });
+    expect(
+      graph.nodes.find((node) => node.kind === "verification-assignment"),
+    ).toMatchObject({ state: "done", sourceDocId: "verify-assignment-1" });
+    expect(graph.nodes.find((node) => node.kind === "verifier")).toMatchObject({
+      state: "live",
+      requestId: "verifier-request",
+      badges: ["running"],
+    });
+    expect(graph.nodes.find((node) => node.kind === "triage")).toMatchObject({
+      state: "waiting-group",
+      badges: ["0/1 complete", "0/1 verdicts", "1 running", "0 queued"],
+    });
+  });
+
+  it("closes both fan-outs and marks the report complete", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ _docID: "job-1", run_id: "defense-1", area_min: "1" });
+    snapshot.threats.push({ _docID: "threat-1", run_id: "defense-1" });
+    snapshot.areas.push({
+      _docID: "area-1",
+      run_id: "defense-1",
+      area_id: "defense-1:area-01",
+      expected_total: "1",
+    });
+    snapshot.scans.push({
+      _docID: "scan-1",
+      run_id: "defense-1",
+      area_id: "defense-1:area-01",
+    });
+    snapshot.triage.push({ _docID: "triage-1", run_id: "defense-1" });
+    snapshot.assignments.push({
+      _docID: "assignment-1",
+      run_id: "defense-1",
+      assignment_id: "finding-1:patch",
+      finding_id: "finding-1",
+    });
+    snapshot.patches.push({
+      _docID: "patch-1",
+      run_id: "defense-1",
+      patch_id: "finding-1:patch",
+    });
+    snapshot.reviews.push({
+      run_id: "defense-1",
+      patch_id: "finding-1:patch",
+      verdict: "ACCEPT",
+    });
+    snapshot.reports.push({
+      _docID: "report-1",
+      run_id: "defense-1",
+      confirmed_count: "1",
+      accepted_patch_count: "1",
+    });
+    for (const [requestId, triggerId, sourceDocId] of [
+      ["threat-request", "defend-threat-model", "job-1"],
+      ["plan-request", "defend-plan", "threat-1"],
+      ["scan-request", "defend-scan", "area-1"],
+      ["triage-request", "defend-triage", undefined],
+      ["patch-request", "defend-patch", "assignment-1"],
+      ["review-request", "defend-patch-review", "patch-1"],
+      ["report-request", "defend-report", undefined],
+    ] as const) {
+      snapshot.requests.push({
+        request_id: requestId,
+        caused_by_correlation: "defense-1",
+        caused_by_trigger_id: triggerId,
+        caused_by_source_doc_id: sourceDocId,
+        lifecycle_state: "completed",
+      });
+    }
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(graph.nodes.find((node) => node.kind === "area")).toMatchObject({
+      state: "done",
+      requestId: "scan-request",
+      sourceDocId: "area-1",
+    });
+    const scanNode = graph.nodes.find((node) => node.kind === "scan");
+    expect(scanNode).toMatchObject({
+      state: "done",
+      sourceDocId: "scan-1",
+    });
+    expect(scanNode).not.toHaveProperty("requestId");
+    expect(graph.nodes.find((node) => node.kind === "review")).toMatchObject({
+      state: "done",
+      badges: ["ACCEPT"],
+    });
+    expect(graph.nodes.find((node) => node.kind === "report")).toMatchObject({
+      state: "done",
+      badges: ["1 confirmed", "1 accepted"],
+    });
+  });
+});

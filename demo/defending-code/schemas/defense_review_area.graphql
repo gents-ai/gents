@@ -1,0 +1,11 @@
+type DefenseReviewArea {
+  run_id: String @index @immutable
+  area_id: String @index(unique: true) @immutable
+  repository_path: String @immutable
+  focus: String
+  threat_ids: String
+  trust_boundary: String
+  reachable_assets: String
+  instructions: String
+  expected_total: String @immutable
+}
