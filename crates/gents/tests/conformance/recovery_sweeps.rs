@@ -1255,7 +1255,7 @@ async fn seed_tool_parent_and_row(
                 past_deadline,
             ),
             "tool_running_parent_interrupted_to_cancelled"
-            | "live_running_composite_parent_interrupted_to_cancelled" => {
+            | "live_running_native_tool_parent_interrupted_to_cancelled" => {
                 set_request_status_and_lifecycle(
                     &node,
                     &parent_doc_id,
@@ -1270,12 +1270,7 @@ async fn seed_tool_parent_and_row(
                     "did:test:test".to_string(),
                     tool_call_id.to_string(),
                     1,
-                    if case.name == "live_running_composite_parent_interrupted_to_cancelled" {
-                        "fan_out_and_synthesize"
-                    } else {
-                        "slow_tool"
-                    }
-                    .to_string(),
+                    "slow_tool".to_string(),
                     "{}".to_string(),
                     future_deadline,
                 )
