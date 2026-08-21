@@ -931,7 +931,7 @@ pub(crate) async fn load_isolated_workspace(
     first_row(&response, "IsolatedWorkspace")
 }
 
-async fn load_workspace_placement(
+pub(crate) async fn load_workspace_placement(
     node: &EmbeddedNode,
     workspace_id: &str,
 ) -> Result<Option<WorkspacePlacementDoc>> {
