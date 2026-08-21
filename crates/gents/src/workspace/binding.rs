@@ -433,6 +433,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn integrate_seal_hash_mismatch_is_denied() {
         let err = admit_workspace_binding(
             "ws-1",
