@@ -9,7 +9,7 @@
       "tool_name": "read_defense_threat_model",
       "collection": "DefenseThreatModel",
       "description": "Load the threat model for this run; run_id is runtime-filled.",
-      "fields": ["repository_path", "focus", "system_context", "assets", "entry_points", "threats", "deprioritized", "open_questions", "mitigations", "provenance"],
+      "fields": ["repository_path", "source_revision", "source_tree_state", "focus", "system_context", "assets", "entry_points", "threats", "deprioritized", "open_questions", "mitigations", "provenance"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -17,7 +17,7 @@
       "tool_name": "read_defense_candidate",
       "collection": "DefenseCandidateFinding",
       "description": "Load every static vulnerability candidate for this run.",
-      "fields": ["finding_id", "area_id", "category", "claimed_severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "threat_ids"],
+      "fields": ["finding_id", "area_id", "claim_kind", "root_cause_key", "security_boundary", "default_reachable", "required_configuration", "violated_invariant", "category", "claimed_severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "threat_ids"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -25,7 +25,7 @@
       "tool_name": "read_defense_verdict",
       "collection": "DefenseFindingVerdict",
       "description": "Load the completed independent verifier ledger for this run.",
-      "fields": ["finding_id", "area_id", "repository_path", "verdict", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "duplicate_of", "preconditions", "access_level", "owner_hint", "threat_ids", "expected_total"],
+      "fields": ["finding_id", "area_id", "repository_path", "verdict", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "security_boundary", "attacker_control", "default_reachable", "required_configuration", "violated_invariant", "contract_surface", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "duplicate_of", "preconditions", "access_level", "owner_hint", "threat_ids", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -33,7 +33,7 @@
       "tool_name": "read_defense_triage_summary",
       "collection": "DefenseTriageSummary",
       "description": "Check whether another durable continuation already closed this run.",
-      "fields": ["candidate_count", "confirmed_count", "refuted_count", "duplicate_count", "patch_assignment_count", "summary"],
+      "fields": ["candidate_count", "confirmed_count", "refuted_count", "duplicate_count", "promoted_count", "summary"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -44,6 +44,16 @@
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "finding_id", "required": true},
         {"name": "area_id", "required": true},
+        {"name": "source_revision", "required": true},
+        {"name": "source_tree_state", "required": true},
+        {"name": "claim_kind", "required": true},
+        {"name": "root_cause_key", "required": true},
+        {"name": "security_boundary", "required": true},
+        {"name": "attacker_control", "required": true},
+        {"name": "default_reachable", "required": true},
+        {"name": "required_configuration", "required": true},
+        {"name": "violated_invariant", "required": true},
+        {"name": "contract_surface", "required": true},
         {"name": "category", "required": true},
         {"name": "severity", "required": true},
         {"name": "confidence", "required": true},
@@ -63,30 +73,18 @@
       ]
     },
     {
-      "tool_name": "write_defense_patch_assignment",
-      "collection": "DefensePatchAssignment",
-      "description": "Create one member of the closed patch-work set, including the no-findings sentinel.",
-      "fields": [
-        {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "assignment_id", "required": true},
-        {"name": "finding_id", "required": true},
-        {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
-        {"name": "status", "required": true},
-        {"name": "expected_total", "required": true}
-      ]
-    },
-    {
       "tool_name": "write_defense_triage_summary",
       "collection": "DefenseTriageSummary",
-      "description": "Close the exact candidate/verdict ledger after patch assignments are written.",
+      "description": "Close the exact candidate/verdict ledger after confirmed findings are promoted.",
       "output_obligation": {"scope": "trigger", "minimum_writes": 1},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
         {"name": "candidate_count", "required": true},
         {"name": "confirmed_count", "required": true},
         {"name": "refuted_count", "required": true},
         {"name": "duplicate_count", "required": true},
-        {"name": "patch_assignment_count", "required": true},
+        {"name": "promoted_count", "required": true},
         {"name": "summary", "required": true}
       ]
     }

@@ -10,6 +10,14 @@ shapes rather than matching an API checklist. Skip style, generic hardening,
 outdated dependencies, operator-controlled configuration, test-only code, and
 claims with no attack story. Never fabricate paths or lines.
 
+Separate security vulnerabilities from correctness, hardening, operational,
+and specification concerns. For every candidate identify the attacker, the
+attacker-controlled value and its source, the entry point, the sensitive sink,
+the crossed security boundary, default reachability, required configuration or
+privilege, guards checked, fail-open/fail-closed behavior, and the violated
+security invariant. Give candidates that share one root cause the same stable
+`root_cause_key`; do not inflate one primitive into many consequence findings.
+
 This is static source analysis. Use the language server for definitions,
 references, implementations, and diagnostics; use shell for read-only
 repository inspection and history. Do not build or execute target code, fuzz,

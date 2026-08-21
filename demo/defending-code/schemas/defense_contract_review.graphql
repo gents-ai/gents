@@ -1,0 +1,16 @@
+type DefenseContractReview {
+  run_id: String @index @immutable
+  review_id: String @index(unique: true) @immutable
+  cluster_id: String @index @immutable
+  repository_path: String @immutable
+  status: String
+  disposition: String
+  behavior_intentional: String
+  spec_impact: String
+  required_foundation_flow: String
+  required_proof_files: String
+  compatibility_constraints: String
+  recommended_fix_boundary: String
+  evidence: String
+  expected_total: String @immutable
+}

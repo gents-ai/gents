@@ -2,6 +2,16 @@ type DefendingFinding {
   run_id: String @index @immutable
   finding_id: String @index(unique: true) @immutable
   area_id: String @immutable
+  source_revision: String
+  source_tree_state: String
+  claim_kind: String
+  root_cause_key: String
+  security_boundary: String
+  attacker_control: String
+  default_reachable: String
+  required_configuration: String
+  violated_invariant: String
+  contract_surface: String
   category: String
   severity: String
   confidence: String

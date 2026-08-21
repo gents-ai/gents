@@ -3326,15 +3326,18 @@ mod tests {
     fn defending_code_pack_is_typed_static_and_closes_both_fan_outs() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/defending-code");
         let manifest = load_manifest_defaults(&pack).expect("defending-code pack should load");
-        assert_eq!(manifest.expect.prompt_tool_contracts.len(), 9);
-        assert_eq!(manifest.expect.result_documents.len(), 8);
+        assert_eq!(manifest.expect.prompt_tool_contracts.len(), 14);
+        assert_eq!(manifest.expect.result_documents.len(), 12);
         assert_eq!(manifest.init.tool_package, "write");
 
         for (trigger, collection) in [
             ("defend-scan", "DefenseReviewArea"),
             ("defend-verifier", "DefenseVerificationAssignment"),
+            ("defend-contract-review", "DefenseRootCauseCluster"),
             ("defend-patch", "DefensePatchAssignment"),
-            ("defend-patch-review", "DefensePatchCandidate"),
+            ("defend-patch-validation", "DefensePatchCandidate"),
+            ("defend-patch-review", "DefensePatchValidation"),
+            ("defend-patch-security-review", "DefensePatchReview"),
         ] {
             let source = manifest
                 .expect
@@ -3365,6 +3368,32 @@ mod tests {
                 "DefenseVerificationCompletion",
                 "per_group",
             ),
+            ("defend-cluster", "DefenseTriageSummary", "per_document"),
+            (
+                "defend-contract-review",
+                "DefenseRootCauseCluster",
+                "per_document",
+            ),
+            (
+                "defend-remediation-plan",
+                "DefenseContractReview",
+                "per_group",
+            ),
+            (
+                "defend-patch-validation",
+                "DefensePatchCandidate",
+                "per_document",
+            ),
+            (
+                "defend-patch-review",
+                "DefensePatchValidation",
+                "per_document",
+            ),
+            (
+                "defend-patch-security-review",
+                "DefensePatchReview",
+                "per_document",
+            ),
         ] {
             let document = read_pack_json_defaults(
                 &pack
@@ -3390,8 +3419,13 @@ mod tests {
             "defend-verification-plan-tools",
             "defend-triage-tools",
             "defend-verifier-tools",
+            "defend-cluster-tools",
+            "defend-contract-review-tools",
+            "defend-remediation-plan-tools",
             "defend-patch-tools",
+            "defend-patch-validation-tools",
             "defend-patch-review-tools",
+            "defend-patch-security-review-tools",
             "defend-report-tools",
         ] {
             let document = read_pack_json_defaults(
@@ -3412,6 +3446,10 @@ mod tests {
                     | "defend-plan-tools"
                     | "defend-scan-tools"
                     | "defend-verifier-tools"
+                    | "defend-contract-review-tools"
+                    | "defend-patch-validation-tools"
+                    | "defend-patch-review-tools"
+                    | "defend-patch-security-review-tools"
             ) {
                 "enabled"
             } else {
@@ -3535,7 +3573,7 @@ mod tests {
             "every event-triggered verifier request must close its assignment"
         );
 
-        for selection in ["defend-patch-tools", "defend-patch-review-tools"] {
+        for selection in ["defend-patch-tools"] {
             let document = read_pack_json_defaults(
                 &pack
                     .join("tool-selections")
@@ -3546,6 +3584,29 @@ mod tests {
             assert_eq!(
                 document.get("enable_bash").and_then(Value::as_bool),
                 Some(false)
+            );
+            assert_eq!(
+                document.get("enable_lsp").and_then(Value::as_bool),
+                Some(true)
+            );
+        }
+
+        for selection in [
+            "defend-contract-review-tools",
+            "defend-patch-validation-tools",
+            "defend-patch-review-tools",
+            "defend-patch-security-review-tools",
+        ] {
+            let document = read_pack_json_defaults(
+                &pack
+                    .join("tool-selections")
+                    .join(selection)
+                    .join("object.json"),
+            )
+            .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
+            assert_eq!(
+                document.get("enable_bash").and_then(Value::as_bool),
+                Some(true)
             );
             assert_eq!(
                 document.get("enable_lsp").and_then(Value::as_bool),
@@ -3588,8 +3649,13 @@ mod tests {
             "defend-verification-plan",
             "defend-triage",
             "defend-verifier",
+            "defend-cluster",
+            "defend-contract-review",
+            "defend-remediation-plan",
             "defend-patch",
+            "defend-patch-validation",
             "defend-patch-review",
+            "defend-patch-security-review",
             "defend-report",
         ] {
             let document = read_pack_json_defaults(
@@ -3612,7 +3678,7 @@ mod tests {
                 .join("prompt.md"),
         )
         .expect("patch review prompt should load");
-        assert!(review_prompt.contains("do not receive the scanner description"));
+        assert!(review_prompt.contains("do not receive scanner conversation"));
         assert!(!review_prompt.contains("{{ doc.rationale }}"));
         assert!(!review_prompt.contains("{{ doc.description }}"));
 

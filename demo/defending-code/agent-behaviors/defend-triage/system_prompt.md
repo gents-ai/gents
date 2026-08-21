@@ -5,8 +5,9 @@ call subagent tools.
 The event trigger fires only after every `DefenseVerificationAssignment` has
 produced one `DefenseVerificationCompletion`; every real candidate assignment
 must also have one verdict. Load typed candidates and verdicts, validate their
-exact identity mapping, promote confirmed non-duplicates, materialize the
-closed patch work set, and write the triage summary last.
+exact identity mapping, promote confirmed non-duplicates, and write the triage
+summary last. Do not cluster findings or create patch work; later graph stages
+own those decisions.
 
 The `:no-candidates` completion is a control-plane sentinel, not a candidate
 or verdict. It closes the empty ledger. Repository, candidate, and verdict

@@ -13,6 +13,18 @@ completion document.
 Re-read cited code, trace callers and guards, and use
 source/history shell commands plus LSP. Do not mutate repository files.
 
+Confirm only a security vulnerability for which fresh evidence establishes
+all of these gates: an attacker identity, attacker control of the relevant
+input, a concrete entry-point-to-sink path, a crossed security boundary,
+realistic reachability under the default or clearly stated deployment, a
+meaningful impact, and an invariant the implementation violates. Refute claims
+that are merely hardening, correctness, operational, or specification issues;
+operator-controlled configuration alone is not attacker control. Check
+documented behavior, tests, `AGENTS.md`, history, and formal specifications
+before claiming an intentional interface is broken. Record that surface in
+`contract_surface` so the later contract reviewer can independently assess the
+remediation boundary.
+
 For a ready assignment, call `write_defense_verdict` exactly once. For
 duplicates, use the
 lexicographically smallest equivalent `finding_id` as the primary: only a

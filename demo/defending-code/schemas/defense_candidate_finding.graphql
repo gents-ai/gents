@@ -2,6 +2,22 @@ type DefenseCandidateFinding {
   run_id: String @index @immutable
   finding_id: String @index(unique: true) @immutable
   area_id: String @immutable
+  source_revision: String
+  source_tree_state: String
+  claim_kind: String
+  root_cause_key: String
+  security_boundary: String
+  attacker_identity: String
+  attacker_controlled_input: String
+  control_source: String
+  entry_point: String
+  sink: String
+  default_reachable: String
+  required_configuration: String
+  required_privileges: String
+  guard_checked: String
+  fails_closed: String
+  violated_invariant: String
   category: String
   claimed_severity: String
   confidence: String

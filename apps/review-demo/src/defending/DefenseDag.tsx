@@ -14,6 +14,8 @@ export function DefenseDag({ graph, selectedId, onSelect }: DefenseDagProps) {
   const plan = one("plan");
   const triage = one("triage");
   const verificationPlan = one("verification-plan");
+  const clusterPlan = one("cluster-plan");
+  const remediationPlan = one("remediation-plan");
   const report = one("report");
   const areas = graph.nodes.filter((node) => node.kind === "area");
   const scans = bySuffix(
@@ -21,6 +23,11 @@ export function DefenseDag({ graph, selectedId, onSelect }: DefenseDagProps) {
     "scan:",
   );
   const assignments = graph.nodes.filter((node) => node.kind === "assignment");
+  const clusters = graph.nodes.filter((node) => node.kind === "cluster");
+  const contractReviews = bySuffix(
+    graph.nodes.filter((node) => node.kind === "contract-review"),
+    "contract-review:",
+  );
   const candidates = graph.nodes.filter((node) => node.kind === "candidate");
   const verificationAssignments = bySuffix(
     graph.nodes.filter((node) => node.kind === "verification-assignment"),
@@ -42,6 +49,14 @@ export function DefenseDag({ graph, selectedId, onSelect }: DefenseDagProps) {
   const reviews = bySuffix(
     graph.nodes.filter((node) => node.kind === "review"),
     "review:",
+  );
+  const validations = bySuffix(
+    graph.nodes.filter((node) => node.kind === "validation"),
+    "validation:",
+  );
+  const securityReviews = bySuffix(
+    graph.nodes.filter((node) => node.kind === "security-review"),
+    "security-review:",
   );
 
   return (
@@ -190,13 +205,68 @@ export function DefenseDag({ graph, selectedId, onSelect }: DefenseDagProps) {
           ) : null}
         </section>
       ) : null}
-      <FanLabel>confirmed-finding patches</FanLabel>
+      <Edge />
+      {clusterPlan ? (
+        <section
+          className="nested-dag cluster-dag"
+          aria-label="Root-cause subgraph"
+        >
+          <p className="nested-dag-title">
+            remediation DAG · root causes + contract workers
+          </p>
+          <DagNode
+            node={clusterPlan}
+            selected={selectedId === clusterPlan.id}
+            onSelect={onSelect}
+          />
+          <FanLabel>one independent contract reviewer per root cause</FanLabel>
+          <div className="dag-join down nested-join" />
+          <div className="dag-fan defense-fan cluster-fan">
+            {clusters.map((cluster) => {
+              const suffix = cluster.id.replace(/^cluster:/, "");
+              const contractReview = contractReviews.get(suffix);
+              return (
+                <div key={cluster.id} className="dag-col">
+                  <DagNode
+                    node={cluster}
+                    selected={selectedId === cluster.id}
+                    onSelect={onSelect}
+                  />
+                  <Edge short />
+                  {contractReview ? (
+                    <DagNode
+                      node={contractReview}
+                      selected={selectedId === contractReview.id}
+                      onSelect={onSelect}
+                    />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          <div className="dag-join up nested-join" />
+          {remediationPlan ? (
+            <DagNode
+              node={remediationPlan}
+              selected={selectedId === remediationPlan.id}
+              onSelect={onSelect}
+            />
+          ) : null}
+        </section>
+      ) : null}
+      <FanLabel>
+        {clusterPlan
+          ? "one contract-aware patch pipeline per root cause"
+          : "confirmed-finding patches"}
+      </FanLabel>
       <div className="dag-join down" />
       <div className="dag-fan defense-fan patch-fan">
         {assignments.map((assignment) => {
           const suffix = assignment.id.replace(/^assignment:/, "");
           const patch = patches.get(suffix);
+          const validation = validations.get(suffix);
           const review = reviews.get(suffix);
+          const securityReview = securityReviews.get(suffix);
           return (
             <div key={assignment.id} className="dag-col">
               <DagNode
@@ -212,6 +282,18 @@ export function DefenseDag({ graph, selectedId, onSelect }: DefenseDagProps) {
                   onSelect={onSelect}
                 />
               ) : null}
+              {clusterPlan ? (
+                <>
+                  <Edge short />
+                  {validation ? (
+                    <DagNode
+                      node={validation}
+                      selected={selectedId === validation.id}
+                      onSelect={onSelect}
+                    />
+                  ) : null}
+                </>
+              ) : null}
               <Edge short />
               {review ? (
                 <DagNode
@@ -219,6 +301,18 @@ export function DefenseDag({ graph, selectedId, onSelect }: DefenseDagProps) {
                   selected={selectedId === review.id}
                   onSelect={onSelect}
                 />
+              ) : null}
+              {clusterPlan ? (
+                <>
+                  <Edge short />
+                  {securityReview ? (
+                    <DagNode
+                      node={securityReview}
+                      selected={selectedId === securityReview.id}
+                      onSelect={onSelect}
+                    />
+                  ) : null}
+                </>
               ) : null}
             </div>
           );

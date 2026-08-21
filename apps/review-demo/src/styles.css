@@ -560,6 +560,22 @@ a:hover {
   max-width: 100%;
 }
 
+.cluster-fan {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  max-width: 100%;
+}
+
+.cluster-fan .dag-col,
+.cluster-fan .dag-node {
+  width: 100%;
+  min-width: 0;
+}
+
+.cluster-fan .dag-node {
+  max-width: 150px;
+}
+
 .triage-fan .dag-col,
 .triage-fan .dag-node {
   width: 100%;
@@ -590,6 +606,28 @@ a:hover {
 
 .kind-verdict {
   box-shadow: inset 0 0 0 1px rgb(61 214 140 / 0.12);
+}
+
+.kind-cluster-plan,
+.kind-remediation-plan {
+  border-color: #c084fc;
+  box-shadow: inset 0 0 0 1px rgb(192 132 252 / 0.12);
+}
+
+.kind-cluster,
+.kind-contract-review {
+  border-color: #f59e0b;
+  box-shadow: inset 0 0 0 1px rgb(245 158 11 / 0.12);
+}
+
+.kind-validation {
+  border-color: #22d3ee;
+  box-shadow: inset 0 0 0 1px rgb(34 211 238 / 0.12);
+}
+
+.kind-security-review {
+  border-color: #fb7185;
+  box-shadow: inset 0 0 0 1px rgb(251 113 133 / 0.12);
 }
 
 .fan-label {

@@ -1,9 +1,13 @@
 type DefensePatchCandidate {
   run_id: String @index @immutable
   patch_id: String @index(unique: true) @immutable
+  cluster_id: String @index
   finding_id: String
+  member_finding_ids: String
   status: String
   repository_path: String @immutable
+  base_revision: String
+  workspace_requirement: String
   path: String
   line: String
   category: String
@@ -12,5 +16,6 @@ type DefensePatchCandidate {
   variants_checked: String
   bypass_considered: String
   test_note: String
+  validation_plan: String
   expected_total: String @immutable
 }

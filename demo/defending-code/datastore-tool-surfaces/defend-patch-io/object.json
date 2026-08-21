@@ -6,14 +6,33 @@
   "entries": [
     {
       "kind": "read",
-      "tool_name": "read_defending_finding",
-      "collection": "DefendingFinding",
-      "description": "Load the one confirmed finding assigned to this patch author.",
-      "fields": ["finding_id", "area_id", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "preconditions", "access_level", "owner_hint", "threat_ids", "verdict"],
+      "tool_name": "read_defense_root_cause_cluster",
+      "collection": "DefenseRootCauseCluster",
+      "description": "Load the exact root-cause cluster assigned to this patch author.",
+      "fields": ["cluster_id", "base_revision", "base_tree_state", "status", "primary_finding_id", "member_finding_ids", "canonical_title", "canonical_root_cause", "claim_kind", "severity", "security_boundary", "affected_paths", "remediation_scope"],
       "filter_fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "finding_id", "required": true}
+        {"name": "cluster_id", "required": true}
       ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_defense_contract_review",
+      "collection": "DefenseContractReview",
+      "description": "Load the contract constraints for this cluster.",
+      "fields": ["review_id", "cluster_id", "status", "disposition", "behavior_intentional", "spec_impact", "required_foundation_flow", "required_proof_files", "compatibility_constraints", "recommended_fix_boundary", "evidence"],
+      "filter_fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "cluster_id", "required": true}
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_defending_finding",
+      "collection": "DefendingFinding",
+      "description": "Load confirmed findings so the author can select the cluster's exact members.",
+      "fields": ["finding_id", "claim_kind", "root_cause_key", "security_boundary", "attacker_control", "default_reachable", "required_configuration", "violated_invariant", "contract_surface", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "preconditions", "access_level", "owner_hint", "threat_ids", "verdict"],
+      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
       "tool_name": "write_defense_patch_candidate",
@@ -23,9 +42,13 @@
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "patch_id", "required": true},
+        {"name": "cluster_id", "required": false, "fill": {"source_field": "cluster_id"}},
         {"name": "finding_id", "required": false, "fill": {"source_field": "finding_id"}},
+        {"name": "member_finding_ids", "required": false, "fill": {"source_field": "member_finding_ids"}},
         {"name": "status", "required": true},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "base_revision", "required": true},
+        {"name": "workspace_requirement", "required": true},
         {"name": "path", "required": true},
         {"name": "line", "required": true},
         {"name": "category", "required": true},
@@ -34,6 +57,7 @@
         {"name": "variants_checked", "required": true},
         {"name": "bypass_considered", "required": true},
         {"name": "test_note", "required": true},
+        {"name": "validation_plan", "required": true},
         {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}}
       ]
     }

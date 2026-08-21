@@ -346,4 +346,94 @@ describe("projectDefenseGraph", () => {
       badges: ["1 confirmed", "1 accepted"],
     });
   });
+
+  it("projects contract review, validation, and adversarial re-attack as agents", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ run_id: "defense-2", area_min: "1" });
+    snapshot.triage.push({ _docID: "triage-2", run_id: "defense-2" });
+    snapshot.clusters.push({
+      _docID: "cluster-doc-2",
+      run_id: "defense-2",
+      cluster_id: "defense-2:cluster-01",
+      canonical_title: "Canonical root cause",
+      member_finding_ids: "finding-a,finding-b",
+      expected_total: "1",
+    });
+    snapshot.contractReviews.push({
+      _docID: "contract-doc-2",
+      run_id: "defense-2",
+      review_id: "defense-2:cluster-01:contract",
+      cluster_id: "defense-2:cluster-01",
+      disposition: "actionable",
+      expected_total: "1",
+    });
+    snapshot.assignments.push({
+      _docID: "patch-assignment-2",
+      run_id: "defense-2",
+      assignment_id: "defense-2:cluster-01:patch",
+      cluster_id: "defense-2:cluster-01",
+      expected_total: "1",
+    });
+    snapshot.patches.push({
+      _docID: "patch-doc-2",
+      run_id: "defense-2",
+      patch_id: "defense-2:cluster-01:patch",
+      status: "drafted",
+    });
+    snapshot.validations.push({
+      _docID: "validation-doc-2",
+      run_id: "defense-2",
+      validation_id: "defense-2:cluster-01:patch:validation",
+      patch_id: "defense-2:cluster-01:patch",
+      status: "passed",
+      applies_cleanly: "yes",
+    });
+    snapshot.reviews.push({
+      _docID: "review-doc-2",
+      run_id: "defense-2",
+      patch_id: "defense-2:cluster-01:patch",
+      verdict: "ACCEPT",
+    });
+    snapshot.securityReviews.push({
+      _docID: "security-doc-2",
+      run_id: "defense-2",
+      security_review_id: "defense-2:cluster-01:patch:security",
+      patch_id: "defense-2:cluster-01:patch",
+      verdict: "ACCEPT",
+    });
+    for (const [requestId, triggerId, sourceDocId] of [
+      ["cluster-request", "defend-cluster", "triage-2"],
+      ["contract-request", "defend-contract-review", "cluster-doc-2"],
+      ["remediation-request", "defend-remediation-plan", undefined],
+      ["patch-request", "defend-patch", "patch-assignment-2"],
+      ["validation-request", "defend-patch-validation", "patch-doc-2"],
+      ["review-request", "defend-patch-review", "validation-doc-2"],
+      ["security-request", "defend-patch-security-review", "review-doc-2"],
+    ] as const) {
+      snapshot.requests.push({
+        request_id: requestId,
+        caused_by_correlation: "defense-2",
+        caused_by_trigger_id: triggerId,
+        caused_by_source_doc_id: sourceDocId,
+        lifecycle_state: "completed",
+      });
+    }
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(graph.nodes.find((node) => node.kind === "contract-review")).toMatchObject({
+      requestId: "contract-request",
+      state: "done",
+      badges: ["actionable"],
+    });
+    expect(graph.nodes.find((node) => node.kind === "validation")).toMatchObject({
+      requestId: "validation-request",
+      state: "done",
+      badges: ["passed", "applies yes"],
+    });
+    expect(graph.nodes.find((node) => node.kind === "security-review")).toMatchObject({
+      requestId: "security-request",
+      state: "done",
+      badges: ["ACCEPT"],
+    });
+  });
 });

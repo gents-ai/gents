@@ -244,6 +244,41 @@ function documentForNode(
             (row) => run(row) && row.finding_id === suffix,
           ),
         );
+      case "cluster-plan":
+        return {
+          collection: "DefenseRootCauseCluster work set",
+          fields: {
+            run_id: node.runId,
+            cluster_count: snapshot.clusters.filter(run).length,
+            clusters: snapshot.clusters.filter(run).map((row) => row.cluster_id),
+          },
+        };
+      case "cluster":
+        return pair(
+          "DefenseRootCauseCluster",
+          snapshot.clusters.find(
+            (row) => run(row) && row.cluster_id === suffix,
+          ),
+        );
+      case "contract-review":
+        return pair(
+          "DefenseContractReview",
+          snapshot.contractReviews.find(
+            (row) => run(row) && row.cluster_id === suffix,
+          ),
+        );
+      case "remediation-plan":
+        return {
+          collection: "DefensePatchAssignment work set",
+          fields: {
+            run_id: node.runId,
+            contract_count: snapshot.contractReviews.filter(run).length,
+            assignment_count: snapshot.assignments.filter(run).length,
+            assignments: snapshot.assignments
+              .filter(run)
+              .map((row) => row.assignment_id),
+          },
+        };
       case "assignment":
         return pair(
           "DefensePatchAssignment",
@@ -256,10 +291,24 @@ function documentForNode(
           "DefensePatchCandidate",
           snapshot.patches.find((row) => run(row) && row.patch_id === suffix),
         );
+      case "validation":
+        return pair(
+          "DefensePatchValidation",
+          snapshot.validations.find(
+            (row) => run(row) && row.patch_id === suffix,
+          ),
+        );
       case "review":
         return pair(
           "DefensePatchReview",
           snapshot.reviews.find((row) => run(row) && row.patch_id === suffix),
+        );
+      case "security-review":
+        return pair(
+          "DefensePatchSecurityReview",
+          snapshot.securityReviews.find(
+            (row) => run(row) && row.patch_id === suffix,
+          ),
         );
       case "report":
         return pair("DefenseReport", snapshot.reports.find(run));

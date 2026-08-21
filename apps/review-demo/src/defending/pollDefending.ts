@@ -47,7 +47,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     }
     DefenseTriageSummary {
       _docID run_id candidate_count confirmed_count refuted_count duplicate_count
-      patch_assignment_count summary
+      summary
     }
     DefensePatchAssignment {
       _docID run_id assignment_id finding_id repository_path status expected_total
@@ -73,6 +73,11 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
   }`);
   let verificationAssignments: DefenseSnapshot["verificationAssignments"] = [];
   let verificationCompletions: DefenseSnapshot["verificationCompletions"] = [];
+  let clusters: DefenseSnapshot["clusters"] = [];
+  let contractReviews: DefenseSnapshot["contractReviews"] = [];
+  let validations: DefenseSnapshot["validations"] = [];
+  let securityReviews: DefenseSnapshot["securityReviews"] = [];
+  let contractPipelineAvailable = false;
   try {
     const optional = await postGraphql<{
       DefenseVerificationAssignment?: DefenseSnapshot["verificationAssignments"];
@@ -90,7 +95,42 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
   } catch {
     // Older live runs predate the assignment schema. Keep their visualizer usable.
   }
+  try {
+    const optional = await postGraphql<{
+      DefenseRootCauseCluster?: DefenseSnapshot["clusters"];
+      DefenseContractReview?: DefenseSnapshot["contractReviews"];
+      DefensePatchValidation?: DefenseSnapshot["validations"];
+      DefensePatchSecurityReview?: DefenseSnapshot["securityReviews"];
+    }>(`{
+      DefenseRootCauseCluster {
+        _docID run_id cluster_id repository_path base_revision status primary_finding_id
+        member_finding_ids canonical_title canonical_root_cause severity security_boundary
+        expected_total
+      }
+      DefenseContractReview {
+        _docID run_id review_id cluster_id status disposition spec_impact
+        required_foundation_flow recommended_fix_boundary evidence expected_total
+      }
+      DefensePatchValidation {
+        _docID run_id validation_id patch_id cluster_id finding_id status applies_cleanly
+        format_status compile_status test_status proof_status commands evidence expected_total
+      }
+      DefensePatchSecurityReview {
+        _docID run_id security_review_id patch_id cluster_id finding_id verdict
+        original_path_closed sibling_variants_checked bypass_found contract_alignment evidence
+        expected_total
+      }
+    }`);
+    clusters = optional.DefenseRootCauseCluster ?? [];
+    contractReviews = optional.DefenseContractReview ?? [];
+    validations = optional.DefensePatchValidation ?? [];
+    securityReviews = optional.DefensePatchSecurityReview ?? [];
+    contractPipelineAvailable = true;
+  } catch {
+    // Older live runs predate the contract-aware patch pipeline.
+  }
   return {
+    contractPipelineAvailable,
     jobs: data.DefendingCodeJob ?? [],
     threats: data.DefenseThreatModel ?? [],
     areas: data.DefenseReviewArea ?? [],
@@ -101,9 +141,13 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     verdicts: data.DefenseFindingVerdict ?? [],
     findings: data.DefendingFinding ?? [],
     triage: data.DefenseTriageSummary ?? [],
+    clusters,
+    contractReviews,
     assignments: data.DefensePatchAssignment ?? [],
     patches: data.DefensePatchCandidate ?? [],
+    validations,
     reviews: data.DefensePatchReview ?? [],
+    securityReviews,
     reports: data.DefenseReport ?? [],
     requests: data.AgentRequest ?? [],
     calls: data.InferenceCall ?? [],
@@ -112,6 +156,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
 
 export function emptyDefenseSnapshot(): DefenseSnapshot {
   return {
+    contractPipelineAvailable: false,
     jobs: [],
     threats: [],
     areas: [],
@@ -122,9 +167,13 @@ export function emptyDefenseSnapshot(): DefenseSnapshot {
     verdicts: [],
     findings: [],
     triage: [],
+    clusters: [],
+    contractReviews: [],
     assignments: [],
     patches: [],
+    validations: [],
     reviews: [],
+    securityReviews: [],
     reports: [],
     requests: [],
     calls: [],

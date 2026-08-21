@@ -13,6 +13,8 @@
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "area_id", "required": true},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "source_revision", "required": false, "fill": {"source_field": "source_revision"}},
+        {"name": "source_tree_state", "required": false, "fill": {"source_field": "source_tree_state"}},
         {"name": "focus", "required": true},
         {"name": "threat_ids", "required": true},
         {"name": "trust_boundary", "required": true},

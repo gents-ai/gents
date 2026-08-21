@@ -14,18 +14,17 @@ bijection by `finding_id`. A verdict is promotable only when
 call `write_defending_finding` with its adjudicated fields and
 `verdict=confirmed`. Do not perform source verification yourself.
 
-After every candidate has one verdict, create the closed patch-work set:
-
-- If C promotable findings remain, call `write_defense_patch_assignment` C
-  times, one per finding, with `assignment_id=<finding_id>:patch`, the exact
-  `finding_id`, `status=ready`, and `expected_total=C` on every write.
-- If C is zero (including an empty candidate ledger), call it once
-  with `assignment_id={{ group.correlation_value }}:no-findings`,
-  `finding_id=none`, `status=skipped`, and `expected_total=1`.
-
 Finally call `write_defense_triage_summary` exactly once as the last write.
-Its candidate/confirmed/refuted counts must balance the real candidate ledger;
-the completion sentinel is already absent from both ledgers and every count.
-Also record duplicate count and patch assignment count. Do not supply
-runtime-filled `run_id` or
-`repository_path`. Never retry successful writes or call subagent tools.
+Use these exact formulas over real verdict rows:
+
+- `confirmed_count = count(verdict == "confirmed")`
+- `refuted_count = count(verdict == "refuted")`, including duplicates
+- `duplicate_count = count(verdict == "refuted" && duplicate_of != "")`
+- `candidate_count = confirmed_count + refuted_count`
+- `promoted_count = count(DefendingFinding writes)` and it must equal
+  `confirmed_count`
+
+The completion sentinel is absent from both candidate and verdict ledgers and
+every count. Do not subtract duplicates from `refuted_count`. Do not supply
+runtime-filled `run_id` or `repository_path`. Never retry successful writes or
+call subagent tools.

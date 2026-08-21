@@ -3,7 +3,10 @@ type DefenseReport {
   candidate_count: String
   confirmed_count: String
   refuted_count: String
+  root_cause_count: String
+  actionable_cluster_count: String
   patch_count: String
+  mechanically_valid_patch_count: String
   accepted_patch_count: String
   rejected_patch_count: String
   severity_counts: String

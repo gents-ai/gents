@@ -2,7 +2,7 @@
   "behavior_id": "defend-triage",
   "agent_did": "did:key:zDefendingCodeAgentPlaceholder0000000000000000000000",
   "display_name": "Adversarial triage reducer",
-  "description": "Reduces a closed typed verdict ledger into confirmed findings and patch assignments.",
+  "description": "Reduces a closed typed verdict ledger into exact counts and confirmed findings.",
   "summary": null,
   "system_prompt": "./system_prompt.md",
   "request_context_template": null,

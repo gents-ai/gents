@@ -1,0 +1,41 @@
+{
+  "surface_id": "defend-contract-review-io",
+  "agent_did": "did:key:zDefendingCodeAgentPlaceholder0000000000000000000000",
+  "display_name": "Cluster contract review IO",
+  "enabled": true,
+  "entries": [
+    {
+      "kind": "read",
+      "tool_name": "read_defending_finding",
+      "collection": "DefendingFinding",
+      "description": "Load the primary confirmed finding for this cluster.",
+      "fields": ["finding_id", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "security_boundary", "attacker_control", "default_reachable", "required_configuration", "violated_invariant", "contract_surface", "category", "severity", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "preconditions", "access_level", "threat_ids"],
+      "filter_fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "finding_id", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_defense_contract_review",
+      "collection": "DefenseContractReview",
+      "description": "Persist the independent contract and specification review.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "review_id", "required": true},
+        {"name": "cluster_id", "required": false, "fill": {"source_field": "cluster_id"}},
+        {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "status", "required": true},
+        {"name": "disposition", "required": true},
+        {"name": "behavior_intentional", "required": true},
+        {"name": "spec_impact", "required": true},
+        {"name": "required_foundation_flow", "required": true},
+        {"name": "required_proof_files", "required": true},
+        {"name": "compatibility_constraints", "required": true},
+        {"name": "recommended_fix_boundary", "required": true},
+        {"name": "evidence", "required": true},
+        {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}}
+      ]
+    }
+  ]
+}

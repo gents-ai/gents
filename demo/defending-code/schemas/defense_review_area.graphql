@@ -2,6 +2,8 @@ type DefenseReviewArea {
   run_id: String @index @immutable
   area_id: String @index(unique: true) @immutable
   repository_path: String @immutable
+  source_revision: String @immutable
+  source_tree_state: String @immutable
   focus: String
   threat_ids: String
   trust_boundary: String

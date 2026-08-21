@@ -1,0 +1,17 @@
+type DefensePatchValidation {
+  run_id: String @index @immutable
+  validation_id: String @index(unique: true) @immutable
+  patch_id: String @index @immutable
+  cluster_id: String @index
+  finding_id: String
+  repository_path: String @immutable
+  status: String
+  applies_cleanly: String
+  format_status: String
+  compile_status: String
+  test_status: String
+  proof_status: String
+  commands: String
+  evidence: String
+  expected_total: String @immutable
+}

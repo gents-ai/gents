@@ -1,6 +1,8 @@
 type DefenseThreatModel {
   run_id: String @index(unique: true) @immutable
   repository_path: String @immutable
+  source_revision: String @immutable
+  source_tree_state: String @immutable
   focus: String
   area_min: String @immutable
   area_max: String @immutable

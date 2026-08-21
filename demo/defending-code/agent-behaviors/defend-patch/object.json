@@ -2,7 +2,7 @@
   "behavior_id": "defend-patch",
   "agent_did": "did:key:zDefendingCodeAgentPlaceholder0000000000000000000000",
   "display_name": "Static patch author",
-  "description": "Drafts one minimal unapplied unified diff for a confirmed finding.",
+  "description": "Drafts one contract-aware unapplied unified diff for a root-cause cluster.",
   "summary": null,
   "system_prompt": "./system_prompt.md",
   "request_context_template": null,

@@ -12,6 +12,8 @@
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "source_revision", "required": true},
+        {"name": "source_tree_state", "required": true},
         {"name": "focus", "required": false, "fill": {"source_field": "focus"}},
         {"name": "area_min", "required": false, "fill": {"source_field": "area_min"}},
         {"name": "area_max", "required": false, "fill": {"source_field": "area_max"}},

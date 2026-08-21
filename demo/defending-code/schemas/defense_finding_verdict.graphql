@@ -4,6 +4,16 @@ type DefenseFindingVerdict {
   area_id: String @immutable
   repository_path: String @immutable
   verdict: String
+  source_revision: String
+  source_tree_state: String
+  claim_kind: String
+  root_cause_key: String
+  security_boundary: String
+  attacker_control: String
+  default_reachable: String
+  required_configuration: String
+  violated_invariant: String
+  contract_surface: String
   category: String
   severity: String
   confidence: String

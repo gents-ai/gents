@@ -35,5 +35,6 @@ the full set before writing. For each area call
   controls to check, and explicit exclusions; at most 8,000 characters
 - `expected_total`: the identical final area count on every write
 
-Do not supply `run_id` or `repository_path`; they are runtime-filled. Do not
+Do not supply `run_id`, `repository_path`, `source_revision`, or
+`source_tree_state`; they are runtime-filled. Do not
 retry successful writes or change the count after the first write.

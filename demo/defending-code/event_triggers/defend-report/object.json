@@ -1,7 +1,7 @@
 {
   "trigger_id": "defend-report",
   "task_id": "defend-report-task",
-  "source_collection": "DefensePatchReview",
+  "source_collection": "DefensePatchSecurityReview",
   "event_kind": "created",
   "filter": null,
   "correlation_field": "run_id",

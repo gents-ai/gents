@@ -16,3 +16,22 @@ write a verdict for a different finding id. Do not supply runtime-filled
 `run_id`, `repository_path`, or `expected_total`. After the verdict write
 succeeds, call `write_defense_verification_completion` exactly once as the
 last write with `status=verified`. Never write completion before the verdict.
+
+`verdict` remains exactly `confirmed` or `refuted`. `confirmed` is allowed only
+when every exploitability gate in the system prompt is supported by concrete
+source evidence. Populate `claim_kind`, normalized `root_cause_key`,
+`security_boundary`, `attacker_control`, `default_reachable`,
+`required_configuration`, `violated_invariant`, and `contract_surface` even
+when refuting; this is the durable explanation for downstream clustering and
+contract review. Copy the candidate's exact `source_revision`; do not replace it
+with the repository's current HEAD, and copy its `source_tree_state`. If HEAD
+or tree state changed after bootstrap, adjudicate against the recorded
+provenance and call the mismatch out in verification. A duplicate is a refuted
+verdict with `duplicate_of` set.
+
+Write `verification` as a compact gate ledger: `attacker`, `control`,
+`entry_to_sink`, `boundary`, `default_reachability`, `guards`, `impact`,
+`invariant`, and `counterevidence`, each with concrete source references. Set
+severity only after accounting for required access, configuration, and existing
+guards. Duplicate only the same defective control; similar categories or
+different sinks are not duplicates.

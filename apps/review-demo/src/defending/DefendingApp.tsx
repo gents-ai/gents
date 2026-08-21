@@ -109,7 +109,9 @@ export function DefendingApp() {
                 "Documents trigger isolated verifier requests",
               ],
               ["Triage", "Completion barrier reduces the closed ledger"],
-              ["Patch × M", "Draft diffs, then isolated review"],
+              ["Cluster × M", "Collapse consequences into root causes"],
+              ["Contract × M", "Check specs, tests, and intended behavior"],
+              ["Patch × M", "Draft, validate, maintain, then re-attack"],
               ["Report", "Reconcile the complete typed ledger"],
             ].map(([title, detail]) => (
               <li key={title} className="edge-step">
@@ -130,9 +132,10 @@ export function DefendingApp() {
           <article className="feature-card boundary-card">
             <h3>Trust boundary</h3>
             <p>
-              Inspectors have read-only file tools, unrestricted shell, LSP,
-              and network access. Patch drafts live in graph documents; they
-              are never applied by this campaign.
+              Discovery and review use read-only files, shell, and LSP. Patch
+              authors write only graph documents. Validators apply drafts in
+              disposable local clones until managed workspaces can bind each
+              request to a runtime-enforced isolated root.
             </p>
           </article>
         </aside>
@@ -209,7 +212,11 @@ function countsForRun(
     completions: count(snapshot.verificationCompletions),
     verdicts: count(snapshot.verdicts),
     confirmed: count(snapshot.findings),
+    clusters: count(snapshot.clusters),
+    contracts: count(snapshot.contractReviews),
     patches: count(snapshot.patches),
+    validations: count(snapshot.validations),
     reviews: count(snapshot.reviews),
+    reattacks: count(snapshot.securityReviews),
   };
 }

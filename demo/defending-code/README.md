@@ -4,9 +4,10 @@ This pack adapts the static find-and-fix workflow from Anthropic's
 `defending-code-reference-harness` into a Gents-native document graph. It is
 deliberately different from `security-scan`: there is no regex kickoff and no
 generic datastore console. The graph starts by building a threat model, uses
-that model to partition a static review, adversarially verifies and ranks the
-candidate ledger, drafts patches as documents, independently reviews those
-diffs, and publishes one campaign report.
+that model to partition a static review, independently verifies the candidate
+ledger, clusters confirmed consequences into root causes, checks repository
+contracts, validates proposed patches, re-attacks them, and publishes one
+campaign report.
 
 ```text
 DefendingCodeJob
@@ -17,11 +18,14 @@ DefendingCodeJob
   -> K per-document triggers -> K independent verifier requests
   -> K DefenseFindingVerdict + K DefenseVerificationCompletion
   -> completion barrier
-  -> one triage reducer
-       -> confirmed DefendingFinding*
-       -> M DefensePatchAssignment (M >= 1; a no-findings sentinel closes zero work)
+  -> one triage reducer -> confirmed DefendingFinding*
+  -> one root-cause reducer -> M DefenseRootCauseCluster
+  -> M triggered contract/spec reviewers -> M DefenseContractReview
+  -> contract barrier -> M DefensePatchAssignment
   -> M patch authors -> M DefensePatchCandidate
-  -> M isolated reviewers -> M DefensePatchReview
+  -> M triggered mechanical validators -> M DefensePatchValidation
+  -> M triggered maintainer reviewers -> M DefensePatchReview
+  -> M triggered adversarial re-attackers -> M DefensePatchSecurityReview
   -> one report barrier -> DefenseReport
 ```
 
@@ -30,10 +34,16 @@ Every intermediate artifact is a typed DefraDB document correlated by
 collection, a fixed projection, and a runtime-filled `run_id`; each write tool
 is bound to one collection and an explicit field allowlist.
 
+The threat-model bootstrap freezes the audited Git revision and dirty-tree
+observation once. That provenance is copied through review areas, candidates,
+verdicts, confirmed findings, root-cause clusters, and patch validation. A
+dirty tree is never silently reconstructed from a clean commit checkout.
+
 The current datastore surface supports bounded creates and reads, not bounded
 updates, while event edges are create-only. State changes are therefore
 append-only facts (`CandidateFinding -> FindingVerdict -> DefendingFinding`,
-and `PatchCandidate -> PatchReview`) rather than in-place mutations. This
+and `PatchCandidate -> PatchValidation -> PatchReview -> PatchSecurityReview`)
+rather than in-place mutations. This
 keeps the full audit history in the graph and avoids introducing free-form
 GraphQL merely to simulate status updates.
 
@@ -47,17 +57,20 @@ read-only, and their prompts prohibit source edits, dependency installation,
 builds, tests, and target execution. Run this pack only against an authorized,
 trusted checkout and network environment.
 
-Patch authors and isolated patch reviewers receive read-only file and LSP
-tools but no shell. They emit unified diffs into
-`DefensePatchCandidate.diff`; they do not modify the checkout. The report
-stage can only use collection-bound graph tools. Findings, source excerpts,
-command output, and diffs are treated as untrusted evidence by downstream
-prompts, not as instructions. Network access is available only to the four
-inspection stages with unrestricted shell.
+Patch authors receive read-only file and LSP tools and emit unified diffs into
+`DefensePatchCandidate.diff`; they do not modify the checkout. Contract
+reviewers, mechanical validators, maintainer reviewers, and security
+re-attackers receive shell plus LSP. Until managed workspaces can bind a
+request's real file root, shell CWD, LSP root, and repository-instruction root,
+the mechanical validator applies the diff only in a unique disposable local
+clone at the recorded base revision. It records exactly which format, compile,
+test, and proof gates ran. The original checkout remains unchanged.
 
-The execution-verified C/C++ pipeline still needs the harness's two-container
-find/grade trust boundary and gVisor setup. It should not be emulated by
-granting this pack unrestricted bash.
+The report stage can only use collection-bound graph tools. Findings, source
+excerpts, command output, and diffs are treated as untrusted evidence by
+downstream prompts, not as instructions. This remains an authorized source
+review pack, not the reference harness's two-container untrusted-target
+execution boundary.
 
 ## Run
 
@@ -101,19 +114,21 @@ export GENTS_DEFENDING_COMPACTION_THRESHOLD=0.762939453125 # 200,000 tokens
 export GENTS_DEFENDING_PROMPT='Prioritize authorization and data-integrity boundaries.'
 ```
 
-The verification work ledger makes the campaign a DAG containing another DAG:
+The campaign is deliberately a DAG containing several document-owned DAGs:
 the scan barrier writes one assignment document per candidate, a per-document
 event trigger creates each isolated verifier request, and each verifier writes
 one typed verdict followed by one completion document. A per-group completion
-barrier invokes the small final triage
-reducer, which joins the closed ledger into routing and patch fan-out. No model
-calls `spawn_subagent`; DefraDB documents and event triggers own the fan-out,
-counting, retries, and audit trail.
+barrier invokes the small triage reducer. Triage does not verify or patch. A
+root-cause reducer collapses consequence findings into remediation units;
+per-document triggers create contract reviewers, patch authors, validators,
+maintainer reviewers, and re-attackers, with group barriers only where a closed
+ledger must be joined. No model calls `spawn_subagent`; DefraDB documents and
+event triggers own the fan-out, counting, retries, and audit trail.
 
 The runner verifies the closed review-area/result ledger, exact
-candidate-to-verdict coverage, balanced confirmed/refuted counts, the single
-final report, stage tool contracts, and signed request provenance. Results and
-all four trace projections land under `runs/<job_id>/`.
+candidate-to-verdict coverage, balanced confirmed/refuted counts, root-cause
+membership, the single final report, stage tool contracts, and signed request
+provenance. Results and all four trace projections land under `runs/<job_id>/`.
 
 ## Upstream lineage
 

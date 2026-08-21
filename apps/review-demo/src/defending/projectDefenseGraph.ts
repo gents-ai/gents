@@ -181,6 +181,13 @@ export function projectDefenseGraph(
   const verdicts = snapshot.verdicts.filter((row) => row.run_id === runId);
   const findings = snapshot.findings.filter((row) => row.run_id === runId);
   const triage = snapshot.triage.find((row) => row.run_id === runId);
+  const clusters = snapshot.clusters
+    .filter((row) => row.run_id === runId)
+    .slice()
+    .sort((left, right) => left.cluster_id.localeCompare(right.cluster_id));
+  const contractReviews = snapshot.contractReviews.filter(
+    (row) => row.run_id === runId,
+  );
   const assignments = snapshot.assignments
     .filter((row) => row.run_id === runId)
     .slice()
@@ -188,12 +195,18 @@ export function projectDefenseGraph(
       left.assignment_id.localeCompare(right.assignment_id),
     );
   const patches = snapshot.patches.filter((row) => row.run_id === runId);
+  const validations = snapshot.validations.filter((row) => row.run_id === runId);
   const reviews = snapshot.reviews.filter((row) => row.run_id === runId);
+  const securityReviews = snapshot.securityReviews.filter(
+    (row) => row.run_id === runId,
+  );
   const report = snapshot.reports.find((row) => row.run_id === runId);
 
   const threatRequest = requestFor(requests, "defend-threat-model", job._docID);
   const planRequest = requestFor(requests, "defend-plan", threat?._docID);
   const triageRequest = requestFor(requests, "defend-triage");
+  const clusterRequest = requestFor(requests, "defend-cluster", triage?._docID);
+  const remediationPlanRequest = requestFor(requests, "defend-remediation-plan");
   const verificationPlanRequest = requestFor(
     requests,
     "defend-verification-plan",
@@ -501,6 +514,122 @@ export function projectDefenseGraph(
     }
   }
 
+  const contractAwarePipeline = Boolean(
+    snapshot.contractPipelineAvailable ||
+      clusters.length > 0 ||
+      contractReviews.length > 0 ||
+      clusterRequest ||
+      requests.some((request) =>
+        [
+          "defend-contract-review",
+          "defend-remediation-plan",
+          "defend-patch-validation",
+          "defend-patch-security-review",
+        ].includes(request.caused_by_trigger_id ?? ""),
+      ),
+  );
+  if (contractAwarePipeline) {
+    nodes.push(
+      node({
+        id: `cluster-plan:${runId}`,
+        kind: "cluster-plan",
+        label: "Root-cause reducer",
+        state: triage
+          ? stateFor(clusterRequest, clusters.length > 0)
+          : "waiting-group",
+        runId,
+        requestId: clusterRequest?.request_id,
+        sessionId: clusterRequest?.session_id ?? undefined,
+        badges: clusters.length > 0 ? [`${clusters.length} clusters`] : [],
+      }),
+    );
+    if (clusters.length === 0) {
+      nodes.push(
+        node({
+          id: "cluster:pending",
+          kind: "cluster",
+          label: "Root-cause cluster",
+          state: "expected",
+          runId,
+        }),
+        node({
+          id: "contract-review:pending",
+          kind: "contract-review",
+          label: "Contract review",
+          state: "expected",
+          runId,
+        }),
+      );
+    } else {
+      for (const [index, cluster] of clusters.entries()) {
+        const contractReview = contractReviews.find(
+          (row) => row.cluster_id === cluster.cluster_id,
+        );
+        const contractRequest = requestFor(
+          requests,
+          "defend-contract-review",
+          cluster._docID,
+        );
+        nodes.push(
+          node({
+            id: `cluster:${cluster.cluster_id}`,
+            kind: "cluster",
+            label: `Root cause ${index + 1}`,
+            detail: cluster.canonical_title ?? cluster.cluster_id,
+            state: "done",
+            runId,
+            sourceDocId: cluster._docID,
+            badges: [
+              ...(cluster.severity ? [cluster.severity] : []),
+              ...(cluster.member_finding_ids
+                ? [`${memberCount(cluster.member_finding_ids)} findings`]
+                : []),
+            ],
+          }),
+          node({
+            id: `contract-review:${cluster.cluster_id}`,
+            kind: "contract-review",
+            label: `Contract ${index + 1}`,
+            detail: cluster.cluster_id,
+            state: stateFor(contractRequest, Boolean(contractReview)),
+            runId,
+            requestId: contractRequest?.request_id,
+            sessionId: contractRequest?.session_id ?? undefined,
+            sourceDocId: contractReview?._docID,
+            badges: contractReview?.disposition
+              ? [contractReview.disposition]
+              : [],
+          }),
+        );
+      }
+    }
+    const expectedContracts = positiveInt(
+      clusters[0]?.expected_total,
+      clusters.length || 1,
+    );
+    const contractsClosed =
+      clusters.length > 0 && contractReviews.length === expectedContracts;
+    nodes.push(
+      node({
+        id: `remediation-plan:${runId}`,
+        kind: "remediation-plan",
+        label: "Remediation work set",
+        state: contractsClosed
+          ? stateFor(remediationPlanRequest, assignments.length > 0)
+          : "waiting-group",
+        runId,
+        requestId: remediationPlanRequest?.request_id,
+        sessionId: remediationPlanRequest?.session_id ?? undefined,
+        badges: [
+          `${contractReviews.length}/${expectedContracts} contracts`,
+          ...(assignments.length > 0
+            ? [`${assignments.length} assignments`]
+            : []),
+        ],
+      }),
+    );
+  }
+
   if (assignments.length === 0) {
     nodes.push(
       node({
@@ -517,6 +646,17 @@ export function projectDefenseGraph(
         state: "expected",
         runId,
       }),
+      ...(contractAwarePipeline
+        ? [
+            node({
+              id: "validation:pending",
+              kind: "validation",
+              label: "Validation",
+              state: "expected",
+              runId,
+            }),
+          ]
+        : []),
       node({
         id: "review:pending",
         kind: "review",
@@ -524,6 +664,17 @@ export function projectDefenseGraph(
         state: "expected",
         runId,
       }),
+      ...(contractAwarePipeline
+        ? [
+            node({
+              id: "security-review:pending",
+              kind: "security-review",
+              label: "Re-attack",
+              state: "expected",
+              runId,
+            }),
+          ]
+        : []),
     );
   } else {
     for (const [index, assignment] of assignments.entries()) {
@@ -531,6 +682,12 @@ export function projectDefenseGraph(
         (row) => row.patch_id === assignment.assignment_id,
       );
       const review = reviews.find(
+        (row) => row.patch_id === assignment.assignment_id,
+      );
+      const validation = validations.find(
+        (row) => row.patch_id === assignment.assignment_id,
+      );
+      const securityReview = securityReviews.find(
         (row) => row.patch_id === assignment.assignment_id,
       );
       const patchRequest = requestFor(
@@ -541,14 +698,24 @@ export function projectDefenseGraph(
       const reviewRequest = requestFor(
         requests,
         "defend-patch-review",
+        validation?._docID,
+      );
+      const validationRequest = requestFor(
+        requests,
+        "defend-patch-validation",
         patch?._docID,
+      );
+      const securityReviewRequest = requestFor(
+        requests,
+        "defend-patch-security-review",
+        review?._docID,
       );
       nodes.push(
         node({
           id: `assignment:${assignment.assignment_id}`,
           kind: "assignment",
-          label: `Finding ${index + 1}`,
-          detail: assignment.finding_id,
+          label: `Remediation ${index + 1}`,
+          detail: assignment.cluster_id ?? assignment.finding_id,
           state: "done",
           runId,
           sourceDocId: assignment._docID,
@@ -566,6 +733,27 @@ export function projectDefenseGraph(
           sourceDocId: patch?._docID,
           badges: patch?.status ? [patch.status] : [],
         }),
+        ...(contractAwarePipeline
+          ? [
+              node({
+                id: `validation:${assignment.assignment_id}`,
+                kind: "validation",
+                label: `Validate ${index + 1}`,
+                detail: assignment.cluster_id ?? assignment.finding_id,
+                state: stateFor(validationRequest, Boolean(validation)),
+                runId,
+                requestId: validationRequest?.request_id,
+                sessionId: validationRequest?.session_id ?? undefined,
+                sourceDocId: validation?._docID,
+                badges: [
+                  ...(validation?.status ? [validation.status] : []),
+                  ...(validation?.applies_cleanly
+                    ? [`applies ${validation.applies_cleanly}`]
+                    : []),
+                ],
+              }),
+            ]
+          : []),
         node({
           id: `review:${assignment.assignment_id}`,
           kind: "review",
@@ -578,12 +766,29 @@ export function projectDefenseGraph(
           sourceDocId: review?._docID,
           badges: review?.verdict ? [review.verdict] : [],
         }),
+        ...(contractAwarePipeline
+          ? [
+              node({
+                id: `security-review:${assignment.assignment_id}`,
+                kind: "security-review",
+                label: `Re-attack ${index + 1}`,
+                detail: assignment.cluster_id ?? assignment.finding_id,
+                state: stateFor(securityReviewRequest, Boolean(securityReview)),
+                runId,
+                requestId: securityReviewRequest?.request_id,
+                sessionId: securityReviewRequest?.session_id ?? undefined,
+                sourceDocId: securityReview?._docID,
+                badges: securityReview?.verdict ? [securityReview.verdict] : [],
+              }),
+            ]
+          : []),
       );
     }
   }
 
-  const reviewsClosed =
-    assignments.length > 0 && reviews.length === assignments.length;
+  const reviewsClosed = contractAwarePipeline
+    ? assignments.length > 0 && securityReviews.length === assignments.length
+    : assignments.length > 0 && reviews.length === assignments.length;
   nodes.push(
     node({
       id: `report:${runId}`,
@@ -606,6 +811,22 @@ export function projectDefenseGraph(
   );
 
   return { runId, nodes };
+}
+
+function memberCount(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "none") {
+    return 0;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed.length;
+    }
+  } catch {
+    // Newline/comma-delimited ids are also accepted by the pack schema.
+  }
+  return trimmed.split(/[\n,]+/).filter((item) => item.trim()).length;
 }
 
 function skeleton(runId: string | null, areaCount: number): DefenseGraph {
@@ -653,6 +874,34 @@ function skeleton(runId: string | null, areaCount: number): DefenseGraph {
       runId: id,
     }),
     node({
+      id: `cluster-plan:${id}`,
+      kind: "cluster-plan",
+      label: "Root-cause reducer",
+      state: "expected",
+      runId: id,
+    }),
+    node({
+      id: "cluster:pending",
+      kind: "cluster",
+      label: "Root-cause cluster",
+      state: "expected",
+      runId: id,
+    }),
+    node({
+      id: "contract-review:pending",
+      kind: "contract-review",
+      label: "Contract review",
+      state: "expected",
+      runId: id,
+    }),
+    node({
+      id: `remediation-plan:${id}`,
+      kind: "remediation-plan",
+      label: "Remediation work set",
+      state: "expected",
+      runId: id,
+    }),
+    node({
       id: "assignment:pending",
       kind: "assignment",
       label: "Patch set",
@@ -667,9 +916,23 @@ function skeleton(runId: string | null, areaCount: number): DefenseGraph {
       runId: id,
     }),
     node({
+      id: "validation:pending",
+      kind: "validation",
+      label: "Validation",
+      state: "expected",
+      runId: id,
+    }),
+    node({
       id: "review:pending",
       kind: "review",
       label: "Review",
+      state: "expected",
+      runId: id,
+    }),
+    node({
+      id: "security-review:pending",
+      kind: "security-review",
+      label: "Re-attack",
       state: "expected",
       runId: id,
     }),
