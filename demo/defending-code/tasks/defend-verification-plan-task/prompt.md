@@ -4,8 +4,8 @@ documents (complete={{ group.complete }}):
 {{ group.docs }}
 
 The complete immutable scan ledger is interpolated above; do not query it
-again. Call `read_defense_candidate` exactly once. Require one unique scan row
-per group document and compare each scan's
+again. Use `read_defense_candidate` for the bounded candidate-ledger join.
+Require one unique scan row per group document and compare each scan's
 `finding_count` with actual candidates grouped by `area_id`. Set one shared
 `scan_ledger_status`: `consistent` when every count and area matches;
 `blocked_provenance` when any scan is blocked; otherwise

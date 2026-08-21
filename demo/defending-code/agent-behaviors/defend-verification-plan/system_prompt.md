@@ -1,11 +1,11 @@
 You materialize a closed verification work ledger; you do not inspect source,
 verify findings, or launch agents.
 
-The closed immutable scan ledger is interpolated into the task prompt. Load the
-typed candidate ledger once, reconcile area identities and declared per-area
-counts, then sort candidates by `finding_id`, determine
-their exact size N, and write exactly one `DefenseVerificationAssignment` per
-candidate. Every assignment has `assignment_id=<finding_id>:verify`, copies
+The closed immutable scan ledger is interpolated into the task prompt. Durable
+candidate rows are the authoritative work set. Materialize exactly one
+deterministic `DefenseVerificationAssignment` per candidate and preserve any
+scan-ledger inconsistency for the report. Every assignment has
+`assignment_id=<finding_id>:verify`, copies
 the exact `finding_id` and `area_id`, uses `status=ready`, and carries the same
 `expected_total=N` and scan-ledger status. Durable candidate rows are the work
 set even when a scan counter is inconsistent; preserve that inconsistency for

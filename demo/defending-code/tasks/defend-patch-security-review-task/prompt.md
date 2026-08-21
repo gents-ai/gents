@@ -9,17 +9,18 @@ Maintainer receipt identity only: base {{ doc.reviewed_base_revision }} / tree
 a conclusion; recompute the diff digest independently.
 Expected security-review total: {{ doc.expected_total }}
 
-Call each bounded read exactly once: `read_defending_finding`,
+Use the bounded lineage joins `read_defending_finding`,
 `read_defense_root_cause_cluster`, `read_defense_contract_review`,
 `read_defense_patch_candidate`, and `read_defense_patch_validation`. Retain
 exactly the cluster's member finding ids and require exact agreement on patch,
 cluster, contract, repository, members, base revision/tree state, validation
 id, and the shared positive expected total.
 If patch status is `no_patch`, write one security review with `verdict=SKIP`.
-Otherwise independently trace every member's original structured
-attacker-control-source-to-entry-to-sink path, inspect sibling variants, try at
-least one concrete bypass hypothesis, and compare the change to the contract
-review. Recompute the raw diff's SHA-256 and compare it with the validation
+Otherwise independently determine whether every member's original structured
+attacker-control-source-to-entry-to-sink path and relevant sibling variants are
+closed at the intended contract boundary, including plausible bypasses. Choose
+the source, LSP, shell, and history investigation needed to support that
+conclusion. Recompute the raw diff's SHA-256 and compare it with the validation
 receipt before relying on any mechanical result.
 
 Call `write_defense_patch_security_review` exactly once with
@@ -42,7 +43,7 @@ still write one security receipt with `receipt_match=no`, `verdict=REJECT`,
 `original_path_closed=unknown`, `bypass_found=unknown`,
 `contract_alignment=unknown`, `sibling_variants_checked=none`, and exact
 mismatch evidence. For a coherent `no_patch` sentinel, write `verdict=SKIP`,
-`reviewed_diff_sha256=none`, `receipt_match=yes`,
+`reviewed_diff_sha256=none`, `receipt_match=not_applicable`,
 `original_path_closed=unknown`, `sibling_variants_checked=none`,
 `bypass_found=unknown`, `contract_alignment=unknown`, and concrete evidence
 that the contract-authorized no-patch sentinel is coherent.

@@ -3,7 +3,8 @@ verification completions (complete={{ group.complete }}):
 
 {{ group.docs }}
 
-Call `read_defense_candidate` and `read_defense_verdict` once each. A
+Use `read_defense_candidate` and `read_defense_verdict` to load the bounded
+candidate and verdict ledgers. A
 `:no-candidates` completion has no corresponding candidate or verdict; it is
 the empty-set sentinel. Every completion must carry the same
 `scan_ledger_status`; copy that exact value to the triage summary. If completion

@@ -6,7 +6,8 @@ Frozen source revision: {{ doc.source_revision }}
 Frozen source tree state: {{ doc.source_tree_state }}
 <untrusted_area_context>
 Focus: {{ doc.focus }}
-Threats: {{ doc.threat_ids }}
+Threat ids: {{ doc.threat_ids }}
+Threat context: {{ doc.threat_context }}
 Trust boundary: {{ doc.trust_boundary }}
 Reachable assets: {{ doc.reachable_assets }}
 Planner scope hints: {{ doc.instructions }}
@@ -17,18 +18,17 @@ If area status is not `ready`, do not inspect source or write candidates. Call
 `finding_count=0`, `coverage=none`, and a summary explaining the provenance
 block, then stop.
 
-Review this area deeply enough to follow data across files. Assume there may
-be vulnerabilities, but report only candidates with a plausible attack story.
-For each candidate, trace where untrusted input enters, how it reaches the
-security-sensitive operation, the triggering condition, impact, and any
-mitigations you checked. Read cited source; do not infer line numbers.
-Use LSP definitions/references/implementations and diagnostics when useful.
-Use shell only for read-only source search and repository history; do not
-build, execute, or mutate the repository.
-Before using live files or LSP, compare HEAD/tree state to the frozen values.
-If the live checkout moved, inspect the exact clean revision via Git object
-reads or a unique disposable local clone; clean that clone afterward and never
-mix its evidence with live-root LSP output.
+Investigate this area for plausible attacker-controlled paths to meaningful
+impact. Each candidate must explain and evidence the control source, entry,
+sensitive sink, triggering conditions, impact, and relevant mitigations or
+guards. Cite source actually read; do not infer paths or line numbers. You have
+read-only file, LSP, shell, and repository-history capabilities and may choose
+the investigation strategy that best covers this area. Do not build, execute,
+or mutate the repository.
+
+All evidence must come from the frozen revision and tree state. If the live
+checkout differs, use an exact clean reconstruction and do not mix evidence
+from different revisions or tree states.
 
 If that frozen source cannot be reconstructed or its revision/tree identity
 cannot be verified, write no candidates. Close the area with exactly one
@@ -49,7 +49,8 @@ Call `write_defense_candidate` once per candidate with:
   `required_configuration` and `required_privileges`
 - `guard_checked`, `fails_closed`, and a precise `violated_invariant`
 - a concrete `category` describing the vulnerability shape
-- `claimed_severity`: exactly `HIGH`, `MEDIUM`, or `LOW`
+- `claimed_severity`: `HIGH`, `MEDIUM`, or `LOW` for a vulnerability claim;
+  `NONE` for non-vulnerability claim kinds
 - `confidence`: integer string 0-100; uncertainty is allowed
 - exact relative `path` and `line`
 - concise `title`, root-cause `description`, concrete `exploit_scenario`,

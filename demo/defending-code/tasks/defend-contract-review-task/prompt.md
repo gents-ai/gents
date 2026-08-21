@@ -22,8 +22,9 @@ If status is not `ready`, write one review with
 ledger repair/rerun, `none` for fields not established, concrete evidence, and
 stop.
 
-Otherwise call `read_defending_finding` once, retain exactly the comma-delimited
-member ids from `{{ doc.member_finding_ids }}`. If any member is missing,
+Otherwise use `read_defending_finding` to load the bounded member ledger and
+retain exactly the comma-delimited member ids from
+`{{ doc.member_finding_ids }}`. If any member is missing,
 duplicated, or has a different frozen revision/tree state, write one review
 with `review_id={{ doc.cluster_id }}:contract`, `status=blocked_handoff`,
 `disposition=blocked_handoff`,
@@ -31,13 +32,13 @@ with `review_id={{ doc.cluster_id }}:contract`, `status=blocked_handoff`,
 `required_foundation_flow=rerun exact closed finding ledger`,
 `required_proof_files=none`, `compatibility_constraints=unknown`,
 `recommended_fix_boundary=none`, a concrete `required_human_decision`, and
-the exact mismatch in `evidence`; then stop. Review all
-members, not only the primary. Inspect repository-level and nearest `AGENTS.md` or
-equivalent instructions, public documentation, relevant tests, history, and
-formal specifications. Determine whether the proposed remediation would break
-intentional behavior and identify the smallest architecturally valid fix
-boundary. Do not overturn the verifier's security verdict; record conflicting
-contract evidence for the report and human reviewer.
+the exact mismatch in `evidence`; then stop. Review all members, not only the
+primary. Repository guidance, public documentation, tests, history, and formal
+specifications are available evidence for determining whether remediation
+would break intentional behavior and for identifying the smallest
+architecturally valid fix boundary. Choose the investigation needed to support
+that decision. Do not overturn the verifier's security verdict; record
+conflicting contract evidence for the report and human reviewer.
 
 If the frozen revision/tree cannot be reconstructed and verified, write the
 same complete `blocked_handoff` receipt defined above with
@@ -63,6 +64,6 @@ Use `required_human_decision=none` unless the disposition is
 `contract_conflict`. If different cluster members require incompatible fix
 boundaries, use `contract_conflict` and explain that the cluster must be split
 or explicitly resolved by a human. Review the exact frozen revision; if the
-live checkout moved, use read-only Git objects or a temporary checkout of that
-revision rather than newer source.
+live checkout moved, use only evidence attributable to that exact revision
+rather than newer source.
 Do not supply runtime-filled run, cluster, repository, or expected-total fields.

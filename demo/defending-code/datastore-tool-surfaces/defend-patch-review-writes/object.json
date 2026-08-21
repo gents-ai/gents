@@ -53,7 +53,7 @@
         {"name": "reviewed_diff_sha256", "required": true},
         {"name": "receipt_match", "required": true},
         {"name": "verdict", "required": true},
-        {"name": "style_score", "required": true},
+        {"name": "quality_status", "required": true},
         {"name": "out_of_scope_hunks", "required": true},
         {"name": "new_surface", "required": true},
         {"name": "reason", "required": true},

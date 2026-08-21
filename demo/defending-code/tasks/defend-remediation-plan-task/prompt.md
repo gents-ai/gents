@@ -4,8 +4,8 @@ contract reviews (complete={{ group.complete }}):
 {{ group.docs }}
 
 The complete immutable contract-review ledger is interpolated above; do not
-query it again. Call `read_defense_root_cause_cluster` exactly once. Require an
-exact cluster-to-review bijection. Sort by `cluster_id`, let N
+query it again. Use `read_defense_root_cause_cluster` for the bounded cluster
+join. Require an exact cluster-to-review bijection. Sort by `cluster_id`, let N
 be the cluster count, and call `write_defense_patch_assignment` exactly N
 times. Each assignment uses `assignment_id=<cluster_id>:patch`, the exact
 cluster id, primary finding id, member finding ids, frozen `base_revision` and

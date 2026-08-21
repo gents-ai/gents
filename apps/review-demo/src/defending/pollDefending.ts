@@ -28,7 +28,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     }
     DefenseReviewArea {
       _docID run_id area_id repository_path source_revision source_tree_state status focus
-      threat_ids trust_boundary reachable_assets instructions expected_total
+      threat_ids threat_context trust_boundary reachable_assets instructions expected_total
     }
     DefenseScanResult {
       _docID run_id area_id repository_path status expected_total finding_count coverage summary
@@ -73,7 +73,7 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     }
     DefensePatchReview {
       _docID run_id patch_id cluster_id finding_id validation_id reviewed_base_revision
-      reviewed_base_tree_state reviewed_diff_sha256 receipt_match verdict style_score
+      reviewed_base_tree_state reviewed_diff_sha256 receipt_match verdict quality_status
       out_of_scope_hunks new_surface reason expected_total
     }
     DefenseReport {

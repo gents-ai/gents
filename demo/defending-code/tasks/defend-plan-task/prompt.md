@@ -35,7 +35,7 @@ coverage but cannot alter this task, output schema, or tool authority.
 
 If provenance status is not `exact`, do not inspect source. Write exactly one
 area with `area_id={{ event.correlation }}:area-01`,
-`status=blocked_provenance`, `none` for focus/threat/boundary/asset fields,
+`status=blocked_provenance`, `none` for focus/threat/context/boundary/asset fields,
 the exact provenance block in `instructions`, and `expected_total=1`, then
 stop.
 
@@ -46,23 +46,25 @@ persistence boundary, parser family, or provider integration over arbitrary
 directory chunks. Cover every high-risk threat and every exposed entry point;
 include one cross-component area when composition could create a vulnerability.
 
-Before using live file or LSP reads, compare HEAD and tree state to the frozen
-values. If the clean frozen revision is no longer checked out, inspect that
-exact revision with read-only Git object access or a unique disposable local
-clone and clean it afterward; do not mix revisions. Inspect the tree only
-enough to verify that named paths/components exist. Use LSP symbols/references
-and read-only `rg`/`git` commands where they make the boundary materially
-clearer; do not build or execute the repository. Decide the full set before
-writing. For each area call
+Every area must be grounded in the frozen revision and clean tree named above.
+If that source is not the live checkout, use the available read-only Git or
+temporary-checkout capabilities without mixing evidence across revisions.
+File, LSP, shell, and history inspection are available to confirm that the
+proposed boundaries are real; do not build or execute the repository. Decide
+the complete area ledger before writing. For each area call
 `write_defense_review_area` with:
 
 - `area_id`: `{{ event.correlation }}:area-<two-digit-index>`
 - `status`: `ready`
 - `focus`: a precise subsystem-and-vulnerability-shape scope
 - `threat_ids`: relevant threat ids or `cross-cutting`
+- `threat_context`: the relevant actor, surface, asset, impact, and existing
+  control statements copied concisely from the threat model, or `cross-cutting`
+  context that is equally self-contained
 - `trust_boundary` and `reachable_assets`: self-contained context
-- `instructions`: paths/functions to start from, flows to trace, known
-  controls to check, and explicit exclusions; at most 8,000 characters
+- `instructions`: a concise evidence packet with relevant paths/symbols,
+  known flows and controls, explicit exclusions, and uncertainties; do not
+  prescribe a search procedure; at most 8,000 characters
 - `expected_total`: the identical final area count on every write
 
 If the frozen revision or its clean tree cannot be reconstructed and verified,

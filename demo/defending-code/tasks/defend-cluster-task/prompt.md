@@ -4,8 +4,9 @@ promoted={{ doc.promoted_count }}.
 Scan ledger status: {{ doc.scan_ledger_status }}
 Triage summary: {{ doc.summary }}
 
-Call `read_defending_finding` once. Require its row count to equal
-`{{ doc.promoted_count }}`. Partition every row into exactly one root-cause cluster.
+Use `read_defending_finding` to load the bounded confirmed-finding ledger.
+Require its row count to equal `{{ doc.promoted_count }}`. Partition every row
+into exactly one root-cause cluster.
 Sort clusters by their lexicographically smallest member finding id. For N
 clusters, call `write_defense_root_cause_cluster` N times with:
 

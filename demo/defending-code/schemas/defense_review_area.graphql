@@ -7,6 +7,7 @@ type DefenseReviewArea {
   status: String @immutable
   focus: String @immutable
   threat_ids: String @immutable
+  threat_context: String @immutable
   trust_boundary: String @immutable
   reachable_assets: String @immutable
   instructions: String @immutable

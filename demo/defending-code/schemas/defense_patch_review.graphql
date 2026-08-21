@@ -9,7 +9,7 @@ type DefensePatchReview {
   reviewed_diff_sha256: String @immutable
   receipt_match: String @immutable
   verdict: String @immutable
-  style_score: String @immutable
+  quality_status: String @immutable
   out_of_scope_hunks: String @immutable
   new_surface: String @immutable
   reason: String @immutable

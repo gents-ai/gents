@@ -43,6 +43,14 @@ ledgers it must join, and one schema-bound write surface for its output facts or
 receipt. Runtime-filled correlation and source fields carry identities forward
 without asking the model to transcribe them.
 
+Prompts follow a bounded-interface, open-investigation rule. They provide the
+best available evidence, the stage objective, the typed output contract, and
+hard authority/provenance constraints. They do not prescribe a search recipe,
+tool-call order, or chain of reasoning. Investigative agents choose how to use
+their repository, shell, and LSP capabilities; document-only reducers remain
+deliberately deterministic because their task is ledger reconciliation rather
+than source analysis.
+
 The threat-model bootstrap freezes the audited Git revision and dirty-tree
 observation once. That provenance is copied through review areas, candidates,
 verdicts, confirmed findings, root-cause clusters, and patch validation. A

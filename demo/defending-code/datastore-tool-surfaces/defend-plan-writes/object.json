@@ -18,6 +18,7 @@
         {"name": "status", "required": true},
         {"name": "focus", "required": true},
         {"name": "threat_ids", "required": true},
+        {"name": "threat_context", "required": true},
         {"name": "trust_boundary", "required": true},
         {"name": "reachable_assets", "required": true},
         {"name": "instructions", "required": true},

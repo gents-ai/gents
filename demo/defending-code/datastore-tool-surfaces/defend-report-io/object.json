@@ -103,7 +103,7 @@
     {
       "kind": "read", "tool_name": "read_defense_patch_review",
       "collection": "DefensePatchReview", "description": "Load maintainer reviews.",
-      "fields": ["patch_id", "cluster_id", "finding_id", "validation_id", "reviewed_base_revision", "reviewed_base_tree_state", "reviewed_diff_sha256", "receipt_match", "verdict", "style_score", "out_of_scope_hunks", "new_surface", "reason", "expected_total"],
+      "fields": ["patch_id", "cluster_id", "finding_id", "validation_id", "reviewed_base_revision", "reviewed_base_tree_state", "reviewed_diff_sha256", "receipt_match", "verdict", "quality_status", "out_of_scope_hunks", "new_surface", "reason", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

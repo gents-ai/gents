@@ -40,6 +40,7 @@ export type DefenseAreaRow = {
   status?: string;
   focus?: string;
   threat_ids?: string;
+  threat_context?: string;
   trust_boundary?: string;
   reachable_assets?: string;
   instructions?: string;
@@ -237,7 +238,7 @@ export type PatchReviewRow = {
   reviewed_diff_sha256?: string;
   receipt_match?: string;
   verdict?: string;
-  style_score?: string;
+  quality_status?: string;
   out_of_scope_hunks?: string;
   new_surface?: string;
   reason?: string;
