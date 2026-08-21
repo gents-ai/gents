@@ -6,21 +6,10 @@
   "entries": [
     {
       "kind": "read",
-      "tool_name": "read_defense_verification_assignment",
-      "collection": "DefenseVerificationAssignment",
-      "description": "Load exactly the assignment that triggered this verifier request.",
-      "fields": ["assignment_id", "finding_id", "area_id", "repository_path", "status", "expected_total"],
-      "filter_fields": [
-        {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "assignment_id", "required": false, "fill": {"source_field": "assignment_id"}}
-      ]
-    },
-    {
-      "kind": "read",
       "tool_name": "read_defense_threat_model",
       "collection": "DefenseThreatModel",
       "description": "Load the threat model for this run; run_id is runtime-filled.",
-      "fields": ["repository_path", "source_revision", "source_tree_state", "focus", "system_context", "assets", "entry_points", "threats", "deprioritized", "open_questions", "mitigations", "provenance"],
+      "fields": ["repository_path", "source_revision", "source_tree_state", "provenance_status", "focus", "system_context", "assets", "entry_points", "threats", "deprioritized", "open_questions", "mitigations", "provenance"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -35,21 +24,13 @@
       ]
     },
     {
-      "kind": "read",
-      "tool_name": "read_defense_candidate_ledger",
-      "collection": "DefenseCandidateFinding",
-      "description": "Load bounded sibling candidate facts for deterministic root-cause deduplication; no verifier reasoning is exposed.",
-      "fields": ["finding_id", "area_id", "claim_kind", "root_cause_key", "security_boundary", "path", "line", "title", "description"],
-      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
-    },
-    {
       "tool_name": "write_defense_verdict",
       "collection": "DefenseFindingVerdict",
       "description": "Persist exactly one adversarial confirmed/refuted verdict for the assigned candidate.",
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "finding_id", "required": true},
-        {"name": "area_id", "required": true},
+        {"name": "finding_id", "required": false, "fill": {"source_field": "finding_id"}},
+        {"name": "area_id", "required": false, "fill": {"source_field": "area_id"}},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
         {"name": "verdict", "required": true},
         {"name": "source_revision", "required": true},
@@ -57,10 +38,19 @@
         {"name": "claim_kind", "required": true},
         {"name": "root_cause_key", "required": true},
         {"name": "security_boundary", "required": true},
+        {"name": "attacker_identity", "required": true},
+        {"name": "attacker_controlled_input", "required": true},
+        {"name": "control_source", "required": true},
+        {"name": "entry_point", "required": true},
+        {"name": "sink", "required": true},
         {"name": "attacker_control", "required": true},
         {"name": "default_reachable", "required": true},
         {"name": "required_configuration", "required": true},
+        {"name": "required_privileges", "required": true},
+        {"name": "guard_checked", "required": true},
+        {"name": "fails_closed", "required": true},
         {"name": "violated_invariant", "required": true},
+        {"name": "impact", "required": true},
         {"name": "contract_surface", "required": true},
         {"name": "category", "required": true},
         {"name": "severity", "required": true},
@@ -92,6 +82,7 @@
         {"name": "finding_id", "required": false, "fill": {"source_field": "finding_id"}},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
         {"name": "status", "required": true},
+        {"name": "scan_ledger_status", "required": false, "fill": {"source_field": "scan_ledger_status"}},
         {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}}
       ]
     }

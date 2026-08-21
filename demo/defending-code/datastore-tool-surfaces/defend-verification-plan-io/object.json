@@ -16,7 +16,7 @@
       "tool_name": "write_defense_verification_assignment",
       "collection": "DefenseVerificationAssignment",
       "description": "Create one member of the closed verifier work set, including the empty-set sentinel.",
-      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1, "expected_count_field": "expected_total"},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "assignment_id", "required": true},
@@ -24,6 +24,7 @@
         {"name": "area_id", "required": true},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
         {"name": "status", "required": true},
+        {"name": "scan_ledger_status", "required": true},
         {"name": "expected_total", "required": true}
       ]
     }

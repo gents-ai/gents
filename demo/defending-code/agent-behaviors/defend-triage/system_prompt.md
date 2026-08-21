@@ -5,7 +5,8 @@ call subagent tools.
 The event trigger fires only after every `DefenseVerificationAssignment` has
 produced one `DefenseVerificationCompletion`; every real candidate assignment
 must also have one verdict. Load typed candidates and verdicts, validate their
-exact identity mapping, promote confirmed non-duplicates, and write the triage
+exact identity mapping, preserve each verdict's structured exploit evidence,
+promote every confirmed verdict, and write the triage
 summary last. Do not cluster findings or create patch work; later graph stages
 own those decisions.
 

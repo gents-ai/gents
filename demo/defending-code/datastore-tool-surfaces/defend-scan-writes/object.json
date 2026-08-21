@@ -51,6 +51,7 @@
         {"name": "area_id", "required": false, "fill": {"source_field": "area_id"}},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
         {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}},
+        {"name": "status", "required": true},
         {"name": "finding_count", "required": true},
         {"name": "coverage", "required": true},
         {"name": "summary", "required": true}

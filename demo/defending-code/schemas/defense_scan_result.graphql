@@ -3,7 +3,8 @@ type DefenseScanResult {
   area_id: String @index(unique: true) @immutable
   repository_path: String @immutable
   expected_total: String @immutable
-  finding_count: String
-  coverage: String
-  summary: String
+  status: String @immutable
+  finding_count: String @immutable
+  coverage: String @immutable
+  summary: String @immutable
 }

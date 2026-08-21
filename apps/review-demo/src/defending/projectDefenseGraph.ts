@@ -101,7 +101,11 @@ function verifierRequestFor(
 function verifierActivity(
   request: AgentRequestRow | undefined,
   verdictExists: boolean,
+  completionStatus?: string,
 ): string {
+  if (completionStatus && completionStatus !== "verified") {
+    return completionStatus.replaceAll("_", " ");
+  }
   if (verdictExists) {
     return "verified";
   }
@@ -119,7 +123,9 @@ function verifierActivity(
     return "input required";
   }
   if (DONE.has(lifecycle)) {
-    return "completed · verdict pending";
+    return completionStatus === "verified"
+      ? "verified completion · verdict missing"
+      : "completed · receipt pending";
   }
   return "queued";
 }
@@ -128,6 +134,28 @@ function node(
   partial: Omit<DefenseNode, "badges"> & { badges?: string[] },
 ): DefenseNode {
   return { badges: [], ...partial };
+}
+
+function rowsBeyondParentMultiplicity<T>(
+  rows: T[],
+  rowKey: (row: T) => string,
+  parentKeys: string[],
+): Array<{ index: number; row: T }> {
+  const remaining = new Map<string, number>();
+  for (const key of parentKeys) {
+    remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  }
+  const extras: Array<{ index: number; row: T }> = [];
+  rows.forEach((row, index) => {
+    const key = rowKey(row);
+    const slots = remaining.get(key) ?? 0;
+    if (slots > 0) {
+      remaining.set(key, slots - 1);
+    } else {
+      extras.push({ index, row });
+    }
+  });
+  return extras;
 }
 
 function selectJob(snapshot: DefenseSnapshot, pinnedRunId?: string | null) {
@@ -237,7 +265,9 @@ export function projectDefenseGraph(
       requestId: threatRequest?.request_id,
       sessionId: threatRequest?.session_id ?? undefined,
       sourceDocId: threat?._docID,
-      badges: threat ? ["written"] : [],
+      badges: threat
+        ? [threat.provenance_status ?? "written"]
+        : [],
     }),
     node({
       id: `plan:${runId}`,
@@ -277,36 +307,35 @@ export function projectDefenseGraph(
           kind: "area",
           label: `Area ${index + 1}`,
           detail: area.focus ?? area.area_id,
+          state: "done",
+          runId,
+          sourceDocId: area._docID,
+          badges: [
+            ...(area.threat_ids ? [area.threat_ids] : []),
+            ...(area.status ? [area.status] : []),
+          ],
+        }),
+        node({
+          id: `scan:${area.area_id}`,
+          kind: "scan",
+          label: `Scan ${index + 1}`,
+          detail: area.focus ?? area.area_id,
           state: stateFor(request, Boolean(scan)),
           runId,
           requestId: request?.request_id,
           sessionId: request?.session_id ?? undefined,
-          sourceDocId: area._docID,
+          sourceDocId: scan?._docID,
           badges: [
-            ...(area.threat_ids ? [area.threat_ids] : []),
-            ...(scan ? ["complete"] : []),
+            ...(scan?.status ? [scan.status] : []),
             ...(findingCount > 0
               ? [`${findingCount} candidate${findingCount === 1 ? "" : "s"}`]
+              : []),
+            ...(scan?.finding_count && scan.finding_count !== String(findingCount)
+              ? [`declared ${scan.finding_count}`]
               : []),
           ],
         }),
       );
-      if (scan) {
-        nodes.push(
-          node({
-            id: `scan:${area.area_id}`,
-            kind: "scan",
-            label: `Scan ${index + 1}`,
-            detail: area.focus ?? area.area_id,
-            state: "done",
-            runId,
-            sourceDocId: scan._docID,
-            badges: scan.finding_count
-              ? [`${scan.finding_count} findings`]
-              : [],
-          }),
-        );
-      }
     }
     for (let index = areas.length; index < expectedAreas; index += 1) {
       const key = `pending-${index}`;
@@ -322,7 +351,39 @@ export function projectDefenseGraph(
     }
   }
 
-  const scansClosed = scans.length === expectedAreas;
+  for (const { index, row: scan } of rowsBeyondParentMultiplicity(
+    scans,
+    (row) => row.area_id,
+    areas.map((row) => row.area_id),
+  )) {
+    nodes.push(
+      node({
+        id: `scan:orphan:${scan._docID ?? `${scan.area_id}:${index}`}`,
+        kind: "scan",
+        label: "Orphan scan",
+        detail: scan.area_id,
+        state: "done",
+        runId,
+        sourceDocId: scan._docID,
+        badges: [
+          "orphan/duplicate ledger row",
+          ...(scan.status ? [scan.status] : []),
+        ],
+      }),
+    );
+  }
+
+  const areaIds = areas.map((row) => row.area_id);
+  const scanAreaIds = scans.map((row) => row.area_id);
+  const areaLedgerClosed =
+    totalsClose(areas, expectedAreas) && uniqueIds(areaIds);
+  const scansClosed =
+    areaLedgerClosed &&
+    totalsClose(scans, expectedAreas) &&
+    sameIds(areaIds, scanAreaIds);
+  const discoveryInconsistent =
+    (areas.length >= expectedAreas || scans.length >= expectedAreas) &&
+    !scansClosed;
   const graphNativeVerification = Boolean(
     verificationPlanRequest ||
       verificationAssignments.length > 0 ||
@@ -338,25 +399,58 @@ export function projectDefenseGraph(
     const verdict = verdicts.find(
       (row) => row.finding_id === candidate.finding_id,
     );
+    const completion = assignment
+      ? verificationCompletions.find(
+          (row) => row.assignment_id === assignment.assignment_id,
+        )
+      : undefined;
     const verifierRequest = verifierRequestFor(
       requests,
       triageRequest?.request_id,
       candidate.finding_id,
       assignment?._docID,
     );
-    return { assignment, candidate, verdict, verifierRequest };
+    return { assignment, candidate, completion, verdict, verifierRequest };
   });
+  const emptyAssignment = verificationAssignments.find(
+    (row) => row.status === "skipped" && row.finding_id === "none",
+  );
+  const emptyCompletion = emptyAssignment
+    ? verificationCompletions.find(
+        (row) => row.assignment_id === emptyAssignment.assignment_id,
+      )
+    : undefined;
+  const emptyVerifierRequest = emptyAssignment
+    ? verifierRequestFor(
+        requests,
+        triageRequest?.request_id,
+        "none",
+        emptyAssignment._docID,
+      )
+    : undefined;
   const isolatedVerifierCount = candidateWork.filter(
     ({ verifierRequest }) => verifierRequest,
-  ).length;
+  ).length + (emptyVerifierRequest ? 1 : 0);
   const runningVerifierCount = candidateWork.filter(
-    ({ verifierRequest, verdict }) =>
-      verifierActivity(verifierRequest, Boolean(verdict)) === "running",
-  ).length;
+    ({ completion, verifierRequest, verdict }) =>
+      verifierActivity(verifierRequest, Boolean(verdict), completion?.status) ===
+      "running",
+  ).length +
+    (emptyVerifierRequest &&
+    verifierActivity(emptyVerifierRequest, false, emptyCompletion?.status) ===
+      "running"
+      ? 1
+      : 0);
   const queuedVerifierCount = candidateWork.filter(
-    ({ verifierRequest, verdict }) =>
-      verifierActivity(verifierRequest, Boolean(verdict)) === "queued",
-  ).length;
+    ({ completion, verifierRequest, verdict }) =>
+      verifierActivity(verifierRequest, Boolean(verdict), completion?.status) ===
+      "queued",
+  ).length +
+    (emptyAssignment &&
+    verifierActivity(emptyVerifierRequest, false, emptyCompletion?.status) ===
+      "queued"
+      ? 1
+      : 0);
   const isolatedVerifierTopology = Boolean(
     graphNativeVerification ||
       triageRequest?.content?.includes("candidate-verifier") ||
@@ -394,22 +488,42 @@ export function projectDefenseGraph(
     verificationAssignments[0]?.expected_total,
     candidates.length || 1,
   );
+  const expectedFindingIds =
+    candidates.length === 0 && emptyAssignment
+      ? ["none"]
+      : candidates.map((row) => row.finding_id);
+  const verificationAssignmentsClosed =
+    totalsClose(verificationAssignments, expectedVerdicts) &&
+    sameIds(
+      verificationAssignments.map((row) => row.finding_id),
+      expectedFindingIds,
+    );
   const verificationClosed =
     graphNativeVerification &&
-    verificationAssignments.length > 0 &&
-    verificationCompletions.length === expectedVerdicts;
+    verificationAssignmentsClosed &&
+    totalsClose(verificationCompletions, expectedVerdicts) &&
+    sameIds(
+      verificationAssignments.map((row) => row.assignment_id),
+      verificationCompletions.map((row) => row.assignment_id),
+    );
+  const verificationInconsistent =
+    verificationAssignments.length >= expectedVerdicts &&
+    verificationCompletions.length >= expectedVerdicts &&
+    !verificationClosed;
   nodes.push(
     node({
       id: `triage:${runId}`,
       kind: "triage",
       label: "Adversarial triage",
-      state: graphNativeVerification
-        ? verificationClosed
-          ? stateFor(triageRequest, Boolean(triage))
-          : "waiting-group"
-        : scansClosed
-          ? coordinatorState(triageRequest, Boolean(triage))
-          : "waiting-group",
+      state: triageRequest
+        ? coordinatorState(triageRequest, Boolean(triage))
+        : graphNativeVerification
+          ? verificationClosed
+            ? coordinatorState(triageRequest, Boolean(triage))
+            : "waiting-group"
+          : scansClosed
+            ? coordinatorState(triageRequest, Boolean(triage))
+            : "waiting-group",
       runId,
       requestId: triageRequest?.request_id,
       sessionId: triageRequest?.session_id ?? undefined,
@@ -424,6 +538,7 @@ export function projectDefenseGraph(
         ...(!scansClosed && candidates.length > 0
           ? [`${candidates.length} candidates queued`]
           : []),
+        ...(discoveryInconsistent ? ["inconsistent discovery ledger"] : []),
         ...(legacySerialTriage
           ? ["serial triage", "active candidate untracked"]
           : []),
@@ -437,16 +552,71 @@ export function projectDefenseGraph(
           ? [`${runningVerifierCount} running`, `${queuedVerifierCount} queued`]
           : []),
         ...(findings.length > 0 ? [`${findings.length} confirmed`] : []),
+        ...(triage?.scan_ledger_status ? [triage.scan_ledger_status] : []),
+        ...(verificationInconsistent
+          ? ["inconsistent verification ledger"]
+          : []),
       ],
     }),
   );
 
   if (scansClosed || graphNativeVerification) {
-    for (const [index, { assignment, candidate, verdict, verifierRequest }] of
+    if (emptyAssignment) {
+      nodes.push(
+        node({
+          id: "candidate:none",
+          kind: "candidate",
+          label: "Empty candidate set",
+          detail: "No candidate rows were written",
+          state: "done",
+          runId,
+          badges: ["empty-set sentinel"],
+        }),
+        node({
+          id: "verification-assignment:none",
+          kind: "verification-assignment",
+          label: "Sentinel assignment",
+          detail: emptyAssignment.assignment_id,
+          state: "done",
+          runId,
+          sourceDocId: emptyAssignment._docID,
+          badges: [emptyAssignment.status ?? "skipped"],
+        }),
+      );
+      if (emptyVerifierRequest) {
+        nodes.push(
+          node({
+            id: "verifier:none",
+            kind: "verifier",
+            label: "Sentinel verifier",
+            detail: "Closes the empty work set",
+            state: stateFor(emptyVerifierRequest, Boolean(emptyCompletion)),
+            runId,
+            requestId: emptyVerifierRequest.request_id,
+            sessionId: emptyVerifierRequest.session_id ?? undefined,
+            badges: [
+              verifierActivity(
+                emptyVerifierRequest,
+                false,
+                emptyCompletion?.status,
+              ),
+            ],
+          }),
+        );
+      }
+    }
+    for (const [
+      index,
+      { assignment, candidate, completion, verdict, verifierRequest },
+    ] of
       candidateWork.entries()) {
       const activity = legacySerialTriage
         ? "activity untracked"
-        : verifierActivity(verifierRequest, Boolean(verdict));
+        : verifierActivity(
+            verifierRequest,
+            Boolean(verdict),
+            completion?.status,
+          );
       nodes.push(
         node({
           id: `candidate:${candidate.finding_id}`,
@@ -486,11 +656,20 @@ export function projectDefenseGraph(
             kind: "verifier",
             label: `Verifier ${index + 1}`,
             detail: candidate.finding_id,
-            state: stateFor(verifierRequest, Boolean(verdict)),
+            state: stateFor(
+              verifierRequest,
+              Boolean(verdict) || Boolean(completion),
+            ),
             runId,
             requestId: verifierRequest.request_id,
             sessionId: verifierRequest.session_id ?? undefined,
-            badges: [verifierActivity(verifierRequest, Boolean(verdict))],
+            badges: [
+              verifierActivity(
+                verifierRequest,
+                Boolean(verdict),
+                completion?.status,
+              ),
+            ],
           }),
         );
       }
@@ -512,6 +691,97 @@ export function projectDefenseGraph(
         );
       }
     }
+  }
+
+  for (const { index, row: assignment } of rowsBeyondParentMultiplicity(
+    verificationAssignments,
+    (row) => row.finding_id,
+    candidates.length > 0 ? candidates.map((row) => row.finding_id) : ["none"],
+  )) {
+    const completion = verificationCompletions.find(
+      (row) => row.assignment_id === assignment.assignment_id,
+    );
+    const verifierRequest = verifierRequestFor(
+      requests,
+      triageRequest?.request_id,
+      assignment.finding_id,
+      assignment._docID,
+    );
+    nodes.push(
+      node({
+        id: `verification-assignment:orphan:${assignment._docID ?? index}`,
+        kind: "verification-assignment",
+        label: "Orphan assignment",
+        detail: assignment.assignment_id,
+        state: "done",
+        runId,
+        sourceDocId: assignment._docID,
+        badges: [
+          "orphan/duplicate ledger row",
+          ...(assignment.status ? [assignment.status] : []),
+        ],
+      }),
+    );
+    if (verifierRequest || completion) {
+      nodes.push(
+        node({
+          id: `verifier:orphan:${assignment._docID ?? index}`,
+          kind: "verifier",
+          label: "Orphan verifier",
+          detail: assignment.finding_id,
+          state: stateFor(verifierRequest, Boolean(completion)),
+          runId,
+          requestId: verifierRequest?.request_id,
+          sessionId: verifierRequest?.session_id ?? undefined,
+          badges: [
+            "orphan/duplicate ledger row",
+            verifierActivity(verifierRequest, false, completion?.status),
+          ],
+        }),
+      );
+    }
+  }
+  for (const { index, row: completion } of rowsBeyondParentMultiplicity(
+    verificationCompletions,
+    (row) => row.assignment_id,
+    verificationAssignments.map((row) => row.assignment_id),
+  )) {
+    nodes.push(
+      node({
+        id: `verifier-completion:orphan:${completion._docID ?? index}`,
+        kind: "verifier",
+        label: "Orphan verifier completion",
+        detail: completion.assignment_id,
+        state: "done",
+        runId,
+        sourceDocId: completion._docID,
+        badges: [
+          "orphan/duplicate ledger row",
+          ...(completion.status ? [completion.status.replaceAll("_", " ")] : []),
+        ],
+      }),
+    );
+  }
+  for (const { index, row: verdict } of rowsBeyondParentMultiplicity(
+    verdicts,
+    (row) => row.finding_id,
+    candidates.map((row) => row.finding_id),
+  )) {
+    nodes.push(
+      node({
+        id: `verdict:orphan:${verdict._docID ?? index}`,
+        kind: "verdict",
+        label: "Orphan verdict",
+        detail: verdict.finding_id,
+        state: "done",
+        runId,
+        sourceDocId: verdict._docID,
+        badges: [
+          "orphan/duplicate ledger row",
+          ...(verdict.verdict ? [verdict.verdict] : []),
+        ],
+      }),
+    );
   }
 
   const contractAwarePipeline = Boolean(
@@ -580,6 +850,7 @@ export function projectDefenseGraph(
             runId,
             sourceDocId: cluster._docID,
             badges: [
+              ...(cluster.status ? [cluster.status] : []),
               ...(cluster.severity ? [cluster.severity] : []),
               ...(cluster.member_finding_ids
                 ? [`${memberCount(cluster.member_finding_ids)} findings`]
@@ -608,15 +879,26 @@ export function projectDefenseGraph(
       clusters.length || 1,
     );
     const contractsClosed =
-      clusters.length > 0 && contractReviews.length === expectedContracts;
+      totalsClose(clusters, expectedContracts) &&
+      totalsClose(contractReviews, expectedContracts) &&
+      sameIds(
+        clusters.map((row) => row.cluster_id),
+        contractReviews.map((row) => row.cluster_id),
+      );
+    const contractsInconsistent =
+      clusters.length >= expectedContracts &&
+      contractReviews.length >= expectedContracts &&
+      !contractsClosed;
     nodes.push(
       node({
         id: `remediation-plan:${runId}`,
         kind: "remediation-plan",
         label: "Remediation work set",
-        state: contractsClosed
+        state: remediationPlanRequest
           ? stateFor(remediationPlanRequest, assignments.length > 0)
-          : "waiting-group",
+          : contractsClosed
+            ? stateFor(remediationPlanRequest, assignments.length > 0)
+            : "waiting-group",
         runId,
         requestId: remediationPlanRequest?.request_id,
         sessionId: remediationPlanRequest?.session_id ?? undefined,
@@ -625,6 +907,29 @@ export function projectDefenseGraph(
           ...(assignments.length > 0
             ? [`${assignments.length} assignments`]
             : []),
+          ...(contractsInconsistent ? ["inconsistent contract ledger"] : []),
+        ],
+      }),
+    );
+  }
+
+  for (const { index, row: review } of rowsBeyondParentMultiplicity(
+    contractReviews,
+    (row) => row.cluster_id,
+    clusters.map((row) => row.cluster_id),
+  )) {
+    nodes.push(
+      node({
+        id: `contract-review:orphan:${review._docID ?? index}`,
+        kind: "contract-review",
+        label: "Orphan contract review",
+        detail: review.review_id,
+        state: "done",
+        runId,
+        sourceDocId: review._docID,
+        badges: [
+          "orphan/duplicate ledger row",
+          ...(review.disposition ? [review.disposition] : []),
         ],
       }),
     );
@@ -750,6 +1055,9 @@ export function projectDefenseGraph(
                   ...(validation?.applies_cleanly
                     ? [`applies ${validation.applies_cleanly}`]
                     : []),
+                  ...(validation?.provenance_match
+                    ? [`provenance ${validation.provenance_match}`]
+                    : []),
                 ],
               }),
             ]
@@ -764,7 +1072,12 @@ export function projectDefenseGraph(
           requestId: reviewRequest?.request_id,
           sessionId: reviewRequest?.session_id ?? undefined,
           sourceDocId: review?._docID,
-          badges: review?.verdict ? [review.verdict] : [],
+          badges: [
+            ...(review?.verdict ? [review.verdict] : []),
+            ...(review?.receipt_match
+              ? [`receipt ${review.receipt_match}`]
+              : []),
+          ],
         }),
         ...(contractAwarePipeline
           ? [
@@ -778,7 +1091,12 @@ export function projectDefenseGraph(
                 requestId: securityReviewRequest?.request_id,
                 sessionId: securityReviewRequest?.session_id ?? undefined,
                 sourceDocId: securityReview?._docID,
-                badges: securityReview?.verdict ? [securityReview.verdict] : [],
+                badges: [
+                  ...(securityReview?.verdict ? [securityReview.verdict] : []),
+                  ...(securityReview?.receipt_match
+                    ? [`receipt ${securityReview.receipt_match}`]
+                    : []),
+                ],
               }),
             ]
           : []),
@@ -786,23 +1104,207 @@ export function projectDefenseGraph(
     }
   }
 
+  for (const { index, row: patch } of rowsBeyondParentMultiplicity(
+    patches,
+    (row) => row.patch_id,
+    assignments.map((row) => row.assignment_id),
+  )) {
+    const validationRequest = requestFor(
+      requests,
+      "defend-patch-validation",
+      patch._docID,
+    );
+    nodes.push(
+      node({
+        id: `patch:orphan:${patch._docID ?? index}`,
+        kind: "patch",
+        label: "Orphan patch",
+        detail: patch.patch_id,
+        state: "done",
+        runId,
+        sourceDocId: patch._docID,
+        badges: [
+          "orphan/duplicate ledger row",
+          ...(patch.status ? [patch.status] : []),
+        ],
+      }),
+    );
+    if (validationRequest) {
+      nodes.push(
+        node({
+          id: `validation:orphan-request:${patch._docID ?? index}`,
+          kind: "validation",
+          label: "Orphan validation request",
+          detail: patch.patch_id,
+          state: stateFor(validationRequest, false),
+          runId,
+          requestId: validationRequest.request_id,
+          sessionId: validationRequest.session_id ?? undefined,
+          badges: ["orphan/duplicate ledger row"],
+        }),
+      );
+    }
+  }
+  for (const { index, row: validation } of rowsBeyondParentMultiplicity(
+    validations,
+    (row) => row.patch_id,
+    assignments.map((row) => row.assignment_id),
+  )) {
+    const sourcePatch = patches.find((row) => row.patch_id === validation.patch_id);
+    const validationRequest = requestFor(
+      requests,
+      "defend-patch-validation",
+      sourcePatch?._docID,
+    );
+    const reviewRequest = requestFor(
+      requests,
+      "defend-patch-review",
+      validation._docID,
+    );
+    nodes.push(
+      node({
+        id: `validation:orphan:${validation._docID ?? index}`,
+        kind: "validation",
+        label: "Orphan validation",
+        detail: validation.validation_id,
+        state: stateFor(validationRequest, true),
+        runId,
+        requestId: validationRequest?.request_id,
+        sessionId: validationRequest?.session_id ?? undefined,
+        sourceDocId: validation._docID,
+        badges: [
+          "orphan/duplicate ledger row",
+          ...(validation.status ? [validation.status] : []),
+        ],
+      }),
+    );
+    if (reviewRequest) {
+      nodes.push(
+        node({
+          id: `review:orphan-request:${validation._docID ?? index}`,
+          kind: "review",
+          label: "Orphan review request",
+          detail: validation.patch_id,
+          state: stateFor(reviewRequest, false),
+          runId,
+          requestId: reviewRequest.request_id,
+          sessionId: reviewRequest.session_id ?? undefined,
+          badges: ["orphan/duplicate ledger row"],
+        }),
+      );
+    }
+  }
+  for (const { index, row: review } of rowsBeyondParentMultiplicity(
+    reviews,
+    (row) => row.patch_id,
+    assignments.map((row) => row.assignment_id),
+  )) {
+    const sourceValidation = validations.find(
+      (row) => row.patch_id === review.patch_id,
+    );
+    const reviewRequest = requestFor(
+      requests,
+      "defend-patch-review",
+      sourceValidation?._docID,
+    );
+    const securityRequest = requestFor(
+      requests,
+      "defend-patch-security-review",
+      review._docID,
+    );
+    nodes.push(
+      node({
+        id: `review:orphan:${review._docID ?? index}`,
+        kind: "review",
+        label: "Orphan patch review",
+        detail: review.patch_id,
+        state: stateFor(reviewRequest, true),
+        runId,
+        requestId: reviewRequest?.request_id,
+        sessionId: reviewRequest?.session_id ?? undefined,
+        sourceDocId: review._docID,
+        badges: [
+          "orphan/duplicate ledger row",
+          ...(review.verdict ? [review.verdict] : []),
+        ],
+      }),
+    );
+    if (securityRequest) {
+      nodes.push(
+        node({
+          id: `security-review:orphan-request:${review._docID ?? index}`,
+          kind: "security-review",
+          label: "Orphan re-attack request",
+          detail: review.patch_id,
+          state: stateFor(securityRequest, false),
+          runId,
+          requestId: securityRequest.request_id,
+          sessionId: securityRequest.session_id ?? undefined,
+          badges: ["orphan/duplicate ledger row"],
+        }),
+      );
+    }
+  }
+  for (const { index, row: review } of rowsBeyondParentMultiplicity(
+    securityReviews,
+    (row) => row.patch_id,
+    assignments.map((row) => row.assignment_id),
+  )) {
+    const sourceReview = reviews.find((row) => row.patch_id === review.patch_id);
+    const securityRequest = requestFor(
+      requests,
+      "defend-patch-security-review",
+      sourceReview?._docID,
+    );
+    nodes.push(
+      node({
+        id: `security-review:orphan:${review._docID ?? index}`,
+        kind: "security-review",
+        label: "Orphan security review",
+        detail: review.patch_id,
+        state: stateFor(securityRequest, true),
+        runId,
+        requestId: securityRequest?.request_id,
+        sessionId: securityRequest?.session_id ?? undefined,
+        sourceDocId: review._docID,
+        badges: [
+          "orphan/duplicate ledger row",
+          ...(review.verdict ? [review.verdict] : []),
+        ],
+      }),
+    );
+  }
+
+  const expectedSecurityReviews = positiveInt(
+    securityReviews[0]?.expected_total ?? assignments[0]?.expected_total,
+    assignments.length || 1,
+  );
+  const securityLedgerClosed =
+    totalsClose(securityReviews, expectedSecurityReviews) &&
+    sameIds(
+      assignments.map((row) => row.assignment_id),
+      securityReviews.map((row) => row.patch_id),
+    );
   const reviewsClosed = contractAwarePipeline
-    ? assignments.length > 0 && securityReviews.length === assignments.length
+    ? assignments.length > 0 && securityLedgerClosed
     : assignments.length > 0 && reviews.length === assignments.length;
   nodes.push(
     node({
       id: `report:${runId}`,
       kind: "report",
       label: "Defense report",
-      state: reviewsClosed
+      state: reportRequest
         ? stateFor(reportRequest, Boolean(report))
-        : "waiting-group",
+        : reviewsClosed
+          ? stateFor(reportRequest, Boolean(report))
+          : "waiting-group",
       runId,
       requestId: reportRequest?.request_id,
       sessionId: reportRequest?.session_id ?? undefined,
       sourceDocId: report?._docID,
       badges: report
         ? [
+            ...(report.audit_status ? [report.audit_status] : []),
             `${report.confirmed_count ?? "0"} confirmed`,
             `${report.accepted_patch_count ?? "0"} accepted`,
           ]
@@ -827,6 +1329,32 @@ function memberCount(value: string): number {
     // Newline/comma-delimited ids are also accepted by the pack schema.
   }
   return trimmed.split(/[\n,]+/).filter((item) => item.trim()).length;
+}
+
+function totalsClose(
+  rows: Array<{ expected_total?: string }>,
+  expected: number,
+): boolean {
+  return (
+    expected > 0 &&
+    rows.length === expected &&
+    rows.every((row) => positiveInt(row.expected_total, 0) === expected)
+  );
+}
+
+function uniqueIds(ids: string[]): boolean {
+  return new Set(ids).size === ids.length;
+}
+
+function sameIds(left: string[], right: string[]): boolean {
+  const sortedLeft = left.slice().sort();
+  const sortedRight = right.slice().sort();
+  return (
+    uniqueIds(sortedLeft) &&
+    uniqueIds(sortedRight) &&
+    sortedLeft.length === sortedRight.length &&
+    sortedLeft.every((id, index) => id === sortedRight[index])
+  );
 }
 
 function skeleton(runId: string | null, areaCount: number): DefenseGraph {

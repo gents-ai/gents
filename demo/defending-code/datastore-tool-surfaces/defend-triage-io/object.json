@@ -6,14 +6,6 @@
   "entries": [
     {
       "kind": "read",
-      "tool_name": "read_defense_threat_model",
-      "collection": "DefenseThreatModel",
-      "description": "Load the threat model for this run; run_id is runtime-filled.",
-      "fields": ["repository_path", "source_revision", "source_tree_state", "focus", "system_context", "assets", "entry_points", "threats", "deprioritized", "open_questions", "mitigations", "provenance"],
-      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
-    },
-    {
-      "kind": "read",
       "tool_name": "read_defense_candidate",
       "collection": "DefenseCandidateFinding",
       "description": "Load every static vulnerability candidate for this run.",
@@ -25,15 +17,7 @@
       "tool_name": "read_defense_verdict",
       "collection": "DefenseFindingVerdict",
       "description": "Load the completed independent verifier ledger for this run.",
-      "fields": ["finding_id", "area_id", "repository_path", "verdict", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "security_boundary", "attacker_control", "default_reachable", "required_configuration", "violated_invariant", "contract_surface", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "duplicate_of", "preconditions", "access_level", "owner_hint", "threat_ids", "expected_total"],
-      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
-    },
-    {
-      "kind": "read",
-      "tool_name": "read_defense_triage_summary",
-      "collection": "DefenseTriageSummary",
-      "description": "Check whether another durable continuation already closed this run.",
-      "fields": ["candidate_count", "confirmed_count", "refuted_count", "duplicate_count", "promoted_count", "summary"],
+      "fields": ["finding_id", "area_id", "repository_path", "verdict", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "security_boundary", "attacker_identity", "attacker_controlled_input", "control_source", "entry_point", "sink", "attacker_control", "default_reachable", "required_configuration", "required_privileges", "guard_checked", "fails_closed", "violated_invariant", "impact", "contract_surface", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "duplicate_of", "preconditions", "access_level", "owner_hint", "threat_ids", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -49,10 +33,19 @@
         {"name": "claim_kind", "required": true},
         {"name": "root_cause_key", "required": true},
         {"name": "security_boundary", "required": true},
+        {"name": "attacker_identity", "required": true},
+        {"name": "attacker_controlled_input", "required": true},
+        {"name": "control_source", "required": true},
+        {"name": "entry_point", "required": true},
+        {"name": "sink", "required": true},
         {"name": "attacker_control", "required": true},
         {"name": "default_reachable", "required": true},
         {"name": "required_configuration", "required": true},
+        {"name": "required_privileges", "required": true},
+        {"name": "guard_checked", "required": true},
+        {"name": "fails_closed", "required": true},
         {"name": "violated_invariant", "required": true},
+        {"name": "impact", "required": true},
         {"name": "contract_surface", "required": true},
         {"name": "category", "required": true},
         {"name": "severity", "required": true},
@@ -80,6 +73,7 @@
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "scan_ledger_status", "required": true},
         {"name": "candidate_count", "required": true},
         {"name": "confirmed_count", "required": true},
         {"name": "refuted_count", "required": true},

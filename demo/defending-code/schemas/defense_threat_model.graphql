@@ -3,15 +3,16 @@ type DefenseThreatModel {
   repository_path: String @immutable
   source_revision: String @immutable
   source_tree_state: String @immutable
-  focus: String
+  provenance_status: String @immutable
+  focus: String @immutable
   area_min: String @immutable
   area_max: String @immutable
-  system_context: String
-  assets: String
-  entry_points: String
-  threats: String
-  deprioritized: String
-  open_questions: String
-  mitigations: String
-  provenance: String
+  system_context: String @immutable
+  assets: String @immutable
+  entry_points: String @immutable
+  threats: String @immutable
+  deprioritized: String @immutable
+  open_questions: String @immutable
+  mitigations: String @immutable
+  provenance: String @immutable
 }

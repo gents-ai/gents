@@ -34,10 +34,24 @@ Every intermediate artifact is a typed DefraDB document correlated by
 collection, a fixed projection, and a runtime-filled `run_id`; each write tool
 is bound to one collection and an explicit field allowlist.
 
+Each event edge treats its created source document as the immutable stage-input
+envelope. Per-document tasks interpolate the source fields directly through
+`{{ doc.* }}`; group barriers interpolate the complete closed source ledger
+through `{{ group.docs }}`. The model is never asked to query the document that
+triggered its own request. A stage receives typed read tools only for other
+ledgers it must join, and one schema-bound write surface for its output facts or
+receipt. Runtime-filled correlation and source fields carry identities forward
+without asking the model to transcribe them.
+
 The threat-model bootstrap freezes the audited Git revision and dirty-tree
 observation once. That provenance is copied through review areas, candidates,
 verdicts, confirmed findings, root-cause clusters, and patch validation. A
 dirty tree is never silently reconstructed from a clean commit checkout.
+Patch proposals bind their exact raw diff bytes with SHA-256; validation,
+maintainer review, and independent security review each persist structured
+base/tree/digest receipts. The final report compares those receipts and emits
+`complete`, `blocked_provenance`, `inconsistent`, or `partial` as a typed audit
+status instead of making consumers infer campaign health from prose.
 
 The current datastore surface supports bounded creates and reads, not bounded
 updates, while event edges are create-only. State changes are therefore
@@ -57,8 +71,10 @@ read-only, and their prompts prohibit source edits, dependency installation,
 builds, tests, and target execution. Run this pack only against an authorized,
 trusted checkout and network environment.
 
-Patch authors receive read-only file and LSP tools and emit unified diffs into
-`DefensePatchCandidate.diff`; they do not modify the checkout. Contract
+Patch authors receive read-only file tools, LSP, and unrestricted shell so they
+can inspect Git objects or create an exact temporary checkout when the live
+tree has moved. They emit unified diffs into `DefensePatchCandidate.diff` and
+do not modify the operator checkout. Contract
 reviewers, mechanical validators, maintainer reviewers, and security
 re-attackers receive shell plus LSP. Until managed workspaces can bind a
 request's real file root, shell CWD, LSP root, and repository-instruction root,
@@ -125,9 +141,11 @@ maintainer reviewers, and re-attackers, with group barriers only where a closed
 ledger must be joined. No model calls `spawn_subagent`; DefraDB documents and
 event triggers own the fan-out, counting, retries, and audit trail.
 
-The runner verifies the closed review-area/result ledger, exact
+The runner verifies the closed review-area/result ledger, declared scan counts,
+exact
 candidate-to-verdict coverage, balanced confirmed/refuted counts, root-cause
-membership, the single final report, stage tool contracts, and signed request
+membership, contract-to-patch lineage, patch/base/diff-bound validation
+receipts, the single final report, stage tool contracts, and signed request
 provenance. Results and all four trace projections land under `runs/<job_id>/`.
 
 ## Upstream lineage

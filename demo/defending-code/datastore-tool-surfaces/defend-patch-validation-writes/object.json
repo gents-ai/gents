@@ -9,7 +9,18 @@
       "tool_name": "read_defense_root_cause_cluster",
       "collection": "DefenseRootCauseCluster",
       "description": "Load frozen base provenance for the patch's root-cause cluster.",
-      "fields": ["cluster_id", "repository_path", "base_revision", "base_tree_state"],
+      "fields": ["cluster_id", "repository_path", "base_revision", "base_tree_state", "status", "primary_finding_id", "member_finding_ids", "expected_total"],
+      "filter_fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "cluster_id", "required": false, "fill": {"source_field": "cluster_id"}}
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_defense_contract_review",
+      "collection": "DefenseContractReview",
+      "description": "Load the foundation, proof, and compatibility gates governing this patch.",
+      "fields": ["review_id", "cluster_id", "repository_path", "status", "disposition", "spec_impact", "required_foundation_flow", "required_proof_files", "compatibility_constraints", "recommended_fix_boundary", "required_human_decision", "evidence", "expected_total"],
       "filter_fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "cluster_id", "required": false, "fill": {"source_field": "cluster_id"}}
@@ -28,6 +39,15 @@
         {"name": "finding_id", "required": false, "fill": {"source_field": "finding_id"}},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
         {"name": "status", "required": true},
+        {"name": "validated_base_revision", "required": true},
+        {"name": "base_tree_state", "required": false, "fill": {"source_field": "base_tree_state"}},
+        {"name": "validated_diff_sha256", "required": true},
+        {"name": "observed_head_revision", "required": true},
+        {"name": "result_tree_hash", "required": true},
+        {"name": "workspace_mode", "required": true},
+        {"name": "workspace_identity", "required": true},
+        {"name": "changed_files", "required": true},
+        {"name": "provenance_match", "required": true},
         {"name": "applies_cleanly", "required": true},
         {"name": "format_status", "required": true},
         {"name": "compile_status", "required": true},

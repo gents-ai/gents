@@ -3327,7 +3327,7 @@ mod tests {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/defending-code");
         let manifest = load_manifest_defaults(&pack).expect("defending-code pack should load");
         assert_eq!(manifest.expect.prompt_tool_contracts.len(), 14);
-        assert_eq!(manifest.expect.result_documents.len(), 12);
+        assert_eq!(manifest.expect.result_documents.len(), 17);
         assert_eq!(manifest.init.tool_package, "write");
 
         for (trigger, collection) in [
@@ -3447,6 +3447,7 @@ mod tests {
                     | "defend-scan-tools"
                     | "defend-verifier-tools"
                     | "defend-contract-review-tools"
+                    | "defend-patch-tools"
                     | "defend-patch-validation-tools"
                     | "defend-patch-review-tools"
                     | "defend-patch-security-review-tools"
@@ -3466,6 +3467,7 @@ mod tests {
             "defend-plan-tools",
             "defend-scan-tools",
             "defend-verifier-tools",
+            "defend-patch-tools",
         ] {
             let document = read_pack_json_defaults(
                 &pack
@@ -3573,21 +3575,159 @@ mod tests {
             "every event-triggered verifier request must close its assignment"
         );
 
-        for selection in ["defend-patch-tools"] {
-            let document = read_pack_json_defaults(
+        let verification_plan_surface = read_pack_json_defaults(
+            &pack
+                .join("datastore-tool-surfaces")
+                .join("defend-verification-plan-io")
+                .join("object.json"),
+        )
+        .expect("verification-plan datastore surface should load");
+        let assignment_write = verification_plan_surface
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("tool_name").and_then(Value::as_str)
+                        == Some("write_defense_verification_assignment")
+                })
+            })
+            .expect("verification-plan surface should expose assignment writes");
+        assert_eq!(
+            assignment_write
+                .get("output_obligation")
+                .and_then(|obligation| obligation.get("expected_count_field"))
+                .and_then(Value::as_str),
+            Some("expected_total"),
+            "the planner must close the exact verifier work set"
+        );
+
+        for (task, surface, source_collection, source_template, redundant_read) in [
+            (
+                "defend-threat-model-task",
+                "defend-threat-model-writes",
+                "DefendingCodeJob",
+                "{{ doc.repository_path }}",
+                "read_defending_code_job",
+            ),
+            (
+                "defend-plan-task",
+                "defend-plan-writes",
+                "DefenseThreatModel",
+                "{{ doc.source_revision }}",
+                "read_defense_threat_model",
+            ),
+            (
+                "defend-scan-task",
+                "defend-scan-writes",
+                "DefenseReviewArea",
+                "{{ doc.area_id }}",
+                "read_defense_review_area",
+            ),
+            (
+                "defend-verification-plan-task",
+                "defend-verification-plan-io",
+                "DefenseScanResult",
+                "{{ group.docs }}",
+                "read_defense_scan_result",
+            ),
+            (
+                "defend-verifier-task",
+                "defend-verifier-io",
+                "DefenseVerificationAssignment",
+                "{{ doc.assignment_id }}",
+                "read_defense_verification_assignment",
+            ),
+            (
+                "defend-triage-task",
+                "defend-triage-io",
+                "DefenseVerificationCompletion",
+                "{{ group.docs }}",
+                "read_defense_verification_completion",
+            ),
+            (
+                "defend-cluster-task",
+                "defend-cluster-io",
+                "DefenseTriageSummary",
+                "{{ doc.promoted_count }}",
+                "read_defense_triage_summary",
+            ),
+            (
+                "defend-contract-review-task",
+                "defend-contract-review-io",
+                "DefenseRootCauseCluster",
+                "{{ doc.cluster_id }}",
+                "read_defense_root_cause_cluster",
+            ),
+            (
+                "defend-remediation-plan-task",
+                "defend-remediation-plan-io",
+                "DefenseContractReview",
+                "{{ group.docs }}",
+                "read_defense_contract_review",
+            ),
+            (
+                "defend-patch-task",
+                "defend-patch-io",
+                "DefensePatchAssignment",
+                "{{ doc.assignment_id }}",
+                "read_defense_patch_assignment",
+            ),
+            (
+                "defend-patch-validation-task",
+                "defend-patch-validation-writes",
+                "DefensePatchCandidate",
+                "{{ doc.diff }}",
+                "read_defense_patch_candidate",
+            ),
+            (
+                "defend-patch-review-task",
+                "defend-patch-review-writes",
+                "DefensePatchValidation",
+                "{{ doc.validated_diff_sha256 }}",
+                "read_defense_patch_validation",
+            ),
+            (
+                "defend-patch-security-review-task",
+                "defend-patch-security-review-io",
+                "DefensePatchReview",
+                "{{ doc.validation_id }}",
+                "read_defense_patch_review",
+            ),
+            (
+                "defend-report-task",
+                "defend-report-io",
+                "DefensePatchSecurityReview",
+                "{{ group.docs }}",
+                "read_defense_patch_security_review",
+            ),
+        ] {
+            let prompt = std::fs::read_to_string(pack.join("tasks").join(task).join("prompt.md"))
+                .unwrap_or_else(|error| panic!("{task} prompt should load: {error}"));
+            assert!(
+                prompt.contains(source_template),
+                "{task} must interpolate its trigger document directly"
+            );
+            assert!(
+                !prompt.contains(redundant_read),
+                "{task} must not re-query its trigger document with {redundant_read}"
+            );
+            let datastore = read_pack_json_defaults(
                 &pack
-                    .join("tool-selections")
-                    .join(selection)
+                    .join("datastore-tool-surfaces")
+                    .join(surface)
                     .join("object.json"),
             )
-            .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
-            assert_eq!(
-                document.get("enable_bash").and_then(Value::as_bool),
-                Some(false)
-            );
-            assert_eq!(
-                document.get("enable_lsp").and_then(Value::as_bool),
-                Some(true)
+            .unwrap_or_else(|error| panic!("{surface} should load: {error:#}"));
+            assert!(
+                datastore
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .is_some_and(|entries| entries.iter().all(|entry| {
+                        entry.get("kind").and_then(Value::as_str) != Some("read")
+                            || entry.get("collection").and_then(Value::as_str)
+                                != Some(source_collection)
+                    })),
+                "{surface} must not expose a redundant read of trigger source {source_collection}"
             );
         }
 

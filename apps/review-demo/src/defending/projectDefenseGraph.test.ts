@@ -83,12 +83,16 @@ describe("projectDefenseGraph", () => {
     const areas = graph.nodes.filter((node) => node.kind === "area");
     expect(areas).toHaveLength(3);
     expect(areas.map((node) => node.state)).toEqual([
-      "live",
+      "done",
       "expected",
       "expected",
     ]);
-    expect(areas[0]).toMatchObject({ requestId: "scan-request" });
-    expect(graph.nodes.filter((node) => node.kind === "scan")).toHaveLength(0);
+    expect(areas[0]).not.toHaveProperty("requestId");
+    expect(graph.nodes.filter((node) => node.kind === "scan")).toHaveLength(1);
+    expect(graph.nodes.find((node) => node.kind === "scan")).toMatchObject({
+      state: "live",
+      requestId: "scan-request",
+    });
     expect(graph.nodes.filter((node) => node.kind === "candidate")).toHaveLength(
       0,
     );
@@ -111,6 +115,7 @@ describe("projectDefenseGraph", () => {
       _docID: "scan-1",
       run_id: "defense-1",
       area_id: "defense-1:area-01",
+      expected_total: "1",
     });
     snapshot.candidates.push({
       _docID: "candidate-1",
@@ -175,6 +180,7 @@ describe("projectDefenseGraph", () => {
       _docID: "scan-1",
       run_id: "defense-1",
       area_id: "defense-1:area-01",
+      expected_total: "1",
     });
     snapshot.candidates.push({
       _docID: "candidate-1",
@@ -217,6 +223,7 @@ describe("projectDefenseGraph", () => {
       _docID: "scan-1",
       run_id: "defense-1",
       area_id: "defense-1:area-01",
+      expected_total: "1",
     });
     snapshot.candidates.push({
       _docID: "candidate-1",
@@ -266,6 +273,224 @@ describe("projectDefenseGraph", () => {
     expect(graph.nodes.find((node) => node.kind === "triage")).toMatchObject({
       state: "waiting-group",
       badges: ["0/1 complete", "0/1 verdicts", "1 running", "0 queued"],
+    });
+  });
+
+  it("shows the empty candidate assignment and verifier as an explicit lane", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ run_id: "defense-empty", area_min: "1" });
+    snapshot.verificationAssignments.push({
+      _docID: "empty-assignment",
+      run_id: "defense-empty",
+      assignment_id: "defense-empty:no-candidates",
+      finding_id: "none",
+      status: "skipped",
+      expected_total: "1",
+    });
+    snapshot.verificationCompletions.push({
+      run_id: "defense-empty",
+      assignment_id: "defense-empty:no-candidates",
+      finding_id: "none",
+      status: "skipped",
+      expected_total: "1",
+    });
+    snapshot.requests.push({
+      request_id: "empty-verifier",
+      caused_by_correlation: "defense-empty",
+      caused_by_trigger_id: "defend-verifier",
+      caused_by_source_doc_id: "empty-assignment",
+      behavior_id: "defend-verifier",
+      lifecycle_state: "completed",
+    });
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(graph.nodes.find((node) => node.id === "candidate:none")).toMatchObject({
+      state: "done",
+      badges: ["empty-set sentinel"],
+    });
+    expect(
+      graph.nodes.find((node) => node.id === "verification-assignment:none"),
+    ).toMatchObject({ sourceDocId: "empty-assignment", badges: ["skipped"] });
+    expect(graph.nodes.find((node) => node.id === "verifier:none")).toMatchObject({
+      requestId: "empty-verifier",
+      state: "done",
+      badges: ["skipped"],
+    });
+  });
+
+  it("shows a verifier's durable blocked completion without inventing a verdict", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ run_id: "defense-blocked", area_min: "1" });
+    snapshot.candidates.push({
+      run_id: "defense-blocked",
+      finding_id: "finding-blocked",
+    });
+    snapshot.verificationAssignments.push({
+      _docID: "assignment-blocked",
+      run_id: "defense-blocked",
+      assignment_id: "finding-blocked:verify",
+      finding_id: "finding-blocked",
+      status: "ready",
+      expected_total: "1",
+    });
+    snapshot.verificationCompletions.push({
+      run_id: "defense-blocked",
+      assignment_id: "finding-blocked:verify",
+      finding_id: "finding-blocked",
+      status: "blocked_provenance",
+      expected_total: "1",
+    });
+    snapshot.requests.push({
+      request_id: "verifier-blocked",
+      caused_by_correlation: "defense-blocked",
+      caused_by_trigger_id: "defend-verifier",
+      caused_by_source_doc_id: "assignment-blocked",
+      behavior_id: "defend-verifier",
+      lifecycle_state: "completed",
+    });
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(
+      graph.nodes.find((node) => node.id === "verifier:finding-blocked"),
+    ).toMatchObject({
+      state: "done",
+      badges: ["blocked provenance"],
+    });
+    expect(graph.nodes.some((node) => node.kind === "verdict")).toBe(false);
+  });
+
+  it("does not let a verdict mask a contradictory blocked completion", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ run_id: "defense-corrupt", area_min: "1" });
+    snapshot.candidates.push({
+      run_id: "defense-corrupt",
+      finding_id: "finding-corrupt",
+    });
+    snapshot.verificationAssignments.push({
+      _docID: "assignment-corrupt",
+      run_id: "defense-corrupt",
+      assignment_id: "finding-corrupt:verify",
+      finding_id: "finding-corrupt",
+      expected_total: "1",
+    });
+    snapshot.verificationCompletions.push({
+      run_id: "defense-corrupt",
+      assignment_id: "finding-corrupt:verify",
+      finding_id: "finding-corrupt",
+      status: "blocked_handoff",
+      expected_total: "1",
+    });
+    snapshot.verdicts.push({
+      run_id: "defense-corrupt",
+      finding_id: "finding-corrupt",
+      verdict: "confirmed",
+    });
+
+    expect(
+      projectDefenseGraph(snapshot).nodes.find(
+        (node) => node.id === "candidate:finding-corrupt",
+      )?.badges,
+    ).toEqual(["blocked handoff"]);
+  });
+
+  it("shows an actual reducer request even when the local ledger looks inconsistent", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ run_id: "defense-live-reducer", area_min: "1" });
+    snapshot.requests.push({
+      request_id: "triage-live",
+      caused_by_correlation: "defense-live-reducer",
+      caused_by_trigger_id: "defend-triage",
+      lifecycle_state: "processing",
+    });
+
+    expect(
+      projectDefenseGraph(snapshot).nodes.find((node) => node.kind === "triage"),
+    ).toMatchObject({ state: "live", requestId: "triage-live" });
+  });
+
+  it("renders orphan verification work and its running agent", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ run_id: "defense-orphan", area_min: "1" });
+    snapshot.verificationAssignments.push({
+      _docID: "assignment-orphan",
+      run_id: "defense-orphan",
+      assignment_id: "missing-finding:verify",
+      finding_id: "missing-finding",
+      status: "ready",
+      expected_total: "1",
+    });
+    snapshot.requests.push({
+      request_id: "verifier-orphan",
+      caused_by_correlation: "defense-orphan",
+      caused_by_trigger_id: "defend-verifier",
+      caused_by_source_doc_id: "assignment-orphan",
+      behavior_id: "defend-verifier",
+      lifecycle_state: "processing",
+    });
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(
+      graph.nodes.find((node) => node.id === "verification-assignment:orphan:assignment-orphan"),
+    ).toMatchObject({ badges: ["orphan/duplicate ledger row", "ready"] });
+    expect(
+      graph.nodes.find((node) => node.id === "verifier:orphan:assignment-orphan"),
+    ).toMatchObject({ state: "live", requestId: "verifier-orphan" });
+  });
+
+  it("renders a validation agent launched from an orphan patch", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.contractPipelineAvailable = true;
+    snapshot.jobs.push({ run_id: "defense-orphan-patch", area_min: "1" });
+    snapshot.patches.push({
+      _docID: "patch-orphan",
+      run_id: "defense-orphan-patch",
+      patch_id: "missing-assignment:patch",
+      status: "drafted",
+    });
+    snapshot.validations.push({
+      _docID: "validation-orphan-doc",
+      run_id: "defense-orphan-patch",
+      validation_id: "missing-assignment:patch:validation",
+      patch_id: "missing-assignment:patch",
+      status: "partial",
+    });
+    snapshot.requests.push({
+      request_id: "validation-orphan",
+      caused_by_correlation: "defense-orphan-patch",
+      caused_by_trigger_id: "defend-patch-validation",
+      caused_by_source_doc_id: "patch-orphan",
+      lifecycle_state: "processing",
+    });
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(
+      graph.nodes.find((node) => node.id === "patch:orphan:patch-orphan"),
+    ).toMatchObject({ state: "done", sourceDocId: "patch-orphan" });
+    expect(
+      graph.nodes.find(
+        (node) => node.id === "validation:orphan-request:patch-orphan",
+      ),
+    ).toMatchObject({ state: "live", requestId: "validation-orphan" });
+  });
+
+  it("keeps discovery blocked when ledger totals disagree", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ run_id: "defense-bad-total", area_min: "1" });
+    snapshot.areas.push({
+      run_id: "defense-bad-total",
+      area_id: "area-1",
+      expected_total: "1",
+    });
+    snapshot.scans.push({
+      run_id: "defense-bad-total",
+      area_id: "area-1",
+      expected_total: "2",
+    });
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(graph.nodes.find((node) => node.kind === "triage")).toMatchObject({
+      state: "waiting-group",
+      badges: ["1/1 scans", "inconsistent discovery ledger"],
     });
   });
 
@@ -328,15 +553,17 @@ describe("projectDefenseGraph", () => {
     const graph = projectDefenseGraph(snapshot);
     expect(graph.nodes.find((node) => node.kind === "area")).toMatchObject({
       state: "done",
-      requestId: "scan-request",
       sourceDocId: "area-1",
     });
+    expect(graph.nodes.find((node) => node.kind === "area")).not.toHaveProperty(
+      "requestId",
+    );
     const scanNode = graph.nodes.find((node) => node.kind === "scan");
     expect(scanNode).toMatchObject({
       state: "done",
       sourceDocId: "scan-1",
+      requestId: "scan-request",
     });
-    expect(scanNode).not.toHaveProperty("requestId");
     expect(graph.nodes.find((node) => node.kind === "review")).toMatchObject({
       state: "done",
       badges: ["ACCEPT"],
@@ -435,5 +662,74 @@ describe("projectDefenseGraph", () => {
       state: "done",
       badges: ["ACCEPT"],
     });
+  });
+
+  it("uses the closed security ledger total to show report readiness", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.contractPipelineAvailable = true;
+    snapshot.jobs.push({ run_id: "defense-3", area_min: "1" });
+    snapshot.assignments.push(
+      {
+        run_id: "defense-3",
+        assignment_id: "patch-1",
+        expected_total: "2",
+      },
+      {
+        run_id: "defense-3",
+        assignment_id: "patch-2",
+        expected_total: "2",
+      },
+    );
+    snapshot.securityReviews.push({
+      run_id: "defense-3",
+      security_review_id: "security-1",
+      patch_id: "patch-1",
+      expected_total: "1",
+    });
+    snapshot.requests.push({
+      request_id: "report-request",
+      caused_by_correlation: "defense-3",
+      caused_by_trigger_id: "defend-report",
+      lifecycle_state: "processing",
+    });
+
+    const graph = projectDefenseGraph(snapshot);
+    expect(graph.nodes.find((node) => node.kind === "report")).toMatchObject({
+      state: "live",
+      requestId: "report-request",
+    });
+  });
+
+  it("does not anticipate a report until security ids and totals close", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.contractPipelineAvailable = true;
+    snapshot.jobs.push({ run_id: "defense-4", area_min: "1" });
+    snapshot.assignments.push(
+      { run_id: "defense-4", assignment_id: "patch-1", expected_total: "2" },
+      { run_id: "defense-4", assignment_id: "patch-2", expected_total: "2" },
+    );
+    snapshot.securityReviews.push({
+      run_id: "defense-4",
+      security_review_id: "security-1",
+      patch_id: "patch-1",
+      expected_total: "1",
+    });
+
+    expect(
+      projectDefenseGraph(snapshot).nodes.find((node) => node.kind === "report")
+        ?.state,
+    ).toBe("waiting-group");
+
+    snapshot.securityReviews[0].expected_total = "2";
+    snapshot.securityReviews.push({
+      run_id: "defense-4",
+      security_review_id: "security-2",
+      patch_id: "patch-2",
+      expected_total: "2",
+    });
+    expect(
+      projectDefenseGraph(snapshot).nodes.find((node) => node.kind === "report")
+        ?.state,
+    ).toBe("expected");
   });
 });

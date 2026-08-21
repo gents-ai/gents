@@ -3,14 +3,15 @@ type DefenseContractReview {
   review_id: String @index(unique: true) @immutable
   cluster_id: String @index @immutable
   repository_path: String @immutable
-  status: String
-  disposition: String
-  behavior_intentional: String
-  spec_impact: String
-  required_foundation_flow: String
-  required_proof_files: String
-  compatibility_constraints: String
-  recommended_fix_boundary: String
-  evidence: String
+  status: String @immutable
+  disposition: String @immutable
+  behavior_intentional: String @immutable
+  spec_impact: String @immutable
+  required_foundation_flow: String @immutable
+  required_proof_files: String @immutable
+  compatibility_constraints: String @immutable
+  recommended_fix_boundary: String @immutable
+  required_human_decision: String @immutable
+  evidence: String @immutable
   expected_total: String @immutable
 }

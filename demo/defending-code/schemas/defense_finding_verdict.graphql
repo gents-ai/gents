@@ -3,32 +3,41 @@ type DefenseFindingVerdict {
   finding_id: String @index(unique: true) @immutable
   area_id: String @immutable
   repository_path: String @immutable
-  verdict: String
-  source_revision: String
-  source_tree_state: String
-  claim_kind: String
-  root_cause_key: String
-  security_boundary: String
-  attacker_control: String
-  default_reachable: String
-  required_configuration: String
-  violated_invariant: String
-  contract_surface: String
-  category: String
-  severity: String
-  confidence: String
-  path: String
-  line: String
-  title: String
-  description: String
-  exploit_scenario: String
-  recommendation: String
-  evidence: String
-  verification: String
-  duplicate_of: String
-  preconditions: String
-  access_level: String
-  owner_hint: String
-  threat_ids: String
+  verdict: String @immutable
+  source_revision: String @immutable
+  source_tree_state: String @immutable
+  claim_kind: String @immutable
+  root_cause_key: String @immutable
+  security_boundary: String @immutable
+  attacker_identity: String @immutable
+  attacker_controlled_input: String @immutable
+  control_source: String @immutable
+  entry_point: String @immutable
+  sink: String @immutable
+  attacker_control: String @immutable
+  default_reachable: String @immutable
+  required_configuration: String @immutable
+  required_privileges: String @immutable
+  guard_checked: String @immutable
+  fails_closed: String @immutable
+  violated_invariant: String @immutable
+  impact: String @immutable
+  contract_surface: String @immutable
+  category: String @immutable
+  severity: String @immutable
+  confidence: String @immutable
+  path: String @immutable
+  line: String @immutable
+  title: String @immutable
+  description: String @immutable
+  exploit_scenario: String @immutable
+  recommendation: String @immutable
+  evidence: String @immutable
+  verification: String @immutable
+  duplicate_of: String @immutable
+  preconditions: String @immutable
+  access_level: String @immutable
+  owner_hint: String @immutable
+  threat_ids: String @immutable
   expected_total: String @immutable
 }

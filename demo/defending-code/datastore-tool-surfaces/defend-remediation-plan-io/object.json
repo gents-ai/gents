@@ -9,15 +9,7 @@
       "tool_name": "read_defense_root_cause_cluster",
       "collection": "DefenseRootCauseCluster",
       "description": "Load the closed root-cause cluster ledger.",
-      "fields": ["cluster_id", "repository_path", "status", "primary_finding_id", "member_finding_ids", "canonical_root_cause", "remediation_scope", "expected_total"],
-      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
-    },
-    {
-      "kind": "read",
-      "tool_name": "read_defense_contract_review",
-      "collection": "DefenseContractReview",
-      "description": "Load the closed contract-review ledger.",
-      "fields": ["review_id", "cluster_id", "repository_path", "status", "disposition", "required_foundation_flow", "recommended_fix_boundary", "expected_total"],
+      "fields": ["cluster_id", "repository_path", "base_revision", "base_tree_state", "status", "primary_finding_id", "member_finding_ids", "canonical_root_cause", "remediation_scope", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -31,7 +23,12 @@
         {"name": "cluster_id", "required": true},
         {"name": "finding_id", "required": true},
         {"name": "member_finding_ids", "required": true},
+        {"name": "contract_review_id", "required": true},
+        {"name": "contract_disposition", "required": true},
+        {"name": "skip_reason", "required": true},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "base_revision", "required": true},
+        {"name": "base_tree_state", "required": true},
         {"name": "status", "required": true},
         {"name": "expected_total", "required": true}
       ]
