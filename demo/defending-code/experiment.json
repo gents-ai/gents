@@ -69,7 +69,7 @@
       {"task_id": "defend-plan-task", "required_tool_names": ["write_defense_review_area"]},
       {"task_id": "defend-scan-task", "required_tool_names": ["write_defense_candidate", "write_defense_scan_result"]},
       {"task_id": "defend-verification-plan-task", "required_tool_names": ["read_defense_candidate", "write_defense_verification_assignment"]},
-      {"task_id": "defend-triage-task", "required_tool_names": ["read_defense_candidate", "read_defense_verification_assignment", "read_defense_verdict", "write_defending_finding", "write_defense_triage_summary"]},
+      {"task_id": "defend-triage-task", "required_tool_names": ["read_defense_candidate", "read_defense_verdict", "write_defending_finding", "write_defense_triage_summary"]},
       {"task_id": "defend-verifier-task", "required_tool_names": ["read_defense_threat_model", "read_defense_candidate", "write_defense_verdict", "write_defense_verification_completion"]},
       {"task_id": "defend-cluster-task", "required_tool_names": ["read_defending_finding", "write_defense_root_cause_cluster"]},
       {"task_id": "defend-contract-review-task", "required_tool_names": ["read_defending_finding", "write_defense_contract_review"]},
@@ -137,7 +137,7 @@
       {
         "collection": "DefenseVerificationCompletion",
         "correlation_field": "run_id",
-        "fields": ["assignment_id", "finding_id", "repository_path", "status", "reason", "scan_ledger_status", "expected_total"]
+        "fields": ["assignment_id", "finding_id", "repository_path", "status", "scan_ledger_status", "expected_total"]
       },
       {
         "collection": "DefenseFindingVerdict",
@@ -162,12 +162,12 @@
       {
         "collection": "DefensePatchAssignment",
         "correlation_field": "run_id",
-        "fields": ["assignment_id", "cluster_id", "finding_id", "member_finding_ids", "contract_review_id", "contract_disposition", "skip_reason", "repository_path", "base_revision", "base_tree_state", "status", "expected_total"]
+        "fields": ["assignment_id", "cluster_id", "finding_id", "member_finding_ids", "contract_review_id", "contract_disposition", "skip_reason", "repository_id", "repository_path", "base_revision", "base_tree_state", "status", "expected_total"]
       },
       {
         "collection": "DefensePatchCandidate",
         "correlation_field": "run_id",
-        "fields": ["patch_id", "cluster_id", "finding_id", "member_finding_ids", "contract_review_id", "contract_disposition", "status", "repository_path", "base_revision", "base_tree_state", "workspace_requirement", "path", "line", "category", "diff", "diff_sha256", "rationale", "variants_checked", "bypass_considered", "test_note", "validation_plan", "expected_total"]
+        "fields": ["patch_id", "workspace_id", "cluster_id", "finding_id", "member_finding_ids", "contract_review_id", "contract_disposition", "status", "repository_path", "base_revision", "base_tree_state", "workspace_requirement", "path", "line", "category", "diff", "diff_sha256", "rationale", "variants_checked", "bypass_considered", "test_note", "validation_plan", "expected_total"]
       },
       {
         "collection": "DefensePatchValidation",

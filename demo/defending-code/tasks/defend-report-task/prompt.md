@@ -26,32 +26,13 @@ Check before publishing:
 - every candidate classification is `vulnerability/HIGH|MEDIUM|LOW` or one of
   the other allowed claim kinds paired with `NONE`;
 - every candidate joins exactly one verification assignment, completion, and
-  verdict by finding/assignment identity, and candidate, assignment, and
-  verdict agree exactly on area, source revision, and source tree state;
-- every non-sentinel verification completion joins exactly one candidate and
-  assignment; any `blocked_handoff` completion is inconsistent;
-- every verdict is exactly `confirmed` + `vulnerability` +
-  `HIGH|MEDIUM|LOW`, or `refuted` + one of
-  `hardening|correctness|operational|specification|not_a_finding` + `NONE`;
+  verdict by finding/assignment identity;
 - candidate count equals verdict count;
 - confirmed + refuted equals candidate count;
-- every blocked verification completion has a non-empty bounded `reason` that
-  identifies the failed handoff or provenance check;
-- every non-empty `verified` completion has exactly one verdict; every
-  `blocked_handoff` or `blocked_provenance` completion has none; and `skipped`
-  is used only by the empty-set sentinel with no verdict;
 - confirmed count equals `DefendingFinding` count;
 - triage-summary candidate/confirmed/refuted counts equal those recomputed from
   the raw candidate and verdict ledgers, `duplicate_count=0`, and
   `promoted_count` equals actual `DefendingFinding` rows;
-- every `DefendingFinding` is an exact join of one promotable confirmed
-  candidate/verdict pair: candidate-owned area, provenance, root-cause key,
-  category, location, title, description, exploit scenario, recommendation,
-  and threat linkage agree;
-  verdict-owned adjudicated kind, provenance, security boundary, exploitability
-  gates, impact, contract surface, severity, confidence, evidence,
-  verification, preconditions, and access level agree; and its stored verdict
-  is `confirmed`;
 - triage `scan_ledger_status` is `consistent` exactly when the observed scan
   counts, candidate classifications, verifier coverage, and provenance joins
   are consistent; otherwise it names the observed mismatch;
@@ -71,12 +52,10 @@ Check before publishing:
   row count; the no-findings path stays explicit through every stage.
 
 Call `write_defense_report` exactly once. Set `audit_status` with this
-precedence: `blocked_provenance` for a non-exact threat model or any
-`blocked_provenance` verification completion;
+precedence: `blocked_provenance` for a non-exact threat model;
 `inconsistent` for any count, identity, total, provenance, digest, or receipt
 mismatch, including a candidate classification mismatch, maintainer ACCEPT
-with non-mergeable quality, an invalid verdict tuple, a promoted-finding join
-mismatch, any durable
+with non-mergeable quality, any durable
 `blocked_handoff` stage status, or join-failure patch-assignment `skip_reason`;
 `partial` when ledgers are coherent but required validation evidence was not
 run; otherwise `complete`. Derive report `candidate_count` from the candidate

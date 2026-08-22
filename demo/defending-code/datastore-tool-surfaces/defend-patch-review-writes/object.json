@@ -48,6 +48,8 @@
         {"name": "cluster_id", "required": false, "fill": {"source_field": "cluster_id"}},
         {"name": "finding_id", "required": false, "fill": {"source_field": "finding_id"}},
         {"name": "validation_id", "required": false, "fill": {"source_field": "validation_id"}},
+        {"name": "workspace_id", "required": false, "fill": {"source_field": "workspace_id"}},
+        {"name": "seal_hash", "required": false, "fill": {"source_field": "seal_hash"}},
         {"name": "reviewed_base_revision", "required": false, "fill": {"source_field": "validated_base_revision"}},
         {"name": "reviewed_base_tree_state", "required": false, "fill": {"source_field": "base_tree_state"}},
         {"name": "reviewed_diff_sha256", "required": true},

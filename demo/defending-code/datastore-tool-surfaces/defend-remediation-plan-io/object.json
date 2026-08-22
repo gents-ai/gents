@@ -26,6 +26,7 @@
         {"name": "contract_review_id", "required": true},
         {"name": "contract_disposition", "required": true},
         {"name": "skip_reason", "required": true},
+        {"name": "repository_id", "required": true},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
         {"name": "base_revision", "required": true},
         {"name": "base_tree_state", "required": true},

@@ -22,10 +22,13 @@ DefendingCodeJob
   -> one root-cause reducer -> M DefenseRootCauseCluster
   -> M triggered contract/spec reviewers -> M DefenseContractReview
   -> contract barrier -> M DefensePatchAssignment
-  -> M patch authors -> M DefensePatchCandidate
-  -> M triggered mechanical validators -> M DefensePatchValidation
-  -> M triggered maintainer reviewers -> M DefensePatchReview
-  -> M triggered adversarial re-attackers -> M DefensePatchSecurityReview
+  -> CallbackBinding CreateWorkspace -> CallbackResult
+  -> M patch authors (ReadWrite bound workspace) -> M DefensePatchCandidate
+  -> WorkspaceReceipt + seal
+  -> M mechanical validators (ReadOnly, seal_hash) -> M DefensePatchValidation
+  -> M maintainer reviewers (ReadOnly) -> M DefensePatchReview
+  -> M adversarial re-attackers (ReadOnly) -> M DefensePatchSecurityReview
+  -> accepted reviews -> typed integrate_workspace
   -> one report barrier -> DefenseReport
 ```
 
@@ -57,10 +60,8 @@ and threat linkage. Verdict rows own the verifier's adjudicated classification,
 independent exploitability gates, fresh evidence, confidence, and severity.
 Triage joins the two ledgers by `finding_id` when promoting confirmed findings;
 verifiers do not transcribe scanner prose or emit clustering metadata. At each
-stage classification is closed: candidates use `vulnerability` with `HIGH`,
-`MEDIUM`, or `LOW`, or a non-vulnerability kind with `NONE`; verdicts use
-`confirmed/vulnerability/HIGH|MEDIUM|LOW` or
-`refuted/<non-vulnerability-or-not_a_finding>/NONE`.
+stage classification is one closed pair: only vulnerabilities carry `HIGH`,
+`MEDIUM`, or `LOW`; every non-vulnerability kind carries `NONE`.
 
 The threat-model bootstrap freezes the audited Git revision and dirty-tree
 observation once. That provenance is copied through review areas, candidates,
@@ -90,16 +91,17 @@ read-only, and their prompts prohibit source edits, dependency installation,
 builds, tests, and target execution. Run this pack only against an authorized,
 trusted checkout and network environment.
 
-Patch authors receive read-only file tools, LSP, and unrestricted shell so they
-can inspect Git objects or create an exact temporary checkout when the live
-tree has moved. They emit unified diffs into `DefensePatchCandidate.diff` and
-do not modify the operator checkout. Contract
-reviewers, mechanical validators, maintainer reviewers, and security
-re-attackers receive shell plus LSP. Until managed workspaces can bind a
-request's real file root, shell CWD, LSP root, and repository-instruction root,
-the mechanical validator applies the diff only in a unique disposable local
-clone at the recorded base revision. It records exactly which format, compile,
-test, and proof gates ran. The original checkout remains unchanged.
+Creating a `DefensePatchAssignment` with `status=ready` provisions one
+isolated workspace through a CallbackBinding (`create_workspace` builtin,
+`git_worktree_diff`). Patch authors bind ReadWrite to that placement: file
+root, shell CWD, LSP root, and AGENTS discovery are the worktree, not the
+operator checkout. They edit files in place. `git commit` / `git add` are
+denied. The host seals the tree after the writer request. Validation,
+maintainer review, and security re-attack bind ReadOnly to the same
+`seal_hash`. A typed Integrate request applies the sealed diff to trunk.
+Cleanup is explicit and is never implied by a terminal request. A temporary
+clone is not the v1 path. Frozen base-revision instructions control bound
+requests; writer-edited `AGENTS.md` is patch data.
 
 The report stage can only use collection-bound graph tools. Findings, source
 excerpts, command output, and diffs are treated as untrusted evidence by

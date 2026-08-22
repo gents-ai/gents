@@ -14,8 +14,9 @@ cluster id, primary finding id, member finding ids, frozen `base_revision` and
 `contract_review_id` and `contract_disposition`. Use `status=ready` only for
 `disposition=actionable` on a ready cluster, with `skip_reason=none`.
 Otherwise use `status=skipped` and a concrete `skip_reason` copied from the
-contract evidence or required human decision. Do not supply runtime-filled run
-or repository fields. Never retry successful writes or call subagent tools.
+contract evidence or required human decision. Set `repository_id=defending-code`
+on every assignment. Do not supply runtime-filled run
+or repository_path fields. Never retry successful writes or call subagent tools.
 
 If the cluster-to-review relation is not a bijection, still write exactly one
 assignment per interpolated contract row. For every missing or duplicate join,

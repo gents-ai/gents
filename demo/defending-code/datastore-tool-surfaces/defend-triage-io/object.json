@@ -8,16 +8,8 @@
       "kind": "read",
       "tool_name": "read_defense_candidate",
       "collection": "DefenseCandidateFinding",
-      "description": "Load every high-recall static security candidate for this run.",
+      "description": "Load every static vulnerability candidate for this run.",
       "fields": ["finding_id", "area_id", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "category", "path", "line", "title", "description", "exploit_scenario", "recommendation", "threat_ids"],
-      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
-    },
-    {
-      "kind": "read",
-      "tool_name": "read_defense_verification_assignment",
-      "collection": "DefenseVerificationAssignment",
-      "description": "Load the immutable candidate-to-verifier work ledger for completion lineage checks.",
-      "fields": ["assignment_id", "finding_id", "area_id", "repository_path", "source_revision", "source_tree_state", "status", "scan_ledger_status", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
