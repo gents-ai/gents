@@ -614,7 +614,7 @@ async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
                 self_config_no_lockout: false,
                 self_config_dry_run: false,
                 enable_lsp: false,
-            enable_graph_dsl: false,
+                enable_graph_dsl: false,
                 lsp_config: None,
             }],
             inference_backends: Vec::new(),
