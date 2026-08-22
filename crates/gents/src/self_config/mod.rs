@@ -34,7 +34,7 @@ mod read;
 #[cfg(test)]
 mod tests;
 
-pub use ops::{PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE};
+pub use ops::{ApplyRequest, PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -143,7 +143,7 @@ fn patch_parameter_schema(target: SelfConfigTarget) -> Value {
     })
 }
 
-fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
+pub(crate) fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
     serde_json::to_string_pretty(outcome).map_err(|error| anyhow!("serialize outcome: {error}"))
 }
 
@@ -348,7 +348,7 @@ fn mcp_service_request(service_id: String, patch: SelfConfigPatch) -> ApplyReque
     request
 }
 
-fn automation_request(
+pub(crate) fn automation_request(
     core: &SelfConfigCore,
     target: SelfConfigTarget,
     id: String,
@@ -524,7 +524,7 @@ async fn ensure_stored_automation_owned(
     Ok(())
 }
 
-fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
+pub(crate) fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
     match kind {
         "task" => Ok(SelfConfigTarget::Task),
         "schedule" => Ok(SelfConfigTarget::Schedule),
