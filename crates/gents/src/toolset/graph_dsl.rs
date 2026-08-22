@@ -656,7 +656,7 @@ mod tests {
             },
         );
         GraphDefinition {
-            graph_id: "test-pipeline".to_string(),
+            graph_id: "test_pipeline".to_string(),
             description: Some("test".to_string()),
             nodes,
             edges: vec![
@@ -781,7 +781,7 @@ mod tests {
             },
         );
         let graph = GraphDefinition {
-            graph_id: "dup-test".to_string(),
+            graph_id: "dup_test".to_string(),
             description: None,
             nodes,
             edges: vec![],
@@ -804,7 +804,7 @@ mod tests {
         for node_id in graph.nodes.keys() {
             let expected = format!("{graph_id}-{node_id}");
             assert!(
-                expected.starts_with("test-pipeline-"),
+                expected.starts_with("test_pipeline-"),
                 "task_id {expected} should be prefixed with graph_id"
             );
         }
@@ -825,7 +825,7 @@ mod tests {
             "{graph_id}-{}-{}",
             graph.edges[1].from, graph.edges[1].to
         );
-        assert_eq!(auto, "test-pipeline-analyze-report");
+        assert_eq!(auto, "test_pipeline-analyze-report");
     }
 
     #[test]
