@@ -34,7 +34,8 @@ mod read;
 #[cfg(test)]
 mod tests;
 
-pub use ops::{ApplyRequest, PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE};
+pub use ops::{PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE};
+pub(crate) use ops::ApplyRequest;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -50,7 +51,7 @@ use crate::graphql::escape_graphql_string;
 use crate::llm::tool::{Tool, ToolDefinition, ToolDyn};
 use crate::tool_surface::SelfConfigToolConfig;
 use defra_node::EmbeddedNode;
-use ops::{decode_merged, guard_selection_keeps_gate, validate_merged_selection, ApplyRequest};
+use ops::{decode_merged, guard_selection_keeps_gate, validate_merged_selection};
 
 pub const GET_MY_CONFIG_TOOL_NAME: &str = "get_my_config";
 pub const CONFIGURE_BEHAVIOR_TOOL_NAME: &str = "configure_behavior";

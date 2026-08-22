@@ -119,11 +119,6 @@ impl CompileGraphTool {
         Ok(Self { core })
     }
 
-    /// Package-visible constructor from an already-built core (used by the
-    /// registration path that shares the self-config core).
-    pub(crate) fn from_core(core: SelfConfigCore) -> Self {
-        Self { core }
-    }
 }
 
 /// Error wrapper mirroring the other tool families: render the full anyhow
@@ -256,7 +251,7 @@ pub fn build_graph_dsl_tool(
 
 /// The summary returned to the agent after a successful compilation.
 #[derive(Debug, serde::Serialize)]
-struct CompileSummary {
+pub(crate) struct CompileSummary {
     graph_id: String,
     tasks_created: Vec<String>,
     triggers_created: Vec<String>,
@@ -282,7 +277,7 @@ pub(crate) async fn compile_graph(
     let mut tasks_created = Vec::with_capacity(graph.nodes.len());
     for (node_id, node) in &graph.nodes {
         let task_id = format!("{graph_id}-{node_id}");
-        create_task(core, &task_id, node).await?;
+        create_task(core, &task_id, node_id, node).await?;
         tasks_created.push(task_id);
     }
     tasks_created.sort();
@@ -475,11 +470,11 @@ fn detect_cycles(graph: &GraphDefinition) -> Result<()> {
     let mut state: HashMap<&str, u8> = HashMap::new();
     let mut path: Vec<&str> = Vec::new();
 
-    fn dfs(
-        node: &str,
-        adj: &HashMap<&str, Vec<&str>>,
-        state: &mut HashMap<&str, u8>,
-        path: &mut Vec<&str>,
+    fn dfs<'a>(
+        node: &'a str,
+        adj: &HashMap<&'a str, Vec<&'a str>>,
+        state: &mut HashMap<&'a str, u8>,
+        path: &mut Vec<&'a str>,
     ) -> Result<()> {
         match state.get(node).copied().unwrap_or(0) {
             2 => return Ok(()), // already fully explored
@@ -515,19 +510,36 @@ fn detect_cycles(graph: &GraphDefinition) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Create one Task document through the transactional self-config write path.
-async fn create_task(core: &SelfConfigCore, task_id: &str, node: &GraphNode) -> Result<()> {
+async fn create_task(
+    core: &SelfConfigCore,
+    task_id: &str,
+    node_id: &str,
+    node: &GraphNode,
+) -> Result<()> {
     use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
     use crate::self_config::automation_request;
 
     let mut patch: SelfConfigPatch = Vec::new();
-    patch.push(("prompt_template".to_string(), Some(Value::String(node.prompt_template.clone()))));
+    // Store the node's target behavior_id in the task's `name` field — the
+    // Task's `behavior_id` is the ownership link, pinned to the calling
+    // behavior by the self-config write path (automation_request's on_create).
+    // The trigger engine dispatches the task under the calling behavior; the
+    // node's behavior_id is recorded here for reference.
+    patch.push((
+        "name".to_string(),
+        Some(Value::String(format!("{node_id} ({})", node.behavior_id))),
+    ));
+    patch.push((
+        "prompt_template".to_string(),
+        Some(Value::String(node.prompt_template.clone())),
+    ));
     patch.push(("enabled".to_string(), Some(Value::Bool(true))));
-    if let Some(name) = &node.output_collection {
+    if let Some(output_collection) = &node.output_collection {
         // Use the output collection as the task's output_schema_ref when
         // provided (the task's bounded write surfaces are pre-populated).
         patch.push((
             "output_schema_ref".to_string(),
-            Some(Value::String(name.clone())),
+            Some(Value::String(output_collection.clone())),
         ));
     }
     // behavior_id is pinned at create by on_create (automation_request), so

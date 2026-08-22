@@ -1187,6 +1187,7 @@ fn init_like_tool_selection_document(
         self_config_dry_run: None,
         enable_lsp: None,
         lsp_config: None,
+        enable_graph_dsl: None,
     }
 }
 
@@ -1479,6 +1480,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         self_config_dry_run: None,
         enable_lsp: None,
         lsp_config: None,
+        enable_graph_dsl: None,
     };
     let ceiling = ToolCeiling::readonly_at(temp_root("gents-complex-package-root"));
     let config = BehaviorToolConfig::from_tool_selection_document(

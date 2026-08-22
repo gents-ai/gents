@@ -33,6 +33,7 @@ pub struct BehaviorToolConfig {
     defra_query_collections: Vec<String>,
     write_tools: Vec<WriteToolDecl>,
     query_tools: Vec<QueryToolDecl>,
+    enable_graph_dsl: bool,
     self_config: super::SelfConfigToolConfig,
     behavior_policy: ToolPolicySurface,
     ceiling_policy: ToolPolicySurface,
