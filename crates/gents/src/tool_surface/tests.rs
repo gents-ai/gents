@@ -95,7 +95,6 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             allowed_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
-            orchestration_enabled: false,
             enable_memory: false,
             enable_session_history_tool: false,
             enable_context_budget: true,
