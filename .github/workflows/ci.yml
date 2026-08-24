@@ -96,6 +96,10 @@ jobs:
 
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size
     needs: rename-guard
     runs-on:
       [self-hosted, macOS, ARM64, studio, "${{ matrix.host }}", "${{ matrix.slot }}"]
@@ -326,6 +330,10 @@ jobs:
         run: .github/scripts/show-sccache-stats.sh
 
   lean-proofs:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size
     # Reuse the warm proof cache on studio-1's light support slot. This keeps
     # the runtime slot free once rename-guard releases the Rust matrix.
     runs-on:
@@ -385,6 +393,10 @@ jobs:
         run: npm test --workspace @source-inc/gents-desktop-chat
 
   desktop-packages:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size
     # Package boundary, publishability, and package-local tests are independent
     # of the desktop application/browser gate and should not block it.
     runs-on: ubuntu-latest
@@ -426,6 +438,10 @@ jobs:
         run: ./scripts/pack-desktop-packages.sh target/desktop-npm-ci
 
   desktop-ui:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size
     # This job exercises browser-only code. Keep scarce macOS capacity for the
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }})
@@ -490,6 +506,10 @@ jobs:
             apps/gents-desktop/playwright-screenshots-report
 
   desktop-ui-bombadil:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size
     # Bombadil's exact Linux failure trace passes on macOS. Keep this small
     # platform-specific smoke on a Studio while the portable UI suite runs on
     # hosted Linux; it normally releases the slot before Rust becomes ready.
