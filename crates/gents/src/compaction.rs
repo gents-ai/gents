@@ -66,6 +66,22 @@ pub enum CompactionStrategy {
     StripThenSummarize,
 }
 
+impl Default for CompactionStrategy {
+    fn default() -> Self {
+        Self::StripThenSummarize
+    }
+}
+
+impl CompactionStrategy {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::StripToolResults => "StripToolResults",
+            Self::Summarize => "Summarize",
+            Self::StripThenSummarize => "StripThenSummarize",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileActivity {
     pub files_read: Vec<String>,
@@ -399,6 +415,18 @@ pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
 pub fn provider_view(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
     let (stripped, activity) = strip_tool_results(messages);
     (sanitize_history_for_provider(stripped), activity)
+}
+
+/// Project the active tail from a canonical provider view after applying the
+/// durable compacted-prefix count. Re-sanitization preserves compatibility
+/// with legacy entries whose prefix could end inside a tool turn.
+pub fn active_provider_history(
+    mut provider_history: Vec<Message>,
+    compacted_messages: usize,
+) -> Vec<Message> {
+    let drain_count = compacted_messages.min(provider_history.len());
+    provider_history.drain(..drain_count);
+    sanitize_history_for_provider(provider_history)
 }
 
 /// Greatest `j <= limit` at which no tool call is awaiting its result — the

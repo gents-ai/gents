@@ -174,6 +174,7 @@ export function ActiveChatWorkspace({
       <ChatHeader
         behaviorLabel={behaviorLabel}
         configuredPeerCount={configuredPeerCount}
+        context={session?.context ?? null}
         dialedPeerCount={dialedPeerCount}
         onOpenMobileNavigation={onOpenMobileNavigation}
         runtimeHealth={runtimeHealth}

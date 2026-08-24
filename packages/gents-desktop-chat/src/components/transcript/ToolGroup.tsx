@@ -3,6 +3,7 @@ import type {
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
+import { memo } from "react";
 
 import { CancelCauseBadge, CancelCauseDetails } from "../cancelUx/index.js";
 import { CommandDenialToolItem } from "../commandDenial/index.js";
@@ -47,7 +48,13 @@ function formatPayload(value: string) {
   }
 }
 
-function Payload({ label, value }: { label: string; value?: string | null }) {
+const Payload = memo(function Payload({
+  label,
+  value,
+}: {
+  label: string;
+  value?: string | null;
+}) {
   if (!value?.trim()) return null;
   const formatted = formatPayload(value);
   return (
@@ -59,7 +66,7 @@ function Payload({ label, value }: { label: string; value?: string | null }) {
       </div>
     </div>
   );
-}
+});
 
 function LiveOutput({ tool }: { tool: RenderedToolCallView }) {
   const tail =

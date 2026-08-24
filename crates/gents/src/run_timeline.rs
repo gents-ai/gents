@@ -267,6 +267,8 @@ pub struct TimelineInferenceCallRow {
     pub completion_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_accounting_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -736,6 +738,8 @@ pub struct TimelineInferenceCallEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_input_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_accounting: Option<crate::rendered_request::ContextAccounting>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub queued_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
@@ -930,6 +934,10 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 prompt_tokens: call.prompt_tokens,
                 completion_tokens: call.completion_tokens,
                 cached_input_tokens: call.cached_input_tokens,
+                context_accounting: call
+                    .context_accounting_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str(json).ok()),
                 queued_at: call.queued_at.clone(),
                 started_at: call.started_at.clone(),
                 ended_at: call.ended_at.clone(),

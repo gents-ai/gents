@@ -91,6 +91,10 @@ pub fn decode_persisted_message(role: &str, content: &str) -> Message {
 
 pub fn present_persisted_message(role: &str, content: &str) -> PersistedMessagePresentation {
     let message = decode_persisted_message(role, content);
+    present_message(&message)
+}
+
+pub fn present_message(message: &Message) -> PersistedMessagePresentation {
     let has_tool_calls = match &message {
         Message::Assistant { content, .. } => content
             .iter()
@@ -122,8 +126,8 @@ pub fn present_persisted_message(role: &str, content: &str) -> PersistedMessageP
 
     PersistedMessagePresentation {
         role,
-        body_markdown: render_message_body_markdown(&message),
-        reasoning_markdown: extract_message_reasoning(&message),
+        body_markdown: render_message_body_markdown(message),
+        reasoning_markdown: extract_message_reasoning(message),
         has_tool_calls,
         has_tool_results,
     }
@@ -281,6 +285,15 @@ mod tests {
 
         assert_eq!(presentation.role, PresentedMessageRole::Assistant);
         assert_eq!(presentation.body_markdown, "hello markdown");
+    }
+
+    #[test]
+    fn decoded_message_presentation_matches_persisted_projection() {
+        let decoded = decode_persisted_message("assistant", "hello markdown");
+        assert_eq!(
+            present_message(&decoded),
+            present_persisted_message("assistant", "hello markdown")
+        );
     }
 
     #[test]

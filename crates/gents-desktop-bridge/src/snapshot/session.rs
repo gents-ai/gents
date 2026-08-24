@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use gents_desktop_core::client::ClientCore;
+use gents_protocol::message::Message;
 use gents_protocol::row::{AgentMessageRow, AgentRequestRow, AgentToolCallRow};
-use gents_protocol::transcript::{normalize_markdown_text, present_persisted_message};
+use gents_protocol::transcript::{
+    normalize_markdown_text, present_message, present_persisted_message,
+};
 
 use super::super::cause_derivation::{
     derive_response_cause, derive_tool_call_cause, RequestEvidence, ResponseEvidence,
@@ -11,7 +15,7 @@ use super::super::cause_derivation::{
 use super::super::types::{
     normalize_optional, turn_state_label, CommandDenialView, DerivedCancelCauseView,
     DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView, ResponseView,
-    RetryEligibilityView, ToolCallView, ToolResultView,
+    RetryEligibilityView, SessionCompactionView, SessionContextView, ToolCallView, ToolResultView,
 };
 use super::timeline::{build_rendered_timeline, has_materialized_user_owner};
 use super::{request_matches_agent, source_matches_agent};
@@ -50,6 +54,336 @@ fn request_is_deprecated_background_completion(request: &AgentRequestRow) -> boo
         request.execution_origin.as_deref(),
         request.metadata.as_deref(),
     )
+}
+
+fn usize_to_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn build_session_context_view(
+    store: &gents_desktop_core::client::ClientStore,
+    agent_did: Option<&str>,
+    behavior_id: Option<&str>,
+    session_id: &str,
+    durable_messages: Vec<Message>,
+    durable_message_count: usize,
+) -> SessionContextView {
+    let behavior = behavior_id.and_then(|behavior_id| {
+        store.behaviors.iter().find(|row| {
+            row.behavior_id == behavior_id
+                && agent_did.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
+        })
+    });
+    let inference_profile = behavior
+        .and_then(|behavior| behavior.inference_profile_id.as_deref())
+        .and_then(|profile_id| {
+            store
+                .inference_profiles
+                .iter()
+                .find(|row| row.profile_id == profile_id)
+        });
+    let context_window = inference_profile
+        .and_then(|profile| profile.context_window)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(gents::config::DEFAULT_CONTEXT_WINDOW);
+    let compaction_threshold = behavior
+        .and_then(|behavior| behavior.compaction_threshold)
+        .unwrap_or(gents::config::DEFAULT_COMPACTION_THRESHOLD);
+    let compaction_strategy = behavior
+        .and_then(|behavior| normalize_optional(behavior.compaction_strategy.as_deref()))
+        .unwrap_or_else(|| {
+            gents::compaction::CompactionStrategy::default()
+                .as_str()
+                .to_string()
+        });
+
+    let mut compaction_rows = store
+        .compaction_entries
+        .iter()
+        .enumerate()
+        .filter(|(index, row)| {
+            row.session_id.as_deref() == Some(session_id)
+                && agent_did.is_none_or(|agent_did| {
+                    source_matches_agent(
+                        &store.compaction_entry_source_agent_dids,
+                        *index,
+                        agent_did,
+                        false,
+                    )
+                })
+        })
+        .map(|(_, row)| row)
+        .collect::<Vec<_>>();
+    compaction_rows.sort_by(|left, right| {
+        left.sequence
+            .unwrap_or_default()
+            .cmp(&right.sequence.unwrap_or_default())
+            .then_with(|| left.created_at.cmp(&right.created_at))
+            .then_with(|| left.compaction_key.cmp(&right.compaction_key))
+    });
+
+    let estimated_durable_tokens = gents::compaction::estimate_message_tokens(&durable_messages);
+    let (provider_messages, _) = gents::compaction::provider_view(durable_messages);
+    let total_compacted_messages = compaction_rows.iter().fold(0_usize, |total, row| {
+        total.saturating_add(
+            row.messages_compacted
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or_default(),
+        )
+    });
+    let active_provider_messages =
+        gents::compaction::active_provider_history(provider_messages, total_compacted_messages);
+    let summaries = compaction_rows
+        .iter()
+        .filter_map(|row| row.summary.clone())
+        .map(gents::compaction::bounded_summary)
+        .collect::<Vec<_>>();
+    let estimated_conversation_tokens =
+        gents::compaction::estimate_message_tokens(&active_provider_messages).saturating_add(
+            gents::prompt::estimate_compaction_summary_tokens(&summaries),
+        );
+    let compactions = compaction_rows
+        .into_iter()
+        .map(|row| SessionCompactionView {
+            compaction_key: row.compaction_key.clone(),
+            sequence: row.sequence,
+            messages_compacted: row.messages_compacted.unwrap_or_default().max(0),
+            original_tokens: row.original_tokens,
+            compacted_tokens: row.compacted_tokens,
+            created_at: normalize_optional(row.created_at.as_deref()),
+        })
+        .collect();
+
+    SessionContextView {
+        estimated_durable_tokens: usize_to_i64(estimated_durable_tokens),
+        estimated_conversation_tokens: usize_to_i64(estimated_conversation_tokens),
+        context_window: usize_to_i64(context_window),
+        compaction_threshold,
+        compaction_threshold_tokens: usize_to_i64(gents::compaction::threshold_budget(
+            context_window,
+            compaction_threshold,
+        )),
+        compaction_strategy,
+        durable_message_count: usize_to_i64(durable_message_count),
+        provider_message_count: usize_to_i64(active_provider_messages.len()),
+        total_compacted_messages: usize_to_i64(total_compacted_messages),
+        compactions,
+        last_request: None,
+    }
+}
+
+pub fn attach_last_request_context(
+    snapshot: &mut DesktopSessionSnapshot,
+    request_id: String,
+    call_id: String,
+    call_sequence: i64,
+    accounting: gents_protocol::rendered_request::ContextAccounting,
+) {
+    use super::super::types::{SessionContextComponentsView, SessionRequestContextView};
+
+    let reason = serde_json::to_value(accounting.compaction_reason)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_string());
+    snapshot.context.last_request = Some(SessionRequestContextView {
+        request_id,
+        call_id,
+        call_sequence,
+        turn_index: usize_to_i64(accounting.turn_index),
+        attempt: i64::from(accounting.attempt),
+        estimator: accounting.estimator,
+        estimated_input_tokens: usize_to_i64(accounting.estimated_input_tokens),
+        context_window: usize_to_i64(accounting.context_window),
+        compaction_threshold_tokens: usize_to_i64(accounting.compaction_threshold_tokens),
+        configured_max_output_tokens: accounting
+            .configured_max_output_tokens
+            .and_then(|value| i64::try_from(value).ok()),
+        effective_max_output_tokens: accounting
+            .effective_max_output_tokens
+            .and_then(|value| i64::try_from(value).ok()),
+        compaction_reason: reason,
+        pre_compaction_input_tokens: accounting.pre_compaction_input_tokens.map(usize_to_i64),
+        components: SessionContextComponentsView {
+            messages: usize_to_i64(accounting.components.messages),
+            documents: usize_to_i64(accounting.components.documents),
+            tool_schemas: usize_to_i64(accounting.components.tool_schemas),
+            additional_parameters: usize_to_i64(accounting.components.additional_parameters),
+            output_schema: usize_to_i64(accounting.components.output_schema),
+        },
+    });
+}
+
+struct LoadedRequestContext {
+    request_id: String,
+    call_id: String,
+    call_sequence: i64,
+    accounting: gents_protocol::rendered_request::ContextAccounting,
+}
+
+/// Build the shared session snapshot and attach the newest durable accounting
+/// row for any request in the session. This deliberately does not key the meter
+/// off `latest_request_id`: a newly submitted request has no accounting until
+/// its first provider dispatch, so the previous measured request remains visible.
+pub async fn build_session_snapshot_for_agent(
+    core: &ClientCore,
+    agent_did: Option<&str>,
+    session_id: &str,
+    preferred_request_id: Option<&str>,
+) -> Option<DesktopSessionSnapshot> {
+    let store = core.store().snapshot();
+    let request_ids = agent_did.map_or_else(
+        || store.requests_for_session(session_id),
+        |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
+    );
+    let request_ids = request_ids
+        .into_iter()
+        .map(|request| request.request_id.clone())
+        .collect::<Vec<_>>();
+    let mut snapshot = build_session_snapshot_from_store_for_agent(
+        store.as_ref(),
+        agent_did,
+        session_id,
+        preferred_request_id,
+    );
+    let resolved_agent_did = snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.agent_did.clone());
+    if let (Some(snapshot), Some(agent_did)) = (snapshot.as_mut(), resolved_agent_did) {
+        match load_latest_session_request_context(core.node(), &agent_did, &request_ids).await {
+            Ok(Some(context)) => attach_last_request_context(
+                snapshot,
+                context.request_id,
+                context.call_id,
+                context.call_sequence,
+                context.accounting,
+            ),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                target: "gents_desktop::chat",
+                agent_did,
+                session_id,
+                error = %error,
+                "loading latest session context accounting failed"
+            ),
+        }
+    }
+    snapshot
+}
+
+async fn load_latest_session_request_context(
+    node: &gents::defra_node::EmbeddedNode,
+    agent_did: &str,
+    request_ids: &[String],
+) -> anyhow::Result<Option<LoadedRequestContext>> {
+    if request_ids.is_empty() {
+        return Ok(None);
+    }
+    let request_ids = request_ids
+        .iter()
+        .map(|request_id| format!("\"{}\"", gents::graphql::escape_graphql_string(request_id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        r#"query {{
+            InferenceCall(
+                filter: {{
+                    request_id: {{ _in: [{request_ids}] }},
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    call_kind: {{ _eq: "inference" }}
+                }},
+                order: {{ queued_at: DESC }},
+                limit: 10
+            ) {{
+                request_id
+                call_id
+                call_seq
+                queued_at
+                context_accounting_json
+            }}
+        }}"#,
+        agent_did = gents::graphql::escape_graphql_string(agent_did),
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying session InferenceCall context accounting: {:?}",
+            response.errors
+        );
+    }
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceCall"))
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    decode_latest_request_context(rows)
+}
+
+fn decode_latest_request_context(
+    rows: &[serde_json::Value],
+) -> anyhow::Result<Option<LoadedRequestContext>> {
+    let Some(row) = rows
+        .iter()
+        .filter(|row| {
+            row.get("context_accounting_json")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+        .max_by(|left, right| {
+            left.get("queued_at")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .cmp(
+                    right
+                        .get("queued_at")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                )
+                .then_with(|| {
+                    left.get("call_seq")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or_default()
+                        .cmp(
+                            &right
+                                .get("call_seq")
+                                .and_then(serde_json::Value::as_i64)
+                                .unwrap_or_default(),
+                        )
+                })
+                .then_with(|| {
+                    left.get("call_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .cmp(
+                            right
+                                .get("call_id")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default(),
+                        )
+                })
+        })
+    else {
+        return Ok(None);
+    };
+    let required_string = |field: &str| {
+        row.get(field)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no {field}"))
+    };
+    let encoded = required_string("context_accounting_json")?;
+    Ok(Some(LoadedRequestContext {
+        request_id: required_string("request_id")?,
+        call_id: required_string("call_id")?,
+        call_sequence: row
+            .get("call_seq")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no call_seq"))?,
+        accounting: serde_json::from_str(&encoded)
+            .map_err(|error| anyhow::anyhow!("decoding context_accounting_json: {error}"))?,
+    }))
 }
 
 fn command_denial_from_row(row: &AgentToolCallRow) -> Option<CommandDenialView> {
@@ -312,6 +646,37 @@ pub fn build_session_snapshot_from_store_for_agent(
     let pending_turn = latest_request_id
         .as_deref()
         .and_then(|request_id| build_pending_turn(store, agent_did, session_id, request_id));
+    let resolved_agent_did = conversation
+        .and_then(|row| normalize_optional(row.agent_did.as_deref()))
+        .or_else(|| latest_request.and_then(|row| normalize_optional(row.agent_did.as_deref())));
+    let resolved_behavior_id = conversation
+        .and_then(|row| normalize_optional(row.behavior_id.as_deref()))
+        .or_else(|| session_row.and_then(|row| normalize_optional(row.behavior_id.as_deref())))
+        .or_else(|| latest_request.and_then(|row| normalize_optional(row.behavior_id.as_deref())));
+    let decoded_messages = transcript
+        .messages
+        .iter()
+        .map(|row| {
+            row.role
+                .as_deref()
+                .zip(row.content.as_deref())
+                .map(|(role, content)| {
+                    gents_protocol::transcript::decode_persisted_message(role, content)
+                })
+        })
+        .collect::<Vec<_>>();
+    let durable_messages = decoded_messages
+        .iter()
+        .filter_map(Clone::clone)
+        .collect::<Vec<_>>();
+    let context = build_session_context_view(
+        store,
+        resolved_agent_did.as_deref(),
+        resolved_behavior_id.as_deref(),
+        session_id,
+        durable_messages,
+        transcript.messages.len(),
+    );
 
     let requests_by_id: HashMap<&str, &AgentRequestRow> = requests
         .iter()
@@ -321,13 +686,11 @@ pub fn build_session_snapshot_from_store_for_agent(
     let messages = transcript
         .messages
         .into_iter()
-        .map(|row| {
+        .zip(decoded_messages)
+        .map(|(row, decoded_message)| {
             let role = normalize_optional(row.role.as_deref());
             let content = normalize_optional(row.content.as_deref());
-            let presentation = role
-                .as_deref()
-                .zip(content.as_deref())
-                .map(|(role, content)| present_persisted_message(role, content));
+            let presentation = decoded_message.as_ref().map(present_message);
 
             MessageView {
                 message_key: row.message_key.clone(),
@@ -447,17 +810,8 @@ pub fn build_session_snapshot_from_store_for_agent(
 
     Some(DesktopSessionSnapshot {
         session_id: session_id.to_string(),
-        agent_did: conversation
-            .and_then(|row| normalize_optional(row.agent_did.as_deref()))
-            .or_else(|| {
-                latest_request.and_then(|row| normalize_optional(row.agent_did.as_deref()))
-            }),
-        behavior_id: conversation
-            .and_then(|row| normalize_optional(row.behavior_id.as_deref()))
-            .or_else(|| session_row.and_then(|row| normalize_optional(row.behavior_id.as_deref())))
-            .or_else(|| {
-                latest_request.and_then(|row| normalize_optional(row.behavior_id.as_deref()))
-            }),
+        agent_did: resolved_agent_did,
+        behavior_id: resolved_behavior_id,
         title: conversation.and_then(|row| normalize_optional(row.title.as_deref())),
         preview_text: conversation.and_then(|row| normalize_optional(row.preview_text.as_deref())),
         status: conversation
@@ -470,6 +824,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         latest_response,
         active_response_overlay,
         pending_turn,
+        context,
         timeline_items,
         messages,
         tool_calls,
@@ -697,5 +1052,162 @@ mod retry_eligibility_tests {
             exhausted.denial_reason.as_deref(),
             Some("retryBudgetExhausted")
         );
+    }
+}
+
+#[cfg(test)]
+mod request_context_tests {
+    use super::*;
+    use gents_protocol::rendered_request::{
+        ContextAccounting, ContextCompactionReason, ContextInputComponents,
+        CONTEXT_ACCOUNTING_VERSION,
+    };
+
+    fn accounting_json(estimated_input_tokens: usize) -> String {
+        serde_json::to_string(&ContextAccounting {
+            accounting_version: CONTEXT_ACCOUNTING_VERSION,
+            turn_index: 0,
+            attempt: 0,
+            estimator: "test".to_string(),
+            components: ContextInputComponents {
+                messages: estimated_input_tokens,
+                documents: 0,
+                tool_schemas: 0,
+                additional_parameters: 0,
+                output_schema: 0,
+            },
+            estimated_input_tokens,
+            context_window: 10_000,
+            compaction_threshold_basis_points: 8_000,
+            compaction_threshold_tokens: 8_000,
+            configured_max_output_tokens: None,
+            effective_max_output_tokens: None,
+            compaction_reason: ContextCompactionReason::BelowThreshold,
+            pre_compaction_input_tokens: None,
+        })
+        .expect("accounting json")
+    }
+
+    #[test]
+    fn newest_accounted_call_survives_a_newer_unaccounted_request() {
+        let rows = vec![
+            serde_json::json!({
+                "request_id": "request-old",
+                "call_id": "call-old",
+                "call_seq": 1,
+                "queued_at": "2026-08-24T12:00:00Z",
+                "context_accounting_json": accounting_json(1_000),
+            }),
+            serde_json::json!({
+                "request_id": "request-new",
+                "call_id": "call-pending",
+                "call_seq": 3,
+                "queued_at": "2026-08-24T12:02:00Z",
+                "context_accounting_json": null,
+            }),
+            serde_json::json!({
+                "request_id": "request-middle",
+                "call_id": "call-middle",
+                "call_seq": 2,
+                "queued_at": "2026-08-24T12:01:00Z",
+                "context_accounting_json": accounting_json(2_000),
+            }),
+        ];
+
+        let loaded = decode_latest_request_context(&rows)
+            .expect("decode context")
+            .expect("accounted call");
+        assert_eq!(loaded.request_id, "request-middle");
+        assert_eq!(loaded.call_id, "call-middle");
+        assert_eq!(loaded.call_sequence, 2);
+        assert_eq!(loaded.accounting.estimated_input_tokens, 2_000);
+    }
+
+    #[tokio::test]
+    async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches() {
+        let (core, _tempdir) = crate::tests::support::boot_core().await;
+        let agent_did = "did:test:context-agent";
+        let session_id = "session-context-side-channel";
+        for (request_id, created_at) in [
+            ("request-accounted", "2026-08-24T12:00:00Z"),
+            ("request-pending", "2026-08-24T12:02:00Z"),
+        ] {
+            let mutation = format!(
+                r#"mutation {{
+                    create_AgentRequest(input: {{
+                        request_id: "{request_id}",
+                        agent_did: "{agent_did}",
+                        behavior_id: "default",
+                        session_id: "{session_id}",
+                        content: "test",
+                        status: "pending",
+                        lifecycle_state: "pending",
+                        backend_id: "backend",
+                        created_at: "{created_at}",
+                        retry_count: 0
+                    }}) {{ _docID }}
+                }}"#
+            );
+            let response = core.node().execute(&mutation).await;
+            assert!(
+                !response.has_errors(),
+                "seed request failed: {:?}",
+                response.errors
+            );
+            core.refresh_local_request(agent_did, request_id)
+                .await
+                .expect("refresh request");
+        }
+
+        let accounted_json = gents::graphql::escape_graphql_string(&accounting_json(2_500));
+        let inference_calls = format!(
+            r#"mutation {{
+                accounted: create_InferenceCall(input: {{
+                    call_id: "call-accounted",
+                    request_id: "request-accounted",
+                    call_seq: 1,
+                    agent_did: "{agent_did}",
+                    call_kind: "inference",
+                    queued_at: "2026-08-24T12:01:00Z",
+                    context_accounting_json: "{accounted_json}"
+                }}) {{ _docID }}
+                pending: create_InferenceCall(input: {{
+                    call_id: "call-pending",
+                    request_id: "request-pending",
+                    call_seq: 2,
+                    agent_did: "{agent_did}",
+                    call_kind: "inference",
+                    queued_at: "2026-08-24T12:03:00Z"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = core.node().execute(&inference_calls).await;
+        assert!(
+            !response.has_errors(),
+            "seed inference calls failed: {:?}",
+            response.errors
+        );
+
+        let snapshot = build_session_snapshot_for_agent(
+            core.as_ref(),
+            Some(agent_did),
+            session_id,
+            Some("request-pending"),
+        )
+        .await
+        .expect("session snapshot");
+        assert_eq!(
+            snapshot.latest_request_id.as_deref(),
+            Some("request-pending")
+        );
+        let last = snapshot
+            .context
+            .last_request
+            .expect("previous accounted request remains visible");
+        assert_eq!(last.request_id, "request-accounted");
+        assert_eq!(last.call_id, "call-accounted");
+        assert_eq!(last.estimated_input_tokens, 2_500);
+
+        core.shutdown().await.expect("core shutdown");
     }
 }

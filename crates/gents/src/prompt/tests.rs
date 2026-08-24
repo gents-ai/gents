@@ -126,6 +126,25 @@ async fn build_with_summaries_prepends() {
 }
 
 #[test]
+fn compaction_summary_estimate_includes_the_provider_message_wrapper() {
+    let summaries = vec![
+        "First checkpoint.".to_string(),
+        "Second checkpoint.".to_string(),
+    ];
+    let message = compaction_summary_message(&summaries).expect("summary message");
+
+    assert_eq!(
+        estimate_compaction_summary_tokens(&summaries),
+        estimate_message_tokens(std::slice::from_ref(&message))
+    );
+    assert!(
+        estimate_compaction_summary_tokens(&summaries)
+            > estimate_tokens(&join_compaction_summaries(&summaries))
+    );
+    assert_eq!(estimate_compaction_summary_tokens(&[]), 0);
+}
+
+#[test]
 fn system_reminder_format() {
     let msg = LayeredPromptBuilder::system_reminder("The time is 3pm.");
     if let Message::User { content } = &msg {

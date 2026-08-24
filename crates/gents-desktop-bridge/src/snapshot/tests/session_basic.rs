@@ -79,6 +79,132 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
 }
 
 #[test]
+fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
+    let behavior: AgentBehaviorRow = serde_json::from_value(serde_json::json!({
+        "behavior_id": "default",
+        "agent_did": "did:test:amy",
+        "inference_profile_id": "large-context",
+        "compaction_strategy": "StripThenSummarize",
+        "compaction_threshold": 0.57
+    }))
+    .expect("behavior row");
+    let profile: InferenceProfileRow = serde_json::from_value(serde_json::json!({
+        "profile_id": "large-context",
+        "context_window": 10_000
+    }))
+    .expect("profile row");
+    let compaction: CompactionEntryRow = serde_json::from_value(serde_json::json!({
+        "compaction_key": "session-context:1",
+        "session_id": "session-context",
+        "sequence": 1,
+        "summary": "The first turn established the durable plan.",
+        "messages_compacted": 1,
+        "original_tokens": 1_000,
+        "compacted_tokens": 200,
+        "created_at": "2026-08-24T12:00:00Z"
+    }))
+    .expect("compaction row");
+    let messages = [
+        "old turn ".repeat(300),
+        "retained turn".into(),
+        "latest turn".into(),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, text)| AgentMessageRow {
+        message_key: format!("session-context:{}", index + 1),
+        session_id: Some("session-context".to_string()),
+        request_id: None,
+        requester_did: None,
+        sequence: Some((index + 1) as i64),
+        role: Some("user".to_string()),
+        content: Some(user_message_json(&text)),
+        reasoning: None,
+        timestamp: None,
+    })
+    .collect();
+    let store = ClientStore::from_rows(ClientStoreRows {
+        conversations: vec![AgentConversationRow {
+            session_id: "session-context".to_string(),
+            agent_name: Some("Amy".to_string()),
+            agent_did: Some("did:test:amy".to_string()),
+            requester_did: None,
+            behavior_id: Some("default".to_string()),
+            title: None,
+            title_source: None,
+            preview_text: None,
+            status: Some("active".to_string()),
+            created_at: None,
+            updated_at: None,
+            latest_request_id: None,
+        }],
+        behaviors: vec![behavior],
+        inference_profiles: vec![profile],
+        messages,
+        compaction_entries: vec![compaction],
+        ..ClientStoreRows::default()
+    });
+
+    let mut snapshot = build_session_snapshot_from_store_for_agent(
+        &store,
+        Some("did:test:amy"),
+        "session-context",
+        None,
+    )
+    .expect("session snapshot");
+
+    assert_eq!(snapshot.context.context_window, 10_000);
+    assert_eq!(snapshot.context.compaction_threshold_tokens, 5_700);
+    assert_eq!(snapshot.context.durable_message_count, 3);
+    assert_eq!(snapshot.context.provider_message_count, 2);
+    assert_eq!(snapshot.context.total_compacted_messages, 1);
+    assert!(snapshot.context.estimated_conversation_tokens > 0);
+    assert!(
+        snapshot.context.estimated_durable_tokens > snapshot.context.estimated_conversation_tokens
+    );
+    assert_eq!(snapshot.context.compactions.len(), 1);
+    assert_eq!(snapshot.context.compactions[0].original_tokens, Some(1_000));
+    assert_eq!(snapshot.context.compactions[0].compacted_tokens, Some(200));
+
+    attach_last_request_context(
+        &mut snapshot,
+        "request-context".to_string(),
+        "call-context".to_string(),
+        4,
+        gents_protocol::rendered_request::ContextAccounting {
+            accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+            turn_index: 3,
+            attempt: 1,
+            estimator: "serialized_json_bytes_div_4_v1".to_string(),
+            components: gents_protocol::rendered_request::ContextInputComponents {
+                messages: 4_000,
+                documents: 100,
+                tool_schemas: 1_200,
+                additional_parameters: 50,
+                output_schema: 350,
+            },
+            estimated_input_tokens: 5_700,
+            context_window: 10_000,
+            compaction_threshold_basis_points: 5_700,
+            compaction_threshold_tokens: 5_700,
+            configured_max_output_tokens: Some(2_000),
+            effective_max_output_tokens: Some(2_000),
+            compaction_reason:
+                gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold,
+            pre_compaction_input_tokens: None,
+        },
+    );
+    let last = snapshot
+        .context
+        .last_request
+        .expect("last request accounting");
+    assert_eq!(last.estimated_input_tokens, 5_700);
+    assert_eq!((last.turn_index, last.attempt), (3, 1));
+    assert_eq!(last.components.tool_schemas, 1_200);
+    assert_eq!(last.compaction_reason, "below_threshold");
+}
+
+#[test]
 fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized() {
     let store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {

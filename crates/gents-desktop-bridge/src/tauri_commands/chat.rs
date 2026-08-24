@@ -2,7 +2,7 @@ use crate::error::BridgeError;
 use tauri::State;
 
 use crate::commands::{rename_conversation, send_chat_message};
-use crate::snapshot::build_session_snapshot_from_store_for_agent;
+use crate::snapshot::build_session_snapshot_for_agent;
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
     ChatSendRequest, ChatSendResult, ConversationRenameRequest, DesktopSessionSnapshot,
@@ -30,13 +30,13 @@ pub async fn desktop_session_snapshot(
             );
         }
     }
-    let snapshot = core.store().snapshot();
-    Ok(build_session_snapshot_from_store_for_agent(
-        snapshot.as_ref(),
+    Ok(build_session_snapshot_for_agent(
+        core.as_ref(),
         agent_did.as_deref(),
         &session_id,
         request_id.as_deref(),
-    ))
+    )
+    .await)
 }
 
 #[tauri::command]

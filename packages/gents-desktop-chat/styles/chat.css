@@ -46,6 +46,122 @@
     flex-wrap: wrap;
   }
 
+  .context-meter {
+    position: relative;
+  }
+
+  .context-meter > summary {
+    cursor: pointer;
+    list-style: none;
+    white-space: nowrap;
+  }
+
+  .context-meter > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .context-meter[open] > summary {
+    border-color: var(--border-selected);
+    color: var(--color-text);
+  }
+
+  .context-meter-popover {
+    position: absolute;
+    z-index: 8;
+    top: calc(100% + var(--space-3));
+    right: 0;
+    display: grid;
+    gap: var(--space-4);
+    width: min(380px, calc(100vw - var(--space-8)));
+    padding: var(--space-5);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-deep);
+    box-shadow: 0 16px 40px rgb(var(--scrim-rgb) / 0.42);
+    color: var(--color-text-soft);
+    font-size: var(--text-sm);
+  }
+
+  .context-meter-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .context-meter-heading span,
+  .context-meter-event,
+  .context-meter-note {
+    color: var(--color-text-muted);
+  }
+
+  .context-meter-track {
+    position: relative;
+    height: 8px;
+    overflow: visible;
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-muted);
+  }
+
+  .context-meter-fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--color-accent);
+  }
+
+  .context-meter-threshold {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    width: 2px;
+    background: var(--color-warning);
+    transform: translateX(-1px);
+  }
+
+  .context-meter-facts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3) var(--space-5);
+    margin: 0;
+  }
+
+  .context-meter-facts div {
+    min-width: 0;
+  }
+
+  .context-meter-facts dt {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+  }
+
+  .context-meter-facts dd {
+    margin: var(--space-1) 0 0;
+    overflow: hidden;
+    color: var(--color-text);
+    text-overflow: ellipsis;
+  }
+
+  .context-meter-history {
+    display: grid;
+    gap: var(--space-2);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border-default);
+  }
+
+  .context-meter-event {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+  }
+
+  .context-meter-note {
+    margin: 0;
+    font-size: var(--text-xs);
+    line-height: 1.45;
+  }
+
   .transcript-panel,
   .composer-panel {
     min-width: 0;
@@ -226,6 +342,10 @@
     padding-bottom: var(--space-2);
   }
 
+  .transcript-load-older {
+    justify-self: center;
+  }
+
   .compact-empty {
     min-height: 180px;
   }
@@ -254,6 +374,14 @@
       flex: 0 0 auto;
       justify-content: flex-end;
       gap: var(--space-2);
+    }
+
+    .context-meter-popover {
+      position: fixed;
+      top: calc(var(--space-10) * 2);
+      right: var(--space-4);
+      left: var(--space-4);
+      width: auto;
     }
 
     .chat-status .chip:last-child {

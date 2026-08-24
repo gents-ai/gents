@@ -514,6 +514,14 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
     let endpoint = std::env::var("GENTS_TEST_INFERENCE_URL")
         .expect("set GENTS_TEST_INFERENCE_URL, including the /v1 suffix");
     let model_name = std::env::var("GENTS_TEST_MODEL").unwrap_or_else(|_| "d4f".to_string());
+    let context_window = std::env::var("GENTS_TEST_COMPACTION_CONTEXT_WINDOW")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(64_000);
+    let timeout_secs = std::env::var("GENTS_TEST_COMPACTION_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(150);
     let client = crate::inference_http::build_openai_chat_completions_client(
         "no-key",
         &endpoint,
@@ -523,30 +531,217 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
     .expect("build live OpenAI-compatible client");
     let model = client.completion_model(&model_name);
     let mut config = scheduled_origin_config();
-    config.temperature = Some(1.0);
-    config.additional_params = Some(serde_json::json!({"top_p": 0.95}));
-    let compactor = DefraCompactor::new(Arc::new(model), config);
+    config.temperature = Some(0.2);
+    config.additional_params = Some(serde_json::json!({"top_p": 0.9, "seed": 7421}));
+    let compactor = DefraCompactor::new(Arc::new(model.clone()), config);
 
-    let result = compactor
-        .compact(
-            summary_worthy_messages(),
-            500,
-            &CompactionOptions {
-                threshold: 0.50,
-                keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
-                summary_max_output_tokens: 2_048,
-                force_summarize: true,
-                ..Default::default()
-            },
+    tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
+        // Cross the configured gate naturally with a realistic transcript. The
+        // exact identifiers are deliberately buried in the prefix that gets
+        // discarded, while a substantial recent suffix remains verbatim.
+        let target_tokens = context_window.saturating_mul(85) / 100;
+        let first_history = live_mobile_triage_history(
+            "initial-investigation",
+            "The active case is CASE-ORBIT-7421. The non-negotiable follow-scroll contract is \
+             FOLLOW-MODE-INSTANT-64. The selected pagination cursor contract is \
+             CURSOR-AMBER-17. The immediate pending action is ACTION-LIVE-VERIFY-91.",
+            target_tokens,
+        );
+        let first = compactor
+            .compact(first_history, context_window, &live_compaction_options())
+            .await
+            .expect("first live schema-constrained compaction must succeed");
+        assert_live_reduction(&first, context_window);
+        let first_summary = first
+            .summary
+            .expect("first compaction must return a summary");
+        assert_checkpoint_markers(
+            &first_summary,
+            &[
+                "CASE-ORBIT-7421",
+                "FOLLOW-MODE-INSTANT-64",
+                "CURSOR-AMBER-17",
+            ],
+        );
+
+        // Feed the actual provider-visible checkpoint wrapper into a second
+        // over-budget history. This exercises the instruction to update an
+        // earlier checkpoint instead of replacing or forgetting it.
+        let mut second_history = vec![crate::prompt::compaction_summary_message(&[first_summary])
+            .expect("first checkpoint must render into provider history")];
+        second_history.extend(live_mobile_triage_history(
+            "pagination-verification",
+            "New evidence: the browser clamp is SCROLL-CLAMP-600 and the rendering budget is \
+             RENDER-BUDGET-200. CASE-ORBIT-7421 is still active, CURSOR-AMBER-17 remains the \
+             selected cursor contract, and ACTION-LIVE-VERIFY-91 is still the next action.",
+            target_tokens,
+        ));
+        let second = compactor
+            .compact(second_history, context_window, &live_compaction_options())
+            .await
+            .expect("second live schema-constrained compaction must succeed");
+        assert_live_reduction(&second, context_window);
+        let second_summary = second
+            .summary
+            .expect("second compaction must return an updated summary");
+        assert_checkpoint_markers(
+            &second_summary,
+            &[
+                "CASE-ORBIT-7421",
+                "CURSOR-AMBER-17",
+                "SCROLL-CLAMP-600",
+                "ACTION-LIVE-VERIFY-91",
+            ],
+        );
+
+        // Finally prove that the compacted projection is useful to a successor,
+        // rather than only inspecting the summarizer's raw text.
+        let checkpoint_message = crate::prompt::compaction_summary_message(&[second_summary])
+            .expect("updated checkpoint must render into provider history");
+        let mut recall_config = gate_test_loop_config();
+        recall_config.preamble = Some(
+            "Recover state only from the supplied continuation checkpoint. Copy identifiers \
+             exactly; do not infer replacements."
+                .to_string(),
+        );
+        recall_config.temperature = Some(0.0);
+        recall_config.max_tokens = Some(512);
+        recall_config.additional_params = Some(serde_json::json!({"seed": 7421}));
+        let recalled: LiveCompactionRecall = crate::agent::loop_stream::run_loop_to_typed(
+            model,
+            None,
+            Message::user(
+                "Return the active case ID, pagination cursor contract, browser clamp, and \
+                 immediate pending action from the checkpoint.",
+            ),
+            vec![checkpoint_message],
+            Arc::new(Vec::new()),
+            recall_config,
         )
         .await
-        .expect("live schema-constrained compaction must succeed");
+        .expect("a successor model must recover state from the compacted projection");
+        assert_eq!(recalled.case_id, "CASE-ORBIT-7421");
+        assert_eq!(recalled.pagination_cursor, "CURSOR-AMBER-17");
+        assert_eq!(recalled.browser_clamp, "SCROLL-CLAMP-600");
+        assert_eq!(recalled.next_action, "ACTION-LIVE-VERIFY-91");
+    })
+    .await
+    .unwrap_or_else(|_| panic!("live compaction scenario exceeded {timeout_secs} seconds"));
+}
 
-    let summary = result
-        .summary
-        .expect("live compaction must return a summary");
-    assert!(!summary.trim().is_empty());
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct LiveCompactionRecall {
+    case_id: String,
+    pagination_cursor: String,
+    browser_clamp: String,
+    next_action: String,
+}
+
+fn live_compaction_options() -> CompactionOptions {
+    CompactionOptions {
+        threshold: 0.75,
+        keep_recent_tokens: 6_000,
+        strategy: CompactionStrategy::Summarize,
+        summary_max_output_tokens: 4_096,
+        force_summarize: false,
+        ..Default::default()
+    }
+}
+
+fn live_mobile_triage_history(
+    phase: &str,
+    critical_context: &str,
+    target_tokens: usize,
+) -> Vec<Message> {
+    let mut messages = vec![
+        text_msg(
+            "user",
+            &format!(
+                "We are continuing the mobile weekend triage phase {phase}. These are \
+                 correctness-critical facts for the work: {critical_context}"
+            ),
+        ),
+        text_msg(
+            "assistant",
+            "I recorded the case, constraints, chosen contracts, and pending action. I will \
+             correlate the remaining transcript evidence without changing those identifiers.",
+        ),
+    ];
+
+    for batch in 0..256 {
+        let samples = (0..18)
+            .map(|sample| {
+                format!(
+                    "sample={sample:02} frame={} visible_rows={} layout_ms={:.2} \
+                     scroll_remaining={} cursor=page-{batch:03}-{sample:02}",
+                    batch * 18 + sample,
+                    120 + ((batch + sample) % 80),
+                    4.0 + ((batch * 7 + sample * 3) % 130) as f64 / 10.0,
+                    (batch * 11 + sample * 17) % 96,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        messages.push(text_msg(
+            "user",
+            &format!(
+                "Evidence batch {batch} for {phase}: I opened a long persisted conversation, \
+                 paged backward, streamed another response, and captured these measurements. \
+                 Check whether follow-scroll disengaged, whether rows were unnecessarily \
+                 remounted, and whether pagination preserved order.\n{samples}"
+            ),
+        ));
+        messages.push(text_msg(
+            "assistant",
+            &format!(
+                "Batch {batch} analysis: ordering remained monotonic across the page boundary. \
+                 The measurements distinguish layout cost from network latency and show that \
+                 remaining-to-bottom, not raw scrollTop equality, is the reliable tip detector. \
+                 I am retaining the raw measurements as supporting evidence while keeping the \
+                 previously recorded case, contracts, and pending action authoritative for this \
+                 phase. The next comparison will check mount counts before and after chunk {}.",
+                batch + 1,
+            ),
+        ));
+
+        if estimate_message_tokens(&messages) >= target_tokens {
+            break;
+        }
+    }
+
+    assert!(
+        estimate_message_tokens(&messages) >= target_tokens,
+        "live fixture must reach its requested provider-input size"
+    );
+    messages
+}
+
+fn assert_live_reduction(result: &CompactionResult, context_window: usize) {
+    assert!(
+        result.original_token_estimate > context_window.saturating_mul(75) / 100,
+        "the live fixture must trigger the production threshold instead of force_summarize"
+    );
+    assert!(
+        result.messages_compacted > 0,
+        "a real prefix must be removed"
+    );
+    assert!(
+        !result.messages.is_empty(),
+        "a recent suffix must remain verbatim"
+    );
+    assert!(
+        result.compacted_token_estimate < result.original_token_estimate,
+        "the checkpoint plus retained suffix must reduce provider input"
+    );
+}
+
+fn assert_checkpoint_markers(summary: &str, markers: &[&str]) {
+    for marker in markers {
+        assert!(
+            summary.contains(marker),
+            "live checkpoint omitted correctness-critical marker {marker}: {summary}"
+        );
+    }
 }
 
 #[derive(Clone, Default)]
@@ -2552,4 +2747,30 @@ fn format_summary_bounds_and_sanitizes_single_items() {
     );
     // Embedded newlines cannot fabricate extra list lines.
     assert!(out.contains("line1 line2 line3"));
+}
+
+#[test]
+fn active_provider_history_applies_the_shared_compacted_prefix_projection() {
+    let history = vec![
+        text_msg("user", "compacted"),
+        text_msg("user", "active one"),
+        text_msg("user", "active two"),
+    ];
+
+    assert_eq!(active_provider_history(history.clone(), 0), history);
+    assert_eq!(
+        active_provider_history(history.clone(), 1),
+        history[1..].to_vec()
+    );
+    assert!(active_provider_history(history, usize::MAX).is_empty());
+}
+
+#[test]
+fn compaction_strategy_default_and_labels_share_one_vocabulary() {
+    assert_eq!(CompactionStrategy::default().as_str(), "StripThenSummarize");
+    assert_eq!(
+        CompactionStrategy::StripToolResults.as_str(),
+        "StripToolResults"
+    );
+    assert_eq!(CompactionStrategy::Summarize.as_str(), "Summarize");
 }

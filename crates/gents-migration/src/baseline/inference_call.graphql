@@ -25,9 +25,4 @@ type InferenceCall @branchable {
     prompt_tokens: Int
     completion_tokens: Int
     cached_input_tokens: Int
-
-    # Versioned, prompt-free accounting copied from the exact RenderedRequest
-    # capture before provider dispatch. Safe to replicate to observer clients;
-    # unlike RenderedRequest it contains no message or tool-schema bodies.
-    context_accounting_json: String
 }

@@ -144,6 +144,8 @@ pub mod subagent_tree;
 
 #[path = "snapshot/session.rs"]
 mod session;
+pub use session::attach_last_request_context;
+pub use session::build_session_snapshot_for_agent;
 #[cfg(test)]
 pub use session::build_session_snapshot_from_store;
 pub use session::build_session_snapshot_from_store_for_agent;

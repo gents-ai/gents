@@ -12,6 +12,28 @@ beforeAll(() => {
   if (!HTMLElement.prototype.scrollIntoView) {
     HTMLElement.prototype.scrollIntoView = () => {};
   }
+  if (!HTMLElement.prototype.scrollTo) {
+    HTMLElement.prototype.scrollTo = function (
+      options?: ScrollToOptions | number,
+      y?: number,
+    ) {
+      const clamp = (value: number, maximum: number) =>
+        Math.min(Math.max(0, value), Math.max(0, maximum));
+      if (typeof options === "number") {
+        this.scrollLeft = clamp(options, this.scrollWidth - this.clientWidth);
+        this.scrollTop = clamp(y ?? 0, this.scrollHeight - this.clientHeight);
+      } else {
+        this.scrollLeft = clamp(
+          options?.left ?? this.scrollLeft,
+          this.scrollWidth - this.clientWidth,
+        );
+        this.scrollTop = clamp(
+          options?.top ?? this.scrollTop,
+          this.scrollHeight - this.clientHeight,
+        );
+      }
+    };
+  }
   console.error = (...args: unknown[]) => {
     if (
       typeof args[0] === "string" &&
