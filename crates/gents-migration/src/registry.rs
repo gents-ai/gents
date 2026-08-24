@@ -275,6 +275,14 @@ const TOOL_SELECTION_ADD_LSP_FIELDS_PATCH: &str = r#"[
   {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"lsp_config","Kind":"String"}},
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
+
+const CALLBACK_RESULT_BASELINE_SDL: &str = include_str!("baseline/callback_result.graphql");
+
+const CALLBACK_RESULT_ADD_BINDING_ID_PATCH: &str = r#"[
+  {"op":"add","path":"/CallbackResult/Fields/-","value":{"Name":"binding_id","Kind":"String"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
 /// Frozen baseline SDL set, ordered like
 /// `gents_protocol::schemas::{RUNTIME_ALL, ALL}` and feature-invariant (includes
 /// AgentMemory). Collections with post-cutover changes use frozen local SDL
@@ -385,7 +393,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_RESULT_NAME,
-        gents_protocol::schemas::CALLBACK_RESULT,
+        CALLBACK_RESULT_BASELINE_SDL,
         "bafyreib7bwk6btbxbumfe6pabj4avfh6alhtgck4jxrifo5odi5qx5l2ru"
     ),
     baseline_entry!(
@@ -601,6 +609,15 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         expected_version: Some("bafyreibzvuogmrsg7z5mz2mlnmb2f5avdas54a35fpoghu2bbwyt4fiame"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["enable_lsp", "lsp_config"]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "callback-result-add-binding-id",
+        collection: gents_protocol::schemas::CALLBACK_RESULT_NAME,
+        patch: CALLBACK_RESULT_ADD_BINDING_ID_PATCH,
+        lens: None,
+        expected_version: Some("bafyreica3zpcebkzqvbkeweck5frjr3stgv6rabjkdkjzdfujrg3uqenni"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&["binding_id"]),
     },
 ];
 
