@@ -113,7 +113,7 @@ def allFields : Target → List FieldKey
       [ "trigger_id", "task_id", "source_collection", "event_kind", "filter"
       , "enabled", "concurrency", "correlation_field", "fire_mode"
       , "expected_count", "expected_count_field", "group_timeout_secs"
-      , "group_min_count", "created_at", "updated_at", "last_attempt_at"
+      , "group_min_count", "workspace_authority", "created_at", "updated_at", "last_attempt_at"
       , "last_fired_source_doc_id", "last_status", "last_error", "fire_count" ]
 
 def writableFields : Target → List FieldKey
@@ -158,7 +158,8 @@ def writableFields : Target → List FieldKey
   | .eventTrigger =>
       [ "task_id", "source_collection", "event_kind", "filter", "enabled"
       , "concurrency", "correlation_field", "fire_mode", "expected_count"
-      , "expected_count_field", "group_timeout_secs", "group_min_count" ]
+      , "expected_count_field", "group_timeout_secs", "group_min_count"
+      , "workspace_authority" ]
 
 def protectedFields (t : Target) : List FieldKey :=
   (allFields t).filter (fun k => decide (k ∉ writableFields t))

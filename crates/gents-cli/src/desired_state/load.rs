@@ -54,11 +54,12 @@ pub(crate) fn load_manifest_root(
     let event_triggers: Vec<DesiredEventTrigger> =
         load_per_doc_collection(root, Collection::EventTrigger, &mut errors);
     let callback_bindings: Vec<DesiredCallbackBinding> =
-        load_per_doc_dir(root, CALLBACK_BINDINGS_DIR, "binding_id", &mut errors);
+        load_per_doc_dir(root, CALLBACK_BINDINGS_DIR, "binding_id", None, &mut errors);
     let repository_placements: Vec<DesiredRepositoryPlacement> = load_per_doc_dir(
         root,
         REPOSITORY_PLACEMENTS_DIR,
         "repository_id",
+        None,
         &mut errors,
     );
 
@@ -299,13 +300,20 @@ where
     let dir_name = collection
         .dir_name()
         .expect("load_per_doc_collection called with a non-directory collection");
-    load_per_doc_dir(root, dir_name, collection.unique_field(), errors)
+    load_per_doc_dir(
+        root,
+        dir_name,
+        collection.unique_field(),
+        Some(collection),
+        errors,
+    )
 }
 
 pub(crate) fn load_per_doc_dir<T>(
     root: &Path,
     dir_name: &str,
     unique_field: &str,
+    collection: Option<Collection>,
     errors: &mut Vec<String>,
 ) -> Vec<T>
 where
@@ -378,7 +386,7 @@ where
         };
         let parsed: T =
             match serde_json::from_slice::<serde_json::Value>(&bytes).and_then(|mut value| {
-                if collection == Collection::ToolSelection {
+                if collection == Some(Collection::ToolSelection) {
                     if let Some(object) = value.as_object_mut() {
                         super::strip_retired_tool_selection_fields(object);
                     }

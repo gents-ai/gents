@@ -3,7 +3,7 @@
   "task_id": "maintenance-execute-task",
   "source_collection": "CallbackResult",
   "event_kind": "created",
-  "filter": null,
+  "filter": "{ binding_id: { _eq: \"maintenance-execute-workspace\" } }",
   "correlation_field": "caused_by_correlation",
   "fire_mode": "per_document",
   "expected_count": null,

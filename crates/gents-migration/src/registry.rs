@@ -296,6 +296,11 @@ const CALLBACK_RESULT_ADD_WORK_UNIT_ID_PATCH: &str = r#"[
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
+const CALLBACK_RESULT_ADD_BINDING_ID_PATCH: &str = r#"[
+  {"op":"add","path":"/CallbackResult/Fields/-","value":{"Name":"binding_id","Kind":"String"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
 const WORKSPACE_RECEIPT_ADD_LINEAGE_FIELDS_PATCH: &str = r#"[
   {"op":"add","path":"/WorkspaceReceipt/Fields/-","value":{"Name":"work_unit_id","Kind":"String"}},
   {"op":"add","path":"/WorkspaceReceipt/Fields/-","value":{"Name":"caused_by_correlation","Kind":"String"}},
@@ -655,6 +660,15 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         expected_version: Some("bafyreih6fsebgzwhbn7jlt7v463egogs6nto7lynjjfl5qcxsve3lf6yby"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["work_unit_id"]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "callback-result-add-binding-id",
+        collection: gents_protocol::schemas::CALLBACK_RESULT_NAME,
+        patch: CALLBACK_RESULT_ADD_BINDING_ID_PATCH,
+        lens: None,
+        expected_version: Some("bafyreie5biukanbfbzircb7hix4i2tbulkvw7zo3stpsjuajkskuvcjr24"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&["binding_id"]),
     },
     MigrationStep::PatchVersioned {
         id: "workspace-receipt-add-lineage-fields",
