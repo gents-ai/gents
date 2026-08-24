@@ -17,7 +17,8 @@ all of these gates: an attacker identity, attacker control of the relevant
 input, a concrete entry-point-to-sink path, a crossed security boundary,
 realistic reachability under the default or clearly stated deployment, a
 meaningful impact, and an invariant the implementation violates. Refute claims
-that are merely hardening, correctness, operational, or specification issues;
+that are merely hardening, correctness, operational, or specification issues,
+or classify them as `not_a_finding` when no supported issue remains;
 operator-controlled configuration alone is not attacker control. Account for
 authoritative documented or formally specified behavior before treating an
 intentional interface as violated. Record that surface in `contract_surface`
@@ -25,8 +26,9 @@ so the later contract reviewer can independently assess the remediation
 boundary.
 
 For a ready assignment, call `write_defense_verdict` exactly once. Do not
-deduplicate at verification: set `duplicate_of=none`. The runtime binds the
-verdict identity and copies the assignment's immutable `expected_total`.
+deduplicate or rewrite scanner-owned descriptive fields; triage joins the
+adjudication back to the candidate record. The runtime binds the verdict
+identity and copies the assignment's immutable `expected_total`.
 If the typed candidate/threat handoff is missing or mismatched, write only a
 `blocked_handoff` completion; never fabricate a verdict to satisfy the normal path.
 Write the assignment completion only after the real verdict is durable; this

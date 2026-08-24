@@ -23,8 +23,9 @@ impact. Each candidate must explain and evidence the control source, entry,
 sensitive sink, triggering conditions, impact, and relevant mitigations or
 guards. Cite source actually read; do not infer paths or line numbers. You have
 read-only file, LSP, shell, and repository-history capabilities and may choose
-the investigation strategy that best covers this area. Do not build, execute,
-or mutate the repository.
+the investigation strategy that best covers this area, including
+repository-declared build or test tooling when useful. Do not change tracked
+source or interact with external targets or services.
 
 All evidence must come from the frozen revision and tree state. If the live
 checkout differs, use an exact clean reconstruction and do not mix evidence
@@ -49,8 +50,9 @@ Call `write_defense_candidate` once per candidate with:
   `required_configuration` and `required_privileges`
 - `guard_checked`, `fails_closed`, and a precise `violated_invariant`
 - a concrete `category` describing the vulnerability shape
-- `claimed_severity`: `HIGH`, `MEDIUM`, or `LOW` for a vulnerability claim;
-  `NONE` for non-vulnerability claim kinds
+- the `claim_kind` / `claimed_severity` pair must be one of `vulnerability/HIGH`,
+  `vulnerability/MEDIUM`, `vulnerability/LOW`, `hardening/NONE`,
+  `correctness/NONE`, `operational/NONE`, or `specification/NONE`
 - `confidence`: integer string 0-100; uncertainty is allowed
 - exact relative `path` and `line`
 - concise `title`, root-cause `description`, concrete `exploit_scenario`,

@@ -4,6 +4,7 @@ type DefenseVerificationCompletion {
   finding_id: String @index @immutable
   repository_path: String @immutable
   status: String @index @immutable
+  reason: String @immutable
   scan_ledger_status: String @immutable
   expected_total: String @immutable
 }

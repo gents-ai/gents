@@ -3574,6 +3574,105 @@ mod tests {
             Some("trigger"),
             "every event-triggered verifier request must close its assignment"
         );
+        assert!(
+            completion_write
+                .get("fields")
+                .and_then(Value::as_array)
+                .is_some_and(|fields| fields.iter().any(|field| {
+                    field.get("name").and_then(Value::as_str) == Some("reason")
+                        && field.get("required").and_then(Value::as_bool) == Some(true)
+                })),
+            "verification completions must durably explain blocked handoffs"
+        );
+        let verdict_write = verifier_surface
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("tool_name").and_then(Value::as_str) == Some("write_defense_verdict")
+                })
+            })
+            .expect("verifier surface should expose verdict writes");
+        let verdict_fields = verdict_write
+            .get("fields")
+            .and_then(Value::as_array)
+            .expect("verdict write should declare fields");
+        for verifier_owned in [
+            "verdict",
+            "adjudicated_claim_kind",
+            "security_boundary",
+            "severity",
+            "evidence",
+            "verification",
+            "preconditions",
+            "access_level",
+        ] {
+            assert!(verdict_fields.iter().any(|field| {
+                field.get("name").and_then(Value::as_str) == Some(verifier_owned)
+            }));
+        }
+        for other_stage_owned in [
+            "claim_kind",
+            "root_cause_key",
+            "title",
+            "description",
+            "recommendation",
+            "duplicate_of",
+            "owner_hint",
+            "threat_ids",
+        ] {
+            assert!(
+                !verdict_fields.iter().any(|field| {
+                    field.get("name").and_then(Value::as_str) == Some(other_stage_owned)
+                }),
+                "verdict writer must not make verifiers repeat {other_stage_owned}"
+            );
+        }
+        for provenance_field in ["source_revision", "source_tree_state"] {
+            let field = verdict_fields
+                .iter()
+                .find(|field| field.get("name").and_then(Value::as_str) == Some(provenance_field))
+                .unwrap_or_else(|| panic!("verdict writer should include {provenance_field}"));
+            assert_eq!(field.get("required").and_then(Value::as_bool), Some(false));
+            assert_eq!(
+                field
+                    .get("fill")
+                    .and_then(|fill| fill.get("source_field"))
+                    .and_then(Value::as_str),
+                Some(provenance_field),
+                "verdict provenance should come from the trigger assignment"
+            );
+        }
+
+        let scan_surface = read_pack_json_defaults(
+            &pack
+                .join("datastore-tool-surfaces")
+                .join("defend-scan-writes")
+                .join("object.json"),
+        )
+        .expect("scan datastore surface should load");
+        let candidate_description = scan_surface
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("tool_name").and_then(Value::as_str)
+                        == Some("write_defense_candidate")
+                })
+            })
+            .and_then(|entry| entry.get("description"))
+            .and_then(Value::as_str)
+            .expect("candidate writer should describe its classification contract");
+        assert!(candidate_description.contains("vulnerability requires claimed_severity"));
+        assert!(candidate_description.contains("require claimed_severity NONE"));
+
+        let verification_plan_prompt = std::fs::read_to_string(
+            pack.join("tasks")
+                .join("defend-verification-plan-task")
+                .join("prompt.md"),
+        )
+        .expect("verification-plan prompt should load");
+        assert!(verification_plan_prompt.contains("classification_mismatch:"));
 
         let verification_plan_surface = read_pack_json_defaults(
             &pack
@@ -3582,6 +3681,209 @@ mod tests {
                 .join("object.json"),
         )
         .expect("verification-plan datastore surface should load");
+        let plan_candidate_fields = verification_plan_surface
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("tool_name").and_then(Value::as_str) == Some("read_defense_candidate")
+                })
+            })
+            .and_then(|entry| entry.get("fields"))
+            .and_then(Value::as_array)
+            .expect("verification plan should read candidate classifications");
+        for classification_field in ["claim_kind", "claimed_severity"] {
+            assert!(plan_candidate_fields
+                .iter()
+                .any(|field| field.as_str() == Some(classification_field)));
+        }
+
+        let triage_surface = read_pack_json_defaults(
+            &pack
+                .join("datastore-tool-surfaces")
+                .join("defend-triage-io")
+                .join("object.json"),
+        )
+        .expect("triage datastore surface should load");
+        let triage_candidate_fields = triage_surface
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("tool_name").and_then(Value::as_str) == Some("read_defense_candidate")
+                })
+            })
+            .and_then(|entry| entry.get("fields"))
+            .and_then(Value::as_array)
+            .expect("triage candidate read should declare its join fields");
+        for provenance_field in ["source_revision", "source_tree_state"] {
+            assert!(triage_candidate_fields
+                .iter()
+                .any(|field| field.as_str() == Some(provenance_field)));
+        }
+        for verifier_owned in ["claimed_severity", "confidence", "evidence"] {
+            assert!(!triage_candidate_fields
+                .iter()
+                .any(|field| field.as_str() == Some(verifier_owned)));
+        }
+        let triage_prompt = std::fs::read_to_string(
+            pack.join("tasks")
+                .join("defend-triage-task")
+                .join("prompt.md"),
+        )
+        .expect("triage prompt should load");
+        assert!(triage_prompt.contains("`source_revision`"));
+        assert!(triage_prompt.contains("`source_tree_state`"));
+
+        let promoted_projection = manifest
+            .expect
+            .result_documents
+            .iter()
+            .find(|result| result.collection == "DefendingFinding")
+            .expect("promoted finding result projection");
+        for joined_field in [
+            "claim_kind",
+            "root_cause_key",
+            "title",
+            "recommendation",
+            "owner_hint",
+            "threat_ids",
+        ] {
+            assert!(
+                promoted_projection
+                    .fields
+                    .iter()
+                    .any(|field| field == joined_field),
+                "promoted finding projection should preserve {joined_field}"
+            );
+        }
+
+        let schema_field_names = |path: &Path| {
+            std::fs::read_to_string(path)
+                .unwrap_or_else(|error| panic!("{} should load: {error}", path.display()))
+                .lines()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with("type ") || line == "}" {
+                        return None;
+                    }
+                    line.split_once(':').map(|(name, _)| name.to_string())
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let json_string_set = |values: &[Value]| {
+            values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .expect("field projection should contain strings")
+                        .to_string()
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let write_field_set = |values: &[Value]| {
+            values
+                .iter()
+                .map(|value| {
+                    value
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .expect("write field should have a name")
+                        .to_string()
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+
+        let verdict_schema_fields =
+            schema_field_names(&pack.join("schemas/defense_finding_verdict.graphql"));
+        assert_eq!(write_field_set(verdict_fields), verdict_schema_fields);
+        let verdict_projection_fields = verdict_schema_fields
+            .iter()
+            .filter(|field| field.as_str() != "run_id")
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let triage_verdict_fields = triage_surface
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("tool_name").and_then(Value::as_str) == Some("read_defense_verdict")
+                })
+            })
+            .and_then(|entry| entry.get("fields"))
+            .and_then(Value::as_array)
+            .expect("triage verdict read should declare fields");
+        assert_eq!(
+            json_string_set(triage_verdict_fields),
+            verdict_projection_fields
+        );
+        let report_surface = read_pack_json_defaults(
+            &pack
+                .join("datastore-tool-surfaces")
+                .join("defend-report-io")
+                .join("object.json"),
+        )
+        .expect("report datastore surface should load");
+        let report_verdict_fields = report_surface
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("tool_name").and_then(Value::as_str) == Some("read_defense_verdict")
+                })
+            })
+            .and_then(|entry| entry.get("fields"))
+            .and_then(Value::as_array)
+            .expect("report verdict read should declare fields");
+        assert_eq!(
+            json_string_set(report_verdict_fields),
+            verdict_projection_fields
+        );
+        let verdict_result_fields = manifest
+            .expect
+            .result_documents
+            .iter()
+            .find(|result| result.collection == "DefenseFindingVerdict")
+            .expect("verdict result projection")
+            .fields
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(verdict_result_fields, verdict_projection_fields);
+
+        let promoted_schema_fields =
+            schema_field_names(&pack.join("schemas/defending_finding.graphql"));
+        let promoted_result_fields = promoted_projection
+            .fields
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            promoted_result_fields,
+            promoted_schema_fields
+                .iter()
+                .filter(|field| field.as_str() != "run_id")
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        let promoted_write_fields = triage_surface
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("tool_name").and_then(Value::as_str)
+                        == Some("write_defending_finding")
+                })
+            })
+            .and_then(|entry| entry.get("fields"))
+            .and_then(Value::as_array)
+            .expect("triage finding write should declare fields");
+        assert_eq!(
+            write_field_set(promoted_write_fields),
+            promoted_schema_fields
+        );
+
         let assignment_write = verification_plan_surface
             .get("entries")
             .and_then(Value::as_array)

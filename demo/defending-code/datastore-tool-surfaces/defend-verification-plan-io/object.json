@@ -9,7 +9,7 @@
       "tool_name": "read_defense_candidate",
       "collection": "DefenseCandidateFinding",
       "description": "Load the closed candidate ledger for this run.",
-      "fields": ["finding_id", "area_id"],
+      "fields": ["finding_id", "area_id", "source_revision", "source_tree_state", "claim_kind", "claimed_severity"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -23,6 +23,8 @@
         {"name": "finding_id", "required": true},
         {"name": "area_id", "required": true},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
+        {"name": "source_revision", "required": true},
+        {"name": "source_tree_state", "required": true},
         {"name": "status", "required": true},
         {"name": "scan_ledger_status", "required": true},
         {"name": "expected_total", "required": true}

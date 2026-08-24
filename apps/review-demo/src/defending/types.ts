@@ -101,8 +101,7 @@ export type DefenseVerdictRow = {
   verdict?: string;
   source_revision?: string;
   source_tree_state?: string;
-  claim_kind?: string;
-  root_cause_key?: string;
+  adjudicated_claim_kind?: string;
   security_boundary?: string;
   attacker_identity?: string;
   attacker_controlled_input?: string;
@@ -118,22 +117,12 @@ export type DefenseVerdictRow = {
   violated_invariant?: string;
   impact?: string;
   contract_surface?: string;
-  category?: string;
   severity?: string;
   confidence?: string;
-  path?: string;
-  line?: string;
-  title?: string;
-  description?: string;
-  exploit_scenario?: string;
-  recommendation?: string;
   evidence?: string;
   verification?: string;
-  duplicate_of?: string;
   preconditions?: string;
   access_level?: string;
-  owner_hint?: string;
-  threat_ids?: string;
 };
 
 export type VerificationAssignmentRow = {
@@ -143,6 +132,8 @@ export type VerificationAssignmentRow = {
   finding_id: string;
   area_id?: string;
   repository_path?: string;
+  source_revision?: string;
+  source_tree_state?: string;
   status?: string;
   scan_ledger_status?: string;
   expected_total?: string;
@@ -155,24 +146,33 @@ export type VerificationCompletionRow = {
   finding_id: string;
   repository_path?: string;
   status?: string;
+  reason?: string;
   scan_ledger_status?: string;
   expected_total?: string;
 };
 
-export type DefendingFindingRow = DefenseVerdictRow & {
+export type DefendingFindingRow = Omit<
+  DefenseVerdictRow,
+  "adjudicated_claim_kind"
+> & {
+  claim_kind?: string;
+  root_cause_key?: string;
   category?: string;
   path?: string;
   line?: string;
+  title?: string;
   description?: string;
   exploit_scenario?: string;
   recommendation?: string;
   evidence?: string;
+  owner_hint?: string;
   threat_ids?: string;
 };
 
 export type TriageSummaryRow = {
   _docID?: string;
   run_id: string;
+  repository_path?: string;
   scan_ledger_status?: string;
   candidate_count?: string;
   confirmed_count?: string;

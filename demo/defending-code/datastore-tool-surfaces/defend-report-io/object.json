@@ -25,7 +25,7 @@
       "tool_name": "read_defense_candidate",
       "collection": "DefenseCandidateFinding",
       "description": "Load the immutable candidate ledger for area and verification joins.",
-      "fields": ["finding_id", "area_id", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "security_boundary", "claimed_severity", "path", "line", "title"],
+      "fields": ["finding_id", "area_id", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "claimed_severity", "category", "path", "line", "title", "description", "exploit_scenario", "recommendation", "threat_ids"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -33,7 +33,7 @@
       "tool_name": "read_defense_verification_assignment",
       "collection": "DefenseVerificationAssignment",
       "description": "Load the closed candidate-to-verifier work ledger.",
-      "fields": ["assignment_id", "finding_id", "area_id", "repository_path", "status", "scan_ledger_status", "expected_total"],
+      "fields": ["assignment_id", "finding_id", "area_id", "repository_path", "source_revision", "source_tree_state", "status", "scan_ledger_status", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -41,7 +41,7 @@
       "tool_name": "read_defense_verification_completion",
       "collection": "DefenseVerificationCompletion",
       "description": "Load the verifier completion barrier ledger.",
-      "fields": ["assignment_id", "finding_id", "repository_path", "status", "scan_ledger_status", "expected_total"],
+      "fields": ["assignment_id", "finding_id", "repository_path", "status", "reason", "scan_ledger_status", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -67,13 +67,13 @@
     {
       "kind": "read", "tool_name": "read_defense_verdict",
       "collection": "DefenseFindingVerdict", "description": "Load the candidate verdict ledger.",
-      "fields": ["finding_id", "area_id", "repository_path", "verdict", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "security_boundary", "attacker_identity", "attacker_controlled_input", "control_source", "entry_point", "sink", "attacker_control", "default_reachable", "required_configuration", "required_privileges", "guard_checked", "fails_closed", "violated_invariant", "impact", "contract_surface", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "duplicate_of", "preconditions", "access_level", "owner_hint", "threat_ids", "expected_total"],
+      "fields": ["finding_id", "area_id", "repository_path", "verdict", "source_revision", "source_tree_state", "adjudicated_claim_kind", "security_boundary", "attacker_identity", "attacker_controlled_input", "control_source", "entry_point", "sink", "attacker_control", "default_reachable", "required_configuration", "required_privileges", "guard_checked", "fails_closed", "violated_invariant", "impact", "contract_surface", "severity", "confidence", "evidence", "verification", "preconditions", "access_level", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
       "kind": "read", "tool_name": "read_defending_finding",
       "collection": "DefendingFinding", "description": "Load confirmed findings.",
-      "fields": ["finding_id", "source_revision", "source_tree_state", "root_cause_key", "security_boundary", "attacker_identity", "attacker_controlled_input", "control_source", "entry_point", "sink", "attacker_control", "default_reachable", "required_configuration", "required_privileges", "guard_checked", "fails_closed", "violated_invariant", "impact", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "preconditions", "access_level", "threat_ids"],
+      "fields": ["finding_id", "area_id", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "security_boundary", "attacker_identity", "attacker_controlled_input", "control_source", "entry_point", "sink", "attacker_control", "default_reachable", "required_configuration", "required_privileges", "guard_checked", "fails_closed", "violated_invariant", "impact", "contract_surface", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "preconditions", "access_level", "threat_ids", "verdict"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

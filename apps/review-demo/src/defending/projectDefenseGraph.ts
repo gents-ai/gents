@@ -594,6 +594,7 @@ export function projectDefenseGraph(
             runId,
             requestId: emptyVerifierRequest.request_id,
             sessionId: emptyVerifierRequest.session_id ?? undefined,
+            sourceDocId: emptyCompletion?._docID,
             badges: [
               verifierActivity(
                 emptyVerifierRequest,
@@ -663,6 +664,7 @@ export function projectDefenseGraph(
             runId,
             requestId: verifierRequest.request_id,
             sessionId: verifierRequest.session_id ?? undefined,
+            sourceDocId: completion?._docID,
             badges: [
               verifierActivity(
                 verifierRequest,
@@ -679,7 +681,7 @@ export function projectDefenseGraph(
             id: `verdict:${candidate.finding_id}`,
             kind: "verdict",
             label: `Verdict ${index + 1}`,
-            detail: verdict.title ?? candidate.finding_id,
+            detail: candidate.title ?? candidate.finding_id,
             state: "done",
             runId,
             sourceDocId: verdict._docID,
@@ -733,6 +735,7 @@ export function projectDefenseGraph(
           runId,
           requestId: verifierRequest?.request_id,
           sessionId: verifierRequest?.session_id ?? undefined,
+          sourceDocId: completion?._docID,
           badges: [
             "orphan/duplicate ledger row",
             verifierActivity(verifierRequest, false, completion?.status),
@@ -1000,21 +1003,19 @@ export function projectDefenseGraph(
         "defend-patch",
         assignment._docID,
       );
-      const reviewRequest = requestFor(
-        requests,
-        "defend-patch-review",
-        validation?._docID,
-      );
-      const validationRequest = requestFor(
-        requests,
-        "defend-patch-validation",
-        patch?._docID,
-      );
-      const securityReviewRequest = requestFor(
-        requests,
-        "defend-patch-security-review",
-        review?._docID,
-      );
+      const reviewRequest = validation?._docID
+        ? requestFor(requests, "defend-patch-review", validation._docID)
+        : undefined;
+      const validationRequest = patch?._docID
+        ? requestFor(requests, "defend-patch-validation", patch._docID)
+        : undefined;
+      const securityReviewRequest = review?._docID
+        ? requestFor(
+            requests,
+            "defend-patch-security-review",
+            review._docID,
+          )
+        : undefined;
       nodes.push(
         node({
           id: `assignment:${assignment.assignment_id}`,

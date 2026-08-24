@@ -51,6 +51,17 @@ their repository, shell, and LSP capabilities; document-only reducers remain
 deliberately deterministic because their task is ledger reconciliation rather
 than source analysis.
 
+Stage documents carry only facts owned by that stage. Candidate rows own the
+scanner's preliminary classification, location, description, recommendation,
+and threat linkage. Verdict rows own the verifier's adjudicated classification,
+independent exploitability gates, fresh evidence, confidence, and severity.
+Triage joins the two ledgers by `finding_id` when promoting confirmed findings;
+verifiers do not transcribe scanner prose or emit clustering metadata. At each
+stage classification is closed: candidates use `vulnerability` with `HIGH`,
+`MEDIUM`, or `LOW`, or a non-vulnerability kind with `NONE`; verdicts use
+`confirmed/vulnerability/HIGH|MEDIUM|LOW` or
+`refuted/<non-vulnerability-or-not_a_finding>/NONE`.
+
 The threat-model bootstrap freezes the audited Git revision and dirty-tree
 observation once. That provenance is copied through review areas, candidates,
 verdicts, confirmed findings, root-cause clusters, and patch validation. A

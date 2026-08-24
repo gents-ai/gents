@@ -7,7 +7,7 @@
     {
       "tool_name": "write_defense_candidate",
       "collection": "DefenseCandidateFinding",
-      "description": "Record one plausible, evidenced vulnerability candidate for independent triage.",
+      "description": "Record one plausible, evidenced security candidate for independent verification. Classification invariant: vulnerability requires claimed_severity HIGH, MEDIUM, or LOW; hardening, correctness, operational, and specification require claimed_severity NONE.",
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "finding_id", "required": true},

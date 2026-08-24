@@ -334,6 +334,7 @@ describe("projectDefenseGraph", () => {
       expected_total: "1",
     });
     snapshot.verificationCompletions.push({
+      _docID: "completion-blocked",
       run_id: "defense-blocked",
       assignment_id: "finding-blocked:verify",
       finding_id: "finding-blocked",
@@ -354,6 +355,7 @@ describe("projectDefenseGraph", () => {
       graph.nodes.find((node) => node.id === "verifier:finding-blocked"),
     ).toMatchObject({
       state: "done",
+      sourceDocId: "completion-blocked",
       badges: ["blocked provenance"],
     });
     expect(graph.nodes.some((node) => node.kind === "verdict")).toBe(false);
@@ -435,6 +437,31 @@ describe("projectDefenseGraph", () => {
     expect(
       graph.nodes.find((node) => node.id === "verifier:orphan:assignment-orphan"),
     ).toMatchObject({ state: "live", requestId: "verifier-orphan" });
+  });
+
+  it("keeps an orphan completion inspectable by document id", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.jobs.push({ run_id: "defense-orphan-completion", area_min: "1" });
+    snapshot.verificationCompletions.push({
+      _docID: "completion-orphan",
+      run_id: "defense-orphan-completion",
+      assignment_id: "missing-assignment",
+      finding_id: "missing-finding",
+      status: "blocked_handoff",
+      reason: "missing_candidate",
+      expected_total: "1",
+    });
+
+    expect(
+      projectDefenseGraph(snapshot).nodes.find(
+        (node) =>
+          node.id === "verifier-completion:orphan:completion-orphan",
+      ),
+    ).toMatchObject({
+      state: "done",
+      sourceDocId: "completion-orphan",
+      badges: ["orphan/duplicate ledger row", "blocked handoff"],
+    });
   });
 
   it("renders a validation agent launched from an orphan patch", () => {
@@ -662,6 +689,88 @@ describe("projectDefenseGraph", () => {
       state: "done",
       badges: ["ACCEPT"],
     });
+  });
+
+  it("does not leak downstream requests into sibling remediation lanes", () => {
+    const snapshot = emptyDefenseSnapshot();
+    snapshot.contractPipelineAvailable = true;
+    snapshot.jobs.push({ run_id: "defense-lanes", area_min: "1" });
+    snapshot.assignments.push(
+      {
+        _docID: "assignment-one",
+        run_id: "defense-lanes",
+        assignment_id: "cluster-one:patch",
+        cluster_id: "cluster-one",
+      },
+      {
+        _docID: "assignment-two",
+        run_id: "defense-lanes",
+        assignment_id: "cluster-two:patch",
+        cluster_id: "cluster-two",
+      },
+    );
+    snapshot.patches.push({
+      _docID: "patch-one",
+      run_id: "defense-lanes",
+      patch_id: "cluster-one:patch",
+      status: "drafted",
+    });
+    snapshot.validations.push({
+      _docID: "validation-one",
+      run_id: "defense-lanes",
+      validation_id: "cluster-one:patch:validation",
+      patch_id: "cluster-one:patch",
+      status: "passed",
+    });
+    snapshot.reviews.push({
+      _docID: "review-one",
+      run_id: "defense-lanes",
+      patch_id: "cluster-one:patch",
+      validation_id: "cluster-one:patch:validation",
+      verdict: "ACCEPT",
+    });
+    snapshot.requests.push(
+      {
+        request_id: "validation-one-request",
+        caused_by_correlation: "defense-lanes",
+        caused_by_trigger_id: "defend-patch-validation",
+        caused_by_source_doc_id: "patch-one",
+        lifecycle_state: "completed",
+      },
+      {
+        request_id: "review-one-request",
+        caused_by_correlation: "defense-lanes",
+        caused_by_trigger_id: "defend-patch-review",
+        caused_by_source_doc_id: "validation-one",
+        lifecycle_state: "completed",
+      },
+      {
+        request_id: "security-one-request",
+        caused_by_correlation: "defense-lanes",
+        caused_by_trigger_id: "defend-patch-security-review",
+        caused_by_source_doc_id: "review-one",
+        lifecycle_state: "processing",
+      },
+    );
+
+    const graph = projectDefenseGraph(snapshot);
+    const siblingStages = [
+      "patch:cluster-two:patch",
+      "validation:cluster-two:patch",
+      "review:cluster-two:patch",
+      "security-review:cluster-two:patch",
+    ].map((id) => graph.nodes.find((node) => node.id === id));
+    expect(
+      siblingStages.map((node) => ({
+        state: node?.state,
+        requestId: node?.requestId,
+      })),
+    ).toEqual([
+      { state: "expected", requestId: undefined },
+      { state: "expected", requestId: undefined },
+      { state: "expected", requestId: undefined },
+      { state: "expected", requestId: undefined },
+    ]);
   });
 
   it("uses the closed security ledger total to show report readiness", () => {

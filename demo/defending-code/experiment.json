@@ -69,7 +69,7 @@
       {"task_id": "defend-plan-task", "required_tool_names": ["write_defense_review_area"]},
       {"task_id": "defend-scan-task", "required_tool_names": ["write_defense_candidate", "write_defense_scan_result"]},
       {"task_id": "defend-verification-plan-task", "required_tool_names": ["read_defense_candidate", "write_defense_verification_assignment"]},
-      {"task_id": "defend-triage-task", "required_tool_names": ["read_defense_candidate", "read_defense_verdict", "write_defending_finding", "write_defense_triage_summary"]},
+      {"task_id": "defend-triage-task", "required_tool_names": ["read_defense_candidate", "read_defense_verification_assignment", "read_defense_verdict", "write_defending_finding", "write_defense_triage_summary"]},
       {"task_id": "defend-verifier-task", "required_tool_names": ["read_defense_threat_model", "read_defense_candidate", "write_defense_verdict", "write_defense_verification_completion"]},
       {"task_id": "defend-cluster-task", "required_tool_names": ["read_defending_finding", "write_defense_root_cause_cluster"]},
       {"task_id": "defend-contract-review-task", "required_tool_names": ["read_defending_finding", "write_defense_contract_review"]},
@@ -132,22 +132,22 @@
       {
         "collection": "DefenseVerificationAssignment",
         "correlation_field": "run_id",
-        "fields": ["assignment_id", "finding_id", "area_id", "repository_path", "status", "scan_ledger_status", "expected_total"]
+        "fields": ["assignment_id", "finding_id", "area_id", "repository_path", "source_revision", "source_tree_state", "status", "scan_ledger_status", "expected_total"]
       },
       {
         "collection": "DefenseVerificationCompletion",
         "correlation_field": "run_id",
-        "fields": ["assignment_id", "finding_id", "repository_path", "status", "scan_ledger_status", "expected_total"]
+        "fields": ["assignment_id", "finding_id", "repository_path", "status", "reason", "scan_ledger_status", "expected_total"]
       },
       {
         "collection": "DefenseFindingVerdict",
         "correlation_field": "run_id",
-        "fields": ["finding_id", "area_id", "repository_path", "verdict", "source_revision", "source_tree_state", "claim_kind", "root_cause_key", "security_boundary", "attacker_identity", "attacker_controlled_input", "control_source", "entry_point", "sink", "attacker_control", "default_reachable", "required_configuration", "required_privileges", "guard_checked", "fails_closed", "violated_invariant", "impact", "contract_surface", "category", "severity", "confidence", "path", "line", "title", "description", "exploit_scenario", "recommendation", "evidence", "verification", "duplicate_of", "preconditions", "access_level", "owner_hint", "threat_ids", "expected_total"]
+        "fields": ["finding_id", "area_id", "repository_path", "verdict", "source_revision", "source_tree_state", "adjudicated_claim_kind", "security_boundary", "attacker_identity", "attacker_controlled_input", "control_source", "entry_point", "sink", "attacker_control", "default_reachable", "required_configuration", "required_privileges", "guard_checked", "fails_closed", "violated_invariant", "impact", "contract_surface", "severity", "confidence", "evidence", "verification", "preconditions", "access_level", "expected_total"]
       },
       {
         "collection": "DefenseTriageSummary",
         "correlation_field": "run_id",
-        "fields": ["scan_ledger_status", "candidate_count", "confirmed_count", "refuted_count", "duplicate_count", "promoted_count", "summary"]
+        "fields": ["repository_path", "scan_ledger_status", "candidate_count", "confirmed_count", "refuted_count", "duplicate_count", "promoted_count", "summary"]
       },
       {
         "collection": "DefenseRootCauseCluster",

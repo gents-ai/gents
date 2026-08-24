@@ -236,7 +236,16 @@ function documentForNode(
           ),
         );
       case "verifier":
-        return null;
+        return pair(
+          "DefenseVerificationCompletion",
+          snapshot.verificationCompletions.find(
+            (row) =>
+              run(row) &&
+              (node.sourceDocId
+                ? row._docID === node.sourceDocId
+                : row.finding_id === suffix),
+          ),
+        );
       case "verdict":
         return pair(
           "DefenseFindingVerdict",

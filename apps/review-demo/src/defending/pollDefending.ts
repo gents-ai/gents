@@ -41,23 +41,22 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
       description exploit_scenario recommendation evidence threat_ids
     }
     DefenseFindingVerdict {
-      _docID run_id finding_id area_id verdict source_revision source_tree_state claim_kind
-      root_cause_key security_boundary attacker_identity attacker_controlled_input control_source
+      _docID run_id finding_id area_id verdict source_revision source_tree_state
+      security_boundary attacker_identity attacker_controlled_input control_source
       entry_point sink attacker_control default_reachable required_configuration
       required_privileges guard_checked fails_closed violated_invariant impact severity confidence
-      contract_surface category path line title description exploit_scenario recommendation
-      evidence verification duplicate_of preconditions access_level owner_hint threat_ids
+      contract_surface evidence verification preconditions access_level
     }
     DefendingFinding {
       _docID run_id finding_id area_id source_revision source_tree_state claim_kind root_cause_key
       security_boundary attacker_identity attacker_controlled_input control_source entry_point sink
       attacker_control default_reachable required_configuration required_privileges guard_checked
-      fails_closed violated_invariant impact category severity confidence path line title description
+      fails_closed violated_invariant impact contract_surface category severity confidence path line title description
       exploit_scenario recommendation evidence verification preconditions access_level owner_hint
       threat_ids verdict
     }
     DefenseTriageSummary {
-      _docID run_id scan_ledger_status candidate_count confirmed_count refuted_count
+      _docID run_id repository_path scan_ledger_status candidate_count confirmed_count refuted_count
       duplicate_count promoted_count summary
     }
     DefensePatchAssignment {
@@ -95,7 +94,33 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
   let contractReviews: DefenseSnapshot["contractReviews"] = [];
   let validations: DefenseSnapshot["validations"] = [];
   let securityReviews: DefenseSnapshot["securityReviews"] = [];
+  let verdictClassifications = new Map<string, string>();
+  let assignmentProvenance = new Map<
+    string,
+    { source_revision?: string; source_tree_state?: string }
+  >();
+  let completionReasons = new Map<string, string>();
   let contractPipelineAvailable = false;
+  try {
+    const optional = await postGraphql<{
+      DefenseFindingVerdict?: Array<{
+        _docID?: string;
+        finding_id: string;
+        adjudicated_claim_kind?: string;
+      }>;
+    }>(`{
+      DefenseFindingVerdict { _docID finding_id adjudicated_claim_kind }
+    }`);
+    verdictClassifications = new Map(
+      (optional.DefenseFindingVerdict ?? []).flatMap((row) =>
+        row.adjudicated_claim_kind
+          ? [[row.finding_id, row.adjudicated_claim_kind] as const]
+          : [],
+      ),
+    );
+  } catch {
+    // Older live runs predate adjudicated verdict classifications.
+  }
   try {
     const optional = await postGraphql<{
       DefenseVerificationAssignment?: DefenseSnapshot["verificationAssignments"];
@@ -114,6 +139,55 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     verificationCompletions = optional.DefenseVerificationCompletion ?? [];
   } catch {
     // Older live runs predate the assignment schema. Keep their visualizer usable.
+  }
+  try {
+    const optional = await postGraphql<{
+      DefenseVerificationAssignment?: Array<{
+        assignment_id: string;
+        source_revision?: string;
+        source_tree_state?: string;
+      }>;
+    }>(`{
+      DefenseVerificationAssignment {
+        assignment_id source_revision source_tree_state
+      }
+    }`);
+    assignmentProvenance = new Map(
+      (optional.DefenseVerificationAssignment ?? []).map((row) => [
+        row.assignment_id,
+        {
+          source_revision: row.source_revision,
+          source_tree_state: row.source_tree_state,
+        },
+      ]),
+    );
+    verificationAssignments = verificationAssignments.map((row) => ({
+      ...row,
+      ...assignmentProvenance.get(row.assignment_id),
+    }));
+  } catch {
+    // Older live runs predate assignment-carried source provenance.
+  }
+  try {
+    const optional = await postGraphql<{
+      DefenseVerificationCompletion?: Array<{
+        assignment_id: string;
+        reason?: string;
+      }>;
+    }>(`{
+      DefenseVerificationCompletion { assignment_id reason }
+    }`);
+    completionReasons = new Map(
+      (optional.DefenseVerificationCompletion ?? []).flatMap((row) =>
+        row.reason ? [[row.assignment_id, row.reason] as const] : [],
+      ),
+    );
+    verificationCompletions = verificationCompletions.map((row) => ({
+      ...row,
+      reason: completionReasons.get(row.assignment_id) ?? row.reason,
+    }));
+  } catch {
+    // Older live runs predate structured verification completion reasons.
   }
   try {
     const optional = await postGraphql<{
@@ -163,7 +237,12 @@ export async function loadDefenseSnapshot(): Promise<DefenseSnapshot> {
     candidates: data.DefenseCandidateFinding ?? [],
     verificationAssignments,
     verificationCompletions,
-    verdicts: data.DefenseFindingVerdict ?? [],
+    verdicts: (data.DefenseFindingVerdict ?? []).map((row) => ({
+      ...row,
+      adjudicated_claim_kind:
+        verdictClassifications.get(row.finding_id) ??
+        row.adjudicated_claim_kind,
+    })),
     findings: data.DefendingFinding ?? [],
     triage: data.DefenseTriageSummary ?? [],
     clusters,
