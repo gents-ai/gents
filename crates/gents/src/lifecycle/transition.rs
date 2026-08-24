@@ -23,87 +23,173 @@ fn request_view_is_terminal(view: &RequestViewRow) -> bool {
         || request_status_is_terminal(&view.status)
 }
 
+async fn execute_request_only_transaction(
+    node: &EmbeddedNode,
+    request_mutation: &str,
+) -> Result<defra_node::QueryResponse> {
+    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+    match txn.execute_local_response(request_mutation).await {
+        Ok(response) => txn.commit().await.map(|()| response),
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
+}
+
 pub(super) async fn execute_request_projection_transaction(
     node: &EmbeddedNode,
-    request_id: &str,
-    session_id: &str,
     request_mutation: &str,
     conversation_mutation: &str,
     operation: &str,
 ) -> Result<defra_node::QueryResponse> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let projection_query = format!(
-        r#"{{
-            AgentConversation(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                limit: 2
-            ) {{ latest_request_id }}
-        }}"#
-    );
     crate::retry::retry_terminal_persistence_operation(
         operation,
         crate::retry::TERMINAL_PERSISTENCE_MAX_RETRIES,
         std::time::Duration::from_millis(crate::retry::TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS),
         || async {
             let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-            let attempt = async {
-                let request_response = txn.execute_local_response(request_mutation).await?;
-                if request_response
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get("update_AgentRequest"))
-                    .is_some_and(response_has_documents)
-                {
-                    let conversation_response =
-                        txn.execute_local_response(conversation_mutation).await?;
-                    if !conversation_response
-                        .data
-                        .as_ref()
-                        .and_then(|data| data.get("update_AgentConversation"))
-                        .is_some_and(response_has_documents)
-                    {
-                        let projection = txn.execute_local_response(&projection_query).await?;
-                        let rows = projection
-                            .data
-                            .as_ref()
-                            .and_then(|data| data.get("AgentConversation"))
-                            .and_then(serde_json::Value::as_array)
-                            .map(Vec::as_slice)
-                            .unwrap_or_default();
-                        match rows {
-                            [row]
-                                if row
-                                    .get("latest_request_id")
-                                    .and_then(serde_json::Value::as_str)
-                                    .is_some_and(|latest| latest != request_id) => {}
-                            [] => anyhow::bail!(
-                                "request {request_id} has no AgentConversation projection"
-                            ),
-                            [_] => anyhow::bail!(
-                                "request {request_id} could not update its latest AgentConversation projection"
-                            ),
-                            _ => anyhow::bail!(
-                                "session {session_id} has duplicate AgentConversation projections"
-                            ),
-                        }
-                    }
-                }
-                Ok::<_, anyhow::Error>(request_response)
-            }
-            .await;
-            match attempt {
-                Ok(response) => txn.commit().await.map(|()| response),
+            let request_response = match txn.execute_local_response(request_mutation).await {
+                Ok(response) => response,
                 Err(error) => {
                     let _ = txn.discard().await;
-                    Err(error)
+                    return Err(error);
                 }
+            };
+            // The request mutation may be an idempotent no-op because the
+            // stream writer already committed its terminal edge. The guarded
+            // projection update must still run so that retry repairs a stale
+            // conversation. If the projection statement fails, discard the
+            // whole attempt and commit the authoritative request alone in a
+            // fresh transaction. Never trust commit-after-error behavior from
+            // the storage engine.
+            if let Err(error) = txn.execute_local_response(conversation_mutation).await {
+                let _ = txn.discard().await;
+                tracing::warn!(
+                    operation,
+                    error = %error,
+                    "retrying terminal request without its conversation projection"
+                );
+                return execute_request_only_transaction(node, request_mutation).await;
             }
+            txn.commit().await.map(|()| request_response)
         },
     )
     .await
 }
 
 impl RequestLifecycle {
+    pub(crate) async fn ensure_error_response(&mut self, reason: &str) -> Result<()> {
+        let request_id = escape_graphql_string(&self.request.request_id);
+        let agent_did = escape_graphql_string(&self.request.agent_did);
+        let query = format!(
+            r#"{{
+                AgentResponse(
+                    filter: {{
+                        request_id: {{ _eq: "{request_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }}
+                    }},
+                    limit: 1
+                ) {{ _docID status }}
+            }}"#
+        );
+        let existing = self.node.execute(&query).await;
+        if existing.has_errors() {
+            anyhow::bail!(
+                "querying error response for request {}: {:?}",
+                self.request.request_id,
+                existing.errors
+            );
+        }
+        if let Some(row) = existing
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentResponse"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rows| rows.first())
+        {
+            let Some(doc_id) = row.get("_docID").and_then(serde_json::Value::as_str) else {
+                anyhow::bail!(
+                    "existing response for request {} has no document id",
+                    self.request.request_id
+                );
+            };
+            self.response_doc_id = Some(doc_id.to_string());
+            if row.get("status").and_then(serde_json::Value::as_str) == Some("complete") {
+                return Ok(());
+            }
+            let doc_id = escape_graphql_string(doc_id);
+            let content = escape_graphql_string(&format!("Error: {reason}"));
+            let reason = escape_graphql_string(reason);
+            let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+            let mutation = format!(
+                r#"mutation {{
+                    update_AgentResponse(
+                        filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                        input: {{
+                            content: "{content}",
+                            reasoning: "",
+                            status: "error",
+                            error_message: "{reason}",
+                            completed_at: "{now}"
+                        }}
+                    ) {{ _docID }}
+                }}"#
+            );
+            crate::retry::execute_graphql_with_terminal_persistence_retry(
+                &self.node,
+                &mutation,
+                "terminalize_existing_request_error_response",
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let request_doc_id = escape_graphql_string(&self.request.doc_id);
+        let behavior_id = escape_graphql_string(&self.behavior_id);
+        let session_id = escape_graphql_string(&self.request.session_id);
+        let content = escape_graphql_string(&format!("Error: {reason}"));
+        let reason = escape_graphql_string(reason);
+        let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let requester_did_field =
+            session::requester_did_create_field(self.request.requester_did.as_deref());
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentResponse(input: {{
+                    response_key: "{request_id}",
+                    request_id: "{request_id}",
+                    request_doc_id: "{request_doc_id}",
+                    agent_did: "{agent_did}",
+                    {requester_did_field}
+                    behavior_id: "{behavior_id}",
+                    session_id: "{session_id}",
+                    content: "{content}",
+                    reasoning: "",
+                    status: "error",
+                    error_message: "{reason}",
+                    token_count: 0,
+                    progress_seq: 0,
+                    created_at: "{now}",
+                    completed_at: "{now}"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = crate::retry::execute_graphql_with_terminal_persistence_retry(
+            &self.node,
+            &mutation,
+            "create_request_error_response",
+        )
+        .await?;
+        self.response_doc_id = extract_single_doc_id(&response, "create_AgentResponse");
+        if self.response_doc_id.is_none() {
+            anyhow::bail!(
+                "creating error response for request {} returned no document",
+                self.request.request_id
+            );
+        }
+        Ok(())
+    }
+
     pub async fn record_failure_reason(&mut self, reason: &str) -> Result<()> {
         // Latch before I/O so the subsequent atomic terminal mutation still
         // carries the reason if this best-effort standalone write fails.
@@ -273,8 +359,6 @@ impl RequestLifecycle {
         );
         let resp = execute_request_projection_transaction(
             &self.node,
-            &self.request.request_id,
-            &self.request.session_id,
             &mutation,
             &conversation_mutation,
             "transition_interrupted",
@@ -438,8 +522,6 @@ impl RequestLifecycle {
         );
         let resp = execute_request_projection_transaction(
             &self.node,
-            &self.request.request_id,
-            &self.request.session_id,
             &mutation,
             &conversation_mutation,
             "transition_request_terminal_status",

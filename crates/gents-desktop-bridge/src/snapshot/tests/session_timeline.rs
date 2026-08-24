@@ -184,7 +184,7 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
 fn steering_projects_the_input_once_without_rendering_its_control_prompt() {
     let mut rows = make_streaming_store_with_response_content("").to_rows();
     rows.responses.clear();
-    rows.requests[0].content = Some("Continue with the new steering message.".to_string());
+    rows.requests[0].content = Some("also check the staging config".to_string());
     rows.requests[0].metadata = Some(
         r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":"parent-1"}}"#
             .to_string(),

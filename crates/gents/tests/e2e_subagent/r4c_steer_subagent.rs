@@ -472,8 +472,7 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
     let queued = fetch_request(db.node.as_ref(), queued_request_id).await;
     assert_eq!(queued.session_id, child_session_id);
     assert_eq!(queued.behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
-    assert_eq!(queued.content, "Continue with the new steering message.");
-    assert_ne!(queued.content, "also check the staging config");
+    assert_eq!(queued.content, "also check the staging config");
     assert_eq!(queued.subagent_depth, Some(1));
     let parent_request_doc_id =
         crate::support::exact_request_doc_id(db.node.as_ref(), "parent-append").await;

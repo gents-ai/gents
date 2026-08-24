@@ -455,13 +455,8 @@ impl RequestLifecycle {
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
         };
-        let projection = request_session_projection_mutation(
-            &request,
-            agent_name,
-            agent_did,
-            &behavior_id,
-            &claimed_at,
-        );
+        let projection =
+            request_session_projection(&request, agent_name, agent_did, &behavior_id, &claimed_at);
         let resp =
             materialize_claimed_request_with_projection(node.as_ref(), &mutation, &projection)
                 .await?;
@@ -533,43 +528,166 @@ fn conversation_title_from_metadata(metadata: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(super) fn request_session_projection_mutation(
+pub(super) struct RequestSessionProjection {
+    session_id: String,
+    behavior_id: String,
+    session_update: String,
+    session_create: String,
+    conversation_update: String,
+    conversation_create: String,
+}
+
+pub(super) fn request_session_projection(
     request: &AgentRequest,
     agent_name: &str,
     agent_did: &str,
     behavior_id: &str,
     started: &str,
-) -> String {
-    let session_field = session::request_session_projection_field(
-        &request.session_id,
-        agent_name,
-        agent_did,
-        behavior_id,
-        request.requester_did.as_deref(),
-        started,
+) -> RequestSessionProjection {
+    let session_id = escape_graphql_string(&request.session_id);
+    let escaped_agent_name = escape_graphql_string(agent_name);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_started = escape_graphql_string(started);
+    let requester_did_field = session::requester_did_create_field(request.requester_did.as_deref());
+    let session_update = format!(
+        r#"mutation {{
+            update_AgentSession(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                input: {{
+                    agent_name: "{escaped_agent_name}",
+                    behavior_id: "{escaped_behavior_id}",
+                    status: "active",
+                    ended: null
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let session_create = format!(
+        r#"mutation {{
+            create_AgentSession(input: {{
+                session_id: "{session_id}",
+                agent_name: "{escaped_agent_name}",
+                agent_did: "{escaped_agent_did}",
+                {requester_did_field}
+                behavior_id: "{escaped_behavior_id}",
+                started: "{escaped_started}",
+                status: "active"
+            }}) {{ _docID }}
+        }}"#
     );
     let title = conversation_title_from_metadata(request.metadata.as_deref());
-    let conversation_field = session::request_conversation_projection_field(
-        &request.session_id,
-        agent_name,
-        agent_did,
-        behavior_id,
-        &request.request_id,
-        &request.content,
-        "processing",
-        request.requester_did.as_deref(),
-        title
-            .as_deref()
-            .map(|title| (title, session::CONVERSATION_TITLE_SOURCE_TASK)),
-        started,
+    let preview = session::derive_conversation_preview(&request.content);
+    let (title, title_source) = title
+        .as_deref()
+        .map(|title| (title, session::CONVERSATION_TITLE_SOURCE_TASK))
+        .unwrap_or(("", session::CONVERSATION_TITLE_SOURCE_FALLBACK));
+    let escaped_title = escape_graphql_string(title);
+    let escaped_title_source = escape_graphql_string(title_source);
+    let escaped_preview = escape_graphql_string(&preview);
+    let escaped_request_id = escape_graphql_string(&request.request_id);
+    let conversation_update = format!(
+        r#"mutation {{
+            update_AgentConversation(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                input: {{
+                    agent_name: "{escaped_agent_name}",
+                    preview_text: "{escaped_preview}",
+                    status: "processing",
+                    updated_at: "{escaped_started}",
+                    latest_request_id: "{escaped_request_id}"
+                }}
+            ) {{ _docID }}
+        }}"#
     );
-    format!("mutation {{ {session_field} {conversation_field} }}")
+    let conversation_create = format!(
+        r#"mutation {{
+            create_AgentConversation(input: {{
+                session_id: "{session_id}",
+                agent_name: "{escaped_agent_name}",
+                agent_did: "{escaped_agent_did}",
+                {requester_did_field}
+                behavior_id: "{escaped_behavior_id}",
+                title: "{escaped_title}",
+                title_source: "{escaped_title_source}",
+                preview_text: "{escaped_preview}",
+                status: "processing",
+                created_at: "{escaped_started}",
+                updated_at: "{escaped_started}",
+                latest_request_id: "{escaped_request_id}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    RequestSessionProjection {
+        session_id: request.session_id.clone(),
+        behavior_id: behavior_id.to_string(),
+        session_update,
+        session_create,
+        conversation_update,
+        conversation_create,
+    }
+}
+
+pub(super) async fn apply_request_session_projection(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    projection: &RequestSessionProjection,
+) -> Result<()> {
+    let escaped_session_id = escape_graphql_string(&projection.session_id);
+    let binding_query = format!(
+        r#"{{
+            AgentSession(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}) {{
+                behavior_id
+            }}
+        }}"#
+    );
+    let binding = txn.execute_local_response(&binding_query).await?;
+    let sessions = binding
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentSession"))
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if let Some(existing_behavior_id) = sessions
+        .iter()
+        .filter_map(|row| row.get("behavior_id").and_then(serde_json::Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty() && *value != projection.behavior_id)
+    {
+        return Err(ClaimAdmissionError::SessionBehaviorMismatch {
+            session_id: projection.session_id.clone(),
+            existing_behavior_id: existing_behavior_id.to_string(),
+            requested_behavior_id: projection.behavior_id.clone(),
+        }
+        .into());
+    }
+    if sessions.is_empty() {
+        txn.execute_local_response(&projection.session_create)
+            .await?;
+    } else {
+        txn.execute_local_response(&projection.session_update)
+            .await?;
+    }
+
+    let conversation = txn
+        .execute_local_response(&projection.conversation_update)
+        .await?;
+    if !conversation
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_AgentConversation"))
+        .is_some_and(response_has_documents)
+    {
+        txn.execute_local_response(&projection.conversation_create)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn materialize_claimed_request_with_projection(
     node: &EmbeddedNode,
     request_mutation: &str,
-    projection_mutation: &str,
+    projection: &RequestSessionProjection,
 ) -> Result<defra_node::QueryResponse> {
     let mut last_error = None;
     for retry_index in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
@@ -584,7 +702,7 @@ async fn materialize_claimed_request_with_projection(
             {
                 anyhow::bail!("materialized AgentRequest mutation returned no document");
             }
-            txn.execute_local_response(projection_mutation).await?;
+            apply_request_session_projection(&txn, projection).await?;
             Ok::<_, anyhow::Error>(created)
         }
         .await;

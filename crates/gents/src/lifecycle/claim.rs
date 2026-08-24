@@ -25,24 +25,14 @@ impl BackgroundCompletionClaimSnapshot {
 async fn claim_request_with_projection<F>(
     node: &EmbeddedNode,
     session_id: &str,
-    behavior_id: &str,
     capture_background_snapshot: bool,
-    projection_mutation: &str,
+    projection: &super::materialize::RequestSessionProjection,
     build_mutation: F,
 ) -> Result<(defra_node::QueryResponse, BackgroundCompletionClaimSnapshot)>
 where
     F: Fn(&str) -> String,
 {
-    let raw_session_id = session_id;
     let session_id = escape_graphql_string(session_id);
-    let session_binding_query = format!(
-        r#"{{
-            AgentSession(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                limit: 2
-            ) {{ behavior_id }}
-        }}"#
-    );
     let snapshot_query = format!(
         r#"{{
             all_messages: AgentMessage(
@@ -63,36 +53,6 @@ where
     for retry_index in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
         let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
         let attempt = async {
-            let binding = txn.execute_local_response(&session_binding_query).await?;
-            let sessions = binding
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentSession"))
-                .and_then(serde_json::Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            if sessions.len() > 1 {
-                return Err(ClaimAdmissionError::DuplicateSessionProjection {
-                    session_id: raw_session_id.to_string(),
-                }
-                .into());
-            }
-            if let Some(existing_behavior_id) = sessions
-                .first()
-                .and_then(|row| row.get("behavior_id"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                if existing_behavior_id != behavior_id {
-                    return Err(ClaimAdmissionError::SessionBehaviorMismatch {
-                        session_id: raw_session_id.to_string(),
-                        existing_behavior_id: existing_behavior_id.to_string(),
-                        requested_behavior_id: behavior_id.to_string(),
-                    }
-                    .into());
-                }
-            }
             let snapshot = if capture_background_snapshot {
                 let response = txn.execute_local_response(&snapshot_query).await?;
                 let through_sequence = response
@@ -138,7 +98,7 @@ where
                 .and_then(|data| data.get("update_AgentRequest"))
                 .is_some_and(response_has_documents)
             {
-                txn.execute_local_response(projection_mutation).await?;
+                super::materialize::apply_request_session_projection(&txn, projection).await?;
             }
             Ok::<_, anyhow::Error>((claimed, snapshot))
         }
@@ -578,7 +538,7 @@ impl RequestLifecycle {
 
         let is_background_completion =
             crate::lifecycle::is_background_completion_request(self.request.metadata.as_deref());
-        let projection_mutation = super::materialize::request_session_projection_mutation(
+        let projection = super::materialize::request_session_projection(
             &self.request,
             &self.agent_name,
             &self.agent_did,
@@ -588,9 +548,8 @@ impl RequestLifecycle {
         let (resp, snapshot) = claim_request_with_projection(
             self.node.as_ref(),
             &self.request.session_id,
-            &self.behavior_id,
             is_background_completion,
-            &projection_mutation,
+            &projection,
             &build_mutation,
         )
         .await?;

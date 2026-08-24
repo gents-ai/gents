@@ -171,22 +171,40 @@ fn runtime_control_projection_keeps_only_the_steering_input_visible() {
 
     assert!(!crate::lifecycle::is_runtime_control_message(
         Some(&steering),
-        &steering_input
+        &steering_input,
+        true,
     ));
     assert!(crate::lifecycle::is_runtime_control_message(
         Some(&steering),
-        ""
+        "",
+        true,
     ));
     assert!(crate::lifecycle::is_runtime_control_message(
         Some(&metadata(QueueSource::Goal)),
-        ""
+        "",
+        false,
     ));
     assert!(crate::lifecycle::is_runtime_control_message(
         None,
-        "background-completion-notification:child-1:subagent"
+        "background-completion-notification:child-1:subagent",
+        false,
     ));
     assert!(!crate::lifecycle::is_runtime_control_message(
         Some(&metadata(QueueSource::User)),
-        ""
+        "",
+        false,
     ));
+    assert!(!crate::lifecycle::is_runtime_control_message(
+        Some(&steering),
+        "session-1:4",
+        false,
+    ));
+    assert!(!crate::lifecycle::request_content_owns_user_projection(
+        Some(&steering)
+    ));
+    assert!(crate::lifecycle::request_content_owns_user_projection(None));
+    assert!(crate::lifecycle::request_owns_user_turn(Some(&steering)));
+    assert!(!crate::lifecycle::request_owns_user_turn(Some(&metadata(
+        QueueSource::Goal
+    ))));
 }

@@ -1,4 +1,3 @@
-use super::query::load_session_document;
 #[cfg(test)]
 use super::query::load_session_document_optional;
 use super::retry::{execute_mutation_with_retry, execute_query_timed, retry_operation};
@@ -125,44 +124,6 @@ pub(crate) async fn ensure_session_with_behavior_id_and_requester_did(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn request_session_projection_field(
-    session_id: &str,
-    agent_name: &str,
-    agent_did: &str,
-    behavior_id: &str,
-    requester_did: Option<&str>,
-    started: &str,
-) -> String {
-    let session_id = escape_graphql_string(session_id);
-    let agent_name = escape_graphql_string(agent_name);
-    let agent_did = escape_graphql_string(agent_did);
-    let behavior_id = escape_graphql_string(behavior_id);
-    let started = escape_graphql_string(started);
-    let requester_did_field = super::requester_did_create_field(requester_did);
-
-    format!(
-        r#"project_session: upsert_AgentSession(
-            filter: {{
-                session_id: {{ _eq: "{session_id}" }}
-            }},
-            add: {{
-                session_id: "{session_id}",
-                agent_name: "{agent_name}",
-                agent_did: "{agent_did}",
-                {requester_did_field}
-                behavior_id: "{behavior_id}",
-                started: "{started}",
-                status: "active"
-            }},
-            update: {{
-                agent_name: "{agent_name}",
-                status: "active"
-            }}
-        ) {{ _docID }}"#
-    )
-}
-
 pub(crate) async fn max_sequence(node: &EmbeddedNode, session_id: &str) -> Result<u32> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
@@ -197,22 +158,18 @@ pub(crate) async fn max_sequence(node: &EmbeddedNode, session_id: &str) -> Resul
 
 pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> {
     retry_operation("close_session", || async {
-        let session = load_session_document(node, session_id).await?;
-
         let now = chrono::Utc::now().to_rfc3339();
-        let escaped_started = escape_graphql_string(&session.started);
+        let escaped_session_id = escape_graphql_string(session_id);
         let mutation = format!(
             r#"mutation {{
                 update_AgentSession(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                     input: {{
-                        started: "{escaped_started}",
                         status: "completed",
                         ended: "{now}"
                     }}
                 ) {{ _docID }}
             }}"#,
-            doc_id = escape_graphql_string(&session.doc_id),
         );
 
         execute_mutation_with_retry(node, &mutation, "close_session").await?;

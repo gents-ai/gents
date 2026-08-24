@@ -151,8 +151,50 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     behavior.backend_api_key = Some("openrouter-key".to_string());
     behavior.model_name = "openai/gpt-4o-mini".to_string();
 
-    let result = gents::run_openai_oneshot(node, &behavior, "Say hello in one sentence.").await?;
+    let result =
+        gents::run_openai_oneshot(node.clone(), &behavior, "Say hello in one sentence.").await?;
     assert_eq!(result.response_text, "mock response");
+
+    let projection = node
+        .execute(
+            r#"{
+                AgentRequest { status lifecycle_state }
+                AgentResponse { status content }
+                AgentMessage(order: { sequence: ASC }) { role content }
+                AgentConversation { status }
+            }"#,
+        )
+        .await;
+    assert!(!projection.has_errors(), "{:?}", projection.errors);
+    assert_eq!(
+        projection.data.as_ref().unwrap()["AgentRequest"][0]["status"],
+        "completed"
+    );
+    assert_eq!(
+        projection.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
+        "completed"
+    );
+    assert_eq!(
+        projection.data.as_ref().unwrap()["AgentResponse"][0]["status"],
+        "complete"
+    );
+    assert_eq!(
+        projection.data.as_ref().unwrap()["AgentResponse"][0]["content"],
+        ""
+    );
+    let assistant = projection.data.as_ref().unwrap()["AgentMessage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "assistant")
+        .expect("one-shot assistant transcript row");
+    assert!(assistant["content"]
+        .as_str()
+        .is_some_and(|content| content.contains("mock response")));
+    assert_eq!(
+        projection.data.as_ref().unwrap()["AgentConversation"][0]["status"],
+        "completed"
+    );
 
     let completion_request = mock_endpoint
         .recorded_requests()

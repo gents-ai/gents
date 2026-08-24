@@ -4,6 +4,10 @@ use super::*;
 pub(super) struct AgentMessageRow {
     pub(super) role: String,
     pub(super) content: String,
+    #[serde(default)]
+    pub(super) request_id: Option<String>,
+    #[serde(default)]
+    pub(super) message_key: String,
 }
 
 #[derive(Deserialize)]
@@ -21,9 +25,8 @@ pub(super) struct CompactionEntryRow {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct SessionDocument {
-    #[serde(rename = "_docID")]
-    pub(super) doc_id: String,
     pub(super) behavior_id: Option<String>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) started: String,
 }
 

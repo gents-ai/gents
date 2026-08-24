@@ -314,8 +314,6 @@ impl RequestLifecycle {
 
             match super::transition::execute_request_projection_transaction(
                 node,
-                request_id,
-                session_id,
                 &mutation,
                 &conversation_mutation,
                 "repair_terminal_request",

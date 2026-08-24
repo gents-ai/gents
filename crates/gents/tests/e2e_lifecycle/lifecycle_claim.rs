@@ -4,8 +4,8 @@ use gents::RequestLifecycle;
 use serde::Deserialize;
 
 use crate::support::{
-    create_request, first_row, set_interrupt_requested_at, set_valid_until, test_db, AGENT_DID,
-    AGENT_NAME,
+    create_conversation_row, create_request, first_row, set_interrupt_requested_at,
+    set_valid_until, test_db, test_db_with_duplicate_tolerant_conversations, AGENT_DID, AGENT_NAME,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -22,6 +22,75 @@ struct BehaviorRow {
 #[derive(Debug, Clone, Deserialize)]
 struct DeadlineRow {
     deadline: String,
+}
+
+#[tokio::test]
+async fn claim_updates_every_duplicate_conversation_projection() {
+    let db = test_db_with_duplicate_tolerant_conversations("claim-duplicate-conversations").await;
+    let session_id = "session-duplicate-conversations";
+    create_conversation_row(
+        &db.node,
+        session_id,
+        "first",
+        "old first",
+        "active",
+        "2026-03-23T00:00:00Z",
+        "2026-03-23T00:00:00Z",
+        "old-first",
+    )
+    .await;
+    create_conversation_row(
+        &db.node,
+        session_id,
+        "second",
+        "old second",
+        "active",
+        "2026-03-23T00:00:01Z",
+        "2026-03-23T00:00:01Z",
+        "old-second",
+    )
+    .await;
+    let doc_id = create_request(
+        &db.node,
+        "req-duplicate-conversations",
+        session_id,
+        "pending",
+        "2026-03-23T00:00:02Z",
+    )
+    .await;
+    let request = DefraWatcher::new(db.node.clone(), AGENT_DID)
+        .try_fetch_request(&doc_id)
+        .await
+        .unwrap()
+        .expect("pending request");
+    let mut lifecycle =
+        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
+
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+
+    let response = db
+        .node
+        .execute(
+            r#"{
+                AgentConversation(
+                    filter: { session_id: { _eq: "session-duplicate-conversations" } }
+                ) { latest_request_id status }
+            }"#,
+        )
+        .await;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentConversation"))
+        .and_then(serde_json::Value::as_array)
+        .expect("conversation rows");
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| {
+        row.get("latest_request_id")
+            .and_then(serde_json::Value::as_str)
+            == Some("req-duplicate-conversations")
+            && row.get("status").and_then(serde_json::Value::as_str) == Some("processing")
+    }));
 }
 
 #[tokio::test]

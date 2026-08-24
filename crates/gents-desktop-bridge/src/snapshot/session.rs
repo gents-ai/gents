@@ -13,19 +13,38 @@ use super::super::types::{
     DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView, ResponseView,
     RetryEligibilityView, ToolCallView, ToolResultView,
 };
-use super::timeline::{build_rendered_timeline, has_materialized_user_owner};
+use super::timeline::{
+    build_rendered_timeline, has_materialized_user_owner, materialized_user_turn_count,
+};
 use super::{request_matches_agent, source_matches_agent};
 
 fn message_is_runtime_control(
     message: &AgentMessageRow,
     requests_by_id: &HashMap<&str, &AgentRequestRow>,
+    keyed_steering_request_ids: &std::collections::BTreeSet<String>,
 ) -> bool {
     let request_metadata = message
         .request_id
         .as_deref()
         .and_then(|request_id| requests_by_id.get(request_id))
         .and_then(|request| request.metadata.as_deref());
-    gents::lifecycle::is_runtime_control_message(request_metadata, &message.message_key)
+    let has_keyed_input = message
+        .request_id
+        .as_deref()
+        .is_some_and(|request_id| keyed_steering_request_ids.contains(request_id));
+    gents::lifecycle::is_runtime_control_message(
+        request_metadata,
+        &message.message_key,
+        has_keyed_input,
+    )
+}
+
+fn keyed_steering_request_ids(messages: &[&AgentMessageRow]) -> std::collections::BTreeSet<String> {
+    messages
+        .iter()
+        .filter(|message| gents::lifecycle::is_steering_input_message_key(&message.message_key))
+        .filter_map(|message| normalize_optional(message.request_id.as_deref()))
+        .collect()
 }
 
 fn request_is_deprecated_background_completion(request: &AgentRequestRow) -> bool {
@@ -300,6 +319,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         .iter()
         .map(|request| (request.request_id.as_str(), *request))
         .collect();
+    let keyed_steering_request_ids = keyed_steering_request_ids(&transcript.messages);
     let messages = transcript
         .messages
         .into_iter()
@@ -335,7 +355,11 @@ pub fn build_session_snapshot_from_store_for_agent(
                 has_tool_results: presentation
                     .as_ref()
                     .is_some_and(|presentation| presentation.has_tool_results),
-                runtime_control: message_is_runtime_control(row, &requests_by_id),
+                runtime_control: message_is_runtime_control(
+                    row,
+                    &requests_by_id,
+                    &keyed_steering_request_ids,
+                ),
                 timestamp: normalize_optional(row.timestamp.as_deref()),
             }
         })
@@ -523,6 +547,41 @@ fn selected_skill_ids_from_metadata(metadata: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn request_turn_root_id(request: &AgentRequestRow) -> String {
+    normalize_optional(request.retry_root_request.as_deref())
+        .unwrap_or_else(|| request.request_id.clone())
+}
+
+fn logical_turn_index_for_request(
+    store: &gents_desktop_core::client::ClientStore,
+    agent_did: Option<&str>,
+    session_id: &str,
+    request_id: &str,
+) -> Option<usize> {
+    let request = store.requests.iter().find(|row| {
+        row.request_id == request_id
+            && row.session_id.as_deref() == Some(session_id)
+            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
+    })?;
+    let root_id = request_turn_root_id(request);
+    let mut requests = agent_did.map_or_else(
+        || store.requests_for_session(session_id),
+        |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
+    );
+    requests.sort_by(|left, right| {
+        normalize_optional(left.created_at.as_deref())
+            .cmp(&normalize_optional(right.created_at.as_deref()))
+            .then_with(|| left.request_id.cmp(&right.request_id))
+    });
+    let mut seen = std::collections::BTreeSet::new();
+    requests
+        .into_iter()
+        .filter(|request| gents::lifecycle::request_owns_user_turn(request.metadata.as_deref()))
+        .map(request_turn_root_id)
+        .filter(|candidate| seen.insert(candidate.clone()))
+        .position(|candidate| candidate == root_id)
+}
+
 fn build_pending_turn(
     store: &gents_desktop_core::client::ClientStore,
     agent_did: Option<&str>,
@@ -534,7 +593,7 @@ fn build_pending_turn(
             && row.session_id.as_deref() == Some(session_id)
             && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
     })?;
-    if gents::lifecycle::is_runtime_control_message(request.metadata.as_deref(), "") {
+    if !gents::lifecycle::request_content_owns_user_projection(request.metadata.as_deref()) {
         return None;
     }
 
@@ -549,6 +608,7 @@ fn build_pending_turn(
         .iter()
         .map(|request| (request.request_id.as_str(), request))
         .collect::<HashMap<_, _>>();
+    let keyed_steering_request_ids = keyed_steering_request_ids(&transcript.messages);
     let messages = transcript
         .messages
         .into_iter()
@@ -575,13 +635,22 @@ fn build_pending_turn(
                 reasoning: None,
                 has_tool_calls: false,
                 has_tool_results: false,
-                runtime_control: message_is_runtime_control(row, &requests_by_id),
+                runtime_control: message_is_runtime_control(
+                    row,
+                    &requests_by_id,
+                    &keyed_steering_request_ids,
+                ),
                 timestamp: normalize_optional(row.timestamp.as_deref()),
             }
         })
         .collect::<Vec<_>>();
 
-    if has_materialized_user_owner(&messages, request_id) {
+    let exact_owner = has_materialized_user_owner(&messages, request_id);
+    let legacy_owner = logical_turn_index_for_request(store, agent_did, session_id, request_id)
+        .is_some_and(|active_turn_index| {
+            materialized_user_turn_count(&messages) > active_turn_index
+        });
+    if exact_owner || legacy_owner {
         return None;
     }
 

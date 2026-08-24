@@ -21,23 +21,19 @@ mod tests;
 pub use crate::tool_call_lifecycle::query::load_tool_call_result;
 pub(crate) use compaction_entries::save_compaction_entry_with_requester_did;
 pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
-#[allow(unused_imports)]
 pub(crate) use conversation::{
-    conversation_needs_generated_title, load_recent_titles_for_agent,
-    request_conversation_projection_field, request_conversation_status_projection_mutation,
-    update_conversation_title_with_source, CONVERSATION_TITLE_SOURCE_FALLBACK,
-    CONVERSATION_TITLE_SOURCE_GENERATED, CONVERSATION_TITLE_SOURCE_TASK,
-};
-#[cfg(test)]
-pub(crate) use conversation::{
-    upsert_conversation_from_request_with_identity,
-    upsert_conversation_from_request_with_identity_and_requester_did,
+    conversation_needs_generated_title, derive_conversation_preview, load_recent_titles_for_agent,
+    request_conversation_status_projection_mutation, update_conversation_title_with_source,
+    CONVERSATION_TITLE_SOURCE_FALLBACK, CONVERSATION_TITLE_SOURCE_GENERATED,
+    CONVERSATION_TITLE_SOURCE_TASK,
 };
 pub use fork::{
     fork, fork_via_http, ForkError, ForkOutcome, ForkParams, GraphqlExecuteResponse,
     GraphqlExecutor, HttpGraphqlExecutor,
 };
 pub use history::load_history;
+pub(crate) use history::load_history_for_request;
+#[cfg(test)]
 pub(crate) use history::load_history_through_sequence;
 #[allow(unused_imports)]
 pub(crate) use history::{
@@ -52,13 +48,12 @@ pub(crate) use query::{
 pub use retry::count_active_sessions;
 pub(crate) use retry::execute_mutation_with_retry;
 pub use sessions::close_session;
+pub(crate) use sessions::max_sequence;
 #[cfg(test)]
 pub(crate) use sessions::{
     create_session_with_behavior_id, create_session_with_id,
     ensure_session_with_behavior_id_and_requester_did,
 };
-#[allow(unused_imports)]
-pub(crate) use sessions::{max_sequence, request_session_projection_field};
 
 /// Render an immutable requester route key for a document create branch.
 /// Ordinary local lineage leaves the field null by omitting it; remote child

@@ -13,6 +13,7 @@ use crate::config::AgentBehavior;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
+use crate::streaming::{DefraStreamWriter, StreamStatus, StreamWriter};
 use crate::tool_surface::{self, ToolRuntimeContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +259,27 @@ where
     .await
 }
 
+async fn terminalize_oneshot_setup_failure(
+    lifecycle: &mut RequestLifecycle,
+    lsp_pool: &crate::toolset::lsp::LspPool,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let reason = error.to_string();
+    let persistence_error = persist_oneshot_failure(lifecycle, &reason).await.err();
+    lsp_pool.shutdown().await;
+    match persistence_error {
+        None => error,
+        Some(persistence_error) => anyhow!(
+            "one-shot setup failed: {error}; additionally failed to persist its terminal response: {persistence_error}"
+        ),
+    }
+}
+
+async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str) -> Result<()> {
+    lifecycle.fail_with_reason(reason).await?;
+    lifecycle.ensure_error_response(reason).await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_oneshot_owned<M: CompletionModel + 'static>(
     node: Arc<EmbeddedNode>,
@@ -284,12 +306,41 @@ where
         TriggerLineage::default(),
     )
     .await?;
-    lifecycle.begin_execution().await?;
+    if let Err(error) = lifecycle.begin_execution().await {
+        return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
+    }
     let request = lifecycle.request().clone();
-    let request_commit_cid = lifecycle
-        .request_commit_cid()
-        .context("one-shot request has no commit CID")?
-        .to_string();
+    let stream_writer = DefraStreamWriter::new(
+        node.clone(),
+        behavior.agent_did(),
+        std::time::Duration::ZERO,
+    );
+    let response_doc_id = match stream_writer
+        .begin_with_requester_did(
+            &request.session_id,
+            &request.request_id,
+            Some(&request.doc_id),
+            lifecycle.behavior_id(),
+            request.requester_did.as_deref(),
+        )
+        .await
+    {
+        Ok(doc_id) => doc_id,
+        Err(error) => {
+            return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
+        }
+    };
+    lifecycle.set_response_doc_id(&response_doc_id);
+    if let Err(error) = lifecycle.advance().await {
+        return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
+    }
+    let request_commit_cid = match lifecycle.request_commit_cid() {
+        Some(cid) => cid.to_string(),
+        None => {
+            let error = anyhow!("one-shot request has no commit CID");
+            return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
+        }
+    };
     config.deadline = request
         .deadline
         .as_deref()
@@ -309,15 +360,27 @@ where
         Some(&crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
     );
 
-    let hook = DefraSessionHook::resume_with_identity_policy(
+    let history = match prompt_builder.build(&[], &[]).await {
+        Ok(prompt) => prompt.messages,
+        Err(error) => {
+            return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
+        }
+    };
+
+    let hook = match DefraSessionHook::resume_with_identity_policy(
         node,
         &request.session_id,
         &behavior.behavior_id,
         behavior.agent_did(),
         FailurePolicy::default(),
     )
-    .await?
-    .with_background_tool_registry(background_tool_registry);
+    .await
+    {
+        Ok(hook) => hook.with_background_tool_registry(background_tool_registry),
+        Err(error) => {
+            return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
+        }
+    };
     hook.set_active_request_binding(
         Some(request.request_id.clone()),
         Some(request.doc_id.clone()),
@@ -325,8 +388,6 @@ where
     )
     .await;
     hook.set_request_deadline_at(config.deadline).await;
-    let history = prompt_builder.build(&[], &[]).await?.messages;
-
     let inference = crate::agent::loop_stream::run_loop_to_text(
         model,
         Some(hook.clone()),
@@ -340,6 +401,26 @@ where
         None => inference.await,
     }
     .map_err(|error| anyhow!("one-shot inference failed: {error}"));
+
+    let response = match response {
+        Ok(response_text) => {
+            let persisted = async {
+                stream_writer
+                    .write_tokens(&response_doc_id, &response_text)
+                    .await?;
+                stream_writer
+                    .finalize(&response_doc_id, StreamStatus::Complete)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            match persisted {
+                Ok(()) => Ok(response_text),
+                Err(error) => Err(anyhow!("one-shot response persistence failed: {error}")),
+            }
+        }
+        Err(error) => Err(error),
+    };
 
     let session_id = hook.session_id().await;
     match response {
@@ -362,7 +443,8 @@ where
             })
         }
         Err(error) => {
-            let lifecycle_result = lifecycle.fail_with_reason(&error.to_string()).await;
+            let lifecycle_result =
+                persist_oneshot_failure(&mut lifecycle, &error.to_string()).await;
             let close_result = hook.close().await;
             if let Some(id) = session_id.as_deref() {
                 lsp_pool.close_session(id).await;

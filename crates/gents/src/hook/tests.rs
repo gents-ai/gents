@@ -1006,6 +1006,90 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
 }
 
 #[tokio::test]
+async fn keyed_steering_input_is_reused_when_the_prompt_hook_runs() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-steering-dedup-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    let session_id = hook.session_id().await.expect("session id");
+    crate::session::create_session_with_behavior_id(
+        node.as_ref(),
+        &session_id,
+        "general",
+        "did:test:general",
+        "general",
+    )
+    .await
+    .unwrap();
+    let prompt = user_text_message("also check the staging config");
+    let persisted = serde_json::to_string(&prompt).unwrap();
+    crate::session::append_message_once_with_key_and_requester_did(
+        node.as_ref(),
+        &session_id,
+        "did:test:general",
+        None,
+        "user",
+        &persisted,
+        None,
+        Some("req-steering"),
+        Some("request-doc-steering"),
+        "steering-input:req-steering",
+        Some(1),
+    )
+    .await
+    .unwrap();
+    hook.set_active_request_binding(
+        Some("req-steering".to_string()),
+        Some("request-doc-steering".to_string()),
+        None,
+    )
+    .await;
+
+    assert!(matches!(
+        hook.on_completion_call(&prompt, &[]).await,
+        HookAction::Continue
+    ));
+
+    let response = node
+        .execute(&format!(
+            r#"{{
+                AgentMessage(filter: {{
+                    session_id: {{ _eq: "{}" }},
+                    request_id: {{ _eq: "req-steering" }}
+                }}) {{ message_key content }}
+            }}"#,
+            crate::graphql::escape_graphql_string(&session_id)
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(serde_json::Value::as_array)
+        .expect("message rows");
+    assert_eq!(rows.len(), 1, "prompt hook must reuse the keyed input row");
+    assert_eq!(rows[0]["message_key"], "steering-input:req-steering");
+    assert_eq!(rows[0]["content"], persisted);
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-timeout-{}", uuid::Uuid::new_v4()));

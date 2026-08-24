@@ -178,7 +178,7 @@ pub fn build_timeline_order(
                 continue;
             }
         }
-        if pending.is_some()
+        if pending_target.is_some()
             && !pending_placed
             && message.sequence == pending_target
             && (message.emits_item || group_sequences.contains(&message.sequence))
@@ -648,5 +648,17 @@ mod tests {
             none_pos < some_pos,
             "None sequence must sort first: {slots:?}"
         );
+    }
+
+    #[test]
+    fn tail_pending_stays_after_sequence_less_messages() {
+        let mut none_msg = msg("none", 0, TimelineRole::Assistant);
+        none_msg.sequence = None;
+        let slots = build_timeline_order(&[none_msg], &[], pending_tail(), None);
+
+        assert!(matches!(
+            slots.as_slice(),
+            [TimelineSlot::Message { .. }, TimelineSlot::Pending]
+        ));
     }
 }

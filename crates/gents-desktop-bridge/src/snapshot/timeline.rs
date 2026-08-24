@@ -67,6 +67,29 @@ pub(super) fn has_materialized_user_owner(messages: &[MessageView], request_id: 
     has_durable_user_owner(&ownership, request_id)
 }
 
+pub(super) fn materialized_user_turn_count(messages: &[MessageView]) -> usize {
+    messages
+        .iter()
+        .filter_map(|message| {
+            let role = message
+                .display_role
+                .as_deref()
+                .or(message.role.as_deref())
+                .unwrap_or_default();
+            let content = normalize_optional(message.display_content.as_deref());
+            (role.eq_ignore_ascii_case("user") && !message.runtime_control)
+                .then_some(content?)
+                .map(|content| {
+                    message.sequence.map_or_else(
+                        || format!("key:{}", message.message_key),
+                        |sequence| format!("sequence:{sequence}:{content}"),
+                    )
+                })
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+}
+
 fn message_presentation_key(
     message: &MessageView,
     role: &str,
@@ -99,7 +122,8 @@ fn overlay_has_durable_owner(
     }
 
     messages.iter().any(|message| {
-        message.request_id.as_deref() == Some(request_id)
+        (message.request_id.as_deref() == Some(request_id)
+            || normalize_optional(message.request_id.as_deref()).is_none())
             && message
                 .display_role
                 .as_deref()
@@ -351,8 +375,9 @@ pub(super) fn build_rendered_timeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_rendered_timeline, has_materialized_user_owner, render_tool_call, tool_status_kind,
-        MessageView, RenderedTimelineItem, ResponseView, ToolCallView,
+        build_rendered_timeline, has_materialized_user_owner, materialized_user_turn_count,
+        render_tool_call, tool_status_kind, MessageView, RenderedTimelineItem, ResponseView,
+        ToolCallView,
     };
 
     fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {
@@ -491,6 +516,16 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_user_projection_counts_as_one_materialized_turn() {
+        let messages = vec![
+            user_message("first", 1, "same turn"),
+            user_message("replica", 1, "same turn"),
+        ];
+
+        assert_eq!(materialized_user_turn_count(&messages), 1);
+    }
+
+    #[test]
     fn user_text_that_looks_like_a_control_message_still_renders() {
         let content = gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         let messages = vec![user_message("literal-user-text", 1, content)];
@@ -505,6 +540,27 @@ mod tests {
                 ..
             } if rendered == content
         ));
+    }
+
+    #[test]
+    fn unbound_legacy_assistant_message_owns_matching_live_overlay() {
+        let mut message = assistant_message("legacy", "", 4, "already durable");
+        message.request_id = None;
+        let response = streaming_response("already durable");
+
+        let timeline =
+            build_rendered_timeline(&[message], &[], None, Some(&response), Some("request-1"));
+
+        assert_eq!(
+            timeline
+                .iter()
+                .filter(|item| matches!(item, RenderedTimelineItem::AssistantMessage { .. }))
+                .count(),
+            1
+        );
+        assert!(!timeline
+            .iter()
+            .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
     }
 
     #[test]

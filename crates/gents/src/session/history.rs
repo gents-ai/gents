@@ -13,6 +13,30 @@ pub(crate) async fn load_history_through_sequence(
     session_id: &str,
     through_sequence: Option<u32>,
 ) -> Result<Vec<Message>> {
+    load_history_projection(node, session_id, through_sequence, None).await
+}
+
+pub(crate) async fn load_history_for_request(
+    node: &EmbeddedNode,
+    request: &crate::watcher::AgentRequest,
+    through_sequence: Option<u32>,
+) -> Result<Vec<Message>> {
+    let current_input = Message::user(request.content.clone());
+    load_history_projection(
+        node,
+        &request.session_id,
+        through_sequence,
+        Some((&request.request_id, current_input)),
+    )
+    .await
+}
+
+pub(super) async fn load_history_projection(
+    node: &EmbeddedNode,
+    session_id: &str,
+    through_sequence: Option<u32>,
+    current_input: Option<(&str, Message)>,
+) -> Result<Vec<Message>> {
     let escaped_session_id = escape_graphql_string(session_id);
     let sequence_filter = through_sequence
         .map(|sequence| format!(", sequence: {{ _le: {sequence} }}"))
@@ -27,6 +51,8 @@ pub(crate) async fn load_history_through_sequence(
                 role
                 content
                 timestamp
+                request_id
+                message_key
             }}
         }}"#
     );
@@ -49,14 +75,19 @@ pub(crate) async fn load_history_through_sequence(
 
     let mut history = Vec::with_capacity(messages.len());
     for msg in messages {
-        history.push(decode_persisted_message(
-            msg.role.as_str(),
-            msg.content.as_str(),
-        ));
+        let decoded = decode_persisted_message(msg.role.as_str(), msg.content.as_str());
+        if current_input.as_ref().is_some_and(|(request_id, input)| {
+            msg.request_id.as_deref() == Some(request_id.as_ref())
+                && (crate::lifecycle::queue::is_steering_input_message_key(&msg.message_key)
+                    || decoded == *input)
+        }) {
+            continue;
+        }
+        history.push(decoded);
     }
 
     tracing::Span::current().record("history_message_count", history.len() as i64);
-    tracing::debug!(session_id = %session_id, ?through_sequence, count = history.len(), "loaded history");
+    tracing::debug!(session_id = %session_id, ?through_sequence, current_request_id = current_input.as_ref().map(|value| value.0), count = history.len(), "loaded history");
     Ok(history)
 }
 

@@ -31,7 +31,6 @@ pub(super) async fn load_session_document_optional(
                 }},
                 limit: 1
             ) {{
-                _docID
                 behavior_id
                 started
             }}
@@ -145,7 +144,8 @@ pub(super) async fn load_conversation_document(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }}
                 }},
-                limit: 2
+                order: {{ updated_at: DESC }},
+                limit: 1
             ) {{
                 title
                 title_source
@@ -171,12 +171,6 @@ pub(super) async fn load_conversation_document(
         None => Vec::new(),
     };
 
-    if rows.len() > 1 {
-        anyhow::bail!(
-            "AgentConversation uniqueness violated for session_id={session_id}: {} documents",
-            rows.len()
-        );
-    }
     Ok(rows.into_iter().next())
 }
 

@@ -7,3 +7,4 @@ import Proofs.PromptAssembly.Content
 import Proofs.PromptAssembly.Provider
 import Proofs.PromptAssembly.Budget
 import Proofs.PromptAssembly.AggregateBudget
+import Proofs.PromptAssembly.CurrentInput

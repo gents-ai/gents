@@ -501,19 +501,30 @@ mod tests {
         )
         .await
         .expect("create routed AgentSession");
-        crate::session::upsert_conversation_from_request_with_identity_and_requester_did(
-            node,
-            &session_id,
-            "default",
-            agent_did,
-            behavior_id,
-            &request_id,
-            "child prompt",
-            "completed",
-            requester_did,
-        )
-        .await
-        .expect("create routed AgentConversation");
+        let requester_did_field = crate::session::requester_did_create_field(requester_did);
+        let escaped_session_id = escape_graphql_string(&session_id);
+        let escaped_request_id = escape_graphql_string(&request_id);
+        let escaped_agent_did = escape_graphql_string(agent_did);
+        let escaped_behavior_id = escape_graphql_string(behavior_id);
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentConversation(input: {{
+                    session_id: "{escaped_session_id}",
+                    agent_name: "default",
+                    agent_did: "{escaped_agent_did}",
+                    {requester_did_field}
+                    behavior_id: "{escaped_behavior_id}",
+                    title: "",
+                    title_source: "placeholder",
+                    preview_text: "child prompt",
+                    status: "completed",
+                    created_at: "2026-07-06T00:00:00Z",
+                    updated_at: "2026-07-06T00:00:00Z",
+                    latest_request_id: "{escaped_request_id}"
+                }}) {{ _docID }}
+            }}"#
+        );
+        exec(node, &mutation, "create routed AgentConversation").await;
         crate::session::save_message_with_requester_did(
             node,
             &session_id,

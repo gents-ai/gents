@@ -1,7 +1,5 @@
 use super::*;
 
-pub(crate) const STEERING_WAKE_PROMPT: &str = "Continue with the new steering message.";
-
 pub(crate) async fn enqueue_session_request(
     node: &EmbeddedNode,
     parent: &AgentRequest,
@@ -109,20 +107,29 @@ pub(crate) async fn enqueue_steering_request_with_message(
     let request_mutation = session_request_create_mutation(
         parent,
         &behavior_id,
-        STEERING_WAKE_PROMPT,
+        content,
         ExecutionOrigin::Interactive,
         &metadata,
         &request_id,
         &now,
         true,
     )?;
+    // Match the hook's canonical persisted representation so its
+    // request-scoped prompt dedup reuses this keyed row instead of appending a
+    // second copy when the continuation starts.
+    let persisted_content = serde_json::to_string(&crate::llm::message::Message::user(content))?;
 
     let mut retry_index = 0;
     let enqueued = loop {
         let txn = ConfigApplyTxn::begin_local(node, None).await?;
-        let attempt =
-            steering_transaction_attempt(&txn, parent, content, &request_id, &request_mutation)
-                .await;
+        let attempt = steering_transaction_attempt(
+            &txn,
+            parent,
+            &persisted_content,
+            &request_id,
+            &request_mutation,
+        )
+        .await;
 
         let result = match attempt {
             Ok(enqueued) => match txn.commit().await {

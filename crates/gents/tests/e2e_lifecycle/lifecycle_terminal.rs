@@ -4,7 +4,8 @@ use gents::RequestLifecycle;
 use serde::Deserialize;
 
 use crate::support::{
-    create_request, create_response, first_row, test_db, upsert_conversation, AGENT_DID, AGENT_NAME,
+    build_request, create_request, create_response, first_row, test_db, upsert_conversation,
+    AGENT_DID, AGENT_NAME,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -16,6 +17,57 @@ struct ConversationRow {
 #[derive(Debug, Clone, Deserialize)]
 struct ProgressRow {
     progress_seq: i64,
+}
+
+#[tokio::test]
+async fn missing_conversation_projection_does_not_block_terminal_request() {
+    let db = test_db("lifecycle-missing-terminal-projection").await;
+    let session_id = "session-missing-terminal-projection";
+    let request_id = "req-missing-terminal-projection";
+    let request_doc_id = create_request(
+        &db.node,
+        request_id,
+        session_id,
+        "pending",
+        "2026-03-23T00:00:00Z",
+    )
+    .await;
+    let request = build_request(
+        request_doc_id,
+        request_id.to_string(),
+        session_id.to_string(),
+        "2026-03-23T00:00:00Z".to_string(),
+    );
+    let mut lifecycle =
+        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let response = db
+        .node
+        .execute(
+            r#"mutation {
+                delete_AgentConversation(
+                    filter: { session_id: { _eq: "session-missing-terminal-projection" } }
+                ) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    lifecycle.complete().await.unwrap();
+
+    let response = db
+        .node
+        .execute(
+            r#"{
+                AgentRequest(
+                    filter: { request_id: { _eq: "req-missing-terminal-projection" } }
+                ) { status lifecycle_state }
+            }"#,
+        )
+        .await;
+    let request = first_row::<serde_json::Value>(&response, "AgentRequest");
+    assert_eq!(request["status"], "completed");
+    assert_eq!(request["lifecycle_state"], "completed");
 }
 
 #[tokio::test]

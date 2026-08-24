@@ -19,6 +19,7 @@ import {
   ChatTranscriptPanel,
 } from "@source-inc/gents-desktop-chat";
 import { effectiveBehaviorSkills } from "@source-inc/gents-desktop-chat";
+import { HoldsPanel } from "@source-inc/gents-desktop-operations";
 
 export type ChatWorkspaceProps = {
   api?: DesktopApiAdapter;
@@ -188,6 +189,12 @@ export function ActiveChatWorkspace({
             session={session}
             optimisticPendingTurn={optimisticPendingTurn}
             onRetryMessage={onRetryMessage}
+          />
+
+          <HoldsPanel
+            agentDid={selectedDeployment.agentDid}
+            api={explicitApi}
+            hideWhenIdle
           />
 
           <ChatComposer
