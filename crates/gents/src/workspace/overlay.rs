@@ -12,13 +12,12 @@ use crate::tool_surface::{resolve_configured_tool_root, FileToolMode};
 use crate::toolset::{workspace_write_sandbox_enforced, WorkspaceAuthority};
 use crate::watcher::AgentRequest;
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IsolatedWorkspaceRecord {
     pub workspace_id: String,
     pub owner_deployment_id: String,
+    pub writer_principal: String,
+    pub integrator_principal: String,
     pub lifecycle_state: String,
     pub seal_hash: Option<String>,
 }
@@ -57,6 +56,26 @@ pub(crate) fn workspace_authority_file_mode(authority: WorkspaceAuthority) -> Fi
     }
 }
 
+pub(crate) fn require_workspace_principal(
+    workspace: &IsolatedWorkspaceRecord,
+    principal_did: &str,
+    authority: WorkspaceAuthority,
+) -> Result<()> {
+    let required = match authority {
+        WorkspaceAuthority::ReadOnly => return Ok(()),
+        WorkspaceAuthority::ReadWrite => &workspace.writer_principal,
+        WorkspaceAuthority::Integrate => &workspace.integrator_principal,
+    };
+    if principal_did.trim() != required.trim() {
+        bail!(
+            "principal {principal_did} is not authorized for {} on workspace {}",
+            authority.as_str(),
+            workspace.workspace_id
+        );
+    }
+    Ok(())
+}
+
 /// Unbound requests (`workspace_id` none/blank) stay on the behavior tool root.
 #[inline(never)]
 pub(crate) async fn resolve_request_workspace_overlay(
@@ -81,6 +100,7 @@ pub(crate) async fn resolve_request_workspace_overlay(
     let workspace = load_isolated_workspace(node, workspace_id)
         .await?
         .ok_or_else(|| anyhow!("isolated workspace {workspace_id} not found"))?;
+    require_workspace_principal(&workspace, &request.agent_did, authority)?;
     let local_deployment_id = load_local_deployment_id(node).await?;
     let placement = load_workspace_placement(node, workspace_id, &local_deployment_id)
         .await?
@@ -318,6 +338,8 @@ pub(crate) fn request_workspace_cwd(request: &AgentRequest) -> Option<PathBuf> {
 struct IsolatedWorkspaceRow {
     workspace_id: Option<String>,
     owner_deployment_id: Option<String>,
+    writer_principal: Option<String>,
+    integrator_principal: Option<String>,
     lifecycle_state: Option<String>,
     seal_hash: Option<String>,
 }
@@ -354,6 +376,8 @@ async fn load_isolated_workspace(
             ) {{
                 workspace_id
                 owner_deployment_id
+                writer_principal
+                integrator_principal
                 lifecycle_state
                 seal_hash
             }}
@@ -372,9 +396,17 @@ async fn load_isolated_workspace(
     let lifecycle_state = optional_id(row.lifecycle_state.as_deref())
         .ok_or_else(|| anyhow!("IsolatedWorkspace {workspace_id} is missing lifecycle_state"))?
         .to_string();
+    let writer_principal = optional_id(row.writer_principal.as_deref())
+        .ok_or_else(|| anyhow!("IsolatedWorkspace {workspace_id} is missing writer_principal"))?
+        .to_string();
+    let integrator_principal = optional_id(row.integrator_principal.as_deref())
+        .ok_or_else(|| anyhow!("IsolatedWorkspace {workspace_id} is missing integrator_principal"))?
+        .to_string();
     Ok(Some(IsolatedWorkspaceRecord {
         workspace_id,
         owner_deployment_id,
+        writer_principal,
+        integrator_principal,
         lifecycle_state,
         seal_hash: optional_id(row.seal_hash.as_deref()).map(str::to_string),
     }))
@@ -476,3 +508,7 @@ async fn load_enabled_workspace_roots(node: &EmbeddedNode) -> Result<Vec<PathBuf
     }
     Ok(roots)
 }
+
+#[cfg(test)]
+#[path = "overlay_tests.rs"]
+mod overlay_tests;

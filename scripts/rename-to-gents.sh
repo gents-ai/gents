@@ -1117,9 +1117,9 @@ self_test() (
   fixture_sequential="$test_dir/sequential"
   fixture_all="$test_dir/all"
   self_test_fixture "$fixture_base"
-  cp -R "$fixture_base" "$fixture_slice"
-  cp -R "$fixture_base" "$fixture_sequential"
-  cp -R "$fixture_base" "$fixture_all"
+  git clone -q --local "$fixture_base" "$fixture_slice"
+  git clone -q --local "$fixture_base" "$fixture_sequential"
+  git clone -q --local "$fixture_base" "$fixture_all"
 
   cd "$fixture_slice"
   owner_checksum=$(cksum docs/gents.md)
