@@ -119,6 +119,35 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         provenance["assembly_trace"]["effective_message_count"], 1,
         "the compact trace still validates positional overlays"
     );
+    let accounting = provenance["assembly_trace"]["context_accounting"].clone();
+    assert_eq!(accounting["compaction_reason"], "below_threshold");
+    let components = &accounting["components"];
+    let component_total = [
+        "messages",
+        "documents",
+        "tool_schemas",
+        "additional_parameters",
+        "output_schema",
+    ]
+    .into_iter()
+    .map(|field| components[field].as_u64().expect("accounting component"))
+    .sum::<u64>();
+    assert_eq!(
+        accounting["estimated_input_tokens"].as_u64(),
+        Some(component_total),
+        "request-bound accounting must be internally reproducible"
+    );
+
+    let calls = inference_calls(db.node.as_ref(), "req-capture-1").await;
+    let inference_call = calls
+        .iter()
+        .find(|call| call["call_kind"] == "inference")
+        .expect("joined inference call");
+    assert_eq!(
+        parse_json(&inference_call["context_accounting_json"]),
+        accounting,
+        "the replicated InferenceCall projection must match local capture provenance"
+    );
 
     agent.shutdown().await;
 }
@@ -396,6 +425,48 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
         );
         assert_eq!(build_path(row), "budgeted");
     }
+    let first_accounting =
+        parse_json(&rows[0]["provenance_json"])["assembly_trace"]["context_accounting"].clone();
+    let retry_accounting =
+        parse_json(&rows[1]["provenance_json"])["assembly_trace"]["context_accounting"].clone();
+    assert_eq!(first_accounting["turn_index"], 0);
+    assert_eq!(first_accounting["attempt"], 0);
+    assert_eq!(retry_accounting["turn_index"], 0);
+    assert_eq!(retry_accounting["attempt"], 1);
+    assert_eq!(
+        retry_accounting["components"], first_accounting["components"],
+        "a byte-identical retry must reuse the same measured request components"
+    );
+    let calls = inference_calls(db.node.as_ref(), "req-capture-attempts").await;
+    let inference_calls = calls
+        .iter()
+        .filter(|call| call["call_kind"] == "inference")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inference_calls.len(),
+        2,
+        "each provider retry attempt must own a distinct InferenceCall: {calls:?}"
+    );
+    for (row, accounting) in rows.iter().zip([&first_accounting, &retry_accounting]) {
+        let call_id = parse_json(&row["provenance_json"])["admission"]["call_id"]
+            .as_str()
+            .expect("rendered request admission call id")
+            .to_string();
+        let call = inference_calls
+            .iter()
+            .find(|call| call["call_id"] == call_id)
+            .expect("joined InferenceCall for rendered attempt");
+        assert_eq!(&parse_json(&call["context_accounting_json"]), accounting);
+    }
+    let latest_call = inference_calls
+        .into_iter()
+        .max_by_key(|call| call["call_seq"].as_i64())
+        .expect("latest inference call");
+    assert_eq!(
+        parse_json(&latest_call["context_accounting_json"]),
+        retry_accounting,
+        "the greatest call sequence must carry retry attempt 1"
+    );
 
     agent.shutdown().await;
 }
@@ -689,6 +760,25 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
         !repaired_arguments.contains(r"\u0007") && repaired_arguments.contains("badvalue"),
         "the repaired attempt must carry the sanitized arguments; got \
          {repaired_arguments:?}"
+    );
+    let repaired_accounting =
+        parse_json(&rows[2]["provenance_json"])["assembly_trace"]["context_accounting"].clone();
+    assert_eq!(repaired_accounting["turn_index"], 1);
+    assert_eq!(repaired_accounting["attempt"], 1);
+    let calls = inference_calls(db.node.as_ref(), "req-capture-repair").await;
+    let inference_calls = calls
+        .iter()
+        .filter(|call| call["call_kind"] == "inference")
+        .collect::<Vec<_>>();
+    assert_eq!(inference_calls.len(), 3, "calls={calls:?}");
+    let latest_call = inference_calls
+        .into_iter()
+        .max_by_key(|call| call["call_seq"].as_i64())
+        .expect("latest inference call");
+    assert_eq!(
+        parse_json(&latest_call["context_accounting_json"]),
+        repaired_accounting,
+        "the greatest call sequence must carry the repaired request accounting"
     );
 
     agent.shutdown().await;
@@ -1331,6 +1421,7 @@ async fn inference_calls(node: &EmbeddedNode, request_id: &str) -> Vec<Value> {
                 call_seq
                 call_kind
                 attempt
+                context_accounting_json
             }}
         }}"#,
         request_id = escape_graphql_string(request_id),

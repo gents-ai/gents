@@ -218,7 +218,8 @@ impl CompletionModel for UsageScriptedModel {
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         self.seen_dispatches.lock().await.push((
-            u64::try_from(completion_request_input_estimate(&request)).unwrap_or(u64::MAX),
+            u64::try_from(completion_request_input_components(&request).estimated_input_tokens())
+                .unwrap_or(u64::MAX),
             request.max_tokens,
         ));
         let turn = self.turns.lock().await.pop_front().unwrap_or_else(|| {
@@ -1356,7 +1357,7 @@ async fn completion_output_ceiling_is_clamped_to_remaining_context() {
     let request = build_request(&model, prompt.clone(), &[], &[], &[], &loop_config)
         .await
         .expect("request should build");
-    let input_tokens = completion_request_input_estimate(&request);
+    let input_tokens = completion_request_input_components(&request).estimated_input_tokens();
     loop_config.context_window = input_tokens + 250;
 
     let stream = run_loop_stream(
@@ -1397,10 +1398,16 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
     loop_config.on_rendered_request = Some(Arc::new(move |turn, _attempt, _request, trace| {
         let reduction_captures = reduction_captures_for_sink.clone();
         Box::pin(async move {
-            reduction_captures
-                .lock()
-                .await
-                .push((turn, trace.reduction_keys));
+            let accounting = trace
+                .context_accounting
+                .expect("every captured dispatch carries context accounting");
+            reduction_captures.lock().await.push((
+                turn,
+                trace.reduction_keys,
+                accounting.compaction_reason,
+                accounting.estimated_input_tokens,
+                accounting.pre_compaction_input_tokens,
+            ));
             Ok(())
         })
     }));
@@ -1415,7 +1422,7 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
     )
     .await
     .expect("first request should build");
-    let first_tokens = completion_request_input_estimate(&first_request);
+    let first_tokens = completion_request_input_components(&first_request).estimated_input_tokens();
     loop_config.context_window = first_tokens + 100 + 100;
 
     let compactions = Arc::new(AtomicUsize::new(0));
@@ -1462,14 +1469,17 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
             .is_some_and(|text| { text.contains("compacted earlier turn") })),
         "the second provider request must use the compacted provider view"
     );
-    assert_eq!(
-        reduction_captures.lock().await.as_slice(),
-        &[
-            (0, vec!["reduction-previous".to_string()]),
-            (1, vec!["reduction-1".to_string()]),
-        ],
-        "the newest checkpoint replaces the active causal key while lineage remains ordered"
-    );
+    let captures = reduction_captures.lock().await;
+    assert_eq!(captures.len(), 2);
+    assert_eq!(captures[0].0, 0);
+    assert_eq!(captures[0].1, vec!["reduction-previous".to_string()]);
+    assert_eq!(captures[0].2, ContextCompactionReason::BelowThreshold);
+    assert_eq!(captures[0].3, first_tokens);
+    assert_eq!(captures[0].4, None);
+    assert_eq!(captures[1].0, 1);
+    assert_eq!(captures[1].1, vec!["reduction-1".to_string()]);
+    assert_eq!(captures[1].2, ContextCompactionReason::Compacted);
+    assert!(captures[1].3 < captures[1].4.expect("pre-compaction estimate"));
 }
 
 #[tokio::test(start_paused = true)]

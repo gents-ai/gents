@@ -1,4 +1,4 @@
-import { isValidElement, useRef, type ReactNode } from "react";
+import { isValidElement, memo, useRef, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -32,7 +32,11 @@ export function CodeBlock(props: { children?: ReactNode }) {
   );
 }
 
-export function MarkdownContent({ value }: { value: string }) {
+export const MarkdownContent = memo(function MarkdownContent({
+  value,
+}: {
+  value: string;
+}) {
   return (
     <div className="markdown-content">
       <ReactMarkdown
@@ -44,7 +48,7 @@ export function MarkdownContent({ value }: { value: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 export function normalizeTranscriptText(value?: string | null) {
   return value?.trim() ?? "";

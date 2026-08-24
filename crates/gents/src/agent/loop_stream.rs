@@ -38,7 +38,10 @@ use crate::llm::message::{
 };
 use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
-use crate::rendered_request::{AssemblyBuildPath, AssemblyTrace};
+use crate::rendered_request::{
+    AssemblyBuildPath, AssemblyTrace, ContextAccounting, ContextCompactionReason,
+    ContextInputComponents, CONTEXT_ACCOUNTING_VERSION,
+};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
@@ -344,7 +347,7 @@ where
             current_turn += 1;
 
             let turn_index = current_turn - 1;
-            let (mut request, compacted_this_turn) = build_budgeted_request(
+            let (mut request, turn_context_decision) = build_budgeted_request(
                 &model,
                 &mut history,
                 &mut new_messages,
@@ -355,7 +358,14 @@ where
                 &mut active_reduction_keys,
             )
             .await?;
-            retain_effective_messages_oracle |= compacted_this_turn;
+            let compaction_reason = turn_context_decision.reason;
+            let pre_compaction_input_tokens =
+                turn_context_decision.pre_compaction_input_tokens;
+            let mut context_input_components = turn_context_decision.components;
+            retain_effective_messages_oracle |= matches!(
+                compaction_reason,
+                ContextCompactionReason::Compacted
+            );
 
             let current_prompt = new_messages
                 .last()
@@ -396,10 +406,15 @@ where
                     // Repair and retry paths can rebuild or reuse the request.
                     // Re-apply both clamps at the one provider-dispatch
                     // chokepoint so no attempt escapes either budget.
-                    clamp_request_output_budget(&mut request, &config);
+                    clamp_request_output_budget(
+                        &mut request,
+                        &config,
+                        context_input_components.estimated_input_tokens(),
+                    );
                     clamp_request_aggregate_token_budget(
                         &mut request,
                         aggregate_token_budget.as_ref(),
+                        context_input_components.estimated_input_tokens(),
                     )?;
                     if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
                         // `history ++ new_messages` is the effective provider
@@ -416,7 +431,16 @@ where
                                 effective_messages,
                             )
                         }
-                        .with_reduction_keys(active_reduction_keys.clone());
+                        .with_reduction_keys(active_reduction_keys.clone())
+                        .with_context_accounting(context_accounting_for_request(
+                            &request,
+                            &config,
+                            &context_input_components,
+                            turn_index,
+                            attempt,
+                            compaction_reason,
+                            pre_compaction_input_tokens,
+                        ));
                         on_rendered_request(turn_index, attempt, request.clone(), assembly_trace)
                             .await
                             .map_err(|error| {
@@ -484,6 +508,8 @@ where
                                         &config,
                                     )
                                     .await?;
+                                    context_input_components =
+                                        completion_request_input_components(&request);
                                     build_path = AssemblyBuildPath::Repair;
                                     // Repair rewrites `history` and `new_messages` in place, and
                                     // both are declared outside `'turns`. The durable transcript is
@@ -603,6 +629,8 @@ where
                                         &config,
                                     )
                                     .await?;
+                                    context_input_components =
+                                        completion_request_input_components(&request);
                                     build_path = AssemblyBuildPath::Repair;
                                     // See the sibling repair arm above: repair mutates the
                                     // request-scoped message vectors, so the effective list stays
@@ -1463,26 +1491,70 @@ fn serialized_token_estimate<T: serde::Serialize + ?Sized>(value: &T) -> usize {
 /// including static tool schemas. The production profile deliberately leaves
 /// tokenizer headroom because this estimator is approximate; its job here is to
 /// apply that conservative profile to every turn's assembled request, in
-/// `build_budgeted_request`. A mid-turn `Repair` rebuild is not re-estimated:
-/// repair only normalizes tool arguments and drops orphaned pairs, so it cannot
-/// grow the input past the budget already cleared for that turn.
-fn completion_request_input_estimate(request: &CompletionRequest) -> usize {
-    serialized_token_estimate(&request.chat_history)
-        .saturating_add(serialized_token_estimate(&request.documents))
-        .saturating_add(serialized_token_estimate(&request.tools))
-        .saturating_add(serialized_token_estimate(&request.additional_params))
-        .saturating_add(serialized_token_estimate(&request.output_schema))
+/// `build_budgeted_request`. Both mid-turn `Repair` rebuild paths recompute these
+/// components before dispatch so the clamp and persisted accounting always
+/// describe the repaired request rather than the rejected one.
+fn completion_request_input_components(request: &CompletionRequest) -> ContextInputComponents {
+    ContextInputComponents {
+        messages: serialized_token_estimate(&request.chat_history),
+        documents: serialized_token_estimate(&request.documents),
+        tool_schemas: serialized_token_estimate(&request.tools),
+        additional_parameters: serialized_token_estimate(&request.additional_params),
+        output_schema: serialized_token_estimate(&request.output_schema),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TurnContextDecision {
+    reason: ContextCompactionReason,
+    pre_compaction_input_tokens: Option<usize>,
+    components: ContextInputComponents,
+}
+
+fn context_accounting_for_request(
+    request: &CompletionRequest,
+    config: &LoopConfig,
+    components: &ContextInputComponents,
+    turn_index: usize,
+    attempt: u32,
+    compaction_reason: ContextCompactionReason,
+    pre_compaction_input_tokens: Option<usize>,
+) -> ContextAccounting {
+    let estimated_input_tokens = components.estimated_input_tokens();
+    ContextAccounting {
+        accounting_version: CONTEXT_ACCOUNTING_VERSION,
+        turn_index,
+        attempt,
+        estimator: "serialized_json_bytes_div_4_v1".to_string(),
+        components: components.clone(),
+        estimated_input_tokens,
+        context_window: config.context_window,
+        compaction_threshold_basis_points: crate::compaction::threshold_basis_points(
+            config.compaction_threshold,
+        ),
+        compaction_threshold_tokens: crate::compaction::threshold_budget(
+            config.context_window,
+            config.compaction_threshold,
+        ),
+        configured_max_output_tokens: config.max_tokens,
+        effective_max_output_tokens: request.max_tokens,
+        compaction_reason,
+        pre_compaction_input_tokens,
+    }
 }
 
 /// Treat the configured output value as a ceiling and fit each completion to
 /// the context remaining after its fully assembled provider input. Compaction
 /// protects the configured input threshold; this clamp independently preserves
 /// `input + output <= context` on every dispatch.
-fn clamp_request_output_budget(request: &mut CompletionRequest, config: &LoopConfig) {
+fn clamp_request_output_budget(
+    request: &mut CompletionRequest,
+    config: &LoopConfig,
+    input_tokens: usize,
+) {
     let Some(configured_max) = request.max_tokens else {
         return;
     };
-    let input_tokens = completion_request_input_estimate(request);
     let configured_max = usize::try_from(configured_max).unwrap_or(usize::MAX);
     let effective_max = crate::compaction::effective_output_budget(
         input_tokens,
@@ -1515,7 +1587,7 @@ fn compactable_message_estimate(messages: &[Message]) -> usize {
 /// pathological summary or a single oversized current prompt still does not
 /// fit.
 fn turn_keep_recent_target(
-    request: &CompletionRequest,
+    total_input: usize,
     provider_messages: &[Message],
     config: &LoopConfig,
 ) -> usize {
@@ -1527,7 +1599,6 @@ fn turn_keep_recent_target(
             .unwrap_or_default(),
         config.compaction_threshold,
     );
-    let total_input = completion_request_input_estimate(request);
     let compactable_input = compactable_message_estimate(provider_messages);
     let static_input = total_input.saturating_sub(compactable_input);
     let message_budget = effective_budget.saturating_sub(static_input);
@@ -1537,13 +1608,13 @@ fn turn_keep_recent_target(
     message_budget.saturating_mul(3) / 4
 }
 
-fn completion_request_exceeds_budget(request: &CompletionRequest, config: &LoopConfig) -> bool {
+fn completion_request_exceeds_budget(input_tokens: usize, config: &LoopConfig) -> bool {
     let max_output_tokens = config
         .max_tokens
         .and_then(|tokens| usize::try_from(tokens).ok())
         .unwrap_or_default();
     crate::compaction::input_exceeds_budget(
-        completion_request_input_estimate(request),
+        input_tokens,
         config.context_window,
         max_output_tokens,
         config.compaction_threshold,
@@ -1575,20 +1646,36 @@ async fn build_budgeted_request<M: CompletionModel>(
     turn_index: usize,
     reduction_chain_keys: &mut Vec<String>,
     active_reduction_keys: &mut Vec<String>,
-) -> Result<(CompletionRequest, bool), StreamingError> {
+) -> Result<(CompletionRequest, TurnContextDecision), StreamingError> {
     let current_prompt = new_messages
         .last()
         .cloned()
         .expect("new_messages always retains at least the initial prompt");
     let prior = &new_messages[..new_messages.len() - 1];
     let mut request = build_request(model, current_prompt, history, prior, tools, config).await?;
-    clamp_request_output_budget(&mut request, config);
+    let components = completion_request_input_components(&request);
+    let before_tokens = components.estimated_input_tokens();
+    clamp_request_output_budget(&mut request, config, before_tokens);
 
     let Some(compactor) = config.turn_compactor.as_ref() else {
-        return Ok((request, false));
+        return Ok((
+            request,
+            TurnContextDecision {
+                reason: ContextCompactionReason::CompactorUnavailable,
+                pre_compaction_input_tokens: None,
+                components,
+            },
+        ));
     };
-    if !completion_request_exceeds_budget(&request, config) {
-        return Ok((request, false));
+    if !completion_request_exceeds_budget(before_tokens, config) {
+        return Ok((
+            request,
+            TurnContextDecision {
+                reason: ContextCompactionReason::BelowThreshold,
+                pre_compaction_input_tokens: None,
+                components,
+            },
+        ));
     }
 
     let provider_messages = history
@@ -1596,8 +1683,7 @@ async fn build_budgeted_request<M: CompletionModel>(
         .chain(new_messages.iter())
         .cloned()
         .collect::<Vec<_>>();
-    let before_tokens = completion_request_input_estimate(&request);
-    let keep_recent_target = turn_keep_recent_target(&request, &provider_messages, config);
+    let keep_recent_target = turn_keep_recent_target(before_tokens, &provider_messages, config);
     let outcome = compactor(TurnCompactionRequest {
         messages: provider_messages,
         keep_recent_target,
@@ -1628,8 +1714,9 @@ async fn build_budgeted_request<M: CompletionModel>(
     active_reduction_keys.push(outcome.reduction_key);
 
     let mut rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
-    clamp_request_output_budget(&mut rebuilt, config);
-    let after_tokens = completion_request_input_estimate(&rebuilt);
+    let rebuilt_components = completion_request_input_components(&rebuilt);
+    let after_tokens = rebuilt_components.estimated_input_tokens();
+    clamp_request_output_budget(&mut rebuilt, config, after_tokens);
     tracing::info!(
         turn = turn_index,
         before_tokens,
@@ -1640,7 +1727,7 @@ async fn build_budgeted_request<M: CompletionModel>(
         "compacted provider input before completion dispatch"
     );
 
-    if completion_request_exceeds_budget(&rebuilt, config) {
+    if completion_request_exceeds_budget(after_tokens, config) {
         let effective_budget = crate::compaction::effective_input_budget(
             config.context_window,
             config
@@ -1657,7 +1744,14 @@ async fn build_budgeted_request<M: CompletionModel>(
         )));
     }
 
-    Ok((rebuilt, true))
+    Ok((
+        rebuilt,
+        TurnContextDecision {
+            reason: ContextCompactionReason::Compacted,
+            pre_compaction_input_tokens: Some(before_tokens),
+            components: rebuilt_components,
+        },
+    ))
 }
 
 async fn build_request<M: CompletionModel>(

@@ -65,9 +65,10 @@ pub(crate) mod transport;
 
 pub use gents_protocol::rendered_request::{
     AdmissionJoin, AssemblyBuildPath, AssemblyTrace, AssistantMessageId, CaptureOrderKey,
-    CaptureScope, CaptureScopeKind, CaptureSeam, ParsedProvenance, ProvenanceManifest,
-    ProvenanceStatus, RenderedRequestSource, ThreadedToolResult, ASSEMBLY_TRACE_VERSION,
-    CAPTURE_VERSION, PROVENANCE_MANIFEST_VERSION,
+    CaptureScope, CaptureScopeKind, CaptureSeam, ContextAccounting, ContextCompactionReason,
+    ContextInputComponents, ParsedProvenance, ProvenanceManifest, ProvenanceStatus,
+    RenderedRequestSource, ThreadedToolResult, ASSEMBLY_TRACE_VERSION, CAPTURE_VERSION,
+    CONTEXT_ACCOUNTING_VERSION, PROVENANCE_MANIFEST_VERSION,
 };
 pub(crate) use sink::defra_rendered_request_capture_factory;
 pub use sink::DefraRenderedRequestSink;

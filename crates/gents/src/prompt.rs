@@ -186,11 +186,8 @@ impl PromptBuilder for LayeredPromptBuilder {
     ) -> Result<BuiltPrompt> {
         let mut assembled = Vec::new();
 
-        if !compaction_summaries.is_empty() {
-            let summary_text = compaction_summaries.join("\n\n---\n\n");
-            assembled.push(Self::system_reminder(&continuation_checkpoint_reminder(
-                &summary_text,
-            )));
+        if let Some(summary_message) = compaction_summary_message(compaction_summaries) {
+            assembled.push(summary_message);
         }
 
         assembled.extend_from_slice(messages);
@@ -204,6 +201,30 @@ impl PromptBuilder for LayeredPromptBuilder {
             estimated_tokens: preamble_tokens + message_tokens,
         })
     }
+}
+
+pub fn join_compaction_summaries(compaction_summaries: &[String]) -> String {
+    compaction_summaries.join("\n\n---\n\n")
+}
+
+/// Render durable compaction summaries exactly as they appear in provider input.
+pub fn compaction_summary_message(compaction_summaries: &[String]) -> Option<Message> {
+    if compaction_summaries.is_empty() {
+        return None;
+    }
+    let summary_text = join_compaction_summaries(compaction_summaries);
+    Some(LayeredPromptBuilder::system_reminder(
+        &continuation_checkpoint_reminder(&summary_text),
+    ))
+}
+
+/// Estimate the provider-visible summary prefix using its actual message wrapper.
+pub fn estimate_compaction_summary_tokens(compaction_summaries: &[String]) -> usize {
+    compaction_summary_message(compaction_summaries)
+        .as_ref()
+        .map(std::slice::from_ref)
+        .map(estimate_message_tokens)
+        .unwrap_or_default()
 }
 
 pub(crate) fn build_preamble_with_targets(

@@ -1,13 +1,14 @@
 use gents::llm::message::{Message, Text, UserContent};
 use gents_desktop_core::client::{ClientStore, ClientStoreRows};
 use gents_protocol::row::{
-    AgentConversationRow, AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentSessionRow,
-    GoalRow,
+    AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentRequestRow, AgentResponseRow,
+    AgentSessionRow, CompactionEntryRow, GoalRow, InferenceProfileRow,
 };
 
 use super::super::types::{
     ConversationSummary, RenderedTimelineItem, ScheduleView, TaskRecentRunsView, TaskView,
 };
+use super::attach_last_request_context;
 use super::build_session_snapshot_from_store;
 use super::build_session_snapshot_from_store_for_agent;
 use super::conversation_task_tag;

@@ -291,6 +291,66 @@ pub struct RetryEligibilityView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionCompactionView {
+    pub compaction_key: String,
+    pub sequence: Option<i64>,
+    pub messages_compacted: i64,
+    pub original_tokens: Option<i64>,
+    pub compacted_tokens: Option<i64>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionContextComponentsView {
+    pub messages: i64,
+    pub documents: i64,
+    pub tool_schemas: i64,
+    pub additional_parameters: i64,
+    pub output_schema: i64,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRequestContextView {
+    pub request_id: String,
+    pub call_id: String,
+    pub call_sequence: i64,
+    pub turn_index: i64,
+    pub attempt: i64,
+    pub estimator: String,
+    pub estimated_input_tokens: i64,
+    pub context_window: i64,
+    pub compaction_threshold_tokens: i64,
+    pub configured_max_output_tokens: Option<i64>,
+    pub effective_max_output_tokens: Option<i64>,
+    pub compaction_reason: String,
+    pub pre_compaction_input_tokens: Option<i64>,
+    pub components: SessionContextComponentsView,
+}
+
+/// Observable context pressure for the session. `last_request` is the exact,
+/// prompt-free accounting captured at the most recent provider boundary; the
+/// remaining fields project the durable conversation and remain available as
+/// a fallback for sessions created before request accounting was introduced.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionContextView {
+    pub estimated_durable_tokens: i64,
+    pub estimated_conversation_tokens: i64,
+    pub context_window: i64,
+    pub compaction_threshold: f64,
+    pub compaction_threshold_tokens: i64,
+    pub compaction_strategy: String,
+    pub durable_message_count: i64,
+    pub provider_message_count: i64,
+    pub total_compacted_messages: i64,
+    pub compactions: Vec<SessionCompactionView>,
+    pub last_request: Option<SessionRequestContextView>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
     pub session_id: String,
     pub agent_did: Option<String>,
@@ -305,6 +365,7 @@ pub struct DesktopSessionSnapshot {
     pub latest_response: Option<ResponseView>,
     pub active_response_overlay: Option<ResponseView>,
     pub pending_turn: Option<PendingTurnView>,
+    pub context: SessionContextView,
     pub timeline_items: Vec<RenderedTimelineItem>,
     #[allow(dead_code)]
     #[serde(skip_serializing)]

@@ -195,6 +195,95 @@ impl DefraRenderedRequestSink {
         Ok(())
     }
 
+    async fn persist_inference_call_context_accounting(
+        &self,
+        rendered: &RenderedCompletionRequest,
+    ) -> Result<()> {
+        let Some(accounting) = rendered.assembly_trace.context_accounting.as_ref() else {
+            return Ok(());
+        };
+        let Some(call_id) = rendered
+            .provenance_json
+            .get("admission")
+            .and_then(|value| value.get("call_id"))
+            .and_then(Value::as_str)
+        else {
+            // One-shot calls have no InferenceCall join. Their accounting is
+            // still durable in RenderedRequest.provenance_json.
+            return Ok(());
+        };
+        let accounting_json = canonical_json_string(
+            &serde_json::to_value(accounting).context("encoding context accounting")?,
+        )?;
+        let call_id = escape_graphql_string(call_id);
+        let query = format!(
+            r#"query {{
+                InferenceCall(filter: {{ call_id: {{ _eq: "{call_id}" }} }}, limit: 2) {{
+                    context_accounting_json
+                }}
+            }}"#,
+        );
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "rendered_request::lookup_inference_context_accounting",
+        )
+        .await?;
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("InferenceCall"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("reading joined InferenceCall returned an unexpected shape"))?;
+        let [row] = rows.as_slice() else {
+            anyhow::bail!(
+                "rendered request admission call {call_id} matched {} InferenceCall rows",
+                rows.len()
+            );
+        };
+        if let Some(stored) = row
+            .get("context_accounting_json")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            let stored: Value = serde_json::from_str(stored)
+                .context("decoding stored InferenceCall context_accounting_json")?;
+            let incoming: Value = serde_json::from_str(&accounting_json)
+                .context("decoding incoming InferenceCall context_accounting_json")?;
+            if canonical_json(&stored) == canonical_json(&incoming) {
+                return Ok(());
+            }
+            anyhow::bail!("InferenceCall {call_id} already carries different context accounting");
+        }
+
+        let mutation = format!(
+            r#"mutation {{
+                update_InferenceCall(
+                    filter: {{ call_id: {{ _eq: "{call_id}" }} }},
+                    input: {{
+                        context_accounting_json: "{accounting_json}"
+                    }}
+                ) {{ _docID }}
+            }}"#,
+            accounting_json = escape_graphql_string(&accounting_json),
+        );
+        let response = crate::graphql::graphql_mutation_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "rendered_request::persist_inference_context_accounting",
+        )
+        .await?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(single_mutation_result)
+            .is_some_and(crate::graphql::response_has_documents)
+        {
+            anyhow::bail!("updating InferenceCall context accounting returned no document");
+        }
+        Ok(())
+    }
+
     /// Persist one capture. See the outcome table at the top of this module.
     pub async fn capture(&self, rendered: RenderedCompletionRequest) -> Result<()> {
         // Canonicalize once. The stored bytes and the complete-fact comparison
@@ -207,7 +296,7 @@ impl DefraRenderedRequestSink {
         // Create first. Fresh captures are overwhelmingly the common path, and
         // now cost one durable statement rather than a lookup plus a mutation.
         // Only re-delivery and races pay for the conflict read.
-        match self
+        let capture_result = match self
             .create(&rendered, &request_json, &provenance_json)
             .await
         {
@@ -235,7 +324,10 @@ impl DefraRenderedRequestSink {
                     _ => Err(create_error),
                 }
             }
-        }
+        };
+        capture_result?;
+        self.persist_inference_call_context_accounting(&rendered)
+            .await
     }
 
     fn reconcile_existing(

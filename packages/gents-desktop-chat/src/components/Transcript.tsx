@@ -2,6 +2,7 @@ import type {
   DerivedCancelCauseView,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
+import { memo } from "react";
 
 import {
   AssistantCancelCauseTurn,
@@ -9,7 +10,7 @@ import {
 } from "./transcript/MessageItems.js";
 import { TimelineItem } from "./transcript/TimelineItem.js";
 
-export function MessageList({
+export const MessageList = memo(function MessageList({
   timelineItems,
   responseCancelCause,
   responseMaterializedSequence,
@@ -26,10 +27,10 @@ export function MessageList({
 
   return (
     <>
-      {timelineItems.map((item, index) => (
+      {timelineItems.map((item) => (
         <TimelineItem
           item={item}
-          key={`${item.kind}-${item.itemKey}-${index}`}
+          key={`${item.kind}-${item.itemKey}`}
           responseCancelCause={responseCancelCause}
           responseMaterializedSequence={responseMaterializedSequence}
         />
@@ -39,4 +40,4 @@ export function MessageList({
       ) : null}
     </>
   );
-}
+});

@@ -269,6 +269,12 @@ const INFERENCE_PROFILE_ADD_SEED_PATCH: &str = r#"[
 // may grow fields; those belong in DEFAULT_STEPS so existing stores keep a
 // known lineage instead of silently changing roots.
 const TOOL_SELECTION_BASELINE_SDL: &str = include_str!("baseline/tool_selection.graphql");
+const INFERENCE_CALL_BASELINE_SDL: &str = include_str!("baseline/inference_call.graphql");
+
+const INFERENCE_CALL_ADD_CONTEXT_ACCOUNTING_PATCH: &str = r#"[
+  {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"context_accounting_json","Kind":"String"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
 
 const TOOL_SELECTION_ADD_LSP_FIELDS_PATCH: &str = r#"[
   {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_lsp","Kind":"Boolean"}},
@@ -427,7 +433,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_CALL_NAME,
-        gents_protocol::schemas::INFERENCE_CALL,
+        INFERENCE_CALL_BASELINE_SDL,
         "bafyreidz4yn2zxshvpjekf42uotxd3wnrurzldnt2t4ldlnomi2gibtipm"
     ),
     baseline_entry!(
@@ -600,6 +606,15 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
 
 /// Ordered post-baseline schema evolution chain.
 pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
+    MigrationStep::PatchVersioned {
+        id: "inference-call-add-context-accounting",
+        collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
+        patch: INFERENCE_CALL_ADD_CONTEXT_ACCOUNTING_PATCH,
+        lens: None,
+        expected_version: Some("bafyreigecktl6sgfz5ykqc62dkakr3l7h5lmlm3a24z7ragutlfo6ffzqa"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&["context_accounting_json"]),
+    },
     MigrationStep::PatchVersioned {
         id: "inference-profile-add-reasoning-effort",
         collection: gents_protocol::schemas::INFERENCE_PROFILE_NAME,

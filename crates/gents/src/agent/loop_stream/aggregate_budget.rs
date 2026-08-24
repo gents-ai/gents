@@ -141,13 +141,13 @@ impl AggregateTokenLedger {
 pub(super) fn clamp_request_aggregate_token_budget(
     request: &mut CompletionRequest,
     budget: Option<&AggregateTokenBudget>,
+    estimated_input_tokens: usize,
 ) -> Result<(), StreamingError> {
     let Some(budget) = budget else {
         return Ok(());
     };
     let ledger = budget.snapshot()?;
-    let input_tokens =
-        u64::try_from(super::completion_request_input_estimate(request)).unwrap_or(u64::MAX);
+    let input_tokens = u64::try_from(estimated_input_tokens).unwrap_or(u64::MAX);
     let configured_max = request.max_tokens.unwrap_or(u64::MAX);
     let effective_max = ledger.effective_output_tokens(input_tokens, configured_max);
     if !ledger.can_dispatch(input_tokens, configured_max) {

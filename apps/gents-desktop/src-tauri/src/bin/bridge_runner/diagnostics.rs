@@ -4,9 +4,7 @@ use gents_desktop_core::client::ClientCore;
 use serde::Serialize;
 
 use crate::live_fixture::LiveBridgeFixture;
-use gents_desktop_bridge::snapshot::{
-    build_runtime_snapshot, build_session_snapshot_from_store_for_agent,
-};
+use gents_desktop_bridge::snapshot::{build_runtime_snapshot, build_session_snapshot_for_agent};
 use gents_desktop_bridge::types::{
     turn_state_label, DesktopClientSnapshot, DesktopSessionSnapshot,
 };
@@ -94,13 +92,13 @@ pub(crate) async fn build_desktop_session_snapshot(
     request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
-    let snapshot = fixture.desktop_core().store().snapshot();
-    build_session_snapshot_from_store_for_agent(
-        snapshot.as_ref(),
+    build_session_snapshot_for_agent(
+        fixture.desktop_core().as_ref(),
         agent_did,
         session_id,
         request_id,
     )
+    .await
 }
 
 pub(crate) async fn build_request_diagnostics_bundle(
@@ -160,12 +158,8 @@ async fn build_request_diagnostics(
                     .is_some_and(|value| matches!(value, "completed" | "success" | "ok"))
         })
         .count();
-    let session_snapshot = build_session_snapshot_from_store_for_agent(
-        snapshot.as_ref(),
-        None,
-        session_id,
-        Some(request_id),
-    );
+    let session_snapshot =
+        build_session_snapshot_for_agent(core, None, session_id, Some(request_id)).await;
 
     RequestDiagnostics {
         source: source.to_string(),

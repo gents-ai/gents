@@ -201,6 +201,7 @@ pub(super) async fn load_timeline_inference_calls_for_request(
                 prompt_tokens
                 completion_tokens
                 cached_input_tokens
+                context_accounting_json
             }}
         }}"#,
         escape_graphql_string(request_doc_id)

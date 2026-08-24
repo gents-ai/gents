@@ -31,7 +31,13 @@ pub const PROVENANCE_MANIFEST_VERSION: u32 = 3;
 /// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
 /// changes. Versioned independently of the manifest so a manifest that later
 /// gains pinned config CIDs does not have to re-version the trace.
-pub const ASSEMBLY_TRACE_VERSION: u32 = 3;
+pub const ASSEMBLY_TRACE_VERSION: u32 = 4;
+
+/// Version of the request-bound context accounting payload. The estimator is
+/// intentionally named as well as versioned: these are the exact values the
+/// runtime used for its dispatch decision, not a claim about a provider's
+/// proprietary tokenizer.
+pub const CONTEXT_ACCOUNTING_VERSION: u32 = 1;
 
 /// Request paths whose body is a completion request, and the wire shape each
 /// one implies. The capturing transport only claims a pending capture for one
@@ -411,6 +417,70 @@ pub struct ThreadedToolResult {
     pub content: Vec<ToolResultContent>,
 }
 
+/// Why the successful provider dispatch did or did not use per-turn
+/// compaction. Session-prefix compaction remains represented by
+/// `CompactionEntry`; this describes the complete request assembled at the
+/// owned-loop dispatch boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextCompactionReason {
+    /// The complete assembled input fit below the configured threshold.
+    BelowThreshold,
+    /// The input exceeded the threshold and a durable
+    /// `ProviderContextReduction` was activated before this dispatch.
+    Compacted,
+    /// This completion loop had no per-turn compactor. Used by internal and
+    /// one-shot loops where compaction is deliberately unavailable.
+    CompactorUnavailable,
+}
+
+/// Token-estimate components for the exact native completion request that was
+/// captured. Their saturating sum is `estimated_input_tokens`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextInputComponents {
+    pub messages: usize,
+    pub documents: usize,
+    pub tool_schemas: usize,
+    pub additional_parameters: usize,
+    pub output_schema: usize,
+}
+
+impl ContextInputComponents {
+    pub fn estimated_input_tokens(&self) -> usize {
+        self.messages
+            .saturating_add(self.documents)
+            .saturating_add(self.tool_schemas)
+            .saturating_add(self.additional_parameters)
+            .saturating_add(self.output_schema)
+    }
+}
+
+/// Request-bound context accounting persisted with the exact rendered request
+/// and projected onto its joined, replicated `InferenceCall` row. Every
+/// provider dispatch attempt owns a distinct call row.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextAccounting {
+    pub accounting_version: u32,
+    /// Provider-dispatch coordinate within the owning completion loop.
+    #[serde(default)]
+    pub turn_index: usize,
+    #[serde(default)]
+    pub attempt: u32,
+    pub estimator: String,
+    pub components: ContextInputComponents,
+    pub estimated_input_tokens: usize,
+    pub context_window: usize,
+    pub compaction_threshold_basis_points: u64,
+    pub compaction_threshold_tokens: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured_max_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_max_output_tokens: Option<u64>,
+    pub compaction_reason: ContextCompactionReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_compaction_input_tokens: Option<usize>,
+}
+
 /// The request-local inputs that reconstruction must account for explicitly.
 ///
 /// Everything else that shapes a request is either durable (transcript rows,
@@ -476,6 +546,9 @@ pub struct AssemblyTrace {
     /// assembly and on pre-v3 traces.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reduction_keys: Vec<String>,
+    /// Exact accounting used at the dispatch gate. Absent on pre-v4 traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_accounting: Option<ContextAccounting>,
 }
 
 impl AssemblyTrace {
@@ -540,11 +613,17 @@ impl AssemblyTrace {
             assistant_message_ids,
             threaded_tool_results,
             reduction_keys: Vec::new(),
+            context_accounting: None,
         }
     }
 
     pub fn with_reduction_keys(mut self, reduction_keys: Vec<String>) -> Self {
         self.reduction_keys = reduction_keys;
+        self
+    }
+
+    pub fn with_context_accounting(mut self, context_accounting: ContextAccounting) -> Self {
+        self.context_accounting = Some(context_accounting);
         self
     }
 }
@@ -994,5 +1073,65 @@ mod tests {
         assert!(compact.effective_messages.is_none());
         assert!(!compact_json.contains(&marker));
         assert!(oracle_json.len() > compact_json.len() + marker.len());
+    }
+
+    #[test]
+    fn context_accounting_round_trips_decision_and_components() {
+        let accounting = ContextAccounting {
+            accounting_version: CONTEXT_ACCOUNTING_VERSION,
+            turn_index: 2,
+            attempt: 1,
+            estimator: "serialized_json_bytes_div_4_v1".to_string(),
+            components: ContextInputComponents {
+                messages: 120,
+                documents: 3,
+                tool_schemas: 40,
+                additional_parameters: 2,
+                output_schema: 5,
+            },
+            estimated_input_tokens: 170,
+            context_window: 480_000,
+            compaction_threshold_basis_points: 5_460,
+            compaction_threshold_tokens: 262_080,
+            configured_max_output_tokens: Some(64_000),
+            effective_max_output_tokens: Some(64_000),
+            compaction_reason: ContextCompactionReason::Compacted,
+            pre_compaction_input_tokens: Some(300_000),
+        };
+        let trace = AssemblyTrace::from_reconstructible_messages(
+            AssemblyBuildPath::Budgeted,
+            vec![Message::user("hello")],
+        )
+        .with_context_accounting(accounting.clone());
+        let encoded = serde_json::to_string(&trace).expect("serialize accounting trace");
+        let decoded: AssemblyTrace =
+            serde_json::from_str(&encoded).expect("deserialize accounting trace");
+
+        assert_eq!(decoded.trace_version, ASSEMBLY_TRACE_VERSION);
+        assert_eq!(decoded.context_accounting, Some(accounting));
+        assert!(encoded.contains(r#""compaction_reason":"compacted""#));
+        assert_eq!(
+            decoded
+                .context_accounting
+                .as_ref()
+                .expect("accounting")
+                .components
+                .estimated_input_tokens(),
+            170
+        );
+    }
+
+    #[test]
+    fn pre_accounting_trace_remains_readable() {
+        let legacy = serde_json::json!({
+            "trace_version": 3,
+            "build_path": "budgeted",
+            "effective_message_count": 0,
+            "assistant_message_ids": [],
+            "threaded_tool_results": []
+        });
+        let decoded: AssemblyTrace =
+            serde_json::from_value(legacy).expect("pre-v4 trace remains readable");
+        assert_eq!(decoded.context_accounting, None);
     }
 }

@@ -139,10 +139,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 // record its count in a shifted space — reopening the very
                 // accounting defect this change closes, for exactly the sessions
                 // that predate it.
-                let mut history = compaction::sanitize_history_for_provider(drop_compacted_prefix(
+                let mut history = compaction::active_provider_history(
                     provider_history,
                     total_compacted_messages(&compaction_entries),
-                ));
+                );
                 let mut summaries = compaction_entries
                     .into_iter()
                     .map(|entry| compaction::bounded_summary(entry.summary))
@@ -515,15 +515,6 @@ fn total_compacted_messages(entries: &[session::CompactionEntry]) -> usize {
         .iter()
         .map(|entry| entry.messages_compacted as usize)
         .sum()
-}
-
-fn drop_compacted_prefix(
-    mut history: Vec<crate::llm::message::Message>,
-    compacted: usize,
-) -> Vec<crate::llm::message::Message> {
-    let drain_count = compacted.min(history.len());
-    history.drain(..drain_count);
-    history
 }
 
 fn prompt_exceeds_compaction_threshold(
