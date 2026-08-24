@@ -23,6 +23,8 @@ fn ready_workspace() -> IsolatedWorkspaceRecord {
     IsolatedWorkspaceRecord {
         workspace_id: "ws-1".into(),
         owner_deployment_id: "dep-1".into(),
+        writer_principal: "did:key:zWriter".into(),
+        integrator_principal: "did:key:zIntegrator".into(),
         lifecycle_state: "ready".into(),
         seal_hash: None,
     }
@@ -62,6 +64,7 @@ fn read_write_meets_unrestricted_to_workspace_write() {
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted);
     let met = apply_workspace_authority(&policy, WorkspaceAuthority::ReadWrite);
     assert_eq!(met.mode, CommandExecutionMode::WorkspaceWrite);
+    assert!(met.deny_git_metadata_writes());
 }
 
 #[test]
@@ -381,6 +384,35 @@ fn workspace_authority_parse_and_write_flags() {
     assert!(WorkspaceAuthority::ReadWrite.allows_file_writes());
     assert!(!WorkspaceAuthority::ReadOnly.allows_file_writes());
     assert!(!WorkspaceAuthority::Integrate.allows_file_writes());
+}
+
+#[test]
+fn write_and_integrate_authority_require_the_configured_principal() {
+    let workspace = ready_workspace();
+    assert!(super::require_workspace_principal(
+        &workspace,
+        "did:key:zWriter",
+        WorkspaceAuthority::ReadWrite
+    )
+    .is_ok());
+    assert!(super::require_workspace_principal(
+        &workspace,
+        "did:key:zOther",
+        WorkspaceAuthority::ReadWrite
+    )
+    .is_err());
+    assert!(super::require_workspace_principal(
+        &workspace,
+        "did:key:zIntegrator",
+        WorkspaceAuthority::Integrate
+    )
+    .is_ok());
+    assert!(super::require_workspace_principal(
+        &workspace,
+        "did:key:zOther",
+        WorkspaceAuthority::ReadOnly
+    )
+    .is_ok());
 }
 
 #[test]
