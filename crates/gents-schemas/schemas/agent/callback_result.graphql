@@ -3,6 +3,7 @@
 type CallbackResult @branchable {
     result_id: String @index(unique: true) @immutable
     invocation_id: String @index @immutable
+    binding_id: String @index @immutable
     owner_deployment_id: String @index @immutable
     workspace_id: String @index
     caused_by_correlation: String @index @immutable
