@@ -22,6 +22,7 @@ mod transition;
 
 pub use manual::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
 pub(crate) use materialize::{
+    activate_workspace_bound_request,
     write_pending_agent_request_with_lineage_and_conversation_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
@@ -152,7 +153,8 @@ impl WorkspaceLineage {
         Ok(Self {
             workspace_id: field("workspace_id"),
             workspace_authority: field("workspace_authority"),
-            workspace_owner_deployment_id: field("workspace_owner_deployment_id"),
+            workspace_owner_deployment_id: field("workspace_owner_deployment_id")
+                .or_else(|| field("owner_deployment_id")),
             workspace_seal_hash: field("workspace_seal_hash"),
         })
     }
@@ -167,6 +169,13 @@ impl WorkspaceLineage {
                 .as_deref()
                 .map(str::trim)
                 .is_some_and(|value| !value.is_empty())
+    }
+
+    pub fn owner_deployment_id(&self) -> Option<&str> {
+        self.workspace_owner_deployment_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     }
 
     pub fn require_authority_if_workspace_id(&self) -> Result<()> {
@@ -579,5 +588,41 @@ mod tests {
             ExecutionOrigin::from_persisted(None),
             ExecutionOrigin::Interactive
         );
+    }
+
+    #[test]
+    fn workspace_lineage_maps_callback_result_owner_deployment_id() {
+        let context = serde_json::json!({
+            "version": 1,
+            "source_fields": {
+                "workspace_id": "ws-1",
+                "workspace_authority": "readWrite",
+                "owner_deployment_id": "deploy-owner"
+            }
+        })
+        .to_string();
+        let lineage = WorkspaceLineage::from_trigger_context(Some(&context)).unwrap();
+        assert_eq!(lineage.workspace_id.as_deref(), Some("ws-1"));
+        assert_eq!(lineage.owner_deployment_id(), Some("deploy-owner"));
+        assert_eq!(
+            lineage.workspace_owner_deployment_id.as_deref(),
+            Some("deploy-owner")
+        );
+    }
+
+    #[test]
+    fn workspace_lineage_prefers_workspace_owner_deployment_id() {
+        let context = serde_json::json!({
+            "version": 1,
+            "source_fields": {
+                "workspace_id": "ws-1",
+                "workspace_authority": "readOnly",
+                "workspace_owner_deployment_id": "deploy-explicit",
+                "owner_deployment_id": "deploy-callback"
+            }
+        })
+        .to_string();
+        let lineage = WorkspaceLineage::from_trigger_context(Some(&context)).unwrap();
+        assert_eq!(lineage.owner_deployment_id(), Some("deploy-explicit"));
     }
 }

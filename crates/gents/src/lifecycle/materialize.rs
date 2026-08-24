@@ -177,6 +177,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
         trigger_lineage,
         conversation_title,
         None,
+        None,
     )
     .await
 }
@@ -190,6 +191,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     trigger_lineage: TriggerLineage,
     conversation_title: Option<&str>,
     workspace_lineage: Option<&WorkspaceLineage>,
+    request_id: Option<&str>,
 ) -> Result<EnqueuedAgentRequest> {
     if trigger_lineage.trigger_kind.as_deref() == Some("manual")
         && trigger_lineage.trigger_id.is_some()
@@ -201,7 +203,11 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     }
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_id = request_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let session_id = uuid::Uuid::new_v4().to_string();
 
     let escaped_request_id = escape_graphql_string(&request_id);
@@ -215,6 +221,11 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     let execution_origin = execution_origin.as_str();
     let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage)?;
     let workspace_fields = workspace_lineage_graphql_fields(workspace_lineage);
+    let initial_status = if workspace_lineage.is_some_and(WorkspaceLineage::is_bound) {
+        "workspace_binding_pending"
+    } else {
+        "pending"
+    };
     let metadata_field = if prompt_selection.selected_skill_ids.is_empty() {
         String::new()
     } else {
@@ -244,7 +255,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "{escaped_content}",{metadata_field}
-                status: "pending",
+                status: "{initial_status}",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{execution_origin}",{lineage_fields}{workspace_fields}
@@ -318,6 +329,37 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         request_id,
         session_id,
     })
+}
+
+pub(crate) async fn activate_workspace_bound_request(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+) -> Result<()> {
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{
+                    _docID: {{ _eq: "{doc_id}" }},
+                    status: {{ _eq: "workspace_binding_pending" }},
+                    lifecycle_state: {{ _eq: "pending" }}
+                }},
+                input: {{ status: "pending" }}
+            ) {{ _docID }}
+        }}"#,
+        doc_id = escape_graphql_string(request_doc_id),
+    );
+    let response = crate::graphql::graphql_mutation_with_transaction_retry(
+        node,
+        &mutation,
+        "activate_workspace_bound_request",
+    )
+    .await?;
+    if crate::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none() {
+        anyhow::bail!(
+            "workspace-bound AgentRequest {request_doc_id} was not staged for activation"
+        );
+    }
+    Ok(())
 }
 
 impl RequestLifecycle {

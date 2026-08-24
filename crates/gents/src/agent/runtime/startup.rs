@@ -255,6 +255,19 @@ pub(in crate::agent) async fn run_agent(
             _ = trigger_engine_cancel.cancelled() => return,
             _ = trigger_engine_startup_barrier.wait_ready() => {}
         }
+        match crate::trigger_engine::production_materializer::recover_workspace_binding_pending_requests(
+            trigger_engine_node.as_ref(),
+            &trigger_engine_deployment_id,
+        )
+        .await
+        {
+            Ok(recovered) if recovered > 0 => tracing::info!(
+                recovered,
+                "recovered workspace-binding-pending requests"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "workspace binding recovery sweep failed"),
+        }
         let materializer: Arc<dyn crate::trigger_engine::MaterializerHandle> = Arc::new(
             crate::trigger_engine::production_materializer::ProductionMaterializer::new(
                 trigger_engine_node.clone(),
