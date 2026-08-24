@@ -10,12 +10,10 @@ Require one unique scan row per group document and compare each scan's
 `scan_ledger_status`: `consistent` when every count and area matches and every
 candidate has one valid classification pair (`vulnerability` with
 `HIGH|MEDIUM|LOW`, or `hardening`, `correctness`, `operational`, or
-`specification` with `NONE`). Use this deterministic precedence:
-`blocked_provenance` when any scan is blocked;
-`classification_mismatch: <finding ids and pairs>` when any candidate pair is
-invalid; `count_mismatch: <concise area/count details>` when identities or
-counts otherwise disagree; and `consistent` only when none apply. Name every
-simultaneous defect in the mismatch detail. The durable candidate
+`specification` with `NONE`);
+`blocked_provenance` when any scan is blocked; otherwise
+`count_mismatch: <concise area/count details>` or
+`classification_mismatch: <finding ids and pairs>`. The durable candidate
 rows, not model-authored counters, are the authoritative work set.
 
 Let N be the exact number of returned candidates. In stable `finding_id` order call

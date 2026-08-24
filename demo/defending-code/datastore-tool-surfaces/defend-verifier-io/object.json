@@ -63,7 +63,7 @@
     {
       "tool_name": "write_defense_verification_completion",
       "collection": "DefenseVerificationCompletion",
-      "description": "Close exactly one verification assignment with a bounded reason after its verdict is durable, or close a sentinel or blocked handoff.",
+      "description": "Close exactly one verification assignment after its verdict is durable, or close the empty-set sentinel.",
       "output_obligation": {"scope": "trigger", "minimum_writes": 1},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
@@ -71,7 +71,6 @@
         {"name": "finding_id", "required": false, "fill": {"source_field": "finding_id"}},
         {"name": "repository_path", "required": false, "fill": {"source_field": "repository_path"}},
         {"name": "status", "required": true},
-        {"name": "reason", "required": true},
         {"name": "scan_ledger_status", "required": false, "fill": {"source_field": "scan_ledger_status"}},
         {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}}
       ]

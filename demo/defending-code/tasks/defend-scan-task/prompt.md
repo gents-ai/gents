@@ -23,9 +23,8 @@ impact. Each candidate must explain and evidence the control source, entry,
 sensitive sink, triggering conditions, impact, and relevant mitigations or
 guards. Cite source actually read; do not infer paths or line numbers. You have
 read-only file, LSP, shell, and repository-history capabilities and may choose
-the investigation strategy that best covers this area, including
-repository-declared build or test tooling when useful. Do not change tracked
-source or interact with external targets or services.
+the investigation strategy that best covers this area. Do not build, execute,
+or mutate the repository.
 
 All evidence must come from the frozen revision and tree state. If the live
 checkout differs, use an exact clean reconstruction and do not mix evidence

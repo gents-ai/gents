@@ -17,8 +17,7 @@ all of these gates: an attacker identity, attacker control of the relevant
 input, a concrete entry-point-to-sink path, a crossed security boundary,
 realistic reachability under the default or clearly stated deployment, a
 meaningful impact, and an invariant the implementation violates. Refute claims
-that are merely hardening, correctness, operational, or specification issues,
-or classify them as `not_a_finding` when no supported issue remains;
+that are merely hardening, correctness, operational, or specification issues;
 operator-controlled configuration alone is not attacker control. Account for
 authoritative documented or formally specified behavior before treating an
 intentional interface as violated. Record that surface in `contract_surface`

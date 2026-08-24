@@ -35,8 +35,6 @@ REVIEW_STREAM_BATCH_MS ?= 5000
 REVIEW_RETRY_MAX_TRANSPORT ?= 720
 REVIEW_RETRY_MAX_RESAMPLE ?= 32
 MAINTENANCE_ROOT ?= $(CURDIR)
-MAINTENANCE_WORKTREE_PARENT ?= $(abspath $(MAINTENANCE_ROOT)/..)
-MAINTENANCE_WORKTREE_PATH ?=
 MAINTENANCE_BRANCH ?=
 MAINTENANCE_HEAD ?= HEAD
 MAINTENANCE_PR_BASE ?= main
@@ -165,8 +163,6 @@ help:
 	@echo "    MAINTENANCE_MAX_AREAS=10  Set the automatic upper bound"
 	@echo "    MAINTENANCE_HISTORY_DEPTH=250  Set first-parent history depth"
 	@echo "    MAINTENANCE_PR_BASE=main  Set the base branch for the final PR"
-	@echo "    MAINTENANCE_WORKTREE_PARENT=DIR  Root newly executed sibling worktrees here"
-	@echo "    MAINTENANCE_WORKTREE_PATH=DIR  Override the exact new sibling worktree path"
 	@echo "    MAINTENANCE_BRANCH=BRANCH  Override the exact new maintenance branch"
 	@echo "    MAINTENANCE_KEEP_HOME=1   Keep the generated runtime home"
 	@echo
@@ -273,7 +269,6 @@ review:
 .PHONY: maintain
 maintain:
 	@test -d "$(MAINTENANCE_ROOT)" || { echo "MAINTENANCE_ROOT is not a directory: $(MAINTENANCE_ROOT)" >&2; exit 2; }
-	@test -d "$(MAINTENANCE_WORKTREE_PARENT)" || { echo "MAINTENANCE_WORKTREE_PARENT is not a directory: $(MAINTENANCE_WORKTREE_PARENT)" >&2; exit 2; }
 	@case "$(MAINTENANCE_AREAS)" in auto) ;; ''|*[!0-9]*) echo "MAINTENANCE_AREAS must be auto or a positive integer: $(MAINTENANCE_AREAS)" >&2; exit 2;; *) test "$(MAINTENANCE_AREAS)" -gt 0 || { echo "MAINTENANCE_AREAS must be greater than zero" >&2; exit 2; };; esac
 	@case "$(MAINTENANCE_MIN_AREAS)" in ''|*[!0-9]*) echo "MAINTENANCE_MIN_AREAS must be a positive integer: $(MAINTENANCE_MIN_AREAS)" >&2; exit 2;; esac
 	@case "$(MAINTENANCE_MAX_AREAS)" in ''|*[!0-9]*) echo "MAINTENANCE_MAX_AREAS must be a positive integer: $(MAINTENANCE_MAX_AREAS)" >&2; exit 2;; esac
@@ -285,14 +280,9 @@ maintain:
 	@command -v rust-analyzer >/dev/null 2>&1 || echo "warning: rust-analyzer not found on PATH; maintenance will fall back to file/search tools" >&2
 	@maintenance_job_id="$(MAINTENANCE_JOB_ID)"; \
 	if test -z "$$maintenance_job_id"; then maintenance_job_id="maintenance-$$(date -u +%Y%m%dT%H%M%SZ)-$$$$"; fi; \
-	maintenance_worktree_path="$(MAINTENANCE_WORKTREE_PATH)"; \
-	if test -z "$$maintenance_worktree_path"; then maintenance_worktree_path="$(abspath $(MAINTENANCE_WORKTREE_PARENT))/gents-$$maintenance_job_id"; fi; \
 	maintenance_branch="$(MAINTENANCE_BRANCH)"; \
 	if test -z "$$maintenance_branch"; then maintenance_branch="agent/$$maintenance_job_id"; fi; \
-	test "$$(dirname "$$maintenance_worktree_path")" = "$(abspath $(MAINTENANCE_WORKTREE_PARENT))" || { echo "MAINTENANCE_WORKTREE_PATH must be a direct child of MAINTENANCE_WORKTREE_PARENT: $$maintenance_worktree_path" >&2; exit 2; }; \
 	GENTS_MAINTENANCE_ROOT="$(abspath $(MAINTENANCE_ROOT))" \
-	GENTS_MAINTENANCE_WORKTREE_PARENT="$(abspath $(MAINTENANCE_WORKTREE_PARENT))" \
-	GENTS_MAINTENANCE_WORKTREE_PATH="$$maintenance_worktree_path" \
 	GENTS_MAINTENANCE_BRANCH="$$maintenance_branch" \
 	GENTS_MAINTENANCE_HEAD_REF="$(MAINTENANCE_HEAD)" \
 	GENTS_MAINTENANCE_PR_BASE="$(MAINTENANCE_PR_BASE)" \

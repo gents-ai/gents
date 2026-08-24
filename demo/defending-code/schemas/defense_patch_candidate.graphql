@@ -7,6 +7,7 @@ type DefensePatchCandidate {
   contract_review_id: String @immutable
   contract_disposition: String @immutable
   status: String @immutable
+  workspace_id: String @index @immutable
   repository_path: String @immutable
   base_revision: String @immutable
   base_tree_state: String @immutable

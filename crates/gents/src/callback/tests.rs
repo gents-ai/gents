@@ -384,6 +384,25 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
 }
 
 #[test]
+fn builtin_emitter_accepts_assignment_and_base_revision_aliases() {
+    let source = json!({
+        "assignment_id": "cluster:patch",
+        "repository_id": "defending-code",
+        "base_revision": "abc123"
+    });
+    let plan = emit_plan_from_source(&binding(), &source).expect("plan");
+    match &plan.actions[0] {
+        crate::workspace::HostAction::CreateWorkspace(action) => {
+            assert_eq!(action.work_unit_id, "cluster:patch");
+            assert_eq!(action.base_sha, "abc123");
+            assert_eq!(action.branch, "gents/cluster-patch");
+            assert_eq!(action.workspace_id, "cluster:patch");
+        }
+        _ => panic!("expected create_workspace"),
+    }
+}
+
+#[test]
 fn builtin_emitter_builds_create_workspace_plan() {
     let source = json!({
         "work_unit_id": "unit-1",
