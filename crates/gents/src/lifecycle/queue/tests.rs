@@ -248,3 +248,4 @@ async fn control_parent_normalization_recovers_legacy_logical_request_edge() {
 mod background_completion;
 mod coalescing;
 mod metadata;
+mod steering;

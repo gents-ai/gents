@@ -1,6 +1,7 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 import Proofs.DurableLineage
+import Proofs.ConversationContinuation
 
 /-!
 # Background Work JSON
@@ -140,6 +141,33 @@ def r4cSteerInterruptComposesJson
       ++ jsonString witness.queueInterruptedRequestId
     ++ "}"
 
+def conversationContinuationPolicyJson
+    (witness : R4cWitnesses.ConversationContinuationPolicy) : String :=
+  "{"
+    ++ "\"witness\":" ++ jsonString "conversation.continuation.policy" ++ ","
+    ++ "\"version\":" ++ toString witness.version ++ ","
+    ++ "\"steering_policy\":" ++ jsonString witness.steeringPolicy ++ ","
+    ++ "\"background_completion_policy\":"
+      ++ jsonString witness.backgroundCompletionPolicy ++ ","
+    ++ "\"goal_policy\":" ++ jsonString witness.goalPolicy ++ ","
+    ++ "\"steering_lineage_admissible\":"
+      ++ boolString witness.steeringLineageAdmissible ++ ","
+    ++ "\"background_lineage_admissible\":"
+      ++ boolString witness.backgroundLineageAdmissible ++ ","
+    ++ "\"goal_lineage_admissible\":"
+      ++ boolString witness.goalLineageAdmissible ++ ","
+    ++ "\"all_control_prompts_internal\":"
+      ++ boolString witness.allControlPromptsInternal ++ ","
+    ++ "\"durable_input_matches_message_backed_kinds\":"
+      ++ boolString witness.durableInputMatchesMessageBackedKinds ++ ","
+    ++ "\"steering_provider_input\":"
+      ++ jsonString witness.steeringProviderInput ++ ","
+    ++ "\"steering_input_appears_exactly_once\":"
+      ++ boolString witness.steeringInputAppearsExactlyOnce ++ ","
+    ++ "\"steering_control_prompt_absent\":"
+      ++ boolString witness.steeringControlPromptAbsent
+    ++ "}"
+
 def r4cListSubagentsLineageRejects :
     R4cWitnesses.ListSubagentsLineageRejects :=
   { callerRequestId := "r4c-w1-caller"
@@ -258,6 +286,42 @@ def r4cSteerInterruptComposes :
   , queueInterruptedRequestId := "r4c-w6-interrupted"
   }
 
+def conversationContinuationPolicy :
+    R4cWitnesses.ConversationContinuationPolicy :=
+  { version := ConversationContinuation.version
+  , steeringPolicy :=
+      ConversationContinuation.Kind.steering.policy.toContract
+  , backgroundCompletionPolicy :=
+      ConversationContinuation.Kind.backgroundCompletion.policy.toContract
+  , goalPolicy := ConversationContinuation.Kind.goal.policy.toContract
+  , steeringLineageAdmissible :=
+      DurableLineage.admissible
+        (ConversationContinuation.Kind.steering.lineage 1)
+  , backgroundLineageAdmissible :=
+      DurableLineage.admissible
+        (ConversationContinuation.Kind.backgroundCompletion.lineage 1)
+  , goalLineageAdmissible :=
+      DurableLineage.admissible (ConversationContinuation.Kind.goal.lineage 0)
+  , allControlPromptsInternal := decide (
+      ConversationContinuation.Kind.steering.policy.controlVisibility = .runtimeControl ∧
+      ConversationContinuation.Kind.backgroundCompletion.policy.controlVisibility = .runtimeControl ∧
+      ConversationContinuation.Kind.goal.policy.controlVisibility = .runtimeControl)
+  , durableInputMatchesMessageBackedKinds := decide (
+      ConversationContinuation.Kind.steering.policy.requiresDurableInput =
+          ConversationContinuation.Kind.steering.policy.inputVisibility.isSome ∧
+      ConversationContinuation.Kind.backgroundCompletion.policy.requiresDurableInput =
+          ConversationContinuation.Kind.backgroundCompletion.policy.inputVisibility.isSome ∧
+      ConversationContinuation.Kind.goal.policy.requiresDurableInput =
+          ConversationContinuation.Kind.goal.policy.inputVisibility.isSome)
+  , steeringProviderInput := ConversationContinuation.steeringProviderInputContract
+  , steeringInputAppearsExactlyOnce := decide (
+      ConversationContinuation.providerItemCount .steeringInput
+        ConversationContinuation.steeringProviderInput = 1)
+  , steeringControlPromptAbsent := decide (
+      ConversationContinuation.providerItemCount .steeringControl
+        ConversationContinuation.steeringProviderInput = 0)
+  }
+
 def r4cBackgroundWorkCasesJson : List String :=
   [ r4cListSubagentsLineageRejectsJson r4cListSubagentsLineageRejects
   , r4cReadTranscriptCursorAdvancesJson r4cReadTranscriptCursorAdvances
@@ -265,6 +329,7 @@ def r4cBackgroundWorkCasesJson : List String :=
   , r4cReadToolOutputDispatchesByStateJson r4cReadToolOutputDispatchesByState
   , r4cSteerAppendPreservesLineageJson r4cSteerAppendPreservesLineage
   , r4cSteerInterruptComposesJson r4cSteerInterruptComposes
+  , conversationContinuationPolicyJson conversationContinuationPolicy
   , r4cUnmaterializedChildVisibleJson r4cUnmaterializedChildVisible
   ]
 

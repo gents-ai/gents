@@ -26,6 +26,9 @@ pub(crate) use materialize::{
     write_pending_agent_request_with_lineage_and_conversation_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
+pub use queue::{
+    classify_continuation_message, classify_continuation_request, ConversationProjection,
+};
 pub use task_title::task_run_conversation_title;
 
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
@@ -51,35 +54,6 @@ pub fn request_owns_user_turn(metadata: Option<&str>) -> bool {
         )
     })
 }
-
-pub fn is_steering_input_message_key(message_key: &str) -> bool {
-    queue::is_steering_input_message_key(message_key)
-}
-
-/// Classify a transcript row with the sibling-message context needed to read
-/// both current and pre-key steering transcripts. Current runtimes persist one
-/// keyed user input plus a non-keyed control prompt. Older runtimes persisted
-/// only the non-keyed user input, which must remain visible after upgrade.
-/// Background-completion notifications and durable-goal controller prompts
-/// are entirely internal.
-pub fn is_runtime_control_message(
-    metadata: Option<&str>,
-    message_key: &str,
-    request_has_keyed_steering_input: bool,
-) -> bool {
-    if crate::background_completion::is_background_completion_notification_message_key(message_key)
-    {
-        return true;
-    }
-    queue::parse_queue_hints(metadata).is_some_and(|hints| match hints.source {
-        queue::QueueSource::BackgroundCompletion | queue::QueueSource::Goal => true,
-        queue::QueueSource::Steering => {
-            request_has_keyed_steering_input && !queue::is_steering_input_message_key(message_key)
-        }
-        queue::QueueSource::User => false,
-    })
-}
-
 /// Legacy runtimes persisted unversioned background-completion wakeups as
 /// scheduled requests. They remain durable audit rows but must be ignored;
 /// current versioned completion wakes are authoritative continuation turns.
@@ -537,7 +511,7 @@ pub struct RequestLifecycle {
     progress_seq: u32,
     deadline_duration_secs: u64,
     claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
-    background_completion_input_through_sequence: Option<u32>,
+    provider_history_through_sequence: Option<u32>,
     state: LocalLifecycleState,
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -557,11 +531,11 @@ impl RequestLifecycle {
         self.valid_until_at_claim
     }
 
-    /// Last transcript sequence owned by this background-completion attempt
-    /// at its atomic claim boundary. Messages appended for a successor epoch
-    /// must not enter this attempt's provider input.
-    pub(crate) fn background_completion_input_through_sequence(&self) -> Option<u32> {
-        self.background_completion_input_through_sequence
+    /// Last transcript sequence visible to this request's provider input.
+    /// Background wakes snapshot the current epoch; steering stops immediately
+    /// before its durable input because that same text is the loop prompt.
+    pub(crate) fn provider_history_through_sequence(&self) -> Option<u32> {
+        self.provider_history_through_sequence
     }
 }
 

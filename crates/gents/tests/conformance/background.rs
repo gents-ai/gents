@@ -1451,7 +1451,7 @@ pub(super) fn generated_subagent_delegation_graph_cases_pin_gap2_contract() {
 
 pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
     let cases = lean_r4c_background_work_cases();
-    assert_eq!(cases.len(), 7);
+    assert_eq!(cases.len(), 8);
 
     let names = cases
         .iter()
@@ -1460,6 +1460,7 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
     assert_eq!(
         names,
         [
+            "conversation.continuation.policy",
             "r4c.list_subagents.lineage_rejects",
             "r4c.list_subagents.unmaterialized_child_visible",
             "r4c.read_subagent_transcript.cursor_advances",
@@ -1471,6 +1472,46 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
         .into_iter()
         .collect::<BTreeSet<_>>()
     );
+
+    match lean_r4c_background_work_case("conversation.continuation.policy") {
+        LeanR4cBackgroundWorkCase::ConversationContinuationPolicy {
+            version,
+            steering_policy,
+            background_completion_policy,
+            goal_policy,
+            steering_lineage_admissible,
+            background_lineage_admissible,
+            goal_lineage_admissible,
+            all_control_prompts_internal,
+            durable_input_matches_message_backed_kinds,
+            steering_provider_input,
+            steering_input_appears_exactly_once,
+            steering_control_prompt_absent,
+        } => {
+            assert_eq!(*version, 1);
+            assert_eq!(
+                Some(steering_policy.clone()),
+                gents::__test_internals::continuation_policy_contract("steering")
+            );
+            assert_eq!(
+                Some(background_completion_policy.clone()),
+                gents::__test_internals::continuation_policy_contract("background_completion")
+            );
+            assert_eq!(
+                Some(goal_policy.clone()),
+                gents::__test_internals::continuation_policy_contract("goal")
+            );
+            assert!(*steering_lineage_admissible);
+            assert!(*background_lineage_admissible);
+            assert!(*goal_lineage_admissible);
+            assert!(*all_control_prompts_internal);
+            assert!(*durable_input_matches_message_backed_kinds);
+            assert_eq!(steering_provider_input, "prior_message|steering_input");
+            assert!(*steering_input_appears_exactly_once);
+            assert!(*steering_control_prompt_absent);
+        }
+        other => panic!("unexpected continuation policy variant: {other:?}"),
+    }
 
     match lean_r4c_background_work_case("r4c.list_subagents.lineage_rejects") {
         LeanR4cBackgroundWorkCase::ListSubagentsLineageRejects {

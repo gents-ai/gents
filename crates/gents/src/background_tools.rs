@@ -22,8 +22,8 @@ pub use crate::descendant_graph::{AWAITING_CHILD_MATERIALIZATION, PENDING_CHILD_
 use crate::document_config::SubagentTarget;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::lifecycle::queue::{
-    drain_automated_wakeups, enqueue_steering_request_with_message, is_automated_wakeup,
-    QueueHints, QueuePolicy, QueueSource,
+    drain_automated_wakeups, enqueue_conversation_continuation, is_automated_wakeup,
+    ConversationContinuation,
 };
 use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
@@ -1265,15 +1265,11 @@ pub(crate) async fn append_steering_request(
     child_request.caused_by_parent_request_doc_id = Some(caller_request_doc_id);
     child_request.caused_by_parent_tool_call_id = None;
     child_request.caused_by_parent_tool_call_doc_id = None;
-    let enqueued = enqueue_steering_request_with_message(
+    let enqueued = enqueue_conversation_continuation(
         node,
         &child_request,
-        message,
-        QueueHints {
-            source: QueueSource::Steering,
-            policy: QueuePolicy::Append,
-            key: None,
-            queued_after_request_id: None,
+        ConversationContinuation::Steering {
+            message,
             interrupted_request_id: interrupted_request_id.clone(),
         },
     )
@@ -1282,7 +1278,7 @@ pub(crate) async fn append_steering_request(
     Ok(SteerSubagentResponse {
         child_request_id: edge.child_request_id.clone(),
         child_session_id: edge.child_session_id.clone(),
-        queued_request_id: enqueued.request_id,
+        queued_request_id: enqueued.request.request_id,
         interrupted_active_request_id: interrupted_request_id,
         drained_wake_up_request_ids,
     })

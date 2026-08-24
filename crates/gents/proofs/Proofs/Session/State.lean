@@ -10,6 +10,7 @@ inductive QueueSource where
   | user
   | backgroundCompletion
   | steering
+  | goal
   deriving DecidableEq, Repr
 
 namespace QueueSource
@@ -18,12 +19,14 @@ def toDefraDB : QueueSource → String
   | .user => "user"
   | .backgroundCompletion => "background_completion"
   | .steering => "steering"
+  | .goal => "goal"
 
 def fromDefraDB? : String → Option QueueSource
   | "user" => some .user
   | "background_completion" => some .backgroundCompletion
   | "subagent_completion" => some .backgroundCompletion
   | "steering" => some .steering
+  | "goal" => some .goal
   | _ => none
 
 theorem fromDefraDB_toDefraDB (source : QueueSource) :
@@ -34,12 +37,14 @@ def automatedWakeup : QueueSource → Prop
   | .user => False
   | .backgroundCompletion => True
   | .steering => False
+  | .goal => False
 
 instance (source : QueueSource) : Decidable source.automatedWakeup :=
   match source with
   | .user => isFalse (by intro h; exact h)
   | .backgroundCompletion => isTrue trivial
   | .steering => isFalse (by intro h; exact h)
+  | .goal => isFalse (by intro h; exact h)
 
 end QueueSource
 

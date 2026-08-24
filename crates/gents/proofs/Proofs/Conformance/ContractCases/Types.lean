@@ -544,6 +544,21 @@ structure SteerInterruptComposes where
   queueInterruptedRequestId : String
   deriving Repr
 
+structure ConversationContinuationPolicy where
+  version : Nat
+  steeringPolicy : String
+  backgroundCompletionPolicy : String
+  goalPolicy : String
+  steeringLineageAdmissible : Bool
+  backgroundLineageAdmissible : Bool
+  goalLineageAdmissible : Bool
+  allControlPromptsInternal : Bool
+  durableInputMatchesMessageBackedKinds : Bool
+  steeringProviderInput : String
+  steeringInputAppearsExactlyOnce : Bool
+  steeringControlPromptAbsent : Bool
+  deriving Repr
+
 structure UnmaterializedChildVisible where
   callerRequestId : String
   bridgeToolCallId : String

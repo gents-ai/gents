@@ -24,6 +24,17 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         admission_context: AdmissionCallContext,
         capture_context: crate::rendered_request::RenderedRequestContext,
     ) {
+        if crate::lifecycle::classify_continuation_request(
+            request.metadata.as_deref(),
+            &request.content,
+        ) == crate::lifecycle::ConversationProjection::RuntimeControl
+        {
+            tracing::debug!(
+                request_id = %request.request_id,
+                "skipping generated title for runtime continuation request"
+            );
+            return;
+        }
         // A generated title is optional presentation metadata, not part of the
         // requested agent result. Budgeted requests therefore skip this
         // out-of-band provider call instead of giving it a second allowance or

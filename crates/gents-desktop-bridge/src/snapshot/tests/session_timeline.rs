@@ -186,7 +186,7 @@ fn steering_projects_the_input_once_without_rendering_its_control_prompt() {
     rows.responses.clear();
     rows.requests[0].content = Some("also check the staging config".to_string());
     rows.requests[0].metadata = Some(
-        r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":"parent-1"}}"#
+        r#"{"continuation_version":1,"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":"parent-1"}}"#
             .to_string(),
     );
     rows.messages[0].message_key = "steering-input:req-1".to_string();
@@ -208,6 +208,53 @@ fn steering_projects_the_input_once_without_rendering_its_control_prompt() {
             })
             .collect::<Vec<_>>(),
         vec!["also check the staging config"]
+    );
+}
+
+#[test]
+fn continuation_assistant_reply_owns_the_live_overlay() {
+    let mut rows = make_streaming_store_with_response_content("working on it").to_rows();
+    rows.requests[0].content = Some("also check the staging config".to_string());
+    rows.requests[0].metadata = Some(
+        r#"{"continuation_version":1,"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":"parent-1"}}"#
+            .to_string(),
+    );
+    rows.messages[0].role = Some("assistant".to_string());
+    rows.messages[0].content = Some(assistant_message_json("working on it"));
+
+    let store = ClientStore::from_rows(rows);
+    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
+        .expect("session snapshot");
+
+    assert!(!snapshot.messages[0].runtime_control);
+    assert!(snapshot
+        .timeline_items
+        .iter()
+        .all(|item| !matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
+}
+
+#[test]
+fn legacy_steering_content_remains_visible_during_projection() {
+    let mut rows = make_streaming_store_with_response_content("").to_rows();
+    rows.responses.clear();
+    rows.requests[0].content = Some("also check the staging config".to_string());
+    rows.requests[0].metadata = Some(
+        r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":"parent-1"}}"#
+            .to_string(),
+    );
+    rows.messages.clear();
+
+    let store = ClientStore::from_rows(rows);
+    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
+        .expect("session snapshot");
+
+    assert!(snapshot.messages.is_empty());
+    assert_eq!(
+        snapshot
+            .pending_turn
+            .as_ref()
+            .map(|turn| turn.content.as_str()),
+        Some("also check the staging config")
     );
 }
 

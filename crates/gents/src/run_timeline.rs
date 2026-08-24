@@ -1259,16 +1259,7 @@ fn request_only_control_link_is_corroborated(request: &TimelineRequestRow) -> bo
     {
         return false;
     }
-    if crate::lifecycle::is_background_completion_request(request.metadata.as_deref()) {
-        return true;
-    }
-    crate::lifecycle::queue::parse_queue_hints(request.metadata.as_deref()).is_some_and(|hints| {
-        matches!(
-            hints.source,
-            crate::lifecycle::queue::QueueSource::Steering
-                | crate::lifecycle::queue::QueueSource::Goal
-        )
-    })
+    crate::lifecycle::queue::metadata_is_request_only_control(request.metadata.as_deref())
 }
 
 fn sorted_inference_calls(

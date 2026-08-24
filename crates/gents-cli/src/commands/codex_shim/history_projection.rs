@@ -92,6 +92,10 @@ struct CompactionRow {
 #[derive(Debug, Clone, Deserialize)]
 struct MessageRow {
     sequence: i64,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
+    message_key: String,
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
     role: String,
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
@@ -172,6 +176,8 @@ pub(super) async fn load_thread_turns(
                 order: {{ sequence: ASC }}
             ) {{
                 sequence
+                request_id
+                message_key
                 role
                 content
                 reasoning
@@ -228,9 +234,13 @@ pub(super) async fn load_thread_turns(
         .map(|message| (message.sequence, message))
         .collect::<BTreeMap<_, _>>();
 
+    let requests_by_id = requests
+        .iter()
+        .map(|request| (request.request_id.as_str(), request))
+        .collect::<BTreeMap<_, _>>();
     let turns = project_request_turns(
         record,
-        requests,
+        &requests,
         &responses_by_request,
         &tools_by_request,
         &compactions_by_request,
@@ -238,7 +248,7 @@ pub(super) async fn load_thread_turns(
     )?;
 
     if turns.is_empty() && !messages.is_empty() {
-        return Ok(project_message_turns(messages));
+        return Ok(project_message_turns(messages, &requests_by_id));
     }
 
     Ok(turns)
@@ -283,7 +293,10 @@ async fn load_completed_compactions(
         .context("decoding completed InferenceCall compaction history rows")
 }
 
-fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
+fn project_message_turns(
+    messages: Vec<MessageRow>,
+    requests_by_id: &BTreeMap<&str, &RequestRow>,
+) -> Vec<codex::Turn> {
     let mut turns = Vec::new();
     let mut current_id = None::<String>;
     let mut current_items = Vec::<codex::ThreadItem>::new();
@@ -292,6 +305,21 @@ fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
     for message in messages {
         let role = message.role.trim();
         if role.eq_ignore_ascii_case("user") {
+            let request = message
+                .request_id
+                .as_ref()
+                .and_then(|request_id| requests_by_id.get(request_id.as_str()).copied());
+            if gents::lifecycle::classify_continuation_message(
+                request.map(|request| request.metadata.as_str()),
+                message.request_id.as_deref(),
+                request.map(|request| request.content.as_str()),
+                &message.role,
+                &message.content,
+                &message.message_key,
+            ) == gents::lifecycle::ConversationProjection::RuntimeControl
+            {
+                continue;
+            }
             finish_message_turn(
                 &mut turns,
                 current_id.take(),
@@ -345,15 +373,16 @@ fn finish_message_turn(
 
 fn project_request_turns(
     record: &CodexThreadRecord,
-    requests: Vec<RequestRow>,
+    requests: &[RequestRow],
     responses_by_request: &BTreeMap<String, ResponseRow>,
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
     compactions_by_request: &BTreeMap<String, Vec<CompactionRow>>,
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) -> Result<Vec<codex::Turn>> {
     let requests = requests
-        .into_iter()
+        .iter()
         .filter(|request| record.is_subagent() || is_codex_visible_request(request))
+        .cloned()
         .collect::<Vec<_>>();
     let requests_by_id = requests
         .iter()
@@ -606,8 +635,33 @@ fn append_request_items(
             .then_with(|| left.started_at.cmp(&right.started_at))
     });
 
-    if !request.content.trim().is_empty()
-        && !is_background_completion_metadata(Some(&request.metadata))
+    let continuation_input = messages_by_sequence.values().find(|message| {
+        message.request_id.as_deref() == Some(request.request_id.as_str())
+            && gents::lifecycle::classify_continuation_message(
+                Some(&request.metadata),
+                message.request_id.as_deref(),
+                Some(&request.content),
+                &message.role,
+                &message.content,
+                &message.message_key,
+            ) == gents::lifecycle::ConversationProjection::VisibleInput
+    });
+    if let Some(message) = continuation_input {
+        let presentation = present_persisted_message(&message.role, &message.content);
+        if !presentation.body_markdown.trim().is_empty() {
+            items.push(codex::ThreadItem::UserMessage {
+                id: format!("gents-user-message-{}", message.sequence),
+                content: vec![codex::UserInput::Text {
+                    text: presentation.body_markdown,
+                    text_elements: Vec::new(),
+                }],
+            });
+        }
+    } else if !request.content.trim().is_empty()
+        && gents::lifecycle::classify_continuation_request(
+            Some(&request.metadata),
+            &request.content,
+        ) != gents::lifecycle::ConversationProjection::RuntimeControl
     {
         items.push(codex::ThreadItem::UserMessage {
             id: format!("gents-user-{}", request.request_id),
@@ -1020,6 +1074,129 @@ mod tests {
     }
 
     #[test]
+    fn steering_projection_uses_versioned_input_and_preserves_legacy_input() {
+        let record = CodexThreadRecord {
+            session_id: "thread-1".to_string(),
+            cwd: PathBuf::from("/tmp/project"),
+            archived: false,
+            loaded: true,
+            memory_mode: "disabled".to_string(),
+            name: String::new(),
+            settings_json: "{}".to_string(),
+            git_info: None,
+            projection_started: None,
+            conversation: None,
+            subagent: None,
+        };
+        let mut request = RequestRow {
+            request_id: "steering-1".to_string(),
+            content: "also check the staging config".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: "completed".to_string(),
+            failure_reason: String::new(),
+            created_at: None,
+            terminalized_at: None,
+            metadata: r#"{"continuation_version":1,"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":"root-1"}}"#.to_string(),
+            execution_origin: "interactive".to_string(),
+        };
+        let messages = BTreeMap::from([
+            (
+                6,
+                MessageRow {
+                    sequence: 6,
+                    request_id: Some("steering-1".to_string()),
+                    message_key: "request-context:steering-1".to_string(),
+                    role: "user".to_string(),
+                    content: "<context>internal request context</context>".to_string(),
+                    reasoning: String::new(),
+                },
+            ),
+            (
+                7,
+                MessageRow {
+                sequence: 7,
+                request_id: Some("steering-1".to_string()),
+                message_key: "steering-input:steering-1".to_string(),
+                role: "user".to_string(),
+                content: r#"{"role":"user","content":[{"type":"text","text":"also check the staging config"}]}"#.to_string(),
+                reasoning: String::new(),
+                },
+            ),
+        ]);
+        let mut items = Vec::new();
+        append_request_items(
+            &record,
+            &mut items,
+            &request,
+            None,
+            Vec::new(),
+            &[],
+            &messages,
+        );
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| matches!(item, codex::ThreadItem::UserMessage { .. }))
+                .count(),
+            1
+        );
+        assert!(items.iter().any(|item| matches!(
+            item,
+            codex::ThreadItem::UserMessage { content, .. }
+                if content.iter().any(|input| matches!(
+                    input,
+                    codex::UserInput::Text { text, .. }
+                        if text == "also check the staging config"
+                ))
+        )));
+
+        request.metadata = r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":"root-1"}}"#.to_string();
+        let legacy_messages = BTreeMap::from([
+            (
+                6,
+                MessageRow {
+                    sequence: 6,
+                    request_id: Some("steering-1".to_string()),
+                    message_key: String::new(),
+                    role: "user".to_string(),
+                    content: "<context>internal request context</context>".to_string(),
+                    reasoning: String::new(),
+                },
+            ),
+            (
+                7,
+                MessageRow {
+                    sequence: 7,
+                    request_id: Some("steering-1".to_string()),
+                    message_key: String::new(),
+                    role: "user".to_string(),
+                    content: r#"{"role":"user","content":[{"type":"text","text":"also check the staging config"}]}"#.to_string(),
+                    reasoning: String::new(),
+                },
+            ),
+        ]);
+        items.clear();
+        append_request_items(
+            &record,
+            &mut items,
+            &request,
+            None,
+            Vec::new(),
+            &[],
+            &legacy_messages,
+        );
+        assert!(items.iter().any(|item| matches!(
+            item,
+            codex::ThreadItem::UserMessage { content, .. }
+                if content.iter().any(|input| matches!(
+                    input,
+                    codex::UserInput::Text { text, .. }
+                        if text == "also check the staging config"
+                ))
+        )));
+    }
+
+    #[test]
     fn turn_completion_timing_prefers_response_then_request_terminalization() {
         let request = RequestRow {
             request_id: "request-1".to_string(),
@@ -1136,6 +1313,8 @@ mod tests {
                 2,
                 MessageRow {
                     sequence: 2,
+                    request_id: None,
+                    message_key: String::new(),
                     role: "assistant".to_string(),
                     content: r#"{"role":"assistant","id":null,"content":[{"id":"call-1","call_id":null,"function":{"name":"list_files","arguments":{"path":"."}},"signature":null,"additional_params":null},{"text":"Before the tool call."}]}"#.to_string(),
                     reasoning: String::new(),
@@ -1145,6 +1324,8 @@ mod tests {
                 4,
                 MessageRow {
                     sequence: 4,
+                    request_id: None,
+                    message_key: String::new(),
                     role: "assistant".to_string(),
                     content: r#"{"role":"assistant","id":null,"content":[{"text":"Final answer after tools."}]}"#.to_string(),
                     reasoning: String::new(),
@@ -1266,9 +1447,11 @@ mod tests {
 
     #[test]
     fn project_message_turns_renders_structured_persisted_messages() {
-        let turns = project_message_turns(vec![
-            MessageRow {
+        let turns = project_message_turns(
+            vec![MessageRow {
                 sequence: 1,
+                request_id: None,
+                message_key: String::new(),
                 role: "user".to_string(),
                 content: r#"{"role":"user","content":[{"type":"text","text":"Hello from stored user JSON."}]}"#
                     .to_string(),
@@ -1276,12 +1459,15 @@ mod tests {
             },
             MessageRow {
                 sequence: 2,
+                request_id: None,
+                message_key: String::new(),
                 role: "assistant".to_string(),
                 content: r#"{"role":"assistant","id":null,"content":[{"text":"Hello from stored assistant JSON."}]}"#
                     .to_string(),
                 reasoning: String::new(),
-            },
-        ]);
+            }],
+            &BTreeMap::new(),
+        );
 
         assert_eq!(turns.len(), 1);
         let turn = &turns[0];
@@ -1303,6 +1489,34 @@ mod tests {
     }
 
     #[test]
+    fn messages_only_fallback_hides_goal_controller_prompts() {
+        let request = RequestRow {
+            request_id: "goal-request-1".to_string(),
+            content: "Continue pursuing the active goal.".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: "completed".to_string(),
+            failure_reason: String::new(),
+            created_at: None,
+            terminalized_at: None,
+            metadata: r#"{"continuation_version":1,"queue":{"source":"goal","policy":"coalesce","key":"goal:1","queued_after_request_id":"root-1"}}"#.to_string(),
+            execution_origin: "scheduled".to_string(),
+        };
+        let requests = BTreeMap::from([(request.request_id.as_str(), &request)]);
+        let turns = project_message_turns(
+            vec![MessageRow {
+                sequence: 1,
+                request_id: Some("goal-request-1".to_string()),
+                message_key: String::new(),
+                role: "user".to_string(),
+                content: "Continue pursuing the active goal.".to_string(),
+                reasoning: String::new(),
+            }],
+            &requests,
+        );
+        assert!(turns.is_empty());
+    }
+
+    #[test]
     fn persisted_reasoning_field_is_the_authoritative_replay_source() {
         let mut items = Vec::new();
         let appended = append_assistant_message_items(
@@ -1310,6 +1524,8 @@ mod tests {
             4,
             &MessageRow {
                 sequence: 4,
+                request_id: None,
+                message_key: String::new(),
                 role: "assistant".to_string(),
                 content: r#"{"role":"assistant","id":null,"content":[{"reasoning":"legacy embedded reasoning"},{"text":"answer"}]}"#
                     .to_string(),

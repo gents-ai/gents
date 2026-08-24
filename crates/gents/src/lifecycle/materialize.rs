@@ -353,7 +353,7 @@ impl RequestLifecycle {
             progress_seq: 0,
             deadline_duration_secs,
             claimed_deadline_at: None,
-            background_completion_input_through_sequence: None,
+            provider_history_through_sequence: None,
             state: LocalLifecycleState::Pending,
             valid_until_at_claim: None,
         }
@@ -495,7 +495,7 @@ impl RequestLifecycle {
             progress_seq: 0,
             deadline_duration_secs,
             claimed_deadline_at: Some(deadline_at),
-            background_completion_input_through_sequence: None,
+            provider_history_through_sequence: None,
             state: LocalLifecycleState::Claimed,
             valid_until_at_claim: None,
         })
@@ -577,7 +577,14 @@ pub(super) fn request_session_projection(
         }}"#
     );
     let title = conversation_title_from_metadata(request.metadata.as_deref());
-    let preview = session::derive_conversation_preview(&request.content);
+    let preview_content = (crate::lifecycle::classify_continuation_request(
+        request.metadata.as_deref(),
+        &request.content,
+    ) != crate::lifecycle::ConversationProjection::RuntimeControl)
+        .then_some(request.content.as_str());
+    let preview = preview_content
+        .map(session::derive_conversation_preview)
+        .unwrap_or_default();
     let (title, title_source) = title
         .as_deref()
         .map(|title| (title, session::CONVERSATION_TITLE_SOURCE_TASK))
@@ -585,6 +592,10 @@ pub(super) fn request_session_projection(
     let escaped_title = escape_graphql_string(title);
     let escaped_title_source = escape_graphql_string(title_source);
     let escaped_preview = escape_graphql_string(&preview);
+    let preview_update = preview_content
+        .is_some()
+        .then(|| format!(r#"preview_text: "{escaped_preview}","#))
+        .unwrap_or_default();
     let escaped_request_id = escape_graphql_string(&request.request_id);
     let conversation_update = format!(
         r#"mutation {{
@@ -592,7 +603,7 @@ pub(super) fn request_session_projection(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 input: {{
                     agent_name: "{escaped_agent_name}",
-                    preview_text: "{escaped_preview}",
+                    {preview_update}
                     status: "processing",
                     updated_at: "{escaped_started}",
                     latest_request_id: "{escaped_request_id}"
@@ -730,4 +741,64 @@ async fn materialize_claimed_request_with_projection(
     }
     Err(last_error
         .unwrap_or_else(|| anyhow::anyhow!("materialize claimed request transaction exhausted")))
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_control_projection_preserves_existing_conversation_preview() {
+        let request = AgentRequest {
+            doc_id: "continuation-doc".to_string(),
+            request_id: "continuation-1".to_string(),
+            agent_did: "did:test:amy".to_string(),
+            requester_did: None,
+            behavior_id: Some("general".to_string()),
+            session_id: "session-1".to_string(),
+            content: "Continue with the new steering message.".to_string(),
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            seed: None,
+            max_tokens: None,
+            max_total_tokens: None,
+            metadata: Some(
+                r#"{"continuation_version":1,"queue":{"source":"steering","policy":"append"}}"#
+                    .to_string(),
+            ),
+            execution_origin: Some("interactive".to_string()),
+            created_at: "2026-08-24T00:00:00Z".to_string(),
+            deadline: None,
+            subagent_depth: 0,
+            caused_by_parent_request_id: None,
+            caused_by_parent_request_doc_id: None,
+            caused_by_parent_tool_call_id: None,
+            caused_by_parent_tool_call_doc_id: None,
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            caused_by_source_doc_id: None,
+            caused_by_correlation: None,
+            caused_by_trigger_context: None,
+            workspace_id: None,
+            workspace_authority: None,
+            workspace_owner_deployment_id: None,
+            workspace_seal_hash: None,
+        };
+
+        let projection = request_session_projection(
+            &request,
+            "Amy",
+            "did:test:amy",
+            "general",
+            "2026-08-24T00:00:00Z",
+        );
+        assert!(!projection.conversation_update.contains("preview_text"));
+        assert!(projection
+            .conversation_update
+            .contains("latest_request_id: \"continuation-1\""));
+        assert!(projection
+            .conversation_create
+            .contains("preview_text: \"\""));
+    }
 }

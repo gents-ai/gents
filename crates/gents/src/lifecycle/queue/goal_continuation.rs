@@ -7,7 +7,7 @@ pub(crate) async fn enqueue_goal_continuation(
     content: &str,
     continuation_sequence: i64,
     wrapup: bool,
-) -> Result<EnqueuedAgentRequest> {
+) -> Result<(EnqueuedAgentRequest, bool)> {
     use sha2::{Digest, Sha256};
 
     let behavior_id = parent_behavior_id(node, parent).await?;
@@ -20,11 +20,14 @@ pub(crate) async fn enqueue_goal_continuation(
             .collect::<String>()
     );
     if let Some(doc_id) = lookup_request_doc_id_optional(node, &request_id).await? {
-        return Ok(EnqueuedAgentRequest {
-            doc_id,
-            request_id,
-            session_id: parent.session_id.clone(),
-        });
+        return Ok((
+            EnqueuedAgentRequest {
+                doc_id,
+                request_id,
+                session_id: parent.session_id.clone(),
+            },
+            false,
+        ));
     }
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -35,16 +38,15 @@ pub(crate) async fn enqueue_goal_continuation(
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
     };
-    let metadata = serde_json::json!({
-        "queue": queue_hints,
-        "goal": {
-            "goal_id": goal_id,
-            "parent_request_id": parent.request_id,
-            "continuation_sequence": continuation_sequence,
-            "wrapup": wrapup,
-        }
-    })
-    .to_string();
+    let mut metadata: serde_json::Value = serde_json::from_str(&queue_metadata_json(&queue_hints))
+        .context("canonical continuation metadata must be valid JSON")?;
+    metadata["goal"] = serde_json::json!({
+        "goal_id": goal_id,
+        "parent_request_id": parent.request_id,
+        "continuation_sequence": continuation_sequence,
+        "wrapup": wrapup,
+    });
+    let metadata = metadata.to_string();
 
     let escaped_request_id = escape_graphql_string(&request_id);
     let escaped_agent_did = escape_graphql_string(&parent.agent_did);
@@ -98,11 +100,14 @@ pub(crate) async fn enqueue_goal_continuation(
         .or(lookup_request_doc_id_optional(node, &request_id).await?)
         .context("goal continuation create returned no _docID")?;
 
-    Ok(EnqueuedAgentRequest {
-        doc_id,
-        request_id,
-        session_id: parent.session_id.clone(),
-    })
+    Ok((
+        EnqueuedAgentRequest {
+            doc_id,
+            request_id,
+            session_id: parent.session_id.clone(),
+        },
+        true,
+    ))
 }
 
 // SAFETY (#664): `agent_did` scopes the candidate query AND the supersede

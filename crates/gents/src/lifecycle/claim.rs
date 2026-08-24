@@ -22,10 +22,24 @@ impl BackgroundCompletionClaimSnapshot {
     }
 }
 
+fn steering_input_sequence(rows: &[serde_json::Value]) -> Result<u32> {
+    anyhow::ensure!(
+        rows.len() == 1,
+        "steering continuation must resolve exactly one durable input row"
+    );
+    let input_sequence = rows[0]
+        .get("sequence")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("steering continuation input has invalid sequence"))?;
+    u32::try_from(input_sequence)
+        .map_err(|_| anyhow::anyhow!("steering continuation input sequence exceeds u32"))
+}
+
 async fn claim_request_with_projection<F>(
     node: &EmbeddedNode,
     session_id: &str,
     capture_background_snapshot: bool,
+    steering_input_key: Option<&str>,
     projection: &super::materialize::RequestSessionProjection,
     build_mutation: F,
 ) -> Result<(defra_node::QueryResponse, BackgroundCompletionClaimSnapshot)>
@@ -33,6 +47,7 @@ where
     F: Fn(&str) -> String,
 {
     let session_id = escape_graphql_string(session_id);
+    let steering_input_key = escape_graphql_string(steering_input_key.unwrap_or_default());
     let snapshot_query = format!(
         r#"{{
             all_messages: AgentMessage(
@@ -47,23 +62,42 @@ where
                 }},
                 order: {{ sequence: ASC }}
             ) {{ sequence message_key }}
+            steering_input: AgentMessage(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    message_key: {{ _eq: "{steering_input_key}" }}
+                }},
+                limit: 2
+            ) {{ sequence }}
         }}"#
     );
     let mut last_error = None;
     for retry_index in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
         let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
         let attempt = async {
-            let snapshot = if capture_background_snapshot {
+            let snapshot = if capture_background_snapshot || !steering_input_key.is_empty() {
                 let response = txn.execute_local_response(&snapshot_query).await?;
-                let through_sequence = response
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get("all_messages"))
-                    .and_then(serde_json::Value::as_array)
-                    .and_then(|rows| rows.first())
-                    .and_then(|row| row.get("sequence"))
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|sequence| u32::try_from(sequence).ok());
+                let through_sequence = if capture_background_snapshot {
+                    response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("all_messages"))
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|rows| rows.first())
+                        .and_then(|row| row.get("sequence"))
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|sequence| u32::try_from(sequence).ok())
+                } else {
+                    let rows = response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("steering_input"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
+                    let input_sequence = steering_input_sequence(rows)?;
+                    Some(input_sequence.saturating_sub(1))
+                };
                 let notification_keys = response
                     .data
                     .as_ref()
@@ -538,6 +572,10 @@ impl RequestLifecycle {
 
         let is_background_completion =
             crate::lifecycle::is_background_completion_request(self.request.metadata.as_deref());
+        let steering_input_key = crate::lifecycle::queue::request_uses_durable_input_as_prompt(
+            self.request.metadata.as_deref(),
+        )
+        .then(|| crate::lifecycle::queue::steering_input_message_key(&self.request.request_id));
         let projection = super::materialize::request_session_projection(
             &self.request,
             &self.agent_name,
@@ -549,11 +587,12 @@ impl RequestLifecycle {
             self.node.as_ref(),
             &self.request.session_id,
             is_background_completion,
+            steering_input_key.as_deref(),
             &projection,
             &build_mutation,
         )
         .await?;
-        let background_completion_input_through_sequence = snapshot.through_sequence;
+        let provider_history_through_sequence = snapshot.through_sequence;
 
         // The mutation response is the only response that can carry the exact
         // commit produced by this claim. Do not fall back to a post-update
@@ -592,8 +631,7 @@ impl RequestLifecycle {
 
         self.state = LocalLifecycleState::Claimed;
         self.claimed_deadline_at = Some(deadline_at);
-        self.background_completion_input_through_sequence =
-            background_completion_input_through_sequence;
+        self.provider_history_through_sequence = provider_history_through_sequence;
         self.valid_until_at_claim = valid_until_at_claim;
 
         Ok(ClaimOutcome::Claimed)
@@ -609,6 +647,25 @@ mod tests {
     const TEST_AGENT_DID: &str = "did:test:claim-order-test";
     const TEST_BEHAVIOR_ID: &str = "general";
     const TEST_BACKEND_ID: &str = "backend-order";
+
+    #[test]
+    fn steering_input_snapshot_requires_exactly_one_row() {
+        for rows in [
+            serde_json::json!([]),
+            serde_json::json!([{ "sequence": 1 }, { "sequence": 2 }]),
+        ] {
+            let error = steering_input_sequence(rows.as_array().unwrap())
+                .expect_err("zero or duplicate steering inputs must fail closed");
+            assert!(error
+                .to_string()
+                .contains("must resolve exactly one durable input row"));
+        }
+        assert_eq!(
+            steering_input_sequence(serde_json::json!([{ "sequence": 7 }]).as_array().unwrap())
+                .unwrap(),
+            7
+        );
+    }
 
     async fn test_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -921,10 +978,7 @@ mod tests {
             lifecycle.claim_with_identity().await.unwrap(),
             ClaimOutcome::Claimed
         );
-        assert_eq!(
-            lifecycle.background_completion_input_through_sequence(),
-            Some(2)
-        );
+        assert_eq!(lifecycle.provider_history_through_sequence(), Some(2));
         let snapshot = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
@@ -968,7 +1022,7 @@ mod tests {
         let history = session::load_history_through_sequence(
             node.as_ref(),
             session_id,
-            lifecycle.background_completion_input_through_sequence(),
+            lifecycle.provider_history_through_sequence(),
         )
         .await
         .unwrap();
