@@ -165,14 +165,226 @@ async fn compaction_entries_track_files_cumulatively() {
     )
     .await
     .unwrap();
+    let generation = load_prompt_compaction_state(&node, "session-1", None)
+        .await
+        .unwrap()
+        .generation;
+    save_compaction_entry_with_requester_did(
+        &node,
+        "session-1",
+        "did:test:test",
+        None,
+        "request-3",
+        "request-doc-3",
+        "Third summary",
+        &[],
+        &[],
+        3,
+        Some(40),
+        500,
+        100,
+        &generation,
+    )
+    .await
+    .unwrap();
 
     let entries = load_compaction_entries(&node, "session-1").await.unwrap();
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].files_read, vec!["/tmp/a.rs"]);
     assert_eq!(entries[1].files_read, vec!["/tmp/a.rs", "/tmp/c.rs"]);
     assert_eq!(entries[1].files_modified, vec!["/tmp/b.rs", "/tmp/d.rs"]);
+    assert_eq!(entries[2].compacted_through_sequence, Some(40));
+    let prompt_state = load_prompt_compaction_state(&node, "session-1", None)
+        .await
+        .unwrap();
+    assert_eq!(prompt_state.summaries.len(), 3);
+    assert_eq!(prompt_state.total_messages_compacted, 15);
+    assert_eq!(prompt_state.compacted_through_sequence, Some(40));
+    let before_cursor = load_prompt_compaction_state(&node, "session-1", Some(20))
+        .await
+        .unwrap();
+    assert!(before_cursor.summaries.is_empty());
+    assert_eq!(before_cursor.total_messages_compacted, 0);
+    assert_eq!(before_cursor.compacted_through_sequence, None);
+    let at_cursor = load_prompt_compaction_state(&node, "session-1", Some(40))
+        .await
+        .unwrap();
+    assert_eq!(at_cursor.summaries.len(), 3);
+    assert_eq!(at_cursor.total_messages_compacted, 15);
+    assert_eq!(at_cursor.compacted_through_sequence, Some(40));
 
     let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    ensure_schemas(&node).await.unwrap();
+    let generation = load_prompt_compaction_state(&node, "session-race", None)
+        .await
+        .unwrap()
+        .generation;
+
+    let left_files = ["/tmp/left.rs".to_string()];
+    let right_files = ["/tmp/right.rs".to_string()];
+    let left = save_compaction_entry_with_requester_did(
+        &node,
+        "session-race",
+        "did:test:test",
+        None,
+        "request-left",
+        "request-doc-left",
+        "left summary",
+        &left_files,
+        &[],
+        2,
+        Some(20),
+        100,
+        20,
+        &generation,
+    );
+    let right = save_compaction_entry_with_requester_did(
+        &node,
+        "session-race",
+        "did:test:test",
+        None,
+        "request-right",
+        "request-doc-right",
+        "right summary",
+        &[],
+        &right_files,
+        3,
+        Some(30),
+        200,
+        40,
+        &generation,
+    );
+    let (left, right) = tokio::join!(left, right);
+    assert_ne!(
+        left.is_ok(),
+        right.is_ok(),
+        "exactly one stale writer must win"
+    );
+    let loser = if left.is_err() {
+        left.unwrap_err()
+    } else {
+        right.unwrap_err()
+    };
+    assert!(
+        format!("{loser:#}").contains("stale compaction generation"),
+        "unexpected loser error: {loser:#}"
+    );
+
+    let entries = load_compaction_entries(&node, "session-race")
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    let winner = &entries[0];
+    match winner.summary.as_str() {
+        "left summary" => {
+            assert_eq!(winner.messages_compacted, 2);
+            assert_eq!(winner.compacted_through_sequence, Some(20));
+            assert_eq!(winner.files_read, vec!["/tmp/left.rs"]);
+            assert!(winner.files_modified.is_empty());
+        }
+        "right summary" => {
+            assert_eq!(winner.messages_compacted, 3);
+            assert_eq!(winner.compacted_through_sequence, Some(30));
+            assert!(winner.files_read.is_empty());
+            assert_eq!(winner.files_modified, vec!["/tmp/right.rs"]);
+        }
+        summary => panic!("mixed or unexpected winner payload: {summary}"),
+    }
+}
+
+#[tokio::test]
+async fn exact_compaction_redelivery_is_idempotent() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    ensure_schemas(&node).await.unwrap();
+    let generation = load_prompt_compaction_state(&node, "session-redelivery", None)
+        .await
+        .unwrap()
+        .generation;
+    let files = ["/tmp/a.rs".to_string()];
+    let save = || {
+        save_compaction_entry_with_requester_did(
+            &node,
+            "session-redelivery",
+            "did:test:test",
+            None,
+            "request-redelivery",
+            "request-doc-redelivery",
+            "same summary",
+            &files,
+            &[],
+            2,
+            Some(20),
+            100,
+            20,
+            &generation,
+        )
+    };
+    let first = save().await.unwrap();
+    let second = save().await.unwrap();
+    assert_eq!(second, first);
+    let next_generation = load_prompt_compaction_state(&node, "session-redelivery", None)
+        .await
+        .unwrap()
+        .generation;
+    save_compaction_entry_with_requester_did(
+        &node,
+        "session-redelivery",
+        "did:test:test",
+        None,
+        "request-later",
+        "request-doc-later",
+        "later summary",
+        &[],
+        &[],
+        1,
+        Some(30),
+        80,
+        10,
+        &next_generation,
+    )
+    .await
+    .unwrap();
+    let replay_after_later = save().await.unwrap();
+    assert_eq!(replay_after_later, first);
+    assert_eq!(
+        load_compaction_entries(&node, "session-redelivery")
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    ensure_schemas(&node).await.unwrap();
+    for (sequence, content) in [(10, "old-a"), (20, "old-b"), (40, "active")] {
+        save_message(
+            &node,
+            "session-cursor",
+            "did:test:test",
+            sequence,
+            "user",
+            content,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let rows =
+        history::load_sequenced_history_projection(&node, "session-cursor", None, Some(20), None)
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].sequence, 40);
+    assert_eq!(rows[0].message, Message::user("active"));
 }
 
 #[tokio::test]

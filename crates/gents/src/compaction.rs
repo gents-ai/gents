@@ -417,6 +417,26 @@ pub fn provider_view(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
     (sanitize_history_for_provider(stripped), activity)
 }
 
+fn provider_view_with_sources(
+    messages: Vec<Message>,
+) -> (Vec<history::SourcedMessage>, FileActivity) {
+    let sourced = messages
+        .into_iter()
+        .enumerate()
+        .map(|(source_index, message)| history::SourcedMessage {
+            source_index,
+            message,
+        })
+        .collect();
+    let (stripped, activity) = history::strip_tool_results_sourced(sourced);
+    let sanitized = history::normalize_assistant_content_order_sourced(
+        history::drop_unpaired_tool_calls_sourced(history::drop_orphaned_tool_results_sourced(
+            stripped,
+        )),
+    );
+    (sanitized, activity)
+}
+
 /// Project the active tail from a canonical provider view after applying the
 /// durable compacted-prefix count. Re-sanitization preserves compatibility
 /// with legacy entries whose prefix could end inside a tool turn.
@@ -427,6 +447,56 @@ pub fn active_provider_history(
     let drain_count = compacted_messages.min(provider_history.len());
     provider_history.drain(..drain_count);
     sanitize_history_for_provider(provider_history)
+}
+
+/// Find the inclusive canonical message cursor that denotes a provider-view
+/// prefix of exactly `provider_prefix_len` messages.
+///
+/// The canonical projection carries each retained message's raw source index,
+/// which identifies the one possible raw boundary for a provider prefix. That
+/// candidate is then independently projected on both sides to establish the
+/// runtime witness for `Compaction.CursorDenotes`. The work is linear in the
+/// transcript rather than re-projecting every possible split.
+pub fn compacted_through_sequence(
+    rows: &[(u32, Message)],
+    provider_prefix_len: usize,
+) -> Option<u32> {
+    if provider_prefix_len == 0 || rows.is_empty() {
+        return None;
+    }
+    let messages = rows
+        .iter()
+        .map(|(_, message)| message.clone())
+        .collect::<Vec<_>>();
+    let (sourced_view, _) = provider_view_with_sources(messages.clone());
+    if provider_prefix_len > sourced_view.len() {
+        return None;
+    }
+
+    let split = sourced_view
+        .get(provider_prefix_len)
+        .map_or(rows.len(), |item| item.source_index);
+    if split == 0 {
+        return None;
+    }
+    let (prefix_view, _) = provider_view(messages[..split].to_vec());
+    if prefix_view.len() != provider_prefix_len {
+        return None;
+    }
+    let (suffix_view, _) = provider_view(messages[split..].to_vec());
+    let full_view = sourced_view
+        .iter()
+        .map(|item| &item.message)
+        .collect::<Vec<_>>();
+    if prefix_view
+        .iter()
+        .chain(suffix_view.iter())
+        .eq(full_view.into_iter())
+    {
+        Some(rows[split - 1].0)
+    } else {
+        None
+    }
 }
 
 /// Greatest `j <= limit` at which no tool call is awaiting its result — the

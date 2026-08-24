@@ -26,6 +26,16 @@ pub struct ContextBudgetSnapshot {
     pub last_compacted_at: Option<String>,
     pub sessions_considered: i64,
     pub request_scan_limit: i64,
+    pub last_request: Option<LastRequestContextSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LastRequestContextSnapshot {
+    pub request_id: String,
+    pub call_id: String,
+    pub call_sequence: i64,
+    pub queued_at: Option<String>,
+    pub accounting: gents_protocol::rendered_request::ContextAccounting,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +46,8 @@ struct ContextEnvelope {
     profiles: Vec<ProfileRow>,
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<RequestRow>,
+    #[serde(rename = "InferenceCall", default)]
+    inference_calls: Vec<InferenceCallRow>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +88,20 @@ struct CompactionRow {
     original_tokens: Option<i64>,
     #[serde(default)]
     compacted_tokens: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InferenceCallRow {
+    #[serde(default)]
+    request_id: String,
+    #[serde(default)]
+    call_id: String,
+    #[serde(default)]
+    call_seq: i64,
+    #[serde(default)]
+    queued_at: Option<String>,
+    #[serde(default)]
+    context_accounting_json: Option<String>,
 }
 
 #[derive(Debug)]
@@ -124,10 +150,10 @@ impl Tool for ContextBudgetTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Report this agent's persisted context-window budget signal: \
-                max context window from enabled behavior profiles, latest compaction token \
-                estimate, utilization percentage when calculable, compaction count, and latest \
-                compaction time. Counts both session-prefix and per-turn provider-context reductions."
+            description: "Report this agent's exact latest persisted provider-dispatch context \
+                accounting: component token estimates, context window, compaction threshold, \
+                decision/reason, utilization, and compaction history. Counts both session-prefix \
+                and per-turn provider-context reductions."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -167,13 +193,19 @@ pub async fn load_context_budget_snapshot(
         bail!("loading context budget failed: {:?}", resp.errors);
     }
     let envelope: ContextEnvelope = decode(resp.data.as_ref(), "context budget")?;
-    let max_tokens = max_context_window(&envelope.behaviors, &envelope.profiles);
+    let last_request = latest_request_context(&envelope.inference_calls)?;
+    let max_tokens = last_request
+        .as_ref()
+        .map(|request| request.accounting.context_window as i64)
+        .or_else(|| max_context_window(&envelope.behaviors, &envelope.profiles));
     let session_ids = distinct_session_ids(&envelope.requests);
 
     let compactions = if session_ids.is_empty() {
         Vec::new()
     } else {
-        let resp = node.execute(&compaction_query(&session_ids)).await;
+        let resp = node
+            .execute(&compaction_query(agent_did, &session_ids))
+            .await;
         if resp.has_errors() {
             bail!("loading context compactions failed: {:?}", resp.errors);
         }
@@ -189,6 +221,7 @@ pub async fn load_context_budget_snapshot(
         max_tokens,
         session_ids.len() as i64,
         compactions,
+        last_request,
     ))
 }
 
@@ -207,11 +240,26 @@ fn context_query(agent_did: &str) -> String {
             AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
                 session_id
             }}
+            InferenceCall(
+                filter: {{
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    call_kind: {{ _eq: "inference" }}
+                }},
+                order: {{ queued_at: DESC }},
+                limit: {RECENT_REQUEST_SCAN}
+            ) {{
+                request_id
+                call_id
+                call_seq
+                queued_at
+                context_accounting_json
+            }}
         }}"#
     )
 }
 
-fn compaction_query(session_ids: &[String]) -> String {
+fn compaction_query(agent_did: &str, session_ids: &[String]) -> String {
+    let agent_did = escape_graphql_string(agent_did);
     let list = session_ids
         .iter()
         .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
@@ -219,12 +267,18 @@ fn compaction_query(session_ids: &[String]) -> String {
         .join(", ");
     format!(
         r#"{{
-            CompactionEntry(filter: {{ session_id: {{ _in: [{list}] }} }}, order: {{ created_at: DESC }}) {{
+            CompactionEntry(filter: {{ _and: [
+                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ session_id: {{ _in: [{list}] }} }}
+            ] }}, order: {{ created_at: DESC }}) {{
                 created_at
                 original_tokens
                 compacted_tokens
             }}
-            ProviderContextReduction(filter: {{ session_id: {{ _in: [{list}] }} }}, order: {{ created_at: DESC }}) {{
+            ProviderContextReduction(filter: {{ _and: [
+                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ session_id: {{ _in: [{list}] }} }}
+            ] }}, order: {{ created_at: DESC }}) {{
                 created_at
                 original_tokens
                 compacted_tokens
@@ -275,13 +329,16 @@ fn build_snapshot(
     max_tokens: Option<i64>,
     sessions_considered: i64,
     compactions: Vec<CompactionRow>,
+    last_request: Option<LastRequestContextSnapshot>,
 ) -> ContextBudgetSnapshot {
     let compaction_count = compactions.len() as i64;
     let latest = compactions
         .iter()
         .max_by(|a, b| a.created_at.cmp(&b.created_at));
-    let current_estimate = latest
-        .and_then(|entry| entry.compacted_tokens)
+    let current_estimate = last_request
+        .as_ref()
+        .map(|request| request.accounting.estimated_input_tokens as i64)
+        .or_else(|| latest.and_then(|entry| entry.compacted_tokens))
         .or_else(|| latest.and_then(|entry| entry.original_tokens));
     let utilization_percent = match (current_estimate, max_tokens) {
         (Some(current), Some(max)) if max > 0 => Some((current as f64 / max as f64) * 100.0),
@@ -296,7 +353,42 @@ fn build_snapshot(
         last_compacted_at: latest.and_then(|entry| entry.created_at.clone()),
         sessions_considered,
         request_scan_limit: RECENT_REQUEST_SCAN as i64,
+        last_request,
     }
+}
+
+fn latest_request_context(rows: &[InferenceCallRow]) -> Result<Option<LastRequestContextSnapshot>> {
+    let mut candidates = rows
+        .iter()
+        .filter_map(|row| {
+            row.context_accounting_json
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|encoded| (row, encoded))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|(left, _), (right, _)| {
+        left.queued_at
+            .cmp(&right.queued_at)
+            .then_with(|| left.call_seq.cmp(&right.call_seq))
+            .then_with(|| left.call_id.cmp(&right.call_id))
+    });
+    let Some((row, encoded)) = candidates.pop() else {
+        return Ok(None);
+    };
+    let accounting = serde_json::from_str(encoded).with_context(|| {
+        format!(
+            "decoding context accounting for InferenceCall {}",
+            row.call_id
+        )
+    })?;
+    Ok(Some(LastRequestContextSnapshot {
+        request_id: row.request_id.clone(),
+        call_id: row.call_id.clone(),
+        call_sequence: row.call_seq,
+        queued_at: row.queued_at.clone(),
+        accounting,
+    }))
 }
 
 #[cfg(test)]
@@ -339,6 +431,7 @@ mod tests {
                 create_CompactionEntry(input: {
                     compaction_key: "session-context:1",
                     session_id: "session-context",
+                    agent_did: "did:key:z-context",
                     sequence: 1,
                     original_tokens: 800,
                     compacted_tokens: 400,
@@ -376,6 +469,47 @@ mod tests {
             assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
         }
 
+        let accounting = gents_protocol::rendered_request::ContextAccounting {
+            accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+            turn_index: 2,
+            attempt: 0,
+            estimator: "serialized_json_bytes_div_4_v1".to_string(),
+            components: gents_protocol::rendered_request::ContextInputComponents {
+                messages: 500,
+                documents: 25,
+                tool_schemas: 100,
+                additional_parameters: 20,
+                output_schema: 5,
+            },
+            estimated_input_tokens: 650,
+            context_window: 1_000,
+            compaction_threshold_basis_points: 8_000,
+            compaction_threshold_tokens: 800,
+            configured_max_output_tokens: Some(100),
+            effective_max_output_tokens: Some(100),
+            compaction_reason:
+                gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold,
+            pre_compaction_input_tokens: None,
+        };
+        let accounting = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_InferenceCall(input: {{
+                        call_id: "context-call",
+                        request_id: "request-context",
+                        request_doc_id: "request-context-doc",
+                        agent_did: "did:key:z-context",
+                        call_kind: "inference",
+                        call_seq: 1,
+                        queued_at: "2026-06-03T11:00:00Z",
+                        context_accounting_json: "{accounting}"
+                    }}) {{ _docID }}
+                }}"#
+            ))
+            .await;
+        assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+
         node
     }
 
@@ -388,13 +522,17 @@ mod tests {
         let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
 
         assert_eq!(parsed.max_tokens, Some(1000));
-        assert_eq!(parsed.current_estimate, Some(300));
-        assert_eq!(parsed.utilization_percent, Some(30.0));
+        assert_eq!(parsed.current_estimate, Some(650));
+        assert_eq!(parsed.utilization_percent, Some(65.0));
         assert_eq!(parsed.compaction_count, 2);
         assert_eq!(
             parsed.last_compacted_at.as_deref(),
             Some("2026-06-03T10:45:00Z")
         );
         assert_eq!(parsed.sessions_considered, 1);
+        let last = parsed.last_request.expect("exact request accounting");
+        assert_eq!(last.request_id, "request-context");
+        assert_eq!(last.accounting.components.tool_schemas, 100);
+        assert_eq!(last.accounting.compaction_threshold_tokens, 800);
     }
 }

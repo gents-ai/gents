@@ -359,3 +359,10 @@ pub(crate) struct LeanCompactionReducerCase {
     pub(crate) safe_boundary: usize,
     pub(crate) retained_count: usize,
 }
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanCompactionCursorCase {
+    pub(crate) name: String,
+    pub(crate) compacted: usize,
+    pub(crate) expected_cursor: Option<usize>,
+}

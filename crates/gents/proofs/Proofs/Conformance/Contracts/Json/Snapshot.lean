@@ -247,6 +247,9 @@ def snapshotJson : String :=
     ++ "\"compaction_reducer_cases\":"
       ++ jsonArray
         (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","
+    ++ "\"compaction_cursor_cases\":"
+      ++ jsonArray
+        (Compaction.compactionCursorCases.map compactionCursorCaseJson) ++ ","
     ++ "\"mcp_health_cases\":"
       ++ jsonArray
         (Proofs.MCPHealth.transitionCases.map mcpHealthCaseJson) ++ ","

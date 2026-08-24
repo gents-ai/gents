@@ -896,6 +896,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_compaction_reducer_cases_pin_contract")
       "compaction" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "compaction_cursor_cases"
+      "CompactionCursorCases"
+      "conformance::generated_compaction_reducer_cases_pin_contract")
+      "compaction" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "prompt_assembly_cases"
       "PromptAssemblySanitizeCases"
       "conformance::prompt_assembly::generated_sanitize_cases_drive_the_production_sanitizer")

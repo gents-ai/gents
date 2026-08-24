@@ -7,12 +7,44 @@ use crate::llm::message::{
 use super::summary::dedupe_paths;
 use super::{estimate_message_tokens, FileActivity};
 
+#[derive(Debug)]
+pub(super) struct SourcedMessage {
+    pub(super) source_index: usize,
+    pub(super) message: Message,
+}
+
+fn source_messages(messages: Vec<Message>) -> Vec<SourcedMessage> {
+    messages
+        .into_iter()
+        .enumerate()
+        .map(|(source_index, message)| SourcedMessage {
+            source_index,
+            message,
+        })
+        .collect()
+}
+
+fn messages_only(messages: Vec<SourcedMessage>) -> Vec<Message> {
+    messages.into_iter().map(|item| item.message).collect()
+}
+
 pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
-    let file_activity = extract_file_activity(&messages);
+    let (messages, file_activity) = strip_tool_results_sourced(source_messages(messages));
+    (messages_only(messages), file_activity)
+}
+
+pub(super) fn strip_tool_results_sourced(
+    messages: Vec<SourcedMessage>,
+) -> (Vec<SourcedMessage>, FileActivity) {
+    let file_activity = extract_file_activity_iter(messages.iter().map(|item| &item.message));
     let mut stripped_messages = Vec::with_capacity(messages.len());
     let mut tool_calls = HashMap::new();
 
-    for message in messages {
+    for SourcedMessage {
+        source_index,
+        message,
+    } in messages
+    {
         match message {
             Message::Assistant { id, content } => {
                 // Scope the lookup to the turn being opened. Call ids are
@@ -33,7 +65,10 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
                     }
                 }
 
-                stripped_messages.push(Message::Assistant { id, content });
+                stripped_messages.push(SourcedMessage {
+                    source_index,
+                    message: Message::Assistant { id, content },
+                });
             }
             Message::User { content } => {
                 let items: Vec<UserContent> = content
@@ -46,10 +81,16 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
                     })
                     .collect();
 
-                stripped_messages.push(Message::User { content: items });
+                stripped_messages.push(SourcedMessage {
+                    source_index,
+                    message: Message::User { content: items },
+                });
             }
             Message::System { content } => {
-                stripped_messages.push(Message::System { content });
+                stripped_messages.push(SourcedMessage {
+                    source_index,
+                    message: Message::System { content },
+                });
             }
         }
     }
@@ -63,10 +104,13 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
 /// reset in [`drop_orphaned_tool_results`]. A single global set of resolved keys
 /// is wrong: when a call id is reused by a later turn, the earlier turn's result
 /// would "resolve" it and a dangling call would survive into provider input.
-fn resolved_keys_per_turn(messages: &[Message]) -> Vec<std::collections::HashSet<String>> {
-    let mut per_turn = vec![std::collections::HashSet::new(); messages.len()];
+fn resolved_keys_per_turn<'a>(
+    len: usize,
+    messages: impl IntoIterator<Item = &'a Message>,
+) -> Vec<std::collections::HashSet<String>> {
+    let mut per_turn = vec![std::collections::HashSet::new(); len];
     let mut active_turn: Option<usize> = None;
-    for (index, message) in messages.iter().enumerate() {
+    for (index, message) in messages.into_iter().enumerate() {
         match message {
             Message::Assistant { .. } => active_turn = Some(index),
             Message::User { content } => {
@@ -94,10 +138,21 @@ fn resolved_keys_per_turn(messages: &[Message]) -> Vec<std::collections::HashSet
 }
 
 pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
-    let resolved_per_turn = resolved_keys_per_turn(&messages);
+    messages_only(drop_unpaired_tool_calls_sourced(source_messages(messages)))
+}
+
+pub(super) fn drop_unpaired_tool_calls_sourced(
+    messages: Vec<SourcedMessage>,
+) -> Vec<SourcedMessage> {
+    let resolved_per_turn =
+        resolved_keys_per_turn(messages.len(), messages.iter().map(|item| &item.message));
 
     let mut kept_messages = Vec::with_capacity(messages.len());
-    for (index, message) in messages.into_iter().enumerate() {
+    for (index, sourced) in messages.into_iter().enumerate() {
+        let SourcedMessage {
+            source_index,
+            message,
+        } = sourced;
         match message {
             Message::Assistant { id, content } => {
                 let resolved = &resolved_per_turn[index];
@@ -119,19 +174,37 @@ pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
                     })
                     .collect();
                 if !kept.is_empty() {
-                    kept_messages.push(Message::Assistant { id, content: kept });
+                    kept_messages.push(SourcedMessage {
+                        source_index,
+                        message: Message::Assistant { id, content: kept },
+                    });
                 }
             }
-            other => kept_messages.push(other),
+            other => kept_messages.push(SourcedMessage {
+                source_index,
+                message: other,
+            }),
         }
     }
     kept_messages
 }
 
 pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
+    messages_only(drop_orphaned_tool_results_sourced(source_messages(
+        messages,
+    )))
+}
+
+pub(super) fn drop_orphaned_tool_results_sourced(
+    messages: Vec<SourcedMessage>,
+) -> Vec<SourcedMessage> {
     let mut pending_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut kept_messages = Vec::with_capacity(messages.len());
-    for message in messages {
+    for SourcedMessage {
+        source_index,
+        message,
+    } in messages
+    {
         match message {
             Message::Assistant { id, content } => {
                 pending_calls.clear();
@@ -140,7 +213,10 @@ pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message>
                         pending_calls.insert(tool_call_key(tool_call));
                     }
                 }
-                kept_messages.push(Message::Assistant { id, content });
+                kept_messages.push(SourcedMessage {
+                    source_index,
+                    message: Message::Assistant { id, content },
+                });
             }
             Message::User { content } => {
                 let has_plain_content = content
@@ -159,12 +235,18 @@ pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message>
                     pending_calls.clear();
                 }
                 if !kept.is_empty() {
-                    kept_messages.push(Message::User { content: kept });
+                    kept_messages.push(SourcedMessage {
+                        source_index,
+                        message: Message::User { content: kept },
+                    });
                 }
             }
             other => {
                 pending_calls.clear();
-                kept_messages.push(other);
+                kept_messages.push(SourcedMessage {
+                    source_index,
+                    message: other,
+                });
             }
         }
     }
@@ -183,28 +265,46 @@ pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message>
 /// conformance-fenced reducers are untouched. Relative order within each
 /// category is preserved.
 pub(super) fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
+    messages_only(normalize_assistant_content_order_sourced(source_messages(
+        messages,
+    )))
+}
+
+pub(super) fn normalize_assistant_content_order_sourced(
+    messages: Vec<SourcedMessage>,
+) -> Vec<SourcedMessage> {
     messages
         .into_iter()
-        .map(|message| match message {
-            Message::Assistant { id, content } => {
-                let mut text = Vec::new();
-                let mut middle = Vec::new();
-                let mut calls = Vec::new();
-                for item in content.into_iter() {
-                    match item {
-                        AssistantContent::Text(_) => text.push(item),
-                        AssistantContent::ToolCall(_) => calls.push(item),
-                        other => middle.push(other),
+        .map(|sourced| {
+            let SourcedMessage {
+                source_index,
+                message,
+            } = sourced;
+            let message = match message {
+                Message::Assistant { id, content } => {
+                    let mut text = Vec::new();
+                    let mut middle = Vec::new();
+                    let mut calls = Vec::new();
+                    for item in content.into_iter() {
+                        match item {
+                            AssistantContent::Text(_) => text.push(item),
+                            AssistantContent::ToolCall(_) => calls.push(item),
+                            other => middle.push(other),
+                        }
+                    }
+                    let ordered: Vec<AssistantContent> =
+                        text.into_iter().chain(middle).chain(calls).collect();
+                    Message::Assistant {
+                        id,
+                        content: ordered,
                     }
                 }
-                let ordered: Vec<AssistantContent> =
-                    text.into_iter().chain(middle).chain(calls).collect();
-                Message::Assistant {
-                    id,
-                    content: ordered,
-                }
+                other => other,
+            };
+            SourcedMessage {
+                source_index,
+                message,
             }
-            other => other,
         })
         .collect()
 }
@@ -374,6 +474,10 @@ pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
 /// there is nothing reliable to test. That is a known over-credit, narrower
 /// than the previous one.
 pub(super) fn extract_file_activity(messages: &[Message]) -> FileActivity {
+    extract_file_activity_iter(messages.iter())
+}
+
+fn extract_file_activity_iter<'a>(messages: impl IntoIterator<Item = &'a Message>) -> FileActivity {
     let mut activity = FileActivity::default();
     let mut pending: HashMap<String, ToolCallInfo> = HashMap::new();
 

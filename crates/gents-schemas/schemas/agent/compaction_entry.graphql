@@ -10,6 +10,10 @@ type CompactionEntry @branchable {
     files_read: String
     files_modified: String
     messages_compacted: Int
+    # Canonical AgentMessage.sequence cursor through which this entry's
+    # cumulative compacted provider prefix is known to project. Null on legacy
+    # entries and whenever the runtime cannot prove the raw/provider split.
+    compacted_through_sequence: Int
     original_tokens: Int
     compacted_tokens: Int
     created_at: DateTime

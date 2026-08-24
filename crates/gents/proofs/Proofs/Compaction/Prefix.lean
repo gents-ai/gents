@@ -380,4 +380,80 @@ theorem compacted_prefix_correspondence
   rw [hregroup]
   exact List.drop_left' (by simp)
 
+/-! ## Persisted canonical cursors
+
+`messages_compacted` is counted in `providerView`, so it is not itself a
+canonical `AgentMessage.sequence` cursor: sanitization may remove durable rows.
+An optimized reader may skip the canonical prefix only when the writer also
+persists a cursor whose raw split projects to exactly the same provider split.
+-/
+
+/-- A canonical row cursor denotes a provider-prefix count when projecting the
+raw rows on either side separately produces exactly the prefix/suffix split of
+the complete provider view.  Production establishes this at compaction time
+and stores the last canonical sequence in the `CompactionEntry`. -/
+def CursorDenotes (msgs : List MessageRow) (cursor compacted : Nat) : Prop :=
+  providerView msgs =
+      providerView (msgs.take cursor) ++ providerView (msgs.drop cursor) ∧
+    (providerView (msgs.take cursor)).length = compacted
+
+/-- Loading only the raw suffix selected by a sound cursor is observationally
+equivalent to the legacy full-load, provider-project, then drop path. -/
+theorem cursor_projects_active_suffix
+    {msgs : List MessageRow} {cursor compacted : Nat}
+    (hcursor : CursorDenotes msgs cursor compacted) :
+    providerView (msgs.drop cursor) = (providerView msgs).drop compacted := by
+  rcases hcursor with ⟨hsplit, hlength⟩
+  rw [hsplit, ← hlength]
+  simp
+
+/-- Production queries canonical rows with `sequence > cursor`, rather than by
+list index. This is the corresponding selection in the model. -/
+def afterSequence (cursor : Transcript.Sequence) (msgs : List MessageRow) :
+    List MessageRow :=
+  msgs.filter fun row => decide (cursor < row.sequence)
+
+/-- The strict ordered-sequence boundary required by the production query: all
+rows in the compacted raw prefix are at or below the inclusive cursor and all
+rows in the active suffix are strictly above it. AgentMessage allocation and
+the ordered query establish this condition; spelling it out prevents a list
+index proof from silently standing in for the database sequence filter. -/
+def SequenceCursorBoundary (msgs : List MessageRow) (rawCursor : Nat)
+    (cursor : Transcript.Sequence) : Prop :=
+  (∀ row ∈ msgs.take rawCursor, row.sequence ≤ cursor) ∧
+    (∀ row ∈ msgs.drop rawCursor, cursor < row.sequence)
+
+theorem afterSequence_eq_drop_of_boundary
+    {msgs : List MessageRow} {rawCursor : Nat} {cursor : Transcript.Sequence}
+    (hboundary : SequenceCursorBoundary msgs rawCursor cursor) :
+    afterSequence cursor msgs = msgs.drop rawCursor := by
+  rcases hboundary with ⟨hprefix, hsuffix⟩
+  rw [← List.take_append_drop rawCursor msgs]
+  simp only [afterSequence, List.filter_append]
+  have hp : (msgs.take rawCursor).filter
+      (fun row => decide (cursor < row.sequence)) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro row hrow
+    simp [Nat.not_lt.mpr (hprefix row hrow)]
+  have hs : (msgs.drop rawCursor).filter
+      (fun row => decide (cursor < row.sequence)) = msgs.drop rawCursor := by
+    apply List.filter_eq_self.mpr
+    intro row hrow
+    simp [hsuffix row hrow]
+  rw [hp, hs]
+  simp
+
+/-- A cursor satisfying both the raw/provider split witness and the strict
+canonical sequence boundary makes the optimized `sequence > cursor` query
+observationally identical to the legacy full projection and provider-space
+drop. This is the exact composition used by request assembly. -/
+theorem sequence_cursor_projects_active_suffix
+    {msgs : List MessageRow} {rawCursor compacted : Nat}
+    {cursor : Transcript.Sequence}
+    (hcursor : CursorDenotes msgs rawCursor compacted)
+    (hboundary : SequenceCursorBoundary msgs rawCursor cursor) :
+    providerView (afterSequence cursor msgs) = (providerView msgs).drop compacted := by
+  rw [afterSequence_eq_drop_of_boundary hboundary]
+  exact cursor_projects_active_suffix hcursor
+
 end Compaction

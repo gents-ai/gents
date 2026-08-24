@@ -1,4 +1,5 @@
 import Proofs.Compaction.Summarize
+import Proofs.Compaction.Prefix
 
 namespace Compaction
 
@@ -304,5 +305,49 @@ def compactionReducerCases : List CompactionReducerCase := [
 
 theorem compactionReducerCases_count :
     compactionReducerCases.length = 17 := by decide
+
+/-! ## Canonical active-history cursor cases
+
+These cases drive the database optimization in Rust. The cursor is a raw-row
+split, while `compacted` is measured in the sanitized provider view; the model
+therefore searches only splits satisfying `CursorDenotes` rather than treating
+the provider count as a raw offset. -/
+
+def cursorFixture : List Transcript.MessageRow :=
+  [ ⟨0, 0, 0, .user, .toolResult 99 ⟨0, 0, 0⟩⟩
+  , ⟨1, 0, 1, .user, .ordinary⟩
+  , ⟨2, 0, 2, .assistant, .assistantToolCalls {1}⟩
+  , ⟨3, 0, 3, .user, .toolResult 1 ⟨0, 0, 0⟩⟩
+  , ⟨4, 0, 4, .assistant, .ordinary⟩ ]
+
+def cursorCandidates (msgs : List Transcript.MessageRow) : List Nat :=
+  (List.range msgs.length).map fun offset => msgs.length - offset
+
+def findCursor (msgs : List Transcript.MessageRow) (compacted : Nat) : Option Nat :=
+  (cursorCandidates msgs).find? fun cursor => decide (
+    providerView msgs =
+        providerView (msgs.take cursor) ++ providerView (msgs.drop cursor) ∧
+      (providerView (msgs.take cursor)).length = compacted)
+
+structure CompactionCursorCase where
+  name           : String
+  compacted      : Nat
+  expectedCursor : Option Nat
+  deriving Repr
+
+def compactionCursorCases : List CompactionCursorCase :=
+  [ { name := "cursor_skips_orphan_and_compacted_turn"
+    , compacted := 1
+    , expectedCursor := findCursor cursorFixture 1 }
+  , { name := "cursor_rejects_split_inside_tool_pair"
+    , compacted := 2
+    , expectedCursor := findCursor cursorFixture 2 }
+  , { name := "cursor_accepts_complete_tool_pair"
+    , compacted := 3
+    , expectedCursor := findCursor cursorFixture 3 } ]
+
+theorem compactionCursorCases_pinned :
+    compactionCursorCases.map (fun c => c.expectedCursor) = [some 2, none, some 4] := by
+  native_decide
 
 end Compaction

@@ -86,170 +86,97 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let skill_reminder_tokens = crate::prompt::estimate_message_tokens(&skill_reminders);
 
             let mut built = async {
-                let full_history = session::load_history_for_request(
-                    &self.node,
-                    &request,
-                    lifecycle.background_completion_input_through_sequence(),
-                )
+                for assembly_attempt in 0..=1 {
+                    let background_cutoff =
+                        lifecycle.background_completion_input_through_sequence();
+                    let compaction_state =
+                        session::load_prompt_compaction_state(
+                            &self.node,
+                            &request.session_id,
+                            background_cutoff,
+                        )
+                            .instrument(tracing::info_span!(
+                                "request.load_prompt_compaction_state",
+                                request_id = %request.request_id,
+                                session_id = %request.session_id,
+                                behavior_id = %behavior_name,
+                                compaction_entry_count = tracing::field::Empty,
+                                compacted_message_count = tracing::field::Empty,
+                                summary_count = tracing::field::Empty,
+                            ))
+                            .await?;
+                    let prior_cursor = compaction_state.compacted_through_sequence;
+                    let total_compacted_messages = compaction_state.total_messages_compacted;
+                    let compaction_generation = compaction_state.generation.clone();
+                    let compaction_generation_is_latest = compaction_state.is_latest_generation;
+                    let sequenced_history = session::load_sequenced_history_for_request(
+                        &self.node,
+                        &request,
+                        background_cutoff,
+                        prior_cursor,
+                    )
                     .instrument(tracing::info_span!(
-                        "request.load_history",
+                        "request.load_active_history",
                         request_id = %request.request_id,
                         session_id = %request.session_id,
                         behavior_id = %behavior_name,
+                        compacted_through_sequence = prior_cursor.map(i64::from),
+                        compacted_provider_messages_skipped = total_compacted_messages as i64,
+                        cursor_hit = prior_cursor.is_some(),
                         history_message_count = tracing::field::Empty,
                     ))
                     .await?;
-                // One canonical reduction, shared with the compaction writer:
-                // `messages_compacted` is measured against this list, so the
-                // prefix drop below must index the same one (#993).
-                let (provider_history, file_activity) =
-                    compaction::provider_view(full_history);
-                if !file_activity.is_empty() {
-                    tracing::debug!(
-                        behavior_id = %self.behavior.behavior_id,
-                        session_id = %request.session_id,
-                        files_read = ?file_activity.files_read,
-                        files_modified = ?file_activity.files_modified,
-                        "files referenced in stripped history"
-                    );
-                }
+                    let durable_history = sequenced_history
+                        .iter()
+                        .map(|row| row.message.clone())
+                        .collect::<Vec<_>>();
+                    // One canonical reduction, shared with the compaction writer:
+                    // `messages_compacted` is measured against this list, so the
+                    // prefix drop below must index the same one (#993).
+                    let (provider_history, file_activity) =
+                        compaction::provider_view(durable_history);
+                    if !file_activity.is_empty() {
+                        tracing::debug!(
+                            behavior_id = %self.behavior.behavior_id,
+                            session_id = %request.session_id,
+                            files_read = ?file_activity.files_read,
+                            files_modified = ?file_activity.files_modified,
+                            "files referenced in stripped history"
+                        );
+                    }
 
-                let compaction_entries =
-                    session::load_compaction_entries(&self.node, &request.session_id)
-                        .instrument(tracing::info_span!(
-                        "request.load_compaction_entries",
-                        request_id = %request.request_id,
-                        session_id = %request.session_id,
-                        behavior_id = %behavior_name,
-                        compaction_entry_count = tracing::field::Empty,
-                        compacted_message_count = tracing::field::Empty,
-                    ))
-                    .await?;
-                // Drop in the space the count was measured in.
-                //
-                // Re-narrowing afterwards is provably free for counts this
-                // runtime wrote — their boundary is always `pair_safe_boundary`,
-                // so the drop lands on a turn boundary and the tail is already
-                // provider-valid (`Compaction.sanitize_drop_noop`). It is not
-                // free for counts written *before* the pair-safe splitter
-                // existed: those used an arbitrary budget index and carry no
-                // version marker, so an upgraded session can drop into the
-                // middle of a turn. Without this the orphan would reach
-                // `compact()`, which re-normalizes its input and would then
-                // record its count in a shifted space — reopening the very
-                // accounting defect this change closes, for exactly the sessions
-                // that predate it.
-                let mut history = compaction::active_provider_history(
-                    provider_history,
-                    total_compacted_messages(&compaction_entries),
-                );
-                let mut summaries = compaction_entries
-                    .into_iter()
-                    .map(|entry| compaction::bounded_summary(entry.summary))
-                    .collect::<Vec<_>>();
-
-                let mut built = self
-                    .prompt_builder
-                    .build(&history, &summaries)
-                    .instrument(tracing::info_span!(
-                        "request.build_prompt",
-                        request_id = %request.request_id,
-                        session_id = %request.session_id,
-                        behavior_id = %behavior_name,
-                        history_messages = history.len(),
-                        summary_count = summaries.len(),
-                    ))
-                    .await?;
-                built.estimated_tokens =
-                    built.estimated_tokens.saturating_add(skill_reminder_tokens);
-                let over_threshold = prompt_exceeds_compaction_threshold(
-                    built.estimated_tokens,
-                    &request.content,
-                    self.behavior.context_window,
-                    self.behavior.compaction_threshold,
-                );
-                // Runtime counterpart of Lean `PromptView.safeToReduce`,
-                // resolved at session scope: while any response in this session
-                // is still streaming, a turn is still being written into the
-                // transcript and must not be summarized away. All-terminal at
-                // session scope implies terminal for every row, so this can only
-                // err toward skipping a compaction the next request retries
-                // (`boundary.compaction.safe-to-reduce-session-scope`, #993).
-                let may_reduce = if over_threshold {
-                    let live_response =
-                        session::session_has_live_response(&self.node, &request.session_id).await?;
-                    let gate_open = if live_response {
-                        compaction::safe_to_reduce(&history, &compaction::NoneKnown)
+                    // Drop in the space the count was measured in.
+                    //
+                    // Re-narrowing afterwards is provably free for counts this
+                    // runtime wrote — their boundary is always `pair_safe_boundary`,
+                    // so the drop lands on a turn boundary and the tail is already
+                    // provider-valid (`Compaction.sanitize_drop_noop`). It is not
+                    // free for counts written *before* the pair-safe splitter
+                    // existed: those used an arbitrary budget index and carry no
+                    // version marker, so an upgraded session can drop into the
+                    // middle of a turn. Without this the orphan would reach
+                    // `compact()`, which re-normalizes its input and would then
+                    // record its count in a shifted space — reopening the very
+                    // accounting defect this change closes, for exactly the sessions
+                    // that predate it.
+                    // A proven cursor already excluded the raw compacted prefix at
+                    // query time. Legacy/null cursors retain the old full-load and
+                    // provider-space drop exactly.
+                    let mut history = if prior_cursor.is_some() {
+                        provider_history
                     } else {
-                        compaction::safe_to_reduce(&history, &compaction::AllTerminal)
-                    };
-                    if !gate_open {
-                        tracing::info!(
-                            request_id = %request.request_id,
-                            session_id = %request.session_id,
-                            behavior_id = %behavior_name,
-                            "compaction skipped: a response in this session is still streaming"
-                        );
-                    }
-                    // `Compaction.providerView_append` — the theorem that lets a
-                    // recorded count still name the same rows once the
-                    // transcript grows — assumes `UniqueCallIds`. Call ids come
-                    // from the provider and nothing enforces that, so it is
-                    // checked rather than assumed: a reused id resurrects an
-                    // earlier unpaired announcement and shifts the prefix under
-                    // the stored count
-                    // (`Compaction.reused_call_id_breaks_prefix_stability`).
-                    let unique_call_ids = compaction::has_unique_call_ids(&history);
-                    if gate_open && !unique_call_ids {
-                        tracing::warn!(
-                            request_id = %request.request_id,
-                            session_id = %request.session_id,
-                            behavior_id = %behavior_name,
-                            "compaction skipped: a tool-call id is announced by more than one turn, \
-                             so a recorded compacted-prefix count would not stay valid"
-                        );
-                    }
-                    gate_open && unique_call_ids
-                } else {
-                    false
-                };
-                if may_reduce {
-                    let result = admission::scope_call(
-                        CallKind::Compaction,
-                        1,
-                        self.compactor.compact(
-                            history,
-                            self.behavior.context_window,
-                            &self.compaction_options_for_request(
-                                lifecycle.claimed_deadline_at(),
-                                aggregate_token_budget.clone(),
-                                effective_seed,
-                            ),
-                        ),
-                    )
-                    .await?;
-
-                    history = result.messages;
-                    if let Some(summary) = result.summary {
-                        let entry = session::save_compaction_entry_with_requester_did(
-                            &self.node,
-                            &request.session_id,
-                            &request.agent_did,
-                            request.requester_did.as_deref(),
-                            &request.request_id,
-                            &request.doc_id,
-                            &summary,
-                            &result.files_read,
-                            &result.files_modified,
-                            result.messages_compacted,
-                            result.original_token_estimate,
-                            result.compacted_token_estimate,
+                        compaction::active_provider_history(
+                            provider_history,
+                            total_compacted_messages,
                         )
-                        .await?;
-                        summaries.push(compaction::bounded_summary(entry.summary));
-                    }
+                    };
+                    let mut summaries = compaction_state
+                        .summaries
+                        .into_iter()
+                        .map(compaction::bounded_summary)
+                        .collect::<Vec<_>>();
 
-                    built = self
+                    let mut built = self
                         .prompt_builder
                         .build(&history, &summaries)
                         .instrument(tracing::info_span!(
@@ -259,14 +186,186 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             behavior_id = %behavior_name,
                             history_messages = history.len(),
                             summary_count = summaries.len(),
-                            compacted = true,
                         ))
                         .await?;
                     built.estimated_tokens =
                         built.estimated_tokens.saturating_add(skill_reminder_tokens);
-                }
+                    let over_threshold = prompt_exceeds_compaction_threshold(
+                        built.estimated_tokens,
+                        &request.content,
+                        self.behavior.context_window,
+                        self.behavior.compaction_threshold,
+                    );
+                    // Runtime counterpart of Lean `PromptView.safeToReduce`,
+                    // resolved at session scope: while any response in this session
+                    // is still streaming, a turn is still being written into the
+                    // transcript and must not be summarized away. All-terminal at
+                    // session scope implies terminal for every row, so this can only
+                    // err toward skipping a compaction the next request retries
+                    // (`boundary.compaction.safe-to-reduce-session-scope`, #993).
+                    let may_reduce = if over_threshold {
+                        let live_response =
+                            session::session_has_live_response(&self.node, &request.session_id).await?;
+                        let gate_open = if live_response {
+                            compaction::safe_to_reduce(&history, &compaction::NoneKnown)
+                        } else {
+                            compaction::safe_to_reduce(&history, &compaction::AllTerminal)
+                        };
+                        if !gate_open {
+                            tracing::info!(
+                                request_id = %request.request_id,
+                                session_id = %request.session_id,
+                                behavior_id = %behavior_name,
+                                "compaction skipped: a response in this session is still streaming"
+                            );
+                        }
+                        // `Compaction.providerView_append` — the theorem that lets a
+                        // recorded count still name the same rows once the
+                        // transcript grows — assumes `UniqueCallIds`. Call ids come
+                        // from the provider and nothing enforces that, so it is
+                        // checked rather than assumed: a reused id resurrects an
+                        // earlier unpaired announcement and shifts the prefix under
+                        // the stored count
+                        // (`Compaction.reused_call_id_breaks_prefix_stability`).
+                        let unique_call_ids = compaction::has_unique_call_ids(&history);
+                        if gate_open && !unique_call_ids {
+                            tracing::warn!(
+                                request_id = %request.request_id,
+                                session_id = %request.session_id,
+                                behavior_id = %behavior_name,
+                                "compaction skipped: a tool-call id is announced by more than one turn, \
+                                 so a recorded compacted-prefix count would not stay valid"
+                            );
+                        }
+                        gate_open && unique_call_ids
+                    } else {
+                        false
+                    };
+                    if may_reduce {
+                        let result = admission::scope_call(
+                            CallKind::Compaction,
+                            1,
+                            self.compactor.compact(
+                                history,
+                                self.behavior.context_window,
+                                &self.compaction_options_for_request(
+                                    lifecycle.claimed_deadline_at(),
+                                    aggregate_token_budget.clone(),
+                                    effective_seed,
+                                ),
+                            ),
+                        )
+                        .await?;
 
-                Ok::<_, anyhow::Error>(built)
+                        history = result.messages;
+                        if let Some(summary) = result.summary {
+                            let cumulative_provider_prefix = if prior_cursor.is_some() {
+                                result.messages_compacted as usize
+                            } else {
+                                total_compacted_messages
+                                    .saturating_add(result.messages_compacted as usize)
+                            };
+                            let candidate_cursor =
+                                compaction::compacted_through_sequence(
+                                    &sequenced_history
+                                        .iter()
+                                        .map(|row| (row.sequence, row.message.clone()))
+                                        .collect::<Vec<_>>(),
+                                    cumulative_provider_prefix,
+                                );
+                            let compacted_through_sequence = candidate_cursor.filter(|cursor| {
+                                let suffix = sequenced_history
+                                    .iter()
+                                    .filter(|row| row.sequence > *cursor)
+                                    .map(|row| row.message.clone())
+                                    .collect::<Vec<_>>();
+                                compaction::provider_view(suffix).0 == history
+                            });
+                            if compacted_through_sequence.is_none() {
+                                tracing::warn!(
+                                    request_id = %request.request_id,
+                                    session_id = %request.session_id,
+                                    provider_prefix = cumulative_provider_prefix,
+                                    "compaction succeeded without a provable canonical cursor; future requests will use the legacy full-history projection"
+                                );
+                            }
+                            if compaction_generation_is_latest {
+                                match session::save_compaction_entry_with_requester_did(
+                                    &self.node,
+                                    &request.session_id,
+                                    &request.agent_did,
+                                    request.requester_did.as_deref(),
+                                    &request.request_id,
+                                    &request.doc_id,
+                                    &summary,
+                                    &result.files_read,
+                                    &result.files_modified,
+                                    result.messages_compacted,
+                                    compacted_through_sequence,
+                                    result.original_token_estimate,
+                                    result.compacted_token_estimate,
+                                    &compaction_generation,
+                                )
+                                .await
+                                {
+                                    Ok(entry) => {
+                                        summaries.push(compaction::bounded_summary(entry.summary));
+                                    }
+                                    Err(error)
+                                        if is_stale_compaction_generation(&error)
+                                            && assembly_attempt == 0 =>
+                                    {
+                                        tracing::info!(
+                                            request_id = %request.request_id,
+                                            session_id = %request.session_id,
+                                            "compaction generation advanced during prompt assembly; rebuilding from the winner"
+                                        );
+                                        continue;
+                                    }
+                                    Err(error) if is_stale_compaction_generation(&error) => {
+                                        tracing::warn!(
+                                            request_id = %request.request_id,
+                                            session_id = %request.session_id,
+                                            "compaction generation advanced twice; using the verified request-local compaction without appending it"
+                                        );
+                                        summaries.push(compaction::bounded_summary(summary));
+                                    }
+                                    Err(error) => return Err(error),
+                                }
+                            } else {
+                                // A background request may be bound to an older
+                                // compatible transcript/compaction generation. Its
+                                // reduction is valid for this request's provider
+                                // input but must not mutate the live session chain.
+                                tracing::info!(
+                                    request_id = %request.request_id,
+                                    session_id = %request.session_id,
+                                    "using request-local compaction for an older background snapshot"
+                                );
+                                summaries.push(compaction::bounded_summary(summary));
+                            }
+                        }
+
+                        built = self
+                            .prompt_builder
+                            .build(&history, &summaries)
+                            .instrument(tracing::info_span!(
+                                "request.build_prompt",
+                                request_id = %request.request_id,
+                                session_id = %request.session_id,
+                                behavior_id = %behavior_name,
+                                history_messages = history.len(),
+                                summary_count = summaries.len(),
+                                compacted = true,
+                            ))
+                            .await?;
+                        built.estimated_tokens =
+                            built.estimated_tokens.saturating_add(skill_reminder_tokens);
+                    }
+
+                    return Ok::<_, anyhow::Error>(built);
+                }
+                unreachable!("bounded prompt assembly retry returns")
             }
             .instrument(tracing::info_span!(
                 "request.prepare_prompt",
@@ -510,13 +609,6 @@ fn selected_skill_ids(metadata: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn total_compacted_messages(entries: &[session::CompactionEntry]) -> usize {
-    entries
-        .iter()
-        .map(|entry| entry.messages_compacted as usize)
-        .sum()
-}
-
 fn prompt_exceeds_compaction_threshold(
     prompt_tokens: usize,
     request_text: &str,
@@ -529,6 +621,10 @@ fn prompt_exceeds_compaction_threshold(
         0,
         threshold,
     )
+}
+
+fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains("stale compaction generation")
 }
 
 #[cfg(test)]

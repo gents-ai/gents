@@ -511,6 +511,8 @@ pub struct CompactionEntryRow {
     #[serde(default)]
     pub messages_compacted: Option<i64>,
     #[serde(default)]
+    pub compacted_through_sequence: Option<i64>,
+    #[serde(default)]
     pub original_tokens: Option<i64>,
     #[serde(default)]
     pub compacted_tokens: Option<i64>,
