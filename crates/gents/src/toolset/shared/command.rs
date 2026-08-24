@@ -148,6 +148,9 @@ pub(crate) fn apply_workspace_authority(
 ) -> CommandExecutionPolicy {
     let mut met = policy.clone();
     met.mode = policy.mode.meet(authority.command_mode());
+    if matches!(authority, WorkspaceAuthority::ReadWrite) {
+        met = met.with_git_worktree_diff();
+    }
     if matches!(met.mode, CommandExecutionMode::ReadOnly) && met.read_only_allowlist().is_empty() {
         met = met.with_read_only_allowlist(
             crate::toolset::default_read_only_command_policy()
