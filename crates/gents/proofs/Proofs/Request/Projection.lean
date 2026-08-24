@@ -36,13 +36,27 @@ theorem terminal_request_independent_of_projection_cardinality (rows : Nat) :
     terminalRequestCommits rows = true := by
   rfl
 
-/-- A projection statement error discards the atomic attempt and selects a
-    fresh request-only transaction; it never turns projection failure into a
-    veto over the authoritative terminal edge. -/
-def terminalCommitAfterProjectionAttempt (_projectionSucceeded : Bool) : Bool := true
+/-- A deterministic projection failure (for example, a missing repairable
+    projection) may fall back to the authoritative request edge. A retryable
+    storage failure must preserve atomic ownership and re-attempt the request
+    and projection together. -/
+inductive ProjectionAttempt where
+  | committed
+  | deterministicFailure
+  | retryableFailure
+  deriving DecidableEq
+
+def terminalCommitAfterProjectionAttempt : ProjectionAttempt → Bool
+  | .committed => true
+  | .deterministicFailure => true
+  | .retryableFailure => false
 
 theorem terminal_request_commits_after_projection_error :
-    terminalCommitAfterProjectionAttempt false = true := by
+    terminalCommitAfterProjectionAttempt .deterministicFailure = true := by
+  rfl
+
+theorem retryable_projection_failure_preserves_atomic_retry :
+    terminalCommitAfterProjectionAttempt .retryableFailure = false := by
   rfl
 
 /-- An already-terminal request still drives its repairable projection, so an

@@ -67,29 +67,6 @@ pub(super) fn has_materialized_user_owner(messages: &[MessageView], request_id: 
     has_durable_user_owner(&ownership, request_id)
 }
 
-pub(super) fn materialized_user_turn_count(messages: &[MessageView]) -> usize {
-    messages
-        .iter()
-        .filter_map(|message| {
-            let role = message
-                .display_role
-                .as_deref()
-                .or(message.role.as_deref())
-                .unwrap_or_default();
-            let content = normalize_optional(message.display_content.as_deref());
-            (role.eq_ignore_ascii_case("user") && !message.runtime_control)
-                .then_some(content?)
-                .map(|content| {
-                    message.sequence.map_or_else(
-                        || format!("key:{}", message.message_key),
-                        |sequence| format!("sequence:{sequence}:{content}"),
-                    )
-                })
-        })
-        .collect::<std::collections::BTreeSet<_>>()
-        .len()
-}
-
 fn message_presentation_key(
     message: &MessageView,
     role: &str,
@@ -375,9 +352,8 @@ pub(super) fn build_rendered_timeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_rendered_timeline, has_materialized_user_owner, materialized_user_turn_count,
-        render_tool_call, tool_status_kind, MessageView, RenderedTimelineItem, ResponseView,
-        ToolCallView,
+        build_rendered_timeline, has_materialized_user_owner, render_tool_call, tool_status_kind,
+        MessageView, RenderedTimelineItem, ResponseView, ToolCallView,
     };
 
     fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {
@@ -513,16 +489,6 @@ mod tests {
             RenderedTimelineItem::UserMessage { content, .. }
                 if content == "Please classify these sessions."
         ));
-    }
-
-    #[test]
-    fn duplicate_user_projection_counts_as_one_materialized_turn() {
-        let messages = vec![
-            user_message("first", 1, "same turn"),
-            user_message("replica", 1, "same turn"),
-        ];
-
-        assert_eq!(materialized_user_turn_count(&messages), 1);
     }
 
     #[test]

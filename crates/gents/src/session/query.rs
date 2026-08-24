@@ -29,6 +29,7 @@ pub(super) async fn load_session_document_optional(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }}
                 }},
+                order: {{ started: DESC }},
                 limit: 1
             ) {{
                 behavior_id

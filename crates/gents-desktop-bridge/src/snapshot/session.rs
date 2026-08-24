@@ -13,9 +13,7 @@ use super::super::types::{
     DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView, ResponseView,
     RetryEligibilityView, ToolCallView, ToolResultView,
 };
-use super::timeline::{
-    build_rendered_timeline, has_materialized_user_owner, materialized_user_turn_count,
-};
+use super::timeline::{build_rendered_timeline, has_materialized_user_owner};
 use super::{request_matches_agent, source_matches_agent};
 
 fn message_is_runtime_control(
@@ -547,39 +545,38 @@ fn selected_skill_ids_from_metadata(metadata: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn request_turn_root_id(request: &AgentRequestRow) -> String {
-    normalize_optional(request.retry_root_request.as_deref())
-        .unwrap_or_else(|| request.request_id.clone())
-}
+fn has_legacy_materialized_user_owner(
+    messages: &[MessageView],
+    request: &AgentRequestRow,
+    content: &str,
+) -> bool {
+    let Some(request_created_at) = request
+        .created_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+    else {
+        return false;
+    };
 
-fn logical_turn_index_for_request(
-    store: &gents_desktop_core::client::ClientStore,
-    agent_did: Option<&str>,
-    session_id: &str,
-    request_id: &str,
-) -> Option<usize> {
-    let request = store.requests.iter().find(|row| {
-        row.request_id == request_id
-            && row.session_id.as_deref() == Some(session_id)
-            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
-    })?;
-    let root_id = request_turn_root_id(request);
-    let mut requests = agent_did.map_or_else(
-        || store.requests_for_session(session_id),
-        |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
-    );
-    requests.sort_by(|left, right| {
-        normalize_optional(left.created_at.as_deref())
-            .cmp(&normalize_optional(right.created_at.as_deref()))
-            .then_with(|| left.request_id.cmp(&right.request_id))
-    });
-    let mut seen = std::collections::BTreeSet::new();
-    requests
-        .into_iter()
-        .filter(|request| gents::lifecycle::request_owns_user_turn(request.metadata.as_deref()))
-        .map(request_turn_root_id)
-        .filter(|candidate| seen.insert(candidate.clone()))
-        .position(|candidate| candidate == root_id)
+    messages.iter().any(|message| {
+        let role = message
+            .display_role
+            .as_deref()
+            .or(message.role.as_deref())
+            .unwrap_or_default();
+        let message_content = normalize_optional(message.display_content.as_deref())
+            .or_else(|| normalize_optional(message.content.as_deref()));
+        let timestamp = message
+            .timestamp
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok());
+
+        normalize_optional(message.request_id.as_deref()).is_none()
+            && role.eq_ignore_ascii_case("user")
+            && !message.runtime_control
+            && message_content.as_deref() == Some(content)
+            && timestamp.is_some_and(|timestamp| timestamp >= request_created_at)
+    })
 }
 
 fn build_pending_turn(
@@ -646,10 +643,7 @@ fn build_pending_turn(
         .collect::<Vec<_>>();
 
     let exact_owner = has_materialized_user_owner(&messages, request_id);
-    let legacy_owner = logical_turn_index_for_request(store, agent_did, session_id, request_id)
-        .is_some_and(|active_turn_index| {
-            materialized_user_turn_count(&messages) > active_turn_index
-        });
+    let legacy_owner = has_legacy_materialized_user_owner(&messages, request, &content);
     if exact_owner || legacy_owner {
         return None;
     }

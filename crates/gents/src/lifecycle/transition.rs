@@ -23,6 +23,10 @@ fn request_view_is_terminal(view: &RequestViewRow) -> bool {
         || request_status_is_terminal(&view.status)
 }
 
+pub(super) fn projection_error_requires_atomic_retry(error: &anyhow::Error) -> bool {
+    crate::retry::is_defradb_transaction_conflict_text(&error.to_string())
+}
+
 async fn execute_request_only_transaction(
     node: &EmbeddedNode,
     request_mutation: &str,
@@ -59,16 +63,24 @@ pub(super) async fn execute_request_projection_transaction(
             // The request mutation may be an idempotent no-op because the
             // stream writer already committed its terminal edge. The guarded
             // projection update must still run so that retry repairs a stale
-            // conversation. If the projection statement fails, discard the
-            // whole attempt and commit the authoritative request alone in a
-            // fresh transaction. Never trust commit-after-error behavior from
-            // the storage engine.
+            // conversation. A transaction conflict must retry both writes as
+            // one atomic attempt. Only deterministic projection errors fall
+            // back to the authoritative request in a fresh transaction. Never
+            // trust commit-after-error behavior from the storage engine.
             if let Err(error) = txn.execute_local_response(conversation_mutation).await {
                 let _ = txn.discard().await;
+                if projection_error_requires_atomic_retry(&error) {
+                    tracing::warn!(
+                        operation,
+                        error = %error,
+                        "retrying terminal request with its conversation projection"
+                    );
+                    return Err(error);
+                }
                 tracing::warn!(
                     operation,
                     error = %error,
-                    "retrying terminal request without its conversation projection"
+                    "committing terminal request without its unavailable conversation projection"
                 );
                 return execute_request_only_transaction(node, request_mutation).await;
             }

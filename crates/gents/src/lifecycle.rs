@@ -908,6 +908,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn retryable_projection_conflict_preserves_the_atomic_attempt() {
+        let conflict = anyhow::anyhow!(
+            "graphql returned errors: transaction conflict while updating AgentConversation"
+        );
+        assert!(transition::projection_error_requires_atomic_retry(
+            &conflict
+        ));
+
+        let deterministic = anyhow::anyhow!(
+            "graphql returned errors: field invalid_conversation_projection_field does not exist"
+        );
+        assert!(!transition::projection_error_requires_atomic_retry(
+            &deterministic
+        ));
+    }
+
     #[tokio::test]
     async fn error_response_terminalizes_an_existing_streaming_response() {
         let tempdir = tempfile::tempdir().unwrap();

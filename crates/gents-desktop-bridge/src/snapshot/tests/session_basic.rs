@@ -313,8 +313,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
 }
 
 #[test]
-fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_message_materializes()
-{
+fn replica_forks_of_an_older_turn_do_not_swallow_a_later_pending_turn() {
     let store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
@@ -414,17 +413,30 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
                 workspace_seal_hash: None,
             },
         ],
-        messages: vec![AgentMessageRow {
-            message_key: "msg-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: Some("req-1".to_string()),
-            requester_did: None,
-            sequence: Some(1),
-            role: Some("user".to_string()),
-            content: Some(user_message_json("same prompt")),
-            reasoning: None,
-            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-        }],
+        messages: vec![
+            AgentMessageRow {
+                message_key: "legacy-msg-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                request_id: None,
+                requester_did: None,
+                sequence: Some(1),
+                role: Some("user".to_string()),
+                content: Some(user_message_json("same prompt")),
+                reasoning: None,
+                timestamp: Some("2026-04-21T12:00:01Z".to_string()),
+            },
+            AgentMessageRow {
+                message_key: "replica-fork-msg-1".to_string(),
+                session_id: Some("session-1".to_string()),
+                request_id: None,
+                requester_did: None,
+                sequence: Some(7),
+                role: Some("user".to_string()),
+                content: Some(user_message_json("same prompt")),
+                reasoning: None,
+                timestamp: Some("2026-04-21T12:00:02Z".to_string()),
+            },
+        ],
         ..ClientStoreRows::default()
     });
 
@@ -437,4 +449,22 @@ fn session_snapshot_keeps_pending_turn_for_repeated_prompt_until_second_user_mes
             .map(|turn| turn.request_id.as_str()),
         Some("req-2")
     );
+
+    let mut materialized_rows = store.to_rows();
+    materialized_rows.messages.push(AgentMessageRow {
+        message_key: "legacy-msg-2".to_string(),
+        session_id: Some("session-1".to_string()),
+        request_id: None,
+        requester_did: None,
+        sequence: Some(9),
+        role: Some("user".to_string()),
+        content: Some(user_message_json("same prompt")),
+        reasoning: None,
+        timestamp: Some("2026-04-21T12:01:01Z".to_string()),
+    });
+    let materialized_store = ClientStore::from_rows(materialized_rows);
+    let materialized =
+        build_session_snapshot_from_store(&materialized_store, "session-1", Some("req-2"))
+            .expect("materialized snapshot");
+    assert!(materialized.pending_turn.is_none());
 }

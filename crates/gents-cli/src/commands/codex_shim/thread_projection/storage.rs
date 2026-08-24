@@ -121,6 +121,7 @@ pub(super) async fn load_conversation(
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
                     behavior_id: {{ _eq: "{escaped_behavior_id}" }}
                 }},
+                order: {{ updated_at: DESC }},
                 limit: 1
             ) {{
                 title preview_text status created_at updated_at latest_request_id forked_from_session_id
