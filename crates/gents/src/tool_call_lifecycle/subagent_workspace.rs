@@ -161,7 +161,9 @@ pub(crate) async fn resolve_child_workspace(
     operator_tool_root: Option<&Path>,
 ) -> Result<Option<WorkspaceLineage>, SpawnWorkspaceError> {
     if let Some(lineage) = stamped {
-        return revalidate_stamped_lineage(node, lineage).await.map(Some);
+        return revalidate_stamped_lineage(node, lineage, writer_principal)
+            .await
+            .map(Some);
     }
     resolve_spawn_workspace(
         node,
@@ -188,14 +190,18 @@ pub(crate) async fn resolve_spawn_workspace(
     match arg {
         None => {
             if parent.has_workspace_id() {
-                inherit_workspace(node, parent).await.map(Some)
+                inherit_workspace(node, parent, writer_principal)
+                    .await
+                    .map(Some)
             } else {
                 Ok(None)
             }
         }
-        Some(SpawnWorkspaceArg::Inherit) => inherit_workspace(node, parent).await.map(Some),
+        Some(SpawnWorkspaceArg::Inherit) => inherit_workspace(node, parent, writer_principal)
+            .await
+            .map(Some),
         Some(SpawnWorkspaceArg::Bind { id, authority }) => {
-            bind_workspace(node, parent, id, authority.as_deref())
+            bind_workspace(node, parent, id, authority.as_deref(), writer_principal)
                 .await
                 .map(Some)
         }
@@ -216,6 +222,7 @@ pub(crate) async fn resolve_spawn_workspace(
 async fn inherit_workspace(
     node: &EmbeddedNode,
     parent: &ParentWorkspaceStamp,
+    principal_did: &str,
 ) -> Result<WorkspaceLineage, SpawnWorkspaceError> {
     let parent_id = nonempty(parent.workspace_id.as_deref()).ok_or_else(|| {
         SpawnWorkspaceError::invalid("workspace inherit requires the parent to have workspace_id")
@@ -229,7 +236,9 @@ async fn inherit_workspace(
     require_parent_stamp_agrees(parent, &workspace)?;
     require_local_workspace(node, &workspace).await?;
     let default_authority = default_authority_for_state(&workspace.lifecycle_state)?;
-    stamp_from_workspace(&workspace, parent_authority.infimum(default_authority))
+    let authority = parent_authority.infimum(default_authority);
+    require_principal(&workspace, principal_did, authority)?;
+    stamp_from_workspace(&workspace, authority)
 }
 
 async fn bind_workspace(
@@ -237,6 +246,7 @@ async fn bind_workspace(
     parent: &ParentWorkspaceStamp,
     workspace_id: &str,
     requested_authority: Option<&str>,
+    principal_did: &str,
 ) -> Result<WorkspaceLineage, SpawnWorkspaceError> {
     let workspace_id = nonempty(Some(workspace_id)).ok_or_else(|| {
         SpawnWorkspaceError::invalid("workspace bind requires a non-empty IsolatedWorkspace id")
@@ -253,6 +263,7 @@ async fn bind_workspace(
         Some(parent_authority) => parent_authority.infimum(requested),
         None => requested,
     };
+    require_principal(&workspace, principal_did, authority)?;
     stamp_from_workspace(&workspace, authority)
 }
 
@@ -399,6 +410,7 @@ async fn flush_outcome(
 async fn revalidate_stamped_lineage(
     node: &EmbeddedNode,
     lineage: WorkspaceLineage,
+    principal_did: &str,
 ) -> Result<WorkspaceLineage, SpawnWorkspaceError> {
     let workspace_id = nonempty(lineage.workspace_id.as_deref())
         .ok_or_else(|| SpawnWorkspaceError::invalid("workspace stamp is missing workspace_id"))?;
@@ -412,7 +424,28 @@ async fn revalidate_stamped_lineage(
             WorkspaceAuthority::parse(value)
                 .map_err(|error| SpawnWorkspaceError::invalid(error.to_string()))
         })?;
+    require_principal(&workspace, principal_did, authority)?;
     stamp_from_workspace(&workspace, authority)
+}
+
+fn require_principal(
+    workspace: &IsolatedWorkspaceDoc,
+    principal_did: &str,
+    authority: WorkspaceAuthority,
+) -> Result<(), SpawnWorkspaceError> {
+    let required = match authority {
+        WorkspaceAuthority::ReadOnly => return Ok(()),
+        WorkspaceAuthority::ReadWrite => &workspace.writer_principal,
+        WorkspaceAuthority::Integrate => &workspace.integrator_principal,
+    };
+    if principal_did.trim() != required.trim() {
+        return Err(SpawnWorkspaceError::invalid(format!(
+            "principal {principal_did} is not authorized for {} on workspace {}",
+            authority.as_str(),
+            workspace.workspace_id
+        )));
+    }
+    Ok(())
 }
 
 fn provision_authority(

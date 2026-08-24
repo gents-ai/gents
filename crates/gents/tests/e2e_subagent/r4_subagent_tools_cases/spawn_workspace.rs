@@ -46,6 +46,7 @@ async fn seed_isolated_workspace(
     repository_id: &str,
     base_sha: &str,
     branch: &str,
+    principal_did: &str,
 ) {
     let doc = IsolatedWorkspaceDoc {
         workspace_id: workspace_id.to_string(),
@@ -56,8 +57,8 @@ async fn seed_isolated_workspace(
         creation_policy: "git_worktree_diff".to_string(),
         adapter: "git_worktree".to_string(),
         owner_deployment_id: owner_deployment_id.to_string(),
-        writer_principal: "did:key:zWriter".to_string(),
-        integrator_principal: "did:key:zIntegrator".to_string(),
+        writer_principal: principal_did.to_string(),
+        integrator_principal: principal_did.to_string(),
         instruction_manifest: "{}".to_string(),
         seal_hash: seal_hash.map(str::to_string),
         lifecycle_state: lifecycle_state.to_string(),
@@ -186,6 +187,7 @@ async fn seed_local_workspace(
     base_sha: &str,
     branch: &str,
     placement_path: &Path,
+    principal_did: &str,
 ) {
     seed_host_deployment(node, owner).await;
     seed_isolated_workspace(
@@ -197,6 +199,7 @@ async fn seed_local_workspace(
         repository_id,
         base_sha,
         branch,
+        principal_did,
     )
     .await;
     seed_workspace_placement(node, workspace_id, owner, placement_path, repository_id).await;
@@ -369,6 +372,7 @@ async fn spawn_subagent_inherit_uses_parent_authority_infimum() {
         "abc123",
         "topic",
         &placement,
+        "did:key:zWriter",
     )
     .await;
 
@@ -422,6 +426,7 @@ async fn spawn_subagent_inherit_sealed_copies_seal_hash() {
         "abc123",
         "topic",
         &placement,
+        "did:key:zWriter",
     )
     .await;
 
@@ -453,6 +458,7 @@ async fn spawn_subagent_bind_id_stamps_existing_workspace() {
         "abc123",
         "topic",
         &placement,
+        "did:test:r4-spawn_ws_bind",
     )
     .await;
 
@@ -494,6 +500,7 @@ async fn spawn_subagent_bind_id_infimums_parent_readonly() {
         "abc123",
         "topic",
         &placement,
+        "did:key:zWriter",
     )
     .await;
 
@@ -529,6 +536,7 @@ async fn spawn_subagent_bind_id_sealed_copies_seal_hash() {
         "abc123",
         "topic",
         &placement,
+        "did:key:zWriter",
     )
     .await;
 
@@ -583,6 +591,7 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
         &sha,
         "topic",
         &parent_ws,
+        "did:key:zWriter",
     )
     .await;
     seed_repository_placement(fixture.db.node.as_ref(), "repo-provision", owner, &repo).await;
@@ -724,6 +733,7 @@ async fn spawn_subagent_provision_fails_closed_when_dest_escapes_operator_tool_r
         &sha,
         "topic",
         &parent_ws,
+        "did:key:zWriter",
     )
     .await;
     seed_repository_placement(
@@ -738,9 +748,11 @@ async fn spawn_subagent_provision_fails_closed_when_dest_escapes_operator_tool_r
         &std::fs::canonicalize(root.path()).unwrap(),
     )
     .await;
+    let narrower_ceiling = repo.join("operator-root");
+    std::fs::create_dir_all(&narrower_ceiling).unwrap();
     fixture
         .hook
-        .set_operator_tool_root(Some(std::fs::canonicalize(&repo).unwrap()));
+        .set_operator_tool_root(Some(std::fs::canonicalize(&narrower_ceiling).unwrap()));
 
     let tool_call_id = "internal-spawn-provision-ceiling";
     let result = spawn_background_child_result(
