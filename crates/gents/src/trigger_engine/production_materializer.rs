@@ -25,7 +25,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::lifecycle::{
     active_runtime_lifecycle_state_graphql_list, task_run_conversation_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
@@ -87,6 +87,81 @@ impl ProductionMaterializer {
             backend_id,
         ))
     }
+}
+
+#[derive(serde::Deserialize)]
+struct StagedWorkspaceRequest {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_id: String,
+    agent_did: String,
+    workspace_id: String,
+    workspace_authority: String,
+    workspace_owner_deployment_id: String,
+    #[serde(default)]
+    workspace_seal_hash: Option<String>,
+}
+
+pub(crate) async fn recover_workspace_binding_pending_requests(
+    node: &EmbeddedNode,
+    local_deployment_id: &str,
+) -> Result<usize> {
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{
+                status: {{ _eq: "workspace_binding_pending" }},
+                lifecycle_state: {{ _eq: "pending" }},
+                workspace_owner_deployment_id: {{ _eq: "{deployment_id}" }}
+            }}) {{
+                _docID
+                request_id
+                agent_did
+                workspace_id
+                workspace_authority
+                workspace_owner_deployment_id
+                workspace_seal_hash
+            }}
+        }}"#,
+        deployment_id = escape_graphql_string(local_deployment_id),
+    );
+    let response = graphql_with_transaction_retry(
+        node,
+        &query,
+        "load workspace-binding-pending AgentRequest rows",
+    )
+    .await?;
+    let staged = rows::<StagedWorkspaceRequest>(&response, "AgentRequest")?;
+    let mut recovered = 0;
+    for request in staged {
+        let lineage = WorkspaceLineage {
+            workspace_id: Some(request.workspace_id),
+            workspace_authority: Some(request.workspace_authority),
+            workspace_owner_deployment_id: Some(request.workspace_owner_deployment_id),
+            workspace_seal_hash: request.workspace_seal_hash,
+        };
+        match crate::workspace::materialize_workspace_binding(
+            node,
+            &request.request_id,
+            &request.doc_id,
+            &request.agent_did,
+            &lineage,
+            Some(local_deployment_id),
+        )
+        .await
+        {
+            Ok(()) => {
+                crate::lifecycle::activate_workspace_bound_request(node, &request.doc_id).await?;
+                recovered += 1;
+            }
+            Err(error) => tracing::warn!(
+                request_id = %request.request_id,
+                request_doc_id = %request.doc_id,
+                %error,
+                "workspace binding recovery remains pending"
+            ),
+        }
+    }
+    Ok(recovered)
 }
 
 pub(crate) fn execution_origin_for_trigger_kind(trigger_kind: TriggerKind) -> ExecutionOrigin {
@@ -200,14 +275,6 @@ impl MaterializerHandle for ProductionMaterializer {
             let conversation_title = task_run_conversation_title(&task_label);
             let workspace_ref = workspace.is_bound().then_some(&workspace);
             let request_id = uuid::Uuid::new_v4().to_string();
-            crate::workspace::materialize_workspace_binding(
-                node.as_ref(),
-                &request_id,
-                "",
-                &workspace,
-                local_deployment_id.as_deref(),
-            )
-            .await?;
             let enqueued =
                 write_pending_agent_request_with_lineage_workspace_and_conversation_title(
                     node.as_ref(),
@@ -221,6 +288,19 @@ impl MaterializerHandle for ProductionMaterializer {
                     Some(&request_id),
                 )
                 .await?;
+            if workspace_ref.is_some() {
+                crate::workspace::materialize_workspace_binding(
+                    node.as_ref(),
+                    &request_id,
+                    &enqueued.doc_id,
+                    &behavior_did,
+                    &workspace,
+                    local_deployment_id.as_deref(),
+                )
+                .await?;
+                crate::lifecycle::activate_workspace_bound_request(node.as_ref(), &enqueued.doc_id)
+                    .await?;
+            }
             tracing::info!(
                 task_id = %task_id,
                 trigger_id = ?trigger_id,

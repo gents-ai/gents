@@ -85,6 +85,14 @@ pub fn admit_workspace_binding(
             .iter()
             .find(|binding| binding.request_id == candidate.request_id)
         {
+            if existing_active.request_doc_id != candidate.request_doc_id {
+                bail!(
+                    "Active {label} binding for request {} points at request_doc_id {}, not {}",
+                    candidate.request_id,
+                    existing_active.request_doc_id,
+                    candidate.request_doc_id
+                );
+            }
             return Ok(AdmitBinding::Reuse(existing_active.clone()));
         }
         if !others.is_empty() && !release_previous_read_write {
@@ -113,6 +121,14 @@ pub fn admit_workspace_binding(
             && binding.request_id == candidate.request_id
             && binding.authority == candidate.authority
     }) {
+        if existing_active.request_doc_id != candidate.request_doc_id {
+            bail!(
+                "Active ReadOnly binding for request {} points at request_doc_id {}, not {}",
+                candidate.request_id,
+                existing_active.request_doc_id,
+                candidate.request_doc_id
+            );
+        }
         return Ok(AdmitBinding::Reuse(existing_active.clone()));
     }
     candidate.lifecycle_state = BINDING_ACTIVE.to_string();

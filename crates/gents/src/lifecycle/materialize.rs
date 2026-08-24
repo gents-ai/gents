@@ -221,6 +221,11 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     let execution_origin = execution_origin.as_str();
     let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage)?;
     let workspace_fields = workspace_lineage_graphql_fields(workspace_lineage);
+    let initial_status = if workspace_lineage.is_some_and(WorkspaceLineage::is_bound) {
+        "workspace_binding_pending"
+    } else {
+        "pending"
+    };
     let metadata_field = if prompt_selection.selected_skill_ids.is_empty() {
         String::new()
     } else {
@@ -250,7 +255,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "{escaped_content}",{metadata_field}
-                status: "pending",
+                status: "{initial_status}",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{execution_origin}",{lineage_fields}{workspace_fields}
@@ -324,6 +329,37 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         request_id,
         session_id,
     })
+}
+
+pub(crate) async fn activate_workspace_bound_request(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+) -> Result<()> {
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{
+                    _docID: {{ _eq: "{doc_id}" }},
+                    status: {{ _eq: "workspace_binding_pending" }},
+                    lifecycle_state: {{ _eq: "pending" }}
+                }},
+                input: {{ status: "pending" }}
+            ) {{ _docID }}
+        }}"#,
+        doc_id = escape_graphql_string(request_doc_id),
+    );
+    let response = crate::graphql::graphql_mutation_with_transaction_retry(
+        node,
+        &mutation,
+        "activate_workspace_bound_request",
+    )
+    .await?;
+    if crate::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none() {
+        anyhow::bail!(
+            "workspace-bound AgentRequest {request_doc_id} was not staged for activation"
+        );
+    }
+    Ok(())
 }
 
 impl RequestLifecycle {

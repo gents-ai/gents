@@ -87,7 +87,6 @@ fn default_adapter() -> WorkspaceAdapterKind {
     WorkspaceAdapterKind::MakeWorktree
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SealWorkspaceAction {
@@ -288,7 +287,6 @@ impl CreateWorkspaceAction {
         }
     }
 }
-
 
 impl SealWorkspaceAction {
     pub(crate) fn validate_against(&self, capabilities: &BTreeSet<String>) -> Result<()> {

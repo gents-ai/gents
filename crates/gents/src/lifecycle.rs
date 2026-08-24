@@ -22,6 +22,7 @@ mod transition;
 
 pub use manual::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
 pub(crate) use materialize::{
+    activate_workspace_bound_request,
     write_pending_agent_request_with_lineage_and_conversation_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };

@@ -849,6 +849,8 @@ fn seal_drift_fails_closed() {
     let mut workspace = super::IsolatedWorkspaceRecord {
         workspace_id: "ws-drift".into(),
         owner_deployment_id: "deploy-1".into(),
+        writer_principal: "did:key:zWriter".into(),
+        integrator_principal: "did:key:zIntegrator".into(),
         lifecycle_state: "sealed".into(),
         seal_hash: Some(hash.clone()),
         instruction_manifest: sealed.workspace.instruction_manifest.clone(),

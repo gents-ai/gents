@@ -274,7 +274,12 @@ fn writer_context(workspace_id: &str, owner_field: &str, owner: &str) -> String 
     .to_string()
 }
 
-async fn insert_ready_workspace(node: &defra_node::EmbeddedNode, workspace_id: &str, owner: &str) {
+async fn insert_ready_workspace(
+    node: &defra_node::EmbeddedNode,
+    workspace_id: &str,
+    owner: &str,
+    writer_principal: &str,
+) {
     let mutation = crate::workspace::isolated_workspace_upsert_mutation(
         &crate::workspace::IsolatedWorkspaceDoc {
             workspace_id: workspace_id.into(),
@@ -285,7 +290,7 @@ async fn insert_ready_workspace(node: &defra_node::EmbeddedNode, workspace_id: &
             creation_policy: "alwaysCreate".into(),
             adapter: "git_worktree".into(),
             owner_deployment_id: owner.into(),
-            writer_principal: "did:key:writer".into(),
+            writer_principal: writer_principal.into(),
             integrator_principal: "did:key:integrator".into(),
             instruction_manifest: "{}".into(),
             seal_hash: None,
@@ -310,6 +315,7 @@ async fn workspace_requests(
         r#"{{
             AgentRequest(filter: {{ workspace_id: {{ _eq: "{id}" }} }}) {{
                 request_id
+                status
                 lifecycle_state
                 workspace_owner_deployment_id
                 workspace_authority
@@ -366,9 +372,15 @@ async fn materializer_skips_callback_result_owner_deployment_id_on_replica() {
 async fn materializer_stamps_owner_when_trigger_context_omits_it() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    insert_ready_workspace(node.as_ref(), "ws-stamp", "deploy-owner").await;
-    let snapshot =
-        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
+    let behavior = integration_test_behavior("general");
+    insert_ready_workspace(
+        node.as_ref(),
+        "ws-stamp",
+        "deploy-owner",
+        behavior.agent_did(),
+    )
+    .await;
+    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx)
         .with_local_deployment_id("deploy-owner");
@@ -405,9 +417,9 @@ async fn materializer_stamps_owner_when_trigger_context_omits_it() {
 async fn unique_read_write_denial_does_not_leave_claimable_request() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    insert_ready_workspace(node.as_ref(), "ws-rw", "deploy-owner").await;
-    let snapshot =
-        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
+    let behavior = integration_test_behavior("general");
+    insert_ready_workspace(node.as_ref(), "ws-rw", "deploy-owner", behavior.agent_did()).await;
+    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx)
         .with_local_deployment_id("deploy-owner");
@@ -441,7 +453,21 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
         "{error:#}"
     );
     let rows = workspace_requests(node.as_ref(), "ws-rw").await;
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["request_id"].as_str(), Some(first.as_str()));
-    assert_eq!(rows[0]["lifecycle_state"].as_str(), Some("pending"));
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let claimable = rows
+        .iter()
+        .filter(|row| {
+            row["status"].as_str() == Some("pending")
+                && row["lifecycle_state"].as_str() == Some("pending")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(claimable.len(), 1, "{rows:?}");
+    assert_eq!(claimable[0]["request_id"].as_str(), Some(first.as_str()));
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["status"].as_str() == Some("workspace_binding_pending"))
+            .count(),
+        1,
+        "{rows:?}"
+    );
 }

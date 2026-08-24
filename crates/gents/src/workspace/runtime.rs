@@ -244,6 +244,7 @@ pub async fn materialize_workspace_binding(
     node: &EmbeddedNode,
     request_id: &str,
     request_doc_id: &str,
+    principal_did: &str,
     lineage: &WorkspaceLineage,
     local_deployment_id: Option<&str>,
 ) -> Result<()> {
@@ -265,6 +266,7 @@ pub async fn materialize_workspace_binding(
     let workspace = super::overlay::load_isolated_workspace_record(node, workspace_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
+    super::overlay::require_workspace_principal(&workspace, principal_did, authority)?;
     let existing = super::overlay::load_workspace_bindings_for(node, workspace_id).await?;
     let candidate = new_binding(
         workspace_id,
@@ -484,6 +486,8 @@ mod tests {
         IsolatedWorkspaceRecord {
             workspace_id: "ws-1".into(),
             owner_deployment_id: "dep-1".into(),
+            writer_principal: "did:key:zWriter".into(),
+            integrator_principal: "did:key:zIntegrator".into(),
             lifecycle_state: "sealed".into(),
             seal_hash: Some("hash-1".into()),
             instruction_manifest: "{}".into(),
