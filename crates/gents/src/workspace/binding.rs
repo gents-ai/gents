@@ -87,7 +87,7 @@ pub fn admit_workspace_binding(
         {
             if existing_active.request_doc_id != candidate.request_doc_id {
                 bail!(
-                    "Active {label} binding for request {} points at request_doc_id {}, not {}",
+                    "Active ReadWrite binding for request {} points at request_doc_id {}, not {}",
                     candidate.request_id,
                     existing_active.request_doc_id,
                     candidate.request_doc_id

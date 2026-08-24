@@ -358,6 +358,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
         crate::workspace::HostAction::CreateWorkspace(action) => {
             assert_eq!(action.workspace_id, "ws-stored");
         }
+        crate::workspace::HostAction::SealWorkspace(_) => panic!("expected create_workspace"),
     }
     assert!(journal_has_started_host_execution(&journal));
 
@@ -946,6 +947,7 @@ fn fixture_wasm_emits_valid_create_workspace_plan() {
             assert_eq!(action.work_unit_id, "unit-1");
             assert_eq!(action.adapter.as_str(), "git_worktree");
         }
+        HostAction::SealWorkspace(_) => panic!("expected create_workspace"),
     }
     plan.validate_against(&caps).expect("capabilities");
 
