@@ -903,7 +903,6 @@ mod behavior_environment_tests {
             write_tools: vec![],
             tool_policy_version: None,
             subagent_default_await_mode: None,
-            orchestration_enabled: None,
         }
     }
 
