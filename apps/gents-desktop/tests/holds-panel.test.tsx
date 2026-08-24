@@ -84,6 +84,19 @@ describe("holds panel", () => {
     await waitFor(() => expect(screen.getByTestId("holds-empty")).toBeInTheDocument());
   });
 
+  it("can stay out of the chat surface when no approval is pending", async () => {
+    withAdapter({
+      listToolCallHolds: vi.fn().mockResolvedValue([]),
+      resolveToolCallHold: vi.fn(),
+    });
+    render(<HoldsPanel agentDid={AGENT_DID} hideWhenIdle />);
+
+    expect(screen.queryByTestId("holds-panel")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByTestId("holds-panel")).not.toBeInTheDocument(),
+    );
+  });
+
   it("approves a held call and refreshes the list", async () => {
     const resolveToolCallHold = vi.fn().mockResolvedValue({
       approvalId: "approval-call-1-x",

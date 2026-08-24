@@ -86,9 +86,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let skill_reminder_tokens = crate::prompt::estimate_message_tokens(&skill_reminders);
 
             let mut built = async {
-                let full_history = session::load_history_through_sequence(
+                let full_history = session::load_history_for_request(
                     &self.node,
-                    &request.session_id,
+                    &request,
                     lifecycle.background_completion_input_through_sequence(),
                 )
                     .instrument(tracing::info_span!(

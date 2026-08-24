@@ -1,17 +1,9 @@
-use super::query::{load_session_document, load_session_document_optional};
+#[cfg(test)]
+use super::query::load_session_document_optional;
 use super::retry::{execute_mutation_with_retry, execute_query_timed, retry_operation};
 use super::*;
 
-pub async fn create_session(
-    node: &EmbeddedNode,
-    agent_name: &str,
-    agent_did: &str,
-) -> Result<String> {
-    let session_id = uuid::Uuid::new_v4().to_string();
-    create_session_with_id(node, &session_id, agent_name, agent_did).await?;
-    Ok(session_id)
-}
-
+#[cfg(test)]
 pub(crate) async fn create_session_with_id(
     node: &EmbeddedNode,
     session_id: &str,
@@ -21,6 +13,7 @@ pub(crate) async fn create_session_with_id(
     create_session_with_behavior_id(node, session_id, agent_name, agent_did, agent_name).await
 }
 
+#[cfg(test)]
 pub(crate) async fn create_session_with_behavior_id(
     node: &EmbeddedNode,
     session_id: &str,
@@ -40,6 +33,7 @@ pub(crate) async fn create_session_with_behavior_id(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 async fn create_session_with_behavior_id_and_requester_did(
     node: &EmbeddedNode,
     session_id: &str,
@@ -109,25 +103,7 @@ async fn create_session_with_behavior_id_and_requester_did(
     Ok(())
 }
 
-pub(crate) async fn ensure_session(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_name: &str,
-    agent_did: &str,
-) -> Result<()> {
-    ensure_session_with_behavior_id(node, session_id, agent_name, agent_did, agent_name).await
-}
-
-pub(crate) async fn ensure_session_with_behavior_id(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_name: &str,
-    agent_did: &str,
-    behavior_id: &str,
-) -> Result<()> {
-    create_session_with_behavior_id(node, session_id, agent_name, agent_did, behavior_id).await
-}
-
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_session_with_behavior_id_and_requester_did(
     node: &EmbeddedNode,
@@ -182,22 +158,18 @@ pub(crate) async fn max_sequence(node: &EmbeddedNode, session_id: &str) -> Resul
 
 pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> {
     retry_operation("close_session", || async {
-        let session = load_session_document(node, session_id).await?;
-
         let now = chrono::Utc::now().to_rfc3339();
-        let escaped_started = escape_graphql_string(&session.started);
+        let escaped_session_id = escape_graphql_string(session_id);
         let mutation = format!(
             r#"mutation {{
                 update_AgentSession(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                     input: {{
-                        started: "{escaped_started}",
                         status: "completed",
                         ended: "{now}"
                     }}
                 ) {{ _docID }}
             }}"#,
-            doc_id = escape_graphql_string(&session.doc_id),
         );
 
         execute_mutation_with_retry(node, &mutation, "close_session").await?;
@@ -209,6 +181,7 @@ pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> 
     Ok(())
 }
 
+#[cfg(test)]
 fn resolve_behavior_id(
     existing: Option<&super::rows::SessionDocument>,
     requested_behavior_id: &str,
@@ -228,6 +201,7 @@ fn resolve_behavior_id(
     }
 }
 
+#[cfg(test)]
 fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
     value.and_then(|value| {
         let trimmed = value.trim();

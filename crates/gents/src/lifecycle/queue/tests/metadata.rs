@@ -154,3 +154,57 @@ fn automated_wakeup_is_true_only_for_keyed_subagent_completion_coalesce() {
         }
     ))));
 }
+
+#[test]
+fn runtime_control_projection_keeps_only_the_steering_input_visible() {
+    let metadata = |source| {
+        queue_metadata_json(&QueueHints {
+            source,
+            policy: QueuePolicy::Append,
+            key: None,
+            queued_after_request_id: None,
+            interrupted_request_id: None,
+        })
+    };
+    let steering = metadata(QueueSource::Steering);
+    let steering_input = steering_input_message_key("request-1");
+
+    assert!(!crate::lifecycle::is_runtime_control_message(
+        Some(&steering),
+        &steering_input,
+        true,
+    ));
+    assert!(crate::lifecycle::is_runtime_control_message(
+        Some(&steering),
+        "",
+        true,
+    ));
+    assert!(crate::lifecycle::is_runtime_control_message(
+        Some(&metadata(QueueSource::Goal)),
+        "",
+        false,
+    ));
+    assert!(crate::lifecycle::is_runtime_control_message(
+        None,
+        "background-completion-notification:child-1:subagent",
+        false,
+    ));
+    assert!(!crate::lifecycle::is_runtime_control_message(
+        Some(&metadata(QueueSource::User)),
+        "",
+        false,
+    ));
+    assert!(!crate::lifecycle::is_runtime_control_message(
+        Some(&steering),
+        "session-1:4",
+        false,
+    ));
+    assert!(!crate::lifecycle::request_content_owns_user_projection(
+        Some(&steering)
+    ));
+    assert!(crate::lifecycle::request_content_owns_user_projection(None));
+    assert!(crate::lifecycle::request_owns_user_turn(Some(&steering)));
+    assert!(!crate::lifecycle::request_owns_user_turn(Some(&metadata(
+        QueueSource::Goal
+    ))));
+}

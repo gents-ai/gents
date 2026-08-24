@@ -76,27 +76,6 @@ pub(crate) async fn enqueue_session_request(
         }
     }
 
-    if let Err(error) = session::upsert_conversation_from_request_with_identity_and_requester_did(
-        node,
-        &parent.session_id,
-        &behavior_id,
-        &parent.agent_did,
-        &behavior_id,
-        &enqueued.request_id,
-        content,
-        "pending",
-        parent.requester_did.as_deref(),
-    )
-    .await
-    {
-        tracing::warn!(
-            request_id = %request_id,
-            session_id = %parent.session_id,
-            error = %error,
-            "failed to update conversation for queued session request"
-        );
-    }
-
     Ok(enqueued)
 }
 
@@ -135,13 +114,22 @@ pub(crate) async fn enqueue_steering_request_with_message(
         &now,
         true,
     )?;
+    // Match the hook's canonical persisted representation so its
+    // request-scoped prompt dedup reuses this keyed row instead of appending a
+    // second copy when the continuation starts.
+    let persisted_content = serde_json::to_string(&crate::llm::message::Message::user(content))?;
 
     let mut retry_index = 0;
     let enqueued = loop {
         let txn = ConfigApplyTxn::begin_local(node, None).await?;
-        let attempt =
-            steering_transaction_attempt(&txn, parent, content, &request_id, &request_mutation)
-                .await;
+        let attempt = steering_transaction_attempt(
+            &txn,
+            parent,
+            &persisted_content,
+            &request_id,
+            &request_mutation,
+        )
+        .await;
 
         let result = match attempt {
             Ok(enqueued) => match txn.commit().await {
@@ -179,27 +167,6 @@ pub(crate) async fn enqueue_steering_request_with_message(
             Err(error) => return Err(error),
         }
     };
-
-    if let Err(error) = session::upsert_conversation_from_request_with_identity_and_requester_did(
-        node,
-        &parent.session_id,
-        &behavior_id,
-        &parent.agent_did,
-        &behavior_id,
-        &enqueued.request_id,
-        content,
-        "pending",
-        parent.requester_did.as_deref(),
-    )
-    .await
-    {
-        tracing::warn!(
-            request_id = %enqueued.request_id,
-            session_id = %parent.session_id,
-            error = %error,
-            "failed to update conversation for steering request"
-        );
-    }
 
     Ok(enqueued)
 }

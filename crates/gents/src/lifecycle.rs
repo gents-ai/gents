@@ -34,6 +34,52 @@ pub fn is_background_completion_request(metadata: Option<&str>) -> bool {
     queue::is_automated_wakeup(metadata)
 }
 
+/// Whether `AgentRequest.content` itself owns the pending user bubble. Steering
+/// uses a separately persisted keyed message; goal and completion requests are
+/// controller turns. Unversioned requests retain the ordinary user default.
+pub fn request_content_owns_user_projection(metadata: Option<&str>) -> bool {
+    queue::parse_queue_hints(metadata).is_none_or(|hints| hints.source == queue::QueueSource::User)
+}
+
+/// Whether the request represents a logical user turn, regardless of whether
+/// its bubble is projected from the request or from a keyed steering message.
+pub fn request_owns_user_turn(metadata: Option<&str>) -> bool {
+    queue::parse_queue_hints(metadata).is_none_or(|hints| {
+        matches!(
+            hints.source,
+            queue::QueueSource::User | queue::QueueSource::Steering
+        )
+    })
+}
+
+pub fn is_steering_input_message_key(message_key: &str) -> bool {
+    queue::is_steering_input_message_key(message_key)
+}
+
+/// Classify a transcript row with the sibling-message context needed to read
+/// both current and pre-key steering transcripts. Current runtimes persist one
+/// keyed user input plus a non-keyed control prompt. Older runtimes persisted
+/// only the non-keyed user input, which must remain visible after upgrade.
+/// Background-completion notifications and durable-goal controller prompts
+/// are entirely internal.
+pub fn is_runtime_control_message(
+    metadata: Option<&str>,
+    message_key: &str,
+    request_has_keyed_steering_input: bool,
+) -> bool {
+    if crate::background_completion::is_background_completion_notification_message_key(message_key)
+    {
+        return true;
+    }
+    queue::parse_queue_hints(metadata).is_some_and(|hints| match hints.source {
+        queue::QueueSource::BackgroundCompletion | queue::QueueSource::Goal => true,
+        queue::QueueSource::Steering => {
+            request_has_keyed_steering_input && !queue::is_steering_input_message_key(message_key)
+        }
+        queue::QueueSource::User => false,
+    })
+}
+
 /// Legacy runtimes persisted unversioned background-completion wakeups as
 /// scheduled requests. They remain durable audit rows but must be ignored;
 /// current versioned completion wakes are authoritative continuation turns.
@@ -98,6 +144,22 @@ pub enum ClaimOutcome {
     Queued,
     Interrupted,
     Expired,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ClaimAdmissionError {
+    #[error(
+        "session {session_id} is pinned to behavior {existing_behavior_id} and cannot switch to {requested_behavior_id}"
+    )]
+    SessionBehaviorMismatch {
+        session_id: String,
+        existing_behavior_id: String,
+        requested_behavior_id: String,
+    },
+}
+
+pub(crate) fn is_claim_admission_error(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ClaimAdmissionError>().is_some()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -508,9 +570,6 @@ pub struct RecoveryReport {
     pub requests_recovered: usize,
     pub background_wakes_redriven: usize,
     pub responses_recovered: usize,
-    pub conversations_recovered: usize,
-    pub conversations_failed: usize,
-    pub duplicate_conversation_sessions: usize,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -785,5 +844,144 @@ mod tests {
             fields.get("caused_by_correlation").map(String::as_str),
             Some("run-1")
         );
+    }
+
+    #[tokio::test]
+    async fn projection_statement_error_falls_back_to_request_only_terminal_commit() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_schemas(node.as_ref()).await.unwrap();
+        let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
+            node.clone(),
+            "default",
+            "did:test:test",
+            "hello",
+            60,
+            ExecutionOrigin::Interactive,
+            "backend",
+            TriggerLineage::default(),
+        )
+        .await
+        .unwrap();
+        lifecycle.begin_execution().await.unwrap();
+        let doc_id = escape_graphql_string(&lifecycle.request().doc_id);
+        let request_mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                    input: {{ status: "completed", lifecycle_state: "completed" }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = transition::execute_request_projection_transaction(
+            node.as_ref(),
+            &request_mutation,
+            "mutation { invalid_conversation_projection_field }",
+            "test_projection_error_fallback",
+        )
+        .await
+        .unwrap();
+        assert!(response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentRequest"))
+            .is_some_and(response_has_documents));
+
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ status lifecycle_state }} }}"#
+        );
+        let persisted = node.execute(&query).await;
+        assert!(!persisted.has_errors(), "{:?}", persisted.errors);
+        assert_eq!(
+            persisted.data.as_ref().unwrap()["AgentRequest"][0]["status"],
+            "completed"
+        );
+        assert_eq!(
+            persisted.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
+            "completed"
+        );
+    }
+
+    #[test]
+    fn retryable_projection_conflict_preserves_the_atomic_attempt() {
+        let conflict = anyhow::anyhow!(
+            "graphql returned errors: transaction conflict while updating AgentConversation"
+        );
+        assert!(transition::projection_error_requires_atomic_retry(
+            &conflict
+        ));
+
+        let deterministic = anyhow::anyhow!(
+            "graphql returned errors: field invalid_conversation_projection_field does not exist"
+        );
+        assert!(!transition::projection_error_requires_atomic_retry(
+            &deterministic
+        ));
+    }
+
+    #[tokio::test]
+    async fn error_response_terminalizes_an_existing_streaming_response() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_schemas(node.as_ref()).await.unwrap();
+        let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
+            node.clone(),
+            "default",
+            "did:test:test",
+            "hello",
+            60,
+            ExecutionOrigin::Interactive,
+            "backend",
+            TriggerLineage::default(),
+        )
+        .await
+        .unwrap();
+        lifecycle.begin_execution().await.unwrap();
+        let request = lifecycle.request().clone();
+        let writer = crate::streaming::DefraStreamWriter::new(
+            node.clone(),
+            "did:test:test",
+            std::time::Duration::ZERO,
+        );
+        let response_doc_id = writer
+            .begin_with_requester_did(
+                &request.session_id,
+                &request.request_id,
+                Some(&request.doc_id),
+                lifecycle.behavior_id(),
+                None,
+            )
+            .await
+            .unwrap();
+        lifecycle.set_response_doc_id(&response_doc_id);
+        lifecycle.fail_with_reason("setup failed").await.unwrap();
+        lifecycle
+            .ensure_error_response("setup failed")
+            .await
+            .unwrap();
+
+        let response_doc_id = escape_graphql_string(&response_doc_id);
+        let persisted = node
+            .execute(&format!(
+                r#"{{ AgentResponse(filter: {{ _docID: {{ _eq: "{response_doc_id}" }} }}) {{ status content error_message }} }}"#
+            ))
+            .await;
+        assert!(!persisted.has_errors(), "{:?}", persisted.errors);
+        let response = &persisted.data.as_ref().unwrap()["AgentResponse"][0];
+        assert_eq!(response["status"], "error");
+        assert_eq!(response["content"], "Error: setup failed");
+        assert_eq!(response["error_message"], "setup failed");
     }
 }

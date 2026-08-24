@@ -14,6 +14,10 @@ pub(super) async fn load_session_document(
         })
 }
 
+pub(crate) async fn require_session(node: &EmbeddedNode, session_id: &str) -> Result<()> {
+    load_session_document(node, session_id).await.map(|_| ())
+}
+
 pub(super) async fn load_session_document_optional(
     node: &EmbeddedNode,
     session_id: &str,
@@ -25,9 +29,9 @@ pub(super) async fn load_session_document_optional(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }}
                 }},
+                order: {{ started: DESC }},
                 limit: 1
             ) {{
-                _docID
                 behavior_id
                 started
             }}
@@ -130,48 +134,22 @@ pub(crate) async fn load_session_behavior_id(
         }))
 }
 
-/// Load every `AgentConversation` doc for a session, canonical doc first.
-///
-/// Duplicates exist in the wild (#693): `session_id` is unique-indexed in the
-/// current schema, but DefraDB cannot add an index to an already-created
-/// collection, so stores whose collection predates the unique index carry
-/// duplicate rows permanently — and replication can mint them. A write
-/// addressed by `filter: { session_id }` matches every duplicate, and DefraDB
-/// refuses it (`cannot upsert multiple matching documents`), which is why every
-/// conversation write must address a single `_docID`.
-///
-/// The canonical doc is the one live surfaces read and recovery repairs. It is
-/// chosen by an explicit total order (newest `updated_at`, then richest, then
-/// greatest `_docID`) rather than by scan order: DefraDB returns duplicates in
-/// docID order, not recency order. `Recovery.canonical_perm_invariant`
-/// (proofs/Proofs/Recovery/Sweeps/Conversation.lean) proves this choice does not
-/// depend on the order rows come back in.
-pub(super) async fn load_conversation_documents_ranked(
+pub(super) async fn load_conversation_document(
     node: &EmbeddedNode,
     session_id: &str,
-) -> Result<Vec<ConversationDocument>> {
+) -> Result<Option<ConversationDocument>> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentConversation(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }}
-                }}
+                }},
+                order: {{ updated_at: DESC }},
+                limit: 1
             ) {{
-                _docID
                 title
                 title_source
-                preview_text
-                status
-                latest_request_id
-                behavior_id
-                created_at
-                updated_at
-                agent_did
-                agent_name
-                forked_from_session_id
-                fork_at_user_turn
-                forked_at
             }}
         }}"#
     );
@@ -185,7 +163,7 @@ pub(super) async fn load_conversation_documents_ranked(
         );
     }
 
-    let mut rows: Vec<ConversationDocument> = match resp
+    let rows: Vec<ConversationDocument> = match resp
         .data
         .as_ref()
         .and_then(|data| data.get("AgentConversation"))
@@ -194,33 +172,7 @@ pub(super) async fn load_conversation_documents_ranked(
         None => Vec::new(),
     };
 
-    rows.sort_by(|left, right| conversation_rank(right).cmp(&conversation_rank(left)));
-    Ok(rows)
-}
-
-/// Ranking key mirroring Lean `Recovery.docRank`: `(updated_at, richness,
-/// doc_id)`, compared lexicographically. `doc_id` is the store's primary key, so
-/// distinct docs never tie and the greatest element is unique.
-fn conversation_rank(doc: &ConversationDocument) -> (String, usize, String) {
-    let richness = [
-        doc.title.trim(),
-        doc.preview_text.trim(),
-        doc.latest_request_id.trim(),
-    ]
-    .iter()
-    .filter(|field| !field.is_empty())
-    .count();
-    (doc.updated_at.clone(), richness, doc.doc_id.clone())
-}
-
-pub(super) async fn load_conversation_document(
-    node: &EmbeddedNode,
-    session_id: &str,
-) -> Result<Option<ConversationDocument>> {
-    Ok(load_conversation_documents_ranked(node, session_id)
-        .await?
-        .into_iter()
-        .next())
+    Ok(rows.into_iter().next())
 }
 
 pub(super) async fn load_recent_conversation_titles(

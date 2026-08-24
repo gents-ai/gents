@@ -1,6 +1,6 @@
 use super::*;
 use crate::ensure_schemas;
-use crate::llm::message::{AssistantContent, Text, UserContent};
+use crate::llm::message::{AssistantContent, Text, ToolResult, ToolResultContent, UserContent};
 use crate::test_support::first_content;
 use gents_protocol::transcript::decode_persisted_message;
 
@@ -39,6 +39,90 @@ fn test_load_history_deserializes_legacy_assistant_content() {
                 && matches!(first_content(&content), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
                 && matches!(content.get(1), Some(AssistantContent::Text(Text { text })) if text == "Done")
     ));
+}
+
+#[tokio::test]
+async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(tempdir.path())
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+    let session_id = "session-steering-provider-history";
+    append_message_once_with_key_and_requester_did(
+        &node,
+        session_id,
+        "did:test:test",
+        None,
+        "user",
+        "older steering",
+        None,
+        Some("request-old"),
+        Some("doc-old"),
+        "steering-input:request-old",
+        Some(1),
+    )
+    .await
+    .unwrap();
+    let tool_result = Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: "result-current".to_string(),
+            call_id: Some("call-current".to_string()),
+            content: vec![ToolResultContent::Text(Text {
+                text: "tool finished".to_string(),
+            })],
+        })],
+    };
+    append_message_once_with_key_and_requester_did(
+        &node,
+        session_id,
+        "did:test:test",
+        None,
+        "user",
+        &serde_json::to_string(&tool_result).unwrap(),
+        None,
+        Some("request-current"),
+        Some("doc-current"),
+        "session-steering-provider-history:tool-result:current",
+        Some(3),
+    )
+    .await
+    .unwrap();
+    append_message_once_with_key_and_requester_did(
+        &node,
+        session_id,
+        "did:test:test",
+        None,
+        "user",
+        "current steering",
+        None,
+        Some("request-current"),
+        Some("doc-current"),
+        "session-steering-provider-history:2",
+        Some(2),
+    )
+    .await
+    .unwrap();
+
+    let current_input = Message::user("current steering");
+    let history = history::load_history_projection(
+        &node,
+        session_id,
+        None,
+        Some(("request-current", current_input)),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(history.len(), 2);
+    assert!(matches!(
+        history.first(),
+        Some(Message::User { content })
+            if matches!(first_content(&content), UserContent::Text(Text { text }) if text == "older steering")
+    ));
+    assert_eq!(history.get(1), Some(&tool_result));
 }
 
 #[tokio::test]
@@ -321,194 +405,6 @@ async fn create_session_with_id_is_idempotent() {
 }
 
 #[tokio::test]
-async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
-    let data_path =
-        std::env::temp_dir().join(format!("gents-conversation-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
-    ensure_schemas(&node).await.unwrap();
-
-    let agent_did = "did:key:zTestGeneral";
-    upsert_conversation_from_request_with_identity(
-        &node,
-        "session-1",
-        "general",
-        agent_did,
-        "general",
-        "request-1",
-        "Draft a weekly fleet report",
-        "processing",
-    )
-    .await
-    .unwrap();
-    upsert_conversation_from_request_with_identity(
-        &node,
-        "session-1",
-        "general",
-        agent_did,
-        "general",
-        "request-2",
-        "Now include the overnight daemon failures too",
-        "processing",
-    )
-    .await
-    .unwrap();
-    update_conversation_status_if_latest_with_identity(
-        &node,
-        "session-1",
-        "general",
-        agent_did,
-        "general",
-        "request-2",
-        "completed",
-    )
-    .await
-    .unwrap();
-
-    let resp = node
-        .execute(
-            r#"{
-                AgentConversation(
-                    filter: { session_id: { _eq: "session-1" } },
-                    limit: 1
-                ) {
-                    session_id
-                    agent_name
-                    agent_did
-                    behavior_id
-                    title
-                    title_source
-                    preview_text
-                    status
-                    latest_request_id
-                }
-            }"#,
-        )
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query conversation failed: {:?}",
-        resp.errors
-    );
-
-    let row = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentConversation"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("conversation row");
-
-    assert_eq!(row.get("title").and_then(|value| value.as_str()), Some(""));
-    assert_eq!(
-        row.get("title_source").and_then(|value| value.as_str()),
-        Some("placeholder")
-    );
-    assert_eq!(
-        row.get("preview_text").and_then(|value| value.as_str()),
-        Some("Now include the overnight daemon failures too")
-    );
-    assert_eq!(
-        row.get("status").and_then(|value| value.as_str()),
-        Some("completed")
-    );
-    assert_eq!(
-        row.get("latest_request_id")
-            .and_then(|value| value.as_str()),
-        Some("request-2")
-    );
-    assert_eq!(
-        row.get("agent_did").and_then(|value| value.as_str()),
-        Some(agent_did)
-    );
-    assert_eq!(
-        row.get("behavior_id").and_then(|value| value.as_str()),
-        Some("general")
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn concurrent_conversation_upserts_converge_on_one_session_row() {
-    let data_path = std::env::temp_dir().join(format!(
-        "gents-conversation-create-race-{}",
-        uuid::Uuid::new_v4()
-    ));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
-    ensure_schemas(&node).await.unwrap();
-
-    let first = upsert_conversation_from_request_with_identity(
-        &node,
-        "session-race",
-        "review-scan",
-        "did:key:zTestReviewer",
-        "review-scan",
-        "request-race",
-        "Review one area",
-        "pending",
-    );
-    let second = upsert_conversation_from_request_with_identity(
-        &node,
-        "session-race",
-        "review-scan",
-        "did:key:zTestReviewer",
-        "review-scan",
-        "request-race",
-        "Review one area",
-        "processing",
-    );
-    let (first, second) = tokio::join!(first, second);
-    first.unwrap();
-    second.unwrap();
-
-    let response = node
-        .execute(
-            r#"{
-                AgentConversation(filter: { session_id: { _eq: "session-race" } }) {
-                    latest_request_id
-                    status
-                }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query failed: {:?}",
-        response.errors
-    );
-    let conversations = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentConversation"))
-        .and_then(|rows| rows.as_array())
-        .expect("conversation rows");
-    assert_eq!(conversations.len(), 1);
-    assert_eq!(
-        conversations[0]
-            .get("latest_request_id")
-            .and_then(|value| value.as_str()),
-        Some("request-race")
-    );
-    assert_eq!(
-        conversations[0]
-            .get("status")
-            .and_then(|value| value.as_str()),
-        Some("processing")
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
 async fn update_conversation_title_with_source_persists_generated_title() {
     let data_path =
         std::env::temp_dir().join(format!("gents-conversation-title-{}", uuid::Uuid::new_v4()));
@@ -519,18 +415,26 @@ async fn update_conversation_title_with_source_persists_generated_title() {
         .unwrap();
     ensure_schemas(&node).await.unwrap();
 
-    upsert_conversation_from_request_with_identity(
-        &node,
-        "session-1",
-        "general",
-        "did:key:zTestGeneral",
-        "general",
-        "request-1",
-        "Draft a weekly fleet report",
-        "processing",
-    )
-    .await
-    .unwrap();
+    let create = node
+        .execute(
+            r#"mutation {
+                create_AgentConversation(input: {
+                    session_id: "session-1",
+                    agent_name: "general",
+                    agent_did: "did:key:zTestGeneral",
+                    behavior_id: "general",
+                    title: "",
+                    title_source: "placeholder",
+                    preview_text: "Draft a weekly fleet report",
+                    status: "processing",
+                    created_at: "2026-05-01T00:00:00Z",
+                    updated_at: "2026-05-01T00:00:00Z",
+                    latest_request_id: "request-1"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!create.has_errors(), "{:?}", create.errors);
 
     update_conversation_title_with_source(&node, "session-1", "fleet-report-draft", "generated")
         .await
@@ -595,50 +499,6 @@ async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
         create_session_with_behavior_id(&node, "session-1", "general", "did:test:test", "code")
             .await
             .unwrap_err();
-    assert!(error.to_string().contains("behavior mismatch"));
-
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn upsert_conversation_rejects_mismatched_existing_behavior() {
-    let data_path = std::env::temp_dir().join(format!(
-        "gents-conversation-binding-{}",
-        uuid::Uuid::new_v4()
-    ));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
-    ensure_schemas(&node).await.unwrap();
-
-    let agent_did = "did:key:zTestGeneral";
-    upsert_conversation_from_request_with_identity(
-        &node,
-        "session-1",
-        "general",
-        agent_did,
-        "general",
-        "request-1",
-        "Hello",
-        "processing",
-    )
-    .await
-    .unwrap();
-
-    let error = upsert_conversation_from_request_with_identity(
-        &node,
-        "session-1",
-        "general",
-        agent_did,
-        "code",
-        "request-2",
-        "Hello again",
-        "processing",
-    )
-    .await
-    .unwrap_err();
     assert!(error.to_string().contains("behavior mismatch"));
 
     let _ = std::fs::remove_dir_all(&data_path);

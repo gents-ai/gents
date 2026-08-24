@@ -44,15 +44,24 @@ function deadlineLabel(deadlineAt: string | null) {
 export type HoldsPanelProps = {
   agentDid: string | null;
   api?: DesktopApiAdapter;
+  hideWhenIdle?: boolean;
 };
 
-export function HoldsPanel({ agentDid, api: explicitApi }: HoldsPanelProps) {
+export function HoldsPanel({
+  agentDid,
+  api: explicitApi,
+  hideWhenIdle = false,
+}: HoldsPanelProps) {
   const api = useOperationsApi(explicitApi);
   const { holds, loading, error, refresh } = useToolCallHolds(agentDid, api);
   const [busyCallId, setBusyCallId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [denyingCallId, setDenyingCallId] = useState<string | null>(null);
   const [denyReason, setDenyReason] = useState("");
+
+  if (hideWhenIdle && !error && (holds == null || holds.length === 0)) {
+    return null;
+  }
 
   const resolve = async (
     hold: HeldToolCallView,

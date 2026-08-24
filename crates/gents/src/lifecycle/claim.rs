@@ -22,9 +22,11 @@ impl BackgroundCompletionClaimSnapshot {
     }
 }
 
-async fn claim_background_completion_with_snapshot<F>(
+async fn claim_request_with_projection<F>(
     node: &EmbeddedNode,
     session_id: &str,
+    capture_background_snapshot: bool,
+    projection: &super::materialize::RequestSessionProjection,
     build_mutation: F,
 ) -> Result<(defra_node::QueryResponse, BackgroundCompletionClaimSnapshot)>
 where
@@ -51,38 +53,53 @@ where
     for retry_index in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
         let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
         let attempt = async {
-            let snapshot = txn.execute_local_response(&snapshot_query).await?;
-            let through_sequence = snapshot
-                .data
-                .as_ref()
-                .and_then(|data| data.get("all_messages"))
-                .and_then(serde_json::Value::as_array)
-                .and_then(|rows| rows.first())
-                .and_then(|row| row.get("sequence"))
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|sequence| u32::try_from(sequence).ok());
-            let notification_keys = snapshot
-                .data
-                .as_ref()
-                .and_then(|data| data.get("notifications"))
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter(|row| {
-                    row.get("sequence")
-                        .and_then(serde_json::Value::as_u64)
-                        .zip(through_sequence.map(u64::from))
-                        .is_some_and(|(sequence, cutoff)| sequence <= cutoff)
-                })
-                .filter_map(|row| row.get("message_key").and_then(serde_json::Value::as_str))
-                .map(ToOwned::to_owned)
-                .collect();
-            let snapshot = BackgroundCompletionClaimSnapshot {
-                through_sequence,
-                notification_keys,
+            let snapshot = if capture_background_snapshot {
+                let response = txn.execute_local_response(&snapshot_query).await?;
+                let through_sequence = response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("all_messages"))
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| row.get("sequence"))
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|sequence| u32::try_from(sequence).ok());
+                let notification_keys = response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("notifications"))
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|row| {
+                        row.get("sequence")
+                            .and_then(serde_json::Value::as_u64)
+                            .zip(through_sequence.map(u64::from))
+                            .is_some_and(|(sequence, cutoff)| sequence <= cutoff)
+                    })
+                    .filter_map(|row| row.get("message_key").and_then(serde_json::Value::as_str))
+                    .map(ToOwned::to_owned)
+                    .collect();
+                BackgroundCompletionClaimSnapshot {
+                    through_sequence,
+                    notification_keys,
+                }
+            } else {
+                BackgroundCompletionClaimSnapshot::default()
             };
-            let mutation = build_mutation(&snapshot.mutation_fields());
+            let snapshot_fields = capture_background_snapshot
+                .then(|| snapshot.mutation_fields())
+                .unwrap_or_default();
+            let mutation = build_mutation(&snapshot_fields);
             let claimed = txn.execute_local_response(&mutation).await?;
+            if claimed
+                .data
+                .as_ref()
+                .and_then(|data| data.get("update_AgentRequest"))
+                .is_some_and(response_has_documents)
+            {
+                super::materialize::apply_request_session_projection(&txn, projection).await?;
+            }
             Ok::<_, anyhow::Error>((claimed, snapshot))
         }
         .await;
@@ -108,8 +125,7 @@ where
             Err(error) => return Err(error),
         }
     }
-    Err(last_error
-        .unwrap_or_else(|| anyhow::anyhow!("background-completion claim transaction exhausted")))
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("request claim transaction exhausted")))
 }
 
 fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -303,6 +319,129 @@ impl RequestLifecycle {
         Ok(())
     }
 
+    pub async fn reject_admission(&mut self, reason: &str) -> Result<()> {
+        self.ensure_state(&[LocalLifecycleState::Pending], "reject_admission")?;
+        let request_doc_id = escape_graphql_string(&self.request.doc_id);
+        let request_id = escape_graphql_string(&self.request.request_id);
+        let agent_did = escape_graphql_string(&self.request.agent_did);
+        let behavior_id = escape_graphql_string(&self.behavior_id);
+        let session_id = escape_graphql_string(&self.request.session_id);
+        let reason_text = reason.to_string();
+        let reason = escape_graphql_string(&reason_text);
+        let content = escape_graphql_string(&format!("Error: {reason_text}"));
+        let terminalized_at_value = chrono::Utc::now().to_rfc3339();
+        let terminalized_at = escape_graphql_string(&terminalized_at_value);
+        let requester_did_field =
+            session::requester_did_create_field(self.request.requester_did.as_deref());
+        let request_mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{
+                        _docID: {{ _eq: "{request_doc_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }},
+                        status: {{ _eq: "pending" }},
+                        lifecycle_state: {{ _eq: "pending" }}
+                    }},
+                    input: {{
+                        status: "error",
+                        lifecycle_state: "failed",
+                        failure_reason: "{reason}",
+                        terminalized_at: "{terminalized_at}",
+                        terminal_redrive_attempts: 0
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let response_mutation = format!(
+            r#"mutation {{
+                create_AgentResponse(input: {{
+                    response_key: "{request_id}",
+                    request_id: "{request_id}",
+                    request_doc_id: "{request_doc_id}",
+                    agent_did: "{agent_did}",
+                    {requester_did_field}
+                    behavior_id: "{behavior_id}",
+                    session_id: "{session_id}",
+                    content: "{content}",
+                    reasoning: "",
+                    status: "error",
+                    error_message: "{reason}",
+                    token_count: 0,
+                    progress_seq: 0,
+                    created_at: "{terminalized_at}",
+                    completed_at: "{terminalized_at}"
+                }}) {{ _docID }}
+            }}"#
+        );
+
+        let updated = crate::retry::retry_terminal_persistence_operation(
+            "reject_request_admission",
+            crate::retry::TERMINAL_PERSISTENCE_MAX_RETRIES,
+            std::time::Duration::from_millis(crate::retry::TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS),
+            || async {
+                let txn =
+                    crate::config_client::ConfigApplyTxn::begin_local(&self.node, None).await?;
+                let attempt = async {
+                    let response = txn.execute_local_response(&request_mutation).await?;
+                    let updated = response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("update_AgentRequest"))
+                        .is_some_and(response_has_documents);
+                    let response_doc_id = if updated {
+                        let response = txn.execute_local_response(&response_mutation).await?;
+                        Some(
+                            extract_single_doc_id(&response, "create_AgentResponse").ok_or_else(
+                                || {
+                                    anyhow::anyhow!(
+                                        "admission rejection created no AgentResponse document"
+                                    )
+                                },
+                            )?,
+                        )
+                    } else {
+                        None
+                    };
+                    Ok::<_, anyhow::Error>((updated, response_doc_id))
+                }
+                .await;
+                match attempt {
+                    Ok(result) => txn.commit().await.map(|()| result),
+                    Err(error) => {
+                        let _ = txn.discard().await;
+                        Err(error)
+                    }
+                }
+            },
+        )
+        .await?;
+
+        let (updated, response_doc_id) = updated;
+        if !updated {
+            let request_view = self.request_view().await?;
+            if !request_view.as_ref().is_some_and(|row| {
+                row.status == "error" && row.lifecycle_state.as_deref() == Some("failed")
+            }) {
+                anyhow::bail!(
+                    "request {} could not reject admission from status={} lifecycle_state={}",
+                    self.request.request_id,
+                    request_view
+                        .as_ref()
+                        .map(|row| row.status.as_str())
+                        .unwrap_or("missing"),
+                    request_view
+                        .as_ref()
+                        .and_then(|row| row.lifecycle_state.as_deref())
+                        .unwrap_or("missing")
+                );
+            }
+        }
+        self.response_doc_id = response_doc_id;
+        self.failure_reason = Some(reason_text);
+        self.state = LocalLifecycleState::Failed;
+        Ok(())
+    }
+
     async fn claim_inner(&mut self, _explicit_did: bool) -> Result<ClaimOutcome> {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
         let (interrupt_requested_at, valid_until) =
@@ -399,22 +538,22 @@ impl RequestLifecycle {
 
         let is_background_completion =
             crate::lifecycle::is_background_completion_request(self.request.metadata.as_deref());
-        let (resp, background_completion_input_through_sequence) = if is_background_completion {
-            let (response, snapshot) = claim_background_completion_with_snapshot(
-                self.node.as_ref(),
-                &self.request.session_id,
-                &build_mutation,
-            )
-            .await?;
-            (response, snapshot.through_sequence)
-        } else {
-            let mutation = build_mutation("");
-            (
-                session::execute_mutation_with_retry(&self.node, &mutation, "claim_request")
-                    .await?,
-                None,
-            )
-        };
+        let projection = super::materialize::request_session_projection(
+            &self.request,
+            &self.agent_name,
+            &self.agent_did,
+            &self.behavior_id,
+            &claimed_at,
+        );
+        let (resp, snapshot) = claim_request_with_projection(
+            self.node.as_ref(),
+            &self.request.session_id,
+            is_background_completion,
+            &projection,
+            &build_mutation,
+        )
+        .await?;
+        let background_completion_input_through_sequence = snapshot.through_sequence;
 
         // The mutation response is the only response that can carry the exact
         // commit produced by this claim. Do not fall back to a post-update

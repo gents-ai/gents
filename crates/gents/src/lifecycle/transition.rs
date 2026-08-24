@@ -23,7 +23,185 @@ fn request_view_is_terminal(view: &RequestViewRow) -> bool {
         || request_status_is_terminal(&view.status)
 }
 
+pub(super) fn projection_error_requires_atomic_retry(error: &anyhow::Error) -> bool {
+    crate::retry::is_defradb_transaction_conflict_text(&error.to_string())
+}
+
+async fn execute_request_only_transaction(
+    node: &EmbeddedNode,
+    request_mutation: &str,
+) -> Result<defra_node::QueryResponse> {
+    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+    match txn.execute_local_response(request_mutation).await {
+        Ok(response) => txn.commit().await.map(|()| response),
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
+}
+
+pub(super) async fn execute_request_projection_transaction(
+    node: &EmbeddedNode,
+    request_mutation: &str,
+    conversation_mutation: &str,
+    operation: &str,
+) -> Result<defra_node::QueryResponse> {
+    crate::retry::retry_terminal_persistence_operation(
+        operation,
+        crate::retry::TERMINAL_PERSISTENCE_MAX_RETRIES,
+        std::time::Duration::from_millis(crate::retry::TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS),
+        || async {
+            let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+            let request_response = match txn.execute_local_response(request_mutation).await {
+                Ok(response) => response,
+                Err(error) => {
+                    let _ = txn.discard().await;
+                    return Err(error);
+                }
+            };
+            // The request mutation may be an idempotent no-op because the
+            // stream writer already committed its terminal edge. The guarded
+            // projection update must still run so that retry repairs a stale
+            // conversation. A transaction conflict must retry both writes as
+            // one atomic attempt. Only deterministic projection errors fall
+            // back to the authoritative request in a fresh transaction. Never
+            // trust commit-after-error behavior from the storage engine.
+            if let Err(error) = txn.execute_local_response(conversation_mutation).await {
+                let _ = txn.discard().await;
+                if projection_error_requires_atomic_retry(&error) {
+                    tracing::warn!(
+                        operation,
+                        error = %error,
+                        "retrying terminal request with its conversation projection"
+                    );
+                    return Err(error);
+                }
+                tracing::warn!(
+                    operation,
+                    error = %error,
+                    "committing terminal request without its unavailable conversation projection"
+                );
+                return execute_request_only_transaction(node, request_mutation).await;
+            }
+            txn.commit().await.map(|()| request_response)
+        },
+    )
+    .await
+}
+
 impl RequestLifecycle {
+    pub(crate) async fn ensure_error_response(&mut self, reason: &str) -> Result<()> {
+        let request_id = escape_graphql_string(&self.request.request_id);
+        let agent_did = escape_graphql_string(&self.request.agent_did);
+        let query = format!(
+            r#"{{
+                AgentResponse(
+                    filter: {{
+                        request_id: {{ _eq: "{request_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }}
+                    }},
+                    limit: 1
+                ) {{ _docID status }}
+            }}"#
+        );
+        let existing = self.node.execute(&query).await;
+        if existing.has_errors() {
+            anyhow::bail!(
+                "querying error response for request {}: {:?}",
+                self.request.request_id,
+                existing.errors
+            );
+        }
+        if let Some(row) = existing
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentResponse"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rows| rows.first())
+        {
+            let Some(doc_id) = row.get("_docID").and_then(serde_json::Value::as_str) else {
+                anyhow::bail!(
+                    "existing response for request {} has no document id",
+                    self.request.request_id
+                );
+            };
+            self.response_doc_id = Some(doc_id.to_string());
+            if row.get("status").and_then(serde_json::Value::as_str) == Some("complete") {
+                return Ok(());
+            }
+            let doc_id = escape_graphql_string(doc_id);
+            let content = escape_graphql_string(&format!("Error: {reason}"));
+            let reason = escape_graphql_string(reason);
+            let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+            let mutation = format!(
+                r#"mutation {{
+                    update_AgentResponse(
+                        filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                        input: {{
+                            content: "{content}",
+                            reasoning: "",
+                            status: "error",
+                            error_message: "{reason}",
+                            completed_at: "{now}"
+                        }}
+                    ) {{ _docID }}
+                }}"#
+            );
+            crate::retry::execute_graphql_with_terminal_persistence_retry(
+                &self.node,
+                &mutation,
+                "terminalize_existing_request_error_response",
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let request_doc_id = escape_graphql_string(&self.request.doc_id);
+        let behavior_id = escape_graphql_string(&self.behavior_id);
+        let session_id = escape_graphql_string(&self.request.session_id);
+        let content = escape_graphql_string(&format!("Error: {reason}"));
+        let reason = escape_graphql_string(reason);
+        let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let requester_did_field =
+            session::requester_did_create_field(self.request.requester_did.as_deref());
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentResponse(input: {{
+                    response_key: "{request_id}",
+                    request_id: "{request_id}",
+                    request_doc_id: "{request_doc_id}",
+                    agent_did: "{agent_did}",
+                    {requester_did_field}
+                    behavior_id: "{behavior_id}",
+                    session_id: "{session_id}",
+                    content: "{content}",
+                    reasoning: "",
+                    status: "error",
+                    error_message: "{reason}",
+                    token_count: 0,
+                    progress_seq: 0,
+                    created_at: "{now}",
+                    completed_at: "{now}"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = crate::retry::execute_graphql_with_terminal_persistence_retry(
+            &self.node,
+            &mutation,
+            "create_request_error_response",
+        )
+        .await?;
+        self.response_doc_id = extract_single_doc_id(&response, "create_AgentResponse");
+        if self.response_doc_id.is_none() {
+            anyhow::bail!(
+                "creating error response for request {} returned no document",
+                self.request.request_id
+            );
+        }
+        Ok(())
+    }
+
     pub async fn record_failure_reason(&mut self, reason: &str) -> Result<()> {
         // Latch before I/O so the subsequent atomic terminal mutation still
         // carries the reason if this best-effort standalone write fails.
@@ -137,38 +315,11 @@ impl RequestLifecycle {
                 ],
                 "completed",
                 PersistedLifecycleState::Completed,
+                "completed",
             )
             .await?
         {
-            RequestStatusTransition::Updated | RequestStatusTransition::AlreadyTarget => {
-                match session::update_conversation_status_if_latest_with_identity(
-                    &self.node,
-                    &self.request.session_id,
-                    &self.agent_name,
-                    &self.agent_did,
-                    &self.behavior_id,
-                    &self.request.request_id,
-                    "completed",
-                )
-                .await?
-                {
-                    session::ConversationUpdateOutcome::Updated => {}
-                    session::ConversationUpdateOutcome::AlreadyApplied => {
-                        tracing::debug!(
-                            session_id = %self.request.session_id,
-                            request_id = %self.request.request_id,
-                            "conversation already marked completed for latest request"
-                        );
-                    }
-                    session::ConversationUpdateOutcome::SkippedStaleRequest => {
-                        tracing::info!(
-                            session_id = %self.request.session_id,
-                            request_id = %self.request.request_id,
-                            "skipping stale conversation completion for non-latest request"
-                        );
-                    }
-                }
-            }
+            RequestStatusTransition::Updated | RequestStatusTransition::AlreadyTarget => {}
             RequestStatusTransition::ConflictingTerminal(current) => {
                 tracing::info!(
                     request_id = %self.request.request_id,
@@ -192,7 +343,8 @@ impl RequestLifecycle {
         let doc_id = escape_graphql_string(&self.request.doc_id);
         let agent_did = escape_graphql_string(&self.request.agent_did);
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
-        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let terminalized_at_value = chrono::Utc::now().to_rfc3339();
+        let terminalized_at = escape_graphql_string(&terminalized_at_value);
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
@@ -211,9 +363,16 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#
         );
-        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+        let conversation_mutation = session::request_conversation_status_projection_mutation(
+            &self.request.session_id,
+            &self.request.request_id,
+            "active",
+            &terminalized_at_value,
+        );
+        let resp = execute_request_projection_transaction(
             &self.node,
             &mutation,
+            &conversation_mutation,
             "transition_interrupted",
         )
         .await?;
@@ -291,38 +450,11 @@ impl RequestLifecycle {
                 ],
                 "error",
                 PersistedLifecycleState::Failed,
+                "active",
             )
             .await?
         {
-            RequestStatusTransition::Updated | RequestStatusTransition::AlreadyTarget => {
-                match session::update_conversation_status_if_latest_with_identity(
-                    &self.node,
-                    &self.request.session_id,
-                    &self.agent_name,
-                    &self.agent_did,
-                    &self.behavior_id,
-                    &self.request.request_id,
-                    "active",
-                )
-                .await?
-                {
-                    session::ConversationUpdateOutcome::Updated => {}
-                    session::ConversationUpdateOutcome::AlreadyApplied => {
-                        tracing::debug!(
-                            session_id = %self.request.session_id,
-                            request_id = %self.request.request_id,
-                            "conversation already active for latest request"
-                        );
-                    }
-                    session::ConversationUpdateOutcome::SkippedStaleRequest => {
-                        tracing::info!(
-                            session_id = %self.request.session_id,
-                            request_id = %self.request.request_id,
-                            "skipping stale conversation reset for non-latest request"
-                        );
-                    }
-                }
-            }
+            RequestStatusTransition::Updated | RequestStatusTransition::AlreadyTarget => {}
             RequestStatusTransition::ConflictingTerminal(current) => {
                 tracing::info!(
                     request_id = %self.request.request_id,
@@ -356,13 +488,15 @@ impl RequestLifecycle {
         from_lifecycle_states: &[PersistedLifecycleState],
         target_status: &str,
         target_lifecycle_state: PersistedLifecycleState,
+        conversation_status: &str,
     ) -> Result<RequestStatusTransition> {
         let doc_id = escape_graphql_string(&self.request.doc_id);
         let agent_did = escape_graphql_string(&self.request.agent_did);
         let from_status = escape_graphql_string(from_status);
         let target_status = escape_graphql_string(target_status);
         let from_lifecycle_states = lifecycle_state_graphql_list_for(from_lifecycle_states);
-        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let terminalized_at_value = chrono::Utc::now().to_rfc3339();
+        let terminalized_at = escape_graphql_string(&terminalized_at_value);
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
@@ -392,9 +526,16 @@ impl RequestLifecycle {
                 escape_graphql_string(self.failure_reason.as_deref().unwrap_or_default()),
         );
 
-        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+        let conversation_mutation = session::request_conversation_status_projection_mutation(
+            &self.request.session_id,
+            &self.request.request_id,
+            conversation_status,
+            &terminalized_at_value,
+        );
+        let resp = execute_request_projection_transaction(
             &self.node,
             &mutation,
+            &conversation_mutation,
             "transition_request_terminal_status",
         )
         .await
