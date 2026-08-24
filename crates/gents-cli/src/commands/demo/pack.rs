@@ -4464,10 +4464,9 @@ mod tests {
                     security_trigger["filter"],
                     "{ _and: [ { workspace_id: { _neq: null } }, { workspace_id: { _ne: \"\" } } ] }"
                 );
-                let skip_prompt = std::fs::read_to_string(
-                    pack.join("tasks/defend-patch-skip-task/prompt.md"),
-                )
-                .expect("skip prompt should load");
+                let skip_prompt =
+                    std::fs::read_to_string(pack.join("tasks/defend-patch-skip-task/prompt.md"))
+                        .expect("skip prompt should load");
                 assert!(
                     !skip_prompt.contains("workspace_id=none"),
                     "skip must not use the string none as workspace_id"
