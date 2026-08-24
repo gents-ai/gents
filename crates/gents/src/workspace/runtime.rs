@@ -262,8 +262,8 @@ pub async fn integrate_on_integrator_success(
             .map_err(|err| anyhow::anyhow!("{err}"))?
     };
     flush_integrate_outcome(node, &outcome).await?;
-    release_integrate_binding(node, &docs, &outcome).await?;
     finalize_integrate_trunk(&trunk, outcome.pending_head_sha.as_deref())?;
+    release_integrate_binding(node, &docs, &outcome).await?;
     clear_integrate_journal(&trunk, workspace_id);
     Ok(())
 }
