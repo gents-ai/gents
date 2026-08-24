@@ -14,6 +14,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("ApplyReconcile", Module("conformance/apply_reconcile.rs")),
         ("Background", Module("conformance/background.rs")),
         ("BackendHealth", Module("conformance/backend_health.rs")),
+        ("Callback", Module("conformance/callback_lifecycle.rs")),
         ("Client", Module("conformance/client_runtime.rs")),
         (
             "ClientShell",
@@ -93,6 +94,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Lsp", Module("conformance/lsp.rs")),
         ("Transcript", Module("conformance/transcript.rs")),
         ("Triggers", Module("conformance/triggers.rs")),
+        ("Workspace", Module("conformance/workspace_binding.rs")),
         (
             "ReversePairingHandlers",
             Module("conformance/pairing_reconcile.rs"),

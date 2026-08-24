@@ -91,6 +91,8 @@ mod backend_health;
 mod background;
 #[path = "conformance/bearer_claim.rs"]
 mod bearer_claim;
+#[path = "conformance/callback_lifecycle.rs"]
+mod callback_lifecycle;
 #[path = "conformance/cancel_propagation.rs"]
 mod cancel_propagation;
 #[path = "conformance/client_runtime.rs"]
@@ -153,6 +155,9 @@ mod streaming_compaction;
 mod tool_call;
 #[path = "conformance/transcript.rs"]
 mod transcript;
+#[path = "conformance/workspace_binding.rs"]
+mod workspace_binding;
+
 #[test]
 fn lean_executable_contracts_cover_initial_domains() {
     coverage::lean_executable_contracts_cover_initial_domains();
