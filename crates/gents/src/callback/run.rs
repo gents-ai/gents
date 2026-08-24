@@ -49,17 +49,15 @@ pub fn result_docs_ready(
         && placement.is_some()
 }
 
-/// CallbackResult may be written from running (then succeed) or to repair
-/// succeeded-without-result. The document must not exist while journal/docs
-/// are incomplete.
+/// CallbackResult is an edge from a succeeded invocation whose result docs are
+/// complete. Succeeded-without-result is repaired by recovery.
 pub fn can_emit_callback_result(
     state: &str,
     journal: &[ActionJournalEntry],
     workspace: Option<&IsolatedWorkspaceDoc>,
     placement: Option<&WorkspacePlacementDoc>,
 ) -> bool {
-    matches!(state, LIFECYCLE_RUNNING | LIFECYCLE_SUCCEEDED)
-        && result_docs_ready(journal, workspace, placement)
+    state == LIFECYCLE_SUCCEEDED && result_docs_ready(journal, workspace, placement)
 }
 
 pub fn encode_journal(journal: &[ActionJournalEntry]) -> String {
@@ -334,7 +332,7 @@ async fn execute_running_invocation(
     let written = memory_from_outcome(&outcome);
     flush_workspace_docs(node, &written).await?;
     persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
-    emit_result_then_succeed(
+    succeed_then_emit_result(
         node,
         invocation,
         &journal,
@@ -390,7 +388,7 @@ async fn deny(
     Ok(())
 }
 
-async fn emit_result_then_succeed(
+async fn succeed_then_emit_result(
     node: &EmbeddedNode,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
@@ -398,6 +396,9 @@ async fn emit_result_then_succeed(
     placement: &WorkspacePlacementDoc,
     correlation: Option<String>,
 ) -> Result<()> {
+    if invocation.lifecycle_state != LIFECYCLE_SUCCEEDED {
+        persist_journal(node, invocation, journal, LIFECYCLE_SUCCEEDED, None).await?;
+    }
     if !can_emit_callback_result(
         &invocation.lifecycle_state,
         journal,
@@ -417,14 +418,15 @@ async fn emit_result_then_succeed(
         &CallbackResultDoc {
             result_id: format!("res-{}", invocation.invocation_id),
             invocation_id: invocation.invocation_id.clone(),
+            binding_id: invocation.binding_id.clone(),
             owner_deployment_id: invocation.owner_deployment_id.clone(),
             workspace_id: Some(workspace.workspace_id.clone()),
             caused_by_correlation: Some(correlation),
             created_at: Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
         },
     )
-    .await?;
-    persist_journal(node, invocation, journal, LIFECYCLE_SUCCEEDED, None).await
+    .await
+    .map(|_| ())
 }
 
 pub async fn recover_local_invocations(
@@ -510,7 +512,7 @@ pub async fn finish_succeeded_if_docs_ready(
         return Ok(true);
     }
     let mut current = invocation.clone();
-    emit_result_then_succeed(
+    succeed_then_emit_result(
         node,
         &mut current,
         &journal,

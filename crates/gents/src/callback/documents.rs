@@ -58,6 +58,7 @@ const INVOCATION_FIELDS: &str = r#"
 const RESULT_FIELDS: &str = r#"
     result_id
     invocation_id
+    binding_id
     owner_deployment_id
     workspace_id
     caused_by_correlation
@@ -165,6 +166,7 @@ pub struct CallbackInvocationDoc {
 pub struct CallbackResultDoc {
     pub result_id: String,
     pub invocation_id: String,
+    pub binding_id: String,
     pub owner_deployment_id: String,
     #[serde(default)]
     pub workspace_id: Option<String>,
@@ -711,6 +713,7 @@ pub async fn create_callback_result(
             create_CallbackResult(input: {{
                 result_id: "{result_id}",
                 invocation_id: "{invocation_id}",
+                binding_id: "{binding_id}",
                 owner_deployment_id: "{owner}",
                 workspace_id: "{workspace}",
                 caused_by_correlation: "{correlation}",
@@ -719,6 +722,7 @@ pub async fn create_callback_result(
         }}"#,
         result_id = escape_graphql_string(&result.result_id),
         invocation_id = escape_graphql_string(&result.invocation_id),
+        binding_id = escape_graphql_string(&result.binding_id),
         owner = escape_graphql_string(&result.owner_deployment_id),
         workspace = escape_graphql_string(workspace),
         correlation = escape_graphql_string(correlation),

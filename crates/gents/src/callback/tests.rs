@@ -100,7 +100,7 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
         provisioning_state: "{}".into(),
         observed_tree_hash: "tree".into(),
     };
-    assert!(can_emit_callback_result(
+    assert!(!can_emit_callback_result(
         LIFECYCLE_RUNNING,
         &journal,
         Some(&workspace),
@@ -409,7 +409,7 @@ fn callback_result_only_after_workspace_docs_are_durable() {
         journal.last().map(|entry| entry.state),
         Some(ActionJournalState::ResultDocsWritten)
     );
-    assert!(can_emit_callback_result(
+    assert!(!can_emit_callback_result(
         LIFECYCLE_RUNNING,
         &journal,
         Some(&outcome.workspace),

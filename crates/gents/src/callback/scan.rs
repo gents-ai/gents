@@ -7,7 +7,7 @@ use defra_node::EmbeddedNode;
 use serde_json::Value;
 use tokio::time::MissedTickBehavior;
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{document_composite_version, escape_graphql_string};
 use crate::UpdateSubscriptionSource;
 
 use super::claim::invocation_is_claimable;
@@ -215,7 +215,6 @@ impl CallbackEngine {
                 return;
             }
         };
-        let mut matched = false;
         let mut all_settled = true;
         for binding in bindings.into_iter().filter(|binding| {
             binding.source_collection == collection && binding.event_kind == "created"
@@ -224,8 +223,7 @@ impl CallbackEngine {
                 .materialize_for_binding(&binding, collection, doc_id)
                 .await
             {
-                Ok(true) => matched = true,
-                Ok(false) => {}
+                Ok(_) => {}
                 Err(error) => {
                     all_settled = false;
                     tracing::warn!(
@@ -238,7 +236,7 @@ impl CallbackEngine {
                 }
             }
         }
-        if all_settled || matched {
+        if all_settled {
             self.mark_seen(collection, doc_id);
         }
     }
@@ -257,7 +255,7 @@ impl CallbackEngine {
             );
             return Ok(false);
         }
-        match probe_filter(
+        let source_version = match probe_filter(
             self.node.as_ref(),
             collection,
             doc_id,
@@ -265,25 +263,18 @@ impl CallbackEngine {
         )
         .await
         {
-            Ok(true) => {}
-            Ok(false) => return Ok(false),
-            Err(error) => {
-                tracing::warn!(
-                    binding_id = %binding.binding_id,
-                    %error,
-                    "callback filter probe failed; skipping this binding"
-                );
-                return Ok(false);
-            }
-        }
-        let key = idempotency_key(&binding.binding_id, doc_id, "created");
+            Ok(Some(version)) => version,
+            Ok(None) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let key = idempotency_key(&binding.binding_id, doc_id, &source_version);
         let invocation = CallbackInvocationDoc {
             invocation_id: uuid::Uuid::new_v4().to_string(),
             owner_deployment_id: binding.owner_deployment_id.clone(),
             binding_id: binding.binding_id.clone(),
             source_collection: collection.to_string(),
             source_doc_id: doc_id.to_string(),
-            source_version: Some("created".to_string()),
+            source_version: Some(source_version),
             idempotency_key: key,
             lifecycle_state: LIFECYCLE_PENDING.to_string(),
             attempts: Some(0),
@@ -373,7 +364,7 @@ pub(super) async fn probe_filter(
     collection: &str,
     source_doc_id: &str,
     filter: Option<&str>,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     crate::graphql::validate_collection_identifier(collection)?;
     let user_filter = filter.map(str::trim).filter(|value| !value.is_empty());
     if let Some(filter) = user_filter {
@@ -393,6 +384,7 @@ pub(super) async fn probe_filter(
         r#"query {{
             {collection}(filter: {filter_literal}, limit: 1) {{
                 _docID
+                _version {{ cid height fieldName }}
             }}
         }}"#
     );
@@ -400,12 +392,19 @@ pub(super) async fn probe_filter(
     if response.has_errors() {
         anyhow::bail!("callback filter probe errors: {:?}", response.errors);
     }
-    let rows = response
+    let row = response
         .data
         .as_ref()
         .and_then(|data| data.get(collection))
-        .and_then(Value::as_array);
-    Ok(rows.is_some_and(|rows| !rows.is_empty()))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first());
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let version = document_composite_version(row, "callback filter probe")?.ok_or_else(|| {
+        anyhow::anyhow!("callback source {source_doc_id} has no composite version")
+    })?;
+    Ok(Some(version.cid))
 }
 
 pub(super) async fn fetch_source_for_invocation(
@@ -419,6 +418,7 @@ pub(super) async fn fetch_source_for_invocation(
         &mut cache,
         &invocation.source_collection,
         &invocation.source_doc_id,
+        invocation.source_version.as_deref(),
         binding,
     )
     .await
@@ -429,6 +429,7 @@ pub(super) async fn fetch_source_doc(
     cache: &mut SourceSchemaCache,
     collection: &str,
     source_doc_id: &str,
+    expected_source_version: Option<&str>,
     binding: &CallbackBindingDoc,
 ) -> Result<Value> {
     let projected = binding.projected_fields()?;
@@ -442,6 +443,7 @@ pub(super) async fn fetch_source_doc(
         r#"query {{
             {collection}(filter: {{ _docID: {{ _eq: "{id}" }} }}, limit: 1) {{
                 _docID
+                _version {{ cid height fieldName }}
                 {projection}
             }}
         }}"#,
@@ -461,5 +463,20 @@ pub(super) async fn fetch_source_doc(
     else {
         anyhow::bail!("source doc {source_doc_id} not found in {collection}");
     };
+    let actual = document_composite_version(&row, "fetch callback source")?.ok_or_else(|| {
+        anyhow::anyhow!("callback source {source_doc_id} has no composite version")
+    })?;
+    if let Some(expected) = expected_source_version {
+        if actual.cid != expected {
+            anyhow::bail!(
+                "callback source {source_doc_id} changed after invocation: expected version {expected}, found {}",
+                actual.cid
+            );
+        }
+    }
+    let mut row = row;
+    if let Some(object) = row.as_object_mut() {
+        object.remove("_version");
+    }
     Ok(strip_secret_fields(row))
 }
