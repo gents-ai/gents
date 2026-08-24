@@ -82,9 +82,7 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
     let has_parent_tc_doc = req.caused_by_parent_tool_call_doc_id.is_some();
     let request_only_control_link = has_parent_req
         && !has_parent_tc
-        && (is_steering_queue(req)
-            || is_goal_queue(req)
-            || crate::lifecycle::is_background_completion_request(req.metadata.as_deref()));
+        && crate::lifecycle::queue::metadata_is_request_only_control(req.metadata.as_deref());
     if has_parent_req != has_parent_req_doc || has_parent_tc != has_parent_tc_doc {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
@@ -105,29 +103,6 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     Ok(())
-}
-
-fn is_steering_queue(req: &AgentRequest) -> bool {
-    let Some(metadata) = req
-        .metadata
-        .as_deref()
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-    else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) else {
-        return false;
-    };
-    value
-        .get("queue")
-        .and_then(|queue| queue.get("source"))
-        .and_then(serde_json::Value::as_str)
-        == Some("steering")
-}
-
-fn is_goal_queue(req: &AgentRequest) -> bool {
-    crate::lifecycle::queue::is_goal_queue(req.metadata.as_deref())
 }
 
 pub trait Watcher: Send + Sync {

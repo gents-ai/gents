@@ -146,6 +146,277 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
 }
 
 #[tokio::test]
+async fn existing_unbound_notification_is_atomically_rebound_to_its_wake() {
+    let db = test_db("atomic-background-rebind").await;
+    let parent = root_parent("atomic-background-rebind-session");
+    let message_key = "background-completion-notification:rebind:tool";
+    let (original_sequence, created) = session::append_message_once_with_key_and_requester_did(
+        &db.node,
+        &parent.session_id,
+        &parent.agent_did,
+        parent.requester_did.as_deref(),
+        "user",
+        "notification persisted before its wake",
+        None,
+        None,
+        None,
+        message_key,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(created);
+
+    let first = enqueue_background_completion_with_message(
+        &db.node,
+        &parent,
+        "notification persisted before its wake",
+        message_key,
+        "review notifications",
+        background_hints(&parent),
+    )
+    .await
+    .unwrap();
+    assert!(first.created_request);
+    assert!(!first.created_message);
+    assert_eq!(first.message_sequence, original_sequence);
+
+    let second = enqueue_background_completion_with_message(
+        &db.node,
+        &parent,
+        "notification persisted before its wake",
+        message_key,
+        "review notifications",
+        background_hints(&parent),
+    )
+    .await
+    .unwrap();
+    assert!(!second.created_request);
+    assert!(!second.created_message);
+    assert_eq!(second.request.doc_id, first.request.doc_id);
+    assert_eq!(second.message_sequence, original_sequence);
+
+    let query = format!(
+        r#"{{
+            AgentMessage(filter: {{
+                session_id: {{ _eq: "{}" }},
+                message_key: {{ _eq: "{}" }}
+            }}) {{ request_id request_doc_id sequence }}
+        }}"#,
+        escape_graphql_string(&parent.session_id),
+        escape_graphql_string(message_key),
+    );
+    let response = db.node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "message query: {:?}",
+        response.errors
+    );
+    let rows = response.data.as_ref().unwrap()["AgentMessage"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["request_id"], first.request.request_id);
+    assert!(rows[0]["request_doc_id"].as_str().is_none_or(str::is_empty));
+    assert_eq!(rows[0]["sequence"], original_sequence);
+}
+
+#[tokio::test]
+async fn interrupted_physically_bound_notification_never_mints_successor_wakes() {
+    let db = test_db("atomic-background-interrupted-binding").await;
+    let parent = root_parent("atomic-background-interrupted-binding-session");
+    let message_key = "background-completion-notification:interrupted:tool";
+    let first = enqueue_background_completion_with_message(
+        &db.node,
+        &parent,
+        r#"<tool-completion tool_call_id="interrupted" status="completed" />"#,
+        message_key,
+        "review notifications",
+        background_hints(&parent),
+    )
+    .await
+    .unwrap();
+
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ status: "interrupted", lifecycle_state: "interrupted" }}
+            ) {{ _docID }}
+            update_AgentMessage(
+                filter: {{ session_id: {{ _eq: "{}" }}, message_key: {{ _eq: "{}" }} }},
+                input: {{ request_id: "stale-logical-successor" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&first.request.doc_id),
+        escape_graphql_string(&parent.session_id),
+        escape_graphql_string(message_key),
+    );
+    let response = db.node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "seed mismatch: {:?}",
+        response.errors
+    );
+    let seeded = db
+        .node
+        .execute(&format!(
+            r#"{{
+                AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}) {{
+                    request_id request_doc_id
+                }}
+                AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
+                    request_id session_id metadata status lifecycle_state
+                }}
+            }}"#,
+            escape_graphql_string(message_key),
+            escape_graphql_string(&first.request.doc_id),
+        ))
+        .await;
+    assert!(!seeded.has_errors(), "seed query: {:?}", seeded.errors);
+    let seeded_data = seeded.data.as_ref().unwrap();
+    assert_eq!(
+        seeded_data["AgentMessage"][0]["request_doc_id"].as_str(),
+        Some(first.request.doc_id.as_str()),
+        "seeded rows: {seeded_data:?}"
+    );
+
+    for _ in 0..2 {
+        let replay = enqueue_background_completion_with_message(
+            &db.node,
+            &parent,
+            r#"<tool-completion tool_call_id="interrupted" status="completed" />"#,
+            message_key,
+            "review notifications",
+            background_hints(&parent),
+        )
+        .await
+        .unwrap();
+        assert!(!replay.created_request);
+        assert!(!replay.created_message);
+        assert_eq!(replay.request.doc_id, first.request.doc_id);
+        assert_eq!(replay.request.request_id, first.request.request_id);
+    }
+
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(&parent.session_id)
+    );
+    let response = db.node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "request count: {:?}",
+        response.errors
+    );
+    assert_eq!(
+        response.data.as_ref().unwrap()["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn keyless_legacy_notification_dedups_by_stable_content_marker() {
+    let db = test_db("atomic-background-keyless-legacy").await;
+    let parent = root_parent("atomic-background-keyless-legacy-session");
+    let content = r#"<subagent-notification child_request_id="legacy-child" status="completed"><summary>done</summary></subagent-notification>"#;
+    let sequence = session::append_message_with_requester_did(
+        &db.node,
+        &parent.session_id,
+        &parent.agent_did,
+        parent.requester_did.as_deref(),
+        "user",
+        content,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let first = enqueue_background_completion_with_message(
+        &db.node,
+        &parent,
+        content,
+        "background-completion-notification:legacy-child:subagent",
+        "review notifications",
+        background_hints(&parent),
+    )
+    .await
+    .unwrap();
+    assert!(!first.created_message);
+    assert_eq!(first.message_sequence, sequence);
+
+    let second = enqueue_background_completion_with_message(
+        &db.node,
+        &parent,
+        content,
+        "background-completion-notification:legacy-child:subagent",
+        "review notifications",
+        background_hints(&parent),
+    )
+    .await
+    .unwrap();
+    assert!(!second.created_request);
+    assert!(!second.created_message);
+    assert_eq!(second.request.doc_id, first.request.doc_id);
+
+    let query = format!(
+        r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(&parent.session_id)
+    );
+    let response = db.node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "message count: {:?}",
+        response.errors
+    );
+    assert_eq!(
+        response.data.as_ref().unwrap()["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn unrelated_exact_content_does_not_rebind_as_a_background_input() {
+    let db = test_db("atomic-background-content-collision").await;
+    let parent = root_parent("atomic-background-content-collision-session");
+    let content = "plain text that happens to equal a notification payload";
+    let unrelated_sequence = session::append_message_with_requester_did(
+        &db.node,
+        &parent.session_id,
+        &parent.agent_did,
+        parent.requester_did.as_deref(),
+        "assistant",
+        content,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let enqueued = enqueue_background_completion_with_message(
+        &db.node,
+        &parent,
+        content,
+        "background-completion-notification:content-collision:tool",
+        "review notifications",
+        background_hints(&parent),
+    )
+    .await
+    .unwrap();
+
+    assert!(enqueued.created_message);
+    assert_ne!(enqueued.message_sequence, unrelated_sequence);
+}
+
+#[tokio::test]
 async fn concurrent_notifications_converge_to_one_pending_wake() {
     let db = test_db("atomic-background-race").await;
     let parent = root_parent("atomic-background-race-session");

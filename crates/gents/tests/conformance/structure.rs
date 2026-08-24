@@ -25,6 +25,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Compaction", Module("conformance/streaming_compaction.rs")),
         ("CompletionRetry", Module("conformance/completion_retry.rs")),
         (
+            "ConversationContinuation",
+            Module("conformance/background.rs"),
+        ),
+        (
             "CancelPropagation",
             Module("conformance/cancel_propagation.rs"),
         ),

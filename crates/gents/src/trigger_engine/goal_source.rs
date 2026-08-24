@@ -22,7 +22,7 @@ use crate::goal::{
     GoalRequestTerminal, GoalStatus, GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::queue::enqueue_goal_continuation;
+use crate::lifecycle::queue::{enqueue_conversation_continuation, ConversationContinuation};
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::watcher::AgentRequest;
 use crate::UpdateSubscriptionSource;
@@ -495,13 +495,15 @@ impl GoalSource {
         };
         let prompt = continuation_prompt(&goal, retry_prefix.as_deref(), wrapup);
         let parent = latest.into_agent_request();
-        let child = enqueue_goal_continuation(
+        let child = enqueue_conversation_continuation(
             &self.node,
             &parent,
-            &goal.goal_id,
-            &prompt,
-            sequence,
-            wrapup,
+            ConversationContinuation::Goal {
+                goal_id: &goal.goal_id,
+                prompt: &prompt,
+                continuation_sequence: sequence,
+                wrapup,
+            },
         )
         .await?;
         let task = ResolvedTask {
@@ -532,7 +534,7 @@ impl GoalSource {
             group_vars: None,
             trigger_context: parent.caused_by_trigger_context.clone(),
             args_vars: None,
-            pre_materialized_request_id: Some(child.request_id),
+            pre_materialized_request_id: Some(child.request.request_id),
             on_result: Box::new(move |result| match result {
                 FireResult::Fired { request_id } => tracing::info!(
                     %request_id,

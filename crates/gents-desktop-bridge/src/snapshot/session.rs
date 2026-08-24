@@ -19,30 +19,23 @@ use super::{request_matches_agent, source_matches_agent};
 fn message_is_runtime_control(
     message: &AgentMessageRow,
     requests_by_id: &HashMap<&str, &AgentRequestRow>,
-    keyed_steering_request_ids: &std::collections::BTreeSet<String>,
 ) -> bool {
-    let request_metadata = message
+    let request = message
         .request_id
         .as_deref()
         .and_then(|request_id| requests_by_id.get(request_id))
-        .and_then(|request| request.metadata.as_deref());
-    let has_keyed_input = message
-        .request_id
-        .as_deref()
-        .is_some_and(|request_id| keyed_steering_request_ids.contains(request_id));
-    gents::lifecycle::is_runtime_control_message(
-        request_metadata,
-        &message.message_key,
-        has_keyed_input,
+        .copied();
+    matches!(
+        gents::lifecycle::classify_continuation_message(
+            request.and_then(|request| request.metadata.as_deref()),
+            message.request_id.as_deref(),
+            request.and_then(|request| request.content.as_deref()),
+            message.role.as_deref().unwrap_or_default(),
+            message.content.as_deref().unwrap_or_default(),
+            &message.message_key,
+        ),
+        gents::lifecycle::ConversationProjection::RuntimeControl
     )
-}
-
-fn keyed_steering_request_ids(messages: &[&AgentMessageRow]) -> std::collections::BTreeSet<String> {
-    messages
-        .iter()
-        .filter(|message| gents::lifecycle::is_steering_input_message_key(&message.message_key))
-        .filter_map(|message| normalize_optional(message.request_id.as_deref()))
-        .collect()
 }
 
 fn request_is_deprecated_background_completion(request: &AgentRequestRow) -> bool {
@@ -317,7 +310,6 @@ pub fn build_session_snapshot_from_store_for_agent(
         .iter()
         .map(|request| (request.request_id.as_str(), *request))
         .collect();
-    let keyed_steering_request_ids = keyed_steering_request_ids(&transcript.messages);
     let messages = transcript
         .messages
         .into_iter()
@@ -353,11 +345,7 @@ pub fn build_session_snapshot_from_store_for_agent(
                 has_tool_results: presentation
                     .as_ref()
                     .is_some_and(|presentation| presentation.has_tool_results),
-                runtime_control: message_is_runtime_control(
-                    row,
-                    &requests_by_id,
-                    &keyed_steering_request_ids,
-                ),
+                runtime_control: message_is_runtime_control(row, &requests_by_id),
                 timestamp: normalize_optional(row.timestamp.as_deref()),
             }
         })
@@ -590,12 +578,14 @@ fn build_pending_turn(
             && row.session_id.as_deref() == Some(session_id)
             && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
     })?;
-    if !gents::lifecycle::request_content_owns_user_projection(request.metadata.as_deref()) {
-        return None;
-    }
-
     let lifecycle_state = normalize_optional(request.lifecycle_state.as_deref());
     let content = normalize_optional(request.content.as_deref())?;
+    if matches!(
+        gents::lifecycle::classify_continuation_request(request.metadata.as_deref(), &content,),
+        gents::lifecycle::ConversationProjection::RuntimeControl
+    ) {
+        return None;
+    }
     let transcript = agent_did.map_or_else(
         || store.transcript(session_id),
         |agent_did| store.transcript_for_agent(session_id, agent_did),
@@ -605,7 +595,6 @@ fn build_pending_turn(
         .iter()
         .map(|request| (request.request_id.as_str(), request))
         .collect::<HashMap<_, _>>();
-    let keyed_steering_request_ids = keyed_steering_request_ids(&transcript.messages);
     let messages = transcript
         .messages
         .into_iter()
@@ -632,11 +621,7 @@ fn build_pending_turn(
                 reasoning: None,
                 has_tool_calls: false,
                 has_tool_results: false,
-                runtime_control: message_is_runtime_control(
-                    row,
-                    &requests_by_id,
-                    &keyed_steering_request_ids,
-                ),
+                runtime_control: message_is_runtime_control(row, &requests_by_id),
                 timestamp: normalize_optional(row.timestamp.as_deref()),
             }
         })

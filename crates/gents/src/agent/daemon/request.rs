@@ -89,7 +89,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let full_history = session::load_history_for_request(
                     &self.node,
                     &request,
-                    lifecycle.background_completion_input_through_sequence(),
+                    lifecycle.provider_history_through_sequence(),
                 )
                     .instrument(tracing::info_span!(
                         "request.load_history",

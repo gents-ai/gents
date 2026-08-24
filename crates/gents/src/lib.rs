@@ -271,7 +271,8 @@ pub mod __test_internals {
     };
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
     pub use crate::lifecycle::queue::{
-        drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
+        continuation_policy_contract, drain_automated_wakeups, reconcile_coalesced_pending_request,
+        QueueSource,
     };
     pub use crate::trigger_engine::run_subagent_source_for_test;
 }

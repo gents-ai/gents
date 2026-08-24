@@ -98,7 +98,6 @@ pub(crate) async fn enqueue_background_completion_with_message(
         .await?
         .unwrap_or_else(|| enqueued.request.clone());
         enqueued.created_request = active_request.doc_id == created_request_doc_id;
-
         enqueued.request = active_request;
     }
 
@@ -119,7 +118,7 @@ async fn background_completion_transaction_attempt(
     let response = txn
         .execute(&format!(
             r#"{{
-                AgentRequest(
+                pending_requests: AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
                         agent_did: {{ _eq: "{escaped_agent_did}" }},
@@ -133,10 +132,78 @@ async fn background_completion_transaction_attempt(
                     session_id
                     metadata
                 }}
+                AgentMessage(
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                    order: {{ sequence: ASC }}
+                ) {{
+                    _docID sequence request_id request_doc_id message_key content timestamp
+                }}
+                background_wakes: AgentRequest(
+                    filter: {{
+                        session_id: {{ _eq: "{escaped_session_id}" }},
+                        agent_did: {{ _eq: "{escaped_agent_did}" }}
+                    }},
+                    order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
+                ) {{
+                    _docID request_id session_id metadata status lifecycle_state created_at
+                }}
             }}"#
         ))
         .await?;
-    let pending = response["data"]["AgentRequest"]
+    let message_rows = response["data"]["AgentMessage"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let existing_message = select_existing_background_input(message_rows, message_key)?;
+    let wake_rows = response["data"]["background_wakes"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if let Some(existing) = existing_message.as_ref() {
+        if let Some(request) =
+            bound_background_request_from_rows(wake_rows, existing, &parent.session_id, queue_key)?
+        {
+            let message_sequence = existing["sequence"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .context("bound background completion input has invalid sequence")?;
+            return Ok(EnqueuedBackgroundCompletionInput {
+                request,
+                message_sequence,
+                created_request: false,
+                created_message: false,
+            });
+        }
+        if let Some(request) =
+            background_wakeup_after_message(wake_rows, existing, &parent.session_id, queue_key)?
+        {
+            if existing["request_doc_id"]
+                .as_str()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                let message_doc_id = existing["_docID"]
+                    .as_str()
+                    .context("existing background completion input has no _docID")?;
+                txn.execute(&bind_legacy_background_input_mutation(
+                    message_doc_id,
+                    &parent.session_id,
+                    &request,
+                )?)
+                .await?;
+            }
+            let message_sequence = existing["sequence"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .context("existing background completion input has invalid sequence")?;
+            return Ok(EnqueuedBackgroundCompletionInput {
+                request,
+                message_sequence,
+                created_request: false,
+                created_message: false,
+            });
+        }
+    }
+    let pending = response["data"]["pending_requests"]
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -166,26 +233,223 @@ async fn background_completion_transaction_attempt(
             )
         }
     };
-    let message_sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
-    let message_mutation = session::create_message_mutation(
-        &parent.session_id,
-        &parent.agent_did,
-        parent.requester_did.as_deref(),
-        message_sequence,
-        "user",
-        content,
-        None,
-        Some(&request.request_id),
-        Some(&request.doc_id),
-        Some(message_key),
-    );
-    txn.execute(&message_mutation).await?;
+    let (message_sequence, created_message, message_mutation) = if let Some(existing) =
+        existing_message
+    {
+        let message_sequence = existing["sequence"]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .context("existing background completion input has invalid sequence")?;
+        let message_doc_id = existing["_docID"]
+            .as_str()
+            .context("existing background completion input has no _docID")?;
+        // request_doc_id is immutable. Only logical-only legacy rows may be
+        // associated with a request; a physically bound row is never rebound.
+        let mutation = existing["request_doc_id"]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .map(|_| String::new())
+            .map_or_else(
+                || {
+                    bind_legacy_background_input_mutation(
+                        message_doc_id,
+                        &parent.session_id,
+                        &request,
+                    )
+                },
+                Ok,
+            )?;
+        (message_sequence, false, mutation)
+    } else {
+        let message_sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
+        (
+            message_sequence,
+            true,
+            session::create_message_mutation(
+                &parent.session_id,
+                &parent.agent_did,
+                parent.requester_did.as_deref(),
+                message_sequence,
+                "user",
+                content,
+                None,
+                Some(&request.request_id),
+                Some(&request.doc_id),
+                Some(message_key),
+            ),
+        )
+    };
+    if !message_mutation.is_empty() {
+        txn.execute(&message_mutation).await?;
+    }
 
     Ok(EnqueuedBackgroundCompletionInput {
         request,
         message_sequence,
         created_request,
+        created_message,
     })
+}
+
+fn select_existing_background_input(rows: &[Value], message_key: &str) -> Result<Option<Value>> {
+    let exact = rows
+        .iter()
+        .filter(|row| row["message_key"].as_str() == Some(message_key))
+        .collect::<Vec<_>>();
+    if exact.len() > 1 {
+        anyhow::bail!(
+            "background completion input key {message_key} resolved to multiple AgentMessage rows"
+        );
+    }
+    if let Some(row) = exact.first() {
+        return Ok(Some((*row).clone()));
+    }
+
+    let Some((stable_id, kind)) =
+        crate::background_completion::background_completion_notification_identity(message_key)
+    else {
+        return Ok(None);
+    };
+    Ok(rows
+        .iter()
+        .find(|row| {
+            crate::background_completion::is_legacy_background_completion_notification(
+                row["message_key"].as_str().unwrap_or_default(),
+                row["content"].as_str().unwrap_or_default(),
+                stable_id,
+                kind,
+            )
+        })
+        .cloned())
+}
+
+fn background_wakeup_after_message(
+    rows: &[Value],
+    message: &Value,
+    session_id: &str,
+    queue_key: &str,
+) -> Result<Option<EnqueuedAgentRequest>> {
+    let timestamp = message["timestamp"]
+        .as_str()
+        .context("existing background completion input has no timestamp")?;
+    let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp)
+        .context("existing background completion input timestamp is not RFC3339")?
+        .with_timezone(&chrono::Utc);
+    for row in rows {
+        if row["session_id"].as_str() != Some(session_id)
+            || !queue_source_and_key_match(
+                row["metadata"].as_str(),
+                QueueSource::BackgroundCompletion,
+                queue_key,
+            )
+        {
+            continue;
+        }
+        let Some(created_at) = row["created_at"].as_str() else {
+            continue;
+        };
+        let created_at = chrono::DateTime::parse_from_rfc3339(created_at)
+            .context("background completion wake created_at is not RFC3339")?
+            .with_timezone(&chrono::Utc);
+        if created_at < timestamp {
+            continue;
+        }
+        let (Some(doc_id), Some(request_id)) = (row["_docID"].as_str(), row["request_id"].as_str())
+        else {
+            continue;
+        };
+        return Ok(Some(EnqueuedAgentRequest {
+            doc_id: doc_id.to_string(),
+            request_id: request_id.to_string(),
+            session_id: session_id.to_string(),
+        }));
+    }
+    Ok(None)
+}
+
+fn bound_background_request_from_rows(
+    rows: &[Value],
+    message: &Value,
+    session_id: &str,
+    queue_key: &str,
+) -> Result<Option<EnqueuedAgentRequest>> {
+    let Some(request_id) = message["request_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let request_doc_id = message["request_doc_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let row = if let Some(request_doc_id) = request_doc_id {
+        rows.iter()
+            .find(|row| row["_docID"].as_str() == Some(request_doc_id))
+    } else {
+        let matches = rows
+            .iter()
+            .filter(|row| {
+                row["request_id"].as_str() == Some(request_id)
+                    && row["session_id"].as_str() == Some(session_id)
+            })
+            .collect::<Vec<_>>();
+        if matches.len() > 1 {
+            anyhow::bail!(
+                "background completion input request {request_id} resolved to multiple AgentRequest rows"
+            );
+        }
+        matches.first().copied()
+    };
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let Some(resolved_request_doc_id) = row["_docID"].as_str() else {
+        return Ok(None);
+    };
+    let Some(resolved_request_id) = row["request_id"].as_str() else {
+        return Ok(None);
+    };
+    let matches = row["session_id"].as_str() == Some(session_id)
+        && queue_source_and_key_match(
+            row["metadata"].as_str(),
+            QueueSource::BackgroundCompletion,
+            queue_key,
+        );
+    Ok(matches.then(|| EnqueuedAgentRequest {
+        doc_id: resolved_request_doc_id.to_string(),
+        request_id: resolved_request_id.to_string(),
+        session_id: session_id.to_string(),
+    }))
+}
+
+fn bind_legacy_background_input_mutation(
+    message_doc_id: &str,
+    session_id: &str,
+    request: &EnqueuedAgentRequest,
+) -> Result<String> {
+    let message_doc_id = message_doc_id.trim();
+    anyhow::ensure!(
+        !message_doc_id.is_empty(),
+        "cannot bind a legacy background completion input without an AgentMessage _docID"
+    );
+    Ok(format!(
+        r#"mutation {{
+            update_AgentMessage(
+                filter: {{
+                    _docID: {{ _eq: "{}" }},
+                    session_id: {{ _eq: "{}" }}
+                }},
+                input: {{
+                    request_id: "{}"
+                }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(message_doc_id),
+        escape_graphql_string(session_id),
+        escape_graphql_string(&request.request_id),
+    ))
 }
 
 pub(super) async fn normalize_request_only_control_parent(
@@ -222,7 +486,7 @@ pub(super) async fn steering_transaction_attempt(
     content: &str,
     request_id: &str,
     request_mutation: &str,
-) -> Result<EnqueuedAgentRequest> {
+) -> Result<EnqueuedSteeringInput> {
     let request_response = txn.execute(request_mutation).await?;
     let request_doc_id = transaction_created_doc_id(&request_response, "AgentRequest")?;
     let sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
@@ -241,11 +505,35 @@ pub(super) async fn steering_transaction_attempt(
     );
     txn.execute(&message_mutation).await?;
 
-    Ok(EnqueuedAgentRequest {
-        doc_id: request_doc_id,
-        request_id: request_id.to_string(),
-        session_id: parent.session_id.clone(),
+    Ok(EnqueuedSteeringInput {
+        request: EnqueuedAgentRequest {
+            doc_id: request_doc_id,
+            request_id: request_id.to_string(),
+            session_id: parent.session_id.clone(),
+        },
+        message_sequence: sequence,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_background_binding_requires_a_physical_message_id() {
+        let request = EnqueuedAgentRequest {
+            doc_id: "request-doc".to_string(),
+            request_id: "request-id".to_string(),
+            session_id: "session-id".to_string(),
+        };
+        let error = bind_legacy_background_input_mutation("  ", "session-id", &request)
+            .expect_err("blank message IDs must not produce a session-wide mutation");
+        assert!(error.to_string().contains("AgentMessage _docID"));
+
+        let mutation =
+            bind_legacy_background_input_mutation("message-doc", "session-id", &request).unwrap();
+        assert!(mutation.contains(r#"_docID: { _eq: "message-doc" }"#));
+    }
 }
 
 async fn next_append_sequence_in_transaction(

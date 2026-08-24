@@ -22,11 +22,7 @@ use crate::background_tools::{
     project_child_terminal, subagent_tool_not_allowed_payload, ChildEdge,
 };
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::queue::{
-    enqueue_background_completion_with_message, enqueue_session_request, parse_queue_hints,
-    QueueHints, QueuePolicy, QueueSource,
-};
-use crate::lifecycle::ExecutionOrigin;
+use crate::lifecycle::queue::{enqueue_conversation_continuation, ConversationContinuation};
 use crate::session;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass, ToolCallLifecycle};
 
@@ -42,6 +38,34 @@ fn background_completion_notification_message_key(stable_id: &str, kind: &str) -
 
 pub fn is_background_completion_notification_message_key(message_key: &str) -> bool {
     message_key.starts_with(BACKGROUND_COMPLETION_NOTIFICATION_MESSAGE_PREFIX)
+}
+
+pub(crate) fn background_completion_notification_identity(
+    message_key: &str,
+) -> Option<(&str, &str)> {
+    message_key
+        .strip_prefix(BACKGROUND_COMPLETION_NOTIFICATION_MESSAGE_PREFIX)?
+        .rsplit_once(':')
+}
+
+pub(crate) fn is_legacy_background_completion_notification(
+    message_key: &str,
+    content: &str,
+    stable_id: &str,
+    kind: &str,
+) -> bool {
+    if message_key == format!("{stable_id}:{kind}") {
+        return true;
+    }
+    let stable_id = rendering::xml_escape_attr(stable_id);
+    match kind {
+        "subagent" => {
+            content.contains("<subagent-notification")
+                && content.contains(&format!(r#"child_request_id="{stable_id}""#))
+        }
+        "tool" => content.contains(&format!(r#"<tool-completion tool_call_id="{stable_id}""#)),
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,12 +139,9 @@ use queries::{load_child_linkage, load_request_id_by_doc_id, load_terminal_child
 use reconciliation::request_is_locally_owned;
 use rendering::{
     child_terminal_status, child_terminal_summary, compact_summary, first_row, non_empty,
-    render_notification, render_tool_completion, xml_escape_attr,
+    render_notification, render_tool_completion,
 };
-use side_effects::{
-    bound_background_wake_request, bridge_state_is_terminal, ensure_projection_side_effects,
-    existing_tool_completion_notification, existing_wakeup_after,
-};
+use side_effects::{bridge_state_is_terminal, ensure_projection_side_effects};
 
 #[cfg(test)]
 mod tests;

@@ -69,6 +69,21 @@ pub(crate) enum LeanR4cBackgroundWorkCase {
         queued_request_id: String,
         queue_interrupted_request_id: String,
     },
+    #[serde(rename = "conversation.continuation.policy")]
+    ConversationContinuationPolicy {
+        version: u32,
+        steering_policy: String,
+        background_completion_policy: String,
+        goal_policy: String,
+        steering_lineage_admissible: bool,
+        background_lineage_admissible: bool,
+        goal_lineage_admissible: bool,
+        all_control_prompts_internal: bool,
+        durable_input_matches_message_backed_kinds: bool,
+        steering_provider_input: String,
+        steering_input_appears_exactly_once: bool,
+        steering_control_prompt_absent: bool,
+    },
     #[serde(rename = "r4c.list_subagents.unmaterialized_child_visible")]
     UnmaterializedChildVisible {
         caller_request_id: String,
@@ -102,6 +117,7 @@ impl LeanR4cBackgroundWorkCase {
                 "r4c.steer_subagent.append_preserves_lineage"
             }
             Self::SteerInterruptComposes { .. } => "r4c.steer_subagent.interrupt_composes",
+            Self::ConversationContinuationPolicy { .. } => "conversation.continuation.policy",
             Self::UnmaterializedChildVisible { .. } => {
                 "r4c.list_subagents.unmaterialized_child_visible"
             }

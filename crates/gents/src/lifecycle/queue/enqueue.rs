@@ -7,10 +7,21 @@ pub(crate) async fn enqueue_session_request(
     execution_origin: ExecutionOrigin,
     queue_hints: QueueHints,
 ) -> Result<EnqueuedAgentRequest> {
-    let request_only_control = matches!(
-        queue_hints.source,
-        QueueSource::Steering | QueueSource::BackgroundCompletion
-    );
+    let continuation_kind = ContinuationKind::from_source(queue_hints.source);
+    if let Some(kind) = continuation_kind {
+        anyhow::ensure!(
+            queue_hints.policy == kind.policy().queue_policy,
+            "continuation queue policy does not match {:?}",
+            kind
+        );
+        anyhow::ensure!(
+            execution_origin == kind.policy().execution_origin,
+            "continuation execution origin does not match {:?}",
+            kind
+        );
+    }
+    let request_only_control =
+        continuation_kind.is_some_and(|kind| kind.is_request_only_control(&queue_hints));
     let normalized_parent = if request_only_control {
         Some(normalize_request_only_control_parent(node, parent).await?)
     } else {
@@ -90,7 +101,7 @@ pub(crate) async fn enqueue_steering_request_with_message(
     parent: &AgentRequest,
     content: &str,
     queue_hints: QueueHints,
-) -> Result<EnqueuedAgentRequest> {
+) -> Result<EnqueuedSteeringInput> {
     anyhow::ensure!(
         queue_hints.source == QueueSource::Steering
             && queue_hints.policy == QueuePolicy::Append

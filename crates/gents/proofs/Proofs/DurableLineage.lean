@@ -100,6 +100,21 @@ theorem background_completion_continuation_is_admissible
   simp [admissible, edgePairsCoherent, pairCoherent, parentShapeCoherent,
     depthCoherent, backgroundCompletionContinuation]
 
+def goalContinuation : RawLineage :=
+  { hasParentRequestId := true
+  , hasParentRequestDocId := true
+  , hasParentToolCallId := false
+  , hasParentToolCallDocId := false
+  , subagentDepth := 0
+  , requestOnlyControl := true
+  , controlAllowedAtDepthZero := true
+  }
+
+/-- A goal continuation is an explicitly linked depth-zero controller turn. -/
+theorem goal_continuation_is_admissible :
+    admissible goalContinuation = true := by
+  rfl
+
 namespace SteeringPersistence
 
 inductive Stage where
