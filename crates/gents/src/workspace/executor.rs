@@ -768,6 +768,12 @@ pub fn execute_integrate_workspace_plan(
             )))
         }
     };
+    restore_integrate_journal(journal, &ctx.repository.host_path, &action.workspace_id);
+    if !journal::action_journal_prefix_legal(journal) {
+        return Err(HostExecuteError::denied(
+            "persisted integrate journal has an illegal prefix",
+        ));
+    }
     if journal::current_state(journal, 0).is_none() {
         journal::advance(journal, 0, ActionJournalState::Validated);
     }
@@ -780,7 +786,6 @@ fn integrate_workspace_action(
     ctx: &mut HostExecutorContext<'_>,
 ) -> Result<IntegrateWorkspaceOutcome, HostExecuteError> {
     let trunk = ctx.repository.host_path.clone();
-    restore_integrate_journal(journal, &trunk, &action.workspace_id);
 
     if matches!(
         journal::current_state(journal, 0),

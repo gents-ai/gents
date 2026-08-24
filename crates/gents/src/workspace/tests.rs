@@ -1479,6 +1479,10 @@ fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
     assert_eq!(first.receipt.kind, "integrator");
 
     docs.receipts.clear();
+    // Commit objects include second-resolution timestamps. Cross a timestamp
+    // boundary so regenerating the commit cannot accidentally look like
+    // successful recovery of the persisted pending SHA.
+    std::thread::sleep(std::time::Duration::from_secs(2));
     let second = execute_integrate_workspace_plan(
         &emit_integrate_workspace_plan(IntegrateWorkspaceAction {
             workspace_id: "ws-crash".into(),
