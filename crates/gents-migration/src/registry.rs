@@ -490,7 +490,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::COMPACTION_ENTRY_NAME,
         gents_protocol::schemas::COMPACTION_ENTRY,
-        "bafyreihhmopyxndufk2fktp6ctbietqgv4jas76hdlrmvvdzabxyo7affi"
+        "bafyreiagy34ktocj6ththl2w4r7ikb73mxv4xdnsl4dp2glkmwke46sgeq"
     ),
     baseline_entry!(
         gents_protocol::schemas::RENDERED_REQUEST_NAME,

@@ -144,6 +144,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) streaming_response_interrupt_flow_cases: Vec<LeanResponseInterruptFlowCase>,
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     #[serde(default)]
+    pub(crate) compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
+    #[serde(default)]
     pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
     #[serde(default)]
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
@@ -903,6 +905,10 @@ pub(crate) fn lean_response_interrupt_flow_case(
 
 pub(crate) fn lean_compaction_reducer_cases() -> &'static [LeanCompactionReducerCase] {
     &lean_contract_snapshot().compaction_reducer_cases
+}
+
+pub(crate) fn lean_compaction_cursor_cases() -> &'static [LeanCompactionCursorCase] {
+    &lean_contract_snapshot().compaction_cursor_cases
 }
 
 pub(crate) fn lean_prompt_assembly_sanitize_cases() -> &'static [LeanPromptAssemblySanitizeCase] {

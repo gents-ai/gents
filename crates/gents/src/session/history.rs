@@ -13,33 +13,64 @@ pub(crate) async fn load_history_through_sequence(
     session_id: &str,
     through_sequence: Option<u32>,
 ) -> Result<Vec<Message>> {
-    load_history_projection(node, session_id, through_sequence, None).await
+    Ok(
+        load_sequenced_history_projection(node, session_id, through_sequence, None, None)
+            .await?
+            .into_iter()
+            .map(|row| row.message)
+            .collect(),
+    )
 }
 
-pub(crate) async fn load_history_for_request(
+pub(crate) async fn load_sequenced_history_for_request(
     node: &EmbeddedNode,
     request: &crate::watcher::AgentRequest,
     through_sequence: Option<u32>,
-) -> Result<Vec<Message>> {
-    let current_input = Message::user(request.content.clone());
-    load_history_projection(
+    after_sequence: Option<u32>,
+) -> Result<Vec<SequencedMessage>> {
+    load_sequenced_history_projection(
         node,
         &request.session_id,
         through_sequence,
-        Some((&request.request_id, current_input)),
+        after_sequence,
+        Some((&request.request_id, Message::user(request.content.clone()))),
     )
     .await
 }
 
+#[cfg(test)]
 pub(super) async fn load_history_projection(
     node: &EmbeddedNode,
     session_id: &str,
     through_sequence: Option<u32>,
     current_input: Option<(&str, Message)>,
 ) -> Result<Vec<Message>> {
+    Ok(
+        load_sequenced_history_projection(node, session_id, through_sequence, None, current_input)
+            .await?
+            .into_iter()
+            .map(|row| row.message)
+            .collect(),
+    )
+}
+
+pub(super) async fn load_sequenced_history_projection(
+    node: &EmbeddedNode,
+    session_id: &str,
+    through_sequence: Option<u32>,
+    after_sequence: Option<u32>,
+    current_input: Option<(&str, Message)>,
+) -> Result<Vec<SequencedMessage>> {
     let escaped_session_id = escape_graphql_string(session_id);
-    let sequence_filter = through_sequence
-        .map(|sequence| format!(", sequence: {{ _le: {sequence} }}"))
+    let mut sequence_bounds = Vec::new();
+    if let Some(sequence) = after_sequence {
+        sequence_bounds.push(format!("_gt: {sequence}"));
+    }
+    if let Some(sequence) = through_sequence {
+        sequence_bounds.push(format!("_le: {sequence}"));
+    }
+    let sequence_filter = (!sequence_bounds.is_empty())
+        .then(|| format!(", sequence: {{ {} }}", sequence_bounds.join(", ")))
         .unwrap_or_default();
     let query = format!(
         r#"{{
@@ -83,11 +114,14 @@ pub(super) async fn load_history_projection(
         }) {
             continue;
         }
-        history.push(decoded);
+        history.push(SequencedMessage {
+            sequence: msg.sequence,
+            message: decoded,
+        });
     }
 
     tracing::Span::current().record("history_message_count", history.len() as i64);
-    tracing::debug!(session_id = %session_id, ?through_sequence, current_request_id = current_input.as_ref().map(|value| value.0), count = history.len(), "loaded history");
+    tracing::debug!(session_id = %session_id, ?through_sequence, ?after_sequence, current_request_id = current_input.as_ref().map(|value| value.0), count = history.len(), "loaded history");
     Ok(history)
 }
 

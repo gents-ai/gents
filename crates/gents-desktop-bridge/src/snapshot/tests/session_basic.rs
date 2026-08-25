@@ -99,6 +99,7 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
         "sequence": 1,
         "summary": "The first turn established the durable plan.",
         "messages_compacted": 1,
+        "compacted_through_sequence": 1,
         "original_tokens": 1_000,
         "compacted_tokens": 200,
         "created_at": "2026-08-24T12:00:00Z"
@@ -123,7 +124,7 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
         timestamp: None,
     })
     .collect();
-    let store = ClientStore::from_rows(ClientStoreRows {
+    let mut store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
             session_id: "session-context".to_string(),
             agent_name: Some("Amy".to_string()),
@@ -202,6 +203,19 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
     assert_eq!((last.turn_index, last.attempt), (3, 1));
     assert_eq!(last.components.tool_schemas, 1_200);
     assert_eq!(last.compaction_reason, "below_threshold");
+
+    store.messages[1].sequence = None;
+    let legacy_fallback = build_session_snapshot_from_store_for_agent(
+        &store,
+        Some("did:test:amy"),
+        "session-context",
+        None,
+    )
+    .expect("snapshot with partially replicated sequence");
+    assert_eq!(
+        legacy_fallback.context.provider_message_count, 2,
+        "a missing sequence must use full projection plus cumulative count"
+    );
 }
 
 #[test]

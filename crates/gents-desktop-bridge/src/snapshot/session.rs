@@ -65,7 +65,7 @@ fn build_session_context_view(
     agent_did: Option<&str>,
     behavior_id: Option<&str>,
     session_id: &str,
-    durable_messages: Vec<Message>,
+    durable_messages: Vec<(Option<i64>, Message)>,
     durable_message_count: usize,
 ) -> SessionContextView {
     let behavior = behavior_id.and_then(|behavior_id| {
@@ -122,8 +122,13 @@ fn build_session_context_view(
             .then_with(|| left.compaction_key.cmp(&right.compaction_key))
     });
 
-    let estimated_durable_tokens = gents::compaction::estimate_message_tokens(&durable_messages);
-    let (provider_messages, _) = gents::compaction::provider_view(durable_messages);
+    let durable_message_refs = durable_messages
+        .iter()
+        .map(|(_, message)| message)
+        .collect::<Vec<_>>();
+    let estimated_durable_tokens = gents::compaction::estimate_tokens(
+        &serde_json::to_string(&durable_message_refs).unwrap_or_default(),
+    );
     let total_compacted_messages = compaction_rows.iter().fold(0_usize, |total, row| {
         total.saturating_add(
             row.messages_compacted
@@ -131,8 +136,32 @@ fn build_session_context_view(
                 .unwrap_or_default(),
         )
     });
-    let active_provider_messages =
-        gents::compaction::active_provider_history(provider_messages, total_compacted_messages);
+    let compacted_through_sequence = compaction_rows
+        .last()
+        .and_then(|row| row.compacted_through_sequence);
+    // Sequence is nillable for legacy/partially replicated rows. The cursor
+    // projection is valid only when every durable message participates in the
+    // same nonnegative ordered sequence space; otherwise preserve the proven
+    // full-provider-view plus cumulative-count fallback.
+    let usable_cursor = compacted_through_sequence.filter(|cursor| {
+        *cursor >= 0
+            && durable_messages
+                .iter()
+                .all(|(sequence, _)| sequence.is_some_and(|sequence| sequence >= 0))
+    });
+    let provider_input = durable_messages
+        .into_iter()
+        .filter(|(sequence, _)| {
+            usable_cursor.is_none_or(|cursor| sequence.is_some_and(|sequence| sequence > cursor))
+        })
+        .map(|(_, message)| message)
+        .collect::<Vec<_>>();
+    let (provider_messages, _) = gents::compaction::provider_view(provider_input);
+    let active_provider_messages = if usable_cursor.is_some() {
+        provider_messages
+    } else {
+        gents::compaction::active_provider_history(provider_messages, total_compacted_messages)
+    };
     let summaries = compaction_rows
         .iter()
         .filter_map(|row| row.summary.clone())
@@ -667,7 +696,8 @@ pub fn build_session_snapshot_from_store_for_agent(
         .collect::<Vec<_>>();
     let durable_messages = decoded_messages
         .iter()
-        .filter_map(Clone::clone)
+        .zip(transcript.messages.iter())
+        .filter_map(|(message, row)| message.clone().map(|message| (row.sequence, message)))
         .collect::<Vec<_>>();
     let context = build_session_context_view(
         store,

@@ -759,6 +759,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CompactionReducerCases".to_string(),
         ));
     }
+    if !lean_compaction_cursor_cases().is_empty() {
+        emitted.insert((
+            "compaction_cursor_cases".to_string(),
+            "CompactionCursorCases".to_string(),
+        ));
+    }
     if !snapshot.prompt_assembly_sanitize_cases.is_empty() {
         emitted.insert((
             "prompt_assembly_cases".to_string(),
@@ -1074,6 +1080,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "bridge_step_cases",
         "transcript_cases",
         "compaction_reducer_cases",
+        "compaction_cursor_cases",
         "prompt_assembly_cases",
         "rendered_capture_cases",
         "durable_reduction_cases",

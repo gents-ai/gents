@@ -39,7 +39,7 @@ use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
 pub use context_budget::{
     build_context_budget_tool, load_context_budget_snapshot, ContextBudgetSnapshot,
-    CONTEXT_BUDGET_TOOL_NAME,
+    LastRequestContextSnapshot, CONTEXT_BUDGET_TOOL_NAME,
 };
 pub use denial::CommandPolicyDenial;
 pub(crate) use denial::DenialReason;
@@ -52,8 +52,10 @@ pub use lsp::{
 #[cfg(feature = "agent-memory")]
 pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
 pub use session_history::{
-    build_session_history_tool, load_session_history_snapshot, SessionHistoryRow,
-    SessionHistorySnapshot, SESSION_HISTORY_TOOL_NAME,
+    build_session_history_tool, load_session_history_snapshot, load_session_investigation,
+    SessionCompactionEvent, SessionHistoryRow, SessionHistorySnapshot,
+    SessionInvestigationSnapshot, SessionRequestEvent, SessionTokenUsage, SessionToolCallStats,
+    SESSION_HISTORY_TOOL_NAME,
 };
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;

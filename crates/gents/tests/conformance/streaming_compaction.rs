@@ -1160,6 +1160,57 @@ pub(super) fn generated_compaction_reducer_cases_pin_contract() {
     for case in cases {
         drive_compaction_reducer_case(case);
     }
+    generated_compaction_cursor_cases_pin_contract();
+}
+
+fn generated_compaction_cursor_cases_pin_contract() {
+    let cases = lean_compaction_cursor_cases();
+    assert_eq!(cases.len(), 3);
+    let expected_names = [
+        "cursor_skips_orphan_and_compacted_turn",
+        "cursor_rejects_split_inside_tool_pair",
+        "cursor_accepts_complete_tool_pair",
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(
+        cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<BTreeSet<_>>(),
+        expected_names
+    );
+
+    let rows = vec![
+        (10, compaction_tool_result_message("orphan", "discard me")),
+        (20, compaction_text_message("user", "compacted")),
+        (40, compaction_tool_call_message("call-1")),
+        (50, compaction_tool_result_message("call-1", "result")),
+        (90, compaction_text_message("assistant", "active")),
+    ];
+    for case in cases {
+        let expected_sequence = case.expected_cursor.map(|split| rows[split - 1].0);
+        let actual = gents::compaction::compacted_through_sequence(&rows, case.compacted);
+        assert_eq!(actual, expected_sequence, "{}: canonical cursor", case.name);
+
+        if let Some(cursor) = actual {
+            let (full, _) = gents::compaction::provider_view(
+                rows.iter().map(|(_, message)| message.clone()).collect(),
+            );
+            let (filtered, _) = gents::compaction::provider_view(
+                rows.iter()
+                    .filter(|(sequence, _)| *sequence > cursor)
+                    .map(|(_, message)| message.clone())
+                    .collect(),
+            );
+            assert_eq!(
+                filtered,
+                gents::compaction::active_provider_history(full, case.compacted),
+                "{}: cursor query must equal full-load-plus-drop",
+                case.name
+            );
+        }
+    }
 }
 
 fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCase) {

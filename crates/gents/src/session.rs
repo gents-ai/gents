@@ -19,6 +19,7 @@ mod sessions;
 mod tests;
 
 pub use crate::tool_call_lifecycle::query::load_tool_call_result;
+pub(crate) use compaction_entries::load_prompt_compaction_state;
 pub(crate) use compaction_entries::save_compaction_entry_with_requester_did;
 pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
 pub(crate) use conversation::{
@@ -32,9 +33,9 @@ pub use fork::{
     GraphqlExecutor, HttpGraphqlExecutor,
 };
 pub use history::load_history;
-pub(crate) use history::load_history_for_request;
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;
+pub(crate) use history::load_sequenced_history_for_request;
 #[allow(unused_imports)]
 pub(crate) use history::{
     append_message_once_with_key_and_requester_did, append_message_with_requester_did,
@@ -82,7 +83,32 @@ pub struct CompactionEntry {
     pub files_read: Vec<String>,
     pub files_modified: Vec<String>,
     pub messages_compacted: u32,
+    /// Inclusive canonical `AgentMessage.sequence` cursor for the cumulative
+    /// compacted provider prefix. `None` keeps legacy entries on the safe
+    /// full-load projection.
+    pub compacted_through_sequence: Option<u32>,
     pub original_tokens: usize,
     pub compacted_tokens: usize,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PromptCompactionState {
+    pub summaries: Vec<String>,
+    pub total_messages_compacted: usize,
+    pub compacted_through_sequence: Option<u32>,
+    /// Canonical fingerprint of the complete ordered compaction generation
+    /// used to build this prompt. Writers compare it transactionally before
+    /// appending so two reductions of the same generation cannot both land.
+    pub generation: String,
+    /// False when a background transcript cutoff selected an older compatible
+    /// compaction generation. Such a request may read that generation but must
+    /// not append a new compaction to the live session chain.
+    pub is_latest_generation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SequencedMessage {
+    pub sequence: u32,
+    pub message: Message,
 }

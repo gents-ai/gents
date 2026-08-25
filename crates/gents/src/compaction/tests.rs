@@ -2766,6 +2766,40 @@ fn active_provider_history_applies_the_shared_compacted_prefix_projection() {
 }
 
 #[test]
+fn canonical_cursor_projects_the_same_sparse_active_suffix() {
+    let rows = vec![
+        (10, tool_result_msg("orphan", "discard me")),
+        (20, text_msg("user", "compacted")),
+        (40, tool_call_msg("read_file", r#"{"path":"/tmp/a"}"#)),
+        (50, tool_result_msg("call-1", "result")),
+        (90, text_msg("assistant", "active")),
+    ];
+    let cursor = compacted_through_sequence(&rows, 1).expect("proven raw cursor");
+    assert_eq!(cursor, 20, "the orphan and first real turn are skipped");
+
+    let (full_view, _) = provider_view(rows.iter().map(|(_, message)| message.clone()).collect());
+    let (filtered_view, _) = provider_view(
+        rows.iter()
+            .filter(|(sequence, _)| *sequence > cursor)
+            .map(|(_, message)| message.clone())
+            .collect(),
+    );
+    assert_eq!(filtered_view, active_provider_history(full_view, 1));
+}
+
+#[test]
+fn canonical_cursor_rejects_a_split_inside_a_tool_pair() {
+    let rows = vec![
+        (1, text_msg("user", "first")),
+        (2, tool_call_msg("read_file", r#"{"path":"/tmp/a"}"#)),
+        (3, tool_result_msg("call-1", "result")),
+    ];
+    assert_eq!(compacted_through_sequence(&rows, 1), Some(1));
+    assert_eq!(compacted_through_sequence(&rows, 2), None);
+    assert_eq!(compacted_through_sequence(&rows, 3), Some(3));
+}
+
+#[test]
 fn compaction_strategy_default_and_labels_share_one_vocabulary() {
     assert_eq!(CompactionStrategy::default().as_str(), "StripThenSummarize");
     assert_eq!(

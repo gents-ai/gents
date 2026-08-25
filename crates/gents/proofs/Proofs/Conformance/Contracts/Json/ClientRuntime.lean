@@ -122,6 +122,13 @@ def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : Str
     ++ "\"retained_count\":" ++ toString witness.retainedCount
     ++ "}"
 
+def compactionCursorCaseJson (witness : Compaction.CompactionCursorCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"compacted\":" ++ toString witness.compacted ++ ","
+    ++ "\"expected_cursor\":" ++ jsonOptionalNat witness.expectedCursor
+    ++ "}"
+
 def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
