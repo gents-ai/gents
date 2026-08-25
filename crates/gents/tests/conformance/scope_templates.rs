@@ -113,6 +113,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "CompactionEntry",
         "BearerPairingReady",
         "PeerEndpoint",
+        "SessionHydrationRequest",
     ];
     const RETURN_CONTROL_PLANE: &[&str] = &[
         "AgentBehavior",
@@ -136,6 +137,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "CompactionEntry",
         "BearerPairingReady",
         "PeerEndpoint",
+        "SessionHydrationRequest",
         "AgentBehavior",
         "ToolSelection",
         "InferenceProfile",
@@ -206,6 +208,12 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
             .expect("outbound endpoint filter"),
         "did",
         requester,
+    );
+    assert_and_eq_filter(
+        outbound
+            .get("SessionHydrationRequest")
+            .expect("hydration request filter"),
+        &[("requester_did", requester), ("agent_did", owner)],
     );
     for collection in RETURN_CONTROL_PLANE {
         assert!(!outbound.contains_key(*collection));

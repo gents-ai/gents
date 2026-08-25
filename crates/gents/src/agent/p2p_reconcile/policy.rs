@@ -246,6 +246,13 @@ fn client_route_filters(
         "PeerEndpoint".to_string(),
         equality_filter("did", endpoint_did),
     );
+    filters.insert(
+        "SessionHydrationRequest".to_string(),
+        combine_filters(
+            equality_filter("requester_did", requester_did),
+            equality_filter("agent_did", owner_agent_did),
+        ),
+    );
     // Runtime-owned configuration is unfiltered only on the return leg. Each
     // replicator has one runtime source, while its mutable owner fields cannot
     // legally participate in DefraDB replication filters.
@@ -352,6 +359,36 @@ mod tests {
             !client_route_collections(PairingDirection::RuntimeToClient)
                 .contains(&"InferenceBackend"),
             "raw inference credentials must never replicate to clients"
+        );
+    }
+
+    #[test]
+    fn client_route_carries_session_hydration_requests() {
+        let template = resolve_template(CLIENT_TEMPLATE).unwrap();
+        let outbound = resolve_template_filters(
+            template,
+            PairingDirection::ClientToRuntime,
+            "did:key:phone",
+            "did:key:mandrake",
+        );
+        let returning = resolve_template_filters(
+            template,
+            PairingDirection::RuntimeToClient,
+            "did:key:phone",
+            "did:key:mandrake",
+        );
+        assert!(client_route_collections(PairingDirection::ClientToRuntime)
+            .contains(&"SessionHydrationRequest"));
+        assert!(template.collections.contains(&"SessionHydrationRequest"));
+        let encoded = serde_json::to_string(outbound.get("SessionHydrationRequest").unwrap())
+            .expect("encode hydration filter");
+        assert!(encoded.contains("requester_did"));
+        assert!(encoded.contains("did:key:phone"));
+        assert!(encoded.contains("agent_did"));
+        assert!(encoded.contains("did:key:mandrake"));
+        assert_eq!(
+            outbound.get("SessionHydrationRequest"),
+            returning.get("SessionHydrationRequest")
         );
     }
 }

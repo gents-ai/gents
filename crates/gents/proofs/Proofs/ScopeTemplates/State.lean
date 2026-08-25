@@ -90,7 +90,8 @@ def clientControlPlaneCollections : List String :=
    "Skill", "DatastoreToolSurface", "Task", "Schedule", "EventTrigger"]
 
 def clientToRuntimeCollections : List String :=
-  clientTranscriptCollections ++ ["BearerPairingReady", "PeerEndpoint"]
+  clientTranscriptCollections ++
+    ["BearerPairingReady", "PeerEndpoint", "SessionHydrationRequest"]
 
 def clientCollections : List String :=
   clientToRuntimeCollections ++ clientControlPlaneCollections

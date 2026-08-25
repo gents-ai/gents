@@ -251,6 +251,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "CompactionEntry",
     "BearerPairingReady",
     "PeerEndpoint",
+    "SessionHydrationRequest",
     "AgentBehavior",
     "ToolSelection",
     "InferenceProfile",
@@ -265,6 +266,9 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
 /// Client-authored rows that may travel toward a runtime. Runtime-owned
 /// configuration stays off this leg: its owner fields are intentionally
 /// mutable and therefore cannot be used as DefraDB replication filters.
+/// `SessionHydrationRequest` is the on-demand transcript catch-up control
+/// document: it must ride this outbound route or a phone using `client`
+/// cannot ask the runtime to replay one owned session.
 pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
@@ -276,6 +280,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "CompactionEntry",
     "BearerPairingReady",
     "PeerEndpoint",
+    "SessionHydrationRequest",
 ];
 
 const CONVERSATION_RULES: &[CollectionRule] = &[
