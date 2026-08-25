@@ -83,6 +83,9 @@ def boundaryModelNatTypedIdsTimeId : String :=
 def boundaryP2pBackpressureObligationModelId : String :=
   "boundary.p2p-backpressure.obligation-model"
 
+def boundaryGraphPipelineFoundationId : String :=
+  "boundary.graph-pipeline.foundation"
+
 def boundaryRenderedCaptureAssembledRequestArtifactId : String :=
   "boundary.rendered-capture.assembled-request-artifact"
 
@@ -277,6 +280,14 @@ def boundaries : List Boundary :=
         some "A future queue-admission, durable-retry, store-before-ack, or restart-recovery regression can pass this one-wave model; the separate pinned-struct observability and P2P end-to-end tests are implementation fences, not proofs of those properties."
     , acceptedFollowUp :=
         some "Extend the distributed model to bounded multi-wave queue admission plus durable retry and pending-DAG restart recovery, bind its witness rows to the pinned DefraDB adapter, and TLC-check MCP2PBackpressure*. Tracked under #630."
+    }
+  , { id := boundaryGraphPipelineFoundationId
+    , domain := "GraphPipeline"
+    , subject := "foundation model before compiler and persistence refinement"
+    , statement :=
+        "Proofs.GraphPipeline establishes publication readiness, active-pointer alignment, immutable revision identity, and run pinning. This foundation slice has no shipping compiler, GraphRevision/GraphRun storage schema, activation controller, or runtime visibility filter, so it makes no Rust refinement claim yet."
+    , acceptedFollowUp :=
+        some "The immediately stacked compiler and publication/runtime pull requests replace this boundary with pure-compiler conformance and persisted lifecycle end-to-end fences."
     }
   , { id := boundaryRenderedCaptureAssembledRequestArtifactId
     , domain := "RenderedCapture"
