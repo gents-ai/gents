@@ -15,7 +15,7 @@ gents demo list                      # what packs exist
 gents demo run pipeline --prompt "…" # override the seed prompt
 gents demo run pipeline --keep-home  # keep the node home for debugging
 
-# Against a node that is already serving (make review-serve, or demo run --keep-home):
+# Against a node that is already serving (or demo run --keep-home):
 gents demo init pipeline --home /tmp/pack-home
 gents demo seed pipeline --http-port 19191 --home /tmp/pack-home
 ```
@@ -101,7 +101,6 @@ new required field on a public config struct breaks there first.
 | Pack | What it shows |
 | --- | --- |
 | [`pipeline/`](pipeline/README.md) | **Canonical example** — job → finding create via surface → stage-2 |
-| [`code-review/`](code-review/README.md) | **Advanced graph example** — live-inference fan-out/fan-in with correlation propagation, source-field fills, exact cardinality, and one durable triage request |
 | [`repo-maintenance/`](repo-maintenance/README.md) | Whole-repository cleanup round that verifies findings, executes focused 1-3 item commits, reviews the assembled change, and opens one PR |
 | [`background-continuation/`](background-continuation/README.md) | Two background subagents → durable notification → acknowledged parent wake |
 | [`security-scan/`](security-scan/README.md) | **Whole-codebase scan** — free regex pre-scan at kickoff, planner batch fan-out, adversarial revalidation barrier, bound query tools instead of `defra_query` |

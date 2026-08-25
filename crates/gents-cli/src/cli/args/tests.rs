@@ -633,6 +633,104 @@ fn p2p_replicator_add_no_filter_is_empty() {
     assert!(args.filters.is_empty());
 }
 
+fn parse_graph(argv: &[&str]) -> GraphCommand {
+    let mut args = vec!["gents", "graph"];
+    args.extend_from_slice(argv);
+    let cli = Cli::try_parse_from(args).expect("graph command should parse");
+    match cli.command {
+        Command::Graph { command } => command,
+        _ => panic!("expected `graph`"),
+    }
+}
+
+#[test]
+fn graph_catalog_install_and_publish_parse() {
+    assert!(matches!(
+        parse_graph(&["catalog", "code-review"]),
+        GraphCommand::Catalog(GraphCatalogArgs { package: Some(package) }) if package == "code-review"
+    ));
+
+    match parse_graph(&[
+        "install",
+        "code-review",
+        "--version",
+        "1.0.0",
+        "--bindings",
+        "/tmp/bindings.json",
+        "--home",
+        "/tmp/gents-home",
+    ]) {
+        GraphCommand::Install(args) => {
+            assert_eq!(args.package, "code-review");
+            assert_eq!(args.version.as_deref(), Some("1.0.0"));
+            assert_eq!(
+                args.bindings.as_deref(),
+                Some(std::path::Path::new("/tmp/bindings.json"))
+            );
+            assert_eq!(
+                args.home.as_deref(),
+                Some(std::path::Path::new("/tmp/gents-home"))
+            );
+        }
+        _ => panic!("expected graph install"),
+    }
+
+    assert!(matches!(
+        parse_graph(&[
+            "publish",
+            "code-review",
+            "--revision",
+            "sha256:abc",
+            "--confirm-revision",
+            "sha256:abc",
+        ]),
+        GraphCommand::Publish(args)
+            if args.package == "code-review"
+                && args.revision == "sha256:abc"
+                && args.confirm_revision == "sha256:abc"
+    ));
+}
+
+#[test]
+fn graph_run_watch_result_cancel_and_toggle_parse() {
+    match parse_graph(&[
+        "run",
+        "code-review",
+        "--repo",
+        "/tmp/repo",
+        "--base",
+        "origin/main",
+        "--head",
+        "HEAD",
+        "--watch",
+    ]) {
+        GraphCommand::Run(args) => {
+            assert_eq!(args.package, "code-review");
+            assert_eq!(args.repo, std::path::PathBuf::from("/tmp/repo"));
+            assert_eq!(args.base, "origin/main");
+            assert_eq!(args.head, "HEAD");
+            assert!(args.watch);
+        }
+        _ => panic!("expected graph run"),
+    }
+
+    assert!(
+        matches!(parse_graph(&["watch", "run-1"]), GraphCommand::Watch(args) if args.run_id == "run-1")
+    );
+    assert!(
+        matches!(parse_graph(&["result", "run-1"]), GraphCommand::Result(args) if args.run_id == "run-1")
+    );
+    assert!(
+        matches!(parse_graph(&["cancel", "run-1", "--reason", "operator"]), GraphCommand::Cancel(args) if args.run_id == "run-1" && args.reason.as_deref() == Some("operator"))
+    );
+    assert!(
+        matches!(parse_graph(&["disable", "code-review"]), GraphCommand::Disable(args) if args.package == "code-review")
+    );
+    assert!(
+        matches!(parse_graph(&["enable", "code-review"]), GraphCommand::Enable(args) if args.package == "code-review")
+    );
+}
+
 fn parse_demo(argv: &[&str]) -> DemoArgs {
     let mut args = vec!["gents", "demo"];
     args.extend_from_slice(argv);
@@ -647,7 +745,7 @@ fn parse_demo(argv: &[&str]) -> DemoArgs {
 fn demo_seed_parses_pack_port_home_and_page() {
     let args = parse_demo(&[
         "seed",
-        "demo/code-review",
+        "demo/pipeline",
         "--http-port",
         "19191",
         "--home",
@@ -661,7 +759,7 @@ fn demo_seed_parses_pack_port_home_and_page() {
     ]);
     match args.command {
         Some(DemoCommand::Seed(seed)) => {
-            assert_eq!(seed.pack, "demo/code-review");
+            assert_eq!(seed.pack, "demo/pipeline");
             assert_eq!(seed.http_port, 19191);
             assert_eq!(
                 seed.home.as_deref(),
@@ -677,10 +775,10 @@ fn demo_seed_parses_pack_port_home_and_page() {
 
 #[test]
 fn demo_init_parses_pack_and_home() {
-    let args = parse_demo(&["init", "demo/code-review", "--home", "/tmp/review-home"]);
+    let args = parse_demo(&["init", "demo/pipeline", "--home", "/tmp/review-home"]);
     match args.command {
         Some(DemoCommand::Init(init)) => {
-            assert_eq!(init.pack, "demo/code-review");
+            assert_eq!(init.pack, "demo/pipeline");
             assert_eq!(init.home, std::path::PathBuf::from("/tmp/review-home"));
             assert!(!init.overwrite);
         }

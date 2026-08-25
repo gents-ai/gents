@@ -30,6 +30,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
     #[serde(default)]
     pub(crate) graph_pipeline_validation_cases: Vec<LeanGraphPipelineValidationCase>,
+    #[serde(default)]
+    pub(crate) graph_pipeline_revision_gate_cases: Vec<LeanGraphPipelineRevisionGateCase>,
+    #[serde(default)]
+    pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) trigger_dispatch_case_count: usize,
@@ -206,6 +210,28 @@ pub(crate) struct LeanGraphPipelineValidationCase {
     pub(crate) expected_valid: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanGraphPipelineRevisionGateCase {
+    pub(crate) name: String,
+    pub(crate) status: String,
+    pub(crate) artifacts_complete: bool,
+    pub(crate) activation_precondition_met: bool,
+    pub(crate) pointer_matches: bool,
+    pub(crate) expected_activate: bool,
+    pub(crate) expected_start: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanGraphPipelineRunTerminalCase {
+    pub(crate) name: String,
+    pub(crate) status: String,
+    pub(crate) cancellation_requested: bool,
+    pub(crate) result_contract_satisfied: bool,
+    pub(crate) active_work_terminal: bool,
+    pub(crate) expected_succeed: bool,
+    pub(crate) expected_fail: bool,
+    pub(crate) expected_cancel: bool,
+}
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanVocabularyContract {
     pub(crate) domain: String,

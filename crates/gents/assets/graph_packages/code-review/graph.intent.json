@@ -1,0 +1,120 @@
+{
+  "graph_id": "code-review",
+  "nodes": [
+    {"node_id": "recon", "capability_id": "review-recon", "capability_revision": "v1"},
+    {"node_id": "scan", "capability_id": "review-scan", "capability_revision": "v1"},
+    {"node_id": "verify", "capability_id": "review-verify", "capability_revision": "v1"},
+    {"node_id": "triage", "capability_id": "review-triage", "capability_revision": "v1"}
+  ],
+  "edges": [
+    {
+      "from": {"node_id": "recon", "port": "areas"},
+      "to": {"node_id": "scan", "port": "area"},
+      "delivery": {"kind": "per_document"},
+      "concurrency": "parallel"
+    },
+    {
+      "from": {"node_id": "scan", "port": "scan_results"},
+      "to": {"node_id": "verify", "port": "scan_results"},
+      "delivery": {"kind": "per_group", "expected": {"kind": "source_field", "field": "expected_total"}},
+      "concurrency": "serial"
+    },
+    {
+      "from": {"node_id": "verify", "port": "summary"},
+      "to": {"node_id": "triage", "port": "summary"},
+      "delivery": {"kind": "per_document"},
+      "concurrency": "serial"
+    }
+  ],
+  "entries": [
+    {
+      "name": "review",
+      "collection": "CodeReviewJob",
+      "schema": "CodeReviewJob/v1",
+      "input_contract": "review-input/v1",
+      "to": {"node_id": "recon", "port": "job"}
+    }
+  ],
+  "results": [
+    {
+      "name": "areas",
+      "from": {"node_id": "recon", "port": "areas"},
+      "cardinality": {"kind": "exactly", "count": 4},
+      "terminal": false,
+      "predicates": [
+        {"kind": "distinct", "field": "area_id"},
+        {"kind": "all_equal", "field": "expected_total"},
+        {"kind": "count_equals_field", "field": "expected_total"}
+      ]
+    },
+    {
+      "name": "scan_results",
+      "from": {"node_id": "scan", "port": "scan_results"},
+      "cardinality": {"kind": "exactly", "count": 4},
+      "terminal": false,
+      "predicates": [
+        {"kind": "distinct", "field": "area_id"},
+        {"kind": "all_equal", "field": "expected_total"},
+        {"kind": "count_equals_field", "field": "expected_total"},
+        {"kind": "same_members", "field": "area_id", "result": "areas", "result_field": "area_id"}
+      ]
+    },
+    {
+      "name": "candidates",
+      "from": {"node_id": "scan", "port": "candidates"},
+      "cardinality": {"kind": "at_most", "count": 128},
+      "terminal": false,
+      "predicates": [{"kind": "distinct", "field": "finding_id"}]
+    },
+    {
+      "name": "verdicts",
+      "from": {"node_id": "verify", "port": "verdicts"},
+      "cardinality": {"kind": "at_most", "count": 128},
+      "terminal": false,
+      "predicates": [
+        {"kind": "distinct", "field": "finding_id"},
+        {"kind": "same_members", "field": "finding_id", "result": "candidates", "result_field": "finding_id"}
+      ]
+    },
+    {
+      "name": "findings",
+      "from": {"node_id": "verify", "port": "findings"},
+      "cardinality": {"kind": "at_most", "count": 128},
+      "terminal": false,
+      "predicates": [
+        {"kind": "distinct", "field": "finding_id"},
+        {"kind": "all_match", "field": "verdict", "value": "confirmed"},
+        {"kind": "subset_of", "field": "finding_id", "result": "verdicts", "result_field": "finding_id"}
+      ]
+    },
+    {
+      "name": "verification_summary",
+      "from": {"node_id": "verify", "port": "summary"},
+      "cardinality": {"kind": "exactly", "count": 1},
+      "terminal": false,
+      "predicates": [
+        {"kind": "field_equals_result_count", "field": "candidate_count", "result": "candidates"},
+        {"kind": "field_equals_result_count", "field": "confirmed_count", "result": "findings"},
+        {"kind": "field_equals_sum", "field": "candidate_count", "terms": ["confirmed_count", "refuted_count"]}
+      ]
+    },
+    {
+      "name": "report",
+      "from": {"node_id": "triage", "port": "report"},
+      "cardinality": {"kind": "exactly", "count": 1},
+      "terminal": true,
+      "predicates": [
+        {"kind": "field_equals_result_count", "field": "confirmed_count", "result": "findings"},
+        {"kind": "field_equals_field", "field": "confirmed_count", "result": "verification_summary", "result_field": "confirmed_count"},
+        {"kind": "field_equals_field", "field": "refuted_count", "result": "verification_summary", "result_field": "refuted_count"}
+      ]
+    }
+  ],
+  "limits": {
+    "max_nodes": 8,
+    "max_edges": 16,
+    "max_depth": 8,
+    "max_fan_out": 16,
+    "max_total_invocations": 128
+  }
+}

@@ -1728,7 +1728,79 @@ fn empty_runtime_view(agent_did: &str) -> DocumentRuntimeView {
         tasks: Default::default(),
         schedules: Default::default(),
         event_triggers: Default::default(),
+        graph_definitions: Default::default(),
+        graph_run_pins: Default::default(),
+        visible_graph_package_artifact_ids: Default::default(),
     }
+}
+
+#[test]
+fn graph_artifact_visibility_unions_active_revisions_with_nonterminal_run_pins() {
+    let mut view = empty_runtime_view("did:key:owner");
+    view.graph_definitions.insert(
+        "graph".to_owned(),
+        DocumentRecord {
+            doc_id: "definition-doc".to_owned(),
+            value: crate::document_config::GraphDefinition {
+                graph_id: "graph".to_owned(),
+                owner_did: "did:key:owner".to_owned(),
+                enabled: true,
+                active_revision_digest: Some("sha256:active".to_owned()),
+                generation: Some(2),
+                created_at: None,
+                updated_at: None,
+            },
+        },
+    );
+    view.graph_definitions.insert(
+        "foreign-graph".to_owned(),
+        DocumentRecord {
+            doc_id: "foreign-definition-doc".to_owned(),
+            value: crate::document_config::GraphDefinition {
+                graph_id: "foreign-graph".to_owned(),
+                owner_did: "did:key:foreign".to_owned(),
+                enabled: true,
+                active_revision_digest: Some("sha256:foreign-active".to_owned()),
+                generation: Some(1),
+                created_at: None,
+                updated_at: None,
+            },
+        },
+    );
+    for (run_id, digest, status) in [
+        ("running", "sha256:pinned", "running"),
+        ("done", "sha256:retired", "succeeded"),
+    ] {
+        view.graph_run_pins.insert(
+            run_id.to_owned(),
+            DocumentRecord {
+                doc_id: format!("{run_id}-doc"),
+                value: crate::document_config::GraphRunPin {
+                    run_id: run_id.to_owned(),
+                    revision_digest: digest.to_owned(),
+                    owner_did: "did:key:owner".to_owned(),
+                    status: status.to_owned(),
+                },
+            },
+        );
+    }
+    view.graph_run_pins.insert(
+        "foreign-running".to_owned(),
+        DocumentRecord {
+            doc_id: "foreign-running-doc".to_owned(),
+            value: crate::document_config::GraphRunPin {
+                run_id: "foreign-running".to_owned(),
+                revision_digest: "sha256:foreign-pinned".to_owned(),
+                owner_did: "did:key:foreign".to_owned(),
+                status: "running".to_owned(),
+            },
+        },
+    );
+
+    assert_eq!(
+        super::active_graph_digests(&view),
+        std::collections::BTreeSet::from(["sha256:active".to_owned(), "sha256:pinned".to_owned(),])
+    );
 }
 
 #[test]

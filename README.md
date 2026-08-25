@@ -49,6 +49,24 @@ model, e.g. `OPENAI_API_KEY=... gents demo --backend-preset openai --model
 gpt-5.4-mini`. Add `--desktop` to launch the native app as soon as the runtime
 is ready.
 
+The binary also carries an immutable catalog of useful graphs. Cataloging is
+read-only; installation writes one explicit, attributable revision into an
+initialized home and publication is a separate confirmation step:
+
+```bash
+gents graph catalog code-review
+gents graph install code-review
+# Run the exact `gents graph publish ...` command in the install receipt.
+gents server
+gents graph run code-review --repo /path/to/repo --base origin/main --head HEAD --watch
+```
+
+Use `gents graph result <run-id>` to retrieve durable result document and commit
+references, or `gents graph cancel <run-id>` to request cancellation. The
+code-review graph accepts any local Git work tree and uses the existing
+principal, deployment, tool-surface, workspace, request, trigger, and graph-run
+machinery; bundling it grants no tools or execution authority.
+
 ## Why this exists
 
 Agent frameworks bolt persistence, identity, and coordination onto a loop. Gents inverts that: the loop is thin and formally specified, and the hard properties come from the substrate.

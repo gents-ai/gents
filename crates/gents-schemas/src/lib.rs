@@ -84,6 +84,10 @@ pub const EVENT_TRIGGER_GROUP_STATE: &str =
     include_str!("../schemas/agent/event_trigger_group_state.graphql");
 pub const GRAPH_DEFINITION_NAME: &str = "GraphDefinition";
 pub const GRAPH_DEFINITION: &str = include_str!("../schemas/agent/graph_definition.graphql");
+pub const GRAPH_REVISION_NAME: &str = "GraphRevision";
+pub const GRAPH_REVISION: &str = include_str!("../schemas/agent/graph_revision.graphql");
+pub const GRAPH_RUN_NAME: &str = "GraphRun";
+pub const GRAPH_RUN: &str = include_str!("../schemas/agent/graph_run.graphql");
 pub const PEER_PAIRING_DESIRED_NAME: &str = "PeerPairingDesired";
 pub const PEER_PAIRING_DESIRED: &str =
     include_str!("../schemas/agent/peer_pairing_desired.graphql");
@@ -162,6 +166,8 @@ pub const ALL: &[&str] = &[
     EVENT_TRIGGER,
     EVENT_TRIGGER_GROUP_STATE,
     GRAPH_DEFINITION,
+    GRAPH_REVISION,
+    GRAPH_RUN,
     PEER_PAIRING_DESIRED,
     DATA_PLANE_PAIRING_DESIRED,
     PEER_PAIRING_APPLIED,
@@ -217,6 +223,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVENT_TRIGGER_NAME,
     EVENT_TRIGGER_GROUP_STATE_NAME,
     GRAPH_DEFINITION_NAME,
+    GRAPH_REVISION_NAME,
+    GRAPH_RUN_NAME,
     PEER_PAIRING_DESIRED_NAME,
     DATA_PLANE_PAIRING_DESIRED_NAME,
     PEER_PAIRING_APPLIED_NAME,
@@ -258,6 +266,8 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     EVENT_TRIGGER_NAME,
     EVENT_TRIGGER_GROUP_STATE_NAME,
     GRAPH_DEFINITION_NAME,
+    GRAPH_REVISION_NAME,
+    GRAPH_RUN_NAME,
     ISOLATED_WORKSPACE_NAME,
     WORKSPACE_BINDING_NAME,
     WORKSPACE_RECEIPT_NAME,

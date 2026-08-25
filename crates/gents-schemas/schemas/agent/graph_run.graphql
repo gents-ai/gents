@@ -1,0 +1,22 @@
+type GraphRun @branchable {
+    run_id: String @index(unique: true) @immutable
+    graph_id: String @index @immutable
+    revision_digest: String @index @immutable
+    owner_did: String @index @immutable
+    caller_did: String @index @immutable
+    entry_name: String @index @immutable
+    correlation: String @index(unique: true) @immutable
+    status: String @index
+    input_json: String @immutable
+    semantic_manifest_json: String @immutable
+    limits_json: String @immutable
+    cancel_requested_at: DateTime @index
+    cancel_requested_by: String @index
+    cancel_reason: String
+    result_refs_json: String
+    update_generation: Int
+    error: String
+    created_at: DateTime @index(direction: DESC) @immutable
+    started_at: DateTime @index(direction: DESC)
+    completed_at: DateTime @index(direction: DESC)
+}

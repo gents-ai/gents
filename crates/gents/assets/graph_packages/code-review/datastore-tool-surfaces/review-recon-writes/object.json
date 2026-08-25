@@ -1,0 +1,22 @@
+{
+  "surface_id": "review-recon-writes",
+  "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
+  "display_name": "Review area writes",
+  "enabled": true,
+  "entries": [{
+    "tool_name": "write_review_area",
+    "collection": "CodeReviewArea",
+    "description": "Create one member of the closed review-area set.",
+    "output_obligation": {"scope": "trigger", "minimum_writes": 1, "expected_count_field": "lens_count"},
+    "fields": [
+      {"name": "run_id", "required": false, "fill": "correlation"},
+      {"name": "area_id", "required": true},
+      {"name": "repository_path", "required": true},
+      {"name": "lens", "required": true},
+      {"name": "path", "required": true},
+      {"name": "instructions", "required": true},
+      {"name": "baseline", "required": true},
+      {"name": "expected_total", "required": true}
+    ]
+  }]
+}

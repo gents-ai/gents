@@ -23,7 +23,8 @@
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2
       }
     },
     "expected_accepted": true,
@@ -53,7 +54,8 @@
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2
       }
     },
     "expected_accepted": false,
@@ -76,7 +78,8 @@
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2
       }
     },
     "expected_accepted": false,
@@ -106,7 +109,8 @@
         "max_nodes": 0,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2
       }
     },
     "expected_accepted": false,
@@ -147,7 +151,8 @@
         "max_nodes": 3,
         "max_edges": 3,
         "max_depth": 3,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2
       }
     },
     "expected_accepted": true,
@@ -177,7 +182,8 @@
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2
       }
     },
     "expected_accepted": false,
@@ -207,7 +213,8 @@
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2
       }
     },
     "expected_accepted": false,
@@ -253,7 +260,8 @@
         "max_nodes": 3,
         "max_edges": 3,
         "max_depth": 3,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2
       }
     },
     "expected_accepted": false,

@@ -204,6 +204,14 @@ pub(super) async fn run_control_watcher(
                     Ok(document_view::ControlUpdateOutcome::PendingVisibility) => {
                         pending_visibility = true;
                     }
+                    Ok(document_view::ControlUpdateOutcome::FullReload) => {
+                        document_view = document_view::load_document_runtime_view(
+                            node.as_ref(),
+                            &agent_did,
+                        )
+                        .await?;
+                        pending_visibility = document_view.has_unresolved_behavior_references();
+                    }
                     Err(error) => {
                         tracing::error!(
                             agent_did = %agent_did,

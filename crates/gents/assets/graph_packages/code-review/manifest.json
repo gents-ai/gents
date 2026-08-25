@@ -1,0 +1,39 @@
+{
+  "manifest_version": 1,
+  "name": "code-review",
+  "version": "1.0.0",
+  "description": "Bounded four-stage review: reconnaissance, lens swarm, verification, and triage.",
+  "compiler_version": "graph-intent-v2",
+  "upgrade_policy": "successor_revision",
+  "dependencies": [],
+  "roles": [
+    {"name": "coordinator", "description": "Runs reconnaissance, verification, and triage."},
+    {"name": "reviewer", "description": "Runs bounded parallel review lenses."}
+  ],
+  "variables": [
+    {"name": "repo", "phase": "run", "kind": "local_git_repository", "required": true, "sensitive": false},
+    {"name": "base", "phase": "run", "kind": "git_ref", "required": true, "sensitive": false},
+    {"name": "head", "phase": "run", "kind": "git_ref", "required": true, "sensitive": false},
+    {"name": "focus", "phase": "run", "kind": "string", "required": false, "sensitive": false}
+  ],
+  "schemas": [
+    "schemas/review_job.graphql",
+    "schemas/review_area.graphql",
+    "schemas/candidate_finding.graphql",
+    "schemas/scan_result.graphql",
+    "schemas/finding_verdict.graphql",
+    "schemas/finding.graphql",
+    "schemas/verification_summary.graphql",
+    "schemas/triage_report.graphql"
+  ],
+  "intent": "graph.intent.json",
+  "capabilities": "capabilities.json",
+  "requested_effects": ["schema_change", "isolated_workspace_read"],
+  "graph_ceiling": {
+    "max_nodes": 8,
+    "max_edges": 16,
+    "max_depth": 8,
+    "max_fan_out": 16,
+    "max_total_invocations": 128
+  }
+}

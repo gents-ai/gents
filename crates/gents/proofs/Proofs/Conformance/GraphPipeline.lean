@@ -52,4 +52,142 @@ def validationCaseJson (testCase : ValidationCase) : String :=
 def validationCasesJson : String :=
   jsonArray (validationCases.map validationCaseJson)
 
+structure RevisionGateCase where
+  name : String
+  status : String
+  artifactsComplete : Bool
+  activationPreconditionMet : Bool
+  pointerMatches : Bool
+  expectedActivate : Bool
+  expectedStart : Bool
+  deriving DecidableEq, Repr
+
+def revisionStatuses : List String := ["draft", "validated", "active", "retired"]
+
+def revisionGateCases : List RevisionGateCase :=
+  revisionStatuses.flatMap fun status =>
+    boolValues.flatMap fun artifactsComplete =>
+      boolValues.flatMap fun activationPreconditionMet =>
+        boolValues.map fun pointerMatches =>
+          { name :=
+              "status=" ++ status ++
+                ",complete=" ++ toString artifactsComplete ++
+                ",activation_precondition=" ++ toString activationPreconditionMet ++
+                ",pointer_matches=" ++ toString pointerMatches
+          , status := status
+          , artifactsComplete := artifactsComplete
+          , activationPreconditionMet := activationPreconditionMet
+          , pointerMatches := pointerMatches
+          , expectedActivate :=
+              status == "validated" && artifactsComplete && activationPreconditionMet
+          , expectedStart := status == "active" && artifactsComplete && pointerMatches
+          }
+
+theorem revisionGateCases_count : revisionGateCases.length = 32 := by native_decide
+
+def revisionGateCaseJson (testCase : RevisionGateCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString testCase.name ++ ","
+    ++ "\"status\":" ++ jsonString testCase.status ++ ","
+    ++ "\"artifacts_complete\":" ++ boolJson testCase.artifactsComplete ++ ","
+    ++ "\"activation_precondition_met\":" ++
+      boolJson testCase.activationPreconditionMet ++ ","
+    ++ "\"pointer_matches\":" ++ boolJson testCase.pointerMatches ++ ","
+    ++ "\"expected_activate\":" ++ boolJson testCase.expectedActivate ++ ","
+    ++ "\"expected_start\":" ++ boolJson testCase.expectedStart
+    ++ "}"
+
+def revisionGateCasesJson : String :=
+  jsonArray (revisionGateCases.map revisionGateCaseJson)
+
+structure RunTerminalCase where
+  name : String
+  status : String
+  cancellationRequested : Bool
+  resultContractSatisfied : Bool
+  activeWorkTerminal : Bool
+  expectedSucceed : Bool
+  expectedFail : Bool
+  expectedCancel : Bool
+  deriving DecidableEq, Repr
+
+def runStatuses : List (GraphPipeline.RunStatus × String) :=
+  [ (.running, "running")
+  , (.succeeded, "succeeded")
+  , (.failed, "failed")
+  , (.cancelled, "cancelled")
+  ]
+
+private def runState
+    (status : GraphPipeline.RunStatus)
+    (cancellationRequested : Bool) : GraphPipeline.State :=
+  { revision :=
+      { graphId := 1
+      , revisionId := 2
+      , digest := 3
+      , status := .active
+      , typesValid := true
+      , topologyValid := true
+      , capabilitiesAuthorized := true
+      , withinBounds := true
+      , artifactsComplete := true
+      }
+  , activeRevision := some 2
+  , run := some
+      { runId := 4
+      , graphId := 1
+      , revisionId := 2
+      , revisionDigest := 3
+      , status := status
+      , seedCommitted := true
+      , cancellationRequested := cancellationRequested
+      , resultsCommitted := false
+      }
+  }
+
+private def transitionAllowed
+    (state : GraphPipeline.State)
+    (action : GraphPipeline.Action) : Bool :=
+  (GraphPipeline.step? state action).isSome
+
+def runTerminalCases : List RunTerminalCase :=
+  runStatuses.flatMap fun (status, statusName) =>
+    boolValues.flatMap fun cancellationRequested =>
+      boolValues.flatMap fun resultContractSatisfied =>
+        boolValues.map fun activeWorkTerminal =>
+          let state := runState status cancellationRequested
+          { name :=
+              "status=" ++ statusName ++
+                ",cancel_requested=" ++ toString cancellationRequested ++
+                ",results_satisfied=" ++ toString resultContractSatisfied ++
+                ",work_terminal=" ++ toString activeWorkTerminal
+          , status := statusName
+          , cancellationRequested := cancellationRequested
+          , resultContractSatisfied := resultContractSatisfied
+          , activeWorkTerminal := activeWorkTerminal
+          , expectedSucceed :=
+              transitionAllowed state (.succeedRun resultContractSatisfied)
+          , expectedFail := transitionAllowed state .failRun
+          , expectedCancel := transitionAllowed state (.cancelRun activeWorkTerminal)
+          }
+
+theorem runTerminalCases_count : runTerminalCases.length = 32 := by native_decide
+
+def runTerminalCaseJson (testCase : RunTerminalCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString testCase.name ++ ","
+    ++ "\"status\":" ++ jsonString testCase.status ++ ","
+    ++ "\"cancellation_requested\":" ++
+      boolJson testCase.cancellationRequested ++ ","
+    ++ "\"result_contract_satisfied\":" ++
+      boolJson testCase.resultContractSatisfied ++ ","
+    ++ "\"active_work_terminal\":" ++ boolJson testCase.activeWorkTerminal ++ ","
+    ++ "\"expected_succeed\":" ++ boolJson testCase.expectedSucceed ++ ","
+    ++ "\"expected_fail\":" ++ boolJson testCase.expectedFail ++ ","
+    ++ "\"expected_cancel\":" ++ boolJson testCase.expectedCancel
+    ++ "}"
+
+def runTerminalCasesJson : String :=
+  jsonArray (runTerminalCases.map runTerminalCaseJson)
+
 end Conformance.GraphPipelineContracts

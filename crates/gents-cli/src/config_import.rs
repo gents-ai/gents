@@ -27,21 +27,7 @@ mod lean_vocab_test;
 
 const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
 
-const CONFIG_APPLY_ORDER: [Collection; 13] = [
-    Collection::PeerPairingDesired,
-    Collection::InferenceBackend,
-    Collection::InferenceProfile,
-    Collection::ToolServiceRegistry,
-    Collection::DatastoreToolSurface,
-    Collection::ToolSelection,
-    Collection::Skill,
-    Collection::AgentBehavior,
-    Collection::ProjectionAcpBinding,
-    Collection::Task,
-    Collection::Schedule,
-    Collection::EventTrigger,
-    Collection::AgentPrincipal,
-];
+const CONFIG_APPLY_ORDER: [Collection; 13] = gents::DESIRED_STATE_APPLY_ORDER;
 
 const CONFIG_PRUNE_ORDER: [Collection; 13] = [
     Collection::AgentPrincipal,
@@ -852,14 +838,37 @@ pub(crate) async fn apply_desired_state_changes(
 
     for collection in CONFIG_APPLY_ORDER {
         let docs = select_apply_docs_for_collection(desired_bundle, planned, collection)?;
-        let applied = apply_import_collection(
-            txn,
-            collection.graphql_type(),
-            collection.unique_field(),
-            &docs,
-            true,
-        )
-        .await?;
+        let applied = if collection == Collection::PeerPairingDesired
+            || uses_custom_apply_writer(collection.graphql_type())
+        {
+            // Pairings have compound manifest ownership semantics and remain
+            // in the CLI-specific path. The three custom writers also retain
+            // the existing batched/tombstone-aware CLI behavior; the runtime
+            // API routes package calls through the same dedicated writers.
+            apply_import_collection(
+                txn,
+                collection.graphql_type(),
+                collection.unique_field(),
+                &docs,
+                true,
+            )
+            .await?
+        } else {
+            let documents = docs
+                .iter()
+                .map(|doc| {
+                    Ok(gents::config_client::DesiredStateApplyDocument {
+                        collection,
+                        add: sanitize_import_document(collection.graphql_type(), doc, false)?,
+                        update: sanitize_import_document(collection.graphql_type(), doc, true)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let plan = gents::config_client::DesiredStateApplyPlan::new(documents)?;
+            gents::config_client::apply_desired_state_plan(txn, &plan)
+                .await?
+                .get(collection)
+        };
         counts.set(collection, applied);
 
         if let Some(sleep) = per_collection_sleep {

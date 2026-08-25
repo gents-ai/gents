@@ -28,16 +28,19 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
             name: "job".to_owned(),
             collection: input.collection.clone(),
             schema: input.schema.clone(),
+            input_contract: None,
             to: PortRef {
                 node_id: "worker".to_owned(),
                 port: input.name.clone(),
             },
         }],
+        results: vec![],
         limits: GraphLimits {
             max_nodes: 2,
             max_edges: 2,
             max_depth: 2,
             max_fan_out: 2,
+            max_total_invocations: 2,
         },
     };
     let capability = StageCapability {
@@ -103,4 +106,67 @@ fn successful_compilation_supplies_stable_publication_identity() {
     assert_eq!(first, second);
     assert!(first.digest.starts_with("sha256:"));
     assert_eq!(first.nodes[0].task_id, "worker-v1-task");
+}
+
+#[test]
+fn generated_revision_gate_cases_fence_publication_and_start_readiness() {
+    let cases = &lean_contract_snapshot().graph_pipeline_revision_gate_cases;
+    assert_eq!(
+        cases.len(),
+        32,
+        "Lean must emit the complete revision gate matrix"
+    );
+
+    for test_case in cases {
+        let decision = gents::graph_pipeline::revision_gate_decision(
+            &test_case.status,
+            test_case.artifacts_complete,
+            test_case.activation_precondition_met,
+            test_case.pointer_matches,
+        );
+        assert_eq!(
+            decision.may_activate, test_case.expected_activate,
+            "{} activate",
+            test_case.name
+        );
+        assert_eq!(
+            decision.may_start, test_case.expected_start,
+            "{} start",
+            test_case.name
+        );
+    }
+}
+
+#[test]
+fn generated_run_terminal_cases_fence_completion_cas() {
+    let cases = &lean_contract_snapshot().graph_pipeline_run_terminal_cases;
+    assert_eq!(
+        cases.len(),
+        32,
+        "Lean must emit the complete terminal matrix"
+    );
+
+    for test_case in cases {
+        let decision = gents::graph_pipeline::graph_run_terminal_decision(
+            &test_case.status,
+            test_case.cancellation_requested,
+            test_case.result_contract_satisfied,
+            test_case.active_work_terminal,
+        );
+        assert_eq!(
+            decision.may_succeed, test_case.expected_succeed,
+            "{} succeed",
+            test_case.name
+        );
+        assert_eq!(
+            decision.may_fail, test_case.expected_fail,
+            "{} fail",
+            test_case.name
+        );
+        assert_eq!(
+            decision.may_cancel, test_case.expected_cancel,
+            "{} cancel",
+            test_case.name
+        );
+    }
 }

@@ -48,6 +48,8 @@ pub(crate) use principal_assembly::BehaviorBuildError;
 #[cfg(test)]
 pub(crate) use builder::PendingAgentBehavior;
 pub use builder::{BehaviorBuilder, GentsBuilder};
+#[cfg(test)]
+pub(crate) use document_view::load_document_runtime_view;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessLifecycleState {

@@ -1,0 +1,31 @@
+{
+  "surface_id": "review-triage-writes",
+  "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
+  "display_name": "Triage reads and report writes",
+  "enabled": true,
+  "entries": [
+    {
+      "kind": "read",
+      "tool_name": "read_finding",
+      "collection": "CodeReviewFinding",
+      "description": "Load every operator-facing CodeReviewFinding for this run. run_id is filled by the runtime.",
+      "fields": ["finding_id", "area_id", "severity", "confidence", "title", "verdict"],
+      "filter_fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"}
+      ]
+    },
+    {
+      "tool_name": "write_triage_report",
+      "collection": "CodeReviewTriageReport",
+      "description": "Create the single count-balanced final report for this correlated review run; run_id is filled by the runtime.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "high_priority_count", "required": true},
+        {"name": "confirmed_count", "required": true},
+        {"name": "refuted_count", "required": true},
+        {"name": "summary", "required": true}
+      ]
+    }
+  ]
+}

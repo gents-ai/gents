@@ -24,6 +24,7 @@
 mod agent_behavior;
 mod approval;
 mod common;
+mod desired_state;
 mod event_trigger;
 mod inference_backend;
 mod schedule;
@@ -35,6 +36,14 @@ pub mod patch;
 pub use agent_behavior::write_agent_behavior_document;
 pub use approval::{list_held_tool_calls, write_tool_approval, HeldToolCall, ToolApprovalVerdict};
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
+pub use desired_state::{
+    apply_desired_state_plan, DesiredStateApplyCounts, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
+};
+pub(crate) use desired_state::{
+    desired_state_document_digest, read_desired_state_document_in_txn,
+    verify_existing_desired_state_plan,
+};
 pub use event_trigger::write_event_trigger_document;
 pub use inference_backend::{write_inference_backend_document, InferenceBackendUpsertDocument};
 pub use schedule::write_schedule_document;
