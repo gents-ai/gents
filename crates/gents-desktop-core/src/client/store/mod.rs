@@ -104,6 +104,7 @@ pub struct ClientStore {
     tool_results_by_session_id: HashMap<String, Vec<usize>>,
     runtimes_by_agent_did: HashMap<String, usize>,
     latest_response_by_request_id: HashMap<String, usize>,
+    response_index_by_key: HashMap<String, usize>,
     request_index_by_id: HashMap<String, usize>,
 }
 
@@ -140,6 +141,83 @@ impl Default for ClientStore {
 }
 
 impl ClientStore {
+    /// Merge an observer patch known to contain only `AgentResponse` rows.
+    ///
+    /// The normal immutable merge rebuilds every collection and every index.
+    /// Streaming responses are the hot exception: their patch cannot affect
+    /// transcript/config indexes, so update the response vector and its two
+    /// indexes without cloning historical messages, tools, or control-plane
+    /// rows. `ObservedStore` owns snapshot isolation with `Arc::make_mut`.
+    pub(crate) fn merge_response_patch_in_place(&mut self, patch: ClientStore) {
+        for incoming in patch.responses {
+            let key = response_merge_key(&incoming);
+            let index = if let Some(index) = self.response_index_by_key.get(&key).copied() {
+                let previous_request_id = self.responses[index].request_id.clone();
+                self.responses[index] = incoming;
+                if previous_request_id != self.responses[index].request_id {
+                    if previous_request_id.as_deref().is_some_and(|request_id| {
+                        self.latest_response_by_request_id.get(request_id) == Some(&index)
+                    }) {
+                        self.reindex_latest_response_for_request(
+                            previous_request_id.as_deref().unwrap_or_default(),
+                        );
+                    }
+                }
+                index
+            } else {
+                let index = self.responses.len();
+                self.responses.push(incoming);
+                self.response_index_by_key.insert(key, index);
+                index
+            };
+
+            let Some(request_id) = self.responses[index]
+                .request_id
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            match self.latest_response_by_request_id.get(request_id).copied() {
+                Some(current) if current != index => {
+                    if indexing::compare_response_rows(
+                        &self.responses[index],
+                        &self.responses[current],
+                    )
+                    .is_gt()
+                    {
+                        self.latest_response_by_request_id
+                            .insert(request_id.to_owned(), index);
+                    }
+                }
+                _ => {
+                    self.latest_response_by_request_id
+                        .insert(request_id.to_owned(), index);
+                }
+            }
+        }
+    }
+
+    fn reindex_latest_response_for_request(&mut self, request_id: &str) {
+        let latest = self
+            .responses
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.request_id.as_deref() == Some(request_id))
+            .max_by(|(_, left), (_, right)| indexing::compare_response_rows(left, right))
+            .map(|(index, _)| index);
+        if let Some(index) = latest {
+            self.latest_response_by_request_id
+                .insert(request_id.to_owned(), index);
+        } else {
+            self.latest_response_by_request_id.remove(request_id);
+        }
+    }
+
+    pub(crate) fn is_response_only_patch(&self) -> bool {
+        self.row_count() == self.responses.len()
+    }
+
     pub fn merge_snapshot(&self, snapshot: ClientStore) -> Self {
         let mut rows = self.to_rows();
         let incoming = snapshot.to_rows();
@@ -1213,6 +1291,58 @@ fn tool_service_registry_merge_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn response_row(content: &str, progress_seq: i64) -> AgentResponseRow {
+        serde_json::from_value(serde_json::json!({
+            "response_key": "response-1",
+            "request_id": "request-1",
+            "agent_did": "did:agent:1",
+            "session_id": "session-1",
+            "content": content,
+            "status": "streaming",
+            "progress_seq": progress_seq
+        }))
+        .expect("response row")
+    }
+
+    #[test]
+    fn response_patch_preserves_cold_collection_allocations_and_updates_latest_index() {
+        let messages = (0..600)
+            .map(|sequence| {
+                serde_json::from_value(serde_json::json!({
+                    "message_key": format!("session-1:{sequence}"),
+                    "session_id": "session-1",
+                    "sequence": sequence,
+                    "role": "assistant",
+                    "content": format!("durable transcript row {sequence}")
+                }))
+                .expect("message row")
+            })
+            .collect();
+        let mut store = ClientStore::from_rows(ClientStoreRows {
+            responses: vec![response_row("a", 1)],
+            messages,
+            ..ClientStoreRows::default()
+        });
+        let messages_ptr = store.messages.as_ptr();
+        let messages_capacity = store.messages.capacity();
+
+        store.merge_response_patch_in_place(ClientStore::from_rows(ClientStoreRows {
+            responses: vec![response_row("ab", 2)],
+            ..ClientStoreRows::default()
+        }));
+
+        assert_eq!(store.messages.len(), 600);
+        assert_eq!(store.messages.as_ptr(), messages_ptr);
+        assert_eq!(store.messages.capacity(), messages_capacity);
+        assert_eq!(store.responses.len(), 1);
+        assert_eq!(
+            store
+                .latest_response_for_request("request-1")
+                .and_then(|row| row.content.as_deref()),
+            Some("ab")
+        );
+    }
 
     fn goal_row(goal_id: &str, created_at: &str, status: &str) -> GoalRow {
         serde_json::from_value(serde_json::json!({

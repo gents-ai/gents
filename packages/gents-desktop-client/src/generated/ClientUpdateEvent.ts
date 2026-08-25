@@ -4,4 +4,4 @@ export type ClientUpdateEvent = {
 /**
  * Coarse ping reason: store | health | lifecycle | config.
  */
-reason: string, };
+reason: string, storeVersion: number | null, reconcileVersion: number | null, responseOnly: boolean, };

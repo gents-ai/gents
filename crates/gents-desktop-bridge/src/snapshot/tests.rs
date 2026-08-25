@@ -8,7 +8,10 @@ use gents_protocol::row::{
 use super::super::types::{
     ConversationSummary, RenderedTimelineItem, ScheduleView, TaskRecentRunsView, TaskView,
 };
+use super::apply_session_timeline_page;
+use super::apply_session_timeline_page_with_query;
 use super::attach_last_request_context;
+use super::build_session_live_delta_from_store;
 use super::build_session_snapshot_from_store;
 use super::build_session_snapshot_from_store_for_agent;
 use super::conversation_task_tag;

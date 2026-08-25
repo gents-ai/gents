@@ -78,6 +78,8 @@ async function fulfillBridgeRoute(
       sessionId: string;
       agentDid?: string | null;
       requestId?: string | null;
+      timelineLimit?: number;
+      timelineBeforeItemKey?: string | null;
     };
     await fulfillJson(
       route,
@@ -85,6 +87,10 @@ async function fulfillBridgeRoute(
         body.sessionId,
         body.agentDid,
         body.requestId,
+        {
+          limit: body.timelineLimit,
+          beforeItemKey: body.timelineBeforeItemKey,
+        },
       ),
     );
     return;
@@ -93,6 +99,18 @@ async function fulfillBridgeRoute(
     await fulfillJson(
       route,
       await fixture.adapter.fetchOperationsSnapshot({ rootRequestId: null }),
+    );
+    return;
+  }
+  if (method === "POST" && path === "/desktop/tool-call-holds/list") {
+    const body = route.request().postDataJSON() as { agentDid: string };
+    await fulfillJson(route, await fixture.adapter.listToolCallHolds(body.agentDid));
+    return;
+  }
+  if (method === "POST" && path === "/desktop/tool-call-holds/resolve") {
+    await fulfillJson(
+      route,
+      await fixture.adapter.resolveToolCallHold(route.request().postDataJSON()),
     );
     return;
   }

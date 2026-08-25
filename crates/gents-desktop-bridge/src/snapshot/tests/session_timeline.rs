@@ -1,5 +1,176 @@
 use super::*;
 
+#[test]
+fn session_timeline_pages_are_bounded_and_cursor_stable() {
+    let store = make_streaming_store_with_response_content("streaming");
+    let mut snapshot =
+        build_session_snapshot_from_store(&store, "sess-1", None).expect("session snapshot");
+    snapshot.timeline_items = (0..100)
+        .map(|index| RenderedTimelineItem::UserMessage {
+            item_key: format!("message-{index:03}"),
+            request_id: Some(format!("request-{index:03}")),
+            sequence: Some(index),
+            content: format!("row {index}"),
+            timestamp: None,
+        })
+        .collect();
+
+    apply_session_timeline_page(&mut snapshot, None, Some(40)).expect("tip page");
+    let tip = snapshot.timeline_page.as_ref().expect("tip metadata");
+    assert_eq!(snapshot.timeline_items.len(), 40);
+    assert_eq!(tip.total_items, 100);
+    assert_eq!(tip.oldest_item_key.as_deref(), Some("message-060"));
+    assert!(tip.has_older);
+    assert!(!tip.has_newer);
+
+    let mut older =
+        build_session_snapshot_from_store(&store, "sess-1", None).expect("older snapshot");
+    older.timeline_items = (0..100)
+        .map(|index| RenderedTimelineItem::UserMessage {
+            item_key: format!("message-{index:03}"),
+            request_id: Some(format!("request-{index:03}")),
+            sequence: Some(index),
+            content: format!("row {index}"),
+            timestamp: None,
+        })
+        .collect();
+    apply_session_timeline_page(&mut older, Some("message-060"), Some(40)).expect("older page");
+    let page = older.timeline_page.as_ref().expect("older metadata");
+    assert_eq!(older.timeline_items.len(), 40);
+    assert_eq!(page.oldest_item_key.as_deref(), Some("message-020"));
+    assert!(page.has_older);
+    assert!(page.has_newer);
+
+    let mut capped =
+        build_session_snapshot_from_store(&store, "sess-1", None).expect("capped snapshot");
+    capped.timeline_items = (0..100)
+        .map(|index| RenderedTimelineItem::UserMessage {
+            item_key: format!("message-{index:03}"),
+            request_id: None,
+            sequence: Some(index),
+            content: format!("row {index}"),
+            timestamp: None,
+        })
+        .collect();
+    apply_session_timeline_page(&mut capped, None, Some(usize::MAX)).expect("capped page");
+    assert_eq!(capped.timeline_items.len(), 80);
+
+    let mut stale_cursor = capped.clone();
+    assert!(
+        apply_session_timeline_page(&mut stale_cursor, Some("message-not-present"), Some(40))
+            .is_err()
+    );
+}
+
+#[test]
+fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() {
+    let store = make_streaming_store_with_response_content("streaming");
+    let mut snapshot =
+        build_session_snapshot_from_store(&store, "sess-1", None).expect("session snapshot");
+    snapshot.timeline_items = (0..81)
+        .map(|index| RenderedTimelineItem::UserMessage {
+            item_key: format!("message-{index:03}"),
+            request_id: None,
+            sequence: Some(index),
+            content: format!("row {index}"),
+            timestamp: None,
+        })
+        .collect();
+    let page = gents_desktop_core::client::SessionTranscriptQueryPage {
+        store: ClientStore::default(),
+        query_count: 2,
+        queried_rows: 81,
+        message_query_limit: 41,
+        tool_call_query_limit: 321,
+        source_exhausted: false,
+        has_newer: true,
+    };
+
+    apply_session_timeline_page_with_query(
+        &mut snapshot,
+        Some("message-081"),
+        Some(40),
+        Some(&page),
+    )
+    .expect("queried page");
+    let metadata = snapshot.timeline_page.as_ref().expect("page metadata");
+    assert_eq!(snapshot.timeline_items.len(), 40);
+    assert_eq!(metadata.oldest_item_key.as_deref(), Some("message-041"));
+    assert_eq!(metadata.newest_item_key.as_deref(), Some("message-080"));
+    assert_eq!(metadata.total_items, -1);
+    assert_eq!(metadata.total_items_exact, Some(false));
+    assert!(metadata.has_older);
+    assert!(metadata.has_newer);
+    assert_eq!(metadata.query_count, Some(2));
+    assert_eq!(metadata.queried_rows, Some(81));
+    assert_eq!(metadata.message_query_limit, Some(41));
+    assert_eq!(metadata.tool_call_query_limit, Some(321));
+}
+
+#[test]
+fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
+    let store = make_streaming_store_with_response_content("hello world");
+    let revision = gents_desktop_core::client::StoreProjectionRevision {
+        store_version: 9,
+        reconcile_version: 4,
+    };
+    let delta = build_session_live_delta_from_store(
+        &store,
+        revision,
+        "sess-1",
+        Some("did:test:amy"),
+        "req-1",
+        4,
+        5,
+        &test_live_text_hash("hello"),
+        0,
+        &test_live_text_hash(""),
+    );
+    assert_eq!(delta.outcome, "delta");
+    let content = delta.content.expect("content patch");
+    assert_eq!(content.mode, "append");
+    assert_eq!(content.value, " world");
+    assert_eq!(content.byte_len, 11);
+
+    let replaced = build_session_live_delta_from_store(
+        &store,
+        revision,
+        "sess-1",
+        Some("did:test:amy"),
+        "req-1",
+        4,
+        5,
+        "wrong-base",
+        0,
+        &test_live_text_hash(""),
+    );
+    assert_eq!(replaced.content.expect("replacement").mode, "replace");
+
+    let fenced = build_session_live_delta_from_store(
+        &store,
+        revision,
+        "sess-1",
+        Some("did:test:amy"),
+        "req-1",
+        3,
+        5,
+        &test_live_text_hash("hello"),
+        0,
+        &test_live_text_hash(""),
+    );
+    assert_eq!(fenced.outcome, "snapshotRequired");
+    assert!(fenced.content.is_none());
+}
+
+fn test_live_text_hash(value: &str) -> String {
+    let mut hash = 0x811c9dc5_u32;
+    for byte in value.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    format!("{hash:08x}")
+}
+
 fn assistant_message_json(text: &str) -> String {
     serde_json::to_string(&Message::assistant(text)).expect("serialize assistant")
 }

@@ -16,7 +16,12 @@ import {
 } from "@source-inc/gents-desktop-chat";
 import {
   delay,
+  applySessionLiveDelta,
   logShellEvent,
+  mergeOlderSessionTimelinePage,
+  mergeSessionTipSnapshot,
+  sessionLiveDeltaRequest,
+  SESSION_TIMELINE_PAGE_SIZE,
   setDesktopShellTimingConfigForTests,
   timingConfig,
   trackedRequestIdForSession,
@@ -67,6 +72,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   );
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
   const [session, setSession] = useState<DesktopSessionSnapshot | null>(null);
+  const sessionRef = useRef<DesktopSessionSnapshot | null>(null);
   const [startupPhase, setStartupPhaseState] = useState<DesktopStartupPhase>(
     "loading-configuration",
   );
@@ -185,6 +191,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   selectedAgentDidRef.current = selectedAgentDid;
   selectedSessionIdRef.current = selectedSessionId;
   selectedTrackedRequestIdRef.current = selectedTrackedRequestId;
+  sessionRef.current = session;
 
   async function refreshSnapshot() {
     const refreshSeq = snapshotRefreshSeq.current + 1;
@@ -236,9 +243,14 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
         nextSessionId,
         selectedAgentDidRef.current,
         selectedTrackedRequestIdRef.current,
+        { limit: SESSION_TIMELINE_PAGE_SIZE },
       );
       if (sessionRefreshSeq.current === refreshSeq) {
-        setSession(next);
+        setSession((current) => {
+          const merged = next ? mergeSessionTipSnapshot(current, next) : null;
+          sessionRef.current = merged;
+          return merged;
+        });
       }
       return next;
     } catch (err) {
@@ -246,6 +258,53 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
         setError(String(err));
       }
       return null;
+    }
+  }
+
+  async function refreshSessionLiveDelta(): Promise<boolean> {
+    const current = sessionRef.current;
+    const requestId = selectedTrackedRequestIdRef.current;
+    if (!current || !requestId || !api.fetchSessionLiveDelta) return false;
+    const request = sessionLiveDeltaRequest(current, requestId);
+    if (!request) return false;
+    try {
+      const delta = await api.fetchSessionLiveDelta(request);
+      if (!delta || selectedSessionIdRef.current !== current.sessionId) return false;
+      const latest = sessionRef.current;
+      if (!latest || latest.sessionId !== current.sessionId) return true;
+      const next = applySessionLiveDelta(latest, delta);
+      if (!next) return false;
+      sessionRef.current = next;
+      setSession(next);
+      return true;
+    } catch (err) {
+      setError(String(err));
+      return false;
+    }
+  }
+
+  async function loadOlderSessionTimeline(): Promise<boolean> {
+    const current = sessionRef.current;
+    const cursor = current?.timelinePage?.oldestItemKey ?? null;
+    if (!current || !current.timelinePage?.hasOlder || !cursor) {
+      return false;
+    }
+
+    try {
+      const older = await api.fetchSessionSnapshot(
+        current.sessionId,
+        current.agentDid ?? selectedAgentDidRef.current,
+        selectedTrackedRequestIdRef.current,
+        { limit: SESSION_TIMELINE_PAGE_SIZE, beforeItemKey: cursor },
+      );
+      if (!older || selectedSessionIdRef.current !== current.sessionId) {
+        return false;
+      }
+      setSession((latest) => mergeOlderSessionTimelinePage(latest, older));
+      return older.timelineItems.length > 0;
+    } catch (err) {
+      setError(String(err));
+      return false;
     }
   }
 
@@ -357,6 +416,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     newConversationAgentRef,
     onStartClient,
     refreshSession,
+    refreshSessionLiveDelta,
     refreshSnapshot,
     restartDesktopClient,
     runtimeHealth,
@@ -365,6 +425,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     selectedDeployment,
     selectedSessionId,
     selectedSessionIdRef,
+    selectedTrackedRequestIdRef,
     selectedTrackedRequestId,
     sending,
     setLocalWorkflow,
@@ -539,6 +600,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     onSelectSession,
     onStartNewConversation,
     refreshSession,
+    loadOlderSessionTimeline,
     refreshSnapshot,
     onAddPeer,
     onPairBearer,

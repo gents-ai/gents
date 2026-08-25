@@ -46,4 +46,30 @@ pub struct ClientUpdateEvent {
     /// Coarse ping reason: store | health | lifecycle | config.
     #[ts(type = "string")]
     pub reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconcile_version: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub response_only: bool,
+}
+
+impl ClientUpdateEvent {
+    pub fn coarse(reason: &'static str) -> Self {
+        Self {
+            reason,
+            store_version: None,
+            reconcile_version: None,
+            response_only: false,
+        }
+    }
+
+    pub fn store(notice: gents_desktop_core::client::StoreUpdateNotice) -> Self {
+        Self {
+            reason: "store",
+            store_version: Some(notice.revision.store_version),
+            reconcile_version: Some(notice.revision.reconcile_version),
+            response_only: notice.response_only,
+        }
+    }
 }

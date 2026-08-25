@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-session-live-delta"
+description = "Enables the desktop_session_live_delta command without any pre-configured scope."
+commands.allow = ["desktop_session_live_delta"]
+
+[[permission]]
+identifier = "deny-desktop-session-live-delta"
+description = "Denies the desktop_session_live_delta command without any pre-configured scope."
+commands.deny = ["desktop_session_live_delta"]

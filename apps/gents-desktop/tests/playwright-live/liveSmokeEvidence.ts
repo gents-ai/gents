@@ -18,6 +18,10 @@ export type LiveSmokeEvidence = LiveSmokeRunnerInfo & {
   requestId: string;
   turnState: string;
   transcriptRows: number;
+  transcriptQueryCount: number;
+  transcriptQueriedRows: number;
+  transcriptMessageQueryLimit: number;
+  transcriptToolCallQueryLimit: number;
   diagnostics: RequestDiagnosticsBundle;
 };
 
@@ -44,6 +48,10 @@ export function liveSmokeSummary(evidence: LiveSmokeEvidence) {
     `| Request | \`${evidence.requestId}\` |`,
     `| Turn state | \`${evidence.turnState}\` |`,
     `| Transcript rows | \`${evidence.transcriptRows}\` |`,
+    `| Transcript DefraDB queries | \`${evidence.transcriptQueryCount}\` |`,
+    `| Transcript rows queried | \`${evidence.transcriptQueriedRows}\` |`,
+    `| Message query limit | \`${evidence.transcriptMessageQueryLimit}\` |`,
+    `| Tool-call query limit | \`${evidence.transcriptToolCallQueryLimit}\` |`,
     `| Desktop timeline rows | \`${evidence.diagnostics.desktop.timelineCount}\` |`,
     `| Remote timeline rows | \`${evidence.diagnostics.remote.timelineCount}\` |`,
     `| Desktop message rows | \`${evidence.diagnostics.desktop.messageCount}\` |`,

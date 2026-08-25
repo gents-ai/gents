@@ -4,7 +4,10 @@ use gents_desktop_core::client::ClientCore;
 use serde::Serialize;
 
 use crate::live_fixture::LiveBridgeFixture;
-use gents_desktop_bridge::snapshot::{build_runtime_snapshot, build_session_snapshot_for_agent};
+use gents_desktop_bridge::snapshot::{
+    apply_session_timeline_page_with_query, build_runtime_snapshot,
+    build_session_snapshot_for_agent, build_session_snapshot_for_agent_with_transcript,
+};
 use gents_desktop_bridge::types::{
     turn_state_label, DesktopClientSnapshot, DesktopSessionSnapshot,
 };
@@ -90,15 +93,51 @@ pub(crate) async fn build_desktop_session_snapshot(
     agent_did: Option<&str>,
     session_id: &str,
     request_id: Option<&str>,
+    timeline_limit: Option<usize>,
+    timeline_before_item_key: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
-    build_session_snapshot_for_agent(
+    let page = match gents_desktop_core::client::load_session_transcript_page(
+        fixture.desktop_core().node(),
+        session_id,
+        timeline_before_item_key,
+        timeline_limit,
+    )
+    .await
+    {
+        Ok(page) => page,
+        Err(error) => {
+            tracing::warn!(
+                session_id,
+                error = %error,
+                "live bridge bounded transcript query failed"
+            );
+            return None;
+        }
+    };
+    let mut snapshot = build_session_snapshot_for_agent_with_transcript(
         fixture.desktop_core().as_ref(),
         agent_did,
         session_id,
         request_id,
+        Some(&page.store),
+        timeline_before_item_key.is_none(),
     )
-    .await
+    .await?;
+    if let Err(error) = apply_session_timeline_page_with_query(
+        &mut snapshot,
+        timeline_before_item_key,
+        timeline_limit,
+        Some(&page),
+    ) {
+        tracing::warn!(
+            session_id,
+            error,
+            "live bridge transcript page projection failed"
+        );
+        return None;
+    }
+    Some(snapshot)
 }
 
 pub(crate) async fn build_request_diagnostics_bundle(

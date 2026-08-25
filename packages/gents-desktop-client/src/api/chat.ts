@@ -6,11 +6,13 @@ export function fetchSessionSnapshot(
   agentDid?: string | null,
   requestId?: string | null,
   api?: DesktopApiAdapter,
+  timelinePage?: { limit?: number; beforeItemKey?: string | null },
 ) {
   return getDesktopApiAdapter(api).fetchSessionSnapshot(
     sessionId,
     agentDid,
     requestId,
+    timelinePage,
   );
 }
 

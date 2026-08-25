@@ -25,6 +25,7 @@
     "test:ui:live:e2e": "node ./tests/run-live-playwright.mjs",
     "test:ui:live:e2e:real": "node ./tests/run-live-playwright.mjs --require-real-inference",
     "test:ui:ios:e2e": "node ./tests/run-ios-simulator-e2e.mjs",
+    "perf:mobile": "node ./tests/run-mobile-performance.mjs",
     "test:ui:native:preflight": "npm run build && cargo build -p gents-desktop-tauri && npm run tauri -- --version",
     "test:live": "node ./tests/run-live-test.mjs",
     "test:live:behavior-config": "node ./tests/run-live-test.mjs --suite behavior",

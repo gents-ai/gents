@@ -18,6 +18,7 @@ import type {
   DesktopListSubagentTreeRequest,
   DesktopPreviewInterruptCascadeRequest,
   DesktopSessionSnapshot,
+  SessionLiveDeltaView,
   EventTriggerDeleteRequest,
   EventTriggerSaveRequest,
   InferenceProbeResult,
@@ -97,7 +98,21 @@ export type DesktopApiAdapter = {
     sessionId: string,
     agentDid?: string | null,
     requestId?: string | null,
+    timelinePage?: {
+      limit?: number;
+      beforeItemKey?: string | null;
+    },
   ) => Promise<DesktopSessionSnapshot | null>;
+  fetchSessionLiveDelta?: (request: {
+    sessionId: string;
+    agentDid?: string | null;
+    requestId: string;
+    baseReconcileVersion: number;
+    baseContentByteLen: number;
+    baseContentHash: string;
+    baseReasoningByteLen: number;
+    baseReasoningHash: string;
+  }) => Promise<SessionLiveDeltaView | null>;
   sendChatMessage: (request: {
     agentDid: string;
     behaviorId?: string | null;

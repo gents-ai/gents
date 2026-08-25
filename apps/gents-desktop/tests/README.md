@@ -37,6 +37,11 @@ The desktop test stack has three layers:
   through a debug-only in-app driver. The runner detects an unexpected native
   app exit and retains screenshots under the printed temporary artifact
   directory.
+- `npm run perf:mobile -- --runs=5` measures deterministic mobile interaction
+  fixtures at an iPhone viewport. It writes JSON plus Markdown under
+  `test-results/mobile-performance/`; only bounded row, payload, and refresh
+  assertions can fail the command. Elapsed time, React work, JavaScript heap,
+  and CPU-task proxies are evidence, not CI timing gates.
 - `npm run test:ui:native:preflight` runs the non-GUI native Tauri preflight.
 
 Root Makefile shortcuts mirror the common commands, including
@@ -65,12 +70,20 @@ default so pairing and first-message behavior are tested from a clean install:
 ```bash
 npm run test:ui:ios:e2e
 npm run test:ui:ios:e2e -- --runs=3
+npm run test:ui:ios:e2e -- --runs=3 --measure \
+  --artifacts=test-results/mobile-performance/ios
 ```
 
 Set `GENTS_IOS_SIMULATOR_ID` to choose a device.
 `GENTS_E2E_ISSUER_GENTS` and `GENTS_E2E_ISSUER_HOME` override the local issuer;
 setting `GENTS_E2E_ISSUER_SSH` explicitly uses a remote issuer. `--keep-data`
 reuses an existing pairing. The runner never prints the single-use invite.
+Measurement mode records correlated application boundaries, observer counters
+(including response in-place versus copy-on-write merges), simulator RSS, and
+process CPU samples as JSON and Markdown. Reset-data and
+keep-data runs are reported as separate cold-data and warm-data classes; never
+combine them into one trend. Simulator process metrics are not substitutes for
+device energy, thermal, or real suspend/resume evidence.
 
 The agent browser can use either harness backend. Deterministic mode is the
 fast click-through layer. Live mode starts `bridge_runner`, an embedded

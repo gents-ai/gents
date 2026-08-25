@@ -130,7 +130,9 @@ impl ClientStore {
         }
 
         let mut latest_response_by_request_id = HashMap::new();
+        let mut response_index_by_key = HashMap::new();
         for (index, row) in rows.responses.iter().enumerate() {
+            response_index_by_key.insert(super::response_merge_key(row), index);
             let Some(request_id) = row.request_id.as_deref().filter(|value| !value.is_empty())
             else {
                 continue;
@@ -198,6 +200,7 @@ impl ClientStore {
             tool_results_by_session_id,
             runtimes_by_agent_did,
             latest_response_by_request_id,
+            response_index_by_key,
             request_index_by_id,
         }
     }
@@ -261,7 +264,10 @@ pub(super) fn cmp_opt_str_asc(left: Option<&str>, right: Option<&str>) -> std::c
     left.unwrap_or_default().cmp(right.unwrap_or_default())
 }
 
-fn compare_response_rows(left: &AgentResponseRow, right: &AgentResponseRow) -> std::cmp::Ordering {
+pub(super) fn compare_response_rows(
+    left: &AgentResponseRow,
+    right: &AgentResponseRow,
+) -> std::cmp::Ordering {
     left.progress_seq
         .unwrap_or_default()
         .cmp(&right.progress_seq.unwrap_or_default())

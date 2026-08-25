@@ -7,6 +7,7 @@ import type {
   CodexLoginResult,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
+  SessionLiveDeltaView,
   InferenceProbeResult,
   InitSummary,
   InterruptRequestResult,
@@ -142,11 +143,24 @@ export function createDesktopApiAdapter(
       ),
     fetchNetworkStatus: () =>
       invokeDesktop<NetworkStatusView>("desktop_network_status"),
-    fetchSessionSnapshot: (sessionId, agentDid, requestId) =>
+    fetchSessionSnapshot: (sessionId, agentDid, requestId, timelinePage) =>
       invokeDesktop<DesktopSessionSnapshot | null>("desktop_session_snapshot", {
         sessionId,
         agentDid,
         requestId,
+        timelineLimit: timelinePage?.limit,
+        timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
+      }),
+    fetchSessionLiveDelta: (request) =>
+      invokeDesktop<SessionLiveDeltaView | null>("desktop_session_live_delta", {
+        sessionId: request.sessionId,
+        agentDid: request.agentDid ?? null,
+        requestId: request.requestId,
+        baseReconcileVersion: request.baseReconcileVersion,
+        baseContentByteLen: request.baseContentByteLen,
+        baseContentHash: request.baseContentHash,
+        baseReasoningByteLen: request.baseReasoningByteLen,
+        baseReasoningHash: request.baseReasoningHash,
       }),
     sendChatMessage: (request) =>
       invokeDesktop<ChatSendResult>("desktop_chat_send", { request }),

@@ -4,6 +4,8 @@ use crate::error::BridgeError;
 
 #[cfg(feature = "native-e2e")]
 const E2E_STATUS_FILENAME: &str = "native-e2e-status.json";
+#[cfg(feature = "native-e2e")]
+const E2E_EVENTS_FILENAME: &str = "native-e2e-events.jsonl";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +15,8 @@ pub struct NativeE2eConfig {
     prompt: String,
     expected_response: String,
     expect_empty_conversation_slice: bool,
+    correlation_id: String,
+    measure_performance: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -20,6 +24,9 @@ pub struct NativeE2eConfig {
 pub struct NativeE2eStatus {
     stage: String,
     detail: Option<String>,
+    correlation_id: Option<String>,
+    monotonic_ms: Option<f64>,
+    metrics: Option<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -59,6 +66,10 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeErro
                 .ok()
                 .as_deref()
                 == Some("1"),
+            correlation_id: std::env::var("GENTS_E2E_CORRELATION_ID")
+                .unwrap_or_else(|_| "native-e2e".to_owned()),
+            measure_performance: std::env::var("GENTS_MOBILE_PERFORMANCE").ok().as_deref()
+                == Some("1"),
         }))
     }
 }
@@ -95,6 +106,23 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
                 "native E2E detail must not exceed 2048 bytes",
             ));
         }
+        if status
+            .correlation_id
+            .as_ref()
+            .is_some_and(|value| value.is_empty() || value.len() > 128)
+        {
+            return Err(BridgeError::from_legacy_message(
+                "native E2E correlation id must contain 1-128 bytes",
+            ));
+        }
+        if status
+            .monotonic_ms
+            .is_some_and(|value| !value.is_finite() || value < 0.0)
+        {
+            return Err(BridgeError::from_legacy_message(
+                "native E2E monotonic time must be finite and nonnegative",
+            ));
+        }
 
         let directory = std::env::temp_dir();
         tokio::fs::create_dir_all(&directory)
@@ -108,9 +136,14 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
         let bytes = serde_json::to_vec(&status).map_err(|error| {
             BridgeError::from_legacy_message(format!("serializing native E2E status: {error}"))
         })?;
+        if bytes.len() > 32 * 1024 {
+            return Err(BridgeError::from_legacy_message(
+                "native E2E status must not exceed 32 KiB",
+            ));
+        }
         let status_path = directory.join(E2E_STATUS_FILENAME);
         let temporary_path = directory.join(format!("{E2E_STATUS_FILENAME}.tmp"));
-        tokio::fs::write(&temporary_path, bytes)
+        tokio::fs::write(&temporary_path, &bytes)
             .await
             .map_err(|error| {
                 BridgeError::from_legacy_message(format!("writing native E2E status: {error}"))
@@ -120,6 +153,33 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
             .map_err(|error| {
                 BridgeError::from_legacy_message(format!("publishing native E2E status: {error}"))
             })?;
+        use tokio::io::AsyncWriteExt;
+        let events_path = directory.join(E2E_EVENTS_FILENAME);
+        let mut events = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&events_path)
+            .await
+            .map_err(|error| {
+                BridgeError::from_legacy_message(format!(
+                    "opening native E2E event artifact: {error}"
+                ))
+            })?;
+        events.write_all(&bytes).await.map_err(|error| {
+            BridgeError::from_legacy_message(format!("writing native E2E event artifact: {error}"))
+        })?;
+        events.write_all(b"\n").await.map_err(|error| {
+            BridgeError::from_legacy_message(format!(
+                "terminating native E2E event artifact: {error}"
+            ))
+        })?;
+        tracing::info!(
+            target: "gents_desktop_bridge::mobile_performance",
+            stage = %status.stage,
+            correlation_id = status.correlation_id.as_deref().unwrap_or("none"),
+            monotonic_ms = status.monotonic_ms.unwrap_or_default(),
+            "native E2E observable boundary"
+        );
         Ok(())
     }
 }

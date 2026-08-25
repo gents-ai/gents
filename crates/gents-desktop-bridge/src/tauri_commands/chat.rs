@@ -2,10 +2,14 @@ use crate::error::BridgeError;
 use tauri::State;
 
 use crate::commands::{rename_conversation, send_chat_message};
-use crate::snapshot::build_session_snapshot_for_agent;
+use crate::snapshot::{
+    apply_session_timeline_page_with_query, build_session_live_delta,
+    build_session_snapshot_for_agent_with_transcript,
+};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
     ChatSendRequest, ChatSendResult, ConversationRenameRequest, DesktopSessionSnapshot,
+    SessionLiveDeltaView,
 };
 
 #[tauri::command]
@@ -13,6 +17,8 @@ pub async fn desktop_session_snapshot(
     session_id: String,
     agent_did: Option<String>,
     request_id: Option<String>,
+    timeline_limit: Option<usize>,
+    timeline_before_item_key: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
     let Some(core) = current_core(&state) else {
@@ -41,13 +47,62 @@ pub async fn desktop_session_snapshot(
             );
         }
     }
-    Ok(build_session_snapshot_for_agent(
+    let transcript_page = gents_desktop_core::client::load_session_transcript_page(
+        core.node(),
+        &session_id,
+        timeline_before_item_key.as_deref(),
+        timeline_limit,
+    )
+    .await
+    .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    let mut snapshot = build_session_snapshot_for_agent_with_transcript(
         core.as_ref(),
         agent_did.as_deref(),
         &session_id,
         request_id.as_deref(),
+        Some(&transcript_page.store),
+        timeline_before_item_key.is_none(),
     )
-    .await)
+    .await;
+    if let Some(snapshot) = snapshot.as_mut() {
+        apply_session_timeline_page_with_query(
+            snapshot,
+            timeline_before_item_key.as_deref(),
+            timeline_limit,
+            Some(&transcript_page),
+        )
+        .map_err(BridgeError::from_legacy_message)?;
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn desktop_session_live_delta(
+    session_id: String,
+    agent_did: Option<String>,
+    request_id: String,
+    base_reconcile_version: u64,
+    base_content_byte_len: usize,
+    base_content_hash: String,
+    base_reasoning_byte_len: usize,
+    base_reasoning_hash: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<SessionLiveDeltaView>, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Ok(None);
+    };
+    Ok(Some(build_session_live_delta(
+        core.as_ref(),
+        &session_id,
+        agent_did.as_deref(),
+        &request_id,
+        base_reconcile_version,
+        base_content_byte_len,
+        &base_content_hash,
+        base_reasoning_byte_len,
+        &base_reasoning_hash,
+    )))
 }
 
 #[tauri::command]

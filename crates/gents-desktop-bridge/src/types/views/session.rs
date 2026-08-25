@@ -351,6 +351,63 @@ pub struct SessionContextView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionTimelinePageView {
+    pub total_items: i64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub total_items_exact: Option<bool>,
+    pub page_items: i64,
+    pub has_older: bool,
+    pub has_newer: bool,
+    pub oldest_item_key: Option<String>,
+    pub newest_item_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub query_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub queried_rows: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub message_query_limit: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub tool_call_query_limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionProjectionRevisionView {
+    pub store_version: u64,
+    pub reconcile_version: u64,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLiveTextPatchView {
+    /// unchanged | append | replace
+    pub mode: String,
+    pub value: String,
+    pub byte_len: usize,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLiveDeltaView {
+    /// delta | unchanged | snapshotRequired
+    pub outcome: String,
+    pub revision: SessionProjectionRevisionView,
+    pub request_id: String,
+    pub progress_seq: Option<i64>,
+    pub turn_state: Option<String>,
+    pub status: Option<String>,
+    pub content: Option<SessionLiveTextPatchView>,
+    pub reasoning: Option<SessionLiveTextPatchView>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
     pub session_id: String,
     pub agent_did: Option<String>,
@@ -367,6 +424,12 @@ pub struct DesktopSessionSnapshot {
     pub pending_turn: Option<PendingTurnView>,
     pub context: SessionContextView,
     pub timeline_items: Vec<RenderedTimelineItem>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub timeline_page: Option<SessionTimelinePageView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub projection_revision: Option<SessionProjectionRevisionView>,
     #[allow(dead_code)]
     #[serde(skip_serializing)]
     #[ts(skip)]

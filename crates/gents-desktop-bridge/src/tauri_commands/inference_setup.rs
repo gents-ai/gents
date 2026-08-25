@@ -194,7 +194,7 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     // flip a ChatGptCodex behavior available; nudge the UI to refetch health.
     let _ = app.emit(
         "desktop://client-updated",
-        ClientUpdateEvent { reason: "config" },
+        ClientUpdateEvent::coarse("config"),
     );
 
     Ok(CodexLoginResult::redacted(doc_id, &credential))
@@ -338,7 +338,7 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
     let _ = app.emit(
         "desktop://client-updated",
-        ClientUpdateEvent { reason: "config" },
+        ClientUpdateEvent::coarse("config"),
     );
     Ok(())
 }
@@ -421,7 +421,7 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
 
     let _ = app.emit(
         "desktop://client-updated",
-        ClientUpdateEvent { reason: "config" },
+        ClientUpdateEvent::coarse("config"),
     );
 
     Ok(GrokLoginResult::redacted(doc_id, &credential))

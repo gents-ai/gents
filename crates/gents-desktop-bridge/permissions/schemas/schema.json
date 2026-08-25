@@ -931,6 +931,18 @@
           "markdownDescription": "Denies the desktop_schedule_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_session_live_delta command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-live-delta",
+          "markdownDescription": "Enables the desktop_session_live_delta command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_live_delta command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-live-delta",
+          "markdownDescription": "Denies the desktop_session_live_delta command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_session_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-session-snapshot",
@@ -1117,10 +1129,10 @@
           "markdownDescription": "Client start/shutdown and selected-agent\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`"
         },
         {
-          "description": "Session/conversation snapshot read\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`",
+          "description": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`",
           "type": "string",
           "const": "session-read",
-          "markdownDescription": "Session/conversation snapshot read\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`"
+          "markdownDescription": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`"
         },
         {
           "description": "Request timeline read\n#### This permission set includes:\n\n- `allow-desktop-request-timeline`",

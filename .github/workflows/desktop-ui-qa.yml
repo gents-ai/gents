@@ -63,6 +63,10 @@ jobs:
         working-directory: apps/gents-desktop
         run: npm run test:ui:e2e
 
+      - name: Capture mobile interaction evidence
+        working-directory: apps/gents-desktop
+        run: npm run perf:mobile -- --runs=5 --output=test-results/mobile-performance/qa
+
       - name: Capture deterministic desktop screenshots
         working-directory: apps/gents-desktop
         run: npm run test:ui:screenshots

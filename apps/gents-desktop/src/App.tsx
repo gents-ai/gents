@@ -273,6 +273,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               onRenameConversationTitle={shell.onRenameConversationTitle}
               onSend={shell.onSendMessage}
               onRetryMessage={shell.onRetryMessage}
+              onLoadOlderTimeline={shell.loadOlderSessionTimeline}
               rowCount={shell.snapshot?.client?.rowCount ?? 0}
               runtimeHealth={shell.runtimeHealth}
               sendHint={

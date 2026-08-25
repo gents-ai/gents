@@ -429,6 +429,10 @@ impl ClientCore {
         self.store.subscribe()
     }
 
+    pub fn store_change_updates(&self) -> watch::Receiver<super::StoreUpdateNotice> {
+        self.store.subscribe_changes()
+    }
+
     pub fn bootstrap_errors(&self) -> &[String] {
         &self.bootstrap_errors
     }

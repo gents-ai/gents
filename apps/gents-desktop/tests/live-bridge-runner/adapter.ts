@@ -7,11 +7,14 @@ import type {
   ChatSendResult,
   DesktopClientSnapshot,
   DesktopOperationsSnapshot,
+  DesktopResolveHoldRequest,
   DesktopSessionSnapshot,
+  HeldToolCallView,
   InitSummary,
   InterruptRequestResult,
   MCPServiceHealthView,
   McpServiceProbeResult,
+  ResolveHoldResult,
   SubagentTreeView,
   TaskRunResult,
 } from "@source-inc/gents-desktop-client";
@@ -63,11 +66,13 @@ export function createBridgeHttpAdapter(
       client.postJson("/desktop/peer/status", { serverAddress }),
     repairP2P: async () =>
       client.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
-    fetchSessionSnapshot: async (sessionId, agentDid, requestId) =>
+    fetchSessionSnapshot: async (sessionId, agentDid, requestId, timelinePage) =>
       client.postJson<DesktopSessionSnapshot | null>("/desktop/session/snapshot", {
         sessionId,
         agentDid: agentDid ?? null,
         requestId: requestId ?? null,
+        timelineLimit: timelinePage?.limit,
+        timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
     sendChatMessage: async (request) => {
       const normalized: TauriDriverChatRequest = {
@@ -140,6 +145,12 @@ export function createBridgeHttpAdapter(
       client.postJson<CascadeCancelPreview>("/desktop/interrupt/preview", request),
     interruptRequest: async (request) =>
       client.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
+    listToolCallHolds: async (agentDid) =>
+      client.postJson<HeldToolCallView[]>("/desktop/tool-call-holds/list", {
+        agentDid,
+      }),
+    resolveToolCallHold: async (request: DesktopResolveHoldRequest) =>
+      client.postJson<ResolveHoldResult>("/desktop/tool-call-holds/resolve", request),
   };
 }
 

@@ -1,7 +1,10 @@
 import { useEffect, type MutableRefObject } from "react";
 
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
-import { conversationBelongsToBehavior } from "@source-inc/gents-desktop-chat";
+import {
+  conversationBelongsToBehavior,
+  isTerminalTurnState,
+} from "@source-inc/gents-desktop-chat";
 import type {
   DeploymentView,
   DesktopApiAdapter,
@@ -12,6 +15,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import {
   createTrailingRefreshQueue,
+  desktopUpdateRefreshScope,
   logShellEvent,
   shouldAutoRestartP2P,
   timingConfig,
@@ -30,6 +34,7 @@ type DesktopShellEffectsArgs = {
   listenToUpdates: DesktopClientUpdatedListenerFactory;
   newConversationAgentRef: MutableRefObject<string | null>;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
+  refreshSessionLiveDelta: () => Promise<boolean>;
   refreshSnapshot: () => Promise<void>;
   restartDesktopClient: (reason: string) => Promise<void>;
   runtimeHealth: P2PHealth | null;
@@ -38,6 +43,7 @@ type DesktopShellEffectsArgs = {
   selectedDeployment: DeploymentView | null;
   selectedSessionId: string | null;
   selectedSessionIdRef: MutableRefObject<string | null>;
+  selectedTrackedRequestIdRef: MutableRefObject<string | null>;
   selectedTrackedRequestId: string | null;
   sending: boolean;
   setLocalWorkflow: (workflow: ChatWorkflowState) => void;
@@ -63,6 +69,7 @@ export function useDesktopShellEffects({
   listenToUpdates,
   newConversationAgentRef,
   refreshSession,
+  refreshSessionLiveDelta,
   refreshSnapshot,
   restartDesktopClient,
   runtimeHealth,
@@ -71,6 +78,7 @@ export function useDesktopShellEffects({
   selectedDeployment,
   selectedSessionId,
   selectedSessionIdRef,
+  selectedTrackedRequestIdRef,
   selectedTrackedRequestId,
   sending,
   setLocalWorkflow,
@@ -178,11 +186,28 @@ export function useDesktopShellEffects({
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    const refreshQueue = createTrailingRefreshQueue(async () => {
+    const fullRefreshQueue = createTrailingRefreshQueue(async () => {
       await refreshSnapshot();
       const sessionId = selectedSessionIdRef.current;
       if (sessionId) {
         await refreshSession(sessionId);
+      }
+    });
+    const snapshotRefreshQueue = createTrailingRefreshQueue(refreshSnapshot);
+    const activeSessionRefreshQueue = createTrailingRefreshQueue(async () => {
+      const sessionId = selectedSessionIdRef.current;
+      if (!sessionId) return;
+      const next = await refreshSession(sessionId);
+      // During a live turn the selected session is the only user-visible data
+      // that changes on each chunk. Refresh the larger fleet/index snapshot
+      // once when the authoritative turn reaches a terminal state.
+      if (next?.turnState && isTerminalTurnState(next.turnState)) {
+        await refreshSnapshot();
+      }
+    });
+    const activeSessionDeltaQueue = createTrailingRefreshQueue(async () => {
+      if (!(await refreshSessionLiveDelta())) {
+        await activeSessionRefreshQueue.request();
       }
     });
 
@@ -197,11 +222,29 @@ export function useDesktopShellEffects({
     };
 
     void listenToDesktopClientUpdates(
-      async () => {
+      async (event) => {
         if (disposed) {
           return;
         }
-        await refreshQueue.request();
+        const scope = desktopUpdateRefreshScope(
+          event.reason,
+          selectedSessionIdRef.current,
+          selectedTrackedRequestIdRef.current,
+          event.responseOnly === true,
+        );
+        if (scope === "snapshot") {
+          await snapshotRefreshQueue.request();
+          return;
+        }
+        if (scope === "session") {
+          await activeSessionRefreshQueue.request();
+          return;
+        }
+        if (scope === "sessionDelta") {
+          await activeSessionDeltaQueue.request();
+          return;
+        }
+        await fullRefreshQueue.request();
       },
       reportListenerError,
       listenToUpdates,
@@ -217,7 +260,10 @@ export function useDesktopShellEffects({
 
     return () => {
       disposed = true;
-      refreshQueue.dispose();
+      fullRefreshQueue.dispose();
+      snapshotRefreshQueue.dispose();
+      activeSessionRefreshQueue.dispose();
+      activeSessionDeltaQueue.dispose();
       unlisten?.();
     };
   }, [
@@ -225,6 +271,7 @@ export function useDesktopShellEffects({
     selectedAgentDid,
     selectedSessionId,
     selectedTrackedRequestId,
+    selectedTrackedRequestIdRef,
     setError,
   ]);
 
