@@ -316,6 +316,13 @@ export function useDesktopShellEffects({
       return;
     }
 
+    // A mailbox tap installs an exact compose route. Preserve it while the
+    // independently replicated behavior/session rows catch up; explicit user
+    // navigation clears the mailbox route at the setter boundary.
+    if (newConversationAgentRef.current === selectedDeployment.agentDid) {
+      return;
+    }
+
     const defaultBehaviorId =
       selectedDeployment.defaultBehaviorId ??
       selectedDeployment.behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
@@ -350,13 +357,6 @@ export function useDesktopShellEffects({
           localWorkflow.sessionId === selectedSessionId))
     ) {
       newConversationAgentRef.current = null;
-      return;
-    }
-
-    if (
-      !selectedSessionId &&
-      newConversationAgentRef.current === selectedDeployment.agentDid
-    ) {
       return;
     }
 

@@ -266,6 +266,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "mailbox"
+    , required := allSurfaces
+    , deferred := []
+    }
   ]
 
 def vocabularyCoverage : List CoverageEntry :=
@@ -369,6 +373,26 @@ def vocabularyCoverage : List CoverageEntry :=
       "GoalStatus"
       "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract")
       "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "MailboxStatus"
+      "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract")
+      "mailbox" allSurfaces
+  , tagged (consumerCoverage
+      "vocabulary"
+      "MailboxKind"
+      "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract")
+      "mailbox" allSurfaces
+  , tagged (consumerCoverage
+      "vocabulary"
+      "MailboxHandling"
+      "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract")
+      "mailbox" allSurfaces
+  , tagged (consumerCoverage
+      "vocabulary"
+      "MailboxSourceKind"
+      "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract")
+      "mailbox" allSurfaces
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
@@ -456,6 +480,11 @@ def stateMachineCoverage : List CoverageEntry :=
       "Goal"
       "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract")
       "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "state_machine"
+      "Mailbox"
+      "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract")
+      "mailbox" [Surface.runtimeInternal]
   ]
 
 def caseCoverage : List CoverageEntry :=

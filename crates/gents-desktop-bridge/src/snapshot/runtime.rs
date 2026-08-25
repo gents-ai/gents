@@ -7,7 +7,8 @@ use super::super::types::{
     normalize_optional, turn_state_label, AgentPrincipalView, BehaviorEnvironmentView,
     BehaviorView, ClientRouteStatusView, ConversationSummary, DeploymentView,
     DesktopRuntimeSnapshot, EventTriggerView, InferenceBackendView, InferenceProfileView,
-    RuntimeView, ScheduleView, SkillView, TaskView, ToolSelectionView, ToolServiceRegistryView,
+    MailboxItemView, RuntimeView, ScheduleView, SkillView, TaskView, ToolSelectionView,
+    ToolServiceRegistryView,
 };
 use super::runtime_tasks::{
     conversation_task_tag, recent_runs_for_task_views, request_backed_conversation_summaries,
@@ -37,6 +38,16 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .agent_principals
                 .iter()
                 .find(|row| row.agent_did == peer.agent_did);
+            let mailbox_items = store
+                .mailbox_items
+                .iter()
+                .filter(|row| {
+                    row.agent_did == peer.agent_did
+                        && row.requester_did == core.principal().did()
+                        && row.status == "open"
+                })
+                .map(MailboxItemView::from)
+                .collect::<Vec<_>>();
             let mut agent_principal = principal
                 .map(|row| AgentPrincipalView {
                     agent_did: row.agent_did.clone(),
@@ -548,6 +559,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 schedules,
                 event_triggers,
                 conversations,
+                mailbox_items,
             }
         })
         .collect::<Vec<_>>();

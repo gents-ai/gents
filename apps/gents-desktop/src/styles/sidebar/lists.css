@@ -1,4 +1,18 @@
 @layer sidebar {
+  .mailbox-item {
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .mailbox-item p {
+    margin: 0;
+  }
+
+  .mailbox-actions {
+    display: flex;
+    gap: 0.45rem;
+  }
+
   .sidebar .list {
     gap: 0;
     align-content: start;

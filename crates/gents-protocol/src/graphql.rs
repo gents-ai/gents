@@ -35,6 +35,7 @@ pub struct CreateAgentRequestInput<'a> {
     pub created_at: &'a str,
     pub caused_by_trigger_id: Option<&'a str>,
     pub caused_by_trigger_kind: Option<&'a str>,
+    pub caused_by_source_doc_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +284,18 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
             )
         })
         .unwrap_or_default();
+    let caused_by_source_doc_id_field = input
+        .caused_by_source_doc_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!(
+                r#"
+                caused_by_source_doc_id: "{}","#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
     let request_override_fields = vec![
         optional_f64_field("temperature", input.temperature),
         optional_f64_field("top_p", input.top_p),
@@ -316,7 +329,7 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
                 status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
-                execution_origin: "interactive",{caused_by_trigger_id_field}{caused_by_trigger_kind_field}
+                execution_origin: "interactive",{caused_by_trigger_id_field}{caused_by_trigger_kind_field}{caused_by_source_doc_id_field}
                 failure_reason: "",
                 created_at: "{created_at}",
                 retry_count: 0,
@@ -332,6 +345,7 @@ pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> Str
         created_at = escape_graphql_string(input.created_at),
         caused_by_trigger_id_field = caused_by_trigger_id_field,
         caused_by_trigger_kind_field = caused_by_trigger_kind_field,
+        caused_by_source_doc_id_field = caused_by_source_doc_id_field,
     )
 }
 
@@ -1156,6 +1170,7 @@ mod tests {
             created_at: "2026-04-13T12:00:00Z",
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
+            caused_by_source_doc_id: None,
         });
 
         assert!(mutation.contains("temperature: 0"));

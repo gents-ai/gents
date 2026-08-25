@@ -1,0 +1,29 @@
+{
+  "surface_id": "mailbox-writes",
+  "agent_did": "did:key:zMailboxAgentPlaceholder000000000000000000000000000",
+  "display_name": "Stamped mailbox writes",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "file_mailbox_item",
+      "collection": "MailboxItem",
+      "description": "File a stamped item in the current requester's mailbox.",
+      "fields": [
+        {"name": "kind", "required": true},
+        {"name": "action", "required": true},
+        {"name": "title", "required": true},
+        {"name": "summary", "required": false},
+        {"name": "payload", "required": false},
+        {"name": "source_kind", "required": true},
+        {"name": "source_id", "required": true},
+        {"name": "session_id", "required": false},
+        {"name": "request_id", "required": false},
+        {"name": "graph_run_id", "required": false},
+        {"name": "cause_doc_id", "required": false},
+        {"name": "expected_collection", "required": false},
+        {"name": "parent_item_id", "required": false},
+        {"name": "deadline_at", "required": false}
+      ]
+    }
+  ]
+}

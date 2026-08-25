@@ -11,6 +11,8 @@ mod cli_diagnose;
 mod cli_goal;
 #[path = "suites/cli_init.rs"]
 mod cli_init;
+#[path = "suites/cli_mailbox.rs"]
+mod cli_mailbox;
 #[path = "suites/cli_reconciliation.rs"]
 mod cli_reconciliation;
 #[path = "suites/cli_request.rs"]

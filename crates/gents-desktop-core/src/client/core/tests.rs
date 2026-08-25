@@ -289,7 +289,7 @@ impl P2POps for RecordingP2P {
 }
 
 #[tokio::test]
-async fn index_sync_request_targets_exactly_the_session_index() {
+async fn index_sync_request_targets_exactly_the_client_index() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -306,7 +306,10 @@ async fn index_sync_request_targets_exactly_the_session_index() {
     let requested = super::bootstrap::request_index_sync(core.node(), &p2p)
         .await
         .expect("request index sync");
-    assert_eq!(requested, ["AgentConversation", "AgentSession"]);
+    assert_eq!(
+        requested,
+        ["AgentConversation", "AgentSession", "MailboxItem"]
+    );
 
     let mut expected = crate::client::schema::index_collection_names()
         .into_iter()

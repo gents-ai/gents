@@ -3,6 +3,7 @@ pub mod config;
 pub mod e2e;
 pub mod inference_setup;
 pub mod lifecycle;
+pub mod mailbox;
 pub mod managed_server;
 pub mod operations;
 pub mod peers;

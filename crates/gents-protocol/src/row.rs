@@ -249,6 +249,8 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub caused_by_trigger_context: Option<String>,
     #[serde(default)]
+    pub caused_by_source_doc_id: Option<String>,
+    #[serde(default)]
     pub caused_by_parent_request_id: Option<String>,
     #[serde(default)]
     pub failure_reason: Option<String>,
@@ -278,6 +280,50 @@ pub struct AgentRequestRow {
     pub workspace_owner_deployment_id: Option<String>,
     #[serde(default)]
     pub workspace_seal_hash: Option<String>,
+}
+
+/// Replicated envelope for human attention. Clients render this row without
+/// hydrating the referenced transcript or domain document.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MailboxItemRow {
+    #[serde(rename = "_docID")]
+    pub doc_id: String,
+    pub item_key: String,
+    pub requester_did: String,
+    pub agent_did: String,
+    pub status: String,
+    pub kind: String,
+    pub action: String,
+    pub title: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub payload: Option<String>,
+    pub source_kind: String,
+    pub source_id: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub graph_run_id: Option<String>,
+    #[serde(default)]
+    pub cause_doc_id: Option<String>,
+    pub target_agent_did: String,
+    pub target_behavior_id: String,
+    #[serde(default)]
+    pub expected_collection: Option<String>,
+    #[serde(default)]
+    pub parent_item_id: Option<String>,
+    #[serde(default)]
+    pub deadline_at: Option<String>,
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub resolved_at: Option<String>,
+    #[serde(default)]
+    pub resolved_doc_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

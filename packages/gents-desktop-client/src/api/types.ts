@@ -26,6 +26,7 @@ import type {
   InferenceProfileSaveRequest,
   InitSummary,
   InterruptRequestResult,
+  MailboxItemView,
   MCPServiceHealthView,
   McpServiceProbeResult,
   NetworkStatusView,
@@ -118,7 +119,11 @@ export type DesktopApiAdapter = {
     behaviorId?: string | null;
     sessionId?: string | null;
     content: string;
+    causedBySourceDocId?: string | null;
   }) => Promise<ChatSendResult>;
+  listMailbox: () => Promise<MailboxItemView[]>;
+  startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
+  dismissMailboxItem: (itemId: string) => Promise<void>;
   renameConversation: (request: {
     agentDid: string;
     sessionId: string;

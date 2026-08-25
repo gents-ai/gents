@@ -194,6 +194,9 @@ struct ToolRuntimeScope {
     background: bool,
     correlation: Option<String>,
     source_fields: std::collections::BTreeMap<String, String>,
+    requester_did: Option<String>,
+    agent_did: Option<String>,
+    behavior_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -208,11 +211,66 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) background: bool,
     pub(crate) correlation: Option<String>,
     pub(crate) source_fields: std::collections::BTreeMap<String, String>,
+    pub(crate) requester_did: Option<String>,
+    pub(crate) agent_did: Option<String>,
+    pub(crate) behavior_id: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct ToolRequestIdentityScope {
+    requester_did: Option<String>,
+    agent_did: Option<String>,
+    behavior_id: Option<String>,
 }
 
 tokio::task_local! {
     static TOOL_RUNTIME_SCOPE: ToolRuntimeScope;
     static WORKSPACE_OVERLAY: ToolWorkspaceScope;
+    static TOOL_REQUEST_IDENTITY: ToolRequestIdentityScope;
+}
+
+fn normalized_identity(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim().to_string();
+        (!value.is_empty()).then_some(value)
+    })
+}
+
+fn current_request_identity() -> ToolRequestIdentityScope {
+    TOOL_REQUEST_IDENTITY
+        .try_with(Clone::clone)
+        .ok()
+        .or_else(|| {
+            TOOL_RUNTIME_SCOPE
+                .try_with(|scope| ToolRequestIdentityScope {
+                    requester_did: scope.requester_did.clone(),
+                    agent_did: scope.agent_did.clone(),
+                    behavior_id: scope.behavior_id.clone(),
+                })
+                .ok()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) async fn scope_tool_request_identity<F, T>(
+    requester_did: Option<String>,
+    agent_did: Option<String>,
+    behavior_id: Option<String>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    TOOL_REQUEST_IDENTITY
+        .scope(
+            ToolRequestIdentityScope {
+                requester_did: normalized_identity(requester_did),
+                agent_did: normalized_identity(agent_did),
+                behavior_id: normalized_identity(behavior_id),
+            },
+            future,
+        )
+        .await
 }
 
 #[cfg(test)]
@@ -267,6 +325,7 @@ where
     F: Future<Output = T>,
 {
     let inherited = current_tool_runtime_context();
+    let identity = current_request_identity();
     TOOL_RUNTIME_SCOPE
         .scope(
             ToolRuntimeScope {
@@ -282,6 +341,9 @@ where
                 source_fields: inherited
                     .map(|scope| scope.source_fields)
                     .unwrap_or_default(),
+                requester_did: identity.requester_did,
+                agent_did: identity.agent_did,
+                behavior_id: identity.behavior_id,
             },
             future,
         )
@@ -308,6 +370,7 @@ where
             .ok()
             .flatten()
     });
+    let identity = current_request_identity();
     TOOL_RUNTIME_SCOPE
         .scope(
             ToolRuntimeScope {
@@ -319,6 +382,9 @@ where
                 background,
                 correlation,
                 source_fields,
+                requester_did: identity.requester_did,
+                agent_did: identity.agent_did,
+                behavior_id: identity.behavior_id,
             },
             future,
         )
@@ -343,6 +409,7 @@ where
         .workspace_cwd
         .clone()
         .or_else(|| workspace.workspace_root.clone());
+    let identity = current_request_identity();
     WORKSPACE_OVERLAY
         .scope(
             workspace,
@@ -356,6 +423,9 @@ where
                     background,
                     correlation,
                     source_fields,
+                    requester_did: identity.requester_did,
+                    agent_did: identity.agent_did,
+                    behavior_id: identity.behavior_id,
                 },
                 future,
             ),
@@ -416,6 +486,9 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             background: scope.background,
             correlation: scope.correlation,
             source_fields: scope.source_fields,
+            requester_did: scope.requester_did,
+            agent_did: scope.agent_did,
+            behavior_id: scope.behavior_id,
         }
     })
 }

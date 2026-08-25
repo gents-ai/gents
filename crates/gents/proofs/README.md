@@ -26,6 +26,8 @@ The proofs are strongest where the runtime is a state machine:
 - command/tool execution policy for bash argv, network, sandbox, and shell env
 - MCP/tool execution preflight and retry eligibility boundaries
 - managed native executor deadline/cancel liveness and tool composition
+- mailbox owner stamping, open-row idempotence, terminal transitions, and
+  separation of attention status from graph progress (`Proofs/Mailbox`)
 - canonical descendant visibility, materialization authorization, and
   direct-parent control authority (`DescendantGraph`, #836)
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
@@ -124,6 +126,10 @@ The current proof suite covers eighteen practical areas:
 18. Graph-pipeline publication: type, topology, capability-authorization, and
     structural-bound validation must all succeed before existing-task routes
     may be published
+19. Human-attention mailbox: requester/agent identity stamping, owner-only
+    dismissal, at-most-one open item per owner/source tuple, fresh occurrence
+    allocation after terminal rows, terminal-state immutability, deadline
+    expiry, and proof that mailbox close states do not create graph edges
 
 Separately, **obligation models** (no Rust refinement tests yet):
 

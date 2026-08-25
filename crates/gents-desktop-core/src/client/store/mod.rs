@@ -9,7 +9,7 @@ use gents_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
     CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
-    ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    MailboxItemRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use serde::Serialize;
 
@@ -22,6 +22,7 @@ pub struct ClientStoreRows {
     pub runtimes: Vec<AgentRuntimeRow>,
     pub conversations: Vec<AgentConversationRow>,
     pub requests: Vec<AgentRequestRow>,
+    pub mailbox_items: Vec<MailboxItemRow>,
     pub responses: Vec<AgentResponseRow>,
     pub messages: Vec<AgentMessageRow>,
     pub sessions: Vec<AgentSessionRow>,
@@ -70,6 +71,7 @@ pub struct ClientStore {
     pub runtimes: Vec<AgentRuntimeRow>,
     pub conversations: Vec<AgentConversationRow>,
     pub requests: Vec<AgentRequestRow>,
+    pub mailbox_items: Vec<MailboxItemRow>,
     pub responses: Vec<AgentResponseRow>,
     pub messages: Vec<AgentMessageRow>,
     pub sessions: Vec<AgentSessionRow>,
@@ -237,6 +239,9 @@ impl ClientStore {
             conversation_merge_key,
         );
         upsert_rows_by_key(&mut rows.requests, incoming.requests, request_merge_key);
+        upsert_rows_by_key(&mut rows.mailbox_items, incoming.mailbox_items, |row| {
+            row.doc_id.clone()
+        });
         upsert_rows_by_key(&mut rows.responses, incoming.responses, response_merge_key);
         upsert_rows_with_sources_by_key(
             &mut rows.messages,
@@ -376,6 +381,7 @@ impl ClientStore {
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.requests
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
+        rows.mailbox_items.retain(|row| row.agent_did != agent_did);
         rows.responses
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.goals.retain(|row| row.agent_did != agent_did);
@@ -542,6 +548,7 @@ impl ClientStore {
             runtimes: self.runtimes.clone(),
             conversations: self.conversations.clone(),
             requests: self.requests.clone(),
+            mailbox_items: self.mailbox_items.clone(),
             responses: self.responses.clone(),
             messages: self.messages.clone(),
             sessions: self.sessions.clone(),
@@ -964,12 +971,20 @@ impl ClientStore {
             .map(|index| &self.requests[*index])
     }
 
+    pub fn mailbox_items_for_requester(&self, requester_did: &str) -> Vec<&MailboxItemRow> {
+        self.mailbox_items
+            .iter()
+            .filter(|row| row.requester_did == requester_did)
+            .collect()
+    }
+
     pub fn row_count(&self) -> usize {
         self.agent_principals.len()
             + self.behaviors.len()
             + self.runtimes.len()
             + self.conversations.len()
             + self.requests.len()
+            + self.mailbox_items.len()
             + self.responses.len()
             + self.messages.len()
             + self.sessions.len()

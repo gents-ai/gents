@@ -22,6 +22,7 @@ export function sendChatMessage(
     behaviorId?: string | null;
     sessionId?: string | null;
     content: string;
+    causedBySourceDocId?: string | null;
   },
   api?: DesktopApiAdapter,
 ) {

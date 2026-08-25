@@ -561,6 +561,7 @@ mod tests {
                 behavior_id: Some(behavior_id.clone()),
                 session_id: None,
                 content: format!("/{skill_id}\n{task}"),
+                caused_by_source_doc_id: None,
             },
         )
         .await?;

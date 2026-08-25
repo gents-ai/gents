@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use gents_desktop_core::client::ClientCore;
+use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use gents_protocol::client_protocol::ClientTurnState;
 use uuid::Uuid;
 
@@ -67,7 +67,16 @@ pub async fn send_chat_message(
     }
 
     let submitted = core
-        .submit_request(&session_id, &agent_did, &content, behavior_id.as_deref())
+        .submit_request_with_options(
+            &session_id,
+            &agent_did,
+            &content,
+            behavior_id.as_deref(),
+            SubmitRequestOptions {
+                caused_by_source_doc_id: request.caused_by_source_doc_id,
+                ..SubmitRequestOptions::default()
+            },
+        )
         .await?;
 
     Ok(ChatSendResult {

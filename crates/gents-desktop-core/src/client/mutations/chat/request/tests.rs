@@ -101,6 +101,102 @@ async fn submit_request_rejects_negative_seed_before_store_access() -> Result<()
     Ok(())
 }
 
+#[tokio::test]
+async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
+    let node = defra_node::EmbeddedNode::builder().build().await?;
+    gents::ensure_runtime_schemas(&node).await?;
+    let response = node
+        .execute(
+            r#"mutation {
+                create_MailboxItem(input: {
+                    item_key: "graph:wait-submit:ask:1",
+                    requester_did: "did:test:owner",
+                    agent_did: "did:test:agent",
+                    status: "open",
+                    kind: "ask",
+                    action: "start_request",
+                    title: "Continue",
+                    source_kind: "graph",
+                    source_id: "wait-submit",
+                    session_id: "session-one",
+                    target_agent_did: "did:test:agent",
+                    target_behavior_id: "operator",
+                    created_at: "2026-08-25T00:00:00Z",
+                    updated_at: "2026-08-25T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let lookup = node
+        .execute(
+            r#"query {
+                MailboxItem(filter: { item_key: { _eq: "graph:wait-submit:ask:1" } }) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    assert!(!lookup.has_errors(), "{:?}", lookup.errors);
+    let item_id = lookup
+        .data
+        .as_ref()
+        .and_then(|data| data.get("MailboxItem"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(Value::as_str)
+        .context("mailbox item id")?;
+
+    validate_mailbox_submission_cause(
+        &node,
+        item_id,
+        "did:test:owner",
+        "did:test:agent",
+        "operator",
+        "session-one",
+    )
+    .await?;
+    assert!(validate_mailbox_submission_cause(
+        &node,
+        item_id,
+        "did:test:other",
+        "did:test:agent",
+        "operator",
+        "session-one",
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("another requester"));
+    assert!(validate_mailbox_submission_cause(
+        &node,
+        item_id,
+        "did:test:owner",
+        "did:test:agent",
+        "other-behavior",
+        "session-one",
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("target agent behavior"));
+    assert!(validate_mailbox_submission_cause(
+        &node,
+        item_id,
+        "did:test:owner",
+        "did:test:agent",
+        "operator",
+        "session-two",
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("target session"));
+    node.shutdown().await;
+    Ok(())
+}
+
 #[test]
 fn retry_key_and_mutation_are_scoped_to_exact_parent_document() {
     assert_ne!(
@@ -449,6 +545,7 @@ fn synthetic_missing_retry_parent(
         caused_by_trigger_kind: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
+        caused_by_source_doc_id: None,
         caused_by_parent_request_id: None,
         failure_reason: Some(String::new()),
         terminalized_at: None,

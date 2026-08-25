@@ -170,24 +170,41 @@ impl DefraSessionHook {
         let correlation = runtime_context
             .as_ref()
             .and_then(|runtime| runtime.correlation.clone());
+        let requester_did = runtime_context
+            .as_ref()
+            .and_then(|runtime| runtime.requester_did.clone());
+        let request_agent_did = runtime_context
+            .as_ref()
+            .and_then(|runtime| runtime.agent_did.clone());
+        let request_behavior_id = runtime_context
+            .as_ref()
+            .and_then(|runtime| runtime.behavior_id.clone());
         let source_fields = runtime_context
             .map(|runtime| runtime.source_fields)
             .unwrap_or_default();
         tokio::spawn(async move {
             let execution = AssertUnwindSafe(async {
-                crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
-                    Some(background_deadline_at),
-                    cancellation_token.clone(),
-                    workspace,
-                    Some(live_output_writer),
-                    Some(execution_session_id.clone()),
-                    correlation,
-                    source_fields,
-                    true,
+                crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+                    requester_did,
+                    request_agent_did,
+                    request_behavior_id,
                     async {
-                        crate::tool_call_lifecycle::runtime::call_tool_managed(
-                            target_tool.as_ref(),
-                            target_args,
+                        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+                            Some(background_deadline_at),
+                            cancellation_token.clone(),
+                            workspace,
+                            Some(live_output_writer),
+                            Some(execution_session_id.clone()),
+                            correlation,
+                            source_fields,
+                            true,
+                            async {
+                                crate::tool_call_lifecycle::runtime::call_tool_managed(
+                                    target_tool.as_ref(),
+                                    target_args,
+                                )
+                                .await
+                            },
                         )
                         .await
                     },

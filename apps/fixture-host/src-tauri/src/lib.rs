@@ -18,6 +18,7 @@ fn bridge_config() -> BridgeConfig {
         },
         snapshot_grants: SnapshotGrants {
             session_read: true,
+            mailbox_read: false,
             fleet_read: true,
             config_read: false,
             operations_read: true,
@@ -74,6 +75,7 @@ mod tests {
             let set = name.strip_prefix("gents-desktop-bridge:").unwrap_or(name);
             match set {
                 "session-read" => bits.session_read = true,
+                "mailbox-read" => bits.mailbox_read = true,
                 "fleet-read" => bits.fleet_read = true,
                 "config-read" => bits.config_read = true,
                 "operations-read" => bits.operations_read = true,

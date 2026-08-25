@@ -38,6 +38,12 @@ impl ClientStore {
                 })
                 .then_with(|| left.request_id.cmp(&right.request_id))
         });
+        rows.mailbox_items.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.doc_id.cmp(&right.doc_id))
+        });
         rows.goals.sort_by(|left, right| {
             left.agent_did
                 .cmp(&right.agent_did)
@@ -166,6 +172,7 @@ impl ClientStore {
             runtimes: rows.runtimes,
             conversations: rows.conversations,
             requests: rows.requests,
+            mailbox_items: rows.mailbox_items,
             responses: rows.responses,
             messages: rows.messages,
             sessions: rows.sessions,

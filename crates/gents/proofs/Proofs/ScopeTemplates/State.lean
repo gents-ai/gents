@@ -83,7 +83,8 @@ def conversationCollections : List String :=
 
 def clientTranscriptCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
-   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry"]
+   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry",
+   "MailboxItem"]
 
 def clientControlPlaneCollections : List String :=
   ["AgentBehavior", "ToolSelection", "InferenceProfile", "ToolServiceRegistry",
@@ -102,7 +103,7 @@ def clientRouteCollections : RouteDirection → List String
 
 def machineCollections : List String :=
   conversationCollections ++
-    ["PersonaConfigRequest", "SessionHydrationRequest", "AgentDirectoryEntry"]
+    ["MailboxItem", "PersonaConfigRequest", "SessionHydrationRequest", "AgentDirectoryEntry"]
 
 def discoveryCollections : List String :=
   ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest",
@@ -116,7 +117,7 @@ def subagentHostCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall"]
 
 def clientIndexCollections : List String :=
-  ["AgentConversation", "AgentSession"]
+  ["AgentConversation", "AgentSession", "MailboxItem"]
 
 def conversationRules : List CollectionRule :=
   [ { collection := "AgentRequest",      field := "requester_did", source := .peerDid }
@@ -131,7 +132,8 @@ def conversationRules : List CollectionRule :=
 
 def machineRules : List CollectionRule :=
   conversationRules ++
-    [ { collection := "PersonaConfigRequest", field := "requester_did", source := .peerDid }
+    [ { collection := "MailboxItem", field := "requester_did", source := .peerDid }
+    , { collection := "PersonaConfigRequest", field := "requester_did", source := .peerDid }
     , { collection := "SessionHydrationRequest", field := "requester_did", source := .peerDid }
     , { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
 
@@ -146,7 +148,8 @@ def subagentHostRules : List CollectionRule :=
 
 def clientIndexRules : List CollectionRule :=
   [ { collection := "AgentConversation", field := "requester_did", source := .peerDid }
-  , { collection := "AgentSession",      field := "requester_did", source := .peerDid } ]
+  , { collection := "AgentSession",      field := "requester_did", source := .peerDid }
+  , { collection := "MailboxItem",       field := "requester_did", source := .peerDid } ]
 
 def conversationTemplate : Template :=
   { id := "conversation"

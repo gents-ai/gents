@@ -50,6 +50,19 @@ permissions = [
 ]
 
 [[set]]
+identifier = "mailbox-read"
+description = "Owner-scoped mailbox envelope reads"
+permissions = ["allow-desktop-mailbox-list"]
+
+[[set]]
+identifier = "mailbox-control"
+description = "Start or dismiss owner-scoped mailbox actions"
+permissions = [
+  "allow-desktop-mailbox-start-request",
+  "allow-desktop-mailbox-dismiss",
+]
+
+[[set]]
 identifier = "resend-control"
 description = "Request resend / retry"
 permissions = [
@@ -186,6 +199,8 @@ permissions = [
   "trace-read",
   "tool-surface-read",
   "chat-write",
+  "mailbox-read",
+  "mailbox-control",
   "resend-control",
   "fleet-read",
   "workspace-read",

@@ -206,7 +206,10 @@ theorem conversation_readiness_crossing_is_claimant_scoped (peerDid localDid : D
 theorem machine_filter_eq (peerDid homeDid : Did) :
     scopeFilter machineTemplate.scope [] peerDid homeDid =
       scopeFilter conversationTemplate.scope [] peerDid homeDid ++
-        [ { collection := "PersonaConfigRequest"
+        [ { collection := "MailboxItem"
+          , field := "requester_did"
+          , value := peerDid }
+        , { collection := "PersonaConfigRequest"
           , field := "requester_did"
           , value := peerDid }
         , { collection := "SessionHydrationRequest"
@@ -221,7 +224,7 @@ theorem machine_filters_transcript_persona_and_directory (peerDid homeDid : Did)
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
       = (conversationTranscriptCollections ++
-          ["PersonaConfigRequest", "SessionHydrationRequest",
+          ["MailboxItem", "PersonaConfigRequest", "SessionHydrationRequest",
            "AgentDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
     conversationRules, conversationCollections, conversationTranscriptCollections]
@@ -415,7 +418,8 @@ theorem clientIndex_in_catalog :
 theorem clientIndex_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection clientIndexRules) [] peerDid localDid
       = [ { collection := "AgentConversation", field := "requester_did", value := peerDid }
-        , { collection := "AgentSession",      field := "requester_did", value := peerDid } ] := by
+        , { collection := "AgentSession",      field := "requester_did", value := peerDid }
+        , { collection := "MailboxItem",       field := "requester_did", value := peerDid } ] := by
   simp [scopeFilter, clientIndexRules]
 
 theorem clientIndex_filters_requester_lineage (peerDid localDid : Did) :
@@ -425,7 +429,7 @@ theorem clientIndex_filters_requester_lineage (peerDid localDid : Did) :
 
 theorem clientIndex_covers_exactly_literal_index_collections :
     clientIndexTemplate.collections =
-      ["AgentConversation", "AgentSession"].toFinset := by
+      ["AgentConversation", "AgentSession", "MailboxItem"].toFinset := by
   decide
 
 theorem subagent_filter_values_local_or_peer

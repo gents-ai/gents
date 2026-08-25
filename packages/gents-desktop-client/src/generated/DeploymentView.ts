@@ -7,6 +7,7 @@ import type { ConversationSummary } from "./ConversationSummary.js";
 import type { EventTriggerView } from "./EventTriggerView.js";
 import type { InferenceBackendView } from "./InferenceBackendView.js";
 import type { InferenceProfileView } from "./InferenceProfileView.js";
+import type { MailboxItemView } from "./MailboxItemView.js";
 import type { RuntimeView } from "./RuntimeView.js";
 import type { ScheduleView } from "./ScheduleView.js";
 import type { SkillView } from "./SkillView.js";
@@ -14,4 +15,4 @@ import type { TaskView } from "./TaskView.js";
 import type { ToolSelectionView } from "./ToolSelectionView.js";
 import type { ToolServiceRegistryView } from "./ToolServiceRegistryView.js";
 
-export type DeploymentView = { peerId: string, label: string, agentDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, pairingReady: boolean, chatSafe: boolean, routes: Array<ClientRouteStatusView>, lastError: string | null, defaultBehaviorId: string | null, agentPrincipal: AgentPrincipalView, runtime: RuntimeView | null, behaviors: Array<BehaviorView>, behaviorEnvironments: Array<BehaviorEnvironmentView>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfileView>, toolSelections: Array<ToolSelectionView>, toolServiceRegistries: Array<ToolServiceRegistryView>, skills: Array<SkillView>, tasks: Array<TaskView>, schedules: Array<ScheduleView>, eventTriggers: Array<EventTriggerView>, conversations: Array<ConversationSummary>, };
+export type DeploymentView = { peerId: string, label: string, agentDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, pairingReady: boolean, chatSafe: boolean, routes: Array<ClientRouteStatusView>, lastError: string | null, defaultBehaviorId: string | null, agentPrincipal: AgentPrincipalView, runtime: RuntimeView | null, behaviors: Array<BehaviorView>, behaviorEnvironments: Array<BehaviorEnvironmentView>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfileView>, toolSelections: Array<ToolSelectionView>, toolServiceRegistries: Array<ToolServiceRegistryView>, skills: Array<SkillView>, tasks: Array<TaskView>, schedules: Array<ScheduleView>, eventTriggers: Array<EventTriggerView>, conversations: Array<ConversationSummary>, mailboxItems: Array<MailboxItemView>, };

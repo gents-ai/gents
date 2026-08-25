@@ -824,6 +824,45 @@ async fn write_tools_register_under_declared_names() {
 }
 
 #[tokio::test]
+async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let granted = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            enable_defra_query: false,
+            write_tools: vec![crate::mailbox::canonical_mailbox_write_decl()],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+    assert!(granted
+        .tool_names()
+        .contains(&crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
+    assert!(granted.source_fill_fields().contains("requester_did"));
+    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let built = granted.build_tools(&runtime).unwrap();
+    assert!(built
+        .iter()
+        .any(|tool| tool.name() == crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME));
+
+    let without_grant = BehaviorToolConfig::meta_only()
+        .resolve(runtime.node.as_ref())
+        .await
+        .unwrap();
+    assert!(!without_grant
+        .tool_names()
+        .contains(&crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
+    assert!(!without_grant.source_fill_fields().contains("requester_did"));
+}
+
+#[tokio::test]
 async fn query_tool_is_advertised_and_registered() {
     use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
 

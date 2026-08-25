@@ -1,0 +1,33 @@
+# TRUST BASIS: this attention index grants neither graph progress nor tool
+# authority. Runtime stamping owns creation identity; requester_did owns
+# supported dismiss writes; acted is runtime-written after a correlated create.
+type MailboxItem @branchable {
+    item_key: String @index(unique: true) @immutable
+    requester_did: String @index @immutable
+    agent_did: String @index @immutable
+    status: String @index
+
+    kind: String @index @immutable
+    action: String @index @immutable
+    title: String @immutable
+    summary: String @immutable
+    payload: String @immutable
+
+    source_kind: String @immutable
+    source_id: String @index @immutable
+    session_id: String @index @immutable
+    request_id: String @index @immutable
+    graph_run_id: String @index @immutable
+    cause_doc_id: String @index @immutable
+
+    target_agent_did: String @index @immutable
+    target_behavior_id: String @index @immutable
+    expected_collection: String @immutable
+    parent_item_id: String @index @immutable
+    deadline_at: DateTime @immutable
+
+    created_at: DateTime @index(direction: DESC) @immutable
+    updated_at: DateTime
+    resolved_at: DateTime
+    resolved_doc_id: String
+}

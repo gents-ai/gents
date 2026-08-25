@@ -2,6 +2,8 @@
 mod chat;
 #[path = "commands/config.rs"]
 mod config;
+#[path = "commands/mailbox.rs"]
+mod mailbox;
 #[path = "commands/mcp_health.rs"]
 pub mod mcp_health;
 #[path = "commands/peer.rs"]
@@ -22,6 +24,7 @@ pub use config::{
     save_agent_config, save_backend_config, save_behavior_config, save_inference_profile_config,
     save_skill_config, save_tool_selection_config,
 };
+pub use mailbox::{dismiss_mailbox, list_mailbox, start_mailbox_request};
 pub use peer::{add_peer, pair_bearer, remove_peer, rename_peer, repair_p2p};
 pub use task::{
     run_schedule_config, run_task_config, save_event_trigger_config, save_schedule_config,

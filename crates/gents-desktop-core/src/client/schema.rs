@@ -58,7 +58,7 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
 }
 
 /// The lightweight session index eagerly hydrated by paired clients.
-pub fn index_collection_names() -> [&'static str; 2] {
+pub fn index_collection_names() -> [&'static str; 3] {
     CLIENT_INDEX_COLLECTIONS
 }
 
@@ -85,9 +85,9 @@ mod tests {
     }
 
     #[test]
-    fn index_collections_are_the_session_index_and_are_branchable() {
+    fn index_collections_are_the_client_index_and_are_branchable() {
         let index = super::index_collection_names();
-        assert_eq!(index, ["AgentConversation", "AgentSession"]);
+        assert_eq!(index, ["AgentConversation", "AgentSession", "MailboxItem"]);
         for name in index {
             assert!(
                 gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&name),

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type {
   ConversationSummary,
   DeploymentView,
+  MailboxItemView,
 } from "@source-inc/gents-desktop-client";
 import {
   BehaviorEnvironmentSection,
@@ -13,6 +14,7 @@ import {
 export type SidebarProps = {
   deployments: DeploymentView[];
   conversations: ConversationSummary[];
+  mailboxItems: MailboxItemView[];
   selectedAgentDid: string | null;
   selectedBehaviorId: string | null;
   selectedSessionId: string | null;
@@ -23,6 +25,8 @@ export type SidebarProps = {
   onOpenSession?: (sessionId: string) => void;
   onSelectAgent?: (agentDid: string) => void;
   onStartNewConversation: (behaviorId: string) => void;
+  onOpenMailboxItem: (itemId: string) => void;
+  onDismissMailboxItem: (itemId: string) => void;
   onRepairP2P?: () => Promise<unknown> | void;
   repairingP2P?: boolean;
 };
@@ -30,6 +34,7 @@ export type SidebarProps = {
 export function Sidebar({
   deployments,
   conversations,
+  mailboxItems,
   selectedAgentDid,
   selectedBehaviorId,
   selectedSessionId,
@@ -40,10 +45,14 @@ export function Sidebar({
   onOpenSession,
   onSelectAgent,
   onStartNewConversation,
+  onOpenMailboxItem,
+  onDismissMailboxItem,
   onRepairP2P,
   repairingP2P,
 }: SidebarProps) {
-  const [section, setSection] = useState<"sessions" | "behaviors">("sessions");
+  const [section, setSection] = useState<"sessions" | "mailbox" | "behaviors">(
+    "sessions",
+  );
   const selectedDeployment = deployments.find(
     (deployment) => deployment.agentDid === selectedAgentDid,
   );
@@ -64,6 +73,15 @@ export function Sidebar({
       />
 
       <div aria-label="Agent workspace" className="agent-section-tabs" role="group">
+        <button
+          aria-pressed={section === "mailbox"}
+          className={section === "mailbox" ? "selected" : ""}
+          data-testid="agent-tab-mailbox"
+          onClick={() => setSection("mailbox")}
+          type="button"
+        >
+          Mailbox{mailboxItems.length ? ` (${mailboxItems.length})` : ""}
+        </button>
         <button
           aria-pressed={section === "sessions"}
           className={section === "sessions" ? "selected" : ""}
@@ -94,6 +112,55 @@ export function Sidebar({
           onOpenSession={onOpenSession}
           onCreateSession={() => setSection("behaviors")}
         />
+      ) : section === "mailbox" ? (
+        <section aria-label="Mailbox" className="sidebar-section mailbox-list">
+          {mailboxItems.length === 0 ? (
+            <p className="empty-state">Nothing needs your attention.</p>
+          ) : (
+            <div className="list">
+              {mailboxItems.map((item) => (
+                <article className="list-item mailbox-item" key={item.itemId}>
+                  <div className="list-item-title">{item.title}</div>
+                  <div className="list-item-meta">
+                    {item.kind} · {new Date(item.createdAt).toLocaleString()}
+                  </div>
+                  <div className="list-item-meta">
+                    {item.sourceKind} · {item.sourceId}
+                  </div>
+                  {item.summary ? <p>{item.summary}</p> : null}
+                  {item.payload ? <p className="mailbox-payload">{item.payload}</p> : null}
+                  <div className="mailbox-actions">
+                    {item.action === "ack" ? (
+                      item.sessionId && onOpenSession ? (
+                        <button
+                          onClick={() => onOpenSession(item.sessionId!)}
+                          type="button"
+                        >
+                          Open source
+                        </button>
+                      ) : null
+                    ) : (
+                      <button
+                        data-testid={`mailbox-open-${item.itemId}`}
+                        onClick={() => onOpenMailboxItem(item.itemId)}
+                        type="button"
+                      >
+                        Open compose
+                      </button>
+                    )}
+                    <button
+                      data-testid={`mailbox-dismiss-${item.itemId}`}
+                      onClick={() => onDismissMailboxItem(item.itemId)}
+                      type="button"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       ) : (
         <BehaviorEnvironmentSection
           environments={environments}
