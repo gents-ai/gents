@@ -53,8 +53,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.12.0
-        CFBundleVersion: "0.12.0"
+        CFBundleShortVersionString: 0.13.0
+        CFBundleVersion: "0.13.0"
     entitlements:
       path: gents-desktop-tauri_iOS/gents-desktop-tauri_iOS.entitlements
     scheme:
