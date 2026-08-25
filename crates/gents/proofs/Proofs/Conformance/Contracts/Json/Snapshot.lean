@@ -28,6 +28,7 @@ import Proofs.Conformance.Deviations
 import Proofs.Conformance.CoverageLedger
 import Proofs.Identity.Conformance
 import Proofs.Conformance.EventDelivery
+import Proofs.Conformance.GraphPipeline
 
 namespace Conformance.Contracts
 
@@ -40,6 +41,8 @@ def snapshotJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
+    ++ "\"graph_pipeline_validation_cases\":"
+      ++ Conformance.GraphPipelineContracts.validationCasesJson ++ ","
     ++ "\"request_transition_cases\":"
       ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"process_transition_cases\":"

@@ -28,6 +28,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) generated_by: String,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
+    #[serde(default)]
+    pub(crate) graph_pipeline_validation_cases: Vec<LeanGraphPipelineValidationCase>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) trigger_dispatch_case_count: usize,
@@ -192,6 +194,16 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     #[serde(default)]
     pub(crate) event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanGraphPipelineValidationCase {
+    pub(crate) name: String,
+    pub(crate) types_valid: bool,
+    pub(crate) topology_valid: bool,
+    pub(crate) capabilities_authorized: bool,
+    pub(crate) within_bounds: bool,
+    pub(crate) expected_valid: bool,
 }
 
 #[derive(Debug, Deserialize)]

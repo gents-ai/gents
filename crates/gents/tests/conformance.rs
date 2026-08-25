@@ -118,6 +118,8 @@ mod event_delivery;
 mod fleet;
 #[path = "conformance/goals.rs"]
 mod goals;
+#[path = "conformance/graph_pipeline.rs"]
+mod graph_pipeline;
 #[path = "conformance/inference_call.rs"]
 mod inference_call;
 #[path = "conformance/interrupts_manual.rs"]

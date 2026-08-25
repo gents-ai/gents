@@ -507,6 +507,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ProcessTransitions".to_string(),
         ));
     }
+    if !snapshot.graph_pipeline_validation_cases.is_empty() {
+        emitted.insert((
+            "graph_pipeline_validation_cases".to_string(),
+            "GraphPipelineValidationCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.trigger_dispatch_case_count,
         snapshot.trigger_dispatch_cases.len(),
@@ -1130,6 +1136,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "descendant_graph_cases",
         "goal_decision_cases",
         "goal_transition_cases",
+        "graph_pipeline_validation_cases",
         "workspace_cases",
         "workspace_binding_cases",
         "callback_cases",
