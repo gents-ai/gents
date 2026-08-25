@@ -38,6 +38,12 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
         ("Goals", Module("conformance/goals.rs")),
+        (
+            "GraphPipeline",
+            Boundary(
+                "foundation model only; compiler and persistence refinement land in the immediately stacked PRs (boundary.graph-pipeline.foundation)",
+            ),
+        ),
         ("Identity", Module("conformance/identity.rs")),
         ("InferenceCall", Module("conformance/inference_call.rs")),
         ("ManagedExec", Module("conformance/managed_exec.rs")),

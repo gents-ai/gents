@@ -89,7 +89,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers seventeen practical areas:
+The current proof suite covers eighteen practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -121,6 +121,9 @@ The current proof suite covers seventeen practical areas:
 17. Agent self-configuration writes: per-collection writable/protected field
     partitions, patch-merge identity immutability and containment,
     transactional accept/reject totality, and no-lockout recoverability
+18. Graph-pipeline publication: type, topology, capability-authorization, and
+    structural-bound validation must all succeed before existing-task routes
+    may be published
 
 Separately, **obligation models** (no Rust refinement tests yet):
 
@@ -199,6 +202,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model |
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
+| `Proofs/GraphPipeline.lean` | Model-callable graph publication boundary: whole-graph validation is required before existing-task routes may be published |
 | `Proofs/PromptAssembly/` | Provider-view sanitation and prompt assembly, per-turn context budgeting, and the request-wide aggregate token ledger. Fences: generated cases consumed by `agent::loop_stream::tests`. |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |

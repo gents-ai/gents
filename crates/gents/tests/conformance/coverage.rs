@@ -287,6 +287,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.prompt-assembly.provider-input-sanitization",
         "boundary.model.nat-typed-ids-time",
         "boundary.p2p-backpressure.obligation-model",
+        "boundary.graph-pipeline.foundation",
         "boundary.rendered-capture.assembled-request-artifact",
         "boundary.rendered-capture.key-encoding-injectivity",
     ]
