@@ -30,9 +30,10 @@ fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
         "iroh_quinn_proto=warn",
         "netwatch=warn",
     ];
-    NOISE_DIRECTIVES.iter().fold(filter, |filter, directive| {
-        filter.add_directive(directive.parse().expect("valid tracing directive"))
-    })
+    // Equal-specificity directives added later replace earlier ones. Parse the
+    // built-in noise floor first so explicit RUST_LOG directives remain the
+    // final authority for any transport target they mention.
+    EnvFilter::new(format!("{},{}", NOISE_DIRECTIVES.join(","), filter))
 }
 
 impl TelemetryGuard {
@@ -213,6 +214,36 @@ mod tests {
         fn shutdown_with_timeout(&mut self, _timeout: Duration) -> OTelSdkResult {
             Ok(())
         }
+    }
+
+    #[test]
+    fn explicit_transport_filter_overrides_noise_default() {
+        let filter = with_default_transport_noise_filters(EnvFilter::new("iroh_gossip=off"));
+        let subscriber = tracing_subscriber::registry().with(filter);
+
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(
+                !tracing::enabled!(target: "iroh_gossip::net", tracing::Level::WARN),
+                "an explicit iroh_gossip=off directive must suppress child-target warnings"
+            );
+        });
+    }
+
+    #[test]
+    fn transport_noise_default_applies_without_an_override() {
+        let filter = with_default_transport_noise_filters(EnvFilter::new("info"));
+        let subscriber = tracing_subscriber::registry().with(filter);
+
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(
+                !tracing::enabled!(target: "iroh_gossip::net", tracing::Level::INFO),
+                "the default iroh_gossip=warn directive should suppress info events"
+            );
+            assert!(tracing::enabled!(
+                target: "iroh_gossip::net",
+                tracing::Level::WARN
+            ));
+        });
     }
 
     #[test]
