@@ -269,9 +269,13 @@ pub(super) async fn push_documents_to_peer(
             doc_id: document.doc_id.clone(),
         })
         .collect::<Vec<_>>();
-    p2p.push_documents_to_peer(peer_id, docs)
-        .await
-        .with_context(|| format!("push hydration documents to peer {peer_id}"))
+    timeout(
+        DEFAULT_EMBEDDED_ADMIN_TIMEOUT,
+        p2p.push_documents_to_peer(peer_id, docs),
+    )
+    .await
+    .with_context(|| format!("push hydration documents to peer {peer_id} timed out"))?
+    .with_context(|| format!("push hydration documents to peer {peer_id}"))
 }
 
 fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminError {

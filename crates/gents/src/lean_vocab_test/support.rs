@@ -391,7 +391,10 @@ pub(crate) struct LeanGoalTransitionCase {
 pub(crate) struct LeanSessionHydrationDecisionCase {
     pub(crate) name: String,
     pub(crate) paired: bool,
+    pub(crate) pairing_requester_matches: bool,
+    pub(crate) pairing_agent_matches: bool,
     pub(crate) active_member: bool,
+    pub(crate) membership_network_matches: bool,
     pub(crate) owns_session: bool,
     pub(crate) expected_admit: bool,
     pub(crate) expected_selected_count: usize,
@@ -400,12 +403,17 @@ pub(crate) struct LeanSessionHydrationDecisionCase {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanSessionHydrationProgressCase {
     pub(crate) name: String,
+    pub(crate) prev_session: String,
+    pub(crate) prev_agent: String,
+    pub(crate) session: String,
+    pub(crate) agent: String,
     pub(crate) prev_phase: String,
     pub(crate) prev_merged: usize,
     pub(crate) prev_served: Option<usize>,
     pub(crate) merged: usize,
     pub(crate) served: Option<usize>,
     pub(crate) failed: bool,
+    pub(crate) begin_request: bool,
     pub(crate) expected_phase: String,
     pub(crate) expected_merged: usize,
     pub(crate) expected_complete: bool,

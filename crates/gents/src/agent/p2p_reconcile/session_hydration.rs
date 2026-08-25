@@ -2,11 +2,10 @@
 //!
 //! The background sweep and P2P delivery adapter are intentionally separate:
 //! this module decides whether a request is authorized and returns the exact
-//! tenant/session-scoped document set. The delivery adapter must consume this
-//! set through DefraDB's existing bounded doc-pusher once that primitive is
-//! exposed through the embedded node API.
+//! tenant/session-scoped document set. The delivery adapter in the reconciler
+//! sends that set through DefraDB's bounded, peer-targeted doc-pusher.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 pub const HYDRATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
@@ -14,7 +13,6 @@ pub const HYDRATION_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "AgentToolResult",
-    "AgentToolApproval",
     "CompactionEntry",
 ];
 
@@ -60,6 +58,21 @@ pub struct SessionOwner {
     pub agent_did: String,
 }
 
+/// A locally desired client route whose exact requester/agent filter is applied.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AppliedPairingRoute {
+    pub peer_id: String,
+    pub requester_did: String,
+    pub agent_did: String,
+}
+
+/// An active membership whose network root and admin signature were verified.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VerifiedActiveMembership {
+    pub network_id: String,
+    pub member_did: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HydrationDocument {
     pub collection: String,
@@ -71,8 +84,9 @@ pub struct HydrationDocument {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HydrationCatalog {
-    pub paired_peer_ids: BTreeSet<String>,
-    pub active_member_dids: BTreeSet<String>,
+    pub applied_pairing_routes: BTreeSet<AppliedPairingRoute>,
+    pub selected_network_id: String,
+    pub verified_active_memberships: BTreeSet<VerifiedActiveMembership>,
     pub sessions: BTreeSet<SessionOwner>,
     pub documents: BTreeSet<HydrationDocument>,
 }
@@ -87,11 +101,22 @@ pub fn decide_hydration(
     request: &HydrationRequest,
     catalog: &HydrationCatalog,
 ) -> HydrationVerdict {
-    if !catalog.paired_peer_ids.contains(&request.peer_id) {
-        return HydrationVerdict::Reject("peer is not paired");
+    let pairing = AppliedPairingRoute {
+        peer_id: request.peer_id.clone(),
+        requester_did: request.requester_did.clone(),
+        agent_did: request.agent_did.clone(),
+    };
+    if !catalog.applied_pairing_routes.contains(&pairing) {
+        return HydrationVerdict::Reject("peer pairing does not match requester and agent");
     }
-    if !catalog.active_member_dids.contains(&request.requester_did) {
-        return HydrationVerdict::Reject("requester membership is not active");
+    let membership = VerifiedActiveMembership {
+        network_id: catalog.selected_network_id.clone(),
+        member_did: request.requester_did.clone(),
+    };
+    if !catalog.verified_active_memberships.contains(&membership) {
+        return HydrationVerdict::Reject(
+            "requester membership is not verified active in the selected network",
+        );
     }
     let owner = SessionOwner {
         session_id: request.session_id.clone(),
@@ -115,47 +140,6 @@ pub fn decide_hydration(
             .cloned()
             .collect(),
     )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HydrationOutcome {
-    Served,
-    Rejected,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct HydrationState {
-    pub delivered: BTreeSet<HydrationDocument>,
-    pub terminals: BTreeMap<String, (HydrationOutcome, usize)>,
-    /// Opaque PairingReconcile-owned state, carried to fence non-interference.
-    pub pairing_state: BTreeSet<String>,
-}
-
-pub fn apply_hydration_step(
-    request: &HydrationRequest,
-    catalog: &HydrationCatalog,
-    state: &HydrationState,
-) -> HydrationState {
-    if state.terminals.contains_key(&request.request_key) {
-        return state.clone();
-    }
-
-    let mut next = state.clone();
-    match decide_hydration(request, catalog) {
-        HydrationVerdict::Admit(documents) => {
-            let count = documents.len();
-            next.delivered.extend(documents);
-            next.terminals.insert(
-                request.request_key.clone(),
-                (HydrationOutcome::Served, count),
-            );
-        }
-        HydrationVerdict::Reject(_) => {
-            next.terminals
-                .insert(request.request_key.clone(), (HydrationOutcome::Rejected, 0));
-        }
-    }
-    next
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +175,8 @@ impl ClientHydrationPhase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientHydrationProgress {
+    pub session_id: String,
+    pub agent_did: String,
     pub phase: ClientHydrationPhase,
     pub merged_count: usize,
     pub served_count: Option<usize>,
@@ -199,10 +185,24 @@ pub struct ClientHydrationProgress {
 impl Default for ClientHydrationProgress {
     fn default() -> Self {
         Self {
+            session_id: String::new(),
+            agent_did: String::new(),
             phase: ClientHydrationPhase::Idle,
             merged_count: 0,
             served_count: None,
         }
+    }
+}
+
+/// Begin a new receiver attempt, clearing any terminal state and denominator
+/// retained by the previous request for this target.
+pub fn begin_hydration_request(session_id: &str, agent_did: &str) -> ClientHydrationProgress {
+    ClientHydrationProgress {
+        session_id: session_id.to_string(),
+        agent_did: agent_did.to_string(),
+        phase: ClientHydrationPhase::Requested,
+        merged_count: 0,
+        served_count: None,
     }
 }
 
@@ -219,14 +219,27 @@ fn can_complete(merged_count: usize, served_count: Option<usize>) -> bool {
 /// never completes a request.
 pub fn observe_hydration_progress(
     prev: &ClientHydrationProgress,
+    session_id: &str,
+    agent_did: &str,
     merged_count: usize,
     served_count: Option<usize>,
     failed: bool,
 ) -> ClientHydrationProgress {
-    let merged = prev.merged_count.max(merged_count);
-    let served = merge_served(prev.served_count, served_count);
-    if failed || prev.phase == ClientHydrationPhase::Failed {
+    let base = if prev.session_id == session_id && prev.agent_did == agent_did {
+        prev.clone()
+    } else {
+        ClientHydrationProgress {
+            session_id: session_id.to_string(),
+            agent_did: agent_did.to_string(),
+            ..ClientHydrationProgress::default()
+        }
+    };
+    let merged = base.merged_count.max(merged_count);
+    let served = merge_served(base.served_count, served_count);
+    if failed || base.phase == ClientHydrationPhase::Failed {
         return ClientHydrationProgress {
+            session_id: session_id.to_string(),
+            agent_did: agent_did.to_string(),
             phase: ClientHydrationPhase::Failed,
             merged_count: merged,
             served_count: served,
@@ -234,19 +247,25 @@ pub fn observe_hydration_progress(
     }
     if can_complete(merged, served) {
         return ClientHydrationProgress {
+            session_id: session_id.to_string(),
+            agent_did: agent_did.to_string(),
             phase: ClientHydrationPhase::Complete,
             merged_count: merged,
             served_count: served,
         };
     }
-    if served.is_some() || merged > 0 || prev.phase == ClientHydrationPhase::Serving {
+    if served.is_some() || merged > 0 || base.phase == ClientHydrationPhase::Serving {
         return ClientHydrationProgress {
+            session_id: session_id.to_string(),
+            agent_did: agent_did.to_string(),
             phase: ClientHydrationPhase::Serving,
             merged_count: merged,
             served_count: served,
         };
     }
     ClientHydrationProgress {
+        session_id: session_id.to_string(),
+        agent_did: agent_did.to_string(),
         phase: ClientHydrationPhase::Requested,
         merged_count: merged,
         served_count: served,

@@ -8,6 +8,7 @@ use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
+use serde::Deserialize;
 
 use super::super::mutations::{self, PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 use super::super::observe::ObservedStore;
@@ -1482,17 +1483,13 @@ impl ClientCore {
     pub async fn focus_session(&self, session_id: &str, agent_did: &str) -> Result<()> {
         let session_id = normalize_required("session_id", session_id)?;
         let agent_did = normalize_required("agent_did", agent_did)?;
-        self.store
-            .set_focused_session_id(Some(session_id.to_string()));
         self.refresh_hydration_progress(&session_id, &agent_did)
             .await?;
         let progress = self.hydration_progress();
-        if progress.merged_count > 0
-            || matches!(
-                progress.phase,
-                gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase::Complete
-            )
-        {
+        if matches!(
+            progress.phase,
+            gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase::Complete
+        ) {
             return Ok(());
         }
         self.request_session_hydration(&session_id, &agent_did)
@@ -1540,11 +1537,9 @@ impl ClientCore {
             anyhow::bail!("upsert SessionHydrationRequest: {:?}", response.errors);
         }
         self.hydration.send_replace(
-            gents::agent::p2p_reconcile::session_hydration::observe_hydration_progress(
-                &self.hydration_progress(),
-                local_hydration_count(self.store.snapshot().as_ref(), &session_id, &agent_did),
-                None,
-                false,
+            gents::agent::p2p_reconcile::session_hydration::begin_hydration_request(
+                &session_id,
+                &agent_did,
             ),
         );
         Ok(())
@@ -1555,13 +1550,21 @@ impl ClientCore {
         session_id: &str,
         agent_did: &str,
     ) -> Result<()> {
-        let merged = local_hydration_count(self.store.snapshot().as_ref(), session_id, agent_did);
+        let merged = load_local_hydration_count(
+            self.node.as_ref(),
+            self.principal.did(),
+            session_id,
+            agent_did,
+        )
+        .await?;
         let (served, failed) =
             load_hydration_server_state(self.node.as_ref(), self.local_peer_id(), session_id)
                 .await?;
         self.hydration.send_replace(
             gents::agent::p2p_reconcile::session_hydration::observe_hydration_progress(
                 &self.hydration_progress(),
+                session_id,
+                agent_did,
                 merged,
                 served,
                 failed,
@@ -1587,29 +1590,62 @@ impl ClientCore {
     }
 }
 
-fn local_hydration_count(store: &ClientStore, session_id: &str, agent_did: &str) -> usize {
+#[derive(Deserialize)]
+struct HydrationDocIdRow {
+    #[serde(rename = "_docID")]
+    doc_id: Option<String>,
+}
+
+async fn load_local_hydration_count(
+    node: &EmbeddedNode,
+    requester_did: &str,
+    session_id: &str,
+    agent_did: &str,
+) -> Result<usize> {
+    let query = local_hydration_query(requester_did, session_id, agent_did);
+    let response = node.execute(&query).await;
+    gents::graphql::ensure_no_errors(&response, "query local session hydration documents")?;
+    local_hydration_count_from_response(&response)
+}
+
+fn local_hydration_query(requester_did: &str, session_id: &str, agent_did: &str) -> String {
+    let requester_did = gents::graphql::escape_graphql_string(requester_did);
+    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let agent_did = gents::graphql::escape_graphql_string(agent_did);
+    let scope = format!(
+        "requester_did: {{ _eq: \"{requester_did}\" }}, agent_did: {{ _eq: \"{agent_did}\" }}, session_id: {{ _eq: \"{session_id}\" }}"
+    );
+    format!(
+        r#"{{
+            AgentRequest(filter: {{ {scope} }}) {{ _docID }}
+            AgentResponse(filter: {{ {scope} }}) {{ _docID }}
+            AgentMessage(filter: {{ {scope} }}) {{ _docID }}
+            AgentToolCall(filter: {{ {scope} }}) {{ _docID }}
+            AgentToolResult(filter: {{ {scope} }}) {{ _docID }}
+            CompactionEntry(filter: {{ {scope} }}) {{ _docID }}
+        }}"#
+    )
+}
+
+fn local_hydration_count_from_response(response: &defra_node::QueryResponse) -> Result<usize> {
     use std::collections::BTreeSet;
+
     let mut ids = BTreeSet::new();
-    for row in store.requests_for_session_for_agent(session_id, agent_did) {
-        ids.insert(format!("AgentRequest:{}", row.request_id));
+    for collection in [
+        "AgentRequest",
+        "AgentResponse",
+        "AgentMessage",
+        "AgentToolCall",
+        "AgentToolResult",
+        "CompactionEntry",
+    ] {
+        for row in gents::graphql::rows::<HydrationDocIdRow>(response, collection)? {
+            if let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) {
+                ids.insert((collection.to_string(), doc_id));
+            }
+        }
     }
-    for row in store.transcript_for_agent(session_id, agent_did).messages {
-        ids.insert(format!("AgentMessage:{}", row.message_key));
-    }
-    for row in store.transcript_for_agent(session_id, agent_did).tool_calls {
-        ids.insert(format!("AgentToolCall:{}", row.tool_call_key));
-    }
-    for row in store
-        .transcript_for_agent(session_id, agent_did)
-        .tool_results
-    {
-        ids.insert(format!(
-            "AgentToolResult:{}:{}",
-            row.tool_name.clone().unwrap_or_default(),
-            row.created_at.clone().unwrap_or_default()
-        ));
-    }
-    ids.len()
+    Ok(ids.len())
 }
 
 async fn load_hydration_server_state(
@@ -1773,6 +1809,32 @@ mod delete_source_tests {
     use super::*;
     use anyhow::anyhow;
     use serde_json::json;
+
+    #[test]
+    fn hydration_count_matches_all_client_routable_server_collections() {
+        let response = defra_node::QueryResponse::success(json!({
+            "AgentRequest": [{ "_docID": "request-1" }],
+            "AgentResponse": [{ "_docID": "response-1" }],
+            "AgentMessage": [{ "_docID": "message-1" }],
+            "AgentToolCall": [{ "_docID": "tool-call-1" }],
+            "AgentToolResult": [{ "_docID": "tool-result-1" }],
+            "CompactionEntry": [{ "_docID": "compaction-1" }]
+        }));
+
+        assert_eq!(local_hydration_count_from_response(&response).unwrap(), 6);
+    }
+
+    #[test]
+    fn hydration_query_escapes_every_scope_value() {
+        let query = local_hydration_query(
+            "did:key:requester\"escaped",
+            "session\"escaped",
+            "did:key:agent\"escaped",
+        );
+        assert!(query.contains(r#"requester_did: { _eq: "did:key:requester\"escaped" }"#));
+        assert!(query.contains(r#"session_id: { _eq: "session\"escaped" }"#));
+        assert!(query.contains(r#"agent_did: { _eq: "did:key:agent\"escaped" }"#));
+    }
 
     fn task(task_id: &str) -> TaskRow {
         serde_json::from_value(json!({ "task_id": task_id })).expect("task row")

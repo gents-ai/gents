@@ -46,6 +46,69 @@ pub fn derive_network_desired(
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedActiveMemberships {
+    pub network_id: String,
+    pub member_dids: BTreeSet<String>,
+}
+
+/// Select active members only after verifying the chosen network root and each
+/// admin-signed membership row. Consumers that do not need endpoints (such as
+/// session hydration admission) must still pass through this boundary.
+pub async fn select_verified_active_memberships(
+    identity: &dyn AgentIdentity,
+    network: &NetworkRecord,
+    memberships: &[MembershipRecord],
+) -> Result<VerifiedActiveMemberships> {
+    let mut selected = VerifiedActiveMemberships {
+        network_id: network.network_id.clone(),
+        member_dids: BTreeSet::new(),
+    };
+    // Forged/invalid network root → nothing is materializable (mirrors the Lean
+    // `validNetwork` precondition of `admittedMember`).
+    if !verify_record(
+        identity,
+        &network.admin_did,
+        &network.signing_payload(),
+        &network.sig,
+        "AgentNetwork",
+    )
+    .await?
+    {
+        tracing::warn!(
+            network_id = %network.network_id,
+            admin_did = %network.admin_did,
+            "network materializer ignoring AgentNetwork with invalid admin signature"
+        );
+        return Ok(selected);
+    }
+    for membership in memberships {
+        if membership.network_id != network.network_id || membership.status.trim() != "active" {
+            continue;
+        }
+        if !verify_record(
+            identity,
+            &network.admin_did,
+            &membership.signing_payload(),
+            &membership.sig,
+            "NetworkMembership",
+        )
+        .await?
+        {
+            tracing::warn!(
+                member_did = %membership.member_did,
+                "network materializer skipped membership with invalid admin signature"
+            );
+            continue;
+        }
+        let member_did = membership.member_did.trim();
+        if !member_did.is_empty() {
+            selected.member_dids.insert(member_did.to_string());
+        }
+    }
+    Ok(selected)
+}
+
 /// The network-membership materialization gate, factored out of
 /// [`GraphqlNetworkStore::load_materializable_entries`] so it is testable
 /// directly against signed records (the GraphQL store only adds the query +
@@ -68,51 +131,15 @@ pub async fn select_materializable_entries(
     now: DateTime<Utc>,
     stale_after: Duration,
 ) -> Result<Vec<NetworkEndpointEntry>> {
-    // Forged/invalid network root → nothing is materializable (mirrors the Lean
-    // `validNetwork` precondition of `admittedMember`).
-    if !verify_record(
-        identity,
-        &network.admin_did,
-        &network.signing_payload(),
-        &network.sig,
-        "AgentNetwork",
-    )
-    .await?
-    {
-        tracing::warn!(
-            network_id = %network.network_id,
-            admin_did = %network.admin_did,
-            "network materializer ignoring AgentNetwork with invalid admin signature"
-        );
-        return Ok(Vec::new());
-    }
-
+    let active = select_verified_active_memberships(identity, network, memberships).await?;
     let endpoints_by_did = endpoints
         .iter()
         .map(|record| (record.did.clone(), record))
         .collect::<BTreeMap<_, _>>();
 
     let mut out = Vec::new();
-    for membership in memberships {
-        if membership.network_id != network.network_id || membership.status.trim() != "active" {
-            continue;
-        }
-        if !verify_record(
-            identity,
-            &network.admin_did,
-            &membership.signing_payload(),
-            &membership.sig,
-            "NetworkMembership",
-        )
-        .await?
-        {
-            tracing::warn!(
-                member_did = %membership.member_did,
-                "network materializer skipped membership with invalid admin signature"
-            );
-            continue;
-        }
-        let Some(endpoint) = endpoints_by_did.get(&membership.member_did) else {
+    for member_did in active.member_dids {
+        let Some(endpoint) = endpoints_by_did.get(&member_did) else {
             continue;
         };
         if !endpoint_is_fresh(&endpoint.updated_at, now, stale_after) {
@@ -423,6 +450,62 @@ pub struct GraphqlNetworkStore {
 impl GraphqlNetworkStore {
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
         Self { node, identity }
+    }
+
+    pub(super) async fn load_verified_active_memberships(
+        &self,
+    ) -> Result<VerifiedActiveMemberships> {
+        let query = r#"{
+            AgentNetwork {
+                network_id
+                admin_did
+                display_name
+                default_template
+                created_at
+                admin_sig
+            }
+            NetworkMembership {
+                network_id
+                member_did
+                status
+                granted_at
+                revoked_at
+                admin_sig
+            }
+        }"#;
+        let response = self.node.execute(query).await;
+        ensure_no_errors(&response, "query verified active membership inputs")?;
+
+        let network_rows = rows::<NetworkRow>(&response, "AgentNetwork")?;
+        let Some(network_row) = (match network_rows.as_slice() {
+            [] => None,
+            [row] => Some(row),
+            rows => {
+                tracing::warn!(
+                    count = rows.len(),
+                    "multiple AgentNetwork rows present; selecting active hydration members against the local node's network"
+                );
+                Some(select_local_network(rows, self.identity.did()))
+            }
+        }) else {
+            return Ok(VerifiedActiveMemberships {
+                network_id: String::new(),
+                member_dids: BTreeSet::new(),
+            });
+        };
+        let network = network_record(network_row)?;
+        let memberships = rows::<MembershipRow>(&response, "NetworkMembership")?
+            .into_iter()
+            .filter_map(|row| match membership_record(&row) {
+                Ok(record) => Some(record),
+                Err(error) => {
+                    tracing::warn!(error = %error, "hydration admission skipped malformed NetworkMembership");
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        select_verified_active_memberships(self.identity.as_ref(), &network, &memberships).await
     }
 
     pub(super) async fn load_revoked_member_dids(&self) -> Result<BTreeSet<String>> {
@@ -815,6 +898,7 @@ struct PeerSourceRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::{AgentIdentity, KeyIdentity};
 
     #[test]
     fn derive_network_desired_skips_self() {
@@ -833,6 +917,55 @@ mod tests {
         let desired = derive_network_desired("did:key:self", &entries);
         assert!(!desired.contains("peer-self"));
         assert!(desired.contains("peer-a"));
+    }
+
+    #[tokio::test]
+    async fn verified_membership_selection_is_signature_and_network_scoped() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let admin = KeyIdentity::load_or_create(tempdir.path().join("admin.key"), None)
+            .expect("admin identity");
+        let mut network = NetworkRecord {
+            network_id: "network-selected".into(),
+            admin_did: admin.did().into(),
+            display_name: "Selected".into(),
+            default_template: "network-control".into(),
+            created_at: "2026-08-25T00:00:00Z".into(),
+            sig: Vec::new(),
+        };
+        network.sig = admin
+            .sign(&network.signing_payload())
+            .await
+            .expect("sign network");
+
+        let membership = |network_id: &str, member_did: &str| MembershipRecord {
+            network_id: network_id.into(),
+            member_did: member_did.into(),
+            status: "active".into(),
+            granted_at: "2026-08-25T00:00:00Z".into(),
+            revoked_at: String::new(),
+            sig: Vec::new(),
+        };
+        let mut selected = membership("network-selected", "did:key:selected");
+        selected.sig = admin
+            .sign(&selected.signing_payload())
+            .await
+            .expect("sign selected membership");
+        let mut foreign = membership("network-foreign", "did:key:foreign");
+        foreign.sig = admin
+            .sign(&foreign.signing_payload())
+            .await
+            .expect("sign foreign membership");
+        let forged = membership("network-selected", "did:key:forged");
+
+        let active =
+            select_verified_active_memberships(&admin, &network, &[selected, foreign, forged])
+                .await
+                .expect("select memberships");
+        assert_eq!(active.network_id, "network-selected");
+        assert_eq!(
+            active.member_dids,
+            BTreeSet::from(["did:key:selected".into()])
+        );
     }
 
     #[test]

@@ -25,7 +25,7 @@ theorem selected_session_sound (cat : Catalog) (r : Request) (doc : Document)
   simp [selectedDocuments, eligible] at hdoc
   exact ⟨hdoc.2.2.2.1, hdoc.2.2.2.2⟩
 
-/-- Hydration can only select the seven transcript collections named by #1142. -/
+/-- Hydration can only select the client-routable transcript collections named by #1142. -/
 theorem selected_collection_sound (cat : Catalog) (r : Request) (doc : Document)
     (hdoc : doc ∈ selectedDocuments cat r) : doc.collection ∈ transcriptCollections := by
   simp [selectedDocuments, eligible] at hdoc
@@ -38,6 +38,22 @@ theorem session_ownership_required (cat : Catalog) (st : State) (r : Request)
   apply hydration_request_grants_nothing
   intro hadmits
   exact howner hadmits.2.2
+
+/-- Membership in another network, or an unverified membership row, cannot admit hydration. -/
+theorem selected_network_membership_required (cat : Catalog) (st : State) (r : Request)
+    (hmembership : verifiedMembership cat r ∉ cat.verifiedActiveMemberships) :
+    (applyStep cat st r).delivered = st.delivered := by
+  apply hydration_request_grants_nothing
+  intro hadmits
+  exact hmembership hadmits.2.1
+
+/-- Pairing admission binds the target peer to the exact requester and agent. -/
+theorem applied_pairing_route_required (cat : Catalog) (st : State) (r : Request)
+    (hpairing : appliedPairingRoute r ∉ cat.appliedPairingRoutes) :
+    (applyStep cat st r).delivered = st.delivered := by
+  apply hydration_request_grants_nothing
+  intro hadmits
+  exact hpairing hadmits.1
 
 /-- One sweep always records a terminal outcome for a previously pending key. -/
 theorem pending_reaches_terminal (cat : Catalog) (st : State) (r : Request)

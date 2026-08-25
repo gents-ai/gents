@@ -3,9 +3,9 @@
 use std::collections::BTreeSet;
 
 use gents::agent::p2p_reconcile::session_hydration::{
-    apply_hydration_step, decide_hydration, observe_hydration_progress, ClientHydrationPhase,
-    ClientHydrationProgress, HydrationCatalog, HydrationDocument, HydrationOutcome,
-    HydrationRequest, HydrationState, HydrationVerdict, SessionOwner,
+    begin_hydration_request, decide_hydration, observe_hydration_progress, AppliedPairingRoute,
+    ClientHydrationPhase, ClientHydrationProgress, HydrationCatalog, HydrationDocument,
+    HydrationRequest, HydrationVerdict, SessionOwner, VerifiedActiveMembership,
 };
 
 use crate::lean_vocab_test::{
@@ -50,8 +50,16 @@ fn document_in_collection(
 
 fn admitted_catalog() -> HydrationCatalog {
     HydrationCatalog {
-        paired_peer_ids: BTreeSet::from(["peer-1".into()]),
-        active_member_dids: BTreeSet::from(["did:key:requester-1".into()]),
+        applied_pairing_routes: BTreeSet::from([AppliedPairingRoute {
+            peer_id: "peer-1".into(),
+            requester_did: "did:key:requester-1".into(),
+            agent_did: "did:key:agent-1".into(),
+        }]),
+        selected_network_id: "network-1".into(),
+        verified_active_memberships: BTreeSet::from([VerifiedActiveMembership {
+            network_id: "network-1".into(),
+            member_did: "did:key:requester-1".into(),
+        }]),
         sessions: BTreeSet::from([SessionOwner {
             session_id: "session-1".into(),
             requester_did: "did:key:requester-1".into(),
@@ -87,57 +95,39 @@ fn admitted_catalog() -> HydrationCatalog {
     }
 }
 
-/// Mirrors Lean `decideAdmits_agrees`, `hydration_request_grants_nothing`,
-/// and `session_ownership_required`.
-#[test]
-fn admission_matrix_matches_lean_conjuncts() {
-    let req = request();
-    let good = admitted_catalog();
-    assert!(matches!(
-        decide_hydration(&req, &good),
-        HydrationVerdict::Admit(_)
-    ));
-
-    let mut cases = Vec::new();
-    let mut unpaired = good.clone();
-    unpaired.paired_peer_ids.clear();
-    cases.push(unpaired);
-    let mut inactive = good.clone();
-    inactive.active_member_dids.clear();
-    cases.push(inactive);
-    let mut unowned = good;
-    unowned.sessions.clear();
-    cases.push(unowned);
-
-    for catalog in cases {
-        assert!(matches!(
-            decide_hydration(&req, &catalog),
-            HydrationVerdict::Reject(_)
-        ));
-        let state = HydrationState::default();
-        let next = apply_hydration_step(&req, &catalog, &state);
-        assert_eq!(next.delivered, state.delivered);
-        assert_eq!(
-            next.terminals.get(&req.request_key),
-            Some(&(HydrationOutcome::Rejected, 0))
-        );
-    }
-}
-
 #[test]
 fn generated_session_hydration_cases_match_decision_core() {
     let req = request();
     let base = admitted_catalog();
     let cases = lean_session_hydration_decision_cases();
-    assert_eq!(cases.len(), 4);
+    assert_eq!(cases.len(), 7);
 
     for case in cases {
         let mut catalog = base.clone();
         if !case.paired {
-            catalog.paired_peer_ids.clear();
+            catalog.applied_pairing_routes.clear();
+        } else if !case.pairing_requester_matches || !case.pairing_agent_matches {
+            catalog.applied_pairing_routes = BTreeSet::from([AppliedPairingRoute {
+                peer_id: req.peer_id.clone(),
+                requester_did: if case.pairing_requester_matches {
+                    req.requester_did.clone()
+                } else {
+                    "did:key:requester-2".into()
+                },
+                agent_did: if case.pairing_agent_matches {
+                    req.agent_did.clone()
+                } else {
+                    "did:key:agent-2".into()
+                },
+            }]);
         }
         if !case.active_member {
-            catalog.active_member_dids.clear();
+            catalog.verified_active_memberships.clear();
+        } else if !case.membership_network_matches {
+            catalog.verified_active_memberships = BTreeSet::from([VerifiedActiveMembership {
+                network_id: "network-2".into(),
+                member_did: req.requester_did.clone(),
+            }]);
         }
         if !case.owns_session {
             catalog.sessions.clear();
@@ -177,27 +167,6 @@ fn admitted_selection_is_exactly_requester_agent_session_scoped() {
     );
 }
 
-/// Mirrors Lean `pending_reaches_terminal`, `applyStep_idempotent`, and
-/// `pairing_noninterference`.
-#[test]
-fn serve_is_terminal_idempotent_and_pairing_neutral() {
-    let req = request();
-    let catalog = admitted_catalog();
-    let state = HydrationState {
-        pairing_state: BTreeSet::from(["stable-machine-filter".into()]),
-        ..Default::default()
-    };
-    let once = apply_hydration_step(&req, &catalog, &state);
-    let twice = apply_hydration_step(&req, &catalog, &once);
-
-    assert_eq!(once, twice);
-    assert_eq!(once.pairing_state, state.pairing_state);
-    assert_eq!(
-        once.terminals.get(&req.request_key),
-        Some(&(HydrationOutcome::Served, 1))
-    );
-}
-
 #[test]
 fn request_key_binds_peer_and_session() {
     assert!(HydrationRequest::from_row(
@@ -215,11 +184,24 @@ fn generated_session_hydration_progress_cases_match_observe() {
     assert!(!cases.is_empty());
     for case in cases {
         let prev = ClientHydrationProgress {
+            session_id: case.prev_session.clone(),
+            agent_did: case.prev_agent.clone(),
             phase: ClientHydrationPhase::parse(&case.prev_phase),
             merged_count: case.prev_merged,
             served_count: case.prev_served,
         };
-        let next = observe_hydration_progress(&prev, case.merged, case.served, case.failed);
+        let next = if case.begin_request {
+            begin_hydration_request(&case.session, &case.agent)
+        } else {
+            observe_hydration_progress(
+                &prev,
+                &case.session,
+                &case.agent,
+                case.merged,
+                case.served,
+                case.failed,
+            )
+        };
         assert_eq!(next.phase.as_str(), case.expected_phase, "{}", case.name);
         assert_eq!(next.merged_count, case.expected_merged, "{}", case.name);
         assert_eq!(
@@ -228,11 +210,17 @@ fn generated_session_hydration_progress_cases_match_observe() {
             "{}",
             case.name
         );
-        assert!(
-            next.merged_count >= prev.merged_count,
-            "{} merged count must be monotone",
-            case.name
-        );
+        if !case.begin_request && case.prev_session == case.session && case.prev_agent == case.agent
+        {
+            assert!(
+                next.merged_count >= prev.merged_count,
+                "{} merged count must be monotone within one target",
+                case.name
+            );
+        } else {
+            assert_eq!(next.session_id, case.session, "{}", case.name);
+            assert_eq!(next.agent_did, case.agent, "{}", case.name);
+        }
         if case.expected_complete {
             assert!(
                 next.served_count

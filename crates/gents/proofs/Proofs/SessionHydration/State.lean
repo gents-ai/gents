@@ -28,6 +28,19 @@ structure SessionOwner where
   agent : String
   deriving DecidableEq, Repr
 
+/-- A locally desired pairing whose exact requester/agent filter was applied for this peer. -/
+structure AppliedPairingRoute where
+  peer : String
+  requester : String
+  agent : String
+  deriving DecidableEq, Repr
+
+/-- An active membership already verified against the selected network root. -/
+structure VerifiedActiveMembership where
+  network : String
+  member : String
+  deriving DecidableEq, Repr
+
 structure Document where
   collection : String
   id : String
@@ -37,8 +50,9 @@ structure Document where
   deriving DecidableEq, Repr
 
 structure Catalog where
-  pairedPeers : Finset String
-  activeMembers : Finset String
+  appliedPairingRoutes : Finset AppliedPairingRoute
+  selectedNetwork : String
+  verifiedActiveMemberships : Finset VerifiedActiveMembership
   sessions : Finset SessionOwner
   documents : Finset Document
   deriving DecidableEq
@@ -62,14 +76,20 @@ structure State where
 
 def transcriptCollections : Finset String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
-   "AgentToolResult", "AgentToolApproval", "CompactionEntry"].toFinset
+   "AgentToolResult", "CompactionEntry"].toFinset
 
 def ownedSession (r : Request) : SessionOwner :=
   { session := r.session, requester := r.requester, agent := r.agent }
 
+def verifiedMembership (cat : Catalog) (r : Request) : VerifiedActiveMembership :=
+  { network := cat.selectedNetwork, member := r.requester }
+
+def appliedPairingRoute (r : Request) : AppliedPairingRoute :=
+  { peer := r.peer, requester := r.requester, agent := r.agent }
+
 def admits (cat : Catalog) (r : Request) : Prop :=
-  r.peer ∈ cat.pairedPeers ∧
-  r.requester ∈ cat.activeMembers ∧
+  appliedPairingRoute r ∈ cat.appliedPairingRoutes ∧
+  verifiedMembership cat r ∈ cat.verifiedActiveMemberships ∧
   ownedSession r ∈ cat.sessions
 
 instance (cat : Catalog) (r : Request) : Decidable (admits cat r) := by

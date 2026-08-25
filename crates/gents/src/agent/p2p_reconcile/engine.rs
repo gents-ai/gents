@@ -20,12 +20,12 @@ use crate::identity::AgentIdentity;
 use super::graphql_helpers::{ensure_no_errors, first_row, graphql_string_list_literal, rows};
 use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
 use super::reciprocal::GraphqlReciprocalStore;
-#[cfg(test)]
-use super::templates::scope_filter;
 use super::templates::{
-    admit_app_collections, decode_pairing_filters, equality_filter, resolve_template, Delivery,
-    DidSource, FilterPredicate, PairingFilters, Scope, APP_COLLECTIONS_TEMPLATE,
+    admit_app_collections, conjunctive_string_eq, decode_pairing_filters, equality_filter,
+    resolve_template, Delivery, DidSource, PairingFilters, Scope, APP_COLLECTIONS_TEMPLATE,
 };
+#[cfg(test)]
+use super::templates::{scope_filter, FilterPredicate};
 use super::{
     compute_owned_pairing_diff, owned_pairing_live_matches, DiffOp, EmbeddedRemoteP2pAdmin,
     PairingActual, PairingApplied, PairingDesired, RemoteP2pAdmin, RemoteP2pAdminError,
@@ -1773,43 +1773,6 @@ fn earned_bearer_readiness(
         .trim()
         .to_string();
     (!address.is_empty()).then(|| (claimant_did.to_string(), address, template.id.to_string()))
-}
-
-fn conjunctive_string_eq<'a>(filter: &'a FilterPredicate, field: &str) -> Option<&'a str> {
-    fn collect<'a>(filter: &'a FilterPredicate, field: &str, found: &mut Option<&'a str>) -> bool {
-        match filter {
-            FilterPredicate::Predicate(conditions) => {
-                let Some(condition) = conditions.get(field) else {
-                    return true;
-                };
-                let Some(value) = condition
-                    .as_object()
-                    .and_then(|condition| condition.get("_eq"))
-                    .and_then(serde_json::Value::as_str)
-                else {
-                    return false;
-                };
-                match found {
-                    Some(existing) => *existing == value,
-                    None => {
-                        *found = Some(value);
-                        true
-                    }
-                }
-            }
-            FilterPredicate::All(filters) => {
-                filters.iter().all(|filter| collect(filter, field, found))
-            }
-            FilterPredicate::Acp { .. } => false,
-        }
-    }
-
-    let mut found = None;
-    if collect(filter, field, &mut found) {
-        found
-    } else {
-        None
-    }
 }
 
 fn bearer_pairing_ready_record(

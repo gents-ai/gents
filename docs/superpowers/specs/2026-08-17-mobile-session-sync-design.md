@@ -143,10 +143,9 @@ Plus CoverageLedger entry, `Executable.lean` contract, Rust conformance file,
 proofs README update. Zero `sorry`s.
 
 Client half (#1143): `ClientCore::request_session_hydration` (the first
-client-authored control-request write path — establishes the pattern),
-`focused_session_id` on `ObservedStore`, a hydration/progress `watch` channel
-beside `p2p_health`, and `P2PSupervisorCommand::{Foregrounded,
-NetworkChanged}` reusing the existing repair cycle. Progress is
+client-authored control-request write path — establishes the pattern). It
+reuses the existing request observation and P2P repair paths rather than
+adding focus/network commands or a second progress channel. Progress is
 receiver-side: `served_doc_count` is the denominator, locally merged docIDs
 the numerator. Hydrated sessions persist on-device; no eviction in v1.
 

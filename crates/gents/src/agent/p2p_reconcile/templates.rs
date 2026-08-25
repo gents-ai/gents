@@ -169,6 +169,45 @@ pub fn single_string_eq(filter: &FilterPredicate) -> Option<(&str, &str)> {
     (operators.len() == 1).then_some((field.as_str(), value))
 }
 
+/// Return one unambiguous string equality from a possibly conjunctive filter.
+pub(super) fn conjunctive_string_eq<'a>(
+    filter: &'a FilterPredicate,
+    field: &str,
+) -> Option<&'a str> {
+    fn collect<'a>(filter: &'a FilterPredicate, field: &str, found: &mut Option<&'a str>) -> bool {
+        match filter {
+            FilterPredicate::Predicate(conditions) => {
+                let Some(condition) = conditions.get(field) else {
+                    return true;
+                };
+                let Some(value) = condition
+                    .as_object()
+                    .and_then(|condition| condition.get("_eq"))
+                    .and_then(Value::as_str)
+                else {
+                    return false;
+                };
+                match found {
+                    Some(existing) => *existing == value,
+                    None => {
+                        *found = Some(value);
+                        true
+                    }
+                }
+            }
+            FilterPredicate::All(filters) => {
+                filters.iter().all(|filter| collect(filter, field, found))
+            }
+            FilterPredicate::Acp { .. } => false,
+        }
+    }
+
+    let mut found = None;
+    collect(filter, field, &mut found)
+        .then_some(found)
+        .flatten()
+}
+
 /// Per-collection filter predicates for a concrete pairing.
 ///
 /// `key` = collection name, `value` = predicate to apply when

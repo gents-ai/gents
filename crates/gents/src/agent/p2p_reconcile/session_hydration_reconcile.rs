@@ -5,7 +5,7 @@
 //! pushes the exact selected set through existing peer-targeted doc-push
 //! machinery, then writes a terminal `served`/`rejected` status.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -16,21 +16,23 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
+use crate::identity::AgentIdentity;
 
 use super::graphql_helpers::{ensure_no_errors, rows};
 use super::session_hydration::{
-    decide_hydration, HydrationCatalog, HydrationDocument, HydrationRequest, HydrationVerdict,
-    SessionOwner, HYDRATION_COLLECTIONS,
+    decide_hydration, AppliedPairingRoute, HydrationCatalog, HydrationDocument, HydrationRequest,
+    HydrationVerdict, SessionOwner, VerifiedActiveMembership, HYDRATION_COLLECTIONS,
 };
+use super::templates::{conjunctive_string_eq, decode_pairing_filters};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct HydrationTickOutcome {
+struct HydrationTickOutcome {
     pub served: BTreeSet<String>,
     pub rejected: BTreeSet<String>,
 }
 
 #[async_trait]
-pub trait HydrationDelivery: Send + Sync {
+trait HydrationDelivery: Send + Sync {
     async fn push_documents_to_peer(
         &self,
         peer_id: &str,
@@ -39,7 +41,7 @@ pub trait HydrationDelivery: Send + Sync {
 }
 
 #[async_trait]
-pub trait HydrationRequestStore: Send + Sync {
+trait HydrationRequestStore: Send + Sync {
     async fn load_pending_requests(&self) -> Result<Vec<HydrationRequestRow>>;
     async fn load_catalog(&self, request: &HydrationRequest) -> Result<HydrationCatalog>;
     async fn mark_served(&self, request_key: &str, served_doc_count: usize) -> Result<()>;
@@ -47,14 +49,14 @@ pub trait HydrationRequestStore: Send + Sync {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HydrationRequestRow {
+struct HydrationRequestRow {
     pub request_key: String,
     pub requester_did: String,
     pub agent_did: String,
     pub session_id: String,
 }
 
-pub async fn reconcile_hydration_tick(
+async fn reconcile_hydration_tick(
     store: &dyn HydrationRequestStore,
     delivery: &dyn HydrationDelivery,
 ) -> Result<HydrationTickOutcome> {
@@ -135,19 +137,30 @@ async fn process_one_request(
 
 pub async fn run_session_hydration_reconciler(
     node: Arc<EmbeddedNode>,
-    delivery: Arc<dyn HydrationDelivery>,
+    identity: Arc<dyn AgentIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let store = GraphqlHydrationStore { node: node.clone() };
+    let store = GraphqlHydrationStore {
+        node: node.clone(),
+        identity,
+    };
+    let delivery: Arc<dyn HydrationDelivery> =
+        Arc::new(EmbeddedHydrationDelivery { node: node.clone() });
     let mut subscription = node.subscribe(&[EventName::Update]);
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    sweep_hydration_requests(&store, delivery.as_ref()).await;
+    if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
+        return Ok(());
+    }
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => sweep_hydration_requests(&store, delivery.as_ref()).await,
+            _ = interval.tick() => {
+                if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
+                    return Ok(());
+                }
+            },
             message = subscription.recv() => {
                 if message.is_none() {
                     tracing::warn!("session-hydration reconciler update subscription closed; continuing with periodic sweeps");
@@ -157,13 +170,30 @@ pub async fn run_session_hydration_reconciler(
                 if dropped > 0 {
                     tracing::warn!(dropped, "session-hydration reconciler update subscription dropped messages");
                 }
-                sweep_hydration_requests(&store, delivery.as_ref()).await;
+                if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
+                    return Ok(());
+                }
             }
         }
     }
 }
 
-async fn sweep_hydration_requests(store: &GraphqlHydrationStore, delivery: &dyn HydrationDelivery) {
+async fn sweep_hydration_requests_until_cancelled(
+    store: &dyn HydrationRequestStore,
+    delivery: &dyn HydrationDelivery,
+    cancel: &CancellationToken,
+) -> bool {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => false,
+        _ = sweep_hydration_requests(store, delivery) => true,
+    }
+}
+
+async fn sweep_hydration_requests(
+    store: &dyn HydrationRequestStore,
+    delivery: &dyn HydrationDelivery,
+) {
     match reconcile_hydration_tick(store, delivery).await {
         Ok(outcome) => {
             if !outcome.served.is_empty() || !outcome.rejected.is_empty() {
@@ -180,18 +210,13 @@ async fn sweep_hydration_requests(store: &GraphqlHydrationStore, delivery: &dyn 
     }
 }
 
-pub struct GraphqlHydrationStore {
+struct GraphqlHydrationStore {
     node: Arc<EmbeddedNode>,
+    identity: Arc<dyn AgentIdentity>,
 }
 
-pub struct EmbeddedHydrationDelivery {
+struct EmbeddedHydrationDelivery {
     node: Arc<EmbeddedNode>,
-}
-
-impl EmbeddedHydrationDelivery {
-    pub fn new(node: Arc<EmbeddedNode>) -> Self {
-        Self { node }
-    }
 }
 
 #[async_trait]
@@ -214,13 +239,15 @@ struct PendingRow {
 }
 
 #[derive(Deserialize)]
-struct PeerIdRow {
+struct DesiredPairingRow {
     peer_id: Option<String>,
+    agent_did: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct MemberRow {
-    member_did: Option<String>,
+struct AppliedPairingRow {
+    peer_id: Option<String>,
+    replicator_filter: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -237,24 +264,6 @@ struct TranscriptRow {
     requester_did: Option<String>,
     agent_did: Option<String>,
     session_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RequestIdRow {
-    #[serde(rename = "_docID")]
-    doc_id: Option<String>,
-    request_id: Option<String>,
-    requester_did: Option<String>,
-    agent_did: Option<String>,
-    session_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ApprovalRow {
-    #[serde(rename = "_docID")]
-    doc_id: Option<String>,
-    request_id: Option<String>,
-    agent_did: Option<String>,
 }
 
 #[async_trait]
@@ -284,16 +293,26 @@ impl HydrationRequestStore for GraphqlHydrationStore {
     }
 
     async fn load_catalog(&self, request: &HydrationRequest) -> Result<HydrationCatalog> {
+        let active =
+            super::network::GraphqlNetworkStore::new(self.node.clone(), self.identity.clone())
+                .load_verified_active_memberships()
+                .await
+                .context("load verified active hydration memberships")?;
         let session_id = escape_graphql_string(&request.session_id);
+        let peer_id = escape_graphql_string(&request.peer_id);
         let query = format!(
             r#"{{
-                PeerPairingApplied {{ peer_id }}
-                NetworkMembership(filter: {{ status: {{ _eq: "active" }} }}) {{ member_did }}
+                PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
+                    peer_id agent_did
+                }}
+                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
+                    peer_id replicator_filter
+                }}
                 AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
                     session_id requester_did agent_did
                 }}
                 AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    _docID request_id requester_did agent_did session_id
+                    _docID requester_did agent_did session_id
                 }}
                 AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
                     _docID requester_did agent_did session_id
@@ -310,19 +329,23 @@ impl HydrationRequestStore for GraphqlHydrationStore {
                 CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
                     _docID requester_did agent_did session_id
                 }}
-                AgentToolApproval {{ _docID request_id agent_did }}
             }}"#
         );
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "query session hydration catalog")?;
 
-        let paired_peer_ids = rows::<PeerIdRow>(&response, "PeerPairingApplied")?
+        let desired_agents = rows::<DesiredPairingRow>(&response, "PeerPairingDesired")?
             .into_iter()
-            .filter_map(|row| row.peer_id.filter(|value| !value.is_empty()))
-            .collect();
-        let active_member_dids = rows::<MemberRow>(&response, "NetworkMembership")?
+            .filter_map(|row| {
+                Some((
+                    row.peer_id.filter(|value| !value.is_empty())?,
+                    row.agent_did.filter(|value| !value.is_empty())?,
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let applied_pairing_routes = rows::<AppliedPairingRow>(&response, "PeerPairingApplied")?
             .into_iter()
-            .filter_map(|row| row.member_did.filter(|value| !value.is_empty()))
+            .filter_map(|row| applied_pairing_route(row, &desired_agents))
             .collect();
         let sessions = rows::<SessionRow>(&response, "AgentSession")?
             .into_iter()
@@ -335,41 +358,8 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             })
             .collect();
 
-        let request_rows = rows::<RequestIdRow>(&response, "AgentRequest")?;
-        let session_request_ids: BTreeSet<String> = request_rows
-            .iter()
-            .filter(|row| {
-                row.session_id.as_deref() == Some(request.session_id.as_str())
-                    && row.requester_did.as_deref() == Some(request.requester_did.as_str())
-                    && row.agent_did.as_deref() == Some(request.agent_did.as_str())
-            })
-            .filter_map(|row| row.request_id.clone())
-            .collect();
-
         let mut documents = BTreeSet::new();
         for collection in HYDRATION_COLLECTIONS {
-            if *collection == "AgentToolApproval" {
-                continue;
-            }
-            let field = if *collection == "AgentRequest" {
-                "AgentRequest"
-            } else {
-                *collection
-            };
-            if field == "AgentRequest" {
-                for row in &request_rows {
-                    if let Some(document) = transcript_document(
-                        collection,
-                        row.doc_id.clone(),
-                        row.requester_did.as_deref(),
-                        row.agent_did.as_deref(),
-                        row.session_id.as_deref(),
-                    ) {
-                        documents.insert(document);
-                    }
-                }
-                continue;
-            }
             for row in rows::<TranscriptRow>(&response, collection)? {
                 if let Some(document) = transcript_document(
                     collection,
@@ -383,26 +373,17 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             }
         }
 
-        for row in rows::<ApprovalRow>(&response, "AgentToolApproval")? {
-            let request_id = row.request_id.unwrap_or_default();
-            if !session_request_ids.contains(&request_id) {
-                continue;
-            }
-            let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) else {
-                continue;
-            };
-            documents.insert(HydrationDocument {
-                collection: "AgentToolApproval".into(),
-                doc_id,
-                requester_did: request.requester_did.clone(),
-                agent_did: row.agent_did.unwrap_or_else(|| request.agent_did.clone()),
-                session_id: request.session_id.clone(),
-            });
-        }
-
         Ok(HydrationCatalog {
-            paired_peer_ids,
-            active_member_dids,
+            applied_pairing_routes,
+            selected_network_id: active.network_id.clone(),
+            verified_active_memberships: active
+                .member_dids
+                .into_iter()
+                .map(|member_did| VerifiedActiveMembership {
+                    network_id: active.network_id.clone(),
+                    member_did,
+                })
+                .collect(),
             sessions,
             documents,
         })
@@ -431,6 +412,26 @@ impl HydrationRequestStore for GraphqlHydrationStore {
         .await
         .map(|_| ())
     }
+}
+
+fn applied_pairing_route(
+    row: AppliedPairingRow,
+    desired_agents: &BTreeMap<String, String>,
+) -> Option<AppliedPairingRoute> {
+    let peer_id = row.peer_id.filter(|value| !value.is_empty())?;
+    let desired_agent = desired_agents.get(&peer_id)?;
+    let filters = decode_pairing_filters(row.replicator_filter.as_deref()?).ok()?;
+    let request_filter = filters.get("SessionHydrationRequest")?;
+    let requester_did = conjunctive_string_eq(request_filter, "requester_did")?;
+    let applied_agent = conjunctive_string_eq(request_filter, "agent_did")?;
+    if applied_agent != desired_agent {
+        return None;
+    }
+    Some(AppliedPairingRoute {
+        peer_id,
+        requester_did: requester_did.to_string(),
+        agent_did: applied_agent.to_string(),
+    })
 }
 
 fn transcript_document(
@@ -489,7 +490,7 @@ fn mark_rejected_mutation(request_key: &str, detail: &str, now: &str) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::p2p_reconcile::session_hydration::HYDRATION_COLLECTIONS;
+    use crate::agent::p2p_reconcile::templates::{combine_filters, equality_filter};
 
     struct MemoryStore {
         pending: Vec<HydrationRequestRow>,
@@ -500,6 +501,10 @@ mod tests {
 
     struct RecordingDelivery {
         pushed: std::sync::Mutex<Vec<(String, BTreeSet<HydrationDocument>)>>,
+    }
+
+    struct BlockingDelivery {
+        started: tokio::sync::Notify,
     }
 
     #[async_trait]
@@ -541,8 +546,19 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn admitted_request_pushes_exact_set_then_marks_served() {
+    #[async_trait]
+    impl HydrationDelivery for BlockingDelivery {
+        async fn push_documents_to_peer(
+            &self,
+            _peer_id: &str,
+            _documents: &BTreeSet<HydrationDocument>,
+        ) -> Result<()> {
+            self.started.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    fn admitted_store() -> MemoryStore {
         let document = HydrationDocument {
             collection: "AgentMessage".into(),
             doc_id: "owned".into(),
@@ -550,7 +566,7 @@ mod tests {
             agent_did: "did:key:agent-1".into(),
             session_id: "session-1".into(),
         };
-        let store = MemoryStore {
+        MemoryStore {
             pending: vec![HydrationRequestRow {
                 request_key: "peer-1:session-1".into(),
                 requester_did: "did:key:requester-1".into(),
@@ -558,18 +574,32 @@ mod tests {
                 session_id: "session-1".into(),
             }],
             catalog: HydrationCatalog {
-                paired_peer_ids: BTreeSet::from(["peer-1".into()]),
-                active_member_dids: BTreeSet::from(["did:key:requester-1".into()]),
+                applied_pairing_routes: BTreeSet::from([AppliedPairingRoute {
+                    peer_id: "peer-1".into(),
+                    requester_did: "did:key:requester-1".into(),
+                    agent_did: "did:key:agent-1".into(),
+                }]),
+                selected_network_id: "network-1".into(),
+                verified_active_memberships: BTreeSet::from([VerifiedActiveMembership {
+                    network_id: "network-1".into(),
+                    member_did: "did:key:requester-1".into(),
+                }]),
                 sessions: BTreeSet::from([SessionOwner {
                     session_id: "session-1".into(),
                     requester_did: "did:key:requester-1".into(),
                     agent_did: "did:key:agent-1".into(),
                 }]),
-                documents: BTreeSet::from([document.clone()]),
+                documents: BTreeSet::from([document]),
             },
             served: std::sync::Mutex::new(Vec::new()),
             rejected: std::sync::Mutex::new(Vec::new()),
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn admitted_request_pushes_exact_set_then_marks_served() {
+        let store = admitted_store();
+        let document = store.catalog.documents.first().expect("document").clone();
         let delivery = RecordingDelivery {
             pushed: std::sync::Mutex::new(Vec::new()),
         };
@@ -585,7 +615,61 @@ mod tests {
             *store.served.lock().expect("served lock"),
             vec![("peer-1:session-1".into(), 1)]
         );
-        assert!(HYDRATION_COLLECTIONS.contains(&"AgentToolApproval"));
+    }
+
+    #[test]
+    fn applied_pairing_requires_exact_requester_and_desired_agent() {
+        let filter = combine_filters(
+            equality_filter("requester_did", "did:key:requester-1"),
+            equality_filter("agent_did", "did:key:agent-1"),
+        );
+        let raw = serde_json::to_string(&BTreeMap::from([(
+            "SessionHydrationRequest".to_string(),
+            filter,
+        )]))
+        .expect("serialize filter");
+        let desired = BTreeMap::from([("peer-1".to_string(), "did:key:agent-1".to_string())]);
+        let route = applied_pairing_route(
+            AppliedPairingRow {
+                peer_id: Some("peer-1".into()),
+                replicator_filter: Some(raw.clone()),
+            },
+            &desired,
+        )
+        .expect("exact route");
+        assert_eq!(route.requester_did, "did:key:requester-1");
+
+        let wrong_agent = BTreeMap::from([("peer-1".to_string(), "did:key:agent-2".to_string())]);
+        assert!(applied_pairing_route(
+            AppliedPairingRow {
+                peer_id: Some("peer-1".into()),
+                replicator_filter: Some(raw),
+            },
+            &wrong_agent,
+        )
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_an_in_flight_delivery() {
+        let store = admitted_store();
+        let delivery = BlockingDelivery {
+            started: tokio::sync::Notify::new(),
+        };
+        let cancel = CancellationToken::new();
+        let sweep = sweep_hydration_requests_until_cancelled(&store, &delivery, &cancel);
+        tokio::pin!(sweep);
+
+        tokio::select! {
+            result = &mut sweep => panic!("sweep unexpectedly completed: {result}"),
+            _ = delivery.started.notified() => {}
+        }
+        cancel.cancel();
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(1), &mut sweep)
+            .await
+            .expect("cancelled sweep should return promptly");
+        assert!(!completed);
+        assert!(store.served.lock().expect("served lock").is_empty());
     }
 
     #[tokio::test]

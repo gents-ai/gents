@@ -294,8 +294,6 @@ impl P2PHealth {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum P2PSupervisorCommand {
     RepairNow,
-    Foregrounded,
-    NetworkChanged,
 }
 
 pub struct ClientCore {
@@ -391,16 +389,6 @@ impl ClientCore {
 
     pub fn hydration_progress_updates(&self) -> watch::Receiver<ClientHydrationProgress> {
         self.hydration.subscribe()
-    }
-
-    pub async fn notify_foregrounded(&self) -> Result<()> {
-        self.send_p2p_command(P2PSupervisorCommand::Foregrounded)
-            .await
-    }
-
-    pub async fn notify_network_changed(&self) -> Result<()> {
-        self.send_p2p_command(P2PSupervisorCommand::NetworkChanged)
-            .await
     }
 
     async fn send_p2p_command(&self, command: P2PSupervisorCommand) -> Result<()> {
