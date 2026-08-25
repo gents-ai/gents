@@ -5,9 +5,9 @@ use gents_desktop_core::client::{ClientCore, ClientPeerStatus, PeerRecord};
 
 use super::super::types::{
     normalize_optional, turn_state_label, AgentPrincipalView, BehaviorEnvironmentView,
-    BehaviorView, ConversationSummary, DeploymentView, DesktopRuntimeSnapshot, EventTriggerView,
-    InferenceBackendView, InferenceProfileView, RuntimeView, ScheduleView, SkillView, TaskView,
-    ToolSelectionView, ToolServiceRegistryView,
+    BehaviorView, ClientRouteStatusView, ConversationSummary, DeploymentView,
+    DesktopRuntimeSnapshot, EventTriggerView, InferenceBackendView, InferenceProfileView,
+    RuntimeView, ScheduleView, SkillView, TaskView, ToolSelectionView, ToolServiceRegistryView,
 };
 use super::runtime_tasks::{
     conversation_task_tag, recent_runs_for_task_views, request_backed_conversation_summaries,
@@ -506,6 +506,33 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 graphql: peer.graphql,
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
                 pairing_ready,
+                chat_safe: status.is_some_and(|status| status.chat_safe),
+                routes: status
+                    .map(|status| {
+                        status
+                            .routes
+                            .iter()
+                            .map(|route| ClientRouteStatusView {
+                                route_id: route.route_id.clone(),
+                                direction: route.direction.clone(),
+                                directory_id: route.directory_id.clone(),
+                                transport_peer_id: route.transport_peer_id.clone(),
+                                address: route.address.clone(),
+                                template: route.template.clone(),
+                                desired: route.desired,
+                                applied: route.applied,
+                                live_match: route.live_match,
+                                filter_summary: route.filter_summary.clone(),
+                                last_error: route.last_error.clone(),
+                                retry_count: route.retry_count,
+                                last_retry_at: super::system_time_rfc3339(route.last_retry_at),
+                                last_retry_error_class: route
+                                    .last_retry_error_class
+                                    .map(|class| format!("{class:?}")),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 last_error: status.and_then(|status| status.last_error.clone()),
                 default_behavior_id,
                 agent_principal,

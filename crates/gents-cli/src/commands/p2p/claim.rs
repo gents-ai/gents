@@ -76,11 +76,19 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
 
     write_agent_network(&access, &token.network).await?;
 
-    let existed = peer_pairing_exists(&access, &token.peer_id).await?;
+    let desired_peer_id = if template == "client" {
+        gents::agent::p2p_reconcile::client_route_id(
+            &token.peer_id,
+            gents::agent::p2p_reconcile::PairingDirection::ClientToRuntime,
+        )
+    } else {
+        token.peer_id.clone()
+    };
+    let existed = peer_pairing_exists(&access, &desired_peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let doc_id = write_pairing_desired(
         &access,
-        &token.peer_id,
+        &desired_peer_id,
         Some(&token.issuer_did),
         &collections,
         &addresses,
@@ -128,6 +136,7 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
         "graphql": graphql,
         "access_mode": access.mode(),
         "peer_id": token.peer_id,
+        "desired_pairing_id": desired_peer_id,
         "issuer_did": token.issuer_did,
         "network_id": token.network_id,
         "claimant_did": identity.did(),

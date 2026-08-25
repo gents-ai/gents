@@ -202,12 +202,22 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     async fn list_replicators(&self) -> RemoteP2pAdminResult<Vec<RemoteReplicator>> {
         #[derive(Deserialize)]
         struct WireReplicator {
-            #[serde(default)]
+            #[serde(default, rename = "ID", alias = "id")]
             id: Option<String>,
-            #[serde(default)]
-            collections: Vec<String>,
-            #[serde(default)]
+            #[serde(default, rename = "CollectionIDs")]
+            collection_ids: Option<Vec<String>>,
+            #[serde(default, rename = "collections")]
+            legacy_collections: Option<Vec<String>>,
+            #[serde(default, rename = "Addresses")]
+            addresses: Option<Vec<String>>,
+            #[serde(default, rename = "addresses")]
+            legacy_addresses: Option<Vec<String>>,
+            #[serde(default, rename = "address")]
             address: Option<String>,
+            #[serde(default, rename = "Filters")]
+            filters: Option<BTreeMap<String, ReplicationFilter>>,
+            #[serde(default, rename = "filters")]
+            legacy_filters: Option<BTreeMap<String, ReplicationFilter>>,
         }
 
         let resp = self
@@ -221,10 +231,28 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         })?;
         Ok(wire
             .into_iter()
-            .map(|w| RemoteReplicator {
-                id: w.id,
-                collections: w.collections,
-                address: w.address,
+            .map(|w| {
+                // The pinned DefraDB wire uses `CollectionIDs`/`Addresses` and
+                // omits `Filters` when the effective map is empty. Lowercase
+                // legacy projections predate observable filters, so omission
+                // there remains unknown rather than being guessed empty.
+                let current_defra_wire = w.collection_ids.is_some() || w.addresses.is_some();
+                RemoteReplicator {
+                    id: w.id,
+                    collections: w
+                        .collection_ids
+                        .or(w.legacy_collections)
+                        .unwrap_or_default(),
+                    address: w.address.or_else(|| {
+                        w.addresses
+                            .or(w.legacy_addresses)
+                            .and_then(|addresses| addresses.into_iter().next())
+                    }),
+                    filters: w
+                        .filters
+                        .or(w.legacy_filters)
+                        .or_else(|| current_defra_wire.then(BTreeMap::new)),
+                }
             })
             .collect())
     }
@@ -835,11 +863,17 @@ mod tests {
     #[tokio::test]
     async fn list_replicators_returns_remote_replicators() {
         let server = MockServer::start().await;
+        let filters = to_replication_filters(&BTreeMap::from([(
+            "AgentRequest".to_string(),
+            gents::agent::p2p_reconcile::equality_filter("agent_did", "did:key:mandrake"),
+        )]))
+        .expect("representable filter");
         let body = serde_json::json!([
             {
-                "id": "peer1",
-                "collections": ["c1"],
-                "address": "/ip4/1.2.3.4/tcp/9000/p2p/peer1",
+                "ID": "peer1",
+                "CollectionIDs": ["c1"],
+                "Addresses": ["/ip4/1.2.3.4/tcp/9000/p2p/peer1"],
+                "Filters": filters,
                 "status": 1,
                 "lastStatusChange": null
             }
@@ -855,6 +889,57 @@ mod tests {
         assert_eq!(reps.len(), 1);
         assert_eq!(reps[0].id.as_deref(), Some("peer1"));
         assert_eq!(reps[0].collections, vec!["c1".to_string()]);
+        assert_eq!(
+            reps[0].address.as_deref(),
+            Some("/ip4/1.2.3.4/tcp/9000/p2p/peer1")
+        );
+        assert_eq!(reps[0].filters.as_ref(), Some(&filters));
+    }
+
+    #[tokio::test]
+    async fn list_replicators_decodes_current_wire_omission_as_empty_filters() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!([{
+            "ID": "peer1",
+            "CollectionIDs": ["c1"],
+            "Addresses": ["/ip4/1.2.3.4/tcp/9000/p2p/peer1"]
+        }]);
+        Mock::given(method("GET"))
+            .and(path("/api/v0/p2p/replicators"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let reps = admin_for(&server)
+            .list_replicators()
+            .await
+            .expect("list current Defra replicators");
+
+        assert_eq!(reps.len(), 1);
+        assert_eq!(reps[0].filters, Some(BTreeMap::new()));
+    }
+
+    #[tokio::test]
+    async fn list_replicators_preserves_legacy_wire_omission_as_unknown() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!([{
+            "id": "peer1",
+            "collections": ["c1"],
+            "addresses": ["/ip4/1.2.3.4/tcp/9000/p2p/peer1"]
+        }]);
+        Mock::given(method("GET"))
+            .and(path("/api/v0/p2p/replicators"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let reps = admin_for(&server)
+            .list_replicators()
+            .await
+            .expect("list legacy replicators");
+
+        assert_eq!(reps.len(), 1);
+        assert_eq!(reps[0].filters, None);
     }
 
     #[tokio::test]

@@ -280,6 +280,25 @@ pub struct ConversationSummary {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct ClientRouteStatusView {
+    pub route_id: String,
+    pub direction: String,
+    pub directory_id: String,
+    pub transport_peer_id: Option<String>,
+    pub address: Option<String>,
+    pub template: Option<String>,
+    pub desired: bool,
+    pub applied: bool,
+    pub live_match: bool,
+    pub filter_summary: String,
+    pub last_error: Option<String>,
+    pub retry_count: u32,
+    pub last_retry_at: Option<String>,
+    pub last_retry_error_class: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentView {
     pub peer_id: String,
     pub label: String,
@@ -289,6 +308,8 @@ pub struct DeploymentView {
     pub graphql: Option<String>,
     pub dial_succeeded: bool,
     pub pairing_ready: bool,
+    pub chat_safe: bool,
+    pub routes: Vec<ClientRouteStatusView>,
     pub last_error: Option<String>,
     pub default_behavior_id: Option<String>,
     pub agent_principal: AgentPrincipalView,

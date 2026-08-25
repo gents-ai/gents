@@ -239,6 +239,16 @@ impl GraphqlReciprocalStore {
         Ok(endpoints)
     }
 
+    /// Resolve one current, signature-verified endpoint without requiring a
+    /// reciprocal-intent row. Saved client deployments use this to repair a
+    /// rotated transport ticket for the same agent DID after restart.
+    pub async fn load_verified_endpoint_for_did(
+        &self,
+        did: &str,
+    ) -> Result<Option<NetworkEndpointEntry>> {
+        <Self as ReciprocalStore>::load_endpoint_for_did(self, did).await
+    }
+
     async fn existing_data_plane_ownership(&self, peer_id: &str) -> Result<DataPlaneOwnership> {
         let peer_id = escape_graphql_string(peer_id);
         let query = format!(

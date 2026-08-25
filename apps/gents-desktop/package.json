@@ -36,6 +36,7 @@
     "test:live:operations": "node ./tests/run-live-test.mjs --suite operations",
     "test:live:subagent": "node ./tests/run-live-test.mjs --suite subagent",
     "test:live:replication": "node ./tests/run-live-test.mjs --suite replication",
+    "test:live:pairing-lifecycle": "GENTS_TAURI_LIVE_REQUIRE_REAL_INFERENCE=1 node ./tests/run-live-test.mjs --suite pairing-lifecycle",
     "test:live:sad-path": "node ./tests/run-live-test.mjs --suite sad-path",
     "test:live:cascade": "node ./tests/run-live-test.mjs --suite cascade",
     "smoke:remote-fleet": "node ./scripts/remote-fleet-smoke.mjs",

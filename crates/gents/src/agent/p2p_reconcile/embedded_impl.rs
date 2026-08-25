@@ -91,6 +91,7 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
                 id: r.id,
                 collections: r.collections,
                 address: r.address,
+                filters: Some(r.filters),
             })
             .collect())
     }
@@ -637,12 +638,20 @@ mod tests {
             if template.collections.is_empty() {
                 continue; // app-collections: bring-your-own collection set.
             }
-            let filters = super::super::templates::scope_filter(
-                &template.scope,
-                template.collections,
-                "did:key:z6MkPeerForFilterValidation",
-                "did:key:z6MkSelfForFilterValidation",
-            );
+            let filters = match &template.scope {
+                Scope::ClientRoute => super::super::policy::resolve_template_filters(
+                    template,
+                    super::super::policy::PairingDirection::ClientToRuntime,
+                    "did:key:z6MkPeerForFilterValidation",
+                    "did:key:z6MkSelfForFilterValidation",
+                ),
+                _ => super::super::templates::scope_filter(
+                    &template.scope,
+                    template.collections,
+                    "did:key:z6MkPeerForFilterValidation",
+                    "did:key:z6MkSelfForFilterValidation",
+                ),
+            };
             match &template.scope {
                 Scope::Unscoped => assert!(
                     filters.is_empty(),
@@ -663,6 +672,7 @@ mod tests {
                     );
                 }
                 Scope::PeerDid { .. } => {}
+                Scope::ClientRoute => assert!(!filters.is_empty()),
             }
             local_admin
                 .add_replicator(

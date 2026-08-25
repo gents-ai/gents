@@ -6,8 +6,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::{EmbeddedNode, QueryResponse};
 use defra_p2p_adapter::{P2POperations as P2POps, ReplicationFilter, ReplicationFilters};
 use gents::agent::p2p_reconcile::{
-    conversation_like, peer_endpoint_upsert_mutation, resolve_template, scope_filter, DidSource,
-    Scope, AGENT_DIRECTORY_COLLECTION,
+    conversation_like, peer_endpoint_upsert_mutation, resolve_template, resolve_template_filters,
+    DidSource, PairingDirection, Scope, AGENT_DIRECTORY_COLLECTION, CLIENT_TEMPLATE,
 };
 use gents::graphql::escape_graphql_string;
 use gents::identity::AgentIdentity;
@@ -184,6 +184,8 @@ impl ClientCore {
             dial_succeeded: true,
             last_error: None,
             pairing: Vec::new(),
+            routes: Vec::new(),
+            chat_safe: false,
         });
         self.clear_mutation_error();
 
@@ -495,7 +497,10 @@ struct BearerPairingReadyObservationRow {
     issuer_sig: Option<String>,
 }
 
-async fn remove_incompatible_replicators(p2p: &Arc<dyn P2POps>, address: &str) -> Result<()> {
+pub(super) async fn remove_incompatible_replicators(
+    p2p: &Arc<dyn P2POps>,
+    address: &str,
+) -> Result<()> {
     p2p_remove_replicator(
         p2p,
         subscribed_collection_names()
@@ -621,6 +626,9 @@ async fn verify_bearer_invite(
 }
 
 fn bearer_template_is_safely_scoped(template: &gents::agent::p2p_reconcile::ScopeTemplate) -> bool {
+    if matches!(&template.scope, Scope::ClientRoute) {
+        return template.id == CLIENT_TEMPLATE;
+    }
     let Scope::PerCollection(rules) = &template.scope else {
         return false;
     };
@@ -657,8 +665,13 @@ pub(super) fn bearer_replicator_collections(template_id: &str) -> Vec<String> {
     let template = resolve_template(template_id)
         .filter(|template| conversation_like(template.id))
         .unwrap_or_else(|| resolve_template("conversation").expect("conversation template"));
-    let mut collections = template
-        .collections
+    let route_collections =
+        if template.id == gents::agent::p2p_reconcile::templates::CLIENT_TEMPLATE {
+            gents::agent::p2p_reconcile::client_route_collections(PairingDirection::ClientToRuntime)
+        } else {
+            template.collections
+        };
+    let mut collections = route_collections
         .iter()
         .map(|value| (*value).to_string())
         .collect::<Vec<_>>();
@@ -685,6 +698,17 @@ pub(super) async fn install_bearer_replicator_for_record(
         template,
     )
     .await
+}
+
+pub(super) fn saved_peer_replicator_collections(record: &PeerRecord) -> Vec<String> {
+    if is_bearer_peer(record) {
+        bearer_replicator_collections(record.pairing_template.as_deref().unwrap_or("conversation"))
+    } else {
+        gents::agent::p2p_reconcile::client_route_collections(PairingDirection::ClientToRuntime)
+            .iter()
+            .map(|collection| (*collection).to_string())
+            .collect()
+    }
 }
 
 async fn install_bearer_replicator(
@@ -718,9 +742,9 @@ fn bearer_replicator_filters(
     let template = resolve_template(template_id)
         .filter(|template| conversation_like(template.id))
         .unwrap_or_else(|| resolve_template("conversation").expect("conversation template"));
-    let pairing_filters = scope_filter(
-        &template.scope,
-        template.collections,
+    let pairing_filters = resolve_template_filters(
+        template,
+        PairingDirection::ClientToRuntime,
         requester_did,
         issuer_did,
     );
@@ -1310,6 +1334,16 @@ mod tests {
             filters.get("BearerPairingReady"),
             Some(&predicate("claimant_did", "did:key:phone"))
         );
+    }
+
+    #[test]
+    fn client_bearer_never_pushes_runtime_configuration() {
+        let collections = bearer_replicator_collections("client");
+        assert!(collections.contains(&"AgentRequest".to_string()));
+        assert!(collections.contains(&"PairingBearerClaim".to_string()));
+        assert!(!collections.contains(&"AgentBehavior".to_string()));
+        assert!(!collections.contains(&"InferenceBackend".to_string()));
+        assert!(!collections.contains(&"Task".to_string()));
     }
 
     #[test]

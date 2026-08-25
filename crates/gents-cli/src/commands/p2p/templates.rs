@@ -29,6 +29,7 @@ fn scope_str(s: &Scope) -> String {
         Scope::PeerDid { field } => field.to_string(),
         Scope::Unscoped => "unscoped".to_string(),
         Scope::PerCollection(_) => "per-collection".to_string(),
+        Scope::ClientRoute => "client-route".to_string(),
     }
 }
 
@@ -155,6 +156,7 @@ mod tests {
             vec![
                 "conversation",
                 "machine",
+                "client",
                 "agent-config",
                 "backup",
                 "discovery",

@@ -1,8 +1,9 @@
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::{
-    ClientCore, ClientCoreOptions, DesktopPaths, SubmitRequestOptions,
+    ClientCore, ClientCoreOptions, DesktopPaths, PeerDirectory, SubmitRequestOptions,
 };
 use serde::Deserialize;
 use tokio::time::{sleep, Instant};
@@ -28,11 +29,7 @@ struct RequestRow {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
-    )
-    .await?;
+    let (runtime, core) = start_core_with_local_route(tempdir.path(), "did:test:amy").await?;
 
     let session_id = Uuid::new_v4().to_string();
     core.submit_request(&session_id, "did:test:amy", "hello", Some("amy-code"))
@@ -61,17 +58,14 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
         );
     }
     core.shutdown().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
-    )
-    .await?;
+    let (runtime, core) = start_core_with_local_route(tempdir.path(), "did:test:amy").await?;
 
     let session_id = Uuid::new_v4().to_string();
     let submitted = core
@@ -128,17 +122,14 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
     );
     assert_eq!(core.store().snapshot().requests.len(), 1);
     core.shutdown().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
-    )
-    .await?;
+    let (runtime, core) = start_core_with_local_route(tempdir.path(), "did:test:amy").await?;
 
     let session_id = Uuid::new_v4().to_string();
 
@@ -215,6 +206,7 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     assert_eq!(new_row.metadata.as_deref(), Some(metadata_value.as_str()));
 
     core.shutdown().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 
@@ -266,14 +258,17 @@ async fn add_and_remove_peer_persists_peer_directory() -> Result<()> {
     assert_eq!(local.peer_records().await.len(), 1);
     assert_eq!(
         peer_pairing_desired_count(local.node(), &added.peer_id).await?,
-        1
+        2
     );
 
     let removed = local.remove_peer(&added.peer_id).await?;
 
     assert_eq!(removed.peer_id, added.peer_id);
     assert!(!removed.connected);
-    assert!(removed.warning.is_none());
+    assert!(removed
+        .warning
+        .as_deref()
+        .is_some_and(|warning| warning.contains("route teardown is pending")));
     assert!(local.peer_records().await.is_empty());
     assert_eq!(local.configured_peer_count(), 0);
     assert_eq!(local.dialed_peer_count(), 0);
@@ -281,7 +276,7 @@ async fn add_and_remove_peer_persists_peer_directory() -> Result<()> {
     assert!(local.p2p().get_replicators().await?.is_empty());
     assert_eq!(
         peer_pairing_desired_count(local.node(), &added.peer_id).await?,
-        0
+        2
     );
     local.shutdown().await?;
     remote.shutdown().await?;
@@ -292,26 +287,55 @@ async fn peer_pairing_desired_count(
     node: &defra_node::EmbeddedNode,
     peer_id: &str,
 ) -> Result<usize> {
-    let peer_id = gents_protocol::graphql::escape_graphql_string(peer_id);
     let response = node
-        .execute(&format!(
-            r#"query {{
-                PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    _docID
-                }}
-            }}"#
-        ))
+        .execute("query { PeerPairingDesired { peer_id } }")
         .await;
     if response.has_errors() {
         bail!("query PeerPairingDesired failed: {:?}", response.errors);
     }
+    let route_prefix = format!("{peer_id}:");
     Ok(response
         .data
         .as_ref()
         .and_then(|data| data.get("PeerPairingDesired"))
         .and_then(|rows| rows.as_array())
-        .map(Vec::len)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| {
+                    row.get("peer_id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|id| id.starts_with(&route_prefix))
+                })
+                .count()
+        })
         .unwrap_or_default())
+}
+
+async fn start_core_with_local_route(
+    root: &Path,
+    agent_did: &str,
+) -> Result<(ClientCore, ClientCore)> {
+    let runtime = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(root.join("runtime")),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    let runtime_addr = wait_for_connectable_iroh_addr(&runtime).await?;
+
+    let client_paths = DesktopPaths::from_root(root.join("client"));
+    let mut directory = PeerDirectory::load(client_paths.peer_directory_path()).await?;
+    directory
+        .upsert_local_standard_peer(
+            "Test Local Runtime",
+            &runtime_addr,
+            agent_did,
+            "http://127.0.0.1:1/api/v0/graphql",
+        )
+        .await?;
+    let client =
+        ClientCore::start_with_paths_and_options(client_paths, ClientCoreOptions::local_only())
+            .await?;
+    Ok((runtime, client))
 }
 
 async fn query_single<T>(node: &defra_node::EmbeddedNode, query: &str, root: &str) -> Result<T>

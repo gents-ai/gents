@@ -25,6 +25,7 @@ inductive ScopeKind where
   | peerDid
   | unscoped
   | perCollection
+  | clientRoute
   deriving DecidableEq, Repr
 
 namespace ScopeKind
@@ -33,16 +34,19 @@ def ofScope : Scope → ScopeKind
   | .peerDid _ => .peerDid
   | .unscoped => .unscoped
   | .perCollection _ => .perCollection
+  | .clientRoute => .clientRoute
 
 def toContract : ScopeKind → String
   | .peerDid => "peerDid"
   | .unscoped => "unscoped"
   | .perCollection => "perCollection"
+  | .clientRoute => "clientRoute"
 
 def fromContract? : String → Option ScopeKind
   | "peerDid" => some .peerDid
   | "unscoped" => some .unscoped
   | "perCollection" => some .perCollection
+  | "clientRoute" => some .clientRoute
   | _ => none
 
 theorem fromContract_toContract (k : ScopeKind) :

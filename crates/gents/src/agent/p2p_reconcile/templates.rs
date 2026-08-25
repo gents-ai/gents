@@ -7,7 +7,7 @@
 //! Pairing filters use DefraDB's predicate type directly. Local helpers only
 //! derive, combine, and inspect those predicates.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
@@ -40,6 +40,13 @@ pub enum Scope {
     /// Explicit per-collection filter rules for directional pairings where
     /// different collections scope to different DID sources.
     PerCollection(&'static [CollectionRule]),
+    /// Direction-aware mobile/desktop client route. Transcript artifacts are
+    /// scoped by both requester DID and owning agent DID. Return-leg runtime
+    /// configuration is collection-bounded but unfiltered because its mutable
+    /// owner fields are not legal DefraDB replicator predicates.
+    /// Resolve this through `policy::resolve_template_filters` so the caller
+    /// must name the data-flow direction explicitly.
+    ClientRoute,
 }
 
 /// DID source for one per-collection filter rule.
@@ -224,6 +231,51 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
     "AgentConversation",
     "CompactionEntry",
     "BearerPairingReady",
+];
+
+/// Bounded client dataplane. Unlike `machine`, this is intentionally a
+/// deployment route rather than fleet gossip: transcript rows are gated by
+/// requester and owning agent, while the small control plane lets a client
+/// render behaviors and automations without importing arbitrary history.
+/// `InferenceBackend` is deliberately absent: the frozen schema contains raw
+/// API-key material. Mobile needs a future redacted backend projection rather
+/// than replication of the credential-bearing document.
+pub const CLIENT_COLLECTIONS: &[&str] = &[
+    "AgentRequest",
+    "AgentResponse",
+    "AgentMessage",
+    "AgentToolCall",
+    "AgentToolResult",
+    "AgentSession",
+    "AgentConversation",
+    "CompactionEntry",
+    "BearerPairingReady",
+    "PeerEndpoint",
+    "AgentBehavior",
+    "ToolSelection",
+    "InferenceProfile",
+    "ToolServiceRegistry",
+    "Skill",
+    "DatastoreToolSurface",
+    "Task",
+    "Schedule",
+    "EventTrigger",
+];
+
+/// Client-authored rows that may travel toward a runtime. Runtime-owned
+/// configuration stays off this leg: its owner fields are intentionally
+/// mutable and therefore cannot be used as DefraDB replication filters.
+pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
+    "AgentRequest",
+    "AgentResponse",
+    "AgentMessage",
+    "AgentToolCall",
+    "AgentToolResult",
+    "AgentSession",
+    "AgentConversation",
+    "CompactionEntry",
+    "BearerPairingReady",
+    "PeerEndpoint",
 ];
 
 const CONVERSATION_RULES: &[CollectionRule] = &[
@@ -468,6 +520,7 @@ pub const SUBAGENT_HOST_TEMPLATE: &str = "subagent-host";
 pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
 pub const MACHINE_TEMPLATE: &str = "machine";
 pub const CLIENT_INDEX_TEMPLATE: &str = "client-index";
+pub const CLIENT_TEMPLATE: &str = "client";
 
 static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
@@ -480,6 +533,12 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
         id: MACHINE_TEMPLATE,
         collections: MACHINE_COLLECTIONS,
         scope: Scope::PerCollection(MACHINE_RULES),
+        delivery: Delivery::Push,
+    },
+    ScopeTemplate {
+        id: CLIENT_TEMPLATE,
+        collections: CLIENT_COLLECTIONS,
+        scope: Scope::ClientRoute,
         delivery: Delivery::Push,
     },
     ScopeTemplate {
@@ -542,6 +601,22 @@ pub fn builtin_templates() -> &'static [ScopeTemplate] {
     BUILTIN_TEMPLATES
 }
 
+/// Admit a bring-your-own app collection set only when it is non-empty and
+/// disjoint from every schema owned by the gents protocol catalog.
+///
+/// Protocol collections have bundled migration/version compatibility rules;
+/// allowing an arbitrary `DataPlanePairingDesired` row to name one would
+/// bypass the client-authored collection fence that protects those rules.
+pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<String>> {
+    let overlaps_protocol_catalog = requested.iter().any(|requested| {
+        gents_protocol::schemas::ALL_COLLECTION_NAMES
+            .iter()
+            .chain(gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.iter())
+            .any(|protocol| requested == protocol)
+    });
+    (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
+}
+
 /// Look up a template by id.  Returns `None` for unknown ids.
 pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
     BUILTIN_TEMPLATES.iter().find(|t| t.id == id)
@@ -582,6 +657,9 @@ pub fn scope_filter(
                 )
             })
             .collect(),
+        Scope::ClientRoute => panic!(
+            "client-route scope requires an explicit direction; use resolve_template_filters"
+        ),
     }
 }
 
@@ -592,7 +670,7 @@ pub fn conversation_like(id: &str) -> bool {
     // predicate: normalization happens at this boundary, not in the model —
     // Lean `conversationLike` is exact string equality with no trimming.
     let id = id.trim();
-    id == "conversation" || id == MACHINE_TEMPLATE
+    id == "conversation" || id == MACHINE_TEMPLATE || id == CLIENT_TEMPLATE
 }
 
 // ---------------------------------------------------------------------------
@@ -725,8 +803,8 @@ mod tests {
     }
 
     #[test]
-    fn builtin_template_count_is_ten() {
-        assert_eq!(builtin_templates().len(), 10);
+    fn builtin_template_count_is_eleven() {
+        assert_eq!(builtin_templates().len(), 11);
     }
 
     #[test]
@@ -755,6 +833,23 @@ mod tests {
         assert_eq!(t.delivery, Delivery::Replicate);
         assert!(matches!(t.scope, Scope::Unscoped));
         assert!(t.collections.is_empty());
+    }
+
+    #[test]
+    fn app_collection_admission_is_disjoint_from_the_protocol_catalog() {
+        let custom = BTreeSet::from(["ChangeProposed".to_string()]);
+        assert_eq!(admit_app_collections(custom.clone()), Some(custom));
+
+        for protocol in gents_protocol::schemas::ALL_COLLECTION_NAMES
+            .iter()
+            .chain(gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.iter())
+        {
+            let requested = BTreeSet::from(["ChangeProposed".to_string(), (*protocol).to_string()]);
+            assert!(
+                admit_app_collections(requested).is_none(),
+                "protocol collection {protocol} bypassed app data-plane admission"
+            );
+        }
     }
 
     #[test]
@@ -880,6 +975,7 @@ mod tests {
     fn conversation_like_accepts_exactly_the_intent_minting_templates() {
         assert!(conversation_like("conversation"));
         assert!(conversation_like("machine"));
+        assert!(conversation_like("client"));
         assert!(conversation_like(" machine "));
         assert!(!conversation_like("network-control"));
         assert!(!conversation_like("discovery"));

@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use gents::agent::p2p_reconcile::{
-    equality_filter, merge_layered_desired, single_string_eq, DiffOp, FilterPredicate,
-    PairingDesired, PairingFilters, MAX_CONCURRENT_PEER_PREPARATIONS,
+    compute_owned_pairing_diff, equality_filter, merge_layered_desired, single_string_eq, DiffOp,
+    FilterPredicate, PairingActual, PairingApplied, PairingDesired, PairingFilters,
+    MAX_CONCURRENT_PEER_PREPARATIONS,
 };
 
 use crate::lean_vocab_test::{
@@ -109,6 +110,29 @@ async fn filter_change_reinstalls_replicator() {
     assert!(
         !matches!(ops.last(), Some(DiffOp::TeardownReplicator(_))),
         "reconverged pairing must not keep tearing down, got {ops:?}"
+    );
+}
+
+#[test]
+fn operator_delete_owns_endpoint_despite_observed_configuration_drift() {
+    let address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-b";
+    let desired = PairingDesired::default();
+    let actual = PairingActual {
+        replicator_addresses: set(&[address]),
+        replicator_collections: [(address.to_string(), set(&["UnexpectedDriftedCollection"]))]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    let applied = PairingApplied {
+        replicator_addresses: set(&[address]),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        compute_owned_pairing_diff(&desired, &actual, &applied),
+        vec![DiffOp::TeardownReplicator(address.to_string())],
+        "mutable live configuration must not hide an owned endpoint from delete"
     );
 }
 

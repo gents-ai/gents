@@ -33,7 +33,9 @@ impl PeerRecord {
     }
 
     pub fn is_chat_ready(&self) -> bool {
-        !self.is_bearer_pairing() || self.pairing_ready
+        self.source.as_deref() == Some("local-standard")
+            || (self.source.is_none() && self.graphql.is_none())
+            || self.pairing_ready
     }
 
     pub fn new(
@@ -74,32 +76,38 @@ impl PeerRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct StoredPeerDirectory {
     peers: Vec<PeerRecord>,
+    #[serde(default)]
+    pending_removals: Vec<PeerRecord>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PeerDirectory {
     path: PathBuf,
     peers: Vec<PeerRecord>,
+    pending_removals: Vec<PeerRecord>,
 }
 
 impl PeerDirectory {
     pub async fn load(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let peers = match tokio::fs::read(&path).await {
-            Ok(bytes) if bytes.is_empty() => Vec::new(),
-            Ok(bytes) => {
-                serde_json::from_slice::<StoredPeerDirectory>(&bytes)
-                    .with_context(|| format!("parsing peer directory {}", path.display()))?
-                    .peers
+        let stored = match tokio::fs::read(&path).await {
+            Ok(bytes) if bytes.is_empty() => StoredPeerDirectory::default(),
+            Ok(bytes) => serde_json::from_slice::<StoredPeerDirectory>(&bytes)
+                .with_context(|| format!("parsing peer directory {}", path.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                StoredPeerDirectory::default()
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(error) => {
                 return Err(anyhow::Error::from(error))
                     .with_context(|| format!("reading peer directory {}", path.display()));
             }
         };
 
-        let mut directory = Self { path, peers };
+        let mut directory = Self {
+            path,
+            peers: stored.peers,
+            pending_removals: stored.pending_removals,
+        };
         directory.sort_records();
         Ok(directory)
     }
@@ -114,6 +122,16 @@ impl PeerDirectory {
 
     pub fn records(&self) -> &[PeerRecord] {
         &self.peers
+    }
+
+    pub fn pending_removals(&self) -> &[PeerRecord] {
+        &self.pending_removals
+    }
+
+    pub fn has_pending_removal(&self, expected: &PeerRecord) -> bool {
+        self.pending_removals
+            .iter()
+            .any(|pending| pending == expected)
     }
 
     pub async fn upsert_saved_peer(
@@ -139,13 +157,42 @@ impl PeerDirectory {
         let agent_did = normalize_non_empty("agent_did", agent_did)?;
         let graphql = normalize_optional(graphql);
         let default_behavior_id = normalize_optional(default_behavior_id);
+        let incoming_source = graphql.map(|_| "server-status");
 
-        let mut record = self
+        let matching_active = self
             .peers
             .iter()
-            .find(|existing| existing.addr == addr && existing.agent_did == agent_did)
-            .cloned()
+            .filter(|existing| {
+                existing.agent_did == agent_did
+                    && (existing.source.as_deref() == incoming_source
+                        || (incoming_source == Some("server-status") && existing.source.is_none()))
+            })
+            .collect::<Vec<_>>();
+        if matching_active.len() > 1 {
+            anyhow::bail!(
+                "multiple saved deployments already own agent {agent_did} for source {:?}; remove the duplicate explicitly before updating",
+                incoming_source
+            );
+        }
+
+        let active = matching_active.first().map(|record| (*record).clone());
+        let pending_index = active.is_none().then(|| {
+            self.pending_removals.iter().position(|existing| {
+                existing.agent_did == agent_did
+                    && (existing.source.as_deref() == incoming_source
+                        || (incoming_source == Some("server-status") && existing.source.is_none()))
+            })
+        });
+        let mut record = active
+            .or_else(|| {
+                pending_index
+                    .flatten()
+                    .map(|index| self.pending_removals.remove(index))
+            })
             .unwrap_or_else(|| PeerRecord::new(label, addr, agent_did));
+        if record.addr != addr {
+            record.pairing_ready = false;
+        }
         record.label = label.to_string();
         record.addr = addr.to_string();
         record.agent_did = agent_did.to_string();
@@ -250,6 +297,27 @@ impl PeerDirectory {
         Ok(Some(record))
     }
 
+    pub async fn set_pairing_ready(
+        &mut self,
+        peer_id: &str,
+        ready: bool,
+    ) -> Result<Option<PeerRecord>> {
+        let Some(mut record) = self
+            .peers
+            .iter()
+            .find(|record| record.peer_id == peer_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if record.pairing_ready == ready {
+            return Ok(Some(record));
+        }
+        record.pairing_ready = ready;
+        self.upsert(record.clone()).await?;
+        Ok(Some(record))
+    }
+
     pub async fn upsert(&mut self, mut record: PeerRecord) -> Result<()> {
         if let Some(existing) = self
             .peers
@@ -279,11 +347,64 @@ impl PeerDirectory {
         Ok(removed)
     }
 
+    pub async fn queue_removal(&mut self, peer_id: &str) -> Result<Option<PeerRecord>> {
+        let Some(index) = self
+            .peers
+            .iter()
+            .position(|record| record.peer_id == peer_id)
+        else {
+            return Ok(None);
+        };
+        let removed = self.peers.remove(index);
+        self.pending_removals
+            .retain(|record| record.peer_id != removed.peer_id);
+        self.pending_removals.push(removed.clone());
+        self.sort_records();
+        self.save().await?;
+        Ok(Some(removed))
+    }
+
+    pub async fn complete_removal_if_matches(&mut self, expected: &PeerRecord) -> Result<bool> {
+        let Some(index) = self
+            .pending_removals
+            .iter()
+            .position(|pending| pending == expected)
+        else {
+            return Ok(false);
+        };
+        let removed = self.pending_removals.remove(index);
+        if let Err(error) = self.save().await {
+            self.pending_removals.insert(index, removed);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    /// Route readiness is an observation, not durable authority across a
+    /// process restart. Managed and bearer deployments must re-establish both
+    /// live legs before chat writes reopen. Legacy GraphQL-less rows keep their
+    /// explicit one-way compatibility behavior in `PeerRecord::is_chat_ready`.
+    pub async fn clear_ephemeral_pairing_readiness(&mut self) -> Result<()> {
+        let mut changed = false;
+        for record in &mut self.peers {
+            if record.source.as_deref() != Some("local-standard") && record.pairing_ready {
+                record.pairing_ready = false;
+                record.updated_at = Utc::now().to_rfc3339();
+                changed = true;
+            }
+        }
+        if changed {
+            self.save().await?;
+        }
+        Ok(())
+    }
+
     async fn save(&self) -> Result<()> {
         write_json_atomically(
             &self.path,
             &StoredPeerDirectory {
                 peers: self.peers.clone(),
+                pending_removals: self.pending_removals.clone(),
             },
         )
         .await
@@ -337,6 +458,43 @@ fn normalize_optional(value: Option<&str>) -> Option<&str> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn legacy_graphql_less_peer_keeps_one_way_chat_compatibility() {
+        let legacy = PeerRecord::new("Legacy bridge", "iroh://legacy", "did:test:legacy");
+        assert!(legacy.is_chat_ready());
+
+        let mut managed = legacy;
+        managed.source = Some("server-status".to_string());
+        managed.graphql = Some("http://runtime.local/graphql".to_string());
+        assert!(!managed.is_chat_ready());
+        managed.pairing_ready = true;
+        assert!(managed.is_chat_ready());
+    }
+
+    #[tokio::test]
+    async fn restart_clears_persisted_managed_readiness_before_chat_reopens() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let mut managed = PeerRecord::new("Mandrake", "iroh://ticket", "did:test:mandrake");
+        managed.source = Some("server-status".to_string());
+        managed.graphql = Some("http://runtime.local/graphql".to_string());
+        managed.pairing_ready = true;
+        directory.upsert(managed.clone()).await.unwrap();
+
+        directory.clear_ephemeral_pairing_readiness().await.unwrap();
+        let record = directory
+            .records()
+            .iter()
+            .find(|record| record.peer_id == managed.peer_id)
+            .unwrap();
+        assert!(!record.pairing_ready);
+        assert!(!record.is_chat_ready());
+
+        let reloaded = PeerDirectory::load(&path).await.unwrap();
+        assert!(!reloaded.records()[0].pairing_ready);
+    }
+
     #[tokio::test]
     async fn missing_file_loads_as_empty_directory() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -374,6 +532,26 @@ mod tests {
 
         let reloaded = PeerDirectory::load(&path).await.unwrap();
         assert!(reloaded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_removal_completion_restores_the_cleanup_tombstone() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let record = PeerRecord::new("Amy", "iroh://amy", "did:test:amy");
+        directory.upsert(record.clone()).await.unwrap();
+        directory.queue_removal(&record.peer_id).await.unwrap();
+
+        tokio::fs::remove_file(&path).await.unwrap();
+        tokio::fs::create_dir(&path).await.unwrap();
+        let error = directory
+            .complete_removal_if_matches(&record)
+            .await
+            .expect_err("directory persistence failure must remain retryable");
+
+        assert!(error.to_string().contains("persisting"));
+        assert!(directory.has_pending_removal(&record));
     }
 
     #[tokio::test]
@@ -448,6 +626,73 @@ mod tests {
         assert_eq!(first.peer_id, second.peer_id);
         assert_eq!(directory.records().len(), 1);
         assert_eq!(directory.records()[0].label, "Workshop Bay Updated");
+    }
+
+    #[tokio::test]
+    async fn server_status_ticket_rotation_preserves_directory_id_and_clears_ready() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let mut first = directory
+            .upsert_saved_peer_with_graphql(
+                "Mandrake",
+                "iroh://old-ticket",
+                "did:test:mandrake",
+                Some("http://mandrake.local/graphql"),
+                Some("mandrake-default"),
+            )
+            .await
+            .unwrap();
+        first.pairing_ready = true;
+        directory.upsert(first.clone()).await.unwrap();
+
+        let rotated = directory
+            .upsert_saved_peer_with_graphql(
+                "Mandrake",
+                "iroh://new-ticket",
+                "did:test:mandrake",
+                Some("http://mandrake.local/graphql"),
+                Some("mandrake-default"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rotated.peer_id, first.peer_id);
+        assert_eq!(rotated.addr, "iroh://new-ticket");
+        assert!(!rotated.pairing_ready);
+        assert_eq!(directory.records().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn duplicate_agent_source_is_rejected_without_silent_record_loss() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        directory
+            .upsert(PeerRecord::new(
+                "First",
+                "iroh://first",
+                "did:test:duplicate",
+            ))
+            .await
+            .unwrap();
+        directory
+            .upsert(PeerRecord::new(
+                "Second",
+                "iroh://second",
+                "did:test:duplicate",
+            ))
+            .await
+            .unwrap();
+
+        let error = directory
+            .upsert_saved_peer("Updated", "iroh://updated", "did:test:duplicate")
+            .await
+            .expect_err("ambiguous ownership must require explicit removal");
+        assert!(error
+            .to_string()
+            .contains("remove the duplicate explicitly"));
+        assert_eq!(directory.records().len(), 2);
     }
 
     #[tokio::test]

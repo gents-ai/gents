@@ -32,32 +32,33 @@ impl BridgeRunnerServer {
         let runtime = fixture.runtime().handle().clone();
         let fixture_for_thread = Arc::clone(&fixture);
         let thread = thread::spawn(move || {
+            let mut request_threads = Vec::new();
             while !stop_for_thread.load(Ordering::Relaxed) {
                 match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let _ = stream.set_nonblocking(false);
-                        let response = match read_http_request(&mut stream).and_then(|request| {
-                            handle_request(&runtime, &fixture_for_thread, request)
-                        }) {
-                            Ok(response) => response,
-                            Err(error) => HttpResponse::json_error(
-                                "500 Internal Server Error",
-                                &error.to_string(),
-                            ),
-                        };
-                        let _ = write_http_response(
-                            &mut stream,
-                            response.status,
-                            response.content_type,
-                            &response.body,
-                        );
-                        let _ = stream.shutdown(Shutdown::Both);
+                    Ok((stream, _)) => {
+                        let runtime = runtime.clone();
+                        let fixture = Arc::clone(&fixture_for_thread);
+                        request_threads.push(thread::spawn(move || {
+                            serve_connection(stream, &runtime, &fixture);
+                        }));
+                        let mut index = 0;
+                        while index < request_threads.len() {
+                            if request_threads[index].is_finished() {
+                                let handle = request_threads.swap_remove(index);
+                                let _ = handle.join();
+                            } else {
+                                index += 1;
+                            }
+                        }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(25));
                     }
                     Err(_) => break,
                 }
+            }
+            for handle in request_threads {
+                let _ = handle.join();
             }
         });
 
@@ -79,4 +80,25 @@ impl BridgeRunnerServer {
             let _ = handle.join();
         }
     }
+}
+
+fn serve_connection(
+    mut stream: TcpStream,
+    runtime: &tokio::runtime::Handle,
+    fixture: &Arc<LiveBridgeFixture>,
+) {
+    let _ = stream.set_nonblocking(false);
+    let response = match read_http_request(&mut stream)
+        .and_then(|request| handle_request(runtime, fixture, request))
+    {
+        Ok(response) => response,
+        Err(error) => HttpResponse::json_error("500 Internal Server Error", &error.to_string()),
+    };
+    let _ = write_http_response(
+        &mut stream,
+        response.status,
+        response.content_type,
+        &response.body,
+    );
+    let _ = stream.shutdown(Shutdown::Both);
 }

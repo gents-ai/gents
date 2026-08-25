@@ -15,16 +15,15 @@ use super::super::principal_identity::PrincipalIdentity;
 use super::super::query::load_full_snapshot_with_peer_records;
 use super::super::schema::{
     ensure_runtime_schemas, index_collection_names, subscribe_all_collections,
-    subscribed_collection_names,
 };
 use super::bearer_pairing::{
-    current_local_endpoint, install_bearer_replicator_for_record, is_bearer_peer,
-    publish_local_endpoint,
+    install_bearer_replicator_for_record, is_bearer_peer, publish_local_endpoint,
 };
 use super::p2p_ops::{
-    p2p_add_replicator, p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses,
-    p2p_local_peer_id, p2p_sync_branchable_collection,
+    p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses, p2p_local_peer_id,
+    p2p_sync_branchable_collection,
 };
+use super::route_manager::ClientRouteManager;
 use super::supervisor::spawn_p2p_supervisor_task;
 use super::{
     ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, BOOTSTRAP_OPERATION_BACKOFF,
@@ -60,9 +59,11 @@ impl ClientCore {
                 .context("starting embedded desktop node")?,
         );
 
-        let peer_directory = Arc::new(tokio::sync::RwLock::new(
-            PeerDirectory::load(paths.peer_directory_path()).await?,
-        ));
+        let mut loaded_peer_directory = PeerDirectory::load(paths.peer_directory_path()).await?;
+        loaded_peer_directory
+            .clear_ephemeral_pairing_readiness()
+            .await?;
+        let peer_directory = Arc::new(tokio::sync::RwLock::new(loaded_peer_directory));
         ensure_runtime_schemas(node.as_ref()).await?;
         ensure_desktop_schema_migrations(Arc::clone(&node)).await?;
         subscribe_all_collections(node.as_ref()).await?;
@@ -94,10 +95,15 @@ impl ClientCore {
         let listen_addresses = p2p_listen_addresses(&p2p)
             .await
             .context("reading desktop P2P listen addresses")?;
+        let route_manager = Arc::new(ClientRouteManager::new(
+            Arc::clone(&node),
+            Arc::clone(&p2p),
+            Arc::new(principal.clone()),
+        ));
 
         let (peer_statuses, bootstrap_errors) = {
             let records = peer_directory.read().await.records().to_vec();
-            bootstrap_saved_peers(node.as_ref(), &p2p, &records, &options, &principal).await
+            bootstrap_saved_peers(&node, &p2p, &records, &options, &principal, &route_manager).await
         };
         let peer_statuses = Arc::new(std::sync::RwLock::new(peer_statuses));
         let (p2p_health, _p2p_health_rx) = watch::channel(P2PHealth::default());
@@ -112,6 +118,7 @@ impl ClientCore {
             p2p_health.clone(),
             p2p_control_rx,
             Arc::new(principal.clone()),
+            Arc::clone(&route_manager),
             options.install_replicators_on_bootstrap,
         );
         Ok(Self {
@@ -121,6 +128,7 @@ impl ClientCore {
             node,
             p2p,
             peer_directory,
+            route_manager,
             store,
             observer: tokio::sync::Mutex::new(Some(observer)),
             peer_statuses,
@@ -164,11 +172,12 @@ async fn ensure_desktop_schema_migrations(node: Arc<EmbeddedNode>) -> Result<()>
 }
 
 pub(super) async fn bootstrap_saved_peers(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
     records: &[PeerRecord],
     options: &ClientCoreOptions,
     actor: &PrincipalIdentity,
+    route_manager: &Arc<ClientRouteManager>,
 ) -> (Vec<ClientPeerStatus>, Vec<String>) {
     let mut statuses = Vec::with_capacity(records.len());
     let mut errors = Vec::new();
@@ -182,37 +191,27 @@ pub(super) async fn bootstrap_saved_peers(
             dial_succeeded: false,
             last_error: None,
             pairing: Vec::new(),
+            routes: Vec::new(),
+            chat_safe: record.pairing_ready,
         };
 
         match connect_peer_with_retry(p2p, &record.addr, &record.label).await {
             Ok(()) => {
                 status.dial_succeeded = true;
 
-                if options.install_replicators_on_bootstrap {
-                    let replicator_result = if is_bearer_peer(record) {
-                        if let Err(error) = publish_local_endpoint(node, p2p, actor).await {
-                            let message = format!(
-                                "peer {} signed endpoint refresh failed: {}",
-                                record.label, error
-                            );
-                            status.last_error = Some(message.clone());
-                            errors.push(message);
-                            statuses.push(status);
-                            continue;
-                        }
-                        install_bearer_replicator_for_record(p2p, record, actor.did()).await
-                    } else {
-                        add_replicator_with_retry(
-                            p2p,
-                            subscribed_collection_names()
-                                .into_iter()
-                                .map(str::to_owned)
-                                .collect(),
-                            &record.addr,
-                            &record.label,
-                        )
-                        .await
-                    };
+                if options.install_replicators_on_bootstrap && is_bearer_peer(record) {
+                    if let Err(error) = publish_local_endpoint(node.as_ref(), p2p, actor).await {
+                        let message = format!(
+                            "peer {} signed endpoint refresh failed: {}",
+                            record.label, error
+                        );
+                        status.last_error = Some(message.clone());
+                        errors.push(message);
+                        statuses.push(status);
+                        continue;
+                    }
+                    let replicator_result =
+                        install_bearer_replicator_for_record(p2p, record, actor.did()).await;
                     if let Err(error) = replicator_result {
                         let message = format!(
                             "peer {} replicator bootstrap failed: {}",
@@ -224,7 +223,7 @@ pub(super) async fn bootstrap_saved_peers(
                 }
 
                 if options.install_replicators_on_bootstrap && !is_bearer_peer(record) {
-                    match configure_local_runtime_pairing(node, p2p, actor, record).await {
+                    match route_manager.lock().await.configure(record).await {
                         Ok(()) => {}
                         Err(error) => {
                             let message = format!(
@@ -248,110 +247,6 @@ pub(super) async fn bootstrap_saved_peers(
     }
 
     (statuses, errors)
-}
-
-pub(super) async fn configure_local_runtime_pairing(
-    node: &EmbeddedNode,
-    p2p: &Arc<dyn P2POps>,
-    actor: &PrincipalIdentity,
-    record: &PeerRecord,
-) -> Result<()> {
-    let local_endpoint = current_local_endpoint(p2p, actor)
-        .await
-        .context("resolving requester P2P endpoint for reciprocal pairing")?;
-    write_peer_pairing_desired(node, record, actor.did(), &local_endpoint.address).await
-}
-
-pub(super) async fn write_peer_pairing_desired(
-    node: &EmbeddedNode,
-    record: &PeerRecord,
-    requester_did: &str,
-    requester_addr: &str,
-) -> Result<()> {
-    use gents::agent::p2p_reconcile::templates::MACHINE_TEMPLATE;
-    use gents_protocol::graphql::escape_graphql_string;
-
-    let peer_id = escape_graphql_string(&record.peer_id);
-    // This row is consumed by the remote runtime. Its peer identity and
-    // replicator address therefore describe this requester, not the remote
-    // deployment represented by `record`.
-    let agent_did = escape_graphql_string(requester_did);
-    let template = escape_graphql_string(MACHINE_TEMPLATE);
-    let replicator_addr = escape_graphql_string(requester_addr);
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let now = escape_graphql_string(&now);
-
-    let query = format!(
-        r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID created_at }} }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query PeerPairingDesired failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-    let existing_row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("PeerPairingDesired"))
-        .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .cloned();
-
-    let mutation = if let Some(existing_row) = existing_row {
-        let created_at = existing_row
-            .get("created_at")
-            .and_then(|value| value.as_str())
-            .map(escape_graphql_string)
-            .unwrap_or_else(|| now.clone());
-        format!(
-            r#"mutation {{ update_PeerPairingDesired(
-                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
-                input: {{
-                    collections: null,
-                    template: "{template}",
-                    replicator_addresses: ["{replicator_addr}"],
-                    agent_did: "{agent_did}",
-                    created_at: "{created_at}",
-                    profiles: null,
-                    updated_at: "{now}"
-                }}
-            ) {{ _docID }} }}"#
-        )
-    } else {
-        format!(
-            r#"mutation {{ create_PeerPairingDesired(input: {{
-                peer_id: "{peer_id}",
-                agent_did: "{agent_did}",
-                collections: null,
-                template: "{template}",
-                replicator_addresses: ["{replicator_addr}"],
-                profiles: null,
-                created_at: "{now}",
-                updated_at: "{now}"
-            }}) {{ _docID }} }}"#
-        )
-    };
-
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "write PeerPairingDesired failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-    Ok(())
 }
 
 pub(super) async fn connect_peer_with_retry(
@@ -438,39 +333,6 @@ pub(super) async fn force_connect_peer_with_retry_until(
                 if Instant::now() >= deadline {
                     anyhow::bail!(
                         "timed out force-connecting bootstrap peer {label} at {addr}: {error}"
-                    );
-                }
-                sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
-            }
-        }
-    }
-}
-
-pub(super) async fn add_replicator_with_retry(
-    p2p: &Arc<dyn P2POps>,
-    collections: Vec<String>,
-    addr: &str,
-    label: &str,
-) -> Result<()> {
-    add_replicator_with_retry_until(p2p, collections, addr, label, BOOTSTRAP_OPERATION_TIMEOUT)
-        .await
-}
-
-pub(super) async fn add_replicator_with_retry_until(
-    p2p: &Arc<dyn P2POps>,
-    collections: Vec<String>,
-    addr: &str,
-    label: &str,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match p2p_add_replicator(p2p, collections.clone(), addr).await {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                if Instant::now() >= deadline {
-                    anyhow::bail!(
-                        "timed out installing bootstrap replicator for peer {label} at {addr}: {error}"
                     );
                 }
                 sleep(BOOTSTRAP_OPERATION_BACKOFF).await;

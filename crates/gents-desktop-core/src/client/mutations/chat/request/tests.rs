@@ -162,6 +162,8 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
         ClientCoreOptions::local_only(),
     )
     .await?;
+    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+        .await?;
 
     let result = async {
         for case in cases {
@@ -915,6 +917,8 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
         ClientCoreOptions::local_only(),
     )
     .await?;
+    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+        .await?;
     let requester_did = core.principal().did().to_string();
     let agent_did = "did:test:amy";
     let session_id = Uuid::new_v4().to_string();
@@ -1017,6 +1021,8 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         ClientCoreOptions::local_only(),
     )
     .await?;
+    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+        .await?;
 
     let session_id = Uuid::new_v4().to_string();
     let original = core
@@ -1093,6 +1099,8 @@ async fn retry_request_preserves_parent_overrides_and_metadata() -> Result<()> {
         ClientCoreOptions::local_only(),
     )
     .await?;
+    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+        .await?;
 
     let session_id = Uuid::new_v4().to_string();
     let metadata = r#"{"eval":"amygdala","case":"retry"}"#.to_string();
@@ -1163,6 +1171,8 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
         ClientCoreOptions::local_only(),
     )
     .await?;
+    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+        .await?;
 
     let session_id = Uuid::new_v4().to_string();
     let original = core
@@ -1210,6 +1220,8 @@ async fn retry_ignores_legacy_background_wake_when_selecting_latest_request() ->
         ClientCoreOptions::local_only(),
     )
     .await?;
+    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+        .await?;
 
     let session_id = Uuid::new_v4().to_string();
     let original = core

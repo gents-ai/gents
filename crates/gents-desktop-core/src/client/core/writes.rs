@@ -1,31 +1,21 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::RwLock as StdRwLock;
 
 use anyhow::{bail, Context, Result};
-use defra_p2p_adapter::P2POperations as P2POps;
 use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
-use p2p::iroh::parse_public_peer_addr;
-use tokio::time::{sleep, Instant};
 
 use super::super::mutations::{self, PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
 use super::super::query::load_chat_patch;
-use super::super::schema::subscribed_collection_names;
 use super::super::store::{ClientStore, ClientStoreRows};
-use super::bootstrap::{
-    add_replicator_with_retry_until, connect_peer_with_retry_until, is_connected_peer,
-    normalize_required,
-};
+use super::bootstrap::normalize_required;
 use super::p2p_ops;
-use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
-use super::{
-    ClientCore, ClientPeerStatus, BOOTSTRAP_OPERATION_BACKOFF, PEER_ADD_OPERATION_TIMEOUT,
-};
+use super::{ClientCore, ClientPeerStatus};
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
@@ -99,13 +89,30 @@ fn behavior_id_for_write(
         })
 }
 
-fn ensure_peer_chat_ready(peer_record: Option<&PeerRecord>) -> Result<()> {
-    if peer_record.is_some_and(|record| !record.is_chat_ready()) {
-        bail!(
-            "bearer pairing is still waiting for signed membership and reciprocal-replication readiness"
-        );
+fn ensure_peer_chat_ready(agent_did: &str, peer_record: Option<&PeerRecord>) -> Result<()> {
+    match peer_record {
+        Some(record) if record.is_chat_ready() => Ok(()),
+        Some(_) => bail!(
+            "the selected deployment route is not ready; no request was saved (wait for pairing repair or inspect pairing status)"
+        ),
+        None => bail!(
+            "no saved deployment route owns agent {agent_did}; no request was saved"
+        ),
     }
-    Ok(())
+}
+
+fn peer_record_owning_agent(records: &[PeerRecord], agent_did: &str) -> Option<PeerRecord> {
+    if let Some(exact) = records.iter().find(|record| record.agent_did == agent_did) {
+        return Some(exact.clone());
+    }
+    // A machine bearer intentionally carries requests for child agent DIDs
+    // hosted behind the paired runtime. Preserve that established fleet path,
+    // but fail closed when more than one machine could own the target.
+    let mut machine_routes = records.iter().filter(|record| {
+        record.pairing_template.as_deref() == Some("machine") && record.is_chat_ready()
+    });
+    let route = machine_routes.next()?.clone();
+    machine_routes.next().is_none().then_some(route)
 }
 
 impl ClientCore {
@@ -136,7 +143,7 @@ impl ClientCore {
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         let peer_record = self.peer_record_for_agent(agent_did).await;
-        ensure_peer_chat_ready(peer_record.as_ref())?;
+        ensure_peer_chat_ready(agent_did, peer_record.as_ref())?;
         let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::submit_request(
             self.node.as_ref(),
@@ -307,11 +314,7 @@ impl ClientCore {
             return None;
         }
         let peer_directory = self.peer_directory.read().await;
-        peer_directory
-            .records()
-            .iter()
-            .find(|record| record.agent_did == agent_did)
-            .cloned()
+        peer_record_owning_agent(peer_directory.records(), agent_did)
     }
 
     pub async fn refresh_local_request(
@@ -1024,6 +1027,8 @@ impl ClientCore {
             .agent_did
             .as_deref()
             .context("stale request has no agent_did")?;
+        let peer_record = self.peer_record_for_agent(agent_did).await;
+        ensure_peer_chat_ready(agent_did, peer_record.as_ref())?;
         let result = mutations::resend_request(
             self.node.as_ref(),
             snapshot.as_ref(),
@@ -1069,10 +1074,12 @@ impl ClientCore {
 
     pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        parent
+        let agent_did = parent
             .agent_did
             .as_deref()
             .context("retry parent has no agent_did")?;
+        let peer_record = self.peer_record_for_agent(agent_did).await;
+        ensure_peer_chat_ready(agent_did, peer_record.as_ref())?;
         let result = mutations::retry_request(
             self.node.as_ref(),
             snapshot.as_ref(),
@@ -1131,79 +1138,20 @@ impl ClientCore {
             .map(str::trim)
             .filter(|value| !value.is_empty());
 
-        let record = {
-            let mut peer_directory = self.peer_directory.write().await;
-            peer_directory
-                .upsert_saved_peer_with_graphql(
-                    label,
-                    addr,
-                    agent_did,
-                    graphql,
-                    default_behavior_id,
-                )
-                .await?
-        };
-
-        let mut warning = None;
-
-        let connected = match connect_peer_with_retry_until(
-            &self.p2p,
-            &record.addr,
-            &record.label,
-            PEER_ADD_OPERATION_TIMEOUT,
-        )
-        .await
-        {
-            Ok(()) => {
-                match add_replicator_with_retry_until(
-                    &self.p2p,
-                    subscribed_collection_names()
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect(),
-                    &record.addr,
-                    &record.label,
-                    PEER_ADD_OPERATION_TIMEOUT,
-                )
-                .await
-                {
-                    Ok(()) => {}
-                    Err(error) => {
-                        append_warning(
-                            &mut warning,
-                            format!("deployment connected but replication setup failed: {error}"),
-                        );
-                    }
-                }
-                true
-            }
-            Err(error) => {
-                append_warning(
-                    &mut warning,
-                    format!("deployment saved but dial failed: {error}"),
-                );
-                false
-            }
-        };
-
-        if let Err(error) = super::bootstrap::configure_local_runtime_pairing(
-            self.node.as_ref(),
-            &self.p2p,
-            &self.principal,
-            &record,
-        )
-        .await
-        {
-            let prefix = if connected {
-                "deployment connected"
-            } else {
-                "deployment saved"
-            };
-            append_warning(
-                &mut warning,
-                format!("{prefix} but reverse pairing failed: {error}"),
-            );
-        }
+        let activation = self
+            .route_manager
+            .activate_peer(
+                &self.peer_directory,
+                label,
+                addr,
+                agent_did,
+                graphql,
+                default_behavior_id,
+            )
+            .await?;
+        let record = activation.record;
+        let connected = activation.connected;
+        let mut warning = activation.warning;
         if let Err(error) = self.refresh_agent(&record.agent_did).await {
             append_warning(
                 &mut warning,
@@ -1211,15 +1159,23 @@ impl ClientCore {
             );
         }
 
-        self.update_peer_status(ClientPeerStatus {
-            peer_id: record.peer_id.clone(),
-            label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
-            addr: record.addr.clone(),
-            dial_succeeded: connected,
-            last_error: warning.clone(),
-            pairing: Vec::new(),
-        });
+        self.route_manager
+            .publish_status_if_current(
+                &self.peer_directory,
+                &self.peer_statuses,
+                ClientPeerStatus {
+                    peer_id: record.peer_id.clone(),
+                    label: record.label.clone(),
+                    agent_did: record.agent_did.clone(),
+                    addr: record.addr.clone(),
+                    dial_succeeded: connected,
+                    last_error: warning.clone(),
+                    pairing: Vec::new(),
+                    routes: Vec::new(),
+                    chat_safe: record.pairing_ready,
+                },
+            )
+            .await;
         self.clear_mutation_error();
         if let Some(warning) = warning.as_deref() {
             tracing::warn!(
@@ -1249,98 +1205,27 @@ impl ClientCore {
 
     pub async fn remove_peer(&self, peer_id: &str) -> Result<PeerMutationResult> {
         let peer_id = normalize_required("peer_id", peer_id)?;
-        let record = {
-            let peer_directory = self.peer_directory.read().await;
-            let record = peer_directory
-                .records()
-                .iter()
-                .find(|record| record.peer_id == peer_id)
-                .cloned()
-                .with_context(|| format!("peer {peer_id} not found"))?;
-            if record.source.as_deref() == Some("local-standard") {
-                anyhow::bail!("the local runtime deployment cannot be removed");
-            }
-            record
-        };
-
-        if let Err(error) = cleanup_saved_peer_p2p(&self.p2p, &record).await {
-            tracing::warn!(
-                target: "gents_desktop_core::peer",
-                peer_id = %record.peer_id,
-                label = %record.label,
-                error = %error,
-                "desktop deployment P2P cleanup failed; deployment retained"
-            );
-            return Err(self.record_mutation_error("remove deployment", error));
-        }
-
-        let removed_result = {
-            let mut peer_directory = self.peer_directory.write().await;
-            let remove_result = peer_directory
-                .remove(peer_id)
-                .await
-                .with_context(|| {
-                    format!(
-                        "P2P cleanup succeeded but removing peer {peer_id} from saved deployments failed"
-                    )
-                })
-                .and_then(|removed| {
-                    removed.with_context(|| format!("peer {peer_id} not found after P2P cleanup"))
-                });
-            match remove_result {
-                Ok(removed) => Ok(removed),
-                Err(remove_error) => match peer_directory.upsert(record.clone()).await {
-                    Ok(()) => Err(anyhow::anyhow!(
-                        "{remove_error}; saved deployment restored and retry is safe"
-                    )),
-                    Err(restore_error) => Err(anyhow::anyhow!(
-                        "{remove_error}; restoring saved deployment also failed: {restore_error}"
-                    )),
-                },
+        let removal = self
+            .route_manager
+            .remove_peer(&self.peer_directory, &self.peer_statuses, peer_id)
+            .await?;
+        let removed = removal.record;
+        let warning = match removal.cleanup_error {
+            None => None,
+            Some(error) => {
+                let warning = format!(
+                    "deployment hidden locally; route teardown is pending and will retry: {error}"
+                );
+                tracing::warn!(
+                    target: "gents_desktop_core::peer",
+                    peer_id = %removed.peer_id,
+                    label = %removed.label,
+                    error = %error,
+                    "desktop deployment removal queued for retry"
+                );
+                Some(warning)
             }
         };
-        let removed = match removed_result {
-            Ok(removed) => removed,
-            Err(error) => return Err(self.record_mutation_error("remove deployment", error)),
-        };
-
-        if let Err(desired_error) =
-            delete_peer_pairing_desired(self.node.as_ref(), &record.peer_id).await
-        {
-            let restore_result = {
-                let mut peer_directory = self.peer_directory.write().await;
-                peer_directory.upsert(record.clone()).await
-            };
-            let error = match restore_result {
-                Ok(()) => anyhow::anyhow!(
-                    "P2P teardown succeeded but pairing desired-state deletion failed: {desired_error}; saved deployment restored and retry is safe"
-                ),
-                Err(restore_error) => anyhow::anyhow!(
-                    "P2P teardown succeeded but pairing desired-state deletion failed: {desired_error}; restoring saved deployment also failed: {restore_error}"
-                ),
-            };
-            tracing::warn!(
-                target: "gents_desktop_core::peer",
-                peer_id = %record.peer_id,
-                label = %record.label,
-                error = %error,
-                "desktop pairing desired-state deletion failed after P2P cleanup"
-            );
-            return Err(self.record_mutation_error("remove deployment", error));
-        }
-
-        {
-            let mut statuses = self
-                .peer_statuses
-                .write()
-                .expect("peer status lock poisoned");
-            if let Some(index) = statuses
-                .iter()
-                .position(|status| status.peer_id == removed.peer_id)
-            {
-                statuses.remove(index);
-            }
-        }
 
         self.clear_mutation_error();
         tracing::info!(
@@ -1354,7 +1239,7 @@ impl ClientCore {
             label: removed.label,
             addr: removed.addr,
             connected: false,
-            warning: None,
+            warning,
         })
     }
 
@@ -1715,106 +1600,6 @@ fn complete_confirmed_delete(
     );
 }
 
-pub(super) async fn cleanup_saved_peer_p2p(
-    p2p: &Arc<dyn P2POps>,
-    record: &PeerRecord,
-) -> Result<()> {
-    let collections = if super::bearer_pairing::is_bearer_peer(record) {
-        super::bearer_pairing::bearer_replicator_collections(
-            record.pairing_template.as_deref().unwrap_or("conversation"),
-        )
-    } else {
-        subscribed_collection_names()
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    };
-    let replicator_result = p2p_remove_replicator(p2p, collections, &record.addr).await;
-    let disconnect_result = async {
-        p2p_disconnect_peer(p2p, &record.addr).await?;
-
-        let Some(expected_peer_id) = parse_public_peer_addr(&record.addr)
-            .ok()
-            .map(|(peer_id, _)| peer_id.to_string())
-        else {
-            return Ok(());
-        };
-        let deadline = Instant::now() + PEER_ADD_OPERATION_TIMEOUT;
-        loop {
-            if !is_connected_peer(p2p, &expected_peer_id).await? {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                anyhow::bail!(
-                    "timed out waiting for peer {} to disconnect",
-                    expected_peer_id
-                );
-            }
-            sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
-        }
-    }
-    .await;
-
-    match (replicator_result, disconnect_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(replicator_error), Ok(())) => anyhow::bail!(
-            "transport disconnected but replicator cleanup failed for {} at {}: {}; saved deployment retained",
-            record.label,
-            record.addr,
-            replicator_error
-        ),
-        (Ok(()), Err(disconnect_error)) => anyhow::bail!(
-            "replicator removed but transport disconnect failed for {} at {}: {}; saved deployment retained",
-            record.label,
-            record.addr,
-            disconnect_error
-        ),
-        (Err(replicator_error), Err(disconnect_error)) => anyhow::bail!(
-            "replicator cleanup failed for {} at {}: {}; transport disconnect also failed: {}; saved deployment retained",
-            record.label,
-            record.addr,
-            replicator_error,
-            disconnect_error
-        ),
-    }
-}
-
-async fn delete_peer_pairing_desired(
-    node: &defra_node::EmbeddedNode,
-    peer_id: &str,
-) -> Result<bool> {
-    use gents_protocol::graphql::escape_graphql_string;
-
-    let peer_id = escape_graphql_string(peer_id);
-    let mutation = format!(
-        r#"mutation {{
-            delete_PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                _docID
-            }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "delete PeerPairingDesired failed; saved deployment retained: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-
-    let deleted = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_PeerPairingDesired"))
-        .and_then(|rows| rows.as_array())
-        .context("delete PeerPairingDesired returned no result rows")?;
-    Ok(!deleted.is_empty())
-}
-
 fn append_warning(warning: &mut Option<String>, message: String) {
     match warning {
         Some(existing) => {
@@ -1863,7 +1648,7 @@ mod delete_source_tests {
         );
         peer.pairing_ready = true;
 
-        ensure_peer_chat_ready(Some(&peer)).unwrap();
+        ensure_peer_chat_ready(&peer.agent_did, Some(&peer)).unwrap();
         assert_eq!(
             behavior_id_for_write(None, Some(&peer)).as_deref(),
             Some("default")
@@ -1875,16 +1660,53 @@ mod delete_source_tests {
     }
 
     #[test]
+    fn machine_pairing_routes_non_owner_subagent_only_when_unambiguous() {
+        let mut machine = peer_record(
+            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
+            Some("default"),
+        );
+        machine.pairing_template = Some("machine".to_string());
+        machine.pairing_ready = true;
+        assert_eq!(
+            peer_record_owning_agent(&[machine.clone()], "did:key:child")
+                .as_ref()
+                .map(|record| record.peer_id.as_str()),
+            Some(machine.peer_id.as_str())
+        );
+
+        let mut second = machine.clone();
+        second.peer_id = "second-machine".to_string();
+        second.agent_did = "did:key:second-host".to_string();
+        assert!(peer_record_owning_agent(&[machine, second], "did:key:child").is_none());
+    }
+
+    #[test]
     fn pending_bearer_peer_rejects_chat_writes() {
         let peer = peer_record(
             Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
             Some("default"),
         );
 
-        assert!(ensure_peer_chat_ready(Some(&peer))
+        assert!(ensure_peer_chat_ready(&peer.agent_did, Some(&peer))
             .unwrap_err()
             .to_string()
-            .contains("still waiting"));
+            .contains("route is not ready"));
+    }
+
+    #[test]
+    fn pending_server_status_and_missing_owner_reject_chat_writes() {
+        let peer = peer_record(Some("server-status"), Some("default"));
+        assert!(ensure_peer_chat_ready(&peer.agent_did, Some(&peer)).is_err());
+        assert!(ensure_peer_chat_ready("did:key:missing", None)
+            .unwrap_err()
+            .to_string()
+            .contains("no saved deployment route"));
+    }
+
+    #[test]
+    fn local_standard_is_explicitly_exempt_from_route_readiness() {
+        let peer = peer_record(Some("local-standard"), Some("default"));
+        ensure_peer_chat_ready(&peer.agent_did, Some(&peer)).unwrap();
     }
 
     #[test]

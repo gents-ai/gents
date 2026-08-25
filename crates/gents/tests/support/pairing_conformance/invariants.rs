@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use gents::agent::p2p_reconcile::{
-    compute_owned_pairing_diff, PairingActual as RuntimePairingActual,
+    compute_owned_pairing_diff, to_replication_filters, PairingActual as RuntimePairingActual,
 };
 
 use super::{PairingActual, PairingApplied, PairingDesired};
@@ -103,11 +103,24 @@ pub fn check_safety(history: &[ObservedSnapshot]) -> Result<(), SafetyViolation>
 }
 
 fn pending_owned_ops(snapshot: &ObservedSnapshot) -> Vec<gents::agent::p2p_reconcile::DiffOp> {
+    // The conformance harness applies every successful replicator install with
+    // the desired filter and records that identity in `PairingApplied`. Mirror
+    // that live filter observation here so the runtime diff sees the same
+    // route the harness installed instead of an artificial unfiltered route.
+    let live_filter = to_replication_filters(&snapshot.applied.replicator_filter)
+        .expect("conformance filters are representable");
+    let replicator_filters = snapshot
+        .actual
+        .replicator_addresses
+        .intersection(&snapshot.applied.replicator_addresses)
+        .map(|address| (address.clone(), live_filter.clone()))
+        .collect();
     compute_owned_pairing_diff(
         &snapshot.desired,
         &RuntimePairingActual {
             collections: snapshot.actual.collections.clone(),
             replicator_addresses: snapshot.actual.replicator_addresses.clone(),
+            replicator_filters,
             ..Default::default()
         },
         &snapshot.applied,

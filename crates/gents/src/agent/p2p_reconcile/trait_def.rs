@@ -31,6 +31,11 @@ pub struct RemoteReplicator {
     pub id: Option<String>,
     pub collections: Vec<String>,
     pub address: Option<String>,
+    /// `None` means the remote admin response omitted filter visibility. This
+    /// is distinct from `Some(empty)`, which authoritatively reports an
+    /// unfiltered replicator.
+    #[serde(default)]
+    pub filters: Option<defra_p2p_adapter::ReplicationFilters>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

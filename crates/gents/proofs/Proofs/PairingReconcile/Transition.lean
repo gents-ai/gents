@@ -33,10 +33,13 @@ def teardownReplicatorState (pre : ReconcileState) (r : ReplicatorId) : Reconcil
   { pre with
     actual := ({
       collections := pre.actual.collections,
-      replicators := pre.actual.replicators.erase r,
+      replicators := eraseReplicatorsAtAddress pre.actual.replicators r.address,
       connected := pre.actual.connected
     } : PairingActual),
-    applied := ({ collections := pre.applied.collections, replicators := pre.applied.replicators.erase r } : PairingApplied) }
+    applied := ({
+      collections := pre.applied.collections,
+      replicators := eraseReplicatorsAtAddress pre.applied.replicators r.address
+    } : PairingApplied) }
 
 def dialState (pre : ReconcileState) : ReconcileState :=
   { pre with
@@ -158,7 +161,15 @@ theorem reconcileTeardownReplicator_removes_target
     (h_post : post = teardownReplicatorState pre r) :
     r ∉ post.actual.replicators := by
   cases h_post
-  exact Finset.not_mem_erase r pre.actual.replicators
+  simp [teardownReplicatorState, eraseReplicatorsAtAddress]
+
+theorem reconcileTeardownReplicator_removes_endpoint_drift
+    {pre post : ReconcileState} {owned observed : ReplicatorId}
+    (h_same : observed.address = owned.address)
+    (h_post : post = teardownReplicatorState pre owned) :
+    observed ∉ post.actual.replicators := by
+  cases h_post
+  simp [teardownReplicatorState, eraseReplicatorsAtAddress, h_same]
 
 theorem readFailure_preserves_actual_applied
     {pre post : ReconcileState}
@@ -219,7 +230,7 @@ theorem unmanaged_collection_survives
 theorem unmanaged_replicator_survives
     {pre post : ReconcileState} (h_trans : Transition pre post)
     {r : ReplicatorId} (hr : r ∈ pre.actual.replicators)
-    (hunmanaged : r ∉ pre.applied.replicators) :
+    (hunmanaged : ∀ owned ∈ pre.applied.replicators, r.address ≠ owned.address) :
     r ∈ post.actual.replicators := by
   cases h_trans with
   | operatorWrite newDesired h_ne h_post =>
@@ -254,10 +265,8 @@ theorem unmanaged_replicator_survives
       exact hr
   | reconcileTeardownReplicator desired target h_desired h_not_desired h_applied h_post =>
       cases h_post
-      by_cases h_eq : r = target
-      · subst h_eq
-        exact False.elim (hunmanaged h_applied)
-      · exact Finset.mem_erase.mpr ⟨h_eq, hr⟩
+      exact Finset.mem_filter.mpr ⟨hr, by
+        simpa using hunmanaged target h_applied⟩
   | crash h_post =>
       cases h_post
       exact hr

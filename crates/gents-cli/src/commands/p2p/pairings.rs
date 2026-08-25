@@ -20,7 +20,9 @@ use super::output::fetch_connected_peer_ids;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PeerPairingDesiredRow {
+    /// Stable desired-state/directory key; never assumed to be an Iroh id.
     peer_id: String,
+    transport_peer_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_did: Option<String>,
     collections: Vec<String>,
@@ -427,11 +429,21 @@ fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())?
                 .to_string();
+            let replicator_addresses = string_list(&row, "replicator_addresses");
+            let transport_peer_ids = replicator_addresses
+                .iter()
+                .filter_map(|address| {
+                    gents::agent::p2p_reconcile::TransportEndpoint::parse(address.clone())
+                        .ok()
+                        .map(|endpoint| endpoint.peer_id().to_string())
+                })
+                .collect();
             Some(PeerPairingDesiredRow {
                 peer_id,
+                transport_peer_ids,
                 agent_did: optional_string(&row, "agent_did"),
                 collections: string_list(&row, "collections"),
-                replicator_addresses: string_list(&row, "replicator_addresses"),
+                replicator_addresses,
                 profiles: string_list(&row, "profiles"),
                 template: optional_string(&row, "template"),
                 created_at: optional_string(&row, "created_at"),
@@ -499,7 +511,11 @@ fn annotate_pairing_health(
     let connected_set = connected_peer_id_set(connected);
 
     for row in &mut desired {
-        row.connected = connected_set.contains(&row.peer_id);
+        row.connected = row
+            .transport_peer_ids
+            .iter()
+            .any(|peer_id| connected_set.contains(peer_id))
+            || (row.transport_peer_ids.is_empty() && connected_set.contains(&row.peer_id));
         let (applied_collections, applied_replicators) = applied_by_peer
             .get(row.peer_id.as_str())
             .cloned()
@@ -637,6 +653,7 @@ pub(super) async fn wait_for_pairing_connected(
 fn print_pairings_table(rows: &[PeerPairingDesiredRow]) -> Result<()> {
     let headers = [
         "PEER".to_string(),
+        "TRANSPORT".to_string(),
         "DID".to_string(),
         "PROFILES".to_string(),
         "CONNECTED".to_string(),
@@ -649,6 +666,11 @@ fn print_pairings_table(rows: &[PeerPairingDesiredRow]) -> Result<()> {
         .map(|row| {
             [
                 row.peer_id.clone(),
+                if row.transport_peer_ids.is_empty() {
+                    "-".to_string()
+                } else {
+                    row.transport_peer_ids.join(",")
+                },
                 row.agent_did.clone().unwrap_or_else(|| "-".to_string()),
                 if row.profiles.is_empty() {
                     "-".to_string()
@@ -822,6 +844,14 @@ mod tests {
     ) -> PeerPairingDesiredRow {
         PeerPairingDesiredRow {
             peer_id: peer_id.to_string(),
+            transport_peer_ids: addresses
+                .iter()
+                .filter_map(|address| {
+                    gents::agent::p2p_reconcile::TransportEndpoint::parse(*address)
+                        .ok()
+                        .map(|endpoint| endpoint.peer_id().to_string())
+                })
+                .collect(),
             agent_did: None,
             collections: collections.iter().map(|c| c.to_string()).collect(),
             replicator_addresses: addresses.iter().map(|a| a.to_string()).collect(),

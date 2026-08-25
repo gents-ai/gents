@@ -3349,6 +3349,7 @@ dependencies = [
  "gents",
  "gents-chatgpt-login",
  "gents-codex-protocol",
+ "gents-desktop-core",
  "gents-fs-runner",
  "gents-lean-contract",
  "gents-protocol",

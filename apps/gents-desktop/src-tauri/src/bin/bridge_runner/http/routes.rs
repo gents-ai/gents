@@ -59,6 +59,30 @@ struct SelectedAgentRequest {
     agent_did: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerIdRequest {
+    peer_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplicatorRequest {
+    #[serde(rename = "Collections")]
+    collections: Vec<String>,
+    #[serde(rename = "Addresses", default)]
+    addresses: Vec<String>,
+    #[serde(rename = "Filters", default)]
+    filters: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteReplicatorRequest {
+    #[serde(rename = "Collections")]
+    collections: Vec<String>,
+    #[serde(rename = "ID")]
+    id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VersionResponse {
@@ -154,6 +178,42 @@ pub(super) fn handle_request(
             let request = decode::<PeerAddRequest>(&request.body, "decoding peer add request")?;
             runtime.block_on(add_peer(fixture.desktop_core().as_ref(), request))?;
             Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/test-fixture/remove-peer") => {
+            require_live_fixture()?;
+            let request = decode::<PeerIdRequest>(&request.body, "decoding peer removal")?;
+            let removed =
+                runtime.block_on(fixture.desktop_core().remove_peer(request.peer_id.trim()))?;
+            Ok(HttpResponse::json_ok(
+                serde_json::json!({
+                    "peerId": removed.peer_id,
+                    "label": removed.label,
+                    "addr": removed.addr,
+                    "connected": removed.connected,
+                    "warning": removed.warning,
+                })
+                .to_string(),
+            ))
+        }
+        ("POST", "/desktop/test-fixture/drift-remote-return-route") => {
+            require_live_fixture()?;
+            let desktop_address = runtime
+                .block_on(fixture.desktop_core().p2p().shareable_address())?
+                .context("desktop has no shareable address for route drift")?;
+            runtime.block_on(fixture.remote_core().p2p().add_replicator(
+                vec!["AgentNetwork".to_string()],
+                Some(&desktop_address),
+                Default::default(),
+                Vec::new(),
+                None,
+            ))?;
+            let replicators = runtime.block_on(fixture.remote_core().p2p().get_replicators())?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
+        }
+        ("GET", "/desktop/test-fixture/remote-replicators") => {
+            require_live_fixture()?;
+            let replicators = runtime.block_on(fixture.remote_core().p2p().get_replicators())?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/desktop/peer/pair-bearer") => {
             let request =
@@ -333,6 +393,81 @@ pub(super) fn handle_request(
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
+        }
+        // Test-only projection of the remote node's P2P admin API. The managed
+        // desktop route owner uses this through the same HTTP client and wire
+        // shapes as a deployed runtime. Keeping it inside the live runner lets
+        // the E2E provision two real nodes without a second server process.
+        ("GET", "/p2p/info") => {
+            require_live_fixture()?;
+            let addresses = runtime.block_on(fixture.remote_core().p2p().listen_addresses())?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&addresses)?))
+        }
+        ("GET", "/p2p/active-peers") => {
+            require_live_fixture()?;
+            let peers = runtime.block_on(fixture.remote_core().p2p().connected_peers())?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&peers)?))
+        }
+        ("POST", "/p2p/connect") => {
+            require_live_fixture()?;
+            let addresses = decode::<Vec<String>>(&request.body, "decoding P2P connect")?;
+            for address in addresses {
+                runtime.block_on(fixture.remote_core().p2p().connect_peer(&address))?;
+            }
+            Ok(HttpResponse::json_ok("{}".to_string()))
+        }
+        ("GET", "/p2p/replicators") => {
+            require_live_fixture()?;
+            let replicators = runtime.block_on(fixture.remote_core().p2p().get_replicators())?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
+        }
+        ("POST", "/p2p/replicators") => {
+            require_live_fixture()?;
+            let request =
+                decode::<ReplicatorRequest>(&request.body, "decoding P2P replicator install")?;
+            let filters = serde_json::from_value(request.filters)
+                .context("decoding P2P replication filters")?;
+            runtime.block_on(fixture.remote_core().p2p().add_replicator(
+                request.collections,
+                request.addresses.first().map(String::as_str),
+                filters,
+                Vec::new(),
+                None,
+            ))?;
+            Ok(HttpResponse::json_ok("{}".to_string()))
+        }
+        ("DELETE", "/p2p/replicators") => {
+            require_live_fixture()?;
+            let request = decode::<DeleteReplicatorRequest>(
+                &request.body,
+                "decoding P2P replicator teardown",
+            )?;
+            runtime.block_on(
+                fixture
+                    .remote_core()
+                    .p2p()
+                    .remove_replicator(request.collections, Some(&request.id)),
+            )?;
+            Ok(HttpResponse::json_ok("{}".to_string()))
+        }
+        ("GET", "/p2p/collections") => {
+            require_live_fixture()?;
+            let collections = runtime.block_on(fixture.remote_core().p2p().get_collections())?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&collections)?))
+        }
+        ("POST", "/p2p/collections") => {
+            require_live_fixture()?;
+            let collections =
+                decode::<Vec<String>>(&request.body, "decoding P2P collection install")?;
+            runtime.block_on(fixture.remote_core().p2p().add_collections(collections))?;
+            Ok(HttpResponse::json_ok("{}".to_string()))
+        }
+        ("DELETE", "/p2p/collections") => {
+            require_live_fixture()?;
+            let collections =
+                decode::<Vec<String>>(&request.body, "decoding P2P collection teardown")?;
+            runtime.block_on(fixture.remote_core().p2p().remove_collections(collections))?;
+            Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("POST", "/desktop/backend/save") => {
             let request =
@@ -730,6 +865,13 @@ fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
 
 fn decode<T: serde::de::DeserializeOwned>(body: &str, context: &str) -> Result<T> {
     serde_json::from_str::<T>(body).context(context.to_string())
+}
+
+fn require_live_fixture() -> Result<()> {
+    if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
+        anyhow::bail!("test fixture route requires GENTS_TAURI_LIVE=1");
+    }
+    Ok(())
 }
 
 fn snapshot_response(

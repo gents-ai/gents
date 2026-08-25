@@ -84,6 +84,7 @@ const liveTestSuites = {
   operations: "tests/tauri-driver.live.operations.test.tsx",
   subagent: "tests/tauri-driver.live.subagent.test.tsx",
   replication: "tests/tauri-driver.live.replication.test.tsx",
+  "pairing-lifecycle": "tests/tauri-driver.live.pairing-lifecycle.test.tsx",
   "sad-path": "tests/tauri-driver.live.sad-path.test.tsx",
   // cascade is intentionally excluded from the default sweep because it
   // requires live inference and can take several minutes. Run it explicitly:

@@ -69,6 +69,7 @@ def scopeFilter (scope : Scope) (collections : List String)
               | .localDid => localDid
               | .peerDid => peerDid
               | .homeDid => localDid })
+  | .clientRoute => []
 
 theorem scopeFilter_spec (s : Scope) (collections : List String)
     (peerDid localDid : Did) :
@@ -87,7 +88,8 @@ theorem scopeFilter_spec (s : Scope) (collections : List String)
                   match r.source with
                   | .localDid => localDid
                   | .peerDid => peerDid
-                  | .homeDid => localDid }) := by
+                  | .homeDid => localDid })
+      | .clientRoute => [] := by
   cases s <;> rfl
 
 theorem scopeFilter_peerDid (f : String) (collections : List String)
@@ -98,6 +100,51 @@ theorem scopeFilter_peerDid (f : String) (collections : List String)
 
 theorem scopeFilter_unscoped (collections : List String) (peerDid localDid : Did) :
     scopeFilter .unscoped collections peerDid localDid = [] := rfl
+
+def clientTranscriptPredicates (requesterDid ownerDid : Did) :
+    List CollectionPredicate :=
+  clientTranscriptCollections.map
+    (fun collection =>
+      { collection := collection
+      , clauses :=
+          [ { field := "requester_did", value := requesterDid }
+          , { field := "agent_did", value := ownerDid } ] })
+
+def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    List CollectionPredicate :=
+  clientTranscriptPredicates requesterDid ownerDid ++
+    [ { collection := "BearerPairingReady"
+      , clauses :=
+          [ { field := "claimant_did", value := requesterDid }
+          , { field := "issuer_did", value := ownerDid } ] }
+    , { collection := "PeerEndpoint"
+      , clauses :=
+          [ { field := "did"
+            , value :=
+                match direction with
+                | .clientToRuntime => requesterDid
+                | .runtimeToClient => ownerDid } ] } ]
+
+def directionalScopeFilters (template : Template) (direction : RouteDirection)
+    (requesterDid ownerDid : Did) : List CollectionPredicate :=
+  match template.scope with
+  | .clientRoute => clientRouteFilters direction requesterDid ownerDid
+  | scope =>
+      (scopeFilter scope (clientRouteCollections direction) requesterDid ownerDid).map
+        (fun filter =>
+          { collection := filter.collection
+          , clauses :=
+              [ { field := filter.field
+                , operator := filter.operator
+                , value := filter.value } ] })
+
+structure TranscriptIdentity where
+  requesterDid : Did
+  agentDid : Did
+
+def clientTranscriptMatches (requesterDid ownerDid : Did)
+    (row : TranscriptIdentity) : Bool :=
+  decide (row.requesterDid = requesterDid) && decide (row.agentDid = ownerDid)
 
 theorem conversation_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection conversationRules) [] peerDid localDid
@@ -179,6 +226,76 @@ theorem machine_directory_crossing_is_home_scoped (peerDid homeDid : Did) :
                , value := homeDid } := by
   simp [scopeFilter, machineTemplate, machineRules, conversationRules]
 
+theorem client_in_catalog :
+    resolveTemplate builtinCatalog "client" = some clientTemplate := by
+  decide
+
+theorem client_directional_resolution_is_total
+    (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    directionalScopeFilters clientTemplate direction requesterDid ownerDid =
+      clientRouteFilters direction requesterDid ownerDid := by
+  rfl
+
+theorem client_request_filter_conjoins_requester_and_destination
+    (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    (clientRouteFilters direction requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "AgentRequest") =
+      some
+        { collection := "AgentRequest"
+        , clauses :=
+            [ { field := "requester_did", value := requesterDid }
+            , { field := "agent_did", value := ownerDid } ] } := by
+  cases direction <;>
+    simp [clientRouteFilters, clientTranscriptPredicates,
+      clientTranscriptCollections]
+
+theorem client_transcript_match_iff_requester_and_destination
+    (requesterDid ownerDid : Did) (row : TranscriptIdentity) :
+    clientTranscriptMatches requesterDid ownerDid row = true ↔
+      row.requesterDid = requesterDid ∧ row.agentDid = ownerDid := by
+  simp [clientTranscriptMatches]
+
+theorem client_transcript_destination_scoped
+    (requesterDid ownerDid : Did) (row : TranscriptIdentity)
+    (hmatches : clientTranscriptMatches requesterDid ownerDid row = true) :
+    row.agentDid = ownerDid := by
+  exact (client_transcript_match_iff_requester_and_destination
+    requesterDid ownerDid row).mp hmatches |>.2
+
+theorem client_transcript_rejects_another_destination
+    (requesterDid ownerDid otherDid : Did) (different : otherDid ≠ ownerDid) :
+    clientTranscriptMatches requesterDid ownerDid
+      { requesterDid := requesterDid, agentDid := otherDid } = false := by
+  simp [clientTranscriptMatches, different]
+
+theorem client_filters_cover_exact_outbound_projection
+    (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    (clientRouteFilters direction requesterDid ownerDid).map
+        (fun predicate => predicate.collection) = clientToRuntimeCollections := by
+  cases direction <;>
+    simp [clientRouteFilters, clientTranscriptPredicates,
+      clientTranscriptCollections, clientToRuntimeCollections]
+
+theorem client_return_adds_exact_bounded_control_plane :
+    clientRouteCollections .runtimeToClient =
+      clientToRuntimeCollections ++ clientControlPlaneCollections := by
+  rfl
+
+theorem client_return_control_plane_is_unfiltered
+    (requesterDid ownerDid : Did) :
+    clientControlPlaneCollections.all
+      (fun collection =>
+        (clientRouteFilters .runtimeToClient requesterDid ownerDid).all
+          (fun predicate => predicate.collection ≠ collection)) = true := by
+  simp [clientControlPlaneCollections, clientRouteFilters,
+    clientTranscriptPredicates, clientTranscriptCollections]
+
+theorem client_excludes_unbounded_and_secret_control_plane :
+    "PeerPairingDesired" ∉ clientTemplate.collections ∧
+    "DataPlanePairingDesired" ∉ clientTemplate.collections ∧
+    "InferenceBackend" ∉ clientTemplate.collections := by
+  decide
+
 theorem subagentCoordinator_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection subagentCoordinatorRules) [] peerDid localDid
       = [ { collection := "AgentToolCall", field := "spawn_target_did", value := peerDid } ] := by
@@ -247,6 +364,28 @@ theorem appCollections_collections_empty :
 
 theorem appCollections_unscoped_no_filter (collections : List String) (peerDid localDid : Did) :
     scopeFilter appCollectionsTemplate.scope collections peerDid localDid = [] := rfl
+
+theorem appCollections_admission_sound
+    (protocolCatalog requested admitted : Finset String)
+    (h : admitAppCollections protocolCatalog requested = some admitted) :
+    admitted = requested ∧ Disjoint admitted protocolCatalog := by
+  unfold admitAppCollections at h
+  split at h
+  case isTrue valid =>
+    simp only [Option.some.injEq] at h
+    subst admitted
+    exact ⟨rfl, valid.2⟩
+  case isFalse => contradiction
+
+theorem appCollections_protocol_overlap_rejected
+    (protocolCatalog requested : Finset String)
+    (overlap : ¬ Disjoint requested protocolCatalog) :
+    admitAppCollections protocolCatalog requested = none := by
+  simp [admitAppCollections, overlap]
+
+theorem appCollections_empty_rejected (protocolCatalog : Finset String) :
+    admitAppCollections protocolCatalog ∅ = none := by
+  simp [admitAppCollections]
 
 theorem clientIndex_in_catalog :
     resolveTemplate builtinCatalog "client-index" = some clientIndexTemplate := by

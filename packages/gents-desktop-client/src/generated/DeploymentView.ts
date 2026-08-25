@@ -2,6 +2,7 @@
 import type { AgentPrincipalView } from "./AgentPrincipalView.js";
 import type { BehaviorEnvironmentView } from "./BehaviorEnvironmentView.js";
 import type { BehaviorView } from "./BehaviorView.js";
+import type { ClientRouteStatusView } from "./ClientRouteStatusView.js";
 import type { ConversationSummary } from "./ConversationSummary.js";
 import type { EventTriggerView } from "./EventTriggerView.js";
 import type { InferenceBackendView } from "./InferenceBackendView.js";
@@ -13,4 +14,4 @@ import type { TaskView } from "./TaskView.js";
 import type { ToolSelectionView } from "./ToolSelectionView.js";
 import type { ToolServiceRegistryView } from "./ToolServiceRegistryView.js";
 
-export type DeploymentView = { peerId: string, label: string, agentDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, pairingReady: boolean, lastError: string | null, defaultBehaviorId: string | null, agentPrincipal: AgentPrincipalView, runtime: RuntimeView | null, behaviors: Array<BehaviorView>, behaviorEnvironments: Array<BehaviorEnvironmentView>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfileView>, toolSelections: Array<ToolSelectionView>, toolServiceRegistries: Array<ToolServiceRegistryView>, skills: Array<SkillView>, tasks: Array<TaskView>, schedules: Array<ScheduleView>, eventTriggers: Array<EventTriggerView>, conversations: Array<ConversationSummary>, };
+export type DeploymentView = { peerId: string, label: string, agentDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, pairingReady: boolean, chatSafe: boolean, routes: Array<ClientRouteStatusView>, lastError: string | null, defaultBehaviorId: string | null, agentPrincipal: AgentPrincipalView, runtime: RuntimeView | null, behaviors: Array<BehaviorView>, behaviorEnvironments: Array<BehaviorEnvironmentView>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfileView>, toolSelections: Array<ToolSelectionView>, toolServiceRegistries: Array<ToolServiceRegistryView>, skills: Array<SkillView>, tasks: Array<TaskView>, schedules: Array<ScheduleView>, eventTriggers: Array<EventTriggerView>, conversations: Array<ConversationSummary>, };
