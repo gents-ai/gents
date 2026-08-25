@@ -146,8 +146,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
   , { feature := "graph-pipeline"
     , required := [Surface.runtimeInternal]
     , deferred :=
-        [ (Surface.agentFacing, "stack slice 4: bounded model tools")
-        , (Surface.operatorCli, "stack slice 3: publication controller")
+        [ (Surface.agentFacing, "evaluation-only custom tool; production configuration wiring follows graduation")
+        , (Surface.operatorCli, "post-experiment graduation surface")
         , (Surface.operatorUi, "post-experiment graduation surface")
         , (Surface.api, "post-experiment graduation surface")
         ]
