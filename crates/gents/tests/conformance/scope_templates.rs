@@ -1,6 +1,8 @@
+use std::collections::BTreeSet;
+
 use gents::agent::p2p_reconcile::templates::{
-    builtin_templates, equality_filter, filter_conditions, resolve_template, scope_filter,
-    single_string_eq, Delivery, FilterPredicate, Scope, AGENT_DIRECTORY_COLLECTION,
+    admit_app_collections, builtin_templates, equality_filter, filter_conditions, resolve_template,
+    scope_filter, single_string_eq, Delivery, FilterPredicate, Scope, AGENT_DIRECTORY_COLLECTION,
 };
 use gents::agent::p2p_reconcile::{
     client_route_collections, resolve_template_filters, PairingDirection, CLIENT_COLLECTIONS,
@@ -519,4 +521,23 @@ fn app_collections_template_is_unscoped_replicate_byo() {
         "did:key:alice",
     );
     assert!(f.is_empty(), "unscoped app-collections must not filter");
+}
+
+#[test]
+fn app_collection_admission_matches_lean_protocol_disjointness_contract() {
+    assert!(admit_app_collections(BTreeSet::new()).is_none());
+
+    let custom = BTreeSet::from(["ChangeProposed".to_string()]);
+    assert_eq!(admit_app_collections(custom.clone()), Some(custom));
+
+    for protocol in gents_protocol::schemas::ALL_COLLECTION_NAMES
+        .iter()
+        .chain(gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.iter())
+    {
+        let requested = BTreeSet::from(["ChangeProposed".to_string(), (*protocol).to_string()]);
+        assert!(
+            admit_app_collections(requested).is_none(),
+            "Lean appCollections_protocol_overlap_rejected violated by {protocol}"
+        );
+    }
 }

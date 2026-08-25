@@ -105,6 +105,10 @@ jobs:
         working-directory: apps/gents-desktop
         run: npm run test:live:replication
 
+      - name: Run managed pairing lifecycle with real inference
+        working-directory: apps/gents-desktop
+        run: npm run test:live:pairing-lifecycle
+
       - name: Show Rust build cache stats
         if: always()
         run: .github/scripts/show-sccache-stats.sh

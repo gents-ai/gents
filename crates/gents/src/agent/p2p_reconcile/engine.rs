@@ -23,8 +23,8 @@ use super::reciprocal::GraphqlReciprocalStore;
 #[cfg(test)]
 use super::templates::scope_filter;
 use super::templates::{
-    decode_pairing_filters, equality_filter, resolve_template, Delivery, DidSource,
-    FilterPredicate, PairingFilters, Scope, APP_COLLECTIONS_TEMPLATE,
+    admit_app_collections, decode_pairing_filters, equality_filter, resolve_template, Delivery,
+    DidSource, FilterPredicate, PairingFilters, Scope, APP_COLLECTIONS_TEMPLATE,
 };
 use super::{
     compute_owned_pairing_diff, owned_pairing_live_matches, DiffOp, EmbeddedRemoteP2pAdmin,
@@ -384,6 +384,55 @@ pub async fn teardown_unowned_replicators_at_endpoint(
             .await
             .with_context(|| format!("teardown unowned client replicator {id}"))?;
         removed += 1;
+    }
+    Ok(removed)
+}
+
+/// Authoritatively remove every live replicator at an endpoint owned by a
+/// route being deleted. Unlike the legacy-upgrade helper above, ownership has
+/// already been established by the caller, so mutable collection/filter drift
+/// must not protect the stale route from teardown.
+pub async fn teardown_owned_replicators_at_endpoint(
+    admin: &dyn RemoteP2pAdmin,
+    address: &str,
+) -> Result<usize> {
+    let endpoint = super::TransportEndpoint::parse(address.to_string())?;
+    let matches_endpoint = |replicator: &super::RemoteReplicator| {
+        replicator.address.as_deref().is_some_and(|candidate| {
+            candidate == address
+                || super::TransportEndpoint::parse(candidate.to_string())
+                    .is_ok_and(|candidate| candidate.peer_id() == endpoint.peer_id())
+        }) || replicator.id.as_deref() == Some(endpoint.peer_id())
+    };
+
+    let replicators = admin
+        .list_replicators()
+        .await
+        .context("list replicators for owned route teardown")?;
+    let mut removed = 0;
+    for replicator in replicators
+        .iter()
+        .filter(|replicator| matches_endpoint(replicator))
+    {
+        let id = replicator.id.as_deref().unwrap_or(endpoint.peer_id());
+        match admin.delete_replicator(id, &replicator.collections).await {
+            Ok(()) | Err(RemoteP2pAdminError::RemoteNotFound(_)) => removed += 1,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("teardown owned client replicator {id}"));
+            }
+        }
+    }
+
+    let remaining = admin
+        .list_replicators()
+        .await
+        .context("verify owned route teardown")?;
+    if remaining.iter().any(matches_endpoint) {
+        anyhow::bail!(
+            "owned client replicator at transport endpoint {} survived teardown",
+            endpoint.peer_id()
+        );
     }
     Ok(removed)
 }
@@ -1536,21 +1585,22 @@ fn data_plane_desired_from_pairing_row(
 
     let (replicator_collections, subscription_collections): (BTreeSet<String>, BTreeSet<String>) =
         if template.id == APP_COLLECTIONS_TEMPLATE {
-            let row_cols = row
+            let requested = row
                 .collections
                 .unwrap_or_default()
                 .into_iter()
                 .map(|c| c.trim().to_string())
                 .filter(|c| !c.is_empty())
                 .collect::<BTreeSet<_>>();
-            if row_cols.is_empty() {
+            let Some(row_cols) = admit_app_collections(requested.clone()) else {
                 tracing::warn!(
                     peer_id = %signed_endpoint.peer_id,
-                    "app-collections DataPlanePairingDesired has no non-blank collections; \
-                     skipping this data-plane layer (control pairing unaffected)"
+                    collections = ?requested,
+                    "app-collections DataPlanePairingDesired is empty or overlaps the protocol \
+                     catalog; skipping this data-plane layer (control pairing unaffected)"
                 );
                 return Ok(None);
-            }
+            };
             (row_cols.clone(), row_cols)
         } else {
             let cols = template

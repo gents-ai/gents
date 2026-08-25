@@ -10,11 +10,11 @@ use defra_p2p_adapter::{
     ReplicationFilter, ReplicatorInfo,
 };
 
+use super::route_manager::cleanup_saved_peer_p2p;
 use super::supervisor::{
     p2p_health_materially_changed, probe_p2p_health, repair_saved_peer,
     request_index_for_ready_peers, saved_peer_needs_repair,
 };
-use super::writes::cleanup_saved_peer_p2p;
 use super::*;
 use crate::client::PeerRecord;
 
@@ -472,25 +472,22 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         record.agent_did.clone(),
     )
     .expect("valid route fixture");
-    let manager = super::route_manager::ClientRouteManager::new(
-        Arc::clone(&core.node),
-        Arc::clone(&core.p2p),
-        Arc::new(core.principal.clone()),
-    );
-    manager
+    let lifecycle = core.route_manager.lock().await;
+    lifecycle
         .upsert_desired(
             &route,
             gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
         )
         .await
         .expect("save pairing desired fixture");
-    manager
+    lifecycle
         .upsert_desired(
             &route,
             gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
         )
         .await
         .expect("update pairing desired fixture");
+    drop(lifecycle);
 
     let result = core
         .remove_peer(&record.peer_id)

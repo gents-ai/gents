@@ -205,6 +205,15 @@ def appCollectionsTemplate : Template :=
   , scope := .unscoped
   , delivery := .replicate }
 
+/-- Bring-your-own app collections are admitted only outside the protocol
+catalog. This keeps the extensible app data plane disjoint from schemas whose
+migration compatibility is owned by the runtime and bundled clients. -/
+def admitAppCollections
+    (protocolCatalog requested : Finset String) : Option (Finset String) :=
+  if requested.Nonempty ∧ Disjoint requested protocolCatalog
+  then some requested
+  else none
+
 def clientIndexTemplate : Template :=
   { id := "client-index"
   , collections := clientIndexCollections.toFinset

@@ -31,10 +31,9 @@
 //!   (the subset test in `bearer_pairing.rs` ties that constant to the
 //!   guard list, so the mirror cannot drift silently).
 //!
-//! Not derived here: bring-your-own data-plane pairings —
-//! `DataPlanePairingDesired` rows can name arbitrary collections for app
-//! templates (`p2p_reconcile/engine.rs`) with no protocol-collection
-//! exclusion; closing that hole is #1137.
+//! Bring-your-own data-plane pairings are fenced separately by
+//! `templates::admit_app_collections`: any overlap with the full protocol
+//! catalog rejects that app layer before it reaches this migration surface.
 
 use std::collections::BTreeSet;
 

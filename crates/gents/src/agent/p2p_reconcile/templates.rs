@@ -7,7 +7,7 @@
 //! Pairing filters use DefraDB's predicate type directly. Local helpers only
 //! derive, combine, and inspect those predicates.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
@@ -601,6 +601,22 @@ pub fn builtin_templates() -> &'static [ScopeTemplate] {
     BUILTIN_TEMPLATES
 }
 
+/// Admit a bring-your-own app collection set only when it is non-empty and
+/// disjoint from every schema owned by the gents protocol catalog.
+///
+/// Protocol collections have bundled migration/version compatibility rules;
+/// allowing an arbitrary `DataPlanePairingDesired` row to name one would
+/// bypass the client-authored collection fence that protects those rules.
+pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<String>> {
+    let overlaps_protocol_catalog = requested.iter().any(|requested| {
+        gents_protocol::schemas::ALL_COLLECTION_NAMES
+            .iter()
+            .chain(gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.iter())
+            .any(|protocol| requested == protocol)
+    });
+    (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
+}
+
 /// Look up a template by id.  Returns `None` for unknown ids.
 pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
     BUILTIN_TEMPLATES.iter().find(|t| t.id == id)
@@ -817,6 +833,23 @@ mod tests {
         assert_eq!(t.delivery, Delivery::Replicate);
         assert!(matches!(t.scope, Scope::Unscoped));
         assert!(t.collections.is_empty());
+    }
+
+    #[test]
+    fn app_collection_admission_is_disjoint_from_the_protocol_catalog() {
+        let custom = BTreeSet::from(["ChangeProposed".to_string()]);
+        assert_eq!(admit_app_collections(custom.clone()), Some(custom));
+
+        for protocol in gents_protocol::schemas::ALL_COLLECTION_NAMES
+            .iter()
+            .chain(gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.iter())
+        {
+            let requested = BTreeSet::from(["ChangeProposed".to_string(), (*protocol).to_string()]);
+            assert!(
+                admit_app_collections(requested).is_none(),
+                "protocol collection {protocol} bypassed app data-plane admission"
+            );
+        }
     }
 
     #[test]

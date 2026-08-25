@@ -10,6 +10,12 @@ import type {
 export const describeLive =
   process.env.GENTS_TAURI_LIVE === "1" ? describe.sequential : describe.skip;
 
+export const describeRealInferenceLive =
+  process.env.GENTS_TAURI_LIVE === "1" &&
+  process.env.GENTS_TAURI_LIVE_REQUIRE_REAL_INFERENCE === "1"
+    ? describe.sequential
+    : describe.skip;
+
 export const FIRST_PROMPT =
   "Read workspace/README.md, then summarize what Gents is in two short bullets.";
 export const SECOND_PROMPT =

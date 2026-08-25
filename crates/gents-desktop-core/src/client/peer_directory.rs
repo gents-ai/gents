@@ -134,12 +134,6 @@ impl PeerDirectory {
             .any(|pending| pending == expected)
     }
 
-    pub fn has_active_owner_for(&self, expected: &PeerRecord) -> bool {
-        self.peers.iter().any(|active| {
-            active.peer_id == expected.peer_id || active.agent_did == expected.agent_did
-        })
-    }
-
     pub async fn upsert_saved_peer(
         &mut self,
         label: &str,

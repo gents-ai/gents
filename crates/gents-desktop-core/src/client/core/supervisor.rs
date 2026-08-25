@@ -28,9 +28,7 @@ use super::p2p_ops::{
     p2p_notify_network_change,
 };
 use super::route_manager::ClientRouteManager;
-use super::writes::{
-    cleanup_pending_removal_if_current, remove_peer_status, PendingRemovalCleanup,
-};
+use super::route_manager::PendingRemovalCleanup;
 use super::{
     ClientPeerStatus, P2PHealth, P2PHealthStatus, P2PSupervisorCommand, P2P_SUPERVISOR_INTERVAL,
     P2P_WEDGED_FAILURE_THRESHOLD,
@@ -44,6 +42,7 @@ pub(super) fn spawn_p2p_supervisor_task(
     p2p_health: watch::Sender<P2PHealth>,
     mut control_rx: mpsc::Receiver<P2PSupervisorCommand>,
     remote_admin_actor: Arc<PrincipalIdentity>,
+    route_manager: Arc<ClientRouteManager>,
     install_replicators_on_bootstrap: bool,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -84,11 +83,9 @@ pub(super) fn spawn_p2p_supervisor_task(
             }
 
             run_pending_removal_cleanup(
-                &node,
-                &p2p,
                 &peer_directory,
                 &peer_statuses,
-                &remote_admin_actor,
+                &route_manager,
                 &mut removal_retries,
             )
             .await;
@@ -98,6 +95,7 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &peer_directory,
                 &peer_statuses,
                 &remote_admin_actor,
+                &route_manager,
                 install_replicators_on_bootstrap,
                 manual_repair,
                 &mut index_requests,
@@ -127,11 +125,9 @@ pub(super) fn spawn_p2p_supervisor_task(
 }
 
 async fn run_pending_removal_cleanup(
-    node: &Arc<EmbeddedNode>,
-    p2p: &Arc<dyn P2POps>,
     peer_directory: &Arc<RwLock<PeerDirectory>>,
     peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
-    actor: &Arc<PrincipalIdentity>,
+    route_manager: &Arc<ClientRouteManager>,
     retries: &mut BTreeMap<String, RemovalRetry>,
 ) {
     let pending = peer_directory.read().await.pending_removals().to_vec();
@@ -144,16 +140,15 @@ async fn run_pending_removal_cleanup(
         // A queued removal is already absent from the durable peer directory;
         // never leave an ephemeral status row advertising it while cleanup
         // retries or after the supervisor completes the tombstone.
-        remove_peer_status(peer_statuses, &record.peer_id);
         if retries
             .get(&record.peer_id)
             .is_some_and(|retry| Instant::now() < retry.retry_after)
         {
             continue;
         }
-        let cleanup =
-            cleanup_pending_removal_if_current(node, p2p, actor.as_ref(), peer_directory, &record)
-                .await;
+        let cleanup = route_manager
+            .retry_pending_removal(peer_directory, peer_statuses, &record)
+            .await;
         match cleanup {
             Ok(PendingRemovalCleanup::Completed | PendingRemovalCleanup::Superseded) => {
                 retries.remove(&record.peer_id);
@@ -232,6 +227,7 @@ async fn run_saved_peer_repair_cycle(
     peer_directory: &Arc<RwLock<PeerDirectory>>,
     peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     remote_admin_actor: &Arc<PrincipalIdentity>,
+    route_manager: &Arc<ClientRouteManager>,
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
     index_requests: &mut BTreeSet<String>,
@@ -246,11 +242,18 @@ async fn run_saved_peer_repair_cycle(
     route_reconciled_at.retain(|peer_id, _| saved_peer_ids.contains(peer_id));
 
     for saved_record in &records {
-        let route_manager = ClientRouteManager::new(
-            Arc::clone(node),
-            Arc::clone(p2p),
-            Arc::clone(remote_admin_actor),
-        );
+        let route_lifecycle = route_manager.lock().await;
+        if !peer_directory
+            .read()
+            .await
+            .records()
+            .iter()
+            .any(|current| current == saved_record)
+        {
+            // The snapshot lost its generation while waiting for the route
+            // owner. Never repair or publish status for stale intent.
+            continue;
+        }
         let route_due = ClientRouteManager::reconcile_due(
             saved_record.pairing_ready,
             route_reconciled_at
@@ -259,7 +262,7 @@ async fn run_saved_peer_repair_cycle(
             force_repair,
         );
         let record = if route_due {
-            route_manager
+            route_lifecycle
                 .refresh_endpoint(peer_directory, saved_record)
                 .await
         } else {
@@ -318,7 +321,7 @@ async fn run_saved_peer_repair_cycle(
         if still_saved && !is_bearer_peer(&record) && route_due {
             let reconcile = tokio::time::timeout(
                 super::P2P_OPERATION_TIMEOUT,
-                route_manager.reconcile(&record, peer_statuses),
+                route_lifecycle.reconcile(&record, peer_statuses),
             )
             .await;
             match reconcile {

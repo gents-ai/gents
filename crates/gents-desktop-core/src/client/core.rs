@@ -302,6 +302,7 @@ pub struct ClientCore {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     peer_directory: Arc<RwLock<PeerDirectory>>,
+    route_manager: Arc<route_manager::ClientRouteManager>,
     store: Arc<ObservedStore>,
     observer: Mutex<Option<ObserverHandle>>,
     peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,

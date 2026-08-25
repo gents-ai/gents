@@ -365,6 +365,28 @@ theorem appCollections_collections_empty :
 theorem appCollections_unscoped_no_filter (collections : List String) (peerDid localDid : Did) :
     scopeFilter appCollectionsTemplate.scope collections peerDid localDid = [] := rfl
 
+theorem appCollections_admission_sound
+    (protocolCatalog requested admitted : Finset String)
+    (h : admitAppCollections protocolCatalog requested = some admitted) :
+    admitted = requested ∧ Disjoint admitted protocolCatalog := by
+  unfold admitAppCollections at h
+  split at h
+  case isTrue valid =>
+    simp only [Option.some.injEq] at h
+    subst admitted
+    exact ⟨rfl, valid.2⟩
+  case isFalse => contradiction
+
+theorem appCollections_protocol_overlap_rejected
+    (protocolCatalog requested : Finset String)
+    (overlap : ¬ Disjoint requested protocolCatalog) :
+    admitAppCollections protocolCatalog requested = none := by
+  simp [admitAppCollections, overlap]
+
+theorem appCollections_empty_rejected (protocolCatalog : Finset String) :
+    admitAppCollections protocolCatalog ∅ = none := by
+  simp [admitAppCollections]
+
 theorem clientIndex_in_catalog :
     resolveTemplate builtinCatalog "client-index" = some clientIndexTemplate := by
   decide

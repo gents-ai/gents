@@ -95,10 +95,15 @@ impl ClientCore {
         let listen_addresses = p2p_listen_addresses(&p2p)
             .await
             .context("reading desktop P2P listen addresses")?;
+        let route_manager = Arc::new(ClientRouteManager::new(
+            Arc::clone(&node),
+            Arc::clone(&p2p),
+            Arc::new(principal.clone()),
+        ));
 
         let (peer_statuses, bootstrap_errors) = {
             let records = peer_directory.read().await.records().to_vec();
-            bootstrap_saved_peers(&node, &p2p, &records, &options, &principal).await
+            bootstrap_saved_peers(&node, &p2p, &records, &options, &principal, &route_manager).await
         };
         let peer_statuses = Arc::new(std::sync::RwLock::new(peer_statuses));
         let (p2p_health, _p2p_health_rx) = watch::channel(P2PHealth::default());
@@ -113,6 +118,7 @@ impl ClientCore {
             p2p_health.clone(),
             p2p_control_rx,
             Arc::new(principal.clone()),
+            Arc::clone(&route_manager),
             options.install_replicators_on_bootstrap,
         );
         Ok(Self {
@@ -122,6 +128,7 @@ impl ClientCore {
             node,
             p2p,
             peer_directory,
+            route_manager,
             store,
             observer: tokio::sync::Mutex::new(Some(observer)),
             peer_statuses,
@@ -170,6 +177,7 @@ pub(super) async fn bootstrap_saved_peers(
     records: &[PeerRecord],
     options: &ClientCoreOptions,
     actor: &PrincipalIdentity,
+    route_manager: &Arc<ClientRouteManager>,
 ) -> (Vec<ClientPeerStatus>, Vec<String>) {
     let mut statuses = Vec::with_capacity(records.len());
     let mut errors = Vec::new();
@@ -215,14 +223,7 @@ pub(super) async fn bootstrap_saved_peers(
                 }
 
                 if options.install_replicators_on_bootstrap && !is_bearer_peer(record) {
-                    match ClientRouteManager::new(
-                        Arc::clone(node),
-                        Arc::clone(p2p),
-                        Arc::new(actor.clone()),
-                    )
-                    .configure(record)
-                    .await
-                    {
+                    match route_manager.lock().await.configure(record).await {
                         Ok(()) => {}
                         Err(error) => {
                             let message = format!(

@@ -209,7 +209,8 @@ theorem filter_change_forces_reinstall
     simp only [installReplicatorState, teardownReplicatorState]
     rw [Finset.mem_insert]
     push_neg
-    exact ⟨filter_change_distinct_identity hf, Finset.not_mem_erase _ _⟩
+    exact ⟨filter_change_distinct_identity hf, by
+      simp [eraseReplicatorsAtAddress]⟩
 
 theorem collections_change_forces_reinstall
     {s : ReconcileState} {desired : PairingDesired}
@@ -243,7 +244,8 @@ theorem collections_change_forces_reinstall
   · simp only [installReplicatorState, teardownReplicatorState]
     rw [Finset.mem_insert]
     push_neg
-    exact ⟨collections_change_distinct_identity hcs, Finset.not_mem_erase _ _⟩
+    exact ⟨collections_change_distinct_identity hcs, by
+      simp [eraseReplicatorsAtAddress]⟩
 
 theorem no_flap_on_converged_stable_desired
     {pre post : ReconcileState}
@@ -305,8 +307,8 @@ theorem stale_applied_replicator_can_be_torn_down
       r ∉ (teardownReplicatorState s r).applied.replicators := by
   refine ⟨Transition.reconcileTeardownReplicator desired r h_desired h_not_desired h_applied rfl,
     ?_, ?_⟩
-  · exact Finset.not_mem_erase r s.actual.replicators
-  · exact Finset.not_mem_erase r s.applied.replicators
+  · simp [teardownReplicatorState, eraseReplicatorsAtAddress]
+  · simp [teardownReplicatorState, eraseReplicatorsAtAddress]
 
 theorem convergence_requires_successful_install
     {s post : ReconcileState} {desired : PairingDesired} {r : ReplicatorId}
