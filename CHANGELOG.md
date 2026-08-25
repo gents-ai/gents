@@ -6,6 +6,52 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.13.0 - 2026-08-25
+
+### Bridge contract
+
+- Advance the Rust and npm desktop package train together to 0.13.0 and the
+  desktop bridge contract from 0.9 to 1.3.
+- Make client-authored requests the sole session creation path, removing the
+  `desktop_session_fork` projection, and add revisioned live-session deltas,
+  bounded transcript-page evidence, exact-total markers, and observer merge
+  counters (#1160, #1154, #1203).
+
+### Mobile and desktop
+
+- Add request-owned remote session hydration with explicit pending, stalled,
+  schema-skew, and terminal states; keep recovery truthful across mobile
+  backgrounding and reconnects (#1154).
+- Bound long-session work at the database query, bridge payload, and React
+  rendering seams: query transcript pages at the tip and backward cursor,
+  preserve tool-call boundaries, coalesce live response updates, and avoid
+  remounting previously rendered rows (#1184, #1185, #1203).
+- Centralize reliable multi-server pairing and replace repeated full-store
+  replication scans with explicit document-set replay (#1186).
+
+### Runtime and formal foundation
+
+- Add Lean-fenced isolated workspaces, callback planning and execution,
+  request-scoped tool roots, frozen instruction provenance, and explicit
+  cleanup receipts for agent-owned workspace lifecycles (#1164-#1174).
+- Publish the graph pipeline foundation, pure intent compiler, task-backed
+  graph routes, and bounded graph tool surface (#1190-#1193).
+- Discover live `AGENTS.md` instructions for unbound requests and tighten the
+  graph-native defending-code review pack (#1173).
+
+### CLI, testing, and reliability
+
+- Keep explicit transport log filters intact and expand live pairing,
+  hydration, pagination, and inference acceptance coverage (#1188, #1154,
+  #1203).
+- Add repeatable mobile interaction artifacts and structural budgets while
+  keeping noisy wall-clock measurements report-only (#1203).
+
+### Dependencies
+
+- Advance DefraDB to `54b629b1`, including explicit document-set P2P replay;
+  this revision is the direct child of the current DefraDB `main` head.
+
 ## 0.12.0 - 2026-08-20
 
 ### Bridge contract
@@ -187,6 +233,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 | Tag        | Bridge crate | npm packages | contract_version | Notes                                         |
 | ---------- | ------------ | ------------ | ---------------- | --------------------------------------------- |
+| v0.13.0    | 0.13.0       | 0.13.0       | 1.3              | Hydration, bounded mobile transcripts, graph pipeline; DefraDB `54b629b1` |
 | v0.12.0    | 0.12.0       | 0.12.0       | 0.9              | Mobile pairing convergence; eager session index; DefraDB `f928b300` |
 | v0.11.0    | 0.11.0       | 0.11.0       | 0.9              | DefraDB v0.18.0; signed provenance and build metrics |
 | v0.10.1    | 0.10.1       | 0.10.1       | 0.5              | DefraDB v0.17.4; mobile/subagent/migration fixes |
