@@ -593,10 +593,6 @@ pub async fn load_session_transcript_page(
     }
     if let Some(sequence) = deferred_message_sequence {
         tool_sequence_conditions.push(format!("_gt: {sequence}"));
-    } else if !messages_exhausted {
-        if let Some(sequence) = messages.iter().filter_map(|row| row.sequence).min() {
-            tool_sequence_conditions.push(format!("_gte: {sequence}"));
-        }
     }
     let tool_sequence_filter = if tool_sequence_conditions.is_empty() {
         String::new()

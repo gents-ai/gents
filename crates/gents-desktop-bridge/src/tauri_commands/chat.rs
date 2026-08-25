@@ -24,6 +24,14 @@ pub async fn desktop_session_snapshot(
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
+    let agent_did = agent_did.or_else(|| {
+        core.store()
+            .snapshot()
+            .conversations
+            .iter()
+            .find(|conversation| conversation.session_id == session_id)
+            .and_then(|conversation| conversation.agent_did.clone())
+    });
 
     if let Some(agent_did) = agent_did.as_deref() {
         if let Err(error) = core.focus_session(&session_id, agent_did).await {

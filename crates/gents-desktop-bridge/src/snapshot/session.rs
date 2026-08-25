@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use gents_desktop_core::client::{ClientCore, ClientStore, SessionTranscriptQueryPage};
@@ -606,42 +606,128 @@ pub fn apply_session_timeline_page_with_query(
     let limit = requested_limit
         .unwrap_or(DEFAULT_SESSION_TIMELINE_PAGE_SIZE)
         .clamp(1, MAX_SESSION_TIMELINE_PAGE_SIZE);
-    let end = match (query_page.is_some(), before_item_key) {
-        (true, _) => total_items,
-        (false, Some(cursor)) => snapshot
+
+    let (page, has_older, has_newer, oldest_item_key) = if let Some(query_page) = query_page {
+        let mut sequence_counts = BTreeMap::<i64, usize>::new();
+        let mut non_durable_items = 0_usize;
+        for item in &snapshot.timeline_items {
+            match rendered_timeline_durable_sequence(item) {
+                Some(Some(sequence)) => {
+                    *sequence_counts.entry(sequence).or_default() += 1;
+                }
+                Some(None) => {
+                    return Err(
+                        "queried session timeline contains an item without a durable sequence"
+                            .to_string(),
+                    );
+                }
+                None => non_durable_items += 1,
+            }
+        }
+        if non_durable_items > limit {
+            return Err(format!(
+                "session timeline has {non_durable_items} live items but the visible page budget is {limit}"
+            ));
+        }
+
+        let mut remaining = limit - non_durable_items;
+        let mut selected_sequences = HashSet::new();
+        for (&sequence, &item_count) in sequence_counts.iter().rev() {
+            if item_count > remaining {
+                if selected_sequences.is_empty() && non_durable_items == 0 {
+                    return Err(format!(
+                        "session timeline sequence group {sequence} exceeds the visible page budget of {limit}"
+                    ));
+                }
+                break;
+            }
+            selected_sequences.insert(sequence);
+            remaining -= item_count;
+        }
+
+        let page = snapshot
             .timeline_items
             .iter()
-            .position(|item| rendered_timeline_item_key(item) == cursor)
-            .ok_or_else(|| format!("session timeline cursor is no longer present: {cursor}"))?,
-        (false, None) => total_items,
-    };
-    let mut start = end.saturating_sub(limit);
-    if start > 0 {
-        if let Some(boundary_sequence) =
-            rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
-        {
-            if rendered_timeline_durable_sequence(&snapshot.timeline_items[start - 1])
-                == Some(boundary_sequence)
-            {
-                while start < end
-                    && rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
-                        == Some(boundary_sequence)
-                {
-                    start += 1;
+            .filter(|item| match rendered_timeline_durable_sequence(item) {
+                Some(Some(sequence)) => selected_sequences.contains(&sequence),
+                Some(None) => false,
+                None => true,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let oldest_sequence = selected_sequences.iter().copied().min();
+        let has_unselected_sequences = selected_sequences.len() < sequence_counts.len();
+        let oldest_item_key = oldest_sequence
+            .and_then(|oldest_sequence| {
+                page.iter().find(|item| {
+                    rendered_timeline_durable_sequence(item) == Some(Some(oldest_sequence))
+                })
+            })
+            .map(rendered_timeline_item_key)
+            .map(str::to_owned)
+            .or_else(|| {
+                if query_page.source_exhausted && !has_unselected_sequences {
+                    return None;
                 }
-                if start == end {
-                    return Err(format!(
-                        "session timeline sequence group {boundary_sequence:?} exceeds the visible page budget of {limit}"
-                    ));
+                query_page
+                    .store
+                    .messages
+                    .iter()
+                    .filter_map(|row| row.sequence)
+                    .chain(
+                        query_page
+                            .store
+                            .tool_calls
+                            .iter()
+                            .filter_map(|row| row.message_sequence),
+                    )
+                    .min()
+                    .map(|sequence| format!("tools-{sequence}"))
+            });
+        (
+            page,
+            has_unselected_sequences || !query_page.source_exhausted,
+            query_page.has_newer,
+            oldest_item_key,
+        )
+    } else {
+        let end = match before_item_key {
+            Some(cursor) => snapshot
+                .timeline_items
+                .iter()
+                .position(|item| rendered_timeline_item_key(item) == cursor)
+                .ok_or_else(|| format!("session timeline cursor is no longer present: {cursor}"))?,
+            None => total_items,
+        };
+        let mut start = end.saturating_sub(limit);
+        if start > 0 {
+            if let Some(boundary_sequence) =
+                rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
+            {
+                if rendered_timeline_durable_sequence(&snapshot.timeline_items[start - 1])
+                    == Some(boundary_sequence)
+                {
+                    while start < end
+                        && rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
+                            == Some(boundary_sequence)
+                    {
+                        start += 1;
+                    }
+                    if start == end {
+                        return Err(format!(
+                            "session timeline sequence group {boundary_sequence:?} exceeds the visible page budget of {limit}"
+                        ));
+                    }
                 }
             }
         }
-    }
-    let page = snapshot.timeline_items[start..end].to_vec();
-    let oldest_item_key = page
-        .first()
-        .map(rendered_timeline_item_key)
-        .map(str::to_owned);
+        let page = snapshot.timeline_items[start..end].to_vec();
+        let oldest_item_key = page
+            .first()
+            .map(rendered_timeline_item_key)
+            .map(str::to_owned);
+        (page, start > 0, end < total_items, oldest_item_key)
+    };
     let newest_item_key = page
         .last()
         .map(rendered_timeline_item_key)
@@ -651,8 +737,8 @@ pub fn apply_session_timeline_page_with_query(
         total_items: query_page.map_or_else(|| usize_to_i64(total_items), |_| -1),
         total_items_exact: query_page.map(|_| false),
         page_items: usize_to_i64(snapshot.timeline_items.len()),
-        has_older: start > 0 || query_page.is_some_and(|page| !page.source_exhausted),
-        has_newer: end < total_items || query_page.is_some_and(|page| page.has_newer),
+        has_older,
+        has_newer,
         oldest_item_key,
         newest_item_key,
         query_count: query_page.map(|page| page.query_count as i64),

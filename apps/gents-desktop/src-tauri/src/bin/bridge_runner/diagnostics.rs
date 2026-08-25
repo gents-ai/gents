@@ -97,6 +97,17 @@ pub(crate) async fn build_desktop_session_snapshot(
     timeline_before_item_key: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
+    let resolved_agent_did = agent_did.map(str::to_owned).or_else(|| {
+        fixture
+            .desktop_core()
+            .store()
+            .snapshot()
+            .conversations
+            .iter()
+            .find(|conversation| conversation.session_id == session_id)
+            .and_then(|conversation| conversation.agent_did.clone())
+    });
+    let agent_did = resolved_agent_did.as_deref();
     let requester_scope = if let Some(agent_did) = agent_did {
         fixture
             .desktop_core()
