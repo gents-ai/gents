@@ -157,3 +157,98 @@ pub fn apply_hydration_step(
     }
     next
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientHydrationPhase {
+    Idle,
+    Requested,
+    Serving,
+    Complete,
+    Failed,
+}
+
+impl ClientHydrationPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Requested => "requested",
+            Self::Serving => "serving",
+            Self::Complete => "complete",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "requested" => Self::Requested,
+            "serving" => Self::Serving,
+            "complete" => Self::Complete,
+            "failed" => Self::Failed,
+            _ => Self::Idle,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientHydrationProgress {
+    pub phase: ClientHydrationPhase,
+    pub merged_count: usize,
+    pub served_count: Option<usize>,
+}
+
+impl Default for ClientHydrationProgress {
+    fn default() -> Self {
+        Self {
+            phase: ClientHydrationPhase::Idle,
+            merged_count: 0,
+            served_count: None,
+        }
+    }
+}
+
+fn merge_served(prev: Option<usize>, next: Option<usize>) -> Option<usize> {
+    next.or(prev)
+}
+
+fn can_complete(merged_count: usize, served_count: Option<usize>) -> bool {
+    served_count.is_some_and(|served| merged_count >= served)
+}
+
+/// Receiver-side progress. Completes only when unique locally merged
+/// documents cover the server's `served_doc_count`. Sender status alone
+/// never completes a request.
+pub fn observe_hydration_progress(
+    prev: &ClientHydrationProgress,
+    merged_count: usize,
+    served_count: Option<usize>,
+    failed: bool,
+) -> ClientHydrationProgress {
+    let merged = prev.merged_count.max(merged_count);
+    let served = merge_served(prev.served_count, served_count);
+    if failed || prev.phase == ClientHydrationPhase::Failed {
+        return ClientHydrationProgress {
+            phase: ClientHydrationPhase::Failed,
+            merged_count: merged,
+            served_count: served,
+        };
+    }
+    if can_complete(merged, served) {
+        return ClientHydrationProgress {
+            phase: ClientHydrationPhase::Complete,
+            merged_count: merged,
+            served_count: served,
+        };
+    }
+    if served.is_some() || merged > 0 || prev.phase == ClientHydrationPhase::Serving {
+        return ClientHydrationProgress {
+            phase: ClientHydrationPhase::Serving,
+            merged_count: merged,
+            served_count: served,
+        };
+    }
+    ClientHydrationProgress {
+        phase: ClientHydrationPhase::Requested,
+        merged_count: merged,
+        served_count: served,
+    }
+}

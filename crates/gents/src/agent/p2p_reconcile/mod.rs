@@ -16,6 +16,7 @@ pub mod profiles;
 pub mod reciprocal;
 pub mod registry;
 pub mod session_hydration;
+pub mod session_hydration_reconcile;
 pub mod templates;
 pub mod trait_def;
 
@@ -65,6 +66,10 @@ pub use reciprocal::{
 pub use registry::{
     registry_upsert_mutation, resolve_network_id, run_registry_heartbeat, RegistryEntry,
     UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,
+};
+pub use session_hydration_reconcile::{
+    reconcile_hydration_tick, run_session_hydration_reconciler, EmbeddedHydrationDelivery,
+    GraphqlHydrationStore, HydrationDelivery, HydrationRequestStore, HydrationTickOutcome,
 };
 pub use templates::{
     builtin_templates, combine_filters, conversation_like, decode_pairing_filters, equality_filter,

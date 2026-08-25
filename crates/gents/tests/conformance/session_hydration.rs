@@ -3,11 +3,14 @@
 use std::collections::BTreeSet;
 
 use gents::agent::p2p_reconcile::session_hydration::{
-    apply_hydration_step, decide_hydration, HydrationCatalog, HydrationDocument, HydrationOutcome,
+    apply_hydration_step, decide_hydration, observe_hydration_progress, ClientHydrationPhase,
+    ClientHydrationProgress, HydrationCatalog, HydrationDocument, HydrationOutcome,
     HydrationRequest, HydrationState, HydrationVerdict, SessionOwner,
 };
 
-use crate::lean_vocab_test::lean_session_hydration_decision_cases;
+use crate::lean_vocab_test::{
+    lean_session_hydration_decision_cases, lean_session_hydration_progress_cases,
+};
 
 fn request() -> HydrationRequest {
     HydrationRequest::from_row(
@@ -204,4 +207,39 @@ fn request_key_binds_peer_and_session() {
         "session-1".into(),
     )
     .is_err());
+}
+
+#[test]
+fn generated_session_hydration_progress_cases_match_observe() {
+    let cases = lean_session_hydration_progress_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let prev = ClientHydrationProgress {
+            phase: ClientHydrationPhase::parse(&case.prev_phase),
+            merged_count: case.prev_merged,
+            served_count: case.prev_served,
+        };
+        let next = observe_hydration_progress(&prev, case.merged, case.served, case.failed);
+        assert_eq!(next.phase.as_str(), case.expected_phase, "{}", case.name);
+        assert_eq!(next.merged_count, case.expected_merged, "{}", case.name);
+        assert_eq!(
+            next.phase == ClientHydrationPhase::Complete,
+            case.expected_complete,
+            "{}",
+            case.name
+        );
+        assert!(
+            next.merged_count >= prev.merged_count,
+            "{} merged count must be monotone",
+            case.name
+        );
+        if case.expected_complete {
+            assert!(
+                next.served_count
+                    .is_some_and(|served| next.merged_count >= served),
+                "{} completed without covering served_doc_count",
+                case.name
+            );
+        }
+    }
 }

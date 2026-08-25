@@ -59,6 +59,7 @@ impl ObserverMetrics {
 pub struct ObservedStore {
     snapshot: RwLock<SharedClientStore>,
     focused_request_id: RwLock<Option<String>>,
+    focused_session_id: RwLock<Option<String>>,
     version_tx: watch::Sender<u64>,
 }
 
@@ -68,6 +69,7 @@ impl ObservedStore {
         let store = Arc::new(Self {
             snapshot: RwLock::new(Arc::new(initial_snapshot)),
             focused_request_id: RwLock::new(None),
+            focused_session_id: RwLock::new(None),
             version_tx,
         });
         (store, version_rx)
@@ -96,6 +98,20 @@ impl ObservedStore {
             .focused_request_id
             .write()
             .expect("focused request lock poisoned") = request_id;
+    }
+
+    pub fn focused_session_id(&self) -> Option<String> {
+        self.focused_session_id
+            .read()
+            .expect("focused session lock poisoned")
+            .clone()
+    }
+
+    pub fn set_focused_session_id(&self, session_id: Option<String>) {
+        *self
+            .focused_session_id
+            .write()
+            .expect("focused session lock poisoned") = session_id;
     }
 
     pub fn replace_snapshot(&self, snapshot: ClientStore) -> u64 {

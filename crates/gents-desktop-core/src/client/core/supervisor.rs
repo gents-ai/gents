@@ -59,7 +59,9 @@ pub(super) fn spawn_p2p_supervisor_task(
             let manual_repair = tokio::select! {
                 _ = ticker.tick() => false,
                 command = control_rx.recv() => match command {
-                    Some(P2PSupervisorCommand::RepairNow) => true,
+                    Some(P2PSupervisorCommand::RepairNow)
+                    | Some(P2PSupervisorCommand::Foregrounded)
+                    | Some(P2PSupervisorCommand::NetworkChanged) => true,
                     None => break,
                 },
             };

@@ -65,4 +65,77 @@ def sessionHydrationDecisionCaseJson (w : SessionHydrationDecisionCase) : String
 def sessionHydrationDecisionCasesJson : String :=
   jsonArray (sessionHydrationDecisionCases.map sessionHydrationDecisionCaseJson)
 
+structure SessionHydrationProgressCase where
+  name : String
+  prevPhase : String
+  prevMerged : Nat
+  prevServed : Option Nat
+  merged : Nat
+  served : Option Nat
+  failed : Bool
+
+def parsePhase (name : String) : SessionHydration.ClientPhase :=
+  match name with
+  | "requested" => .requested
+  | "serving" => .serving
+  | "complete" => .complete
+  | "failed" => .failed
+  | _ => .idle
+
+def progressPrev (w : SessionHydrationProgressCase) : SessionHydration.ClientProgress :=
+  { phase := parsePhase w.prevPhase
+  , mergedCount := w.prevMerged
+  , servedCount := w.prevServed }
+
+def sessionHydrationProgressCases : List SessionHydrationProgressCase :=
+  [ { name := "open_requests"
+    , prevPhase := "idle", prevMerged := 0, prevServed := none
+    , merged := 0, served := none, failed := false }
+  , { name := "serving_partial"
+    , prevPhase := "requested", prevMerged := 0, prevServed := none
+    , merged := 2, served := some 5, failed := false }
+  , { name := "complete_when_covered"
+    , prevPhase := "serving", prevMerged := 2, prevServed := some 5
+    , merged := 5, served := some 5, failed := false }
+  , { name := "empty_session_completes"
+    , prevPhase := "requested", prevMerged := 0, prevServed := none
+    , merged := 0, served := some 0, failed := false }
+  , { name := "cannot_complete_early"
+    , prevPhase := "serving", prevMerged := 2, prevServed := some 5
+    , merged := 4, served := some 5, failed := false }
+  , { name := "failed_stays_failed"
+    , prevPhase := "serving", prevMerged := 1, prevServed := some 3
+    , merged := 3, served := some 3, failed := true }
+  ]
+
+def optionNatString : Option Nat → String
+  | some n => toString n
+  | none => "null"
+
+def phaseString : SessionHydration.ClientPhase → String
+  | .idle => "idle"
+  | .requested => "requested"
+  | .serving => "serving"
+  | .complete => "complete"
+  | .failed => "failed"
+
+def sessionHydrationProgressCaseJson (w : SessionHydrationProgressCase) : String :=
+  let next := SessionHydration.observe (progressPrev w) w.merged w.served w.failed
+  "{"
+    ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"prev_phase\":" ++ jsonString w.prevPhase ++ ","
+    ++ "\"prev_merged\":" ++ toString w.prevMerged ++ ","
+    ++ "\"prev_served\":" ++ optionNatString w.prevServed ++ ","
+    ++ "\"merged\":" ++ toString w.merged ++ ","
+    ++ "\"served\":" ++ optionNatString w.served ++ ","
+    ++ "\"failed\":" ++ boolString w.failed ++ ","
+    ++ "\"expected_phase\":" ++ jsonString (phaseString next.phase) ++ ","
+    ++ "\"expected_merged\":" ++ toString next.mergedCount ++ ","
+    ++ "\"expected_complete\":" ++
+      boolString (decide (next.phase = SessionHydration.ClientPhase.complete))
+    ++ "}"
+
+def sessionHydrationProgressCasesJson : String :=
+  jsonArray (sessionHydrationProgressCases.map sessionHydrationProgressCaseJson)
+
 end Conformance.Contracts

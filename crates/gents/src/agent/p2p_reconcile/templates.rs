@@ -861,6 +861,11 @@ mod tests {
                 "protocol collection {protocol} bypassed app data-plane admission"
             );
         }
+        assert!(
+            admit_app_collections(BTreeSet::from(["SessionHydrationRequest".to_string()]))
+                .is_none(),
+            "SessionHydrationRequest must stay protocol-owned and never ride app-collections"
+        );
     }
 
     #[test]

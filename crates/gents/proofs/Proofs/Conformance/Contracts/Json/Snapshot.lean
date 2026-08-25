@@ -58,6 +58,8 @@ def snapshotJson : String :=
       ++ goalTransitionCasesJson ++ ","
     ++ "\"session_hydration_decision_cases\":"
       ++ sessionHydrationDecisionCasesJson ++ ","
+    ++ "\"session_hydration_progress_cases\":"
+      ++ sessionHydrationProgressCasesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"

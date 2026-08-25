@@ -19,6 +19,17 @@ pub async fn desktop_session_snapshot(
         return Ok(None);
     };
 
+    if let Some(agent_did) = agent_did.as_deref() {
+        if let Err(error) = core.focus_session(&session_id, agent_did).await {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                agent_did,
+                session_id = %session_id,
+                error = %error,
+                "session hydration request failed; rendering whatever is already local"
+            );
+        }
+    }
     if let (Some(agent_did), Some(request_id)) = (agent_did.as_deref(), request_id.as_deref()) {
         if let Err(error) = core.refresh_local_request(agent_did, request_id).await {
             tracing::warn!(

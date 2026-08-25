@@ -252,6 +252,28 @@ fn document_requests(doc_ids: &[String]) -> Vec<P2pDocumentRequest> {
         .collect()
 }
 
+pub(super) async fn push_documents_to_peer(
+    node: &Arc<EmbeddedNode>,
+    peer_id: &str,
+    documents: &std::collections::BTreeSet<super::session_hydration::HydrationDocument>,
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    let p2p = node
+        .p2p_arc()
+        .context("embedded node has no P2P transport for hydration delivery")?;
+    let docs = documents
+        .iter()
+        .map(|document| P2pDocumentRequest {
+            collection: document.collection.clone(),
+            doc_id: document.doc_id.clone(),
+        })
+        .collect::<Vec<_>>();
+    p2p.push_documents_to_peer(peer_id, docs)
+        .await
+        .with_context(|| format!("push hydration documents to peer {peer_id}"))
+}
+
 fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminError {
     match error {
         P2PError::NotFound(message) => RemoteP2pAdminError::RemoteNotFound(message),
