@@ -437,6 +437,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         || SUBAGENT_TOOL_NAMES.contains(&name)
         || SINGLETON_TOOL_NAMES.contains(&name)
         || crate::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
+        || crate::graph_pipeline::GRAPH_PIPELINE_TOOL_NAMES.contains(&name)
 }
 
 /// Deserialize the `write_tools` field from either representation:

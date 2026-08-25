@@ -1,0 +1,262 @@
+[
+  {
+    "name": "valid_single_stage",
+    "intent": {
+      "graph_id": "document-review",
+      "nodes": [
+        {
+          "node_id": "worker",
+          "capability_id": "worker",
+          "capability_revision": "v1"
+        }
+      ],
+      "edges": [],
+      "entries": [
+        {
+          "name": "input",
+          "collection": "PipelineInput",
+          "schema": "PipelineInput/v1",
+          "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "limits": {
+        "max_nodes": 2,
+        "max_edges": 2,
+        "max_depth": 2,
+        "max_fan_out": 2
+      }
+    },
+    "expected_accepted": true,
+    "expected_diagnostic_codes": []
+  },
+  {
+    "name": "unknown_capability_fails_closed",
+    "intent": {
+      "graph_id": "document-review",
+      "nodes": [
+        {
+          "node_id": "worker",
+          "capability_id": "model-invented-stage",
+          "capability_revision": "v1"
+        }
+      ],
+      "edges": [],
+      "entries": [
+        {
+          "name": "input",
+          "collection": "PipelineInput",
+          "schema": "PipelineInput/v1",
+          "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "limits": {
+        "max_nodes": 2,
+        "max_edges": 2,
+        "max_depth": 2,
+        "max_fan_out": 2
+      }
+    },
+    "expected_accepted": false,
+    "expected_diagnostic_codes": ["unknown_capability"]
+  },
+  {
+    "name": "missing_required_entry_is_repairable",
+    "intent": {
+      "graph_id": "document-review",
+      "nodes": [
+        {
+          "node_id": "worker",
+          "capability_id": "worker",
+          "capability_revision": "v1"
+        }
+      ],
+      "edges": [],
+      "entries": [],
+      "limits": {
+        "max_nodes": 2,
+        "max_edges": 2,
+        "max_depth": 2,
+        "max_fan_out": 2
+      }
+    },
+    "expected_accepted": false,
+    "expected_diagnostic_codes": ["missing_input_binding", "unreachable_node"]
+  },
+  {
+    "name": "intent_bound_is_enforced",
+    "intent": {
+      "graph_id": "document-review",
+      "nodes": [
+        {
+          "node_id": "worker",
+          "capability_id": "worker",
+          "capability_revision": "v1"
+        }
+      ],
+      "edges": [],
+      "entries": [
+        {
+          "name": "input",
+          "collection": "PipelineInput",
+          "schema": "PipelineInput/v1",
+          "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "limits": {
+        "max_nodes": 0,
+        "max_edges": 2,
+        "max_depth": 2,
+        "max_fan_out": 2
+      }
+    },
+    "expected_accepted": false,
+    "expected_diagnostic_codes": ["node_limit_exceeded"]
+  },
+  {
+    "name": "valid_two_stage_route",
+    "intent": {
+      "graph_id": "document-review-two-stage",
+      "nodes": [
+        {
+          "node_id": "worker",
+          "capability_id": "worker",
+          "capability_revision": "v1"
+        },
+        {
+          "node_id": "reviewer",
+          "capability_id": "reviewer",
+          "capability_revision": "v1"
+        }
+      ],
+      "edges": [
+        {
+          "from": { "node_id": "worker", "port": "result" },
+          "to": { "node_id": "reviewer", "port": "input" },
+          "delivery": { "kind": "per_document" }
+        }
+      ],
+      "entries": [
+        {
+          "name": "input",
+          "collection": "PipelineInput",
+          "schema": "PipelineInput/v1",
+          "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "limits": {
+        "max_nodes": 3,
+        "max_edges": 3,
+        "max_depth": 3,
+        "max_fan_out": 2
+      }
+    },
+    "expected_accepted": true,
+    "expected_diagnostic_codes": []
+  },
+  {
+    "name": "stale_capability_revision_is_repairable",
+    "intent": {
+      "graph_id": "document-review",
+      "nodes": [
+        {
+          "node_id": "worker",
+          "capability_id": "worker",
+          "capability_revision": "v2"
+        }
+      ],
+      "edges": [],
+      "entries": [
+        {
+          "name": "input",
+          "collection": "PipelineInput",
+          "schema": "PipelineInput/v1",
+          "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "limits": {
+        "max_nodes": 2,
+        "max_edges": 2,
+        "max_depth": 2,
+        "max_fan_out": 2
+      }
+    },
+    "expected_accepted": false,
+    "expected_diagnostic_codes": ["capability_revision_mismatch"]
+  },
+  {
+    "name": "entry_schema_mismatch_is_repairable",
+    "intent": {
+      "graph_id": "document-review",
+      "nodes": [
+        {
+          "node_id": "worker",
+          "capability_id": "worker",
+          "capability_revision": "v1"
+        }
+      ],
+      "edges": [],
+      "entries": [
+        {
+          "name": "input",
+          "collection": "PipelineInput",
+          "schema": "PipelineInput/v2",
+          "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "limits": {
+        "max_nodes": 2,
+        "max_edges": 2,
+        "max_depth": 2,
+        "max_fan_out": 2
+      }
+    },
+    "expected_accepted": false,
+    "expected_diagnostic_codes": ["schema_mismatch"]
+  },
+  {
+    "name": "cycle_is_repairable",
+    "intent": {
+      "graph_id": "document-review-cycle",
+      "nodes": [
+        {
+          "node_id": "worker",
+          "capability_id": "worker",
+          "capability_revision": "v1"
+        },
+        {
+          "node_id": "reviewer",
+          "capability_id": "reviewer",
+          "capability_revision": "v1"
+        }
+      ],
+      "edges": [
+        {
+          "from": { "node_id": "worker", "port": "result" },
+          "to": { "node_id": "reviewer", "port": "input" },
+          "delivery": { "kind": "per_document" }
+        },
+        {
+          "from": { "node_id": "reviewer", "port": "feedback" },
+          "to": { "node_id": "worker", "port": "feedback" },
+          "delivery": { "kind": "per_document" }
+        }
+      ],
+      "entries": [
+        {
+          "name": "input",
+          "collection": "PipelineInput",
+          "schema": "PipelineInput/v1",
+          "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "limits": {
+        "max_nodes": 3,
+        "max_edges": 3,
+        "max_depth": 3,
+        "max_fan_out": 2
+      }
+    },
+    "expected_accepted": false,
+    "expected_diagnostic_codes": ["cycle"]
+  }
+]
