@@ -283,11 +283,11 @@ def boundaries : List Boundary :=
     }
   , { id := boundaryGraphPipelineFoundationId
     , domain := "GraphPipeline"
-    , subject := "pure compiler before persistence refinement"
+    , subject := "compiler and existing-runtime publication adapter"
     , statement :=
-        "Proofs.GraphPipeline establishes publication readiness, active-pointer alignment, immutable revision identity, and run pinning. The pure GraphIntent compiler is fenced against the model's exhaustive validation conjunction, but this slice has no GraphRevision/GraphRun storage schema, activation controller, or runtime visibility filter, so persisted lifecycle refinement remains outside the claim."
+        "Proofs.GraphPipeline establishes that only wholly valid proposals may cross the publication boundary. Rust conformance generates the four-part validation matrix, and publication reuses ConfigApplyTxn plus existing EventTrigger writers. DefraDB transaction serializability and runtime reconciliation readiness remain assumed platform boundaries rather than theorems of this repository."
     , acceptedFollowUp :=
-        some "The immediately stacked publication/runtime pull request replaces the remaining boundary with persisted lifecycle and visibility end-to-end fences."
+        some "Before graduation, add a live model evaluation that waits for normal reconciliation, writes an entry document through an existing bounded write tool, and observes the existing task/trigger runtime end to end."
     }
   , { id := boundaryRenderedCaptureAssembledRequestArtifactId
     , domain := "RenderedCapture"

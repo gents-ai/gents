@@ -1,15 +1,17 @@
-//! Pure compiler for model-proposed document graphs.
+//! Compiler and publication adapter for model-proposed document graphs.
 //!
 //! Inputs to this module are untrusted proposals. Compilation resolves only
-//! operator-approved stage capabilities and performs no I/O. Persistence and
-//! activation live behind a separate controller boundary.
+//! operator-approved wrappers around existing Tasks. Publication creates only
+//! ordinary EventTriggers; the existing runtime remains the sole executor.
 
 mod compiler;
+mod runtime;
 mod types;
 
 pub use compiler::{
     compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy, GraphCompileError,
 };
+pub use runtime::{publish_graph_plan, PublishedGraph};
 pub use types::{
     DeliveryMode, Diagnostic, DiagnosticCode, EntryBinding, GraphEdge, GraphIntent, GraphLimits,
     GraphNode, GraphPlan, PlannedEdge, PlannedEntry, PlannedNode, PortCardinality, PortRef,
