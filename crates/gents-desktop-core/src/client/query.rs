@@ -635,7 +635,13 @@ pub async fn load_session_transcript_page(
             .and_then(|row| row.message_sequence)
             .expect("null tool sequences rejected above");
         tool_calls.retain(|row| row.message_sequence != Some(deferred_sequence));
-        messages.retain(|row| row.sequence != Some(deferred_sequence));
+        // The overscan row proves every lower sequence is outside the complete
+        // tool window too. Defer their messages with the boundary group so the
+        // bridge never renders a message whose tools were truncated.
+        messages.retain(|row| {
+            row.sequence
+                .is_some_and(|sequence| sequence > deferred_sequence)
+        });
         if tool_calls.is_empty() {
             bail!(
                 "session transcript has more than {} tool calls at sequence {deferred_sequence}; the sequence-atomic tool budget cannot represent it losslessly",
@@ -1496,6 +1502,74 @@ mod tests {
         assert_eq!(tool_page.store.tool_calls.len(), 320);
         assert_eq!(tool_page.queried_rows, 321);
         assert!(!tool_page.source_exhausted);
+
+        let message_fields = (1..=10)
+            .map(|sequence| {
+                format!(
+                    r#"wm{sequence}: create_AgentMessage(input: {{
+                        message_key: "tool-window:{sequence}",
+                        session_id: "tool-window",
+                        sequence: {sequence},
+                        role: "assistant",
+                        content: "window row {sequence}"
+                    }}) {{ _docID }}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let window_tool_fields = (1..=400)
+            .map(|index| {
+                let sequence = ((index - 1) / 40) + 1;
+                format!(
+                    r#"wt{index}: create_AgentToolCall(input: {{
+                        tool_call_key: "tool-window:{index}",
+                        session_id: "tool-window",
+                        message_sequence: {sequence},
+                        tool_name: "window_tool",
+                        tool_call_id: "window-call-{index}"
+                    }}) {{ _docID }}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let response = node
+            .execute(&format!(
+                "mutation {{ {message_fields} {window_tool_fields} }}"
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let window_tip =
+            load_session_transcript_page(node.as_ref(), "tool-window", None, None, None, Some(10))
+                .await
+                .expect("tool-window tip");
+        assert_eq!(window_tip.store.tool_calls.len(), 320);
+        assert!(window_tip
+            .store
+            .messages
+            .iter()
+            .all(|row| row.sequence.is_some_and(|sequence| sequence > 2)));
+        assert!(!window_tip.source_exhausted);
+        let window_older = load_session_transcript_page(
+            node.as_ref(),
+            "tool-window",
+            None,
+            None,
+            Some("tool-window:3"),
+            Some(10),
+        )
+        .await
+        .expect("tool-window older page");
+        assert_eq!(
+            window_older
+                .store
+                .messages
+                .iter()
+                .filter_map(|row| row.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(window_older.store.tool_calls.len(), 80);
+        assert!(window_older.source_exhausted);
     }
 
     #[tokio::test]
