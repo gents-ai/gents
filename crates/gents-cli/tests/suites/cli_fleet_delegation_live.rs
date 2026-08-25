@@ -59,6 +59,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use gents::{
+    agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin},
     subagent_target_entry, JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
 use gents_codex_protocol as codex;
@@ -215,6 +216,706 @@ struct TranscriptToolExchange {
     name: String,
     args: Value,
     result: Option<String>,
+}
+
+/// Three fresh homes exercising the same public `ClientCore::add_peer` flow as
+/// server-status/mobile bootstrap. Server process lifecycle and inference use
+/// the established fleet harness; no test-only replicator or desired-row write
+/// is used.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "live: set GENTS_LIVE_CLIENT_PAIRING=1 and provide GENTS_LIVE_OPENAI_ENDPOINT plus GENTS_LIVE_OPENAI_MODEL"]
+async fn three_node_mobile_pairing_routes_only_to_owner_live() -> Result<()> {
+    require_live_gate("GENTS_LIVE_CLIENT_PAIRING")?;
+    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
+        .context("GENTS_LIVE_OPENAI_ENDPOINT is required when the live pairing gate is enabled")?;
+    let model = std::env::var("GENTS_LIVE_OPENAI_MODEL")
+        .context("GENTS_LIVE_OPENAI_MODEL is required when the live pairing gate is enabled")?;
+    assert_endpoint_reachable(&endpoint).await?;
+    run_three_node_mobile_pairing(&endpoint, &model, None).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn three_node_mobile_pairing_routes_only_to_owner_and_repairs() -> Result<()> {
+    let model = format!("mock-client-pairing-{}", Uuid::new_v4().simple());
+    let expected = "mandrake-only deterministic response";
+    let endpoint = MockChatEndpoint::start(&model, expected)?;
+    run_three_node_mobile_pairing(endpoint.endpoint(), &model, Some(expected)).await
+}
+
+async fn run_three_node_mobile_pairing(
+    endpoint: &str,
+    model: &str,
+    expected_answer: Option<&str>,
+) -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating client-pairing fleet tempdir")?;
+    let mut fleet = bring_up_fleet(tempdir.path(), 2, endpoint, model, false).await?;
+    let phone_root = tempdir.path().join("phone");
+    let phone_paths = gents_desktop_core::client::DesktopPaths::from_root(phone_root);
+    let phone = gents_desktop_core::client::ClientCore::start_with_paths_and_options(
+        phone_paths.clone(),
+        gents_desktop_core::client::ClientCoreOptions::local_only(),
+    )
+    .await?;
+    add_runtime_to_phone(&phone, "Amy", &fleet[0]).await?;
+    add_runtime_to_phone(&phone, "Mandrake", &fleet[1]).await?;
+    assert_client_route_desired_intents(&phone, &fleet).await?;
+    if let Err(error) = wait_for_phone_routes(&phone, &fleet).await {
+        diagnose_client_route_timeout(&phone, &fleet, "before restart readiness").await;
+        persist_fleet_logs(&fleet, "client-pairing-readiness-fail");
+        return Err(error);
+    }
+    exercise_runtime_config_return(&phone, &fleet[0], &fleet[1]).await?;
+    let original_directory_ids = phone
+        .peer_records()
+        .await
+        .into_iter()
+        .map(|record| (record.agent_did, record.peer_id))
+        .collect::<HashMap<_, _>>();
+    if let Err(error) = exercise_owner_routing(
+        &phone,
+        &fleet[0],
+        &fleet[1],
+        "before restart",
+        expected_answer,
+    )
+    .await
+    {
+        dump_fleet_doc_state(&fleet).await;
+        persist_fleet_logs(&fleet, "client-pairing-before-restart-fail");
+        dump_fleet_logs(&fleet);
+        return Err(error.context("client pairing failed before restart"));
+    }
+
+    let old_runtime_tickets = fleet
+        .iter()
+        .map(|runtime| (runtime.agent_did.clone(), runtime.shareable.clone()))
+        .collect::<HashMap<_, _>>();
+    phone.shutdown().await?;
+    drop(phone);
+    for node in &mut fleet {
+        restart_fleet_node(node).await?;
+    }
+    let phone = gents_desktop_core::client::ClientCore::start_with_paths_and_options(
+        phone_paths,
+        gents_desktop_core::client::ClientCoreOptions::local_only(),
+    )
+    .await?;
+    // No second pairing call: the restored phone supervisor must discover each
+    // runtime's fresh public ticket through its saved management endpoint,
+    // update the durable route intent, and repair both legs automatically.
+    for runtime in &fleet {
+        eprintln!(
+            "client route ticket rotation owner={} peer={} old={} new={}",
+            runtime.agent_did,
+            runtime.peer_id,
+            old_runtime_tickets
+                .get(&runtime.agent_did)
+                .map(String::as_str)
+                .unwrap_or("<missing>"),
+            runtime.shareable
+        );
+    }
+    for record in phone.peer_records().await {
+        anyhow::ensure!(
+            original_directory_ids.get(&record.agent_did) == Some(&record.peer_id),
+            "server-status refresh replaced directory identity for {}: before={:?} after={}",
+            record.agent_did,
+            original_directory_ids.get(&record.agent_did),
+            record.peer_id
+        );
+    }
+    if let Err(error) = wait_for_phone_routes(&phone, &fleet).await {
+        diagnose_client_route_timeout(&phone, &fleet, "after restart readiness").await;
+        persist_fleet_logs(&fleet, "client-pairing-restart-readiness-fail");
+        return Err(error);
+    }
+    assert_client_route_desired_intents(&phone, &fleet).await?;
+    for runtime in &fleet {
+        let record = phone
+            .peer_records()
+            .await
+            .into_iter()
+            .find(|record| record.agent_did == runtime.agent_did)
+            .context("restored phone omitted runtime directory row")?;
+        let observed = gents::agent::p2p_reconcile::TransportEndpoint::parse(record.addr)?;
+        let current =
+            gents::agent::p2p_reconcile::TransportEndpoint::parse(runtime.shareable.clone())?;
+        anyhow::ensure!(
+            observed.equivalent_to(&current),
+            "automatic repair retained a stale runtime endpoint for {}: observed={} current={}",
+            runtime.agent_did,
+            observed.address(),
+            current.address()
+        );
+    }
+    if let Err(error) = exercise_owner_routing(
+        &phone,
+        &fleet[0],
+        &fleet[1],
+        "after restart",
+        expected_answer,
+    )
+    .await
+    {
+        let _ = dump_client_route_topology(&phone, &fleet, "after restart failure").await;
+        dump_fleet_doc_state(&fleet).await;
+        persist_fleet_logs(&fleet, "client-pairing-after-restart-fail");
+        dump_fleet_logs(&fleet);
+        return Err(error.context("client pairing failed after restart"));
+    }
+
+    persist_fleet_logs(&fleet, "client-pairing-pass");
+    phone.shutdown().await?;
+    Ok(())
+}
+
+async fn diagnose_client_route_timeout(
+    phone: &gents_desktop_core::client::ClientCore,
+    fleet: &[FleetNode],
+    phase: &str,
+) {
+    let _ = dump_client_route_topology(phone, fleet, phase).await;
+    let pairing = phone
+        .node()
+        .execute(
+            r#"{ PeerPairingDesired { peer_id agent_did template replicator_addresses }
+                 PeerPairingApplied { peer_id collections replicator_addresses replicator_filter } }"#,
+        )
+        .await;
+    eprintln!(
+        "client route pairing state {phase}: {}",
+        serde_json::to_string_pretty(&pairing.data).unwrap_or_else(|_| format!("{pairing:?}"))
+    );
+    eprintln!(
+        "client route network status {phase}: {:#?}",
+        phone.network_status().await
+    );
+    eprintln!(
+        "client route peer statuses {phase}: {:#?}",
+        phone.peer_statuses()
+    );
+    dump_fleet_logs(fleet);
+}
+
+async fn assert_client_route_desired_intents(
+    phone: &gents_desktop_core::client::ClientCore,
+    fleet: &[FleetNode],
+) -> Result<()> {
+    let response = phone
+        .node()
+        .execute("{ PeerPairingDesired { peer_id agent_did template replicator_addresses } }")
+        .await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "querying route intents failed: {response:?}"
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("PeerPairingDesired"))
+        .and_then(Value::as_array)
+        .context("route intent query omitted PeerPairingDesired")?;
+    for record in phone.peer_records().await {
+        let owner = fleet
+            .iter()
+            .find(|runtime| runtime.agent_did == record.agent_did)
+            .context("directory owner missing from test fleet")?;
+        for direction in ["client-to-runtime", "runtime-to-client"] {
+            let route_id = format!("{}:{direction}", record.peer_id);
+            let row = rows
+                .iter()
+                .find(|row| {
+                    row.get("peer_id").and_then(Value::as_str) == Some(route_id.as_str())
+                        && row.get("agent_did").and_then(Value::as_str)
+                            == Some(owner.agent_did.as_str())
+                        && row.get("template").and_then(Value::as_str) == Some("client")
+                })
+                .with_context(|| {
+                    format!(
+                        "public pairing omitted {direction} durable route intent for {}: {rows:?}",
+                        owner.agent_did
+                    )
+                })?;
+            if direction == "client-to-runtime" {
+                let address = row
+                    .get("replicator_addresses")
+                    .and_then(Value::as_array)
+                    .and_then(|addresses| addresses.first())
+                    .and_then(Value::as_str)
+                    .context("client-to-runtime intent omitted its transport address")?;
+                let desired = gents::agent::p2p_reconcile::TransportEndpoint::parse(address)?;
+                let current =
+                    gents::agent::p2p_reconcile::TransportEndpoint::parse(owner.shareable.clone())?;
+                anyhow::ensure!(
+                    desired.equivalent_to(&current),
+                    "client-to-runtime intent retained stale endpoint for {}: desired={} current={}",
+                    owner.agent_did,
+                    desired.address(),
+                    current.address()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn dump_client_route_topology(
+    phone: &gents_desktop_core::client::ClientCore,
+    fleet: &[FleetNode],
+    phase: &str,
+) -> Result<()> {
+    let phone_admin = EmbeddedRemoteP2pAdmin::new(phone.node_arc());
+    let phone_replicators = phone_admin.list_replicators().await?;
+    let phone_collections = phone_admin.list_p2p_collections().await?;
+    eprintln!(
+        "\n##### CLIENT ROUTE TOPOLOGY {phase} phone={} #####\nreplicators={}\nsubscribed_collections={}",
+        phone.principal().did(),
+        serde_json::to_string_pretty(&phone_replicators)?,
+        serde_json::to_string_pretty(&phone_collections)?
+    );
+    for runtime in fleet {
+        let api_base = runtime
+            .graphql
+            .strip_suffix("/graphql")
+            .with_context(|| format!("unexpected GraphQL endpoint shape: {}", runtime.graphql))?;
+        let replicators = p2p_http_client()?
+            .get(format!("{api_base}/p2p/replicators"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Value>()
+            .await?;
+        let collections = p2p_http_client()?
+            .get(format!("{api_base}/p2p/collections"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Value>()
+            .await?;
+        eprintln!(
+            "runtime owner={} peer={} ticket={} replicators={} subscribed_collections={}",
+            runtime.agent_did,
+            runtime.peer_id,
+            runtime.shareable,
+            serde_json::to_string(&replicators)?,
+            serde_json::to_string(&collections)?
+        );
+    }
+    Ok(())
+}
+
+async fn add_runtime_to_phone(
+    phone: &gents_desktop_core::client::ClientCore,
+    label: &str,
+    runtime: &FleetNode,
+) -> Result<()> {
+    let result = phone
+        .add_peer(
+            label,
+            &runtime.shareable,
+            &runtime.agent_did,
+            Some(&runtime.graphql),
+            Some(&runtime.behavior_id),
+        )
+        .await?;
+    anyhow::ensure!(result.connected, "{label} did not connect: {result:?}");
+    Ok(())
+}
+
+async fn wait_for_phone_routes(
+    phone: &gents_desktop_core::client::ClientCore,
+    runtimes: &[FleetNode],
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut prior_live = HashMap::<String, usize>::new();
+    loop {
+        let records = phone.peer_records().await;
+        let readiness = async {
+            anyhow::ensure!(
+                runtimes.iter().all(|runtime| records.iter().any(|record| {
+                    record.agent_did == runtime.agent_did && record.is_chat_ready()
+                })),
+                "phone routes are not bidirectionally ready: {records:?}"
+            );
+            assert_directional_applied_filters(phone, &records, runtimes).await?;
+            assert_client_route_desired_intents(phone, runtimes).await
+        }
+        .await;
+        let last_error = match readiness {
+            Ok(()) => return Ok(()),
+            Err(error) => error.to_string(),
+        };
+
+        for runtime in runtimes {
+            let count = fetch_runtime_replicator_count(runtime)
+                .await
+                .unwrap_or(usize::MAX);
+            if prior_live.insert(runtime.agent_did.clone(), count) != Some(count) {
+                eprintln!(
+                    "client route live transition owner={} runtime_replicators={}",
+                    runtime.agent_did,
+                    if count == usize::MAX {
+                        "unavailable".to_string()
+                    } else {
+                        count.to_string()
+                    }
+                );
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out after 120s: {last_error}");
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn fetch_runtime_replicator_count(runtime: &FleetNode) -> Result<usize> {
+    let api_base = runtime
+        .graphql
+        .strip_suffix("/graphql")
+        .context("runtime GraphQL endpoint has no /graphql suffix")?;
+    let rows = p2p_http_client()?
+        .get(format!("{api_base}/p2p/replicators"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Vec<Value>>()
+        .await?;
+    Ok(rows.len())
+}
+
+async fn assert_directional_applied_filters(
+    phone: &gents_desktop_core::client::ClientCore,
+    records: &[gents_desktop_core::client::PeerRecord],
+    runtimes: &[FleetNode],
+) -> Result<()> {
+    for runtime in runtimes {
+        let record = records
+            .iter()
+            .find(|record| record.agent_did == runtime.agent_did)
+            .with_context(|| format!("missing directory row for {}", runtime.agent_did))?;
+        for direction in ["client-to-runtime", "runtime-to-client"] {
+            let route_id = escape_graphql_string(&format!("{}:{direction}", record.peer_id));
+            let response = phone
+                .node()
+                .execute(&format!(
+                    r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{route_id}" }} }}, limit: 1) {{ replicator_addresses replicator_filter }} }}"#
+                ))
+                .await;
+            anyhow::ensure!(
+                !response.has_errors(),
+                "querying {direction} applied route failed: {response:?}"
+            );
+            let row = response
+                .data
+                .as_ref()
+                .and_then(|data| data.pointer("/PeerPairingApplied/0"))
+                .with_context(|| {
+                    format!(
+                        "missing applied {direction} route for {}",
+                        runtime.agent_did
+                    )
+                })?;
+            let filter = row
+                .get("replicator_filter")
+                .and_then(Value::as_str)
+                .context("applied client route omitted its transcript filter")?;
+            anyhow::ensure!(
+                filter.contains(phone.principal().did()) && filter.contains(&runtime.agent_did),
+                "{direction} route is not scoped to requester={} and owner={}: {filter}",
+                phone.principal().did(),
+                runtime.agent_did
+            );
+            anyhow::ensure!(
+                row.get("replicator_addresses")
+                    .and_then(Value::as_array)
+                    .is_some_and(|addresses| !addresses.is_empty()),
+                "{direction} route has no transport address"
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn exercise_owner_routing(
+    phone: &gents_desktop_core::client::ClientCore,
+    amy: &FleetNode,
+    mandrake: &FleetNode,
+    phase: &str,
+    expected_answer: Option<&str>,
+) -> Result<()> {
+    let session_id = Uuid::new_v4().to_string();
+    let submit = phone
+        .submit_request(
+            &session_id,
+            &mandrake.agent_did,
+            &format!("Reply with a brief acknowledgement for client pairing {phase}."),
+            Some(&mandrake.behavior_id),
+        )
+        .await?;
+    let request_id = submit.request_id;
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let owner_observation = loop {
+        if let Some(observation) = fetch_request_observation(&amy.graphql, &request_id).await? {
+            bail!(
+                "owner-addressed request entered Amy: lifecycle={} claimed_at={:?}",
+                observation.lifecycle_state,
+                observation.claimed_at
+            );
+        }
+        if let Some(observation) = fetch_request_observation(&mandrake.graphql, &request_id).await?
+        {
+            if is_terminal(&observation.lifecycle_state) {
+                break observation;
+            }
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "Mandrake did not complete request while Amy stayed absent"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    anyhow::ensure!(
+        owner_observation.lifecycle_state == "completed",
+        "owner ended request as {}",
+        owner_observation.lifecycle_state
+    );
+    anyhow::ensure!(
+        owner_observation.claimed_at.is_some(),
+        "Mandrake completed the request without recording an owner claim"
+    );
+    assert_request_absent_for_window(&amy.graphql, &request_id, Duration::from_secs(5)).await?;
+    let answer = wait_for_embedded_assistant_answer(
+        phone,
+        &request_id,
+        &session_id,
+        Duration::from_secs(120),
+    )
+    .await?;
+    anyhow::ensure!(
+        !answer.trim().is_empty(),
+        "phone received an empty response"
+    );
+    if let Some(expected) = expected_answer {
+        anyhow::ensure!(
+            answer.contains(expected),
+            "unexpected phone response: {answer}"
+        );
+    }
+    assert_embedded_conversation_returned(phone, &session_id).await?;
+    Ok(())
+}
+
+async fn exercise_runtime_config_return(
+    phone: &gents_desktop_core::client::ClientCore,
+    amy: &FleetNode,
+    mandrake: &FleetNode,
+) -> Result<()> {
+    let surface_id = format!("mandrake-return-{}", Uuid::new_v4());
+    let escaped_surface_id = escape_graphql_string(&surface_id);
+    let escaped_owner = escape_graphql_string(&mandrake.agent_did);
+    graphql_query(
+        &mandrake.graphql,
+        &format!(
+            r#"mutation {{ create_DatastoreToolSurface(input: {{ surface_id: "{escaped_surface_id}", agent_did: "{escaped_owner}", display_name: "Mandrake return-plane fixture", enabled: false, entries: null }}) {{ _docID }} }}"#
+        ),
+    )
+    .await?;
+
+    wait_until_value(Duration::from_secs(30), || async {
+        let behavior_agent =
+            fetch_embedded_owner(phone, ConfigFixture::Behavior, &mandrake.behavior_id).await?;
+        let surface_agent =
+            fetch_embedded_owner(phone, ConfigFixture::DatastoreToolSurface, &surface_id).await?;
+        anyhow::ensure!(
+            behavior_agent.as_deref() == Some(mandrake.agent_did.as_str())
+                && surface_agent.as_deref() == Some(mandrake.agent_did.as_str()),
+            "Mandrake runtime configuration has not returned to the phone: behavior={behavior_agent:?} surface={surface_agent:?}"
+        );
+        Ok(())
+    })
+    .await?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        anyhow::ensure!(
+            fetch_remote_owner(&amy.graphql, ConfigFixture::Behavior, &mandrake.behavior_id)
+                .await?
+                .is_none()
+                && fetch_remote_owner(
+                    &amy.graphql,
+                    ConfigFixture::DatastoreToolSurface,
+                    &surface_id,
+                )
+                .await?
+                .is_none(),
+            "Mandrake return-plane configuration entered Amy's store"
+        );
+        if Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ConfigFixture {
+    Behavior,
+    DatastoreToolSurface,
+}
+
+impl ConfigFixture {
+    fn collection(self) -> &'static str {
+        match self {
+            Self::Behavior => "AgentBehavior",
+            Self::DatastoreToolSurface => "DatastoreToolSurface",
+        }
+    }
+
+    fn id_field(self) -> &'static str {
+        match self {
+            Self::Behavior => "behavior_id",
+            Self::DatastoreToolSurface => "surface_id",
+        }
+    }
+}
+
+async fn fetch_remote_owner(
+    graphql: &str,
+    fixture: ConfigFixture,
+    id: &str,
+) -> Result<Option<String>> {
+    let collection = fixture.collection();
+    let id_field = fixture.id_field();
+    let id = escape_graphql_string(id);
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ {collection}(filter: {{ {id_field}: {{ _eq: "{id}" }} }}, limit: 1) {{ agent_did }} }}"#
+        ),
+    )
+    .await?;
+    Ok(response
+        .pointer(&format!("/data/{collection}/0/agent_did"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned))
+}
+
+async fn fetch_embedded_owner(
+    phone: &gents_desktop_core::client::ClientCore,
+    fixture: ConfigFixture,
+    id: &str,
+) -> Result<Option<String>> {
+    let collection = fixture.collection();
+    let id_field = fixture.id_field();
+    let id = escape_graphql_string(id);
+    let response = phone
+        .node()
+        .execute(&format!(
+            r#"{{ {collection}(filter: {{ {id_field}: {{ _eq: "{id}" }} }}, limit: 1) {{ agent_did }} }}"#
+        ))
+        .await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "querying embedded {collection} failed: {response:?}"
+    );
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.pointer(&format!("/{collection}/0/agent_did")))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned))
+}
+
+async fn assert_request_absent_for_window(
+    graphql: &str,
+    request_id: &str,
+    window: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + window;
+    loop {
+        if let Some(observation) = fetch_request_observation(graphql, request_id).await? {
+            bail!(
+                "owner-addressed request entered non-target store: lifecycle={} claimed_at={:?}",
+                observation.lifecycle_state,
+                observation.claimed_at
+            );
+        }
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn wait_for_embedded_assistant_answer(
+    phone: &gents_desktop_core::client::ClientCore,
+    request_id: &str,
+    session_id: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let escaped = escape_graphql_string(request_id);
+    let session_id = escape_graphql_string(session_id);
+    wait_until_value(timeout, || async {
+        let response = phone
+            .node()
+            .execute(&format!(
+                r#"{{ AgentResponse(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ content status }} AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }}, role: {{ _eq: "assistant" }} }}, order: {{ sequence: DESC }}, limit: 1) {{ content }} }}"#
+            ))
+            .await;
+        anyhow::ensure!(!response.has_errors(), "phone response query failed: {response:?}");
+        let answer = response
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/AgentResponse/0/content"))
+            .and_then(Value::as_str)
+            .filter(|content| !content.trim().is_empty())
+            .or_else(|| {
+                response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.pointer("/AgentMessage/0/content"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or_default()
+            .to_string();
+        anyhow::ensure!(
+            !answer.trim().is_empty(),
+            "assistant response has not returned to phone"
+        );
+        Ok(answer)
+    })
+    .await
+}
+
+async fn assert_embedded_conversation_returned(
+    phone: &gents_desktop_core::client::ClientCore,
+    session_id: &str,
+) -> Result<()> {
+    let session_id = escape_graphql_string(session_id);
+    wait_until_value(Duration::from_secs(30), || async {
+        let response = phone
+            .node()
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{ session_id }} AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{ session_id }} AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }}, role: {{ _eq: "assistant" }} }}, limit: 1) {{ session_id }} }}"#
+            ))
+            .await;
+        anyhow::ensure!(
+            !response.has_errors(),
+            "phone conversation query failed: {response:?}"
+        );
+        let data = response
+            .data
+            .context("phone conversation query omitted data")?;
+        anyhow::ensure!(
+            data.pointer("/AgentSession/0/session_id").is_some()
+                && data.pointer("/AgentConversation/0/session_id").is_some()
+                && data.pointer("/AgentMessage/0/session_id").is_some(),
+            "session/conversation/assistant message did not return to phone: {data}"
+        );
+        Ok(())
+    })
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -1950,20 +2651,25 @@ async fn bring_up_fleet(
         let graphql = graphql_url(port);
         let agent_name = format!("fleet-{label}-{}", Uuid::new_v4().simple());
 
-        let init = run_init_json(
-            &home,
-            &[
-                "--agent-name",
-                &agent_name,
-                "--model-name",
-                model_name,
-                "--max-concurrent",
-                "4",
-                "--max-queue-depth",
-                "16",
-                model_endpoint,
-            ],
-        )?;
+        let mut init_args = vec![
+            "--agent-name".to_string(),
+            agent_name.clone(),
+            "--model-name".to_string(),
+            model_name.to_string(),
+            "--max-concurrent".to_string(),
+            "4".to_string(),
+            "--max-queue-depth".to_string(),
+            "16".to_string(),
+        ];
+        if std::env::var("GENTS_LIVE_OPENAI_API_KEY").is_ok_and(|value| !value.trim().is_empty()) {
+            init_args.extend([
+                "--api-key-env-var".to_string(),
+                "GENTS_LIVE_OPENAI_API_KEY".to_string(),
+            ]);
+        }
+        init_args.push(model_endpoint.to_string());
+        let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
+        let init = run_init_json(&home, &init_arg_refs)?;
         let agent_did = agent_did_from_init(&init)?;
         let behavior_id = init_string(&init, "default_behavior_id")?;
         let tool_selection_id = init_string(&init, "tool_selection_id")?;
@@ -3156,6 +3862,21 @@ async fn wait_for_request_terminal(
 }
 
 async fn fetch_request_lifecycle(graphql: &str, request_id: &str) -> Result<Option<String>> {
+    Ok(fetch_request_observation(graphql, request_id)
+        .await?
+        .map(|observation| observation.lifecycle_state))
+}
+
+#[derive(Debug)]
+struct RequestObservation {
+    lifecycle_state: String,
+    claimed_at: Option<String>,
+}
+
+async fn fetch_request_observation(
+    graphql: &str,
+    request_id: &str,
+) -> Result<Option<RequestObservation>> {
     let request_id = escape_graphql_string(request_id);
     let response = graphql_query(
         graphql,
@@ -3163,6 +3884,7 @@ async fn fetch_request_lifecycle(graphql: &str, request_id: &str) -> Result<Opti
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
                     lifecycle_state
+                    claimed_at
                 }}
             }}"#
         ),
@@ -3172,9 +3894,17 @@ async fn fetch_request_lifecycle(graphql: &str, request_id: &str) -> Result<Opti
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
-        .and_then(|row| row.get("lifecycle_state"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned))
+        .map(|row| RequestObservation {
+            lifecycle_state: row
+                .get("lifecycle_state")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            claimed_at: row
+                .get("claimed_at")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        }))
 }
 
 async fn wait_for_assistant_answer(

@@ -5,7 +5,8 @@ use events::Bus;
 
 use super::*;
 use crate::agent::p2p_reconcile::{
-    single_string_eq, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+    single_string_eq, to_replication_filters, RemoteP2pAdminError, RemoteP2pAdminResult,
+    RemoteReplicator,
 };
 
 fn set(values: &[&str]) -> BTreeSet<String> {
@@ -119,12 +120,40 @@ fn self_pairing_row_is_not_materialized() {
             collections: None,
             replicator_addresses: Some(vec!["iroh-ticket".to_string()]),
             template: Some("machine".to_string()),
+            ..Default::default()
         },
         "did:key:self",
     )
     .expect("pairing row parses");
 
     assert!(merge_layered_desired("did:key:self", "did:key:self", base, None).is_none());
+}
+
+#[test]
+fn explicit_client_route_keeps_requester_and_owner_across_remote_admin() {
+    let desired = desired_from_pairing_row(
+        PairingStateRow {
+            peer_id: Some("directory-a:runtime-to-client".to_string()),
+            agent_did: Some("did:key:mandrake".to_string()),
+            replicator_addresses: Some(vec!["iroh-ticket".to_string()]),
+            template: Some("client".to_string()),
+            ..Default::default()
+        },
+        // Desktop authenticates the remote-admin request as the phone. The
+        // owner must still come from durable intent, not this actor DID.
+        "did:key:phone",
+    )
+    .expect("explicit route parses")
+    .expect("route materializes");
+    let encoded = serde_json::to_string(
+        desired
+            .replicator_filter
+            .get("AgentRequest")
+            .expect("request filter"),
+    )
+    .unwrap();
+    assert!(encoded.contains("did:key:phone"));
+    assert!(encoded.contains("did:key:mandrake"));
 }
 
 #[test]
@@ -280,6 +309,7 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
             collections: None,
             replicator_addresses: Some(vec!["/ip4/192.0.2.1/tcp/9999/p2p/forged".to_string()]),
             template: Some("conversation".to_string()),
+            ..Default::default()
         },
         &signed_endpoint,
         "did:key:self",
@@ -313,6 +343,7 @@ fn data_plane_subagent_coordinator_uses_signed_peer_for_targeted_bridge() {
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("subagent-coordinator".to_string()),
+            ..Default::default()
         },
         &signed_endpoint,
         "did:key:coord",
@@ -344,6 +375,7 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("subagent-host".to_string()),
+            ..Default::default()
         },
         &signed_endpoint,
         "did:key:host",
@@ -382,6 +414,7 @@ fn data_plane_desired_rejects_foreign_agent_did_scope() {
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("conversation".to_string()),
+            ..Default::default()
         },
         &signed_endpoint,
         "did:key:self",
@@ -400,6 +433,14 @@ fn data_plane_desired_rejects_foreign_agent_did_scope() {
 /// must reconcile (review Finding #1). The prefix guarantees id != name.
 fn mock_collection_id(name: &str) -> String {
     format!("col_{name}_id")
+}
+
+fn mock_live_filters(filters: &PairingFilters) -> defra_p2p_adapter::ReplicationFilters {
+    to_replication_filters(filters)
+        .expect("mock filters are representable")
+        .into_iter()
+        .map(|(collection, filter)| (mock_collection_id(&collection), filter))
+        .collect()
 }
 
 struct MockStore {
@@ -626,6 +667,7 @@ impl RemoteP2pAdmin for MockAdmin {
             ));
         }
         drop(remaining_failures);
+        let resolved_filters = mock_live_filters(filters);
         for address in addresses {
             // Like the real adapter, the transport records the carried
             // collection set in *id* space; `read_actual` reverse-resolves
@@ -636,6 +678,7 @@ impl RemoteP2pAdmin for MockAdmin {
                     id: Some(format!("id-{address}")),
                     collections: collections.iter().map(|c| mock_collection_id(c)).collect(),
                     address: Some(address.clone()),
+                    filters: Some(resolved_filters.clone()),
                 },
             );
             self.emitted
@@ -765,8 +808,71 @@ impl RemoteP2pAdmin for MockAdmin {
 }
 
 #[tokio::test]
+async fn upgrade_tears_down_only_unowned_replicator_at_client_endpoint() {
+    let admin = MockAdmin::default();
+    let legacy_address =
+        "127.0.0.1:56091/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb"
+            .to_string();
+    let unrelated_address =
+        "127.0.0.1:56092/p2p/7fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bc"
+            .to_string();
+    admin.replicators.lock().unwrap().insert(
+        legacy_address.clone(),
+        RemoteReplicator {
+            id: Some("legacy-runtime-replicator".into()),
+            // Real DefraDB shape: get_replicators returns CollectionIDs,
+            // while desired teardown policy is expressed in schema names.
+            collections: vec![mock_collection_id("legacy-machine-collection")],
+            address: Some(legacy_address.clone()),
+            filters: Some(Default::default()),
+        },
+    );
+    admin.replicators.lock().unwrap().insert(
+        unrelated_address.clone(),
+        RemoteReplicator {
+            id: Some("unrelated-replicator".into()),
+            collections: vec![mock_collection_id("unrelated-collection")],
+            address: Some(unrelated_address.clone()),
+            filters: Some(Default::default()),
+        },
+    );
+    let sibling_key = "sibling-on-same-endpoint".to_string();
+    admin.replicators.lock().unwrap().insert(
+        sibling_key.clone(),
+        RemoteReplicator {
+            id: Some("sibling-runtime-replicator".into()),
+            collections: vec![mock_collection_id("sibling-collection")],
+            address: Some(legacy_address.clone()),
+            filters: Some(Default::default()),
+        },
+    );
+
+    let removed = teardown_unowned_replicators_at_endpoint(
+        &admin,
+        &legacy_address,
+        &[String::from("legacy-machine-collection")],
+    )
+    .await
+    .expect("legacy endpoint cleanup");
+
+    assert_eq!(removed, 1);
+    let remaining = admin.replicators.lock().unwrap();
+    assert!(!remaining.contains_key(&legacy_address));
+    assert!(remaining.contains_key(&unrelated_address));
+    assert!(remaining.contains_key(&sibling_key));
+    assert_eq!(
+        *admin.deleted_replicator_collections.lock().unwrap(),
+        vec![vec![mock_collection_id("legacy-machine-collection")]],
+        "teardown must pass the live CollectionIDs back to DefraDB"
+    );
+}
+
+#[tokio::test]
 async fn cancellation_preempts_in_flight_pairing_sweep_admin_wait() {
-    let store = MockStore::with_desired(Some(PairingDesired::default()));
+    let store = MockStore::with_desired(Some(PairingDesired {
+        replicator_addresses: set(&["addr1"]),
+        ..Default::default()
+    }));
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let admin = MockAdmin {
@@ -968,6 +1074,7 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
             id: Some("id-addr1".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: Some("addr1".into()),
+            filters: Some(Default::default()),
         },
     );
     let mut replay_connections = BTreeMap::new();
@@ -1050,6 +1157,7 @@ async fn desired_read_failure_during_reconnect_keeps_replay_pending() {
             id: Some("id-addr1".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: Some("addr1".into()),
+            filters: Some(Default::default()),
         },
     );
     let mut replay_connections = BTreeMap::from([("peer-a".to_string(), false)]);
@@ -1110,6 +1218,7 @@ async fn failed_reconnect_replay_is_healed_by_next_tick_diff() {
             id: Some("id-addr1".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: Some("addr1".into()),
+            filters: Some(Default::default()),
         },
     );
     let mut replay_connections = BTreeMap::new();
@@ -1195,7 +1304,7 @@ async fn reconnect_force_replays_converged_subagent_replicator() {
     }));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
-        replicator_filter: filter,
+        replicator_filter: filter.clone(),
         ..Default::default()
     };
     let admin = MockAdmin::default();
@@ -1205,6 +1314,7 @@ async fn reconnect_force_replays_converged_subagent_replicator() {
             id: Some("id-addr1".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: Some("addr1".into()),
+            filters: Some(mock_live_filters(&filter)),
         },
     );
 
@@ -1239,7 +1349,7 @@ async fn inbound_reconnect_force_replays_without_owner_redial() {
     }));
     *store.applied.lock().unwrap() = PairingApplied {
         replicator_addresses: set(&["addr1"]),
-        replicator_filter: filter,
+        replicator_filter: filter.clone(),
         ..Default::default()
     };
     let admin = MockAdmin::default();
@@ -1250,6 +1360,7 @@ async fn inbound_reconnect_force_replays_without_owner_redial() {
             id: Some("id-addr1".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: Some("addr1".into()),
+            filters: Some(mock_live_filters(&filter)),
         },
     );
 
@@ -1304,6 +1415,7 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
             id: Some("id-addr1".into()),
             collections: vec!["AgentNetwork".into()],
             address: Some("addr1".into()),
+            filters: Some(Default::default()),
         },
     );
 
@@ -1359,6 +1471,7 @@ async fn changed_endpoint_replaces_same_peer_replicator_teardown_first() {
             id: Some("stable-peer".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: None,
+            filters: Some(Default::default()),
         },
     );
     admin.replicators.lock().unwrap().insert(
@@ -1367,6 +1480,7 @@ async fn changed_endpoint_replaces_same_peer_replicator_teardown_first() {
             id: Some("other-peer".into()),
             collections: vec![mock_collection_id("AgentRequest")],
             address: Some("other-peer@127.0.0.1:4300".into()),
+            filters: Some(Default::default()),
         },
     );
 
@@ -1391,12 +1505,108 @@ async fn changed_endpoint_replaces_same_peer_replicator_teardown_first() {
     );
 }
 
+/// A restored transport route is not authoritative merely because durable
+/// `PeerPairingApplied` still matches desired. The live route may carry an old
+/// ticket and have lost its filter during restore; both are route-identity
+/// drift and must be repaired before readiness is earned.
+#[tokio::test]
+async fn matching_applied_repairs_restored_unfiltered_stale_address() {
+    let peer_id = "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
+    let stale_address = format!("127.0.0.1:56091/p2p/{peer_id}");
+    let desired_address = format!("127.0.0.1:56092/p2p/{peer_id}");
+    let filter = one_filter("AgentRequest", "agent_did", "did:key:mandrake");
+    let store = MockStore::with_desired(Some(PairingDesired {
+        replicator_addresses: set(&[&desired_address]),
+        replicator_collections: set(&["AgentRequest"]),
+        replicator_filter: filter.clone(),
+        ..Default::default()
+    }));
+    *store.applied.lock().unwrap() = PairingApplied {
+        replicator_addresses: set(&[&desired_address]),
+        replicator_filter: filter.clone(),
+        ..Default::default()
+    };
+    let admin = MockAdmin {
+        active: Mutex::new(vec![peer_id.to_string()]),
+        ..Default::default()
+    };
+    admin.replicators.lock().unwrap().insert(
+        stale_address.clone(),
+        RemoteReplicator {
+            id: Some(peer_id.to_string()),
+            collections: vec![mock_collection_id("AgentRequest")],
+            address: Some(stale_address),
+            filters: Some(Default::default()),
+        },
+    );
+
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("repair restored route");
+
+    assert_eq!(
+        outcome.ops_applied,
+        vec![
+            DiffOp::TeardownReplicator(desired_address.clone()),
+            DiffOp::InstallReplicator(desired_address.clone()),
+        ]
+    );
+    assert!(outcome.live_route_matches);
+    let live = admin.replicators.lock().unwrap();
+    let repaired = live.get(&desired_address).expect("fresh route installed");
+    assert_eq!(repaired.address.as_deref(), Some(desired_address.as_str()));
+    assert_eq!(repaired.filters.as_ref(), Some(&mock_live_filters(&filter)));
+}
+
+/// Older remote-admin responses did not expose `Filters`. Unknown visibility
+/// must neither certify a scoped route nor cause reinstall on every sweep once
+/// durable applied identity already matches desired.
+#[tokio::test]
+async fn omitted_live_filters_fail_closed_without_reinstall_churn() {
+    let filter = one_filter("AgentRequest", "agent_did", "did:key:mandrake");
+    let store = MockStore::with_desired(Some(PairingDesired {
+        replicator_addresses: set(&["addr1"]),
+        replicator_collections: set(&["AgentRequest"]),
+        replicator_filter: filter.clone(),
+        ..Default::default()
+    }));
+    *store.applied.lock().unwrap() = PairingApplied {
+        replicator_addresses: set(&["addr1"]),
+        replicator_filter: filter,
+        ..Default::default()
+    };
+    let admin = MockAdmin::default();
+    admin.replicators.lock().unwrap().insert(
+        "addr1".into(),
+        RemoteReplicator {
+            id: Some("id-addr1".into()),
+            collections: vec![mock_collection_id("AgentRequest")],
+            address: Some("addr1".into()),
+            filters: None,
+        },
+    );
+
+    for _ in 0..2 {
+        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+            .await
+            .expect("compatibility reconcile tick");
+        assert!(outcome.ops_applied.is_empty());
+        assert!(
+            !outcome.live_route_matches,
+            "unknown scoped filter must not earn route readiness"
+        );
+    }
+    assert!(admin.emitted.lock().unwrap().is_empty());
+    assert!(admin.recorded_filters.lock().unwrap().is_empty());
+}
+
 #[test]
 fn addressless_replicator_is_not_aliased_across_multiple_applied_routes() {
     let replicator = RemoteReplicator {
         id: Some("stable-peer".to_string()),
         collections: Vec::new(),
         address: None,
+        filters: Some(Default::default()),
     };
     let applied = set(&["stable-peer@127.0.0.1:4100", "stable-peer@127.0.0.1:4200"]);
 
@@ -1419,6 +1629,7 @@ async fn duplicate_remote_routes_merge_their_collection_sets() {
                 id: Some(id.to_string()),
                 collections: vec![mock_collection_id(collection)],
                 address: Some("shared-route".to_string()),
+                filters: Some(Default::default()),
             },
         );
     }
@@ -1760,6 +1971,7 @@ async fn teardown_is_restricted_to_applied_extras() {
             id: Some("managed-id".into()),
             collections: vec!["managed".into()],
             address: Some("managed-addr".into()),
+            filters: Some(Default::default()),
         },
     );
     admin.replicators.lock().unwrap().insert(
@@ -1768,6 +1980,7 @@ async fn teardown_is_restricted_to_applied_extras() {
             id: Some("manual-id".into()),
             collections: vec!["manual".into()],
             address: Some("manual-addr".into()),
+            filters: Some(Default::default()),
         },
     );
 
@@ -1809,6 +2022,7 @@ async fn desired_absent_tears_down_managed_state_and_deletes_applied_row() {
             id: Some("id-addr1".into()),
             collections: vec!["c1".into()],
             address: Some("addr1".into()),
+            filters: Some(Default::default()),
         },
     );
 
@@ -1842,6 +2056,7 @@ fn desired_row(template: Option<&str>, agent_did: Option<&str>) -> PairingStateR
         collections: None,
         replicator_addresses: Some(vec!["addr1".into()]),
         template: template.map(str::to_string),
+        ..Default::default()
     }
 }
 
@@ -1973,6 +2188,7 @@ fn app_collections_on_control_plane_path_soft_skips() {
             collections: None,
             replicator_addresses: Some(vec!["addr-b".to_string()]),
             template: Some("app-collections".to_string()),
+            ..Default::default()
         },
         "did:key:self",
     )
@@ -1996,6 +2212,7 @@ fn app_collections_row_resolves_row_collections_as_subscription_and_replicator()
             collections: Some(vec!["ChangeProposed".to_string()]),
             replicator_addresses: None,
             template: Some("app-collections".to_string()),
+            ..Default::default()
         },
         &signed_endpoint,
         "did:key:self",
@@ -2024,6 +2241,7 @@ fn app_collections_empty_collections_soft_skips() {
             collections: Some(vec!["   ".to_string()]),
             replicator_addresses: None,
             template: Some("app-collections".to_string()),
+            ..Default::default()
         },
         &signed_endpoint,
         "did:key:self",
@@ -2051,6 +2269,7 @@ fn foreign_agent_did_still_hard_fails_whole_peer_load() {
             collections: Some(vec!["ChangeProposed".to_string()]),
             replicator_addresses: None,
             template: Some("app-collections".to_string()),
+            ..Default::default()
         },
         &signed_endpoint,
         "did:key:self",
@@ -2187,6 +2406,7 @@ async fn changing_scoped_did_reinstalls_replicator() {
             id: Some("id-addr1".into()),
             collections: vec!["AgentRequest".into()],
             address: Some("addr1".into()),
+            filters: Some(Default::default()),
         },
     );
 
@@ -2294,6 +2514,7 @@ fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("machine".to_string()),
+            ..Default::default()
         },
         &signed_endpoint,
         "did:key:self",

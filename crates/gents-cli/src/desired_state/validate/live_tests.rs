@@ -396,6 +396,7 @@ async fn preboot_pairing_apply_is_idempotent_and_restart_loader_consumes_seed() 
                     id: Some(address.clone()),
                     collections: Vec::new(),
                     address: Some(address.clone()),
+                    filters: Some(Default::default()),
                 })
                 .collect())
         }

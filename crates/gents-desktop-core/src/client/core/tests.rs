@@ -349,6 +349,8 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
         dial_succeeded: true,
         last_error: None,
         pairing: Vec::new(),
+        routes: Vec::new(),
+        chat_safe: false,
     }]));
     let mut saved = BTreeSet::from(["saved-alpha".to_string()]);
     let mut requested_for = BTreeSet::new();
@@ -371,6 +373,8 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
             dial_succeeded: true,
             last_error: None,
             pairing: Vec::new(),
+            routes: Vec::new(),
+            chat_safe: false,
         });
     saved.insert("saved-beta".to_string());
     request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
@@ -410,16 +414,22 @@ async fn saved_peer_cleanup_removes_replicator_before_idempotent_disconnect() {
         .expect("absent P2P state should clean up idempotently");
 
     let calls = recording.cleanup_calls();
-    assert_eq!(calls.len(), 2);
+    assert_eq!(calls.len(), 3);
     assert!(calls[0].starts_with(&format!("remove-replicator:{}:", record.addr)));
-    assert_eq!(calls[1], format!("disconnect:{}", record.addr));
-    for collection in crate::client::schema::subscribed_collection_names() {
+    assert!(calls[1].starts_with(&format!("remove-replicator:{}:", record.addr)));
+    assert_eq!(calls[2], format!("disconnect:{}", record.addr));
+    for collection in gents::agent::p2p_reconcile::client_route_collections(
+        gents::agent::p2p_reconcile::PairingDirection::ClientToRuntime,
+    ) {
         assert!(calls[0].contains(collection));
+    }
+    for collection in crate::client::schema::subscribed_collection_names() {
+        assert!(calls[1].contains(collection));
     }
 }
 
 #[tokio::test]
-async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
+async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offline() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -432,7 +442,7 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
     let record = PeerRecord::new(
         "Invalid Address",
         "not-a-valid-p2p-address",
-        "did:test:invalid",
+        "did:test:invalid\"quoted",
     );
     core.peer_directory
         .write()
@@ -440,47 +450,61 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
         .upsert(record.clone())
         .await
         .expect("save invalid peer fixture");
-    super::bootstrap::write_peer_pairing_desired(
-        core.node(),
-        &record,
+    let route = gents::agent::p2p_reconcile::ClientRouteIdentity::new(
+        record.peer_id.clone(),
+        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
         "did:key:desktop-requester",
-        "endpoint-requester-ticket",
+        record.agent_did.clone(),
     )
-    .await
-    .expect("save pairing desired fixture");
-    super::bootstrap::write_peer_pairing_desired(
-        core.node(),
-        &record,
-        "did:key:desktop-requester",
-        "endpoint-requester-ticket-updated",
-    )
-    .await
-    .expect("update pairing desired fixture");
+    .expect("valid route fixture");
+    let manager = super::route_manager::ClientRouteManager::new(
+        Arc::clone(&core.node),
+        Arc::clone(&core.p2p),
+        Arc::new(core.principal.clone()),
+    );
+    manager
+        .upsert_desired(
+            &route,
+            gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
+        )
+        .await
+        .expect("save pairing desired fixture");
+    manager
+        .upsert_desired(
+            &route,
+            gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
+        )
+        .await
+        .expect("update pairing desired fixture");
 
-    let error = core
+    let result = core
         .remove_peer(&record.peer_id)
         .await
-        .expect_err("invalid P2P cleanup must fail removal");
-    let message = error.to_string();
+        .expect("offline cleanup must not block local removal");
+    let message = result.warning.expect("pending cleanup warning");
     assert!(
-        message.contains("replicator removed but transport disconnect failed"),
+        message.contains("route teardown is pending and will retry"),
         "{message}"
     );
-    assert!(message.contains("saved deployment retained"), "{message}");
-    assert!(core
+    assert!(!core
         .peer_records()
         .await
         .iter()
         .any(|saved| saved.peer_id == record.peer_id));
     assert!(core
-        .last_mutation_error()
-        .as_deref()
-        .is_some_and(|error| error.contains("saved deployment retained")));
-    let peer_id = gents_protocol::graphql::escape_graphql_string(&record.peer_id);
+        .peer_directory
+        .read()
+        .await
+        .pending_removals()
+        .iter()
+        .any(|pending| pending.peer_id == record.peer_id));
+    let peer_id = gents_protocol::graphql::escape_graphql_string(
+        &route.desired_id(gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient),
+    );
     let response = core
         .node()
         .execute(&format!(
-            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID agent_did collections template replicator_addresses }} }}"#
+            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID agent_did profiles collections template replicator_addresses }} }}"#
         ))
         .await;
     assert!(!response.has_errors());
@@ -494,21 +518,22 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
     let row = rows.first().expect("saved pairing desired row");
     assert_eq!(
         row.get("agent_did").and_then(serde_json::Value::as_str),
-        Some("did:key:desktop-requester")
+        Some("did:test:invalid\"quoted")
     );
+    assert!(row.get("profiles").is_some_and(serde_json::Value::is_null));
     assert_eq!(
         row.get("replicator_addresses")
             .and_then(serde_json::Value::as_array)
             .and_then(|addresses| addresses.first())
             .and_then(serde_json::Value::as_str),
-        Some("endpoint-requester-ticket-updated")
+        Some(route.transport.address())
     );
     assert!(row
         .get("collections")
         .is_some_and(serde_json::Value::is_null));
     assert_eq!(
         row.get("template").and_then(serde_json::Value::as_str),
-        Some("machine")
+        Some("client")
     );
 
     core.shutdown().await.expect("shutdown");
@@ -535,6 +560,8 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
             dial_succeeded: false,
             last_error: Some("peer Workshop Bay dial failed".to_string()),
             pairing: Vec::new(),
+            routes: Vec::new(),
+            chat_safe: false,
         }),
         "did:key:desktop",
         false,
@@ -549,7 +576,7 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
 }
 
 #[tokio::test]
-async fn repair_saved_graphql_peer_installs_p2p_replicator_while_connected() {
+async fn repair_saved_graphql_peer_leaves_replicator_installation_to_route_manager() {
     let recording = Arc::new(RecordingP2P::default());
     let mut record = PeerRecord::new(
         "Workshop Bay",
@@ -571,6 +598,8 @@ async fn repair_saved_graphql_peer_installs_p2p_replicator_while_connected() {
             dial_succeeded: true,
             last_error: None,
             pairing: Vec::new(),
+            routes: Vec::new(),
+            chat_safe: false,
         }),
         "did:key:desktop",
         true,
@@ -580,7 +609,10 @@ async fn repair_saved_graphql_peer_installs_p2p_replicator_while_connected() {
 
     assert_eq!(recording.notify_calls(), 1);
     assert_eq!(recording.connect_calls(), vec![record.addr.clone()]);
-    assert_eq!(recording.add_replicator_calls(), vec![record.addr.clone()]);
+    assert!(
+        recording.add_replicator_calls().is_empty(),
+        "the route manager, not transport repair, owns replicator installation"
+    );
     assert!(repaired.dial_succeeded);
     assert_eq!(repaired.last_error, None);
 }
@@ -606,6 +638,8 @@ async fn saved_peer_needs_repair_when_live_connection_has_dropped() {
             dial_succeeded: true,
             last_error: None,
             pairing: Vec::new(),
+            routes: Vec::new(),
+            chat_safe: false,
         }),
     )
     .await;
@@ -635,6 +669,8 @@ async fn saved_peer_does_not_need_repair_while_live_connection_is_healthy() {
             dial_succeeded: true,
             last_error: None,
             pairing: Vec::new(),
+            routes: Vec::new(),
+            chat_safe: false,
         }),
     )
     .await;

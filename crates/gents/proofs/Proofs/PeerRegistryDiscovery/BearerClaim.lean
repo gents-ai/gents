@@ -48,7 +48,7 @@ instance (s : ClaimState) (c : Claim) : Decidable (admits s c) := by
   infer_instance
 
 def conversationLike (template : String) : Bool :=
-  template = "conversation" || template = "machine"
+  template = "conversation" || template = "machine" || template = "client"
 
 def preferredClaim (current candidate : Claim) : Claim :=
   if current.token.priority < candidate.token.priority then candidate else current
@@ -154,6 +154,12 @@ theorem claimStep_intent_iff_conversation_like {s : ClaimState} {c : Claim}
 
 theorem machine_claim_records_intent {s : ClaimState} {c : Claim}
     (hadm : admits s c) (htmpl : c.token.template = "machine") :
+    c.claimant ∈ (claimStep s c).intents := by
+  unfold claimStep
+  simp [hadm, htmpl, conversationLike]
+
+theorem client_claim_records_intent {s : ClaimState} {c : Claim}
+    (hadm : admits s c) (htmpl : c.token.template = "client") :
     c.claimant ∈ (claimStep s c).intents := by
   unfold claimStep
   simp [hadm, htmpl, conversationLike]

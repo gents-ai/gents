@@ -115,6 +115,12 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         deployment.graphql = None;
         deployment.dial_succeeded = false;
         deployment.last_error = None;
+        for route in &mut deployment.routes {
+            route.transport_peer_id = None;
+            route.address = None;
+            route.filter_summary.clear();
+            route.last_error = None;
+        }
     }
 
     if !grants.session_read {
@@ -211,9 +217,9 @@ fn project_tool_selection_for_fleet(mut selection: ToolSelectionView) -> ToolSel
 mod tests {
     use super::*;
     use crate::types::{
-        AgentPrincipalView, BehaviorEnvironmentView, BehaviorView, ConversationSummary,
-        DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot,
-        P2PHealthView, SavedPeerView, SkillView,
+        AgentPrincipalView, BehaviorEnvironmentView, BehaviorView, ClientRouteStatusView,
+        ConversationSummary, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
+        DesktopRuntimeSnapshot, P2PHealthView, SavedPeerView, SkillView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
@@ -269,6 +275,26 @@ mod tests {
                     graphql: Some("http://127.0.0.1/graphql".into()),
                     dial_succeeded: true,
                     pairing_ready: true,
+                    chat_safe: true,
+                    routes: ["client-to-runtime", "runtime-to-client"]
+                        .into_iter()
+                        .map(|direction| ClientRouteStatusView {
+                            route_id: format!("peer_1:{direction}"),
+                            direction: direction.into(),
+                            directory_id: "peer_1".into(),
+                            transport_peer_id: Some("transport".into()),
+                            address: Some("ticket".into()),
+                            template: Some("client".into()),
+                            desired: true,
+                            applied: true,
+                            live_match: true,
+                            filter_summary: "2 collections; 2 scoped filters".into(),
+                            last_error: None,
+                            retry_count: 0,
+                            last_retry_at: None,
+                            last_retry_error_class: None,
+                        })
+                        .collect(),
                     last_error: None,
                     default_behavior_id: Some("default".into()),
                     agent_principal: AgentPrincipalView {
@@ -367,6 +393,8 @@ mod tests {
             .inference_profile_name
             .is_none());
         assert!(dep.addr.is_empty());
+        assert_eq!(dep.routes.len(), 2);
+        assert!(dep.routes.iter().all(|route| route.address.is_none()));
         assert!(dep.behaviors[0].system_prompt.is_none());
         assert_eq!(dep.behaviors[0].model_name.as_deref(), Some("gpt"));
         assert_eq!(dep.behaviors[0].skill_refs, vec!["skill_a".to_string()]);
@@ -382,6 +410,8 @@ mod tests {
     fn session_read_keeps_conversations_and_chat_projections() {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::chat_package());
         let dep = &projected.client.as_ref().unwrap().deployments[0];
+        assert_eq!(dep.routes.len(), 2);
+        assert!(dep.routes.iter().all(|route| route.live_match));
         assert_eq!(dep.conversations.len(), 1);
         assert_eq!(dep.behavior_environments[0].session_count, 1);
         assert!(dep.behavior_environments[0].workspace_root.is_none());

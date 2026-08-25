@@ -12,6 +12,11 @@ inductive Delivery where
   | replicate
   deriving DecidableEq, Repr
 
+inductive RouteDirection where
+  | clientToRuntime
+  | runtimeToClient
+  deriving DecidableEq, Repr
+
 inductive DidSource where
   | localDid
   | peerDid
@@ -28,6 +33,7 @@ inductive Scope where
   | peerDid (field : String)
   | unscoped
   | perCollection (rules : List CollectionRule)
+  | clientRoute
   deriving DecidableEq, Repr
 
 structure ScopeFilterKey where
@@ -41,6 +47,17 @@ structure CollectionScopeFilter where
   field : String
   operator : String := "_eq"
   value : Did
+  deriving DecidableEq, Repr
+
+structure FilterClause where
+  field : String
+  operator : String := "_eq"
+  value : Did
+  deriving DecidableEq, Repr
+
+structure CollectionPredicate where
+  collection : String
+  clauses : List FilterClause
   deriving DecidableEq, Repr
 
 structure Template where
@@ -63,6 +80,24 @@ def agentConfigCollections : List String :=
 
 def conversationCollections : List String :=
   conversationTranscriptCollections ++ agentConfigCollections
+
+def clientTranscriptCollections : List String :=
+  ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
+   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry"]
+
+def clientControlPlaneCollections : List String :=
+  ["AgentBehavior", "ToolSelection", "InferenceProfile", "ToolServiceRegistry",
+   "Skill", "DatastoreToolSurface", "Task", "Schedule", "EventTrigger"]
+
+def clientToRuntimeCollections : List String :=
+  clientTranscriptCollections ++ ["BearerPairingReady", "PeerEndpoint"]
+
+def clientCollections : List String :=
+  clientToRuntimeCollections ++ clientControlPlaneCollections
+
+def clientRouteCollections : RouteDirection → List String
+  | .clientToRuntime => clientToRuntimeCollections
+  | .runtimeToClient => clientCollections
 
 def machineCollections : List String :=
   conversationCollections ++ ["PersonaConfigRequest", "AgentDirectoryEntry"]
@@ -122,6 +157,12 @@ def machineTemplate : Template :=
   , scope := .perCollection machineRules
   , delivery := .push }
 
+def clientTemplate : Template :=
+  { id := "client"
+  , collections := clientCollections.toFinset
+  , scope := .clientRoute
+  , delivery := .push }
+
 def agentConfigTemplate : Template :=
   { id := "agent-config"
   , collections := agentConfigCollections.toFinset
@@ -173,6 +214,7 @@ def clientIndexTemplate : Template :=
 def builtinCatalog : Catalog :=
   [ conversationTemplate
   , machineTemplate
+  , clientTemplate
   , agentConfigTemplate
   , backupTemplate
   , discoveryTemplate

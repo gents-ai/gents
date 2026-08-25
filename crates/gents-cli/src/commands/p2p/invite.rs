@@ -104,7 +104,7 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
         );
     }
 
-    let default_behavior_id = if template == "conversation" {
+    let default_behavior_id = if matches!(template.as_str(), "conversation" | "client") {
         Some(
             load_default_behavior_id(&access, identity.did())
                 .await

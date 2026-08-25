@@ -1,6 +1,7 @@
 pub(super) mod bearer_pairing;
 mod bootstrap;
 mod p2p_ops;
+mod route_manager;
 mod supervisor;
 mod writes;
 
@@ -94,6 +95,28 @@ pub struct ClientPeerStatus {
     pub dial_succeeded: bool,
     pub last_error: Option<String>,
     pub pairing: Vec<PairingCollectionStatus>,
+    /// Directional route diagnostics published by the single route owner.
+    pub routes: Vec<ClientRouteStatus>,
+    /// True only when both directional routes are known safe for chat.
+    pub chat_safe: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientRouteStatus {
+    pub route_id: String,
+    pub direction: String,
+    pub directory_id: String,
+    pub transport_peer_id: Option<String>,
+    pub address: Option<String>,
+    pub template: Option<String>,
+    pub desired: bool,
+    pub applied: bool,
+    pub live_match: bool,
+    pub filter_summary: String,
+    pub last_error: Option<String>,
+    pub retry_count: u32,
+    pub last_retry_at: Option<SystemTime>,
+    pub last_retry_error_class: Option<PairingErrorClass>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +202,8 @@ mod pairing_status_tests {
             dial_succeeded: true,
             last_error: None,
             pairing: vec![PairingCollectionStatus::new("c1")],
+            routes: Vec::new(),
+            chat_safe: false,
         };
         assert_eq!(peer_status.pairing.len(), 1);
     }
@@ -315,6 +340,21 @@ impl ClientCore {
 
     pub fn p2p(&self) -> &Arc<dyn P2POps> {
         &self.p2p
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn add_local_standard_peer_for_test(&self, agent_did: &str) -> Result<()> {
+        self.peer_directory
+            .write()
+            .await
+            .upsert_local_standard_peer(
+                "Test Local Runtime",
+                "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+                agent_did,
+                "http://127.0.0.1:56001/graphql",
+            )
+            .await?;
+        Ok(())
     }
 
     pub fn local_peer_id(&self) -> &str {

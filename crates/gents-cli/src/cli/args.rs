@@ -2728,7 +2728,7 @@ pub(crate) struct P2pInviteArgs {
     pub(crate) graphql: Option<String>,
     /// Scope template id for this invite (e.g. `conversation`, `agent-config`, `backup`).
     /// The template is encoded in the invite token and read by `p2p pairings join`.
-    /// Defaults to `conversation` (filtered push of the peer's conversation slice).
+    /// Defaults to `conversation`; mobile clients should request `client` explicitly.
     /// Use `p2p templates list` to see all available templates.
     #[arg(
         long = "template",

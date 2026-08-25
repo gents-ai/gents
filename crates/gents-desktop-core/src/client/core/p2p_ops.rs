@@ -69,30 +69,6 @@ pub(super) async fn p2p_get_replicators(p2p: &Arc<dyn P2POps>) -> Result<Vec<Rep
     }
 }
 
-pub(super) async fn p2p_add_replicator(
-    p2p: &Arc<dyn P2POps>,
-    collections: Vec<String>,
-    addr: &str,
-) -> Result<()> {
-    match timeout(
-        P2P_OPERATION_TIMEOUT,
-        p2p.add_replicator(
-            collections,
-            Some(addr),
-            Default::default(),
-            Vec::new(),
-            None,
-        ),
-    )
-    .await
-    {
-        Ok(result) => result
-            .map_err(anyhow::Error::msg)
-            .with_context(|| format!("adding desktop P2P replicator for {addr}")),
-        Err(_) => anyhow::bail!("timed out adding desktop P2P replicator for {addr}"),
-    }
-}
-
 pub(super) async fn p2p_remove_replicator(
     p2p: &Arc<dyn P2POps>,
     collections: Vec<String>,

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use anyhow::{bail, Result};
 use gents::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
 use gents::agent::p2p_reconcile::{
-    compute_owned_pairing_diff, update_applied_after_success, DiffOp,
+    compute_owned_pairing_diff, to_replication_filters, update_applied_after_success, DiffOp,
     PairingActual as RuntimePairingActual,
 };
 use gents::graphql::escape_graphql_string;
@@ -276,9 +276,17 @@ async fn apply_desired_state(
         peer.actual_connected = true;
     }
 
+    let live_filter = to_replication_filters(&reconciler.applied_replicator_filter)
+        .expect("conformance filters are representable");
+    let replicator_filters = peer
+        .actual_replicator_addresses
+        .intersection(&reconciler.applied_replicator_addresses)
+        .map(|address| (address.clone(), live_filter.clone()))
+        .collect();
     let actual = RuntimePairingActual {
         collections: peer.actual_collections.clone(),
         replicator_addresses: peer.actual_replicator_addresses.clone(),
+        replicator_filters,
         ..Default::default()
     };
     let mut applied = PairingApplied {

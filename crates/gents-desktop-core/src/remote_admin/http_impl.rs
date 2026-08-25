@@ -202,12 +202,16 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     async fn list_replicators(&self) -> RemoteP2pAdminResult<Vec<RemoteReplicator>> {
         #[derive(Deserialize)]
         struct WireReplicator {
-            #[serde(default)]
+            #[serde(default, rename = "ID", alias = "id")]
             id: Option<String>,
-            #[serde(default)]
+            #[serde(default, rename = "CollectionIDs", alias = "collections")]
             collections: Vec<String>,
-            #[serde(default)]
+            #[serde(default, rename = "Addresses", alias = "addresses")]
+            addresses: Vec<String>,
+            #[serde(default, rename = "address")]
             address: Option<String>,
+            #[serde(default, rename = "Filters", alias = "filters")]
+            filters: Option<BTreeMap<String, ReplicationFilter>>,
         }
 
         let resp = self
@@ -224,7 +228,8 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
             .map(|w| RemoteReplicator {
                 id: w.id,
                 collections: w.collections,
-                address: w.address,
+                address: w.address.or_else(|| w.addresses.into_iter().next()),
+                filters: w.filters,
             })
             .collect())
     }
@@ -835,11 +840,17 @@ mod tests {
     #[tokio::test]
     async fn list_replicators_returns_remote_replicators() {
         let server = MockServer::start().await;
+        let filters = to_replication_filters(&BTreeMap::from([(
+            "AgentRequest".to_string(),
+            gents::agent::p2p_reconcile::equality_filter("agent_did", "did:key:mandrake"),
+        )]))
+        .expect("representable filter");
         let body = serde_json::json!([
             {
-                "id": "peer1",
-                "collections": ["c1"],
-                "address": "/ip4/1.2.3.4/tcp/9000/p2p/peer1",
+                "ID": "peer1",
+                "CollectionIDs": ["c1"],
+                "Addresses": ["/ip4/1.2.3.4/tcp/9000/p2p/peer1"],
+                "Filters": filters,
                 "status": 1,
                 "lastStatusChange": null
             }
@@ -855,6 +866,34 @@ mod tests {
         assert_eq!(reps.len(), 1);
         assert_eq!(reps[0].id.as_deref(), Some("peer1"));
         assert_eq!(reps[0].collections, vec!["c1".to_string()]);
+        assert_eq!(
+            reps[0].address.as_deref(),
+            Some("/ip4/1.2.3.4/tcp/9000/p2p/peer1")
+        );
+        assert_eq!(reps[0].filters.as_ref(), Some(&filters));
+    }
+
+    #[tokio::test]
+    async fn list_replicators_preserves_omitted_filters_as_unknown() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!([{
+            "ID": "peer1",
+            "CollectionIDs": ["c1"],
+            "Addresses": ["/ip4/1.2.3.4/tcp/9000/p2p/peer1"]
+        }]);
+        Mock::given(method("GET"))
+            .and(path("/api/v0/p2p/replicators"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let reps = admin_for(&server)
+            .list_replicators()
+            .await
+            .expect("list legacy replicators");
+
+        assert_eq!(reps.len(), 1);
+        assert_eq!(reps[0].filters, None);
     }
 
     #[tokio::test]
