@@ -283,11 +283,11 @@ def boundaries : List Boundary :=
     }
   , { id := boundaryGraphPipelineFoundationId
     , domain := "GraphPipeline"
-    , subject := "foundation model before compiler and persistence refinement"
+    , subject := "pure compiler before persistence refinement"
     , statement :=
-        "Proofs.GraphPipeline establishes publication readiness, active-pointer alignment, immutable revision identity, and run pinning. This foundation slice has no shipping compiler, GraphRevision/GraphRun storage schema, activation controller, or runtime visibility filter, so it makes no Rust refinement claim yet."
+        "Proofs.GraphPipeline establishes publication readiness, active-pointer alignment, immutable revision identity, and run pinning. The pure GraphIntent compiler is fenced against the model's exhaustive validation conjunction, but this slice has no GraphRevision/GraphRun storage schema, activation controller, or runtime visibility filter, so persisted lifecycle refinement remains outside the claim."
     , acceptedFollowUp :=
-        some "The immediately stacked compiler and publication/runtime pull requests replace this boundary with pure-compiler conformance and persisted lifecycle end-to-end fences."
+        some "The immediately stacked publication/runtime pull request replaces the remaining boundary with persisted lifecycle and visibility end-to-end fences."
     }
   , { id := boundaryRenderedCaptureAssembledRequestArtifactId
     , domain := "RenderedCapture"

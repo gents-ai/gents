@@ -143,6 +143,15 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "graph-pipeline"
+    , required := [Surface.runtimeInternal]
+    , deferred :=
+        [ (Surface.agentFacing, "stack slice 4: bounded model tools")
+        , (Surface.operatorCli, "stack slice 3: publication controller")
+        , (Surface.operatorUi, "post-experiment graduation surface")
+        , (Surface.api, "post-experiment graduation surface")
+        ]
+    }
   , { feature := "session-recovery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -699,6 +708,11 @@ def caseCoverage : List CoverageEntry :=
       "RecoverySweepCases"
       "conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract")
       "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "graph_pipeline_validation_cases"
+      "GraphPipelineValidationCases"
+      "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate")
+      "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "recovery_equivalence_cases"
       "RecoveryEquivalenceCases"

@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/graph_pipeline.rs",
+            module_path: "conformance::graph_pipeline",
+            function: "generated_validation_cases_fence_whole_graph_compilation_gate",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance/goals.rs",
