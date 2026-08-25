@@ -97,9 +97,22 @@ pub(crate) async fn build_desktop_session_snapshot(
     timeline_before_item_key: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
+    let requester_scope = if let Some(agent_did) = agent_did {
+        fixture
+            .desktop_core()
+            .peer_records()
+            .await
+            .iter()
+            .any(|peer| peer.agent_did == agent_did && peer.is_bearer_pairing())
+            .then(|| fixture.desktop_core().principal().did().to_string())
+    } else {
+        None
+    };
     let page = match gents_desktop_core::client::load_session_transcript_page(
         fixture.desktop_core().node(),
         session_id,
+        agent_did,
+        requester_scope.as_deref(),
         timeline_before_item_key,
         timeline_limit,
     )

@@ -47,9 +47,20 @@ pub async fn desktop_session_snapshot(
             );
         }
     }
+    let requester_scope = if let Some(agent_did) = agent_did.as_deref() {
+        core.peer_records()
+            .await
+            .iter()
+            .any(|peer| peer.agent_did == agent_did && peer.is_bearer_pairing())
+            .then(|| core.principal().did().to_string())
+    } else {
+        None
+    };
     let transcript_page = gents_desktop_core::client::load_session_transcript_page(
         core.node(),
         &session_id,
+        agent_did.as_deref(),
+        requester_scope.as_deref(),
         timeline_before_item_key.as_deref(),
         timeline_limit,
     )

@@ -333,9 +333,11 @@ Hard CI failures are deterministic bounds:
 - fifty uncontended response-only store patches preserve the 600-row message
   allocation and perform zero whole-store copy-on-write merges; the explicit
   held-reader case must preserve the prior revision through copy-on-write.
-- a 40-item DefraDB transcript page returns at most 41 message rows; an older
-  page has no overlap with the tip, and more than 320 tool-call rows fails as a
-  structural regression instead of silently truncating a group.
+- a 40-item DefraDB transcript page queries at most 41 message rows and 321
+  tool-call rows, materializes only complete sequence groups, and uses two
+  queries at the tip or three when resolving an older-page cursor; tool-call
+  overflow marks the source as having older data, while a single group larger
+  than 320 rows fails truthfully instead of being silently split.
 
 Elapsed time, commit work, heap/RSS growth, CPU, and long-task values are
 reported only. A wall-clock limit requires at least 30 samples across multiple

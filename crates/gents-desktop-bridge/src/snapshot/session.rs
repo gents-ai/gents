@@ -356,6 +356,14 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         .as_ref()
         .and_then(|snapshot| snapshot.agent_did.clone());
     if let Some(snapshot) = snapshot.as_mut() {
+        if transcript_store.is_some() {
+            snapshot.context = build_session_context_from_store(
+                store.as_ref(),
+                resolved_agent_did.as_deref(),
+                snapshot.behavior_id.as_deref(),
+                session_id,
+            );
+        }
         match loaded_context {
             Some(context) => attach_last_request_context(
                 snapshot,
@@ -364,14 +372,6 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
                 context.call_sequence,
                 context.accounting,
             ),
-            None if transcript_store.is_some() => {
-                snapshot.context = build_session_context_from_store(
-                    store.as_ref(),
-                    resolved_agent_did.as_deref(),
-                    snapshot.behavior_id.as_deref(),
-                    session_id,
-                );
-            }
             None => {}
         }
         snapshot.projection_revision = Some(SessionProjectionRevisionView {
@@ -568,6 +568,22 @@ fn rendered_timeline_item_key(item: &super::super::types::RenderedTimelineItem) 
     }
 }
 
+fn rendered_timeline_durable_sequence(
+    item: &super::super::types::RenderedTimelineItem,
+) -> Option<Option<i64>> {
+    use super::super::types::RenderedTimelineItem;
+
+    match item {
+        RenderedTimelineItem::UserMessage { sequence, .. }
+        | RenderedTimelineItem::AssistantMessage { sequence, .. } => Some(*sequence),
+        RenderedTimelineItem::ToolGroup {
+            message_sequence, ..
+        } => Some(*message_sequence),
+        RenderedTimelineItem::PendingUserTurn { .. }
+        | RenderedTimelineItem::LiveAssistant { .. } => None,
+    }
+}
+
 /// Bound the bridge-visible transcript while retaining an opaque, durable-row
 /// cursor for explicit older-page requests. The full database-backed snapshot
 /// remains authoritative inside the bridge; only IPC materialization is
@@ -599,7 +615,28 @@ pub fn apply_session_timeline_page_with_query(
             .ok_or_else(|| format!("session timeline cursor is no longer present: {cursor}"))?,
         (false, None) => total_items,
     };
-    let start = end.saturating_sub(limit);
+    let mut start = end.saturating_sub(limit);
+    if start > 0 {
+        if let Some(boundary_sequence) =
+            rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
+        {
+            if rendered_timeline_durable_sequence(&snapshot.timeline_items[start - 1])
+                == Some(boundary_sequence)
+            {
+                while start < end
+                    && rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
+                        == Some(boundary_sequence)
+                {
+                    start += 1;
+                }
+                if start == end {
+                    return Err(format!(
+                        "session timeline sequence group {boundary_sequence:?} exceeds the visible page budget of {limit}"
+                    ));
+                }
+            }
+        }
+    }
     let page = snapshot.timeline_items[start..end].to_vec();
     let oldest_item_key = page
         .first()
@@ -1029,16 +1066,7 @@ fn build_session_snapshot_from_store_for_agent_with_transcript(
         .then_some(latest_request_id.as_deref())
         .flatten()
         .as_deref()
-        .and_then(|request_id| {
-            build_pending_turn(
-                store,
-                transcript_store,
-                transcript_is_bounded,
-                agent_did,
-                session_id,
-                request_id,
-            )
-        });
+        .and_then(|request_id| build_pending_turn(store, agent_did, session_id, request_id));
     let resolved_agent_did = conversation
         .and_then(|row| normalize_optional(row.agent_did.as_deref()))
         .or_else(|| latest_request.and_then(|row| normalize_optional(row.agent_did.as_deref())));
@@ -1332,8 +1360,6 @@ fn has_legacy_materialized_user_owner(
 
 fn build_pending_turn(
     store: &ClientStore,
-    transcript_store: &ClientStore,
-    transcript_is_bounded: bool,
     agent_did: Option<&str>,
     session_id: &str,
     request_id: &str,
@@ -1349,14 +1375,13 @@ fn build_pending_turn(
 
     let lifecycle_state = normalize_optional(request.lifecycle_state.as_deref());
     let content = normalize_optional(request.content.as_deref())?;
-    let transcript = if transcript_is_bounded {
-        transcript_store.transcript(session_id)
-    } else {
-        agent_did.map_or_else(
-            || transcript_store.transcript(session_id),
-            |agent_did| transcript_store.transcript_for_agent(session_id, agent_did),
-        )
-    };
+    // Pending ownership is session state, not visible-page state. A materialized
+    // user row outside the current window must still suppress the request-owned
+    // placeholder at the tip.
+    let transcript = agent_did.map_or_else(
+        || store.transcript(session_id),
+        |agent_did| store.transcript_for_agent(session_id, agent_did),
+    );
     let requests_by_id = store
         .requests
         .iter()

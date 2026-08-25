@@ -75,7 +75,7 @@ test.describe("desktop live browser smoke", () => {
           `live browser smoke request ended ${completedSession.turnState}`,
         );
       }
-      expect(completedSession.timelinePage?.queryCount).toBe(1);
+      expect(completedSession.timelinePage?.queryCount).toBe(2);
       expect(completedSession.timelinePage?.queriedRows ?? 0).toBeGreaterThan(0);
       expect(
         completedSession.timelinePage?.queriedRows ?? Number.MAX_SAFE_INTEGER,

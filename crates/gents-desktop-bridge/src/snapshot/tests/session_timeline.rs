@@ -108,6 +108,73 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
 }
 
 #[test]
+fn queried_timeline_page_never_splits_a_sequence_group() {
+    let store = make_streaming_store_with_response_content("streaming");
+    let mut snapshot =
+        build_session_snapshot_from_store(&store, "sess-1", None).expect("session snapshot");
+    snapshot.timeline_items = vec![
+        RenderedTimelineItem::AssistantMessage {
+            item_key: "message-1".into(),
+            sequence: Some(1),
+            content: Some("one".into()),
+            reasoning: None,
+            timestamp: None,
+        },
+        RenderedTimelineItem::ToolGroup {
+            item_key: "tools-1".into(),
+            message_sequence: Some(1),
+            tools: Vec::new(),
+        },
+        RenderedTimelineItem::AssistantMessage {
+            item_key: "message-2".into(),
+            sequence: Some(2),
+            content: Some("two".into()),
+            reasoning: None,
+            timestamp: None,
+        },
+        RenderedTimelineItem::ToolGroup {
+            item_key: "tools-2".into(),
+            message_sequence: Some(2),
+            tools: Vec::new(),
+        },
+        RenderedTimelineItem::AssistantMessage {
+            item_key: "message-3".into(),
+            sequence: Some(3),
+            content: Some("three".into()),
+            reasoning: None,
+            timestamp: None,
+        },
+    ];
+    let page = gents_desktop_core::client::SessionTranscriptQueryPage {
+        store: ClientStore::default(),
+        query_count: 2,
+        queried_rows: 5,
+        message_query_limit: 5,
+        tool_call_query_limit: 321,
+        source_exhausted: true,
+        has_newer: false,
+    };
+
+    apply_session_timeline_page_with_query(&mut snapshot, None, Some(4), Some(&page))
+        .expect("sequence-atomic page");
+    let keys = snapshot
+        .timeline_items
+        .iter()
+        .map(|item| match item {
+            RenderedTimelineItem::UserMessage { item_key, .. }
+            | RenderedTimelineItem::AssistantMessage { item_key, .. }
+            | RenderedTimelineItem::ToolGroup { item_key, .. }
+            | RenderedTimelineItem::PendingUserTurn { item_key, .. }
+            | RenderedTimelineItem::LiveAssistant { item_key, .. } => item_key.as_str(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(keys, vec!["message-2", "tools-2", "message-3"]);
+    let metadata = snapshot.timeline_page.expect("page metadata");
+    assert!(metadata.has_older);
+    assert_eq!(metadata.oldest_item_key.as_deref(), Some("message-2"));
+}
+
+#[test]
 fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
     let store = make_streaming_store_with_response_content("hello world");
     let revision = gents_desktop_core::client::StoreProjectionRevision {
