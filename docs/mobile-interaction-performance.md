@@ -41,7 +41,7 @@ deterministic. Changing the shape requires a new fixture ID and a fresh baseline
 | Paired launch to index | native launch to visible `.conversation-list`; browser agent selection to 120 visible rows    | native seeded long index is future work                                                                  |
 | Cached short session   | click to visible known local message                                                          | browser projection fixture today                                                                         |
 | Large local tip        | click to visible last item of 600; record the bounded bridge page and mounted rows            | bridge projection CPU still starts from the observed in-memory store; native durable seed is future work |
-| Page older             | explicit cursor-page action to row 520; assert the row-560 DOM node remains mounted           | database query-level paging remains follow-up work                                                       |
+| Page older             | query-level DefraDB cursor page plus bridge merge; assert the prior expensive DOM node remains mounted | deterministic browser UI merging is paired with real-node Rust integration coverage                      |
 | Sustained stream       | 50 sequential update events, each observed in the transcript                                  | deterministic adapter models event/refresh pressure, not provider token cadence                          |
 | Foreground recovery    | native correlated status stream plus observer counters; browser projects stalled then healthy | real iOS suspend/network repair awaits #1143/#893                                                        |
 | Remote hydration       | reserved fixture contract below                                                               | intentionally not implemented on this branch                                                             |
@@ -50,23 +50,23 @@ The future `mobile-hydration-v1` fixture should seed 600 transcript documents on
 the paired server while the phone has only the session index row. Opening it must
 record one stable correlation ID at request write, first accepted merge,
 `served_doc_count`, visible first page, and terminal complete/failed state. It
-must count request/repair attempts, merged document IDs, duplicate arrivals, and
-bytes. It should be added only after #1142 and #1143 land; this worktree does not
-reproduce their document lifecycle or write path.
+must count request/repair attempts, merged document IDs, duplicate arrivals,
+and bytes. The #1154 hydration foundation is now the integration base, so this
+worktree calls its session-focus extension point but deliberately does not add
+the on-demand fixture or reproduce the hydration lifecycle. Foreground/network
+repair still depends on #1143.
 
-The compatibility base inspected on 2026-08-25 was
-`origin/agent/session-hydration-foundation` at
-`ecdb5c8c2f26d9acb635d202b8d5c2acbcf3d6c1`, three commits ahead of this
-track's source baseline. It owns the hydration schema, request write, sweep,
-reconcile, proofs, and live E2E. It also changes `client/core.rs`,
+The final compatibility base inspected on 2026-08-25 was `origin/main` at
+`c9ccf9ba`, which includes the squashed #1154 hydration foundation as
+`cf15aac4`. This branch was rebased onto that main head before final merge
+validation. #1154 owns the hydration schema, request write, sweep, reconcile,
+proofs, and live E2E. It also changes `client/core.rs`,
 `client/core/supervisor.rs`, `client/observe.rs`, and the bridge chat commands,
-which overlap this track's store revision and session-read seams. Integrate that
-branch only after this
-working tree is committed: a hydration request or accepted merge must advance
-the authoritative reconcile revision, while an `AgentResponse`-only stream
-update may retain the response fast path. Scenario 8 should then extend the
-landed live E2E and its real document lifecycle rather than copying either into
-this branch.
+which overlap this track's store revision and session-read seams. The rebased
+implementation preserves that ownership: a hydration request or accepted merge
+advances the authoritative reconcile revision, while an `AgentResponse`-only
+stream update may retain the response fast path. Scenario 8 remains a future
+extension of the landed live E2E and its real document lifecycle.
 
 ## Instrumentation and ownership
 
@@ -156,11 +156,12 @@ lacked the tool-hold endpoints used by the rendered shell. The supervisor
 change is gated by the existing `install_replicators_on_bootstrap = false`
 fixture option; default product behavior is unchanged.
 
-The deterministic live lane now also asserts the production transcript query
-path. Its completed two-message session used one DefraDB page query, returned
-two transcript rows, and reported a 41-message lookahead limit plus the
-independent 320-tool-call structural budget. Those counts are attached to the
-live smoke JSON/Markdown artifact.
+The deterministic live lane also asserts the production transcript query path.
+The final path performs one bounded message query followed by one tool query at
+the tip (plus one cursor-resolution query for older pages), reports a
+41-message lookahead and 321-tool-row overscan limit, and materializes only
+complete sequence groups. Those counts are attached to the live smoke
+JSON/Markdown artifact.
 
 ## Measured browser baseline
 
@@ -294,17 +295,33 @@ then slices it. It resolves an older item key to the durable sequence space and
 queries `AgentMessage` and `AgentToolCall` in descending sequence order before
 projection. A 40-item page queries at most 41 message rows (40 plus one
 lookahead). Tool calls have a separate 320-row structural budget; the query
-fetches one sentinel row and fails truthfully instead of returning a truncated
-tool group if that budget is exceeded.
+fetches one sentinel row and retains every complete sequence group before the
+cut. If the sentinel lands inside a group, messages at and behind that sequence
+are deferred to the next page so the bridge never returns a message without its
+tools. Only a single sequence group larger than 320 tool rows fails truthfully.
 
 The durable 600-message DefraDB fixture returns 41 message rows for a tip page,
 93.2% fewer than the former 600-row transcript read, and materializes 40 visible
-items, 93.3% fewer than the former full projection. An older request performs
-one cursor lookup plus one bounded page query, returns the next 41 rows, and has
-no overlap with the tip. The cursor uses `_lt` on the durable sequence, so new
-tip inserts cannot shift or duplicate an older page. Request-refresh fallback
-queries are also request-owned now; they no longer reload every historical
-message, tool result, and compaction row in the session.
+items, 93.3% fewer than the former full projection. A tip request performs one
+bounded message query and one tool-window query. An older request first resolves
+the cursor, then performs the same two bounded queries. The cursor uses `_lt` on
+the durable sequence, so new tip inserts cannot shift or duplicate an older
+page. Equal-sequence rows remain atomic. A page containing only non-rendering
+durable rows receives a synthetic durable continuation cursor instead of
+silently ending pagination, and old orphan tool groups cannot move the page
+boundary. Every lookup is scoped to the selected agent and, when present, the
+bearer requester DID. Request-refresh fallback queries are also request-owned
+now; they no longer reload every historical message, tool result, and compaction
+row in the session.
+
+Two independent pagination-focused review passes were run after rebasing onto
+#1154. They found and drove tests for equal-sequence gaps, tool-window overflow,
+bearer isolation, nullable sequence handling, hidden-only continuation pages,
+and orphan tool groups. A separate workstation review attempt exposed a review
+harness defect: unrestricted workers can clean an uncommitted shared worktree,
+and the review server readiness check can race startup. No result from that run
+is treated as evidence; future workstation reviews must use an isolated clean
+worktree and an observable readiness boundary.
 
 Modern sessions retain their exact request-owned provider context accounting.
 For legacy sessions without an `InferenceCall` accounting row, the bridge still
@@ -376,9 +393,9 @@ sample.
 
 Proposed follow-up issue slices, in dependency order:
 
-1. Integrate `agent/session-hydration-foundation` and add the documented remote
-   hydration fixture without duplicating its lifecycle; accepted hydration
-   merges must advance the authoritative reconcile revision.
+1. Add the documented remote hydration fixture on the landed #1154 foundation
+   without duplicating its lifecycle; accepted hydration merges must advance
+   the authoritative reconcile revision.
 2. Split resident transcript summaries/counts from on-demand content reads in
    the observer; acceptance: cold bootstrap memory is independent of transcript
    content bytes while legacy context accounting remains truthful.
@@ -405,8 +422,10 @@ original stream baseline, bridge traffic is 675x smaller, elapsed time is 71.0%
 lower, task time is 69.2% lower, and React work is 79.8% lower. The third,
 desktop-core stage removes all 50 uncontended whole-store rebuilds structurally.
 The final query stage reduces the durable 600-message page read to 41 message
-rows and the visible projection to 40, with stable older-page cursors and an
-explicit tool-row failure budget. Native wall-clock and memory impact remain
+rows and the visible projection to at most 40 sequence-atomic items. Tool reads
+use 321-row overscan, defer incomplete groups instead of failing long sessions,
+and retain a cursor even when a durable window renders no visible item. Native
+wall-clock and memory impact remain
 intentionally unclaimed until the native lane produces a valid distribution.
 Native cold launch, observer resident-transcript memory, suspend repair, device
 memory/energy, and remote hydration remain unknown until their named lanes or
