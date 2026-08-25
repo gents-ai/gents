@@ -76,6 +76,12 @@ and DOM-mutation observers, and byte counts of serialized bridge arguments and
 results. The wrapper is installed only for the performance fixture. Production
 code pays no instrumentation cost.
 
+The performance fixture disables the production 1.5-second active-session poll
+through the existing test timing seam. This keeps the event-driven stream
+budget structural on slow and fast runners: an unrelated timer cannot add a
+session snapshot merely because one sample crosses 1.5 seconds. The production
+fallback remains enabled and is covered outside the measurement fixture.
+
 The native lane accepts `--measure`. Debug-only driver statuses include a
 bounded correlation ID, application `performance.now()` boundary, DOM counts,
 and `desktop_observer_metrics`. The Rust bridge validates a 32 KiB record cap,

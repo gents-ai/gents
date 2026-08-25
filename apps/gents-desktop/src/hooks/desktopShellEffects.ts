@@ -390,13 +390,17 @@ export function useDesktopShellEffects({
 
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const pollMs = timingConfig().activeSessionPollMs;
+    if (pollMs === null) {
+      return;
+    }
     const poll = async () => {
       await refreshSession(selectedSessionId);
       if (!disposed) {
-        timer = setTimeout(poll, timingConfig().activeSessionPollMs);
+        timer = setTimeout(poll, pollMs);
       }
     };
-    timer = setTimeout(poll, timingConfig().activeSessionPollMs);
+    timer = setTimeout(poll, pollMs);
 
     return () => {
       disposed = true;

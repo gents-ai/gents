@@ -12,7 +12,7 @@ export type DesktopShellTimingConfig = {
   p2pAutoRestartCooldownMs: number;
   clientRestartMaxAttempts: number;
   clientRestartBackoffMs: number;
-  activeSessionPollMs: number;
+  activeSessionPollMs: number | null;
 };
 
 const DEFAULT_TIMING_CONFIG: DesktopShellTimingConfig = {
