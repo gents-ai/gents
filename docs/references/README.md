@@ -18,6 +18,7 @@ The primary source. The pack compiles clause 5 into agent nodes.
 
 | Location | Why it matters |
 | --- | --- |
+| §4.3.3.4 | Change classification by blast radius. Disposition sits at the lowest organisational level whose effects have no repercussions on customer commitments. Compiled as three `Rid` classes under a job-level eagerness policy |
 | §5.2.2 | System requirements allocated to software — origin of the **requirements baseline (RB)**, the customer's artefact |
 | §5.3.3.1a | Joint review exit criteria, six clauses. Lifted near-verbatim as the review behavior system prompt; clause 5 ("outputs are in such a status that the next activity can start") is the trigger edge condition |
 | §5.4.2.1 | Requirements analysis. Ten expected outputs, each becoming an individually-addressable `TechnicalSpecification` document |
@@ -26,7 +27,8 @@ The primary source. The pack compiles clause 5 into agent nodes.
 | §5.6.3 vs §5.6.4 | **The validation split.** Validation against the TS `[DJF, SVS; CDR]` versus against the RB `[DJF, SVS; QR, AR]`. Load-bearing: CI only ever does the first |
 | §5.8.3.1, §5.8.3.2 | Verification of the RB (feeds SRR) and of the TS |
 | **Figure 4-2** | Review/artefact map. Gives each review its input set — the context loadout per review behavior, read off the table rather than invented |
-| **Annex R, Table R-1** | Normative tailoring by software criticality (A–D). Keyed by stable requirement id, one row per expected output, `Y`/`N`/`Ytba`. Becomes the `TailoringRule` collection; the issue label selects the subgraph |
+| **Annex K.4** | Over- and under-selection of design items as pathological modes, plus the criteria for whether something is its own area. The architecture node uses this to declare fan-out width (bounded 1–6 in v1) |
+| **Annex R, Table R-1** | Normative tailoring by software criticality (A–D). Keyed by stable requirement id, one row per expected output, `Y`/`N`/`Ytba`. Becomes the `TailoringRule` collection; the issue label selects the subgraph. SRR at category D is an explicit MGT override of this table |
 
 ### Reading the clause notation
 

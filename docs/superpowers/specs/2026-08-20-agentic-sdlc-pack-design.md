@@ -1,9 +1,9 @@
 # Agentic SDLC pack — design
 
-**Status:** brainstormed in session 2026-08-20 on `agent/space-dev`; this document is the
-durable record and the source for the tracking issue.
+**Status:** design; open questions resolved in review on PR #1161 (2026-08-21).
 **Prototype target:** gents itself — GitHub issues labelled `sdlc:<A|B|C|D>`, driven against
-`workstation-1:8000` (GLM-5.2).
+`workstation-1:8000` (GLM-5.2). One V, small-app to feature-integration scope;
+recursive V-of-Vs is out of bounds.
 
 ## The bet
 
@@ -81,10 +81,11 @@ The pack primitives map onto the standard with almost no impedance:
 | Activity precedence | `EventTrigger`, `event_kind: created` |
 | What an activity may produce | `DatastoreToolSurface` on its `ToolSelection` |
 | Joint review (§5.3.3) | A review behavior + its RID ledger |
-| Review item discrepancy | A `Rid` document with a disposition |
+| Review item discrepancy | A `Rid` document with a disposition and change class |
 | Configuration management baseline | `supersedes` chain, append-only |
 | Traceability matrix | `derived_from` edges, DID-signed |
 | Annex R tailoring | A `TailoringRule` collection, queried at dispatch |
+| Change classification (§4.3.3.4) | `Rid.change_class` under job eagerness |
 
 ### Revision, not mutation
 
@@ -104,7 +105,8 @@ as signed history. The append-only constraint of the trigger engine and the chan
 discipline of the standard are the same constraint. No runtime gap.
 
 Downstream re-derivation is scoped by `derived_from`: a node re-runs when any document it
-derived from has been superseded. That is a query, not a subscription.
+derived from has been superseded. That is a query, not a subscription. Whether it re-runs
+*now* or waits is a change-class decision — see [Change classification](#change-classification).
 
 ## Collections
 
@@ -117,9 +119,9 @@ ECSS's own file taxonomy, one collection each:
 | `InterfaceControl` | ICD | External interfaces |
 | `DesignDefinition` | DDF | Architecture and per-item design (SDD), build config (SCF) |
 | `DesignJustification` | DJF | Verification/validation specs and reports — the *why* |
-| `ManagementFile` | MGT | Plans, schedule, tailoring decisions |
-| `Rid` | — | Review item discrepancies, with disposition |
-| `SdlcJob` | — | Seed; carries issue number, criticality, head SHA |
+| `ManagementFile` | MGT | Plans, schedule, tailoring decisions, eagerness |
+| `Rid` | — | Review item discrepancies, with disposition and change class |
+| `SdlcJob` | — | Seed; carries issue number, criticality, eagerness, head SHA |
 
 Every artefact document carries:
 
@@ -140,14 +142,14 @@ expected outputs — the requirements node *physically cannot* write a `DesignDe
 
 | # | Clause | Node | Reads | Writes |
 | --- | --- | --- | --- | --- |
-| 0 | — | `sdlc-intake` | GitHub issue | `SdlcJob`, `ManagementFile` (tailoring decision) |
+| 0 | — | `sdlc-intake` | GitHub issue | `SdlcJob`, `ManagementFile` (tailoring + eagerness), `Rid` when arguing |
 | 1 | §5.2.2 | `sdlc-needs` | issue body | `RequirementsBaseline`, one doc **per need** |
 | 2 | §5.8.3.1 | `sdlc-verify-rb` | RB | `DesignJustification` (SVR) → feeds **SRR** |
 | — | §5.3.3 | **SRR — hard human gate** | RB, DJF, MGT | `Rid` dispositions |
 | 3 | §5.4.2 | `sdlc-requirements` | RB | `TechnicalSpecification`, `InterfaceControl` |
 | 4 | §5.8.3.2 | `sdlc-verify-ts` | TS, RB | `DesignJustification` (SVR) |
-| 5 | §5.4.3 | `sdlc-architecture` | TS | `DesignDefinition` (SDD) |
-| 6 | §5.5.2 | `sdlc-item-design` | DDF, TS | `DesignDefinition` per item — **fan-out** |
+| 5 | §5.4.3 | `sdlc-architecture` | TS | `DesignDefinition` (SDD) — **declares items** |
+| 6 | §5.5.2 | `sdlc-item-design` | DDF, TS | `DesignDefinition` per declared item — **fan-out** |
 | 7 | §5.6.3 | `sdlc-validation-spec` | TS | `DesignJustification` (SVS vs TS) |
 | 8 | §5.5.3 | `sdlc-code` | DDF | commits in an isolated worktree, `DesignJustification` (unit test reports) |
 | 9 | §5.8 | `sdlc-verification` | code, TS | `DesignJustification` (SVR) — adversarial |
@@ -168,7 +170,37 @@ documents.
 
 Nodes 6 and 8 fan out per software item and fan back in on a count-balanced barrier — the
 work-package pattern `repo-maintenance` already proves, including the rule that document
-arrival order is not an execution callback.
+arrival order is not an execution callback. The architecture node **declares** the items;
+fan-out width is a property of that `DesignDefinition`, not a pack constant. For v1 the
+declaration is bounded to **1–6** items. Annex K.4 treats over- and under-selection as
+pathological modes and supplies the criteria the architecture behavior uses to decide
+whether something is its own area.
+
+### Argument, cascade, alignment
+
+**Intake argues.** If an issue is too vague to produce a requirements baseline,
+`sdlc-intake` does not fail the run. It posts clarifying questions through the GitHub
+bridge, writes an inbound `Rid`, and parks until a human replies. That loop is the
+highest-value exercise on the V — ideation refinement — and it may take several turns
+before node 1 runs.
+
+The same pattern repeats at every left-side node. A child that finds a gap writes a
+change proposal to its **adjacent parent only**. It never addresses a non-adjacent node.
+The parent answers from its own artefacts, supersedes its own artefact, or cascades one
+hop further up. Distance is unbounded; skip-level talk is not. This is ECSS §4.3.3.4: a
+change proposal is processed through the levels of the organisation, and disposition sits
+at the lowest level whose effects have no repercussions on commitments made to the
+customer.
+
+Write-surface fences already enforce adjacency: `sdlc-item-design` cannot write a
+`RequirementsBaseline`. The cascade is a `Rid` (or a superseding parent document), not a
+skip-level mutation.
+
+**Alignment.** Agents on the **left of the V** are aligned with implementors against the
+specs they inherited — they argue when an input artefact is incomplete, or when a more
+efficient realisation of the same goal needs the spec updated. Agents on the **right of
+the V** are aligned with the specs against the delivered artefacts — they argue with the
+implementors.
 
 ### Why verification and validation are separate nodes
 
@@ -232,6 +264,31 @@ The other five (SWRR, PDR, DDR, CDR, QR) run as agent reviews that emit RIDs. A 
 reach in and re-disposition any RID at any time; that creates a superseding document, fires
 a `created` edge, and re-derives downstream. Reclaimable without being blocking.
 
+For `sdlc:D`, Annex R may switch SRR off. The value gradient still keeps the ideation tip
+as a hard human gate; that is an **explicit tailoring override** recorded in the job's
+`ManagementFile`, not an accident of the Table R-1 query.
+
+## Change classification
+
+ECSS §4.3.3.4 classifies a change by blast radius: whether it goes back to the customer
+or is handled internally. For the pack the originator is the GitHub issue. Pre-approval
+(descending the V, artefacts not yet baselined) and post-approval use the **same classes**
+in v1; the distinction is not load-bearing for us.
+
+Three classes, recorded on the `Rid`. The class is selected under an **eagerness** policy
+on the `SdlcJob` / `ManagementFile` — it configures how eagerly the stack approaches work,
+not a per-node special case.
+
+| Class | What it means | Re-derivation |
+| --- | --- | --- |
+| 1 | Hits the originator artefact. Escalate to a human; work on that branch waits. | Parked |
+| 2 | Intermediate artefact. Log the decision **and** flag it for human review; work continues on the agent's call. A later human `Rid` can invalidate it. | Eager, optimistic |
+| 3 | Answered entirely from existing artefacts. Note the decision; do not elevate. | Eager |
+
+This replaces the binary "re-derive eagerly vs. mark stale." Class 1 is the wait path.
+Class 2 and 3 re-derive. Waiting for a human and doing the wrong thing can run in parallel
+under class 2: the decision is visible, work continues, the human can still pull it back.
+
 ## Human surfaces
 
 **The transport is not the semantics.** A GitHub comment and a paired mobile session both
@@ -275,13 +332,20 @@ Requirement id    Expected Output                                   A   B   C   
 So the GitHub label is not an on/off switch for the workflow; it is a **criticality
 category**, and the category selects the subgraph. `sdlc:D` on a bug fix runs requirements →
 code → verify. `sdlc:A` runs the full V with architecture, design justification, and every
-review.
+review. SRR is the exception: even when Table R-1 would omit it at category D, the pack
+keeps it as a hard human gate and records that override in MGT.
 
 Table R-1 becomes a `TailoringRule` collection (`ecss_clause`, `expected_output`, `category`,
 `applicability`). Node activation is a query against it, and the tailoring decision for a
 given job is recorded in its `ManagementFile` — which is what ECSS requires anyway.
 
 ## Prototype scope
+
+Current target is **one V** for a small-app or feature-integration job — roughly 2–4 weeks
+of human work against an established codebase, issue in and PR out. 12207 notes that its
+life-cycle processes can be applied "concurrently, iteratively and recursively"; recursive
+**V of Vs** (sub-Vs under a parent V, with today's human gates falling to the parent) is a
+bigger bet and is explicitly out of bounds for this pack.
 
 On `agent/space-dev`, as `demo/sdlc/`, following the existing pack layout (`schemas/`,
 `agent-behaviors/`, `datastore-tool-surfaces/`, `tool-selections/`, `event_triggers/`,
@@ -290,8 +354,9 @@ On `agent/space-dev`, as `demo/sdlc/`, following the existing pack layout (`sche
 Build order, because each layer fences the next:
 
 1. **`schemas/`** — the collections *are* the state machine. Get `derived_from`, `supersedes`,
-   `ecss_clause`, `criticality` right; a node is then just a behavior reading one collection
-   and writing another. Remember: never emit `[]` in a DefraDB mutation, emit `null`.
+   `ecss_clause`, `criticality`, `change_class`, and job `eagerness` right; a node is then
+   just a behavior reading one collection and writing another. Remember: never emit `[]` in
+   a DefraDB mutation, emit `null`.
 2. **`datastore-tool-surfaces/`** — the real safety fence, one per node.
 3. **`agent-behaviors/`** — system prompts, several lifted near-verbatim from clause text.
 4. **`event_triggers/`** — the edges, `created`-only.
@@ -308,29 +373,33 @@ Then run it end to end on one real labelled gents issue against `workstation-1:8
   It is a separate concern, but building this pack first is what discovers its requirements.
 - 12207 organizational and agreement processes (§6.1, §6.2) — out of scope; this pack covers
   the technical processes (§6.4) only.
+- Recursive V of Vs / jobs larger than a 2–4 week feature. 12207 permits it; this pack does
+  not.
 
-## Open questions
+## Decisions from review
 
-1. **Fan-out width for `sdlc-item-design`.** `repo-maintenance` uses 5–10 areas by default.
-   A single GitHub issue probably wants fewer. Bound it, or let the architecture node declare
-   it?
-2. **Does the intake node get to argue?** If an issue is too vague to produce a requirements
-   baseline, does it fail the run, or post a comment asking for clarification and park until
-   a human replies (which is just an inbound RID)? The second is more useful and costs
-   nothing extra.
-3. **Re-derivation blast radius.** A superseded RB requirement invalidates everything
-   downstream of it. For a late override that could mean re-running code and verification.
-   Do we re-derive eagerly, or mark downstream documents stale and let a human trigger the
-   re-run?
-4. **Where does the SRR hard gate live for a `sdlc:D` fix?** Annex R may switch SRR off for
-   low criticality, but the value-gradient argument says humans always keep the ideation tip.
-   If they conflict, the value gradient wins — but that should be an explicit tailoring
-   override recorded in MGT, not an accident.
+Resolved on PR #1161. The original questions are kept here so the answers stay attached
+to the forks they closed.
+
+1. **Fan-out width for `sdlc-item-design`.** Declared by the architecture node, not
+   hardcoded. v1 bound is 1–6. Selection criteria from Annex K.4.
+2. **Does the intake node get to argue?** Yes, it must. Vague issues park on an inbound
+   `Rid` rather than failing the run. Cascade is adjacent-only, any distance up the left
+   side. Left-of-V agents argue the spec; right-of-V agents argue the implementation.
+   See [Argument, cascade, alignment](#argument-cascade-alignment).
+3. **Re-derivation blast radius.** Not a binary. ECSS §4.3.3.4 change classes, folded
+   across pre/post approval for v1, recorded as three classes on the `Rid` under a
+   job-level eagerness policy. Class 1 parks; class 2 re-derives and flags; class 3
+   re-derives quietly. See [Change classification](#change-classification).
+4. **SRR for `sdlc:D`.** Value gradient wins: SRR stays a hard human gate, as an explicit
+   MGT tailoring override of Annex R. Recursion / V-of-Vs is out of bounds; current target
+   is one V for a 2–4 week feature.
 
 ## References
 
 - ECSS-E-ST-40C Rev.1 (30 April 2025) — Space engineering: Software. Clause 5 (processes),
-  Figure 4-2 (review/artefact map), Annex R (criticality tailoring).
+  §4.3.3.4 (change classification), Figure 4-2 (review/artefact map), Annex K.4 (item
+  selection), Annex R (criticality tailoring).
 - ISO/IEC/IEEE 12207 — Software life cycle processes. §6.4 technical processes.
 - *Something old, something new: can established software-engineering process serve as a
   template for agentic development loops?*
