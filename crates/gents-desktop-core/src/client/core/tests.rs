@@ -450,6 +450,21 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .upsert(record.clone())
         .await
         .expect("save invalid peer fixture");
+    core.update_peer_status(ClientPeerStatus {
+        peer_id: record.peer_id.clone(),
+        label: record.label.clone(),
+        agent_did: record.agent_did.clone(),
+        addr: record.addr.clone(),
+        dial_succeeded: true,
+        last_error: None,
+        pairing: Vec::new(),
+        routes: Vec::new(),
+        chat_safe: true,
+    });
+    assert!(core
+        .peer_statuses()
+        .iter()
+        .any(|status| status.peer_id == record.peer_id));
     let route = gents::agent::p2p_reconcile::ClientRouteIdentity::new(
         record.peer_id.clone(),
         "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
@@ -498,6 +513,10 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .pending_removals()
         .iter()
         .any(|pending| pending.peer_id == record.peer_id));
+    assert!(!core
+        .peer_statuses()
+        .iter()
+        .any(|status| status.peer_id == record.peer_id));
     let peer_id = gents_protocol::graphql::escape_graphql_string(
         &route.desired_id(gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient),
     );

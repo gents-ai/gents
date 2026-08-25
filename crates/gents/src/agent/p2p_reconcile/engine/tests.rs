@@ -1600,6 +1600,49 @@ async fn omitted_live_filters_fail_closed_without_reinstall_churn() {
     assert!(admin.recorded_filters.lock().unwrap().is_empty());
 }
 
+/// Current DefraDB HTTP responses omit `Filters` only for an empty effective
+/// map. The HTTP adapter projects that as `Some(empty)`, which is authoritative
+/// drift for a scoped route and must repair rather than remain permanently
+/// unready.
+#[tokio::test]
+async fn known_empty_live_filters_repair_a_scoped_route() {
+    let filter = one_filter("AgentRequest", "agent_did", "did:key:mandrake");
+    let store = MockStore::with_desired(Some(PairingDesired {
+        replicator_addresses: set(&["addr1"]),
+        replicator_collections: set(&["AgentRequest"]),
+        replicator_filter: filter.clone(),
+        ..Default::default()
+    }));
+    *store.applied.lock().unwrap() = PairingApplied {
+        replicator_addresses: set(&["addr1"]),
+        replicator_filter: filter,
+        ..Default::default()
+    };
+    let admin = MockAdmin::default();
+    admin.replicators.lock().unwrap().insert(
+        "addr1".into(),
+        RemoteReplicator {
+            id: Some("id-addr1".into()),
+            collections: vec![mock_collection_id("AgentRequest")],
+            address: Some("addr1".into()),
+            filters: Some(Default::default()),
+        },
+    );
+
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("repair current-wire empty filter drift");
+
+    assert_eq!(
+        outcome.ops_applied,
+        vec![
+            DiffOp::TeardownReplicator("addr1".into()),
+            DiffOp::InstallReplicator("addr1".into()),
+        ]
+    );
+    assert!(outcome.live_route_matches);
+}
+
 #[test]
 fn addressless_replicator_is_not_aliased_across_multiple_applied_routes() {
     let replicator = RemoteReplicator {

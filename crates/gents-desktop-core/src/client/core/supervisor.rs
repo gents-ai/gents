@@ -28,7 +28,9 @@ use super::p2p_ops::{
     p2p_notify_network_change,
 };
 use super::route_manager::ClientRouteManager;
-use super::writes::cleanup_pending_removal;
+use super::writes::{
+    cleanup_pending_removal_if_current, remove_peer_status, PendingRemovalCleanup,
+};
 use super::{
     ClientPeerStatus, P2PHealth, P2PHealthStatus, P2PSupervisorCommand, P2P_SUPERVISOR_INTERVAL,
     P2P_WEDGED_FAILURE_THRESHOLD,
@@ -85,6 +87,7 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &node,
                 &p2p,
                 &peer_directory,
+                &peer_statuses,
                 &remote_admin_actor,
                 &mut removal_retries,
             )
@@ -127,6 +130,7 @@ async fn run_pending_removal_cleanup(
     node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
     peer_directory: &Arc<RwLock<PeerDirectory>>,
+    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     actor: &Arc<PrincipalIdentity>,
     retries: &mut BTreeMap<String, RemovalRetry>,
 ) {
@@ -137,42 +141,25 @@ async fn run_pending_removal_cleanup(
         .collect::<BTreeSet<_>>();
     retries.retain(|peer_id, _| pending_ids.contains(peer_id));
     for record in pending {
+        // A queued removal is already absent from the durable peer directory;
+        // never leave an ephemeral status row advertising it while cleanup
+        // retries or after the supervisor completes the tombstone.
+        remove_peer_status(peer_statuses, &record.peer_id);
         if retries
             .get(&record.peer_id)
             .is_some_and(|retry| Instant::now() < retry.retry_after)
         {
             continue;
         }
-        let cleanup = tokio::time::timeout(
-            super::P2P_OPERATION_TIMEOUT,
-            cleanup_pending_removal(node, p2p, actor.as_ref(), &record),
-        )
-        .await;
+        let cleanup =
+            cleanup_pending_removal_if_current(node, p2p, actor.as_ref(), peer_directory, &record)
+                .await;
         match cleanup {
-            Ok(Ok(())) => {
+            Ok(PendingRemovalCleanup::Completed | PendingRemovalCleanup::Superseded) => {
                 retries.remove(&record.peer_id);
-                if let Err(error) = peer_directory
-                    .write()
-                    .await
-                    .complete_removal(&record.peer_id)
-                    .await
-                {
-                    tracing::warn!(
-                        directory_peer_id = %record.peer_id,
-                        error = %error,
-                        "route teardown succeeded but removal tombstone persistence will retry"
-                    );
-                }
             }
-            result => {
-                let error = match result {
-                    Ok(Err(error)) => error.to_string(),
-                    Err(_) => format!(
-                        "cleanup exceeded {}s timeout",
-                        super::P2P_OPERATION_TIMEOUT.as_secs()
-                    ),
-                    Ok(Ok(())) => unreachable!(),
-                };
+            Err(error) => {
+                let error = error.to_string();
                 let retry = retries.entry(record.peer_id.clone()).or_default();
                 retry.failures = retry.failures.saturating_add(1);
                 retry.retry_after = Instant::now() + removal_retry_delay(retry.failures);

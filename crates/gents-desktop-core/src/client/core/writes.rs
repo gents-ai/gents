@@ -1,4 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
+use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, RwLock as StdRwLock};
 
@@ -9,11 +10,12 @@ use gents_protocol::row::{
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use p2p::iroh::parse_public_peer_addr;
+use tokio::sync::RwLock;
 use tokio::time::{sleep, Instant};
 
 use super::super::mutations::{self, PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 use super::super::observe::ObservedStore;
-use super::super::peer_directory::PeerRecord;
+use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::query::load_chat_patch;
 use super::super::schema::subscribed_collection_names;
 use super::super::store::{ClientStore, ClientStoreRows};
@@ -23,7 +25,8 @@ use super::p2p_ops;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
 use super::route_manager::ClientRouteManager;
 use super::{
-    ClientCore, ClientPeerStatus, BOOTSTRAP_OPERATION_BACKOFF, PEER_ADD_OPERATION_TIMEOUT,
+    ClientCore, ClientPeerStatus, BOOTSTRAP_OPERATION_BACKOFF, P2P_OPERATION_TIMEOUT,
+    PEER_ADD_OPERATION_TIMEOUT,
 };
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
@@ -1268,43 +1271,35 @@ impl ClientCore {
                 .with_context(|| format!("peer {peer_id} not found while queueing removal"))?
         };
 
-        let warning =
-            match cleanup_pending_removal(&self.node, &self.p2p, &self.principal, &record).await {
-                Ok(()) => {
-                    self.peer_directory
-                        .write()
-                        .await
-                        .complete_removal(&record.peer_id)
-                        .await?;
-                    None
-                }
-                Err(error) => {
-                    let warning = format!(
+        // Directory removal is the user-visible commit point. Hide the matching
+        // ephemeral status before any fallible transport or tombstone work so
+        // a cleanup/persistence failure cannot leave a ghost deployment.
+        remove_peer_status(&self.peer_statuses, &removed.peer_id);
+
+        let warning = match cleanup_pending_removal_if_current(
+            &self.node,
+            &self.p2p,
+            &self.principal,
+            &self.peer_directory,
+            &record,
+        )
+        .await
+        {
+            Ok(PendingRemovalCleanup::Completed | PendingRemovalCleanup::Superseded) => None,
+            Err(error) => {
+                let warning = format!(
                     "deployment hidden locally; route teardown is pending and will retry: {error}"
                 );
-                    tracing::warn!(
-                        target: "gents_desktop_core::peer",
-                        peer_id = %record.peer_id,
-                        label = %record.label,
-                        error = %error,
-                        "desktop deployment removal queued for retry"
-                    );
-                    Some(warning)
-                }
-            };
-
-        {
-            let mut statuses = self
-                .peer_statuses
-                .write()
-                .expect("peer status lock poisoned");
-            if let Some(index) = statuses
-                .iter()
-                .position(|status| status.peer_id == removed.peer_id)
-            {
-                statuses.remove(index);
+                tracing::warn!(
+                    target: "gents_desktop_core::peer",
+                    peer_id = %record.peer_id,
+                    label = %record.label,
+                    error = %error,
+                    "desktop deployment removal queued for retry"
+                );
+                Some(warning)
             }
-        }
+        };
 
         self.clear_mutation_error();
         tracing::info!(
@@ -1794,6 +1789,77 @@ pub(super) async fn cleanup_pending_removal(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PendingRemovalCleanup {
+    Completed,
+    Superseded,
+}
+
+async fn finalize_pending_removal_with<F, Fut>(
+    peer_directory: &Arc<RwLock<PeerDirectory>>,
+    record: &PeerRecord,
+    cleanup: F,
+) -> Result<PendingRemovalCleanup>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    // Keep the directory write lock from the final intent check through every
+    // destructive effect. add_peer/configure must first resurrect the same
+    // tombstone under this lock, so stale cleanup can never run concurrently
+    // with or after a resurrection.
+    let mut directory = peer_directory.write().await;
+    if !directory.has_pending_removal(record) {
+        return Ok(PendingRemovalCleanup::Superseded);
+    }
+    if directory.has_active_owner_for(record) {
+        directory.complete_removal_if_matches(record).await?;
+        return Ok(PendingRemovalCleanup::Superseded);
+    }
+
+    cleanup().await?;
+    if !directory.complete_removal_if_matches(record).await? {
+        anyhow::bail!(
+            "pending removal intent changed while cleanup owned the directory lock for {}",
+            record.peer_id
+        );
+    }
+    Ok(PendingRemovalCleanup::Completed)
+}
+
+pub(super) async fn cleanup_pending_removal_if_current(
+    node: &Arc<defra_node::EmbeddedNode>,
+    p2p: &Arc<dyn P2POps>,
+    principal: &super::super::principal_identity::PrincipalIdentity,
+    peer_directory: &Arc<RwLock<PeerDirectory>>,
+    record: &PeerRecord,
+) -> Result<PendingRemovalCleanup> {
+    finalize_pending_removal_with(peer_directory, record, || async {
+        tokio::time::timeout(
+            P2P_OPERATION_TIMEOUT,
+            cleanup_pending_removal(node, p2p, principal, record),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "cleanup exceeded {}s timeout",
+                P2P_OPERATION_TIMEOUT.as_secs()
+            )
+        })?
+    })
+    .await
+}
+
+pub(super) fn remove_peer_status(
+    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    peer_id: &str,
+) {
+    peer_statuses
+        .write()
+        .expect("peer status lock poisoned")
+        .retain(|status| status.peer_id != peer_id);
+}
+
 fn requires_managed_remote_teardown(record: &PeerRecord) -> bool {
     !record.is_bearer_pairing()
         && record
@@ -1817,6 +1883,8 @@ mod delete_source_tests {
     use super::*;
     use anyhow::anyhow;
     use serde_json::json;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
 
     fn task(task_id: &str) -> TaskRow {
         serde_json::from_value(json!({ "task_id": task_id })).expect("task row")
@@ -1840,6 +1908,112 @@ mod delete_source_tests {
         record.source = source.map(str::to_owned);
         record.default_behavior_id = default_behavior_id.map(str::to_owned);
         record
+    }
+
+    #[tokio::test]
+    async fn stale_cleanup_snapshot_cannot_delete_a_resurrected_route() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let directory = Arc::new(RwLock::new(
+            PeerDirectory::load(&tempdir.path().join("peers.json"))
+                .await
+                .unwrap(),
+        ));
+        let record = peer_record(Some("server-status"), Some("default"));
+        {
+            let mut directory = directory.write().await;
+            directory.upsert(record.clone()).await.unwrap();
+            directory.queue_removal(&record.peer_id).await.unwrap();
+            directory
+                .upsert_saved_peer_with_graphql(
+                    &record.label,
+                    &record.addr,
+                    &record.agent_did,
+                    Some("http://amy.local/graphql"),
+                    record.default_behavior_id.as_deref(),
+                )
+                .await
+                .unwrap();
+        }
+        let cleanup_called = Arc::new(AtomicBool::new(false));
+        let called = Arc::clone(&cleanup_called);
+
+        let result = finalize_pending_removal_with(&directory, &record, || async move {
+            called.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result, PendingRemovalCleanup::Superseded);
+        assert!(!cleanup_called.load(Ordering::SeqCst));
+        let directory = directory.read().await;
+        assert!(directory
+            .records()
+            .iter()
+            .any(|active| active.agent_did == record.agent_did));
+        assert!(directory.pending_removals().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cleanup_owns_removal_until_teardown_finishes_then_allows_readd() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let directory = Arc::new(RwLock::new(
+            PeerDirectory::load(&tempdir.path().join("peers.json"))
+                .await
+                .unwrap(),
+        ));
+        let record = peer_record(Some("server-status"), Some("default"));
+        {
+            let mut directory = directory.write().await;
+            directory.upsert(record.clone()).await.unwrap();
+            directory.queue_removal(&record.peer_id).await.unwrap();
+        }
+        let cleanup_started = Arc::new(Notify::new());
+        let allow_cleanup = Arc::new(Notify::new());
+        let cleanup_directory = Arc::clone(&directory);
+        let cleanup_record = record.clone();
+        let started = Arc::clone(&cleanup_started);
+        let allowed = Arc::clone(&allow_cleanup);
+        let cleanup = tokio::spawn(async move {
+            finalize_pending_removal_with(&cleanup_directory, &cleanup_record, || async move {
+                started.notify_one();
+                allowed.notified().await;
+                Ok(())
+            })
+            .await
+        });
+        cleanup_started.notified().await;
+
+        let readd_directory = Arc::clone(&directory);
+        let readd_record = record.clone();
+        let mut readd = tokio::spawn(async move {
+            readd_directory
+                .write()
+                .await
+                .upsert_saved_peer_with_graphql(
+                    &readd_record.label,
+                    &readd_record.addr,
+                    &readd_record.agent_did,
+                    Some("http://amy.local/graphql"),
+                    readd_record.default_behavior_id.as_deref(),
+                )
+                .await
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), &mut readd)
+                .await
+                .is_err()
+        );
+
+        allow_cleanup.notify_one();
+        assert_eq!(
+            cleanup.await.unwrap().unwrap(),
+            PendingRemovalCleanup::Completed
+        );
+        let resurrected = readd.await.unwrap().unwrap();
+        let directory = directory.read().await;
+        assert_eq!(directory.records(), &[resurrected]);
+        assert!(directory.pending_removals().is_empty());
     }
 
     #[test]

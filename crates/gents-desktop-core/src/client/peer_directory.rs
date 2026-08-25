@@ -128,6 +128,18 @@ impl PeerDirectory {
         &self.pending_removals
     }
 
+    pub fn has_pending_removal(&self, expected: &PeerRecord) -> bool {
+        self.pending_removals
+            .iter()
+            .any(|pending| pending == expected)
+    }
+
+    pub fn has_active_owner_for(&self, expected: &PeerRecord) -> bool {
+        self.peers.iter().any(|active| {
+            active.peer_id == expected.peer_id || active.agent_did == expected.agent_did
+        })
+    }
+
     pub async fn upsert_saved_peer(
         &mut self,
         label: &str,
@@ -358,12 +370,20 @@ impl PeerDirectory {
         Ok(Some(removed))
     }
 
-    pub async fn complete_removal(&mut self, peer_id: &str) -> Result<bool> {
-        let before = self.pending_removals.len();
-        self.pending_removals
-            .retain(|record| record.peer_id != peer_id);
-        self.save().await?;
-        Ok(self.pending_removals.len() != before)
+    pub async fn complete_removal_if_matches(&mut self, expected: &PeerRecord) -> Result<bool> {
+        let Some(index) = self
+            .pending_removals
+            .iter()
+            .position(|pending| pending == expected)
+        else {
+            return Ok(false);
+        };
+        let removed = self.pending_removals.remove(index);
+        if let Err(error) = self.save().await {
+            self.pending_removals.insert(index, removed);
+            return Err(error);
+        }
+        Ok(true)
     }
 
     /// Route readiness is an observation, not durable authority across a
@@ -518,6 +538,26 @@ mod tests {
 
         let reloaded = PeerDirectory::load(&path).await.unwrap();
         assert!(reloaded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_removal_completion_restores_the_cleanup_tombstone() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let record = PeerRecord::new("Amy", "iroh://amy", "did:test:amy");
+        directory.upsert(record.clone()).await.unwrap();
+        directory.queue_removal(&record.peer_id).await.unwrap();
+
+        tokio::fs::remove_file(&path).await.unwrap();
+        tokio::fs::create_dir(&path).await.unwrap();
+        let error = directory
+            .complete_removal_if_matches(&record)
+            .await
+            .expect_err("directory persistence failure must remain retryable");
+
+        assert!(error.to_string().contains("persisting"));
+        assert!(directory.has_pending_removal(&record));
     }
 
     #[tokio::test]
