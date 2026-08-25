@@ -97,12 +97,61 @@ pub async fn create_runtime_request(
     session_id: &str,
     content: &str,
 ) -> String {
+    create_runtime_request_inner(
+        node,
+        agent_did,
+        behavior_id,
+        request_id,
+        session_id,
+        None,
+        content,
+    )
+    .await
+}
+
+/// Create an interactive runtime request whose immutable requester lineage is
+/// explicit. Live P2P tests use this to create server-side history owned by a
+/// client that has not connected yet.
+pub async fn create_runtime_request_for_requester(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    request_id: &str,
+    session_id: &str,
+    requester_did: &str,
+    content: &str,
+) -> String {
+    create_runtime_request_inner(
+        node,
+        agent_did,
+        behavior_id,
+        request_id,
+        session_id,
+        Some(requester_did),
+        content,
+    )
+    .await
+}
+
+async fn create_runtime_request_inner(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    request_id: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    content: &str,
+) -> String {
     upsert_generated_conversation(node, agent_did, behavior_id, session_id).await;
 
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let escaped_session_id = escape_graphql_string(session_id);
+    let requester_did_field = requester_did
+        .map(escape_graphql_string)
+        .map(|requester_did| format!(r#"requester_did: "{requester_did}","#))
+        .unwrap_or_default();
     let escaped_content = escape_graphql_string(content);
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
@@ -110,6 +159,7 @@ pub async fn create_runtime_request(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
+                {requester_did_field}
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",

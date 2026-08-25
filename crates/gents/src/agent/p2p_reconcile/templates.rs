@@ -169,6 +169,45 @@ pub fn single_string_eq(filter: &FilterPredicate) -> Option<(&str, &str)> {
     (operators.len() == 1).then_some((field.as_str(), value))
 }
 
+/// Return one unambiguous string equality from a possibly conjunctive filter.
+pub(super) fn conjunctive_string_eq<'a>(
+    filter: &'a FilterPredicate,
+    field: &str,
+) -> Option<&'a str> {
+    fn collect<'a>(filter: &'a FilterPredicate, field: &str, found: &mut Option<&'a str>) -> bool {
+        match filter {
+            FilterPredicate::Predicate(conditions) => {
+                let Some(condition) = conditions.get(field) else {
+                    return true;
+                };
+                let Some(value) = condition
+                    .as_object()
+                    .and_then(|condition| condition.get("_eq"))
+                    .and_then(Value::as_str)
+                else {
+                    return false;
+                };
+                match found {
+                    Some(existing) => *existing == value,
+                    None => {
+                        *found = Some(value);
+                        true
+                    }
+                }
+            }
+            FilterPredicate::All(filters) => {
+                filters.iter().all(|filter| collect(filter, field, found))
+            }
+            FilterPredicate::Acp { .. } => false,
+        }
+    }
+
+    let mut found = None;
+    collect(filter, field, &mut found)
+        .then_some(found)
+        .flatten()
+}
+
 /// Per-collection filter predicates for a concrete pairing.
 ///
 /// `key` = collection name, `value` = predicate to apply when
@@ -251,6 +290,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "CompactionEntry",
     "BearerPairingReady",
     "PeerEndpoint",
+    "SessionHydrationRequest",
     "AgentBehavior",
     "ToolSelection",
     "InferenceProfile",
@@ -265,6 +305,9 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
 /// Client-authored rows that may travel toward a runtime. Runtime-owned
 /// configuration stays off this leg: its owner fields are intentionally
 /// mutable and therefore cannot be used as DefraDB replication filters.
+/// `SessionHydrationRequest` is the on-demand transcript catch-up control
+/// document: it must ride this outbound route or a phone using `client`
+/// cannot ask the runtime to replay one owned session.
 pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
@@ -276,6 +319,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "CompactionEntry",
     "BearerPairingReady",
     "PeerEndpoint",
+    "SessionHydrationRequest",
 ];
 
 const CONVERSATION_RULES: &[CollectionRule] = &[
@@ -368,6 +412,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "Skill",
     "DatastoreToolSurface",
     "PersonaConfigRequest",
+    "SessionHydrationRequest",
     AGENT_DIRECTORY_COLLECTION,
 ];
 
@@ -419,6 +464,11 @@ const MACHINE_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "PersonaConfigRequest",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "SessionHydrationRequest",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
@@ -850,6 +900,11 @@ mod tests {
                 "protocol collection {protocol} bypassed app data-plane admission"
             );
         }
+        assert!(
+            admit_app_collections(BTreeSet::from(["SessionHydrationRequest".to_string()]))
+                .is_none(),
+            "SessionHydrationRequest must stay protocol-owned and never ride app-collections"
+        );
     }
 
     #[test]
@@ -942,7 +997,7 @@ mod tests {
     fn machine_template_scopes_conversation_and_issuer_owned_directory() {
         let t = resolve_template("machine").expect("machine template registered");
         assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections.len(), 18);
+        assert_eq!(t.collections.len(), 19);
         assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
         let filters = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:server");
         // Conversation collections stay member-scoped exactly like `conversation`.
@@ -967,6 +1022,10 @@ mod tests {
         // requester's rows to every machine peer (the #687 leak class).
         assert_eq!(
             filters.get("PersonaConfigRequest"),
+            Some(&equality_filter("requester_did", "did:key:phone"))
+        );
+        assert_eq!(
+            filters.get("SessionHydrationRequest"),
             Some(&equality_filter("requester_did", "did:key:phone"))
         );
     }

@@ -123,7 +123,11 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
             , value :=
                 match direction with
                 | .clientToRuntime => requesterDid
-                | .runtimeToClient => ownerDid } ] } ]
+                | .runtimeToClient => ownerDid } ] }
+    , { collection := "SessionHydrationRequest"
+      , clauses :=
+          [ { field := "requester_did", value := requesterDid }
+          , { field := "agent_did", value := ownerDid } ] } ]
 
 def directionalScopeFilters (template : Template) (direction : RouteDirection)
     (requesterDid ownerDid : Did) : List CollectionPredicate :=
@@ -205,6 +209,9 @@ theorem machine_filter_eq (peerDid homeDid : Did) :
         [ { collection := "PersonaConfigRequest"
           , field := "requester_did"
           , value := peerDid }
+        , { collection := "SessionHydrationRequest"
+          , field := "requester_did"
+          , value := peerDid }
         , { collection := "AgentDirectoryEntry"
           , field := "source_did"
           , value := homeDid } ] := by
@@ -214,7 +221,8 @@ theorem machine_filters_transcript_persona_and_directory (peerDid homeDid : Did)
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
       = (conversationTranscriptCollections ++
-          ["PersonaConfigRequest", "AgentDirectoryEntry"]).toFinset := by
+          ["PersonaConfigRequest", "SessionHydrationRequest",
+           "AgentDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
     conversationRules, conversationCollections, conversationTranscriptCollections]
 
@@ -242,6 +250,19 @@ theorem client_request_filter_conjoins_requester_and_destination
         (fun predicate => predicate.collection = "AgentRequest") =
       some
         { collection := "AgentRequest"
+        , clauses :=
+            [ { field := "requester_did", value := requesterDid }
+            , { field := "agent_did", value := ownerDid } ] } := by
+  cases direction <;>
+    simp [clientRouteFilters, clientTranscriptPredicates,
+      clientTranscriptCollections]
+
+theorem client_hydration_request_conjoins_requester_and_destination
+    (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    (clientRouteFilters direction requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "SessionHydrationRequest") =
+      some
+        { collection := "SessionHydrationRequest"
         , clauses :=
             [ { field := "requester_did", value := requesterDid }
             , { field := "agent_did", value := ownerDid } ] } := by

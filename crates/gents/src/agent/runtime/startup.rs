@@ -34,6 +34,7 @@ enum BackgroundTaskResult {
     ReciprocalReconcile(Result<()>),
     BearerClaimReconcile(Result<()>),
     PersonaRequestReconcile(Result<()>),
+    SessionHydrationReconcile(Result<()>),
     DiscoveryReconcile(Result<()>),
     DirectoryProjection(Result<()>),
 }
@@ -519,6 +520,20 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let hydration_node = agent.node.clone();
+    let hydration_identity = agent.principal_arc().identity.clone();
+    let hydration_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::SessionHydrationReconcile(
+            crate::agent::p2p_reconcile::run_session_hydration_reconciler(
+                hydration_node,
+                hydration_identity,
+                hydration_cancel,
+            )
+            .await,
+        )
+    });
+
     let reciprocal_node = agent.node.clone();
     let reciprocal_identity = agent.principal_arc().identity.clone();
     let reciprocal_cancel = cancel.child_token();
@@ -669,6 +684,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::ReciprocalReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::BearerClaimReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::PersonaRequestReconcile(result)) => (result, false),
+            Ok(BackgroundTaskResult::SessionHydrationReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::DiscoveryReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::DirectoryProjection(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),

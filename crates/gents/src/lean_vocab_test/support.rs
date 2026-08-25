@@ -38,6 +38,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_decision_cases: Vec<LeanGoalDecisionCase>,
     #[serde(default)]
     pub(crate) goal_transition_cases: Vec<LeanGoalTransitionCase>,
+    #[serde(default)]
+    pub(crate) session_hydration_decision_cases: Vec<LeanSessionHydrationDecisionCase>,
+    #[serde(default)]
+    pub(crate) session_hydration_progress_cases: Vec<LeanSessionHydrationProgressCase>,
     pub(crate) frontend_client_shell_case_count: usize,
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) desktop_client_shell_case_count: usize,
@@ -381,6 +385,38 @@ pub(crate) struct LeanGoalTransitionCase {
     pub(crate) expected_blocked_audits: i64,
     pub(crate) expected_wrapup_requested: bool,
     pub(crate) expected_wrapup_completed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationDecisionCase {
+    pub(crate) name: String,
+    pub(crate) paired: bool,
+    pub(crate) pairing_requester_matches: bool,
+    pub(crate) pairing_agent_matches: bool,
+    pub(crate) active_member: bool,
+    pub(crate) membership_network_matches: bool,
+    pub(crate) owns_session: bool,
+    pub(crate) expected_admit: bool,
+    pub(crate) expected_selected_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationProgressCase {
+    pub(crate) name: String,
+    pub(crate) prev_session: String,
+    pub(crate) prev_agent: String,
+    pub(crate) session: String,
+    pub(crate) agent: String,
+    pub(crate) prev_phase: String,
+    pub(crate) prev_merged: usize,
+    pub(crate) prev_served: Option<usize>,
+    pub(crate) merged: usize,
+    pub(crate) served: Option<usize>,
+    pub(crate) failed: bool,
+    pub(crate) begin_request: bool,
+    pub(crate) expected_phase: String,
+    pub(crate) expected_merged: usize,
+    pub(crate) expected_complete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1071,6 +1107,16 @@ pub(crate) fn lean_goal_decision_cases() -> &'static [LeanGoalDecisionCase] {
 
 pub(crate) fn lean_goal_transition_cases() -> &'static [LeanGoalTransitionCase] {
     &lean_contract_snapshot().goal_transition_cases
+}
+
+pub(crate) fn lean_session_hydration_decision_cases() -> &'static [LeanSessionHydrationDecisionCase]
+{
+    &lean_contract_snapshot().session_hydration_decision_cases
+}
+
+pub(crate) fn lean_session_hydration_progress_cases() -> &'static [LeanSessionHydrationProgressCase]
+{
+    &lean_contract_snapshot().session_hydration_progress_cases
 }
 
 pub(crate) fn lean_trigger_dispatch_case_count() -> usize {

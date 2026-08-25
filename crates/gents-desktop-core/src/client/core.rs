@@ -29,6 +29,7 @@ use super::query::{
     load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
 };
 use crate::remote_admin::PairingErrorClass;
+use gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress;
 
 pub use bearer_pairing::{BearerInvitePreview, BearerPairingResult};
 
@@ -308,6 +309,7 @@ pub struct ClientCore {
     peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     p2p_health: watch::Sender<P2PHealth>,
+    hydration: watch::Sender<ClientHydrationProgress>,
     selected_agent_did: watch::Sender<Option<String>>,
     last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
@@ -381,6 +383,28 @@ impl ClientCore {
         self.p2p_health.subscribe()
     }
 
+    pub fn hydration_progress(&self) -> ClientHydrationProgress {
+        self.hydration.borrow().clone()
+    }
+
+    pub fn hydration_progress_updates(&self) -> watch::Receiver<ClientHydrationProgress> {
+        self.hydration.subscribe()
+    }
+
+    async fn send_p2p_command(&self, command: P2PSupervisorCommand) -> Result<()> {
+        let sender = self
+            .p2p_control
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("desktop P2P supervisor is shutting down"))?;
+        sender
+            .send(command)
+            .await
+            .context("queueing desktop P2P supervisor command")
+    }
+
     pub fn set_selected_agent_did(&self, agent_did: Option<String>) {
         self.selected_agent_did.send_replace(agent_did);
     }
@@ -442,17 +466,7 @@ impl ClientCore {
     }
 
     pub async fn request_p2p_repair(&self) -> Result<()> {
-        let sender = self
-            .p2p_control
-            .lock()
-            .await
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("desktop P2P supervisor is shutting down"))?;
-        sender
-            .send(P2PSupervisorCommand::RepairNow)
-            .await
-            .context("queueing desktop P2P repair request")
+        self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
     }
 
     pub async fn refresh_store(&self) -> Result<u64> {

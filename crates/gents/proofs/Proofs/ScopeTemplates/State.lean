@@ -90,7 +90,8 @@ def clientControlPlaneCollections : List String :=
    "Skill", "DatastoreToolSurface", "Task", "Schedule", "EventTrigger"]
 
 def clientToRuntimeCollections : List String :=
-  clientTranscriptCollections ++ ["BearerPairingReady", "PeerEndpoint"]
+  clientTranscriptCollections ++
+    ["BearerPairingReady", "PeerEndpoint", "SessionHydrationRequest"]
 
 def clientCollections : List String :=
   clientToRuntimeCollections ++ clientControlPlaneCollections
@@ -100,7 +101,8 @@ def clientRouteCollections : RouteDirection → List String
   | .runtimeToClient => clientCollections
 
 def machineCollections : List String :=
-  conversationCollections ++ ["PersonaConfigRequest", "AgentDirectoryEntry"]
+  conversationCollections ++
+    ["PersonaConfigRequest", "SessionHydrationRequest", "AgentDirectoryEntry"]
 
 def discoveryCollections : List String :=
   ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest",
@@ -130,6 +132,7 @@ def conversationRules : List CollectionRule :=
 def machineRules : List CollectionRule :=
   conversationRules ++
     [ { collection := "PersonaConfigRequest", field := "requester_did", source := .peerDid }
+    , { collection := "SessionHydrationRequest", field := "requester_did", source := .peerDid }
     , { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
 
 def subagentCoordinatorRules : List CollectionRule :=

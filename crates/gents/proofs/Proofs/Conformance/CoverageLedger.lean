@@ -135,6 +135,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "session-hydration"
+    , required := [Surface.runtimeInternal]
+    , deferred := [(Surface.operatorUi, "client hydration/progress is #1143")]
+    }
   , { feature := "runtime-reconcile"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -481,6 +485,16 @@ def caseCoverage : List CoverageEntry :=
       "GoalTransitionCases"
       "conformance::goals::generated_goal_transition_cases_fence_runtime_state_machine")
       "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_hydration_cases"
+      "SessionHydrationDecisionCases"
+      "conformance::session_hydration::generated_session_hydration_cases_match_decision_core")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_hydration_progress_cases"
+      "SessionHydrationProgressCases"
+      "conformance::session_hydration::generated_session_hydration_progress_cases_match_observe")
+      "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_decision_cases"
       "GoalDecisionCases"

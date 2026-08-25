@@ -15,6 +15,8 @@ pub mod policy;
 pub mod profiles;
 pub mod reciprocal;
 pub mod registry;
+pub mod session_hydration;
+pub mod session_hydration_reconcile;
 pub mod templates;
 pub mod trait_def;
 
@@ -65,6 +67,7 @@ pub use registry::{
     registry_upsert_mutation, resolve_network_id, run_registry_heartbeat, RegistryEntry,
     UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,
 };
+pub use session_hydration_reconcile::run_session_hydration_reconciler;
 pub use templates::{
     builtin_templates, combine_filters, conversation_like, decode_pairing_filters, equality_filter,
     filter_conditions, resolve_template, scope_filter, single_string_eq, to_replication_filters,

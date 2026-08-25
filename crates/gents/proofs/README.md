@@ -17,6 +17,7 @@ The proofs are strongest where the runtime is a state machine:
 - inference-call lifecycle, cancellation transitions, and slot reconstruction
 - scheduler and fleet slot accounting from persisted call rows
 - session retry/reissue
+- tenant-safe, on-demand session hydration admission and document selection
 - runtime reconcile generation publication
 - desired-state apply ordering and field ownership
 - task, schedule, and event-trigger dispatch
@@ -185,6 +186,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Barrel for fleet state, transitions, executable semantics, and slot accounting |
 | `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
+| `Proofs/SessionHydration/` | Exact applied peer/requester/agent route admission plus selected-network verified membership; exact requester/agent/session document selection; terminality; idempotent crash re-drive; pairing non-interference; and resettable session-scoped receiver progress (#1142). Fence: `tests/conformance/session_hydration.rs`. The reconciler consumes the selected set through DefraDB's bounded peer-targeted document pusher. |
 | `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
 | `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
 | `Proofs/ApplyReconcile.lean` | Barrel for desired-state apply, prefix safety, runtime bridge, and convergence |
