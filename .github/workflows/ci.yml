@@ -498,6 +498,13 @@ jobs:
         working-directory: apps/gents-desktop
         run: npm run test:ui:e2e
 
+      # Only deterministic shape assertions fail this lane. Wall-clock and
+      # resource measurements remain evidence until runner stability is known.
+      - name: Check mobile interaction structural budgets
+        if: matrix.suite == 'browser'
+        working-directory: apps/gents-desktop
+        run: npm run perf:mobile -- --runs=3 --output=test-results/mobile-performance/ci
+
       - name: Upload desktop UI artifacts
         if: failure() && matrix.suite == 'browser'
         uses: actions/upload-artifact@v7

@@ -75,6 +75,14 @@ test.describe("desktop live browser smoke", () => {
           `live browser smoke request ended ${completedSession.turnState}`,
         );
       }
+      expect(completedSession.timelinePage?.queryCount).toBe(2);
+      expect(completedSession.timelinePage?.queriedRows ?? 0).toBeGreaterThan(0);
+      expect(
+        completedSession.timelinePage?.queriedRows ?? Number.MAX_SAFE_INTEGER,
+      ).toBeLessThanOrEqual(
+        (completedSession.timelinePage?.messageQueryLimit ?? 0) +
+          (completedSession.timelinePage?.toolCallQueryLimit ?? 0),
+      );
 
       const transcriptRows = page.locator(
         '[data-testid="transcript-panel"] .message-card',
@@ -84,12 +92,10 @@ test.describe("desktop live browser smoke", () => {
         .toBeGreaterThanOrEqual(2);
       const transcriptRowCount = await transcriptRows.count();
 
-      await page.getByRole("button", { name: /open operations drawer/i }).click();
       await expect(
-        page.getByRole("complementary", { name: "Operations" }),
-      ).toBeVisible();
-      await expect(page.getByRole("tab", { name: /Backends/ })).toBeVisible();
-
+        page.getByRole("button", { name: /open operations drawer/i }),
+      ).toHaveCount(0);
+      await page.getByTestId("agent-actions").click();
       await page.getByRole("button", { name: "Configure" }).click();
       await expect(page.locator(".config-workspace")).toBeVisible();
       await page.getByTestId("config-tab-backends").click();
@@ -108,6 +114,12 @@ test.describe("desktop live browser smoke", () => {
         requestId: submitted.requestId,
         turnState: completedSession.turnState,
         transcriptRows: transcriptRowCount,
+        transcriptQueryCount: completedSession.timelinePage?.queryCount ?? 0,
+        transcriptQueriedRows: completedSession.timelinePage?.queriedRows ?? 0,
+        transcriptMessageQueryLimit:
+          completedSession.timelinePage?.messageQueryLimit ?? 0,
+        transcriptToolCallQueryLimit:
+          completedSession.timelinePage?.toolCallQueryLimit ?? 0,
         diagnostics,
       });
 

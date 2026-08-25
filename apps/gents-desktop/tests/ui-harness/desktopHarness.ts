@@ -42,17 +42,61 @@ export type DesktopUiHarnessScenario =
   | "long-content"
   | "active-turn"
   | "cascade-turn"
-  | "coding";
+  | "coding"
+  | "mobile-performance";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
+};
+
+export type MobilePerformanceBridgeCall = {
+  command: string;
+  durationMs: number;
+  requestBytes: number;
+  responseBytes: number;
+};
+
+export type MobilePerformanceCommit = {
+  id: string;
+  phase: "mount" | "update" | "nested-update";
+  actualDurationMs: number;
+  baseDurationMs: number;
+  startTimeMs: number;
+  commitTimeMs: number;
+};
+
+export type MobilePerformanceHarnessSnapshot = {
+  bridgeCalls: MobilePerformanceBridgeCall[];
+  commits: MobilePerformanceCommit[];
+  updateEvents: number;
+};
+
+export type MobilePerformanceHarnessController = {
+  fixture: typeof MOBILE_PERFORMANCE_FIXTURE;
+  reset(): void;
+  snapshot(): MobilePerformanceHarnessSnapshot;
+  recordCommit(commit: MobilePerformanceCommit): void;
+  streamUpdate(): number;
+  streamBurst(count: number): number;
+  setP2PStatus(status: "healthy" | "degraded" | "wedged"): void;
 };
 
 type DesktopUiHarness = {
   adapter: DesktopApiAdapter;
   listenerFactory: DesktopClientUpdatedListenerFactory;
   scenario: DesktopUiHarnessScenario;
+  performance: MobilePerformanceHarnessController | null;
 };
+
+export const MOBILE_PERFORMANCE_FIXTURE = {
+  id: "mobile-interactions-v1",
+  sessionIndexCount: 120,
+  shortSessionTimelineItems: 1,
+  largeSessionTimelineItems: 600,
+  transcriptPageSize: 40,
+  streamUpdateCount: 50,
+  repeatedNavigationCount: 10,
+} as const;
 
 export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
@@ -75,6 +119,13 @@ export function createDesktopUiHarness(
   let rowCount = 42;
   let deployment = createDeployment();
   let removed = false;
+  let p2pStatus: "healthy" | "degraded" | "wedged" = "healthy";
+  let updateEvents = 0;
+  let storeVersion = 1;
+  let reconcileVersion = 1;
+  let streamSequence = 0;
+  let bridgeCalls: MobilePerformanceBridgeCall[] = [];
+  let commits: MobilePerformanceCommit[] = [];
 
   const greeting =
     scenario === "long-content"
@@ -233,26 +284,112 @@ export function createDesktopUiHarness(
         : []),
     ],
   });
+  if (scenario === "mobile-performance") {
+    sessions.set("session-large", createLargePerformanceSession());
+    for (
+      let index = 2;
+      index < MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
+      index += 1
+    ) {
+      const sessionId = `session-index-${String(index).padStart(3, "0")}`;
+      sessions.set(sessionId, {
+        sessionId,
+        agentDid: AGENT_DID,
+        behaviorId: DEFAULT_BEHAVIOR_ID,
+        title: `Comparable session ${String(index).padStart(3, "0")}`,
+        previewText: `Durable session-index fixture row ${index}`,
+        status: "completed",
+        turnState: "completed",
+        latestRequestId: `request-index-${index}`,
+        timelineItems: [],
+      });
+    }
+    rowCount =
+      MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount * 2 +
+      MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems +
+      MOBILE_PERFORMANCE_FIXTURE.shortSessionTimelineItems;
+  }
   syncConversations();
 
-  function notify(reason: string) {
+  function notify(reason: string, responseOnly = false) {
+    updateEvents += 1;
+    if (reason === "store") {
+      storeVersion += 1;
+      if (!responseOnly) reconcileVersion += 1;
+    }
     window.setTimeout(() => {
       for (const listener of listeners) {
-        void listener({ reason });
+        void listener({
+          reason,
+          storeVersion,
+          reconcileVersion,
+          responseOnly,
+        });
       }
     }, 0);
+  }
+
+  function notifyBurst(reason: string, count: number, responseOnly = false) {
+    updateEvents += count;
+    window.setTimeout(() => {
+      for (let index = 0; index < count; index += 1) {
+        if (reason === "store") {
+          storeVersion += 1;
+          if (!responseOnly) reconcileVersion += 1;
+        }
+        for (const listener of listeners) {
+          void listener({
+            reason,
+            storeVersion,
+            reconcileVersion,
+            responseOnly,
+          });
+        }
+      }
+    }, 0);
+  }
+
+  function appendStreamChunk() {
+    streamSequence += 1;
+    const session = sessions.get("session-large");
+    if (!session) {
+      throw new Error("mobile performance fixture lost session-large");
+    }
+    let liveContent = "";
+    const timelineItems = session.timelineItems.map((item) =>
+      item.kind === "liveAssistant" && item.itemKey === "large-live"
+        ? (() => {
+            liveContent = `${item.content ?? ""} stream-chunk-${streamSequence}`;
+            return { ...item, content: liveContent };
+          })()
+        : item,
+    );
+    sessions.set("session-large", {
+      ...session,
+      previewText: `stream-chunk-${streamSequence}`,
+      timelineItems,
+      latestResponse: session.latestResponse
+        ? { ...session.latestResponse, content: liveContent }
+        : null,
+      activeResponseOverlay: {
+        ...session.activeResponseOverlay,
+        content: liveContent,
+        reasoning: null,
+      },
+    });
+    return streamSequence;
   }
 
   function snapshot() {
     const deployments = scenario === "empty-fleet" || removed ? [] : [deployment];
     const health = {
-      status: "healthy",
-      connectedPeerCount: 1,
-      replicatorCount: 1,
-      consecutiveFailures: 0,
-      lastOkAt: STARTED_AT,
-      lastError: null,
-      lastFailureAt: null,
+      status: p2pStatus,
+      connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
+      replicatorCount: p2pStatus === "healthy" ? 1 : 0,
+      consecutiveFailures: p2pStatus === "healthy" ? 0 : 3,
+      lastOkAt: p2pStatus === "healthy" ? STARTED_AT : null,
+      lastError: p2pStatus === "healthy" ? null : "fixture transport unavailable",
+      lastFailureAt: p2pStatus === "healthy" ? null : STARTED_AT,
     };
     const next: DesktopClientSnapshot = {
       bootstrap: {
@@ -655,9 +792,79 @@ export function createDesktopUiHarness(
       notify("runtime");
       return snapshot();
     },
-    async fetchSessionSnapshot(sessionId) {
+    async fetchSessionSnapshot(_sessionId, _agentDid, _requestId, timelinePage) {
+      const sessionId = _sessionId;
       const session = sessions.get(sessionId);
-      return session ? clone(session) : null;
+      if (!session) return null;
+      const snapshot = clone(session);
+      snapshot.projectionRevision = { storeVersion, reconcileVersion };
+      if (!timelinePage) return snapshot;
+
+      const totalItems = snapshot.timelineItems.length;
+      const limit = Math.max(1, Math.min(80, timelinePage.limit ?? 40));
+      const end = timelinePage.beforeItemKey
+        ? snapshot.timelineItems.findIndex(
+            (item) => item.itemKey === timelinePage.beforeItemKey,
+          )
+        : totalItems;
+      if (end < 0) {
+        throw new Error(
+          `session timeline cursor is no longer present: ${timelinePage.beforeItemKey}`,
+        );
+      }
+      const start = Math.max(0, end - limit);
+      snapshot.timelineItems = snapshot.timelineItems.slice(start, end);
+      snapshot.timelinePage = {
+        totalItems,
+        pageItems: snapshot.timelineItems.length,
+        hasOlder: start > 0,
+        hasNewer: end < totalItems,
+        oldestItemKey: snapshot.timelineItems[0]?.itemKey ?? null,
+        newestItemKey:
+          snapshot.timelineItems[snapshot.timelineItems.length - 1]?.itemKey ?? null,
+      };
+      return snapshot;
+    },
+    async fetchSessionLiveDelta(request) {
+      const session = sessions.get(request.sessionId);
+      if (!session || session.latestRequestId !== request.requestId) return null;
+      const revision = { storeVersion, reconcileVersion };
+      if (request.baseReconcileVersion !== reconcileVersion) {
+        return {
+          outcome: "snapshotRequired",
+          revision,
+          requestId: request.requestId,
+          progressSeq: streamSequence,
+          turnState: session.turnState,
+          status: session.latestResponse?.status ?? null,
+          content: null,
+          reasoning: null,
+        };
+      }
+      const response = session.activeResponseOverlay ?? session.latestResponse;
+      const content = harnessLiveTextPatch(
+        response?.content ?? "",
+        request.baseContentByteLen,
+        request.baseContentHash,
+      );
+      const reasoning = harnessLiveTextPatch(
+        response?.reasoning ?? "",
+        request.baseReasoningByteLen,
+        request.baseReasoningHash,
+      );
+      return {
+        outcome:
+          content.mode === "unchanged" && reasoning.mode === "unchanged"
+            ? "unchanged"
+            : "delta",
+        revision,
+        requestId: request.requestId,
+        progressSeq: streamSequence,
+        turnState: session.turnState,
+        status: session.latestResponse?.status ?? null,
+        content,
+        reasoning,
+      };
     },
     async sendChatMessage(request) {
       const content = request.content.trim();
@@ -1292,7 +1499,171 @@ export function createDesktopUiHarness(
     );
   }
 
-  return { adapter, listenerFactory, scenario };
+  const performance: MobilePerformanceHarnessController | null =
+    scenario === "mobile-performance"
+      ? {
+          fixture: MOBILE_PERFORMANCE_FIXTURE,
+          reset() {
+            bridgeCalls = [];
+            commits = [];
+            updateEvents = 0;
+          },
+          snapshot() {
+            return clone({ bridgeCalls, commits, updateEvents });
+          },
+          recordCommit(commit) {
+            commits.push(commit);
+          },
+          streamUpdate() {
+            const sequence = appendStreamChunk();
+            syncConversations();
+            notify("store", true);
+            return sequence;
+          },
+          streamBurst(count) {
+            let sequence = streamSequence;
+            for (let index = 0; index < count; index += 1) {
+              sequence = appendStreamChunk();
+            }
+            syncConversations();
+            notifyBurst("store", count, true);
+            return sequence;
+          },
+          setP2PStatus(status) {
+            p2pStatus = status;
+            notify("health");
+          },
+        }
+      : null;
+
+  const measuredAdapter = performance
+    ? new Proxy(adapter, {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver);
+          if (typeof value !== "function") return value;
+          return async (...args: unknown[]) => {
+            const startedAt = window.performance.now();
+            const result = await value(...args);
+            bridgeCalls.push({
+              command: String(property),
+              durationMs: window.performance.now() - startedAt,
+              requestBytes: serializedBytes(args),
+              responseBytes: serializedBytes(result),
+            });
+            return result;
+          };
+        },
+      })
+    : adapter;
+
+  return { adapter: measuredAdapter, listenerFactory, scenario, performance };
+}
+
+function createLargePerformanceSession(): DesktopSessionSnapshot {
+  const filler =
+    "bounded durable transcript fixture with markdown `code`, stable prose, and comparable byte shape";
+  const timelineItems = Array.from(
+    { length: MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems },
+    (_, index) => {
+      if (index === MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems - 1) {
+        return {
+          kind: "liveAssistant" as const,
+          itemKey: "large-live",
+          content: "stream-start",
+          reasoning: null,
+        };
+      }
+      return index % 2 === 0
+        ? {
+            kind: "userMessage" as const,
+            itemKey: `large-user-${index}`,
+            requestId: `large-request-${index}`,
+            sequence: index,
+            content: `User fixture row ${index}: ${filler}`,
+            timestamp: STARTED_AT,
+          }
+        : {
+            kind: "assistantMessage" as const,
+            itemKey: `large-assistant-${index}`,
+            sequence: index,
+            content: `Assistant fixture row ${index}: ${filler}`,
+            reasoning: index % 10 === 1 ? `Reasoning fixture ${index}` : null,
+            timestamp: STARTED_AT,
+          };
+    },
+  );
+  return {
+    sessionId: "session-large",
+    agentDid: AGENT_DID,
+    behaviorId: DEFAULT_BEHAVIOR_ID,
+    title: "Large local transcript — 600 timeline items",
+    previewText: "stream-start",
+    status: "processing",
+    turnState: "streaming",
+    latestRequestId: "large-request-live",
+    latestResponse: {
+      status: "streaming",
+      content: "stream-start",
+      reasoning: null,
+      tokenCount: 1,
+      materializedMessageSequence: null,
+      materializedAt: null,
+      completedAt: null,
+      backendId: "backend-openai",
+    },
+    pendingTurn: null,
+    activeResponseOverlay: { content: "stream-start", reasoning: null },
+    timelineItems,
+  };
+}
+
+function serializedBytes(value: unknown) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  } catch {
+    return 0;
+  }
+}
+
+function harnessLiveTextHash(value: string) {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(value)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+function harnessLiveTextPatch(value: string, baseByteLen: number, baseHash: string) {
+  const bytes = new TextEncoder().encode(value);
+  const prefix = new TextDecoder("utf-8", { fatal: true });
+  let prefixValue: string | null = null;
+  try {
+    prefixValue = prefix.decode(bytes.slice(0, baseByteLen));
+  } catch {
+    prefixValue = null;
+  }
+  const prefixMatches =
+    baseByteLen <= bytes.byteLength &&
+    prefixValue !== null &&
+    harnessLiveTextHash(prefixValue) === baseHash;
+  const mode =
+    prefixMatches && baseByteLen === bytes.byteLength
+      ? "unchanged"
+      : prefixMatches
+        ? "append"
+        : "replace";
+  return {
+    mode,
+    value:
+      mode === "unchanged"
+        ? ""
+        : mode === "append"
+          ? new TextDecoder().decode(bytes.slice(baseByteLen))
+          : value,
+    byteLen: bytes.byteLength,
+    hash: harnessLiveTextHash(value),
+  };
 }
 
 function createDeployment(): DeploymentView {
@@ -1562,6 +1933,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "active-turn":
     case "cascade-turn":
     case "coding":
+    case "mobile-performance":
       return value;
     default:
       return "default";

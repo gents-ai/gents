@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use gents_desktop_core::client::ClientCore;
+use gents_desktop_core::client::{ClientCore, ClientStore, SessionTranscriptQueryPage};
 use gents_protocol::message::Message;
 use gents_protocol::row::{AgentMessageRow, AgentRequestRow, AgentToolCallRow};
 use gents_protocol::transcript::{
@@ -15,7 +15,9 @@ use super::super::cause_derivation::{
 use super::super::types::{
     normalize_optional, turn_state_label, CommandDenialView, DerivedCancelCauseView,
     DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView, ResponseView,
-    RetryEligibilityView, SessionCompactionView, SessionContextView, ToolCallView, ToolResultView,
+    RetryEligibilityView, SessionCompactionView, SessionContextView, SessionLiveDeltaView,
+    SessionLiveTextPatchView, SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
+    ToolResultView,
 };
 use super::timeline::{build_rendered_timeline, has_materialized_user_owner};
 use super::{request_matches_agent, source_matches_agent};
@@ -201,6 +203,42 @@ fn build_session_context_view(
     }
 }
 
+fn build_session_context_from_store(
+    store: &ClientStore,
+    agent_did: Option<&str>,
+    behavior_id: Option<&str>,
+    session_id: &str,
+) -> SessionContextView {
+    let transcript = agent_did.map_or_else(
+        || store.transcript(session_id),
+        |agent_did| store.transcript_for_agent(session_id, agent_did),
+    );
+    let durable_message_count = transcript.messages.len();
+    let durable_messages = transcript
+        .messages
+        .into_iter()
+        .filter_map(|row| {
+            row.role
+                .as_deref()
+                .zip(row.content.as_deref())
+                .map(|(role, content)| {
+                    (
+                        row.sequence,
+                        gents_protocol::transcript::decode_persisted_message(role, content),
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    build_session_context_view(
+        store,
+        agent_did,
+        behavior_id,
+        session_id,
+        durable_messages,
+        durable_message_count,
+    )
+}
+
 pub fn attach_last_request_context(
     snapshot: &mut DesktopSessionSnapshot,
     request_id: String,
@@ -259,7 +297,26 @@ pub async fn build_session_snapshot_for_agent(
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
-    let store = core.store().snapshot();
+    build_session_snapshot_for_agent_with_transcript(
+        core,
+        agent_did,
+        session_id,
+        preferred_request_id,
+        None,
+        true,
+    )
+    .await
+}
+
+pub async fn build_session_snapshot_for_agent_with_transcript(
+    core: &ClientCore,
+    agent_did: Option<&str>,
+    session_id: &str,
+    preferred_request_id: Option<&str>,
+    transcript_store: Option<&ClientStore>,
+    include_live_tail: bool,
+) -> Option<DesktopSessionSnapshot> {
+    let (store, projection_revision) = core.store().snapshot_with_revision();
     let request_ids = agent_did.map_or_else(
         || store.requests_for_session(session_id),
         |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
@@ -268,8 +325,29 @@ pub async fn build_session_snapshot_for_agent(
         .into_iter()
         .map(|request| request.request_id.clone())
         .collect::<Vec<_>>();
-    let mut snapshot = build_session_snapshot_from_store_for_agent(
+    let loaded_context = match agent_did {
+        Some(agent_did) => {
+            match load_latest_session_request_context(core.node(), agent_did, &request_ids).await {
+                Ok(context) => context,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "gents_desktop::chat",
+                        agent_did,
+                        session_id,
+                        error = %error,
+                        "loading latest session context accounting failed"
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+    let mut snapshot = build_session_snapshot_from_store_for_agent_with_transcript(
         store.as_ref(),
+        transcript_store.unwrap_or(store.as_ref()),
+        transcript_store.is_some(),
+        include_live_tail,
         agent_did,
         session_id,
         preferred_request_id,
@@ -277,26 +355,398 @@ pub async fn build_session_snapshot_for_agent(
     let resolved_agent_did = snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.agent_did.clone());
-    if let (Some(snapshot), Some(agent_did)) = (snapshot.as_mut(), resolved_agent_did) {
-        match load_latest_session_request_context(core.node(), &agent_did, &request_ids).await {
-            Ok(Some(context)) => attach_last_request_context(
+    if let Some(snapshot) = snapshot.as_mut() {
+        if transcript_store.is_some() {
+            snapshot.context = build_session_context_from_store(
+                store.as_ref(),
+                resolved_agent_did.as_deref(),
+                snapshot.behavior_id.as_deref(),
+                session_id,
+            );
+        }
+        match loaded_context {
+            Some(context) => attach_last_request_context(
                 snapshot,
                 context.request_id,
                 context.call_id,
                 context.call_sequence,
                 context.accounting,
             ),
-            Ok(None) => {}
-            Err(error) => tracing::warn!(
-                target: "gents_desktop::chat",
-                agent_did,
-                session_id,
-                error = %error,
-                "loading latest session context accounting failed"
-            ),
+            None => {}
         }
+        snapshot.projection_revision = Some(SessionProjectionRevisionView {
+            store_version: projection_revision.store_version,
+            reconcile_version: projection_revision.reconcile_version,
+        });
     }
     snapshot
+}
+
+fn live_text_hash(value: &str) -> String {
+    // FNV-1a is used only as a compact projection continuity checksum, never as
+    // a security primitive. Length plus checksum cheaply checks that an append
+    // patch is based on the same text version held by the webview.
+    let mut hash = 0x811c9dc5_u32;
+    for byte in value.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    format!("{hash:08x}")
+}
+
+fn live_text_patch(
+    value: Option<&str>,
+    base_byte_len: usize,
+    base_hash: &str,
+) -> SessionLiveTextPatchView {
+    let value = value
+        .map(normalize_markdown_text)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+    let byte_len = value.len();
+    let hash = live_text_hash(&value);
+    let prefix_matches = base_byte_len <= byte_len
+        && value.is_char_boundary(base_byte_len)
+        && live_text_hash(&value[..base_byte_len]) == base_hash;
+    let (mode, patch_value) = if prefix_matches && base_byte_len == byte_len {
+        ("unchanged", String::new())
+    } else if prefix_matches {
+        ("append", value[base_byte_len..].to_string())
+    } else {
+        ("replace", value)
+    };
+    SessionLiveTextPatchView {
+        mode: mode.to_string(),
+        value: patch_value,
+        byte_len,
+        hash,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_session_live_delta(
+    core: &ClientCore,
+    session_id: &str,
+    agent_did: Option<&str>,
+    request_id: &str,
+    base_reconcile_version: u64,
+    base_content_byte_len: usize,
+    base_content_hash: &str,
+    base_reasoning_byte_len: usize,
+    base_reasoning_hash: &str,
+) -> SessionLiveDeltaView {
+    let (store, revision) = core.store().snapshot_with_revision();
+    build_session_live_delta_from_store(
+        store.as_ref(),
+        revision,
+        session_id,
+        agent_did,
+        request_id,
+        base_reconcile_version,
+        base_content_byte_len,
+        base_content_hash,
+        base_reasoning_byte_len,
+        base_reasoning_hash,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_session_live_delta_from_store(
+    store: &gents_desktop_core::client::ClientStore,
+    revision: gents_desktop_core::client::StoreProjectionRevision,
+    session_id: &str,
+    agent_did: Option<&str>,
+    request_id: &str,
+    base_reconcile_version: u64,
+    base_content_byte_len: usize,
+    base_content_hash: &str,
+    base_reasoning_byte_len: usize,
+    base_reasoning_hash: &str,
+) -> SessionLiveDeltaView {
+    let revision_view = SessionProjectionRevisionView {
+        store_version: revision.store_version,
+        reconcile_version: revision.reconcile_version,
+    };
+    let snapshot_required =
+        |turn_state: Option<String>, status: Option<String>| SessionLiveDeltaView {
+            outcome: "snapshotRequired".to_string(),
+            revision: revision_view.clone(),
+            request_id: request_id.to_string(),
+            progress_seq: None,
+            turn_state,
+            status,
+            content: None,
+            reasoning: None,
+        };
+
+    if revision.reconcile_version != base_reconcile_version {
+        return snapshot_required(None, None);
+    }
+
+    let request = store.requests.iter().find(|request| {
+        request.request_id == request_id
+            && request.session_id.as_deref() == Some(session_id)
+            && agent_did.is_none_or(|agent_did| request.agent_did.as_deref() == Some(agent_did))
+    });
+    if request.is_none() {
+        return snapshot_required(None, None);
+    }
+    let turn_state = agent_did.map_or_else(
+        || store.derive_turn_for_request(request_id),
+        |agent_did| store.derive_turn_for_request_for_agent(request_id, agent_did),
+    );
+    let turn_state_label = turn_state.map(turn_state_label).map(str::to_owned);
+    if !matches!(
+        turn_state,
+        Some(gents_protocol::client_protocol::ClientTurnState::WaitingForClaim)
+            | Some(gents_protocol::client_protocol::ClientTurnState::Streaming)
+    ) {
+        return snapshot_required(turn_state_label, None);
+    }
+
+    let response = agent_did.map_or_else(
+        || store.latest_response_for_request(request_id),
+        |agent_did| store.latest_response_for_request_for_agent(request_id, agent_did),
+    );
+    let Some(response) = response else {
+        return snapshot_required(turn_state_label, None);
+    };
+    let status = normalize_optional(response.status.as_deref());
+    let terminal_response = status.as_deref().is_some_and(|status| {
+        matches!(
+            status.to_ascii_lowercase().as_str(),
+            "complete" | "completed" | "error" | "failed" | "interrupted"
+        )
+    });
+    if terminal_response
+        || response.materialized_message_sequence.is_some()
+        || response.materialized_at.is_some()
+        || response.interrupted_at.is_some()
+    {
+        return snapshot_required(turn_state_label, status);
+    }
+
+    let content = live_text_patch(
+        response.content.as_deref(),
+        base_content_byte_len,
+        base_content_hash,
+    );
+    let reasoning = live_text_patch(
+        response.reasoning.as_deref(),
+        base_reasoning_byte_len,
+        base_reasoning_hash,
+    );
+    let outcome = if content.mode == "unchanged" && reasoning.mode == "unchanged" {
+        "unchanged"
+    } else {
+        "delta"
+    };
+    SessionLiveDeltaView {
+        outcome: outcome.to_string(),
+        revision: revision_view,
+        request_id: request_id.to_string(),
+        progress_seq: response.progress_seq,
+        turn_state: turn_state_label,
+        status,
+        content: Some(content),
+        reasoning: Some(reasoning),
+    }
+}
+
+pub const DEFAULT_SESSION_TIMELINE_PAGE_SIZE: usize = 40;
+pub const MAX_SESSION_TIMELINE_PAGE_SIZE: usize = 80;
+
+fn rendered_timeline_item_key(item: &super::super::types::RenderedTimelineItem) -> &str {
+    use super::super::types::RenderedTimelineItem;
+
+    match item {
+        RenderedTimelineItem::UserMessage { item_key, .. }
+        | RenderedTimelineItem::AssistantMessage { item_key, .. }
+        | RenderedTimelineItem::ToolGroup { item_key, .. }
+        | RenderedTimelineItem::PendingUserTurn { item_key, .. }
+        | RenderedTimelineItem::LiveAssistant { item_key, .. } => item_key,
+    }
+}
+
+fn rendered_timeline_durable_sequence(
+    item: &super::super::types::RenderedTimelineItem,
+) -> Option<Option<i64>> {
+    use super::super::types::RenderedTimelineItem;
+
+    match item {
+        RenderedTimelineItem::UserMessage { sequence, .. }
+        | RenderedTimelineItem::AssistantMessage { sequence, .. } => Some(*sequence),
+        RenderedTimelineItem::ToolGroup {
+            message_sequence, ..
+        } => Some(*message_sequence),
+        RenderedTimelineItem::PendingUserTurn { .. }
+        | RenderedTimelineItem::LiveAssistant { .. } => None,
+    }
+}
+
+/// Bound the bridge-visible transcript while retaining an opaque, durable-row
+/// cursor for explicit older-page requests. The full database-backed snapshot
+/// remains authoritative inside the bridge; only IPC materialization is
+/// windowed here.
+pub fn apply_session_timeline_page(
+    snapshot: &mut DesktopSessionSnapshot,
+    before_item_key: Option<&str>,
+    requested_limit: Option<usize>,
+) -> Result<(), String> {
+    apply_session_timeline_page_with_query(snapshot, before_item_key, requested_limit, None)
+}
+
+pub fn apply_session_timeline_page_with_query(
+    snapshot: &mut DesktopSessionSnapshot,
+    before_item_key: Option<&str>,
+    requested_limit: Option<usize>,
+    query_page: Option<&SessionTranscriptQueryPage>,
+) -> Result<(), String> {
+    let total_items = snapshot.timeline_items.len();
+    let limit = requested_limit
+        .unwrap_or(DEFAULT_SESSION_TIMELINE_PAGE_SIZE)
+        .clamp(1, MAX_SESSION_TIMELINE_PAGE_SIZE);
+
+    let (page, has_older, has_newer, oldest_item_key) = if let Some(query_page) = query_page {
+        let mut sequence_counts = BTreeMap::<i64, usize>::new();
+        let mut non_durable_items = 0_usize;
+        for item in &snapshot.timeline_items {
+            match rendered_timeline_durable_sequence(item) {
+                Some(Some(sequence)) => {
+                    *sequence_counts.entry(sequence).or_default() += 1;
+                }
+                Some(None) => {
+                    return Err(
+                        "queried session timeline contains an item without a durable sequence"
+                            .to_string(),
+                    );
+                }
+                None => non_durable_items += 1,
+            }
+        }
+        if non_durable_items > limit {
+            return Err(format!(
+                "session timeline has {non_durable_items} live items but the visible page budget is {limit}"
+            ));
+        }
+
+        let mut remaining = limit - non_durable_items;
+        let mut selected_sequences = HashSet::new();
+        for (&sequence, &item_count) in sequence_counts.iter().rev() {
+            if item_count > remaining {
+                if selected_sequences.is_empty() && non_durable_items == 0 {
+                    return Err(format!(
+                        "session timeline sequence group {sequence} exceeds the visible page budget of {limit}"
+                    ));
+                }
+                break;
+            }
+            selected_sequences.insert(sequence);
+            remaining -= item_count;
+        }
+
+        let page = snapshot
+            .timeline_items
+            .iter()
+            .filter(|item| match rendered_timeline_durable_sequence(item) {
+                Some(Some(sequence)) => selected_sequences.contains(&sequence),
+                Some(None) => false,
+                None => true,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let oldest_sequence = selected_sequences.iter().copied().min();
+        let has_unselected_sequences = selected_sequences.len() < sequence_counts.len();
+        let oldest_item_key = oldest_sequence
+            .and_then(|oldest_sequence| {
+                page.iter().find(|item| {
+                    rendered_timeline_durable_sequence(item) == Some(Some(oldest_sequence))
+                })
+            })
+            .map(rendered_timeline_item_key)
+            .map(str::to_owned)
+            .or_else(|| {
+                if query_page.source_exhausted && !has_unselected_sequences {
+                    return None;
+                }
+                query_page
+                    .store
+                    .messages
+                    .iter()
+                    .filter_map(|row| row.sequence)
+                    .chain(
+                        query_page
+                            .store
+                            .tool_calls
+                            .iter()
+                            .filter_map(|row| row.message_sequence),
+                    )
+                    .min()
+                    .map(|sequence| format!("tools-{sequence}"))
+            });
+        (
+            page,
+            has_unselected_sequences || !query_page.source_exhausted,
+            query_page.has_newer,
+            oldest_item_key,
+        )
+    } else {
+        let end = match before_item_key {
+            Some(cursor) => snapshot
+                .timeline_items
+                .iter()
+                .position(|item| rendered_timeline_item_key(item) == cursor)
+                .ok_or_else(|| format!("session timeline cursor is no longer present: {cursor}"))?,
+            None => total_items,
+        };
+        let mut start = end.saturating_sub(limit);
+        if start > 0 {
+            if let Some(boundary_sequence) =
+                rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
+            {
+                if rendered_timeline_durable_sequence(&snapshot.timeline_items[start - 1])
+                    == Some(boundary_sequence)
+                {
+                    while start < end
+                        && rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
+                            == Some(boundary_sequence)
+                    {
+                        start += 1;
+                    }
+                    if start == end {
+                        return Err(format!(
+                            "session timeline sequence group {boundary_sequence:?} exceeds the visible page budget of {limit}"
+                        ));
+                    }
+                }
+            }
+        }
+        let page = snapshot.timeline_items[start..end].to_vec();
+        let oldest_item_key = page
+            .first()
+            .map(rendered_timeline_item_key)
+            .map(str::to_owned);
+        (page, start > 0, end < total_items, oldest_item_key)
+    };
+    let newest_item_key = page
+        .last()
+        .map(rendered_timeline_item_key)
+        .map(str::to_owned);
+    snapshot.timeline_items = page;
+    snapshot.timeline_page = Some(SessionTimelinePageView {
+        total_items: query_page.map_or_else(|| usize_to_i64(total_items), |_| -1),
+        total_items_exact: query_page.map(|_| false),
+        page_items: usize_to_i64(snapshot.timeline_items.len()),
+        has_older,
+        has_newer,
+        oldest_item_key,
+        newest_item_key,
+        query_count: query_page.map(|page| page.query_count as i64),
+        queried_rows: query_page.map(|page| usize_to_i64(page.queried_rows)),
+        message_query_limit: query_page.map(|page| usize_to_i64(page.message_query_limit)),
+        tool_call_query_limit: query_page.map(|page| usize_to_i64(page.tool_call_query_limit)),
+    });
+    Ok(())
 }
 
 async fn load_latest_session_request_context(
@@ -499,6 +949,26 @@ pub fn build_session_snapshot_from_store_for_agent(
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
+    build_session_snapshot_from_store_for_agent_with_transcript(
+        store,
+        store,
+        false,
+        true,
+        agent_did,
+        session_id,
+        preferred_request_id,
+    )
+}
+
+fn build_session_snapshot_from_store_for_agent_with_transcript(
+    store: &ClientStore,
+    transcript_store: &ClientStore,
+    transcript_is_bounded: bool,
+    include_live_tail: bool,
+    agent_did: Option<&str>,
+    session_id: &str,
+    preferred_request_id: Option<&str>,
+) -> Option<DesktopSessionSnapshot> {
     let conversation = store.conversations.iter().find(|row| {
         row.session_id == session_id
             && agent_did.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
@@ -550,10 +1020,14 @@ pub fn build_session_snapshot_from_store_for_agent(
         return None;
     }
 
-    let transcript = agent_did.map_or_else(
-        || store.transcript(session_id),
-        |agent_did| store.transcript_for_agent(session_id, agent_did),
-    );
+    let transcript = if transcript_is_bounded {
+        transcript_store.transcript(session_id)
+    } else {
+        agent_did.map_or_else(
+            || transcript_store.transcript(session_id),
+            |agent_did| transcript_store.transcript_for_agent(session_id, agent_did),
+        )
+    };
     let latest_request_id = preferred_request_id
         .filter(|request_id| {
             requests.iter().any(|row| {
@@ -653,11 +1127,13 @@ pub fn build_session_snapshot_from_store_for_agent(
             .as_deref()
             .unwrap_or_default()
             .to_ascii_lowercase();
-        matches!(
-            turn_state,
-            Some(gents_protocol::client_protocol::ClientTurnState::WaitingForClaim)
-                | Some(gents_protocol::client_protocol::ClientTurnState::Streaming)
-        ) && response.materialized_message_sequence.is_none()
+        include_live_tail
+            && matches!(
+                turn_state,
+                Some(gents_protocol::client_protocol::ClientTurnState::WaitingForClaim)
+                    | Some(gents_protocol::client_protocol::ClientTurnState::Streaming)
+            )
+            && response.materialized_message_sequence.is_none()
             && response.interrupted_at.is_none()
             && !matches!(
                 response_status.as_str(),
@@ -672,7 +1148,9 @@ pub fn build_session_snapshot_from_store_for_agent(
                     .as_deref()
                     .is_some_and(|value| !value.trim().is_empty()))
     });
-    let pending_turn = latest_request_id
+    let pending_turn = include_live_tail
+        .then_some(latest_request_id.as_deref())
+        .flatten()
         .as_deref()
         .and_then(|request_id| build_pending_turn(store, agent_did, session_id, request_id));
     let resolved_agent_did = conversation
@@ -856,6 +1334,8 @@ pub fn build_session_snapshot_from_store_for_agent(
         pending_turn,
         context,
         timeline_items,
+        timeline_page: None,
+        projection_revision: None,
         messages,
         tool_calls,
         tool_results,
@@ -965,7 +1445,7 @@ fn has_legacy_materialized_user_owner(
 }
 
 fn build_pending_turn(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &ClientStore,
     agent_did: Option<&str>,
     session_id: &str,
     request_id: &str,
@@ -981,6 +1461,9 @@ fn build_pending_turn(
 
     let lifecycle_state = normalize_optional(request.lifecycle_state.as_deref());
     let content = normalize_optional(request.content.as_deref())?;
+    // Pending ownership is session state, not visible-page state. A materialized
+    // user row outside the current window must still suppress the request-owned
+    // placeholder at the tip.
     let transcript = agent_did.map_or_else(
         || store.transcript(session_id),
         |agent_did| store.transcript_for_agent(session_id, agent_did),

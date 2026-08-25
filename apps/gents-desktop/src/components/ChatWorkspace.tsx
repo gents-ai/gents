@@ -45,6 +45,7 @@ export type ChatWorkspaceProps = {
   onDraftChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onRetryMessage?: (requestId: string) => void | Promise<void>;
+  onLoadOlderTimeline?: () => Promise<boolean>;
   onOpenMobileNavigation?: () => void;
   onInterruptAccepted?: () => void | Promise<void>;
 };
@@ -96,6 +97,7 @@ export function ActiveChatWorkspace({
   onDraftChange,
   onSend,
   onRetryMessage,
+  onLoadOlderTimeline,
   onOpenMobileNavigation,
   onInterruptAccepted,
 }: ActiveChatWorkspaceProps) {
@@ -190,6 +192,7 @@ export function ActiveChatWorkspace({
             session={session}
             optimisticPendingTurn={optimisticPendingTurn}
             onRetryMessage={onRetryMessage}
+            onLoadOlder={onLoadOlderTimeline}
           />
 
           <HoldsPanel

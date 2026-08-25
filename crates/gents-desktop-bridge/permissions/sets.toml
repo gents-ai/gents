@@ -25,8 +25,11 @@ permissions = [
 
 [[set]]
 identifier = "session-read"
-description = "Session/conversation snapshot read"
-permissions = ["allow-desktop-session-snapshot"]
+description = "Session/conversation snapshot and live-delta reads"
+permissions = [
+  "allow-desktop-session-snapshot",
+  "allow-desktop-session-live-delta",
+]
 
 [[set]]
 identifier = "trace-read"

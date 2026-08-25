@@ -49,6 +49,10 @@
       "permissionSet": "session-read"
     },
     {
+      "name": "desktop_session_live_delta",
+      "permissionSet": "session-read"
+    },
+    {
       "name": "desktop_request_timeline",
       "permissionSet": "trace-read"
     },
@@ -269,7 +273,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "1.0",
+  "contractVersion": "1.3",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",

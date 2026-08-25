@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -544,11 +545,14 @@ describe("ChatTranscriptPanel states", () => {
     expect(screen.queryByText("message-49")).not.toBeInTheDocument();
     expect(screen.getByText("message-50")).toBeInTheDocument();
     expect(screen.getByText("message-89")).toBeInTheDocument();
+    const retainedMessage = screen.getByText("message-50");
 
-    fireEvent.scroll(panel);
+    fireEvent.click(screen.getByTestId("transcript-load-older"));
 
     await waitFor(() => expect(screen.getByText("message-10")).toBeInTheDocument());
     expect(screen.queryByText("message-9")).not.toBeInTheDocument();
+    expect(screen.getByText("message-50")).toBe(retainedMessage);
+    expect(retainedMessage.isConnected).toBe(true);
     expect(panel.scrollTop).toBe(800);
 
     const streamingTimelineItems: RenderedTimelineItem[] = [
@@ -576,5 +580,63 @@ describe("ChatTranscriptPanel states", () => {
       expect(screen.queryByText("message-10")).not.toBeInTheDocument(),
     );
     expect(screen.getByText("message-11")).toBeInTheDocument();
+  });
+
+  it("requests exactly one remote page and retains the mounted tip rows", async () => {
+    const allItems: RenderedTimelineItem[] = Array.from({ length: 80 }, (_, index) => ({
+      kind: "userMessage",
+      itemKey: `remote-${index}`,
+      content: `remote-message-${index}`,
+    }));
+    const onLoad = vi.fn();
+
+    function RemotePageFixture() {
+      const [session, setSession] = useState(
+        makeSession({
+          timelineItems: allItems.slice(40),
+          timelinePage: {
+            totalItems: 80,
+            pageItems: 40,
+            hasOlder: true,
+            hasNewer: false,
+            oldestItemKey: "remote-40",
+            newestItemKey: "remote-79",
+          },
+        }),
+      );
+      return (
+        <ChatTranscriptPanel
+          selectedSessionId="s1"
+          session={session}
+          onLoadOlder={async () => {
+            onLoad();
+            setSession((current) => ({
+              ...current,
+              timelineItems: allItems,
+              timelinePage: {
+                totalItems: 80,
+                pageItems: 80,
+                hasOlder: false,
+                hasNewer: false,
+                oldestItemKey: "remote-0",
+                newestItemKey: "remote-79",
+              },
+            }));
+            return true;
+          }}
+        />
+      );
+    }
+
+    render(<RemotePageFixture />);
+    const retainedMessage = screen.getByText("remote-message-40");
+    fireEvent.click(screen.getByTestId("transcript-load-older"));
+
+    await waitFor(() =>
+      expect(screen.getByText("remote-message-0")).toBeInTheDocument(),
+    );
+    expect(onLoad).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("remote-message-40")).toBe(retainedMessage);
+    expect(screen.queryByTestId("transcript-load-older")).not.toBeInTheDocument();
   });
 });

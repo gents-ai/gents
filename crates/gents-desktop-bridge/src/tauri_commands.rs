@@ -30,7 +30,7 @@ pub(crate) async fn emit_config_update_and_snapshot<R: Runtime>(
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let _ = app.emit(
         "desktop://client-updated",
-        ClientUpdateEvent { reason: "config" },
+        ClientUpdateEvent::coarse("config"),
     );
     build_client_snapshot_with_grants(Some(core), Some(&state.policy), snapshot_grants(state))
         .await

@@ -1402,6 +1402,32 @@ Denies the desktop_schedule_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-session-live-delta`
+
+</td>
+<td>
+
+Enables the desktop_session_live_delta command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-live-delta`
+
+</td>
+<td>
+
+Denies the desktop_session_live_delta command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-session-snapshot`
 
 </td>
@@ -1797,7 +1823,7 @@ Client start/shutdown and selected-agent
 </td>
 <td>
 
-Session/conversation snapshot read
+Session/conversation snapshot and live-delta reads
 
 </td>
 </tr>

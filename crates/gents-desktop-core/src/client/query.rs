@@ -17,10 +17,31 @@ use gents_protocol::schemas::{
     TASK_NAME, TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
 };
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use serde_json::Value;
 
 use super::peer_directory::PeerRecord;
 use super::store::{ClientStore, ClientStoreRows};
+
+pub const DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 40;
+pub const MAX_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 80;
+const SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET: usize = 320;
+
+#[derive(Debug)]
+pub struct SessionTranscriptQueryPage {
+    pub store: ClientStore,
+    pub query_count: u64,
+    pub queried_rows: usize,
+    pub message_query_limit: usize,
+    pub tool_call_query_limit: usize,
+    pub source_exhausted: bool,
+    pub has_newer: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptCursorRow {
+    sequence: Option<i64>,
+}
 
 const AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
@@ -437,9 +458,224 @@ pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<Cl
         }));
     };
 
-    let patch_query = remote_chat_patch_query(&session_id);
+    let patch_query = remote_chat_patch_query(&session_id, request_id);
     let data = execute_local_graphql_query(node, &patch_query, "local chat patch").await?;
     chat_patch_from_data(&data)
+}
+
+fn tool_group_cursor_sequence(cursor: &str) -> Option<i64> {
+    cursor
+        .strip_prefix("tools-")
+        .and_then(|value| value.parse::<i64>().ok())
+}
+
+async fn resolve_transcript_cursor_sequence(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: Option<&str>,
+    requester_did: Option<&str>,
+    cursor: &str,
+) -> Result<i64> {
+    if let Some(sequence) = tool_group_cursor_sequence(cursor) {
+        return Ok(sequence);
+    }
+    let session_id = escape_graphql_string(session_id);
+    let message_key = escape_graphql_string(cursor);
+    let agent_filter = agent_did
+        .map(escape_graphql_string)
+        .map(|agent_did| format!(", agent_did: {{ _eq: \"{agent_did}\" }}"))
+        .unwrap_or_default();
+    let requester_filter = requester_did
+        .map(escape_graphql_string)
+        .map(|requester_did| format!(", requester_did: {{ _eq: \"{requester_did}\" }}"))
+        .unwrap_or_default();
+    let rows: Vec<TranscriptCursorRow> = load_rows(
+        node,
+        AGENT_MESSAGE_NAME,
+        &format!(
+            r#"query {{
+  AgentMessage(
+    filter: {{
+      session_id: {{ _eq: "{session_id}" }},
+      message_key: {{ _eq: "{message_key}" }}{agent_filter}{requester_filter}
+    }},
+    limit: 1
+  ) {{ sequence }}
+}}"#
+        ),
+    )
+    .await?;
+    rows.first()
+        .and_then(|row| row.sequence)
+        .ok_or_else(|| anyhow!("session transcript cursor is no longer present: {cursor}"))
+}
+
+/// Query a bounded transcript window directly from DefraDB. The cursor is a
+/// bridge item key, but is resolved to the durable sequence space before the
+/// page query so inserts at the tip cannot shift an older page. Messages and
+/// tool groups are independently overscanned because one sequence may produce
+/// both timeline items; the bridge performs the final visible-item limit.
+pub async fn load_session_transcript_page(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: Option<&str>,
+    requester_did: Option<&str>,
+    before_item_key: Option<&str>,
+    requested_limit: Option<usize>,
+) -> Result<SessionTranscriptQueryPage> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        bail!("session transcript query requires a session id");
+    }
+    let limit = requested_limit
+        .unwrap_or(DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE)
+        .clamp(1, MAX_SESSION_TRANSCRIPT_PAGE_SIZE);
+    let message_query_limit = limit.saturating_add(1);
+    let tool_call_query_limit = SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET.saturating_add(1);
+    let before_sequence = match before_item_key {
+        Some(cursor) => Some(
+            resolve_transcript_cursor_sequence(node, session_id, agent_did, requester_did, cursor)
+                .await?,
+        ),
+        None => None,
+    };
+    let escaped_session_id = escape_graphql_string(session_id);
+    let agent_filter = agent_did
+        .map(escape_graphql_string)
+        .map(|agent_did| format!(", agent_did: {{ _eq: \"{agent_did}\" }}"))
+        .unwrap_or_default();
+    let requester_filter = requester_did
+        .map(escape_graphql_string)
+        .map(|requester_did| format!(", requester_did: {{ _eq: \"{requester_did}\" }}"))
+        .unwrap_or_default();
+    let message_sequence_filter = before_sequence
+        .map(|sequence| format!(", sequence: {{ _lt: {sequence} }}"))
+        .unwrap_or_default();
+    let message_query = format!(
+        r#"query DesktopSessionTranscriptMessages {{
+  AgentMessage(
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter}{requester_filter}{message_sequence_filter} }},
+    order: [{{ sequence: DESC }}, {{ message_key: DESC }}],
+    limit: {message_query_limit}
+  ) {{ {AGENT_MESSAGE_FIELDS} }}
+}}"#
+    );
+    let started = std::time::Instant::now();
+    let message_data =
+        execute_local_graphql_query(node, &message_query, "session transcript messages").await?;
+    let queried_messages: Vec<AgentMessageRow> =
+        parse_query_rows(&message_data, AGENT_MESSAGE_NAME)?;
+    if queried_messages.iter().any(|row| row.sequence.is_none()) {
+        bail!(
+            "session transcript contains legacy messages without a sequence; bounded pagination cannot represent that schema state losslessly"
+        );
+    }
+    let messages_exhausted = queried_messages.len() < message_query_limit;
+    let mut messages = queried_messages.clone();
+    let deferred_message_sequence = (!messages_exhausted)
+        .then(|| queried_messages.last().and_then(|row| row.sequence))
+        .flatten();
+    if let Some(sequence) = deferred_message_sequence {
+        messages.retain(|row| row.sequence != Some(sequence));
+        if messages.is_empty() {
+            bail!(
+                "session transcript has more than {limit} messages at sequence {sequence}; the sequence-atomic page budget cannot represent it losslessly"
+            );
+        }
+    }
+
+    // Tool calls are bounded to the same sequence window as the message
+    // overscan. This keeps a long tool-bearing session pageable while still
+    // bounding a pathological single tool group.
+    let mut tool_sequence_conditions = Vec::new();
+    if let Some(sequence) = before_sequence {
+        tool_sequence_conditions.push(format!("_lt: {sequence}"));
+    }
+    if let Some(sequence) = deferred_message_sequence {
+        tool_sequence_conditions.push(format!("_gt: {sequence}"));
+    }
+    let tool_sequence_filter = if tool_sequence_conditions.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", message_sequence: {{ {} }}",
+            tool_sequence_conditions.join(", ")
+        )
+    };
+    let tool_query = format!(
+        r#"query DesktopSessionTranscriptTools {{
+  AgentToolCall(
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter}{requester_filter}{tool_sequence_filter} }},
+    order: [{{ message_sequence: DESC }}, {{ tool_call_key: DESC }}],
+    limit: {tool_call_query_limit}
+  ) {{ {AGENT_TOOL_CALL_FIELDS} }}
+}}"#
+    );
+    let tool_data =
+        execute_local_graphql_query(node, &tool_query, "session transcript tools").await?;
+    let queried_tool_calls: Vec<AgentToolCallRow> =
+        parse_query_rows(&tool_data, AGENT_TOOL_CALL_NAME)?;
+    if queried_tool_calls
+        .iter()
+        .any(|row| row.message_sequence.is_none())
+    {
+        bail!(
+            "session transcript contains legacy tool calls without a message sequence; bounded pagination cannot represent that schema state losslessly"
+        );
+    }
+    let tools_exhausted = queried_tool_calls.len() < tool_call_query_limit;
+    let mut tool_calls = queried_tool_calls.clone();
+    if !tools_exhausted {
+        let deferred_sequence = queried_tool_calls
+            .last()
+            .and_then(|row| row.message_sequence)
+            .expect("null tool sequences rejected above");
+        tool_calls.retain(|row| row.message_sequence != Some(deferred_sequence));
+        // The overscan row proves every lower sequence is outside the complete
+        // tool window too. Defer their messages with the boundary group so the
+        // bridge never renders a message whose tools were truncated.
+        messages.retain(|row| {
+            row.sequence
+                .is_some_and(|sequence| sequence > deferred_sequence)
+        });
+        if tool_calls.is_empty() {
+            bail!(
+                "session transcript has more than {} tool calls at sequence {deferred_sequence}; the sequence-atomic tool budget cannot represent it losslessly",
+                SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET
+            );
+        }
+    }
+    let source_exhausted = messages_exhausted && tools_exhausted;
+    let queried_rows = queried_messages
+        .len()
+        .saturating_add(queried_tool_calls.len());
+    let query_count = 2 + u64::from(before_item_key.is_some());
+    tracing::debug!(
+        target: "gents_desktop_core::query",
+        session_id,
+        before_sequence,
+        requested_limit = limit,
+        message_query_limit,
+        tool_call_query_limit,
+        query_count,
+        queried_rows,
+        source_exhausted,
+        elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
+        "loaded bounded DefraDB transcript page"
+    );
+    Ok(SessionTranscriptQueryPage {
+        store: ClientStore::from_rows(ClientStoreRows {
+            messages,
+            tool_calls,
+            ..ClientStoreRows::default()
+        }),
+        query_count,
+        queried_rows,
+        message_query_limit,
+        tool_call_query_limit,
+        source_exhausted,
+        has_newer: before_sequence.is_some(),
+    })
 }
 
 fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
@@ -451,8 +687,6 @@ fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
         sessions: parse_query_rows(&data, "AgentSession")?,
         goals: parse_query_rows(&data, "Goal")?,
         tool_calls: parse_query_rows(&data, "AgentToolCall")?,
-        tool_results: parse_query_rows(&data, "AgentToolResult")?,
-        compaction_entries: parse_query_rows(&data, "CompactionEntry")?,
         ..ClientStoreRows::default()
     }))
 }
@@ -575,20 +809,19 @@ query DesktopLocalRequestLookup {{
     )
 }
 
-fn remote_chat_patch_query(session_id: &str) -> String {
+fn remote_chat_patch_query(session_id: &str, request_id: &str) -> String {
     let session_id = escape_graphql_string(session_id);
+    let request_id = escape_graphql_string(request_id);
     format!(
         r#"
 query DesktopRemoteChatPatch {{
   AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_CONVERSATION_FIELDS} }}
   AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_REQUEST_FIELDS} }}
   AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
-  AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+  AgentMessage(filter: {{ _and: [{{ session_id: {{ _eq: "{session_id}" }} }}, {{ request_id: {{ _eq: "{request_id}" }} }}] }}) {{ {AGENT_MESSAGE_FIELDS} }}
   AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_SESSION_FIELDS} }}
   Goal(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {GOAL_FIELDS} }}
-  AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
-  AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }}
-  CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {COMPACTION_ENTRY_FIELDS} }}
+  AgentToolCall(filter: {{ _and: [{{ session_id: {{ _eq: "{session_id}" }} }}, {{ request_id: {{ _eq: "{request_id}" }} }}] }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
 }}
 "#
     )
@@ -1169,6 +1402,295 @@ mod tests {
                 .all(|row| row.session_id.as_deref() == Some("sess-selected")),
             "unrelated session leaked into selected patch"
         );
+    }
+
+    #[tokio::test]
+    async fn transcript_pages_bound_defradb_rows_and_use_stable_sequence_cursors() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let fields = (1..=600)
+            .map(|sequence| {
+                format!(
+                    r#"m{sequence}: create_AgentMessage(input: {{
+                        message_key: "paged:{sequence}",
+                        session_id: "paged",
+                        sequence: {sequence},
+                        role: "assistant",
+                        content: "row {sequence}",
+                        timestamp: "2026-08-25T00:00:00Z"
+                    }}) {{ _docID }}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let response = node.execute(&format!("mutation {{ {fields} }}")).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let tip = load_session_transcript_page(node.as_ref(), "paged", None, None, None, Some(10))
+            .await
+            .expect("tip page");
+        assert_eq!(tip.query_count, 2);
+        assert_eq!(tip.message_query_limit, 11);
+        assert_eq!(tip.tool_call_query_limit, 321);
+        assert_eq!(tip.queried_rows, 11);
+        assert!(!tip.source_exhausted);
+        let tip_sequences = tip
+            .store
+            .messages
+            .iter()
+            .filter_map(|row| row.sequence)
+            .collect::<Vec<_>>();
+        assert_eq!(tip_sequences.iter().copied().min(), Some(591));
+        assert_eq!(tip_sequences.iter().copied().max(), Some(600));
+
+        let older = load_session_transcript_page(
+            node.as_ref(),
+            "paged",
+            None,
+            None,
+            Some("paged:591"),
+            Some(10),
+        )
+        .await
+        .expect("older page");
+        assert_eq!(older.query_count, 3);
+        assert_eq!(older.queried_rows, 11);
+        assert!(older.has_newer);
+        assert!(older
+            .store
+            .messages
+            .iter()
+            .all(|row| row.sequence.is_some_and(|sequence| sequence < 591)));
+        assert!(tip_sequences.iter().all(|sequence| older
+            .store
+            .messages
+            .iter()
+            .all(|row| row.sequence != Some(*sequence))));
+
+        let tool_cursor = tool_group_cursor_sequence("tools-42");
+        assert_eq!(tool_cursor, Some(42));
+
+        let tool_fields = (1..=321)
+            .map(|sequence| {
+                format!(
+                    r#"t{sequence}: create_AgentToolCall(input: {{
+                        tool_call_key: "tool-heavy:{sequence}",
+                        session_id: "tool-heavy",
+                        message_sequence: {sequence},
+                        tool_name: "bounded_tool",
+                        tool_call_id: "call-{sequence}",
+                        status: "completed",
+                        lifecycle_state: "completed"
+                    }}) {{ _docID }}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let response = node.execute(&format!("mutation {{ {tool_fields} }}")).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let tool_page =
+            load_session_transcript_page(node.as_ref(), "tool-heavy", None, None, None, Some(40))
+                .await
+                .expect("many bounded tool groups remain pageable");
+        assert_eq!(tool_page.store.tool_calls.len(), 320);
+        assert_eq!(tool_page.queried_rows, 321);
+        assert!(!tool_page.source_exhausted);
+
+        let message_fields = (1..=10)
+            .map(|sequence| {
+                format!(
+                    r#"wm{sequence}: create_AgentMessage(input: {{
+                        message_key: "tool-window:{sequence}",
+                        session_id: "tool-window",
+                        sequence: {sequence},
+                        role: "assistant",
+                        content: "window row {sequence}"
+                    }}) {{ _docID }}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let window_tool_fields = (1..=400)
+            .map(|index| {
+                let sequence = ((index - 1) / 40) + 1;
+                format!(
+                    r#"wt{index}: create_AgentToolCall(input: {{
+                        tool_call_key: "tool-window:{index}",
+                        session_id: "tool-window",
+                        message_sequence: {sequence},
+                        tool_name: "window_tool",
+                        tool_call_id: "window-call-{index}"
+                    }}) {{ _docID }}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let response = node
+            .execute(&format!(
+                "mutation {{ {message_fields} {window_tool_fields} }}"
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let window_tip =
+            load_session_transcript_page(node.as_ref(), "tool-window", None, None, None, Some(10))
+                .await
+                .expect("tool-window tip");
+        assert_eq!(window_tip.store.tool_calls.len(), 320);
+        assert!(window_tip
+            .store
+            .messages
+            .iter()
+            .all(|row| row.sequence.is_some_and(|sequence| sequence > 2)));
+        assert!(!window_tip.source_exhausted);
+        let window_older = load_session_transcript_page(
+            node.as_ref(),
+            "tool-window",
+            None,
+            None,
+            Some("tool-window:3"),
+            Some(10),
+        )
+        .await
+        .expect("tool-window older page");
+        assert_eq!(
+            window_older
+                .store
+                .messages
+                .iter()
+                .filter_map(|row| row.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(window_older.store.tool_calls.len(), 80);
+        assert!(window_older.source_exhausted);
+    }
+
+    #[tokio::test]
+    async fn transcript_pages_preserve_scope_and_equal_sequence_groups() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    kept: create_AgentMessage(input: {
+                        message_key: "scope:kept", session_id: "shared-session",
+                        agent_did: "did:test:selected", requester_did: "did:test:local",
+                        sequence: 3, role: "assistant", content: "kept"
+                    }) { _docID }
+                    wrongAgent: create_AgentMessage(input: {
+                        message_key: "scope:wrong-agent", session_id: "shared-session",
+                        agent_did: "did:test:other", requester_did: "did:test:local",
+                        sequence: 4, role: "assistant", content: "wrong agent"
+                    }) { _docID }
+                    wrongRequester: create_AgentMessage(input: {
+                        message_key: "scope:wrong-requester", session_id: "shared-session",
+                        agent_did: "did:test:selected", requester_did: "did:test:other-requester",
+                        sequence: 5, role: "assistant", content: "wrong requester"
+                    }) { _docID }
+                    keptTool: create_AgentToolCall(input: {
+                        tool_call_key: "scope:kept-tool", session_id: "shared-session",
+                        agent_did: "did:test:selected", requester_did: "did:test:local",
+                        message_sequence: 3, tool_name: "kept"
+                    }) { _docID }
+                    wrongTool: create_AgentToolCall(input: {
+                        tool_call_key: "scope:wrong-tool", session_id: "shared-session",
+                        agent_did: "did:test:other", requester_did: "did:test:local",
+                        message_sequence: 4, tool_name: "wrong"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let scoped = load_session_transcript_page(
+            node.as_ref(),
+            "shared-session",
+            Some("did:test:selected"),
+            Some("did:test:local"),
+            None,
+            Some(10),
+        )
+        .await
+        .expect("scoped page");
+        assert_eq!(scoped.store.messages.len(), 1);
+        assert_eq!(scoped.store.messages[0].message_key, "scope:kept");
+        assert_eq!(scoped.store.tool_calls.len(), 1);
+        assert_eq!(scoped.store.tool_calls[0].tool_call_key, "scope:kept-tool");
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    first: create_AgentMessage(input: {
+                        message_key: "equal:a", session_id: "equal",
+                        sequence: 2, role: "assistant", content: "a"
+                    }) { _docID }
+                    second: create_AgentMessage(input: {
+                        message_key: "equal:b", session_id: "equal",
+                        sequence: 2, role: "assistant", content: "b"
+                    }) { _docID }
+                    older: create_AgentMessage(input: {
+                        message_key: "equal:older", session_id: "equal",
+                        sequence: 1, role: "assistant", content: "older"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let equal_tip =
+            load_session_transcript_page(node.as_ref(), "equal", None, None, None, Some(2))
+                .await
+                .expect("equal-sequence tip");
+        assert_eq!(equal_tip.store.messages.len(), 2);
+        assert!(equal_tip
+            .store
+            .messages
+            .iter()
+            .all(|row| row.sequence == Some(2)));
+        let equal_older = load_session_transcript_page(
+            node.as_ref(),
+            "equal",
+            None,
+            None,
+            Some("equal:a"),
+            Some(2),
+        )
+        .await
+        .expect("equal-sequence older page");
+        assert_eq!(equal_older.store.messages.len(), 1);
+        assert_eq!(equal_older.store.messages[0].message_key, "equal:older");
+    }
+
+    #[tokio::test]
+    async fn transcript_pages_reject_unrepresentable_null_sequences_truthfully() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_AgentMessage(input: {
+                        message_key: "legacy:null", session_id: "legacy",
+                        role: "assistant", content: "legacy"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let error =
+            load_session_transcript_page(node.as_ref(), "legacy", None, None, None, Some(10))
+                .await
+                .expect_err("null sequence must not be silently skipped");
+        assert!(error
+            .to_string()
+            .contains("bounded pagination cannot represent that schema state losslessly"));
     }
 
     #[tokio::test]

@@ -7,10 +7,6 @@ import {
   withLiveDesktop,
 } from "./tauri-driver-live/harness";
 import {
-  closeOperationsDrawer,
-  exerciseOperationsDrawerTabs,
-} from "./tauri-driver-live/operations-assertions";
-import {
   describeLive,
   expectCompletedSession,
   FIRST_PROMPT,
@@ -152,8 +148,7 @@ describeLive("Tauri app live bridge runner chat", () => {
 });
 
 async function exerciseShellWhileTurnRuns(driver: LiveDesktopDriver) {
-  await exerciseOperationsDrawerTabs(driver);
-  await closeOperationsDrawer(driver);
+  expect(screen.queryByRole("button", { name: /open operations drawer/i })).toBeNull();
 
   await driver.openConfig();
   await driver.openConfigSection("backends");

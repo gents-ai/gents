@@ -1,6 +1,9 @@
 export type { ChatSendResult } from "../generated/ChatSendResult.js";
 export type { CommandDenialView } from "../generated/CommandDenialView.js";
 export type { DesktopSessionSnapshot } from "../generated/DesktopSessionSnapshot.js";
+export type { SessionLiveDeltaView } from "../generated/SessionLiveDeltaView.js";
+export type { SessionLiveTextPatchView } from "../generated/SessionLiveTextPatchView.js";
+export type { SessionProjectionRevisionView } from "../generated/SessionProjectionRevisionView.js";
 export type { GoalView } from "../generated/GoalView.js";
 export type { MessageView } from "../generated/MessageView.js";
 export type { PendingTurnView } from "../generated/PendingTurnView.js";

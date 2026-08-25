@@ -213,9 +213,7 @@ async fn run_detached_client_start<R: Runtime>(
             } else {
                 let _ = app.emit(
                     "desktop://client-updated",
-                    ClientUpdateEvent {
-                        reason: "lifecycle",
-                    },
+                    ClientUpdateEvent::coarse("lifecycle"),
                 );
                 tracing::info!("desktop client start: single-flight ready");
             }
@@ -328,9 +326,7 @@ pub async fn desktop_client_shutdown<R: Runtime>(
 
     let _ = app.emit(
         "desktop://client-updated",
-        ClientUpdateEvent {
-            reason: "lifecycle",
-        },
+        ClientUpdateEvent::coarse("lifecycle"),
     );
 
     let grants = snapshot_grants(&state);
@@ -439,6 +435,8 @@ pub struct DesktopObserverMetrics {
     pub drop_recoveries: u64,
     pub local_write_redundant_fetches: u64,
     pub fetch_failures: u64,
+    pub response_in_place_merges: u64,
+    pub response_copy_on_write_merges: u64,
 }
 
 #[tauri::command]
@@ -459,6 +457,8 @@ pub async fn desktop_observer_metrics(
         drop_recoveries: snap.drop_recoveries,
         local_write_redundant_fetches: snap.local_write_redundant_fetches,
         fetch_failures: snap.fetch_failures,
+        response_in_place_merges: snap.response_in_place_merges,
+        response_copy_on_write_merges: snap.response_copy_on_write_merges,
     }))
 }
 

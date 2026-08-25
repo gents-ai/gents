@@ -32,11 +32,15 @@ use gents_desktop_bridge::snapshot::operations_snapshot::{
 use gents_desktop_bridge::snapshot::subagent_tree::{
     build_local_subagent_tree, effective_subagent_tree_max_depth,
 };
+use gents_desktop_bridge::tauri_commands::operations::{
+    list_tool_call_holds_for_core, resolve_tool_call_hold_for_core,
+};
 use gents_desktop_bridge::types::{
     AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BearerPairingRequest,
     BehaviorSaveRequest, ChatSendRequest, ConversationRenameRequest, DesktopInterruptRequest,
-    DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, EventTriggerSaveRequest,
+    DesktopListHoldsRequest, DesktopListSubagentTreeRequest, DesktopOperationsSnapshot,
+    DesktopOperationsSnapshotRequest, DesktopPreviewInterruptCascadeRequest,
+    DesktopProbeMcpServiceRequest, DesktopResolveHoldRequest, EventTriggerSaveRequest,
     InferenceCallSummaryView, InferenceProfileSaveRequest, NativeExecutorStatusView,
     PeerAddRequest, PeerProbeRequest, RuntimeLivenessView, ScheduleRunRequest, ScheduleSaveRequest,
     SubagentTreeView, TaskRunRequest, TaskSaveRequest, ToolSelectionSaveRequest,
@@ -50,6 +54,8 @@ struct SessionSnapshotRequest {
     agent_did: Option<String>,
     session_id: String,
     request_id: Option<String>,
+    timeline_limit: Option<usize>,
+    timeline_before_item_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,6 +270,8 @@ pub(super) fn handle_request(
                 request.agent_did.as_deref(),
                 &request.session_id,
                 request.request_id.as_deref(),
+                request.timeline_limit,
+                request.timeline_before_item_key.as_deref(),
             ));
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
@@ -328,6 +336,28 @@ pub(super) fn handle_request(
             let request = decode::<ChatSendRequest>(&request.body, "decoding chat send request")?;
             let result =
                 runtime.block_on(send_chat_message(fixture.desktop_core().as_ref(), request))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
+        }
+        ("POST", "/desktop/tool-call-holds/list") => {
+            let request = decode::<DesktopListHoldsRequest>(
+                &request.body,
+                "decoding tool-call holds request",
+            )?;
+            let held = runtime.block_on(list_tool_call_holds_for_core(
+                Arc::clone(fixture.desktop_core()),
+                request,
+            ))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&held)?))
+        }
+        ("POST", "/desktop/tool-call-holds/resolve") => {
+            let request = decode::<DesktopResolveHoldRequest>(
+                &request.body,
+                "decoding tool-call hold resolution",
+            )?;
+            let result = runtime.block_on(resolve_tool_call_hold_for_core(
+                Arc::clone(fixture.desktop_core()),
+                request,
+            ))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
         ("POST", "/desktop/conversation/rename") => {

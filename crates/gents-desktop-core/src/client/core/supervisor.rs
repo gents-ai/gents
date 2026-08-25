@@ -318,7 +318,8 @@ async fn run_saved_peer_repair_cycle(
             .await;
         }
 
-        if still_saved && !is_bearer_peer(&record) && route_due {
+        if still_saved && install_replicators_on_bootstrap && !is_bearer_peer(&record) && route_due
+        {
             let reconcile = tokio::time::timeout(
                 super::P2P_OPERATION_TIMEOUT,
                 route_lifecycle.reconcile(&record, peer_statuses),

@@ -2,6 +2,7 @@ import type {
   DerivedCancelCauseView,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
+import { memo } from "react";
 
 import {
   AssistantMessageItem,
@@ -11,7 +12,7 @@ import {
 } from "./MessageItems.js";
 import { ToolGroup } from "./ToolGroup.js";
 
-export function TimelineItem({
+export const TimelineItem = memo(function TimelineItem({
   item,
   responseCancelCause,
   responseMaterializedSequence,
@@ -49,4 +50,4 @@ export function TimelineItem({
     default:
       return null;
   }
-}
+});

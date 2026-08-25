@@ -66,7 +66,7 @@ pub async fn desktop_schedule_run<R: Runtime>(
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
     let _ = app.emit(
         "desktop://client-updated",
-        ClientUpdateEvent { reason: "config" },
+        ClientUpdateEvent::coarse("config"),
     );
     Ok(result)
 }
@@ -106,7 +106,7 @@ pub async fn desktop_task_run<R: Runtime>(
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
     let _ = app.emit(
         "desktop://client-updated",
-        ClientUpdateEvent { reason: "config" },
+        ClientUpdateEvent::coarse("config"),
     );
     Ok(result)
 }

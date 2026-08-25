@@ -139,7 +139,12 @@ impl LiveBridgeFixture {
         ))?;
         let mut peer_record =
             PeerRecord::new(DEFAULT_DEPLOYMENT_LABEL, &remote_addr, &running_agent.did);
-        peer_record.source = Some("bridge-runner".to_string());
+        peer_record.source = Some("local-standard".to_string());
+        // This fixture owns both nodes and installs both directional
+        // replicators below. Keep the durable route truthful while the normal
+        // supervisor is intentionally disabled for this manually managed
+        // topology.
+        peer_record.pairing_ready = true;
         write_peer_directory_records(&desktop_paths, &[peer_record.clone()])?;
 
         let desktop_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(

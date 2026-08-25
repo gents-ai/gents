@@ -27,6 +27,8 @@ pub struct ObserverMetrics {
     pub drop_recoveries: AtomicU64,
     pub local_write_redundant_fetches: AtomicU64,
     pub fetch_failures: AtomicU64,
+    pub response_in_place_merges: AtomicU64,
+    pub response_copy_on_write_merges: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +40,8 @@ pub struct ObserverMetricsSnapshot {
     pub drop_recoveries: u64,
     pub local_write_redundant_fetches: u64,
     pub fetch_failures: u64,
+    pub response_in_place_merges: u64,
+    pub response_copy_on_write_merges: u64,
 }
 
 impl ObserverMetrics {
@@ -52,36 +56,99 @@ impl ObserverMetrics {
                 .local_write_redundant_fetches
                 .load(Ordering::Relaxed),
             fetch_failures: self.fetch_failures.load(Ordering::Relaxed),
+            response_in_place_merges: self.response_in_place_merges.load(Ordering::Relaxed),
+            response_copy_on_write_merges: self
+                .response_copy_on_write_merges
+                .load(Ordering::Relaxed),
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreProjectionRevision {
+    pub store_version: u64,
+    pub reconcile_version: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreUpdateNotice {
+    pub revision: StoreProjectionRevision,
+    /// True only when every database row merged by this publication belongs to
+    /// AgentResponse. Consumers may use the live-tail projection in that case;
+    /// every other publication requires an authoritative snapshot reconcile.
+    pub response_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorePatchMergeOutcome {
+    pub store_version: u64,
+    pub response_only: bool,
+    /// True when a reader still held the prior immutable snapshot and the hot
+    /// response merge therefore had to preserve it with copy-on-write.
+    pub copied_snapshot: bool,
+}
+
+struct ObservedState {
+    snapshot: SharedClientStore,
+    revision: StoreProjectionRevision,
+}
+
 pub struct ObservedStore {
-    snapshot: RwLock<SharedClientStore>,
+    state: RwLock<ObservedState>,
     focused_request_id: RwLock<Option<String>>,
     version_tx: watch::Sender<u64>,
+    change_tx: watch::Sender<StoreUpdateNotice>,
 }
 
 impl ObservedStore {
     pub fn new(initial_snapshot: ClientStore) -> (Arc<Self>, watch::Receiver<u64>) {
         let (version_tx, version_rx) = watch::channel(1_u64);
+        let revision = StoreProjectionRevision {
+            store_version: 1,
+            reconcile_version: 1,
+        };
+        let (change_tx, _change_rx) = watch::channel(StoreUpdateNotice {
+            revision,
+            response_only: false,
+        });
         let store = Arc::new(Self {
-            snapshot: RwLock::new(Arc::new(initial_snapshot)),
+            state: RwLock::new(ObservedState {
+                snapshot: Arc::new(initial_snapshot),
+                revision,
+            }),
             focused_request_id: RwLock::new(None),
             version_tx,
+            change_tx,
         });
         (store, version_rx)
     }
 
     pub fn snapshot(&self) -> SharedClientStore {
-        self.snapshot
+        self.state
             .read()
             .expect("store snapshot lock poisoned")
+            .snapshot
             .clone()
+    }
+
+    pub fn snapshot_with_revision(&self) -> (SharedClientStore, StoreProjectionRevision) {
+        let state = self.state.read().expect("store snapshot lock poisoned");
+        (state.snapshot.clone(), state.revision)
+    }
+
+    pub fn projection_revision(&self) -> StoreProjectionRevision {
+        self.state
+            .read()
+            .expect("store snapshot lock poisoned")
+            .revision
     }
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.version_tx.subscribe()
+    }
+
+    pub fn subscribe_changes(&self) -> watch::Receiver<StoreUpdateNotice> {
+        self.change_tx.subscribe()
     }
 
     pub fn focused_request_id(&self) -> Option<String> {
@@ -99,51 +166,113 @@ impl ObservedStore {
     }
 
     pub fn replace_snapshot(&self, snapshot: ClientStore) -> u64 {
-        *self.snapshot.write().expect("store snapshot lock poisoned") = Arc::new(snapshot);
-
-        let next_version = self.version_tx.borrow().saturating_add(1);
-        self.version_tx.send_replace(next_version);
-        next_version
+        self.update(false, |_| snapshot)
     }
 
     pub fn merge_chat_patch(&self, patch: ClientStore) -> u64 {
-        let mut snapshot = self.snapshot.write().expect("store snapshot lock poisoned");
-        let next_snapshot = snapshot.merge_chat_patch(patch);
-        *snapshot = Arc::new(next_snapshot);
-
-        let next_version = self.version_tx.borrow().saturating_add(1);
-        self.version_tx.send_replace(next_version);
-        next_version
+        self.update(false, |snapshot| snapshot.merge_chat_patch(patch))
     }
 
     pub fn merge_snapshot(&self, incoming: ClientStore) -> u64 {
-        let mut snapshot = self.snapshot.write().expect("store snapshot lock poisoned");
-        let next_snapshot = snapshot.merge_snapshot(incoming);
-        *snapshot = Arc::new(next_snapshot);
+        self.merge_observer_patch(incoming, false)
+    }
 
-        let next_version = self.version_tx.borrow().saturating_add(1);
-        self.version_tx.send_replace(next_version);
-        next_version
+    pub fn merge_observer_patch(&self, incoming: ClientStore, response_only: bool) -> u64 {
+        self.merge_observer_patch_with_outcome(incoming, response_only)
+            .store_version
+    }
+
+    pub fn merge_observer_patch_with_outcome(
+        &self,
+        incoming: ClientStore,
+        response_only: bool,
+    ) -> StorePatchMergeOutcome {
+        if response_only && incoming.is_response_only_patch() {
+            return self.update_in_place(true, |snapshot| {
+                snapshot.merge_response_patch_in_place(incoming);
+            });
+        }
+        StorePatchMergeOutcome {
+            store_version: self.update(false, |snapshot| snapshot.merge_snapshot(incoming)),
+            response_only: false,
+            copied_snapshot: false,
+        }
     }
 
     pub fn replace_agent_snapshot(&self, agent_did: &str, incoming: ClientStore) -> u64 {
-        let mut snapshot = self.snapshot.write().expect("store snapshot lock poisoned");
-        let next_snapshot = snapshot.replace_agent_scope(agent_did, incoming);
-        *snapshot = Arc::new(next_snapshot);
-
-        let next_version = self.version_tx.borrow().saturating_add(1);
-        self.version_tx.send_replace(next_version);
-        next_version
+        self.update(false, |snapshot| {
+            snapshot.replace_agent_scope(agent_did, incoming)
+        })
     }
 
     pub fn replace_remote_agent_snapshot(&self, agent_did: &str, incoming: ClientStore) -> u64 {
-        let mut snapshot = self.snapshot.write().expect("store snapshot lock poisoned");
-        let next_snapshot = snapshot.replace_remote_agent_scope(agent_did, incoming);
-        *snapshot = Arc::new(next_snapshot);
+        self.update(false, |snapshot| {
+            snapshot.replace_remote_agent_scope(agent_did, incoming)
+        })
+    }
 
-        let next_version = self.version_tx.borrow().saturating_add(1);
-        self.version_tx.send_replace(next_version);
-        next_version
+    fn update(
+        &self,
+        response_only: bool,
+        transform: impl FnOnce(&ClientStore) -> ClientStore,
+    ) -> u64 {
+        let notice = {
+            let mut state = self.state.write().expect("store snapshot lock poisoned");
+            let store_version = state.revision.store_version.saturating_add(1);
+            let reconcile_version = if response_only {
+                state.revision.reconcile_version
+            } else {
+                state.revision.reconcile_version.saturating_add(1)
+            };
+            state.snapshot = Arc::new(transform(state.snapshot.as_ref()));
+            state.revision = StoreProjectionRevision {
+                store_version,
+                reconcile_version,
+            };
+            StoreUpdateNotice {
+                revision: state.revision,
+                response_only,
+            }
+        };
+        self.version_tx.send_replace(notice.revision.store_version);
+        self.change_tx.send_replace(notice);
+        notice.revision.store_version
+    }
+
+    fn update_in_place(
+        &self,
+        response_only: bool,
+        transform: impl FnOnce(&mut ClientStore),
+    ) -> StorePatchMergeOutcome {
+        let (notice, copied_snapshot) = {
+            let mut state = self.state.write().expect("store snapshot lock poisoned");
+            let copied_snapshot = Arc::strong_count(&state.snapshot) > 1;
+            transform(Arc::make_mut(&mut state.snapshot));
+            let store_version = state.revision.store_version.saturating_add(1);
+            let reconcile_version = if response_only {
+                state.revision.reconcile_version
+            } else {
+                state.revision.reconcile_version.saturating_add(1)
+            };
+            state.revision = StoreProjectionRevision {
+                store_version,
+                reconcile_version,
+            };
+            (
+                StoreUpdateNotice {
+                    revision: state.revision,
+                    response_only,
+                },
+                copied_snapshot,
+            )
+        };
+        self.version_tx.send_replace(notice.revision.store_version);
+        self.change_tx.send_replace(notice);
+        StorePatchMergeOutcome {
+            store_version: notice.revision.store_version,
+            response_only,
+            copied_snapshot,
+        }
     }
 }
 
@@ -381,7 +510,24 @@ pub fn spawn_observer_with_selection(
                             let mut rows = patch.to_rows();
                             let peers = peer_directory.read().await.records().to_vec();
                             isolate_legacy_bearer_rows(&mut rows, &peers, &requester_did);
-                            store.merge_snapshot(ClientStore::from_rows(rows));
+                            let response_only = collection_name == "AgentResponse";
+                            let outcome = store.merge_observer_patch_with_outcome(
+                                ClientStore::from_rows(rows),
+                                response_only,
+                            );
+                            if outcome.response_only {
+                                let counter = if outcome.copied_snapshot {
+                                    &metrics_for_task.response_copy_on_write_merges
+                                } else {
+                                    &metrics_for_task.response_in_place_merges
+                                };
+                                counter.fetch_add(1, Ordering::Relaxed);
+                                tracing::trace!(
+                                    store_version = outcome.store_version,
+                                    copied_snapshot = outcome.copied_snapshot,
+                                    "merged response-only desktop observer patch"
+                                );
+                            }
                         }
                         metrics_for_task
                             .docs_fetched
@@ -469,6 +615,126 @@ async fn accumulate_dirty(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn response_patch(content: &str, progress_seq: i64) -> ClientStore {
+        ClientStore::from_rows(crate::client::store::ClientStoreRows {
+            responses: vec![serde_json::from_value(serde_json::json!({
+                "response_key": "response-1",
+                "request_id": "request-1",
+                "agent_did": "did:agent:1",
+                "session_id": "session-1",
+                "content": content,
+                "status": "streaming",
+                "progress_seq": progress_seq
+            }))
+            .expect("response row")],
+            ..crate::client::store::ClientStoreRows::default()
+        })
+    }
+
+    #[test]
+    fn response_only_updates_advance_store_without_advancing_reconcile_revision() {
+        let (store, _) = ObservedStore::new(ClientStore::default());
+        let mut changes = store.subscribe_changes();
+        let initial = store.projection_revision();
+
+        store.merge_observer_patch(ClientStore::default(), true);
+        let response_notice = *changes.borrow_and_update();
+        assert!(response_notice.response_only);
+        assert_eq!(
+            response_notice.revision.store_version,
+            initial.store_version + 1
+        );
+        assert_eq!(
+            response_notice.revision.reconcile_version,
+            initial.reconcile_version
+        );
+
+        store.replace_snapshot(ClientStore::default());
+        let reconcile_notice = *changes.borrow_and_update();
+        assert!(!reconcile_notice.response_only);
+        assert_eq!(
+            reconcile_notice.revision.reconcile_version,
+            initial.reconcile_version + 1
+        );
+    }
+
+    #[test]
+    fn response_only_merge_is_in_place_unless_a_reader_needs_snapshot_isolation() {
+        let initial = ClientStore::from_rows(crate::client::store::ClientStoreRows {
+            responses: response_patch("a", 1).responses,
+            messages: (0..600)
+                .map(|sequence| {
+                    serde_json::from_value(serde_json::json!({
+                        "message_key": format!("session-1:{sequence}"),
+                        "session_id": "session-1",
+                        "sequence": sequence,
+                        "role": "assistant",
+                        "content": format!("durable row {sequence}")
+                    }))
+                    .expect("message row")
+                })
+                .collect(),
+            ..crate::client::store::ClientStoreRows::default()
+        });
+        let (store, _) = ObservedStore::new(initial);
+
+        for progress_seq in 2..=51 {
+            let outcome = store.merge_observer_patch_with_outcome(
+                response_patch(&"x".repeat(progress_seq as usize), progress_seq),
+                true,
+            );
+            assert!(outcome.response_only);
+            assert!(!outcome.copied_snapshot);
+        }
+        assert_eq!(store.snapshot().messages.len(), 600);
+
+        let expected_held_content = "x".repeat(51);
+        let held_reader = store.snapshot();
+        let second = store.merge_observer_patch_with_outcome(response_patch("terminal", 52), true);
+        assert!(second.response_only);
+        assert!(second.copied_snapshot);
+        assert_eq!(
+            held_reader
+                .latest_response_for_request("request-1")
+                .and_then(|row| row.content.as_deref()),
+            Some(expected_held_content.as_str())
+        );
+        assert_eq!(
+            store
+                .snapshot()
+                .latest_response_for_request("request-1")
+                .and_then(|row| row.content.as_deref()),
+            Some("terminal")
+        );
+    }
+
+    #[test]
+    fn mislabeled_response_patch_falls_back_to_authoritative_reconcile() {
+        let (store, _) = ObservedStore::new(ClientStore::default());
+        let initial = store.projection_revision();
+        let patch = ClientStore::from_rows(crate::client::store::ClientStoreRows {
+            messages: vec![serde_json::from_value(serde_json::json!({
+                "message_key": "session-1:1",
+                "session_id": "session-1",
+                "sequence": 1,
+                "role": "user",
+                "content": "authoritative row"
+            }))
+            .expect("message row")],
+            ..crate::client::store::ClientStoreRows::default()
+        });
+
+        let outcome = store.merge_observer_patch_with_outcome(patch, true);
+
+        assert!(!outcome.response_only);
+        assert!(!outcome.copied_snapshot);
+        assert_eq!(store.snapshot().messages.len(), 1);
+        assert_eq!(
+            store.projection_revision().reconcile_version,
+            initial.reconcile_version + 1
+        );
+    }
     use crate::client::schema::ensure_runtime_schemas;
     use defra_node::{EventName, NodeBuilder};
     use std::sync::Arc;

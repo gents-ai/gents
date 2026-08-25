@@ -6,11 +6,25 @@ type NativeE2eConfig = {
   prompt: string;
   expectedResponse: string;
   expectEmptyConversationSlice: boolean;
+  correlationId: string;
+  measurePerformance: boolean;
 };
 
 type NativeE2eStatus = {
   stage: string;
   detail?: string;
+  correlationId?: string;
+  monotonicMs?: number;
+  metrics?: {
+    ui: {
+      conversationRows: number;
+      transcriptCards: number;
+      transcriptTurnBlocks: number;
+      bodyBytes: number;
+    };
+    observer: unknown;
+    observerTimedOut: boolean;
+  };
 };
 
 type TauriBridgeWindow = Window & {
@@ -20,6 +34,7 @@ type TauriBridgeWindow = Window & {
 };
 
 let activeRun: Promise<void> | null = null;
+let activeConfig: NativeE2eConfig | null = null;
 
 export function startNativeSimulatorE2e(): Promise<void> {
   if (activeRun) {
@@ -38,10 +53,12 @@ async function runNativeSimulatorE2e() {
   if (!config) {
     return;
   }
+  activeConfig = config;
 
   try {
     await reportStatus({ stage: "starting" });
     await waitForText("Fleet Dashboard", 30_000);
+    await reportStatus({ stage: "shell-interactive" });
 
     let chatButton = await waitForOptional(
       () => findAgentChatButton(config.agentLabel),
@@ -59,6 +76,12 @@ async function runNativeSimulatorE2e() {
 
     await reportStatus({ stage: "waiting-ready" });
     chatButton.click();
+    await waitFor(
+      () => document.querySelector<HTMLElement>(".conversation-list"),
+      30_000,
+      "visible session index",
+    );
+    await reportStatus({ stage: "session-index-visible" });
 
     const newChatButton = await waitFor(
       () => findNewChatButton(config.agentLabel),
@@ -279,8 +302,37 @@ async function waitForOptional<T>(
 }
 
 async function reportStatus(status: NativeE2eStatus) {
-  renderStatus(status);
-  await invoke("desktop_native_e2e_status", { status });
+  const observerResult = activeConfig?.measurePerformance
+    ? await Promise.race([
+        invoke("desktop_observer_metrics")
+          .then((observer) => ({ observer, timedOut: false }))
+          .catch(() => ({ observer: null, timedOut: false })),
+        delay(1_000).then(() => ({ observer: null, timedOut: true })),
+      ])
+    : null;
+  const measured = activeConfig?.measurePerformance
+    ? {
+        ...status,
+        correlationId: activeConfig.correlationId,
+        monotonicMs: window.performance.now(),
+        metrics: {
+          ui: {
+            conversationRows: conversationRowCount(document),
+            transcriptCards: document.querySelectorAll(
+              '[data-testid="transcript-panel"] .message-card',
+            ).length,
+            transcriptTurnBlocks: document.querySelectorAll(
+              '[data-testid="transcript-panel"] .turn-block',
+            ).length,
+            bodyBytes: new TextEncoder().encode(document.body.innerHTML).byteLength,
+          },
+          observer: observerResult?.observer ?? null,
+          observerTimedOut: observerResult?.timedOut ?? false,
+        },
+      }
+    : status;
+  renderStatus(measured);
+  await invoke("desktop_native_e2e_status", { status: measured });
 }
 
 function renderStatus(status: NativeE2eStatus) {

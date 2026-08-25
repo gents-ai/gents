@@ -15,9 +15,16 @@ pub use core::{
     P2PHealth, P2PHealthStatus,
 };
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
-pub use observe::{ObservedStore, ObserverHandle, ObserverMetricsSnapshot};
+pub use observe::{
+    ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,
+    StoreUpdateNotice,
+};
 pub use paths::DesktopPaths;
 pub use peer_directory::{PeerDirectory, PeerRecord};
 pub use principal_identity::PrincipalIdentity;
-pub use query::{fetch_doc_patch, load_agent_scoped_snapshot};
+pub use query::{
+    fetch_doc_patch, load_agent_scoped_snapshot, load_session_transcript_page,
+    SessionTranscriptQueryPage, DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE,
+    MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
+};
 pub use store::{ClientStore, ClientStoreRows, TaskRecentRuns, TranscriptView};

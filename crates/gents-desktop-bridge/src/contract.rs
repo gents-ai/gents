@@ -8,6 +8,9 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 1.3: additive — query-level transcript page evidence and exact-total marker.
+// 1.2: additive — observer response in-place/copy-on-write merge counters.
+// 1.1: additive — revisioned desktop_session_live_delta read and store event metadata.
 // 1.0: breaking — clients submit requests; desktop session-fork projection removed.
 // 0.8: additive — managed-server tray event inventory.
 // 0.7: additive — retry eligibility projection and agent-scoped conversation rename.
@@ -18,7 +21,7 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "1.0";
+pub const CONTRACT_VERSION: &str = "1.3";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -84,6 +87,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_managed_server_stop", "runtime-admin"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
+        ("desktop_session_live_delta", "session-read"),
         // trace-read
         ("desktop_request_timeline", "trace-read"),
         // tool-surface-read
@@ -510,6 +514,7 @@ mod tests {
             ("desktop_managed_server_start", "mutate"),
             ("desktop_managed_server_stop", "mutate"),
             ("desktop_session_snapshot", "read"),
+            ("desktop_session_live_delta", "read"),
             ("desktop_request_timeline", "read"),
             ("desktop_tool_surface_explain", "read"),
             ("desktop_chat_send", "mutate"),
