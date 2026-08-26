@@ -162,12 +162,10 @@ jobs:
         # boundary and identity_decide fences.
         if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
         run: |
-          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          .github/scripts/setup-elan.sh
           cargo_dir="$(dirname "$(rustup which cargo)")"
           echo "${cargo_dir}" >> "$GITHUB_PATH"
           "${cargo_dir}/cargo" --version
-          "$HOME/.elan/bin/elan" --version
 
       - name: Install protobuf compiler
         run: .github/scripts/setup-protoc.sh
@@ -349,10 +347,7 @@ jobs:
           persist-credentials: false
 
       - name: Install elan
-        run: |
-          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" --version
+        run: .github/scripts/setup-elan.sh
 
       - name: Prepare persistent Lean build cache
         run: .github/scripts/setup-lean-build-cache.sh
