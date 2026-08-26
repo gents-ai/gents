@@ -1261,6 +1261,13 @@ pub async fn reconcile_graph_run_with_access(
     if view.is_terminal() {
         return Ok(view);
     }
+    if view.cancellation_requested_at.is_some() && view.active_request_count > 0 {
+        for request in &view.requests {
+            if !request.terminal && !request.request_id.is_empty() {
+                interrupt_request_with_access(access, &request.request_id).await?;
+            }
+        }
+    }
     if let Some((status, _, _)) = terminal_projection(&view) {
         if let Err(commit_error) = commit_terminal_with_access(access, &view, status).await {
             let reloaded = load_graph_run_view_with_access(access, actor_did, run_id).await?;

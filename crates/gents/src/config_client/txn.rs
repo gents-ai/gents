@@ -114,6 +114,51 @@ impl<'a> ConfigApplyTxn<'a> {
         }
     }
 
+    /// Return the active collection version through the same local-or-HTTP
+    /// backend as this transaction. DefraDB schema registration is additive
+    /// and lives outside document transactions, so this is the authoritative
+    /// schema-readiness view for transactional package checks.
+    pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        match &self.backend {
+            TxnBackend::Local { node, .. } => node
+                .get_collection(collection)?
+                .map(serde_json::to_value)
+                .transpose()
+                .context("serializing active collection version"),
+            TxnBackend::Graphql {
+                endpoint,
+                http_client,
+                ..
+            } => {
+                let api_base = graphql_api_base(endpoint)?;
+                let url = format!("{api_base}/collections/versions");
+                let versions: Value = http_client
+                    .get(&url)
+                    .send()
+                    .await
+                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .error_for_status()
+                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .json()
+                    .await
+                    .with_context(|| format!("decoding collection versions from {url}"))?;
+                Ok(versions.as_array().and_then(|versions| {
+                    versions
+                        .iter()
+                        .find(|version| {
+                            version.get("Name").and_then(Value::as_str) == Some(collection)
+                                && version
+                                    .get("IsActive")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(true)
+                        })
+                        .cloned()
+                }))
+            }
+        }
+    }
+
     /// Execute against an embedded transaction while preserving the native
     /// response envelope, including composite-version metadata. Runtime
     /// lifecycle transitions need that exact commit identity; converting to

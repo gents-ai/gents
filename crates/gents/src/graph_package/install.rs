@@ -23,7 +23,7 @@ use super::{load_bundled_graph_package, BundledGraphPackage};
 // GraphRevision records retain the real installation/materialization time.
 const PACKAGE_DOCUMENT_TIMESTAMP: &str = "1970-01-01T00:00:00Z";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct SchemaFieldContract {
     kind: Value,
     crdt_type: Value,
@@ -34,13 +34,13 @@ struct SchemaFieldContract {
     immutable: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 struct SchemaIndexContract {
     fields: Vec<(String, bool)>,
     unique: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct CollectionSchemaContract {
     fields: BTreeMap<String, SchemaFieldContract>,
     indexes: Vec<SchemaIndexContract>,
@@ -129,6 +129,17 @@ fn collection_schema_contract(version: &Value) -> Result<CollectionSchemaContrac
             .and_then(Value::as_bool)
             .unwrap_or(false),
     })
+}
+
+/// Canonical semantic digest of the complete DefraDB collection contract.
+/// Package planning, install validation, replay readiness, and run start all
+/// use this one normalization boundary.
+pub(crate) fn collection_schema_contract_digest(version: &Value) -> Result<String> {
+    let contract = collection_schema_contract(version)?;
+    Ok(format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&contract)?)
+    ))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,17 +385,55 @@ fn validate_bindings(
     if deployments.len() != 1 {
         anyhow::bail!("graph package v1 roles must share one host deployment");
     }
+    for variable in &package.manifest.variables {
+        if variable.phase != super::PackageVariablePhase::Install {
+            continue;
+        }
+        let supplied = bindings.variables.get(&variable.name);
+        if variable.required && supplied.is_none() {
+            anyhow::bail!("required install variable {:?} is missing", variable.name);
+        }
+        if variable.sensitive && supplied.is_some() {
+            anyhow::bail!(
+                "sensitive install variable {:?} may not be persisted in package bindings",
+                variable.name
+            );
+        }
+        if let Some(value) = supplied {
+            let kind_matches = matches!(
+                (&variable.kind, value),
+                (
+                    super::PackageVariableKind::String,
+                    PackageBindingValue::String(_)
+                ) | (
+                    super::PackageVariableKind::Integer,
+                    PackageBindingValue::Integer(_)
+                ) | (
+                    super::PackageVariableKind::Boolean,
+                    PackageBindingValue::Boolean(_)
+                ) | (
+                    super::PackageVariableKind::DocumentRef,
+                    PackageBindingValue::DocumentRef(_)
+                )
+            );
+            if !kind_matches {
+                anyhow::bail!(
+                    "install variable {:?} does not match declared kind {:?}",
+                    variable.name,
+                    variable.kind
+                );
+            }
+        }
+    }
     if bindings.variables.keys().any(|name| {
         package
             .manifest
             .variables
             .iter()
             .find(|variable| variable.name == *name)
-            .is_none_or(|variable| {
-                variable.phase != super::PackageVariablePhase::Install || variable.sensitive
-            })
+            .is_none_or(|variable| variable.phase != super::PackageVariablePhase::Install)
     }) {
-        anyhow::bail!("install bindings contain undeclared, run-phase, or sensitive variables");
+        anyhow::bail!("install bindings contain undeclared or run-phase variables");
     }
     Ok(())
 }
@@ -777,22 +826,18 @@ pub async fn prepare_bundled_graph_package_install(
         .schemas
         .iter()
         .map(|path| {
-            let collections = query::parse_sdl(package.asset_text(path)?)?
+            let collection_contract_digests = query::parse_sdl(package.asset_text(path)?)?
                 .into_iter()
                 .map(|collection| {
-                    let mut fields = collection
-                        .fields
-                        .into_iter()
-                        .map(|field| field.name)
-                        .collect::<Vec<_>>();
-                    fields.sort();
-                    (collection.name, fields)
+                    let name = collection.name.clone();
+                    let version = serde_json::to_value(collection)?;
+                    Ok((name, collection_schema_contract_digest(&version)?))
                 })
-                .collect();
+                .collect::<Result<BTreeMap<_, _>>>()?;
             Ok(RequiredSchemaDigest {
                 namespace: path.clone(),
                 digest: digest_bytes(package.asset(path)?),
-                collections,
+                collection_contract_digests,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -984,6 +1029,59 @@ mod tests {
     use crate::graph_pipeline::{activate_graph_revision, start_graph_run};
     use defra_node::EmbeddedNode;
     use std::sync::Arc;
+
+    fn validation_bindings() -> GraphPackageInstallBindings {
+        let owner = "did:key:package-owner";
+        let role = PackageRoleBinding {
+            principal_did: owner.to_owned(),
+            deployment_id: "local-test".to_owned(),
+            backend_id: Some("test-backend".to_owned()),
+            profile_id: Some("test-profile".to_owned()),
+            model_name: Some("test-model".to_owned()),
+        };
+        GraphPackageInstallBindings {
+            owner_did: owner.to_owned(),
+            roles: BTreeMap::from([
+                ("coordinator".to_owned(), role.clone()),
+                ("reviewer".to_owned(), role),
+            ]),
+            variables: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn install_bindings_enforce_required_variable_kind() {
+        let mut package = load_bundled_graph_package("code-review").unwrap();
+        package
+            .manifest
+            .variables
+            .push(crate::graph_package::PackageVariableDeclaration {
+                name: "review_budget".to_owned(),
+                phase: crate::graph_package::PackageVariablePhase::Install,
+                kind: crate::graph_package::PackageVariableKind::Integer,
+                required: true,
+                sensitive: false,
+            });
+        let mut bindings = validation_bindings();
+        assert!(validate_bindings(&package, &bindings)
+            .unwrap_err()
+            .to_string()
+            .contains("required install variable"));
+
+        bindings.variables.insert(
+            "review_budget".to_owned(),
+            PackageBindingValue::String("8".to_owned()),
+        );
+        assert!(validate_bindings(&package, &bindings)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match declared kind"));
+
+        bindings
+            .variables
+            .insert("review_budget".to_owned(), PackageBindingValue::Integer(8));
+        validate_bindings(&package, &bindings).unwrap();
+    }
 
     async fn create_fixture_bindings(node: &EmbeddedNode) -> GraphPackageInstallBindings {
         let owner = "did:key:package-owner";
@@ -1177,6 +1275,7 @@ mod tests {
             None,
             &bindings.owner_did,
             &first.graph_id,
+            None,
             "review",
             json!({
                 "repository_path": "/tmp/repo",
@@ -1273,6 +1372,7 @@ mod tests {
             None,
             &bindings.owner_did,
             &first.graph_id,
+            None,
             "review",
             json!({
                 "repository_path": "/tmp/repo",
@@ -1350,6 +1450,7 @@ mod tests {
             None,
             &bindings.owner_did,
             &first.graph_id,
+            None,
             "review",
             json!({
                 "repository_path": "/tmp/repo",

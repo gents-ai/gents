@@ -276,21 +276,21 @@ impl DocumentRuntimeView {
     }
 }
 
-fn active_graph_digests(view: &DocumentRuntimeView) -> BTreeSet<String> {
+fn active_graph_revision_pins(view: &DocumentRuntimeView) -> (BTreeSet<String>, BTreeSet<String>) {
     let agent_did = view.principal.value.agent_did.as_str();
-    let mut digests: BTreeSet<String> = view
+    let active = view
         .graph_definitions
         .values()
         .filter(|record| record.value.owner_did == agent_did && record.value.enabled)
         .filter_map(|record| record.value.active_revision_digest.clone())
         .collect();
-    digests.extend(
-        view.graph_run_pins
-            .values()
-            .filter(|record| record.value.owner_did == agent_did && !record.value.is_terminal())
-            .map(|record| record.value.revision_digest.clone()),
-    );
-    digests
+    let pinned = view
+        .graph_run_pins
+        .values()
+        .filter(|record| record.value.owner_did == agent_did && !record.value.is_terminal())
+        .map(|record| record.value.revision_digest.clone())
+        .collect();
+    (active, pinned)
 }
 
 fn package_config_artifact_is_visible(view: &DocumentRuntimeView, id: &str) -> bool {

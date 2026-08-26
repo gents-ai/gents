@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "code-review",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bounded four-stage review: reconnaissance, lens swarm, verification, and triage.",
   "compiler_version": "graph-intent-v3",
   "upgrade_policy": "successor_revision",

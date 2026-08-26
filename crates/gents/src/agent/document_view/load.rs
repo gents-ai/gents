@@ -59,14 +59,17 @@ pub(crate) async fn load_document_runtime_view(
             .insert(run.run_id.clone(), DocumentRecord { doc_id, value: run });
     }
 
-    let active_graph_digests = super::active_graph_digests(&view);
-    view.visible_graph_package_artifact_ids =
+    let (active_revision_digests, pinned_revision_digests) =
+        super::active_graph_revision_pins(&view);
+    let (visible_artifact_ids, visible_graph_digests) =
         crate::graph_pipeline::load_visible_package_artifact_ids(
             node,
             agent_did,
-            &active_graph_digests,
+            &active_revision_digests,
+            &pinned_revision_digests,
         )
         .await?;
+    view.visible_graph_package_artifact_ids = visible_artifact_ids;
     for (doc_id, selection) in list_tool_selection_records(node, agent_did).await? {
         if !super::package_config_artifact_is_visible(&view, &selection.selection_id) {
             continue;
@@ -246,7 +249,7 @@ pub(crate) async fn load_document_runtime_view(
         }
         if !crate::graph_pipeline::graph_artifact_is_visible(
             &trigger.trigger_id,
-            &active_graph_digests,
+            &visible_graph_digests,
         ) {
             continue;
         }

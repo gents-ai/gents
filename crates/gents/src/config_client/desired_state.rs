@@ -66,16 +66,7 @@ pub(crate) async fn read_desired_state_document_in_txn(
     collection: Collection,
     unique_value: &str,
 ) -> Result<Option<Value>> {
-    let target = match collection {
-        Collection::AgentBehavior => Some(super::patch::SelfConfigTarget::AgentBehavior),
-        Collection::ToolSelection => Some(super::patch::SelfConfigTarget::ToolSelection),
-        Collection::Task => Some(super::patch::SelfConfigTarget::Task),
-        Collection::DatastoreToolSurface => None,
-        _ => anyhow::bail!(
-            "{} is not a package-owned desired-state resource",
-            collection.graphql_type()
-        ),
-    };
+    let target = desired_state_read_target(collection)?;
     if let Some(target) = target {
         return Ok(super::patch::read_doc_in_txn(txn, target, unique_value)
             .await?
@@ -113,6 +104,26 @@ pub(crate) async fn read_desired_state_document_in_txn(
             .remove("_docID");
         row
     }))
+}
+
+fn desired_state_read_target(
+    collection: Collection,
+) -> Result<Option<super::patch::SelfConfigTarget>> {
+    let target = match collection {
+        Collection::AgentBehavior => Some(super::patch::SelfConfigTarget::AgentBehavior),
+        Collection::ToolSelection => Some(super::patch::SelfConfigTarget::ToolSelection),
+        Collection::Task => Some(super::patch::SelfConfigTarget::Task),
+        Collection::Schedule => Some(super::patch::SelfConfigTarget::Schedule),
+        Collection::EventTrigger => Some(super::patch::SelfConfigTarget::EventTrigger),
+        Collection::DatastoreToolSurface => None,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "{} is not a package-owned desired-state resource",
+                collection.graphql_type()
+            ))
+        }
+    };
+    Ok(target)
 }
 
 /// Existing revision-owned documents are immutable. Missing rows are
@@ -336,6 +347,22 @@ mod tests {
         .is_err());
         assert!(
             DesiredStateApplyPlan::new(vec![doc(Collection::PeerPairingDesired, "peer")]).is_err()
+        );
+    }
+
+    #[test]
+    fn every_specialized_desired_state_writer_has_a_verification_reader() {
+        assert_eq!(
+            desired_state_read_target(Collection::Task).unwrap(),
+            Some(super::super::patch::SelfConfigTarget::Task)
+        );
+        assert_eq!(
+            desired_state_read_target(Collection::Schedule).unwrap(),
+            Some(super::super::patch::SelfConfigTarget::Schedule)
+        );
+        assert_eq!(
+            desired_state_read_target(Collection::EventTrigger).unwrap(),
+            Some(super::super::patch::SelfConfigTarget::EventTrigger)
         );
     }
 }

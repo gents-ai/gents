@@ -230,6 +230,12 @@ fn resolve_repository(
 }
 
 async fn run(args: GraphRunArgs) -> Result<()> {
+    if args.package != "code-review" {
+        anyhow::bail!(
+            "graph run currently supports the local code-review quickstart; package-specific entry bindings are not available for {:?}",
+            args.package
+        );
+    }
     let (access, actor) = access_and_actor(&args.scope).await?;
     let ConfigAccess::Graphql(endpoint) = &access else {
         anyhow::bail!(
@@ -279,6 +285,7 @@ async fn run(args: GraphRunArgs) -> Result<()> {
         &access,
         &actor,
         &graph_id,
+        Some(&digest),
         "review",
         json!({
             "repository_path": ".",

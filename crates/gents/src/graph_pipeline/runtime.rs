@@ -168,6 +168,10 @@ fn verify_package_role_bindings(package: &PackagePlan, owner_did: &str) -> Resul
     Ok(())
 }
 
+fn revision_visibility_authorized(status: &str, active_pointer: bool, run_pin: bool) -> bool {
+    (active_pointer && status == "active") || (run_pin && matches!(status, "active" | "retired"))
+}
+
 /// Resolve package-owned ordinary configuration resources through the same
 /// active-revision/nonterminal-run pin set used for Task/EventTrigger
 /// visibility. The plan remains the only ownership ledger; no package catalog
@@ -175,12 +179,31 @@ fn verify_package_role_bindings(package: &PackagePlan, owner_did: &str) -> Resul
 pub(crate) async fn load_visible_package_artifact_ids(
     node: &EmbeddedNode,
     agent_did: &str,
-    revision_digests: &BTreeSet<String>,
-) -> Result<BTreeSet<String>> {
-    let mut visible = BTreeSet::new();
-    for digest in revision_digests {
-        match load_visible_package_artifact_ids_for_revision(node, agent_did, digest).await {
-            Ok(ids) => visible.extend(ids),
+    active_revision_digests: &BTreeSet<String>,
+    pinned_revision_digests: &BTreeSet<String>,
+) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let revision_digests = active_revision_digests
+        .union(pinned_revision_digests)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut artifact_ids = BTreeSet::new();
+    let mut ready_revision_digests = BTreeSet::new();
+    for digest in &revision_digests {
+        let active_pointer = active_revision_digests.contains(digest);
+        let run_pin = pinned_revision_digests.contains(digest);
+        match load_visible_package_artifact_ids_for_revision(
+            node,
+            agent_did,
+            digest,
+            active_pointer,
+            run_pin,
+        )
+        .await
+        {
+            Ok(ids) => {
+                ready_revision_digests.insert(digest.clone());
+                artifact_ids.extend(ids);
+            }
             Err(error) => {
                 tracing::warn!(
                     revision_digest = %digest,
@@ -191,19 +214,21 @@ pub(crate) async fn load_visible_package_artifact_ids(
             }
         }
     }
-    Ok(visible)
+    Ok((artifact_ids, ready_revision_digests))
 }
 
 async fn load_visible_package_artifact_ids_for_revision(
     node: &EmbeddedNode,
     agent_did: &str,
     digest: &str,
+    active_pointer: bool,
+    run_pin: bool,
 ) -> Result<BTreeSet<String>> {
     let response = node
         .execute(&format!(
             r#"{{
                     GraphRevision(filter: {{ digest: {{ _eq: "{}" }} }}, limit: 2) {{
-                        owner_did artifacts_complete plan_json
+                        owner_did status artifacts_complete plan_json
                     }}
                 }}"#,
             escape_graphql_string(digest),
@@ -223,6 +248,15 @@ async fn load_visible_package_artifact_ids_for_revision(
     let revision = &revisions[0];
     if revision.get("owner_did").and_then(Value::as_str) != Some(agent_did) {
         anyhow::bail!("visible GraphRevision {digest:?} is owned by another principal");
+    }
+    let status = revision
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !revision_visibility_authorized(status, active_pointer, run_pin) {
+        anyhow::bail!(
+            "visible GraphRevision {digest:?} status {status:?} is inconsistent with its active pointer or nonterminal run pin"
+        );
     }
     if revision.get("artifacts_complete").and_then(Value::as_bool) != Some(true) {
         anyhow::bail!("visible GraphRevision {digest:?} has incomplete artifacts");
@@ -260,39 +294,24 @@ async fn verify_package_schemas_in_txn(
     package: &PackagePlan,
 ) -> Result<()> {
     for schema in &package.required_schema_digests {
-        if schema.collections.is_empty() {
+        if schema.collection_contract_digests.is_empty() {
             anyhow::bail!(
-                "package schema {:?} has no pinned runtime readiness shape",
+                "package schema {:?} has no pinned runtime contract",
                 schema.namespace
             );
         }
-        for (collection, fields) in &schema.collections {
-            let query = crate::defra_query::introspection_query(collection)?;
-            let response = txn.execute(&query).await.with_context(|| {
+        for (collection, expected_digest) in &schema.collection_contract_digests {
+            let live = txn.collection_version(collection).await?.with_context(|| {
                 format!(
                     "package schema {:?} collection {collection:?} is not locally ready",
                     schema.namespace
                 )
             })?;
-            let live = crate::defra_query::parse_collection_schema(response.get("data"))
-                .with_context(|| {
-                    format!(
-                        "package schema {:?} collection {collection:?} is not locally ready",
-                        schema.namespace
-                    )
-                })?;
-            let live_fields = live
-                .fields
-                .iter()
-                .map(|field| field.name.as_str())
-                .collect::<BTreeSet<_>>();
-            if fields
-                .iter()
-                .any(|field| !live_fields.contains(field.as_str()))
-            {
+            let live_digest = crate::graph_package::collection_schema_contract_digest(&live)?;
+            if &live_digest != expected_digest {
                 anyhow::bail!(
-                    "package schema {:?} collection {collection:?} does not match its pinned field shape",
-                    schema.namespace
+                    "package schema {:?} collection {collection:?} does not match its pinned contract: expected {expected_digest}, observed {live_digest}",
+                    schema.namespace,
                 );
             }
         }
@@ -1042,11 +1061,20 @@ pub async fn start_graph_run(
     identity: Option<Did>,
     caller_did: &str,
     graph_id: &str,
+    expected_revision_digest: Option<&str>,
     entry_name: &str,
     input: Value,
 ) -> Result<GraphRunReceipt> {
     let txn = ConfigApplyTxn::begin_local(node, identity).await?;
-    let result = start_run_in_txn(&txn, caller_did, graph_id, entry_name, input).await;
+    let result = start_run_in_txn(
+        &txn,
+        caller_did,
+        graph_id,
+        expected_revision_digest,
+        entry_name,
+        input,
+    )
+    .await;
     match result {
         Ok(receipt) => {
             txn.commit().await.context("commit graph run start")?;
@@ -1064,11 +1092,20 @@ pub async fn start_graph_run_with_access(
     access: &ConfigAccess,
     caller_did: &str,
     graph_id: &str,
+    expected_revision_digest: Option<&str>,
     entry_name: &str,
     input: Value,
 ) -> Result<GraphRunReceipt> {
     let txn = access.begin_apply_txn().await?;
-    let result = start_run_in_txn(&txn, caller_did, graph_id, entry_name, input).await;
+    let result = start_run_in_txn(
+        &txn,
+        caller_did,
+        graph_id,
+        expected_revision_digest,
+        entry_name,
+        input,
+    )
+    .await;
     match result {
         Ok(receipt) => {
             txn.commit().await.context("commit graph run start")?;
@@ -1085,6 +1122,7 @@ async fn start_run_in_txn(
     txn: &ConfigApplyTxn<'_>,
     caller_did: &str,
     graph_id: &str,
+    expected_revision_digest: Option<&str>,
     entry_name: &str,
     input: Value,
 ) -> Result<GraphRunReceipt> {
@@ -1106,6 +1144,13 @@ async fn start_run_in_txn(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .context("graph has no active revision")?;
+    if let Some(expected) = expected_revision_digest {
+        if expected != digest {
+            anyhow::bail!(
+                "active graph revision changed after preflight: expected {expected:?}, observed {digest:?}"
+            );
+        }
+    }
     let revision = query_graph_revision(txn, digest)
         .await?
         .context("active graph revision is missing")?;
@@ -1249,10 +1294,12 @@ mod tests {
             "sha256:incomplete".to_owned(),
             "sha256:malformed".to_owned(),
         ]);
-        let visible = load_visible_package_artifact_ids(&node, "did:key:owner", &digests)
-            .await
-            .unwrap();
-        assert!(visible.is_empty());
+        let visible =
+            load_visible_package_artifact_ids(&node, "did:key:owner", &digests, &BTreeSet::new())
+                .await
+                .unwrap();
+        assert!(visible.0.is_empty());
+        assert!(visible.1.is_empty());
 
         node.shutdown().await;
     }
@@ -1264,6 +1311,10 @@ mod tests {
             .await
             .unwrap();
         let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+        let ready_contract = crate::graph_package::collection_schema_contract_digest(
+            &txn.collection_version("ReadyInput").await.unwrap().unwrap(),
+        )
+        .unwrap();
         let mut package = PackagePlan {
             name: "test-package".to_owned(),
             version: "1.0.0".to_owned(),
@@ -1281,28 +1332,29 @@ mod tests {
             required_schema_digests: vec![RequiredSchemaDigest {
                 namespace: "test.graphql".to_owned(),
                 digest: format!("sha256:{}", "3".repeat(64)),
-                collections: std::collections::BTreeMap::from([(
+                collection_contract_digests: std::collections::BTreeMap::from([(
                     "ReadyInput".to_owned(),
-                    vec!["graph_run_id".to_owned()],
+                    ready_contract,
                 )]),
             }],
         };
 
         verify_package_schemas_in_txn(&txn, &package).await.unwrap();
         package.required_schema_digests[0]
-            .collections
+            .collection_contract_digests
             .get_mut("ReadyInput")
             .unwrap()
-            .push("missing_field".to_owned());
+            .clone_from(&format!("sha256:{}", "f".repeat(64)));
         assert!(verify_package_schemas_in_txn(&txn, &package)
             .await
             .unwrap_err()
             .to_string()
-            .contains("does not match its pinned field shape"));
-        package.required_schema_digests[0].collections = std::collections::BTreeMap::from([(
-            "MissingInput".to_owned(),
-            vec!["graph_run_id".to_owned()],
-        )]);
+            .contains("does not match its pinned contract"));
+        package.required_schema_digests[0].collection_contract_digests =
+            std::collections::BTreeMap::from([(
+                "MissingInput".to_owned(),
+                format!("sha256:{}", "f".repeat(64)),
+            )]);
         assert!(verify_package_schemas_in_txn(&txn, &package)
             .await
             .unwrap_err()
@@ -1582,6 +1634,16 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn package_visibility_distinguishes_active_pointers_from_run_pins() {
+        assert!(revision_visibility_authorized("active", true, false));
+        assert!(!revision_visibility_authorized("retired", true, false));
+        assert!(revision_visibility_authorized("active", false, true));
+        assert!(revision_visibility_authorized("retired", false, true));
+        assert!(!revision_visibility_authorized("validated", true, true));
+        assert!(!revision_visibility_authorized("draft", true, true));
+    }
+
     async fn install_plan_tasks(node: &EmbeddedNode, plan: &GraphPlan) {
         let now = chrono::Utc::now().to_rfc3339();
         for task_id in plan
@@ -1684,11 +1746,34 @@ mod tests {
         assert_eq!(active_row["status"], "active");
         assert_eq!(active_row["artifacts_complete"], true);
 
+        let stale_digest = format!("sha256:{}", "f".repeat(64));
+        let stale_start = start_graph_run(
+            &node,
+            None,
+            "did:key:owner",
+            "pipeline",
+            Some(&stale_digest),
+            "input",
+            json!({ "payload": "stale" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(stale_start
+            .to_string()
+            .contains("active graph revision changed after preflight"));
+        let no_stale_run = node.execute("{ GraphRun { run_id } }").await;
+        assert!(!no_stale_run.has_errors(), "{:?}", no_stale_run.errors);
+        assert!(no_stale_run.data.unwrap()["GraphRun"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
         let run = start_graph_run(
             &node,
             None,
             "did:key:owner",
             "pipeline",
+            None,
             "input",
             json!({ "payload": "hello" }),
         )
@@ -1886,6 +1971,7 @@ mod tests {
             None,
             "did:key:owner",
             "result-pipeline",
+            None,
             "input",
             json!({ "payload": "review" }),
         )

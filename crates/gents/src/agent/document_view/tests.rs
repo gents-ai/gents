@@ -1853,8 +1853,11 @@ fn graph_artifact_visibility_unions_active_revisions_with_nonterminal_run_pins()
     );
 
     assert_eq!(
-        super::active_graph_digests(&view),
-        std::collections::BTreeSet::from(["sha256:active".to_owned(), "sha256:pinned".to_owned(),])
+        super::active_graph_revision_pins(&view),
+        (
+            std::collections::BTreeSet::from(["sha256:active".to_owned()]),
+            std::collections::BTreeSet::from(["sha256:pinned".to_owned()]),
+        )
     );
 }
 

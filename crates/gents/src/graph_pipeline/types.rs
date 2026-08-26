@@ -392,10 +392,10 @@ pub struct PlannedPackageArtifact {
 pub struct RequiredSchemaDigest {
     pub namespace: String,
     pub digest: String,
-    /// Minimal runtime readiness shape derived from the pinned SDL. The digest
-    /// keeps provenance exact; this map lets peers fail closed without needing
-    /// the originating binary's bundled catalog.
-    pub collections: BTreeMap<String, Vec<String>>,
+    /// Canonical full-contract digest for each collection in the pinned SDL.
+    /// Peers can compare their active DefraDB collection versions without
+    /// needing the originating binary's bundled catalog.
+    pub collection_contract_digests: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
