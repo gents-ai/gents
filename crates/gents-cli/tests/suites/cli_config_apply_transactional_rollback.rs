@@ -84,6 +84,19 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         .context("spawning gents config apply with apply-sleep env")?;
 
     thread::sleep(KILL_DELAY);
+    if let Some(status) = cli
+        .try_wait()
+        .context("checking config apply before SIGKILL")?
+    {
+        let output = cli
+            .wait_with_output()
+            .context("capturing config apply that exited before SIGKILL")?;
+        return Err(anyhow!(
+            "config apply exited before the rollback probe could kill an active transaction ({status})\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
     cli.kill().context("SIGKILL CLI")?;
     cli.wait().context("reap CLI")?;
 

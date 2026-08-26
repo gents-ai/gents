@@ -1,24 +1,12 @@
-use gents::Collection;
+use gents::{Collection, DESIRED_STATE_APPLY_ORDER};
 use std::collections::BTreeSet;
 
 fn config_apply_order_from_source() -> Vec<Collection> {
     let src = include_str!("../../src/config_import.rs");
-    let body_start = src.find("const CONFIG_APPLY_ORDER").unwrap();
-    let body_end = src[body_start..].find("];").unwrap() + body_start;
-    let body = &src[body_start..body_end];
-
-    let re = regex::Regex::new(r"Collection::([A-Za-z]+)").unwrap();
-    re.captures_iter(body)
-        .map(|capture| {
-            let variant_name = capture.get(1).unwrap().as_str();
-            Collection::ALL
-                .into_iter()
-                .find(|collection| collection.graphql_type() == variant_name)
-                .unwrap_or_else(|| {
-                    panic!("unknown Collection variant in CONFIG_APPLY_ORDER: {variant_name}")
-                })
-        })
-        .collect()
+    assert!(src.contains(
+        "const CONFIG_APPLY_ORDER: [Collection; 13] = gents::DESIRED_STATE_APPLY_ORDER;"
+    ));
+    DESIRED_STATE_APPLY_ORDER.to_vec()
 }
 
 #[test]

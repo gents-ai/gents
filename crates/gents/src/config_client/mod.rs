@@ -24,6 +24,7 @@
 mod agent_behavior;
 mod approval;
 mod common;
+mod desired_state;
 mod event_trigger;
 mod inference_backend;
 mod schedule;
@@ -35,6 +36,14 @@ pub mod patch;
 pub use agent_behavior::write_agent_behavior_document;
 pub use approval::{list_held_tool_calls, write_tool_approval, HeldToolCall, ToolApprovalVerdict};
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
+pub use desired_state::{
+    apply_desired_state_plan, DesiredStateApplyCounts, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
+};
+pub(crate) use desired_state::{
+    desired_state_document_digest, read_desired_state_document_in_txn,
+    verify_existing_desired_state_plan,
+};
 pub use event_trigger::write_event_trigger_document;
 pub use inference_backend::{write_inference_backend_document, InferenceBackendUpsertDocument};
 pub use schedule::write_schedule_document;
@@ -46,9 +55,10 @@ pub use txn::ConfigApplyTxn;
 
 mod tool_selection;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::{json, Value};
@@ -94,6 +104,99 @@ impl ConfigAccess {
                 .await?;
                 Ok(json!({
                     "data": response.data.unwrap_or(Value::Null),
+                }))
+            }
+        }
+    }
+
+    /// Apply schema SDL through the same local-or-HTTP control-plane seam as
+    /// configuration writes. Callers must still perform their own structural
+    /// compatibility check before invoking this operation.
+    pub async fn add_schema(&self, sdl: &str) -> Result<()> {
+        match self {
+            Self::Graphql(graphql) => {
+                let api_base = graphql_api_base(graphql)?;
+                let url = format!("{api_base}/schema");
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()?;
+                let response = client
+                    .post(&url)
+                    .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .body(sdl.to_owned())
+                    .send()
+                    .await
+                    .with_context(|| format!("posting schema SDL to {url}"))?;
+                let status = response.status();
+                let bytes = response
+                    .bytes()
+                    .await
+                    .with_context(|| format!("reading schema SDL response from {url}"))?;
+                if !status.is_success() {
+                    anyhow::bail!(
+                        "schema SDL request to {url} failed with {status}: {}",
+                        String::from_utf8_lossy(&bytes)
+                    );
+                }
+                Ok(())
+            }
+            Self::Local(node) => node.add_schema(sdl).await.context("adding schema SDL"),
+        }
+    }
+
+    /// Return the declared field shape for one collection. HTTP callers use
+    /// DefraDB's read-only collection-version API, which EmbeddedNode exposes
+    /// without enabling destructive collection management.
+    pub async fn collection_fields(&self, collection: &str) -> Result<Option<BTreeSet<String>>> {
+        Ok(self.collection_version(collection).await?.map(|version| {
+            version
+                .get("Fields")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|field| field.get("Name").and_then(Value::as_str))
+                .map(ToOwned::to_owned)
+                .collect()
+        }))
+    }
+
+    /// Return the active DefraDB collection version so callers that own a
+    /// schema contract can compare field kinds, directives, and indexes—not
+    /// merely the set of field names.
+    pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        match self {
+            Self::Local(node) => node
+                .get_collection(collection)?
+                .map(serde_json::to_value)
+                .transpose()
+                .context("serializing active collection version"),
+            Self::Graphql(graphql) => {
+                let api_base = graphql_api_base(graphql)?;
+                let url = format!("{api_base}/collections/versions");
+                let versions: Value = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()?
+                    .get(&url)
+                    .send()
+                    .await
+                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .error_for_status()
+                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .json()
+                    .await
+                    .with_context(|| format!("decoding collection versions from {url}"))?;
+                Ok(versions.as_array().and_then(|versions| {
+                    versions
+                        .iter()
+                        .find(|version| {
+                            version.get("Name").and_then(Value::as_str) == Some(collection)
+                                && version
+                                    .get("IsActive")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(true)
+                        })
+                        .cloned()
                 }))
             }
         }
