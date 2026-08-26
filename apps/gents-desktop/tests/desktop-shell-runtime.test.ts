@@ -5,6 +5,7 @@ import {
   applySessionLiveDelta,
   createTrailingRefreshQueue,
   desktopUpdateRefreshScope,
+  dismissMailboxItemAndClearMatchingRoute,
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
   sessionLiveDeltaRequest,
@@ -79,6 +80,38 @@ describe("desktopUpdateRefreshScope", () => {
     );
     expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
     expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
+  });
+});
+
+describe("dismissMailboxItemAndClearMatchingRoute", () => {
+  it("preserves a newer compose route while an older dismissal is in flight", async () => {
+    const pass = deferred();
+    let currentRouteItemId: string | null = "item-a";
+    const clearMatchingRoute = vi.fn();
+    const dismissal = dismissMailboxItemAndClearMatchingRoute(
+      "item-a",
+      () => pass.promise,
+      () => currentRouteItemId,
+      clearMatchingRoute,
+    );
+
+    currentRouteItemId = "item-b";
+    pass.resolve();
+    await dismissal;
+
+    expect(clearMatchingRoute).not.toHaveBeenCalled();
+  });
+
+  it("clears the compose route when the dismissed item is still current", async () => {
+    const clearMatchingRoute = vi.fn();
+    await dismissMailboxItemAndClearMatchingRoute(
+      "item-a",
+      async () => {},
+      () => "item-a",
+      clearMatchingRoute,
+    );
+
+    expect(clearMatchingRoute).toHaveBeenCalledOnce();
   });
 });
 

@@ -17,6 +17,7 @@ import {
 import {
   delay,
   applySessionLiveDelta,
+  dismissMailboxItemAndClearMatchingRoute,
   logShellEvent,
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
@@ -615,12 +616,16 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
 
   async function onDismissMailboxItem(itemId: string) {
     try {
-      await api.dismissMailboxItem(itemId);
-      if (pendingMailboxCauseId === itemId) {
-        pendingMailboxRouteRef.current = null;
-        newConversationAgentRef.current = null;
-        setPendingMailboxCauseId(null);
-      }
+      await dismissMailboxItemAndClearMatchingRoute(
+        itemId,
+        (dismissedItemId) => api.dismissMailboxItem(dismissedItemId),
+        () => pendingMailboxRouteRef.current?.itemId ?? null,
+        () => {
+          pendingMailboxRouteRef.current = null;
+          newConversationAgentRef.current = null;
+          setPendingMailboxCauseId(null);
+        },
+      );
       await refreshSnapshot();
     } catch (error) {
       setError(String(error));
