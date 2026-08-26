@@ -19,6 +19,14 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 2,
         "max_edges": 2,
@@ -51,6 +59,14 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 2,
         "max_edges": 2,
@@ -76,6 +92,14 @@
       ],
       "edges": [],
       "entries": [],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 2,
         "max_edges": 2,
@@ -106,6 +130,14 @@
           "collection": "PipelineInput",
           "schema": "PipelineInput/v1",
           "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
         }
       ],
       "limits": {
@@ -151,6 +183,14 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "feedback",
+          "from": { "node_id": "reviewer", "port": "feedback" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 3,
         "max_edges": 3,
@@ -183,6 +223,14 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 2,
         "max_edges": 2,
@@ -213,6 +261,14 @@
           "collection": "PipelineInput",
           "schema": "PipelineInput/v2",
           "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
         }
       ],
       "limits": {
@@ -261,6 +317,14 @@
           "collection": "PipelineInput",
           "schema": "PipelineInput/v1",
           "to": { "node_id": "worker", "port": "input" }
+        }
+      ],
+      "results": [
+        {
+          "name": "feedback",
+          "from": { "node_id": "reviewer", "port": "feedback" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
         }
       ],
       "limits": {

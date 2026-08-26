@@ -207,6 +207,7 @@ pub(crate) struct LeanGraphPipelineValidationCase {
     pub(crate) topology_valid: bool,
     pub(crate) capabilities_authorized: bool,
     pub(crate) within_bounds: bool,
+    pub(crate) terminal_result_declared: bool,
     pub(crate) expected_valid: bool,
 }
 

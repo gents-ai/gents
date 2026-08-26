@@ -95,7 +95,16 @@ fn linear_intent() -> GraphIntent {
                 port: "job".to_owned(),
             },
         }],
-        results: vec![],
+        results: vec![ResultContract {
+            name: "findings".to_owned(),
+            from: PortRef {
+                node_id: "extract".to_owned(),
+                port: "finding".to_owned(),
+            },
+            cardinality: ResultCardinality::AtMost { count: 8 },
+            terminal: true,
+            predicates: vec![],
+        }],
         limits: GraphLimits {
             max_nodes: 8,
             max_edges: 16,
@@ -315,6 +324,27 @@ fn result_contracts_are_typed_canonical_and_digest_bound() {
     assert!(has_code(&error, DiagnosticCode::DuplicateResult));
     assert!(has_code(&error, DiagnosticCode::InvalidResultCardinality));
     assert!(has_code(&error, DiagnosticCode::InvalidResultPredicate));
+}
+
+#[test]
+fn compilation_requires_a_terminal_result_contract() {
+    let mut intent = linear_intent();
+    intent.results.clear();
+    let error = compile(&intent, &catalog()).unwrap_err();
+    assert!(has_code(&error, DiagnosticCode::MissingTerminalResult));
+
+    intent.results = vec![ResultContract {
+        name: "observations".to_owned(),
+        from: PortRef {
+            node_id: "extract".to_owned(),
+            port: "finding".to_owned(),
+        },
+        cardinality: ResultCardinality::AtMost { count: 8 },
+        terminal: false,
+        predicates: vec![],
+    }];
+    let error = compile(&intent, &catalog()).unwrap_err();
+    assert!(has_code(&error, DiagnosticCode::MissingTerminalResult));
 }
 
 fn package_plan(artifacts: Vec<PlannedPackageArtifact>) -> PackagePlan {

@@ -121,6 +121,7 @@ mod tests {
     use super::*;
     use crate::graph_pipeline::{
         EntryBinding, GraphLimits, GraphNode, PortCardinality, PortRef, PortSpec,
+        ResultCardinality, ResultContract,
     };
 
     #[derive(Deserialize)]
@@ -214,7 +215,16 @@ mod tests {
                     port: "input".to_owned(),
                 },
             }],
-            results: vec![],
+            results: vec![ResultContract {
+                name: "result".to_owned(),
+                from: PortRef {
+                    node_id: "worker".to_owned(),
+                    port: "result".to_owned(),
+                },
+                cardinality: ResultCardinality::Exactly { count: 1 },
+                terminal: true,
+                predicates: vec![],
+            }],
             limits: GraphLimits {
                 max_nodes: 2,
                 max_edges: 2,

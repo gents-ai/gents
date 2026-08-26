@@ -1208,6 +1208,7 @@ async fn start_run_in_txn(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::sync::Arc;
 
     use super::*;
     use crate::graph_pipeline::{
@@ -1321,6 +1322,14 @@ mod tests {
             cardinality: PortCardinality::One,
             required: true,
         };
+        let output = PortSpec {
+            name: "result".to_owned(),
+            collection: "PipelineResult".to_owned(),
+            schema: "PipelineResult/v1".to_owned(),
+            correlation_field: "graph_run_id".to_owned(),
+            cardinality: PortCardinality::One,
+            required: false,
+        };
         compile_graph(
             &GraphIntent {
                 graph_id: "pipeline".to_owned(),
@@ -1340,7 +1349,16 @@ mod tests {
                         port: input.name.clone(),
                     },
                 }],
-                results: vec![],
+                results: vec![ResultContract {
+                    name: "result".to_owned(),
+                    from: PortRef {
+                        node_id: "worker".to_owned(),
+                        port: output.name.clone(),
+                    },
+                    cardinality: ResultCardinality::Exactly { count: 1 },
+                    terminal: true,
+                    predicates: vec![],
+                }],
                 limits: GraphLimits {
                     max_nodes: 2,
                     max_edges: 2,
@@ -1355,7 +1373,7 @@ mod tests {
                 revision: "v1".to_owned(),
                 task_id: format!("worker-{configuration}"),
                 input_ports: vec![input],
-                output_ports: vec![],
+                output_ports: vec![output],
                 allowed_callers: vec!["did:key:owner".to_owned()],
             }],
             "did:key:owner",
@@ -1429,7 +1447,16 @@ mod tests {
                         port: "input".to_owned(),
                     },
                 }],
-                results: vec![],
+                results: vec![ResultContract {
+                    name: "items".to_owned(),
+                    from: PortRef {
+                        node_id: "producer".to_owned(),
+                        port: "items".to_owned(),
+                    },
+                    cardinality: ResultCardinality::AtMost { count: 2 },
+                    terminal: true,
+                    predicates: vec![],
+                }],
                 limits: GraphLimits {
                     max_nodes: 2,
                     max_edges: 2,
@@ -1594,6 +1621,10 @@ mod tests {
             r#"type PipelineInput {
                 graph_run_id: String @index(unique: true)
                 payload: String
+            }"#,
+            r#"type PipelineResult {
+                graph_run_id: String @index
+                report: String
             }"#,
         ] {
             node.add_schema(schema).await.unwrap();
@@ -1815,7 +1846,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_run_view_commits_exact_terminal_result_refs_and_reloads_them() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         for schema in [
             gents_protocol::schemas::GRAPH_DEFINITION,
             gents_protocol::schemas::GRAPH_REVISION,
@@ -1975,6 +2006,40 @@ mod tests {
                 .unwrap(),
             0
         );
+        let result_document = node
+            .execute("{ PipelineResult(limit: 1) { _docID report } }")
+            .await;
+        assert!(
+            !result_document.has_errors(),
+            "{:?}",
+            result_document.errors
+        );
+        let result_document = result_document.data.unwrap()["PipelineResult"][0].clone();
+        let result_doc_id = result_document["_docID"].as_str().unwrap();
+        let changed = node
+            .execute(&format!(
+                r#"mutation {{ update_PipelineResult(
+                    docID: "{}", input: {{ report: "changed after completion" }}
+                ) {{ _docID }} }}"#,
+                escape_graphql_string(result_doc_id),
+            ))
+            .await;
+        assert!(!changed.has_errors(), "{:?}", changed.errors);
+        let access = ConfigAccess::Local(Arc::clone(&node));
+        let hydrated = super::super::load_graph_run_result_view_with_access(
+            &access,
+            "did:key:owner",
+            &run.run_id,
+        )
+        .await
+        .unwrap();
+        let report = hydrated
+            .results
+            .iter()
+            .find(|result| result.name == "report")
+            .unwrap();
+        assert_eq!(report.refs, terminal.persisted_result_refs);
+        assert_eq!(report.documents[0]["report"], "looks good");
         node.shutdown().await;
     }
 

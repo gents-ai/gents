@@ -1807,6 +1807,21 @@ fn graph_artifact_visibility_unions_active_revisions_with_nonterminal_run_pins()
             },
         },
     );
+    view.graph_definitions.insert(
+        "disabled-graph".to_owned(),
+        DocumentRecord {
+            doc_id: "disabled-definition-doc".to_owned(),
+            value: crate::document_config::GraphDefinition {
+                graph_id: "disabled-graph".to_owned(),
+                owner_did: "did:key:owner".to_owned(),
+                enabled: false,
+                active_revision_digest: Some("sha256:disabled".to_owned()),
+                generation: Some(1),
+                created_at: None,
+                updated_at: None,
+            },
+        },
+    );
     for (run_id, digest, status) in [
         ("running", "sha256:pinned", "running"),
         ("done", "sha256:retired", "succeeded"),

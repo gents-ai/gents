@@ -281,7 +281,7 @@ fn active_graph_digests(view: &DocumentRuntimeView) -> BTreeSet<String> {
     let mut digests: BTreeSet<String> = view
         .graph_definitions
         .values()
-        .filter(|record| record.value.owner_did == agent_did)
+        .filter(|record| record.value.owner_did == agent_did && record.value.enabled)
         .filter_map(|record| record.value.active_revision_digest.clone())
         .collect();
     digests.extend(

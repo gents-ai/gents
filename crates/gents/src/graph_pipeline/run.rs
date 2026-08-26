@@ -11,7 +11,9 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::{escape_graphql_string, validate_collection_identifier};
+use crate::graphql::{
+    document_composite_version, escape_graphql_string, validate_collection_identifier,
+};
 
 use super::runtime::graph_trigger_id;
 use super::{
@@ -894,6 +896,150 @@ pub async fn load_graph_run_view_with_access(
     run_id: &str,
 ) -> Result<GraphRunView> {
     load_graph_run_view_with(access, actor_did, run_id).await
+}
+
+fn collection_result_projection_fields(version: &Value, collection: &str) -> Result<Vec<String>> {
+    let fields = version
+        .get("Fields")
+        .and_then(Value::as_array)
+        .with_context(|| format!("collection {collection} version has no Fields array"))?;
+    let mut names = fields
+        .iter()
+        // Relation fields need a nested GraphQL selection. Result hydration
+        // deliberately projects every scalar/array value and leaves relation
+        // traversal to an explicitly declared result document instead of
+        // inventing an unbounded recursive projection.
+        .filter(|field| field.get("RelationName").is_none_or(Value::is_null))
+        .filter_map(|field| field.get("Name").and_then(Value::as_str))
+        .filter(|name| *name != "_docID" && *name != "_version")
+        .map(|name| {
+            crate::graphql::validate_graphql_name(name)?;
+            Ok(name.to_owned())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+async fn hydrate_terminal_result_documents(
+    access: &ConfigAccess,
+    view: &mut GraphRunView,
+) -> Result<()> {
+    let mut fields_by_collection = BTreeMap::<String, Vec<String>>::new();
+    for result in view.results.iter_mut().filter(|result| result.terminal) {
+        let persisted_refs = view
+            .persisted_result_refs
+            .iter()
+            .filter(|reference| reference.name == result.name)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut refs = if persisted_refs.is_empty() {
+            result.refs.clone()
+        } else {
+            persisted_refs
+        };
+        refs.sort_by(|left, right| left.document_id.cmp(&right.document_id));
+
+        let mut documents = Vec::with_capacity(refs.len());
+        for reference in &refs {
+            validate_collection_identifier(&reference.collection)?;
+            let fields = if let Some(fields) = fields_by_collection.get(&reference.collection) {
+                fields.clone()
+            } else {
+                let version = access
+                    .collection_version(&reference.collection)
+                    .await?
+                    .with_context(|| {
+                        format!("result collection {} is unavailable", reference.collection)
+                    })?;
+                let fields = collection_result_projection_fields(&version, &reference.collection)?;
+                fields_by_collection.insert(reference.collection.clone(), fields.clone());
+                fields
+            };
+            let selected_fields = if fields.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", fields.join(" "))
+            };
+            let cids = graphql_string_list_literal(std::slice::from_ref(&reference.commit_cid));
+            let response = access
+                .execute(&format!(
+                    r#"{{
+                        {collection}(
+                            cid: {cids},
+                            docID: "{document_id}",
+                            showDeleted: true
+                        ) {{ _docID _version {{ cid height fieldName }}{selected_fields} }}
+                    }}"#,
+                    collection = reference.collection,
+                    document_id = escape_graphql_string(&reference.document_id),
+                ))
+                .await
+                .with_context(|| {
+                    format!(
+                        "reconstructing result {} document {} at {}",
+                        result.name, reference.document_id, reference.commit_cid
+                    )
+                })?;
+            let rows = rows(&response, &reference.collection);
+            if rows.len() != 1 {
+                anyhow::bail!(
+                    "result {} document {} at {} reconstructed {} rows",
+                    result.name,
+                    reference.document_id,
+                    reference.commit_cid,
+                    rows.len()
+                );
+            }
+            let mut document = rows[0].clone();
+            if document.get("_docID").and_then(Value::as_str)
+                != Some(reference.document_id.as_str())
+            {
+                anyhow::bail!(
+                    "result {} commit {} reconstructed the wrong document",
+                    result.name,
+                    reference.commit_cid
+                );
+            }
+            let reconstructed = document_composite_version(
+                &document,
+                &format!("hydrate graph result {}", result.name),
+            )?
+            .context("historical result document has no composite commit")?;
+            if reconstructed.cid != reference.commit_cid {
+                anyhow::bail!(
+                    "result {} document {} reconstructed commit {}, expected {}",
+                    result.name,
+                    reference.document_id,
+                    reconstructed.cid,
+                    reference.commit_cid
+                );
+            }
+            if let Some(object) = document.as_object_mut() {
+                object.remove("_version");
+            }
+            documents.push(document);
+        }
+        result.refs = refs;
+        result.observed_count = documents.len();
+        result.documents = documents;
+    }
+    Ok(())
+}
+
+/// Reconstruct a graph run and hydrate each terminal output from the exact
+/// document commits pinned when the run succeeded. This is the shared result
+/// projection for CLI and bridge consumers; it does not create a UI-only
+/// execution or result model.
+pub async fn load_graph_run_result_view_with_access(
+    access: &ConfigAccess,
+    actor_did: &str,
+    run_id: &str,
+) -> Result<GraphRunView> {
+    let mut view = load_graph_run_view_with(access, actor_did, run_id).await?;
+    hydrate_terminal_result_documents(access, &mut view).await?;
+    Ok(view)
 }
 
 /// Reconcile every running graph owned by one principal. The durable run and

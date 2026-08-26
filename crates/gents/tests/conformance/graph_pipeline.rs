@@ -1,6 +1,6 @@
 use gents::graph_pipeline::{
     compile_graph, CompilerPolicy, EntryBinding, GraphIntent, GraphLimits, GraphNode,
-    PortCardinality, PortRef, PortSpec, StageCapability,
+    PortCardinality, PortRef, PortSpec, ResultCardinality, ResultContract, StageCapability,
 };
 
 use super::lean_contract_snapshot;
@@ -15,6 +15,14 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
         correlation_field: "graph_run_id".to_owned(),
         cardinality: PortCardinality::One,
         required: true,
+    };
+    let output = PortSpec {
+        name: "result".to_owned(),
+        collection: "ExperimentResult".to_owned(),
+        schema: "ExperimentResult/v1".to_owned(),
+        correlation_field: "graph_run_id".to_owned(),
+        cardinality: PortCardinality::One,
+        required: false,
     };
     let intent = GraphIntent {
         graph_id: "lean-validation-fixture".to_owned(),
@@ -34,7 +42,16 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
                 port: input.name.clone(),
             },
         }],
-        results: vec![],
+        results: vec![ResultContract {
+            name: "result".to_owned(),
+            from: PortRef {
+                node_id: "worker".to_owned(),
+                port: output.name.clone(),
+            },
+            cardinality: ResultCardinality::Exactly { count: 1 },
+            terminal: true,
+            predicates: vec![],
+        }],
         limits: GraphLimits {
             max_nodes: 2,
             max_edges: 2,
@@ -49,7 +66,7 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
         revision: "v1".to_owned(),
         task_id: "worker-v1-task".to_owned(),
         input_ports: vec![input],
-        output_ports: vec![],
+        output_ports: vec![output],
         allowed_callers: vec![CALLER_DID.to_owned()],
     };
     (intent, vec![capability])
@@ -58,7 +75,7 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
 #[test]
 fn generated_validation_cases_fence_whole_graph_compilation_gate() {
     let cases = &lean_contract_snapshot().graph_pipeline_validation_cases;
-    assert_eq!(cases.len(), 16, "Lean must emit the full four-bit matrix");
+    assert_eq!(cases.len(), 32, "Lean must emit the full five-bit matrix");
 
     for test_case in cases {
         let (mut intent, mut capabilities) = valid_fixture();
@@ -73,6 +90,9 @@ fn generated_validation_cases_fence_whole_graph_compilation_gate() {
         }
         if !test_case.within_bounds {
             intent.limits.max_nodes = 0;
+        }
+        if !test_case.terminal_result_declared {
+            intent.results.clear();
         }
 
         let accepted = compile_graph(

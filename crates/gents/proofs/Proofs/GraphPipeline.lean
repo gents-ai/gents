@@ -46,6 +46,7 @@ structure Revision where
   topologyValid : Bool
   capabilitiesAuthorized : Bool
   withinBounds : Bool
+  terminalResultDeclared : Bool
   artifactsComplete : Bool
   deriving DecidableEq, Repr
 
@@ -53,7 +54,8 @@ def Revision.wholeGraphValid (revision : Revision) : Prop :=
   revision.typesValid = true ∧
     revision.topologyValid = true ∧
     revision.capabilitiesAuthorized = true ∧
-    revision.withinBounds = true
+    revision.withinBounds = true ∧
+    revision.terminalResultDeclared = true
 
 instance (revision : Revision) : Decidable revision.wholeGraphValid := by
   unfold Revision.wholeGraphValid

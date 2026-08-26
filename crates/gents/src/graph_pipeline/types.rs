@@ -233,6 +233,7 @@ pub enum DiagnosticCode {
     InvalidGroupCountField,
     InvalidGroupTimeout,
     DuplicateResult,
+    MissingTerminalResult,
     InvalidResultCardinality,
     InvalidResultPredicate,
     MultipleInputBindings,

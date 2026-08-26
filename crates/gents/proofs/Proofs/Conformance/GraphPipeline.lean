@@ -11,6 +11,7 @@ structure ValidationCase where
   topologyValid : Bool
   capabilitiesAuthorized : Bool
   withinBounds : Bool
+  terminalResultDeclared : Bool
   expectedValid : Bool
   deriving DecidableEq, Repr
 
@@ -20,21 +21,25 @@ def validationCases : List ValidationCase :=
   boolValues.flatMap fun typesValid =>
     boolValues.flatMap fun topologyValid =>
       boolValues.flatMap fun capabilitiesAuthorized =>
-        boolValues.map fun withinBounds =>
+        boolValues.flatMap fun withinBounds =>
+          boolValues.map fun terminalResultDeclared =>
           { name :=
               "types=" ++ toString typesValid ++
               ",topology=" ++ toString topologyValid ++
               ",authorized=" ++ toString capabilitiesAuthorized ++
-              ",bounds=" ++ toString withinBounds
+              ",bounds=" ++ toString withinBounds ++
+              ",terminal_result=" ++ toString terminalResultDeclared
           , typesValid := typesValid
           , topologyValid := topologyValid
           , capabilitiesAuthorized := capabilitiesAuthorized
           , withinBounds := withinBounds
+          , terminalResultDeclared := terminalResultDeclared
           , expectedValid :=
-              typesValid && topologyValid && capabilitiesAuthorized && withinBounds
+              typesValid && topologyValid && capabilitiesAuthorized && withinBounds &&
+                terminalResultDeclared
           }
 
-theorem validationCases_count : validationCases.length = 16 := by native_decide
+theorem validationCases_count : validationCases.length = 32 := by native_decide
 
 private def boolJson (value : Bool) : String :=
   if value then "true" else "false"
@@ -46,6 +51,8 @@ def validationCaseJson (testCase : ValidationCase) : String :=
     ++ "\"topology_valid\":" ++ boolJson testCase.topologyValid ++ ","
     ++ "\"capabilities_authorized\":" ++ boolJson testCase.capabilitiesAuthorized ++ ","
     ++ "\"within_bounds\":" ++ boolJson testCase.withinBounds ++ ","
+    ++ "\"terminal_result_declared\":" ++
+      boolJson testCase.terminalResultDeclared ++ ","
     ++ "\"expected_valid\":" ++ boolJson testCase.expectedValid
     ++ "}"
 
@@ -131,6 +138,7 @@ private def runState
       , topologyValid := true
       , capabilitiesAuthorized := true
       , withinBounds := true
+      , terminalResultDeclared := true
       , artifactsComplete := true
       }
   , activeRevision := some 2

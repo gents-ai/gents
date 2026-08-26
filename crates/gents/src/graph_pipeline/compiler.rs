@@ -565,6 +565,14 @@ pub fn compile_graph(
         .iter()
         .map(|result| result.name.as_str())
         .collect::<BTreeSet<_>>();
+    if !intent.results.iter().any(|result| result.terminal) {
+        diagnostic(
+            &mut diagnostics,
+            DiagnosticCode::MissingTerminalResult,
+            "/results",
+            "a graph must declare at least one terminal result so every completed run can reach a durable terminal state",
+        );
+    }
     let mut result_names = BTreeSet::new();
     for (index, result) in intent.results.iter().enumerate() {
         let path = format!("/results/{index}");

@@ -16,10 +16,10 @@ pub use compiler::{
 };
 pub(crate) use run::run_graph_run_reconciler;
 pub use run::{
-    load_graph_run_view, load_graph_run_view_with_access, reconcile_graph_run,
-    reconcile_graph_run_with_access, reconcile_owned_graph_runs, request_graph_run_cancellation,
-    request_graph_run_cancellation_with_access, GraphResultRef, GraphRunGroupView,
-    GraphRunRequestView, GraphRunResultView, GraphRunStageView, GraphRunView,
+    load_graph_run_result_view_with_access, load_graph_run_view, load_graph_run_view_with_access,
+    reconcile_graph_run, reconcile_graph_run_with_access, reconcile_owned_graph_runs,
+    request_graph_run_cancellation, request_graph_run_cancellation_with_access, GraphResultRef,
+    GraphRunGroupView, GraphRunRequestView, GraphRunResultView, GraphRunStageView, GraphRunView,
 };
 pub(crate) use runtime::materialize_graph_revision_in_txn;
 pub use runtime::{

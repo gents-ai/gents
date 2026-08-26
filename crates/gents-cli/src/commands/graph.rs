@@ -11,9 +11,9 @@ use gents::graph_package::{
     install_bundled_graph_package, load_bundled_graph_package, GraphPackageInstallBindings,
 };
 use gents::graph_pipeline::{
-    activate_graph_revision_with_access, load_graph_run_view_with_access,
-    request_graph_run_cancellation_with_access, revision_gate_decision,
-    start_graph_run_with_access, GraphPlan, GraphRunView,
+    activate_graph_revision_with_access, load_graph_run_result_view_with_access,
+    load_graph_run_view_with_access, request_graph_run_cancellation_with_access,
+    revision_gate_decision, start_graph_run_with_access, GraphPlan, GraphRunView,
 };
 use gents::graphql::escape_graphql_string;
 use gents::run_timeline::{RunActivityRows, TimelineToolCallRow};
@@ -321,6 +321,10 @@ async fn run(args: GraphRunArgs) -> Result<()> {
     }
 }
 
+fn effective_error(view: &GraphRunView) -> Option<&Value> {
+    view.error.as_ref().or(view.failure_evidence.as_ref())
+}
+
 fn progress(view: &GraphRunView) -> Value {
     json!({
         "run_id": view.run_id,
@@ -332,7 +336,7 @@ fn progress(view: &GraphRunView) -> Value {
         "stages": view.stages,
         "groups": view.groups,
         "results": view.results,
-        "error": view.error,
+        "error": effective_error(view),
     })
 }
 
@@ -521,7 +525,7 @@ fn print_progress_text(
             "\nWarning: activity counts exceeded the bounded observation window"
         )?;
     }
-    if let Some(error) = view.error.as_ref().or(view.failure_evidence.as_ref()) {
+    if let Some(error) = effective_error(view) {
         writeln!(out, "\nError: {}", serde_json::to_string(error)?)?;
     }
     out.flush()?;
@@ -536,11 +540,10 @@ fn display_value(value: &Value) -> String {
     }
 }
 
-fn print_result_text(view: &GraphRunView) -> Result<()> {
-    let mut out = io::stdout().lock();
+fn write_result_text(out: &mut impl io::Write, view: &GraphRunView) -> Result<()> {
     writeln!(out, "Run: {}", view.run_id)?;
     writeln!(out, "Status: {}", view.status)?;
-    if let Some(error) = view.error.as_ref().or(view.failure_evidence.as_ref()) {
+    if let Some(error) = effective_error(view) {
         writeln!(out, "Error: {}", serde_json::to_string_pretty(error)?)?;
     }
     let outputs = view
@@ -583,6 +586,10 @@ fn print_result_text(view: &GraphRunView) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_result_text(view: &GraphRunView) -> Result<()> {
+    write_result_text(&mut io::stdout().lock(), view)
 }
 
 async fn watch_run(
@@ -642,7 +649,7 @@ async fn watch(args: GraphWatchArgs) -> Result<()> {
 
 async fn result(args: GraphResultArgs) -> Result<()> {
     let (access, actor) = access_and_actor(&args.scope).await?;
-    let view = load_graph_run_view_with_access(&access, &actor, &args.run_id).await?;
+    let view = load_graph_run_result_view_with_access(&access, &actor, &args.run_id).await?;
     match args
         .output
         .ensure_supported("graph result", &[OutputFormat::Text, OutputFormat::Json])?
@@ -653,7 +660,7 @@ async fn result(args: GraphResultArgs) -> Result<()> {
             "revision_digest": view.revision_digest,
             "results": view.results,
             "result_refs": view.persisted_result_refs,
-            "error": view.error,
+            "error": effective_error(&view),
         })),
         OutputFormat::Text => print_result_text(&view),
         _ => unreachable!("validated output format"),
@@ -728,4 +735,112 @@ async fn toggle(args: GraphToggleArgs, enabled: bool) -> Result<()> {
         ))
         .await?;
     print_json(&json!({ "graph_id": graph_id, "enabled": enabled }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result_view() -> GraphRunView {
+        serde_json::from_str(
+            r#"{
+            "view_version": 1,
+            "run_id": "run-1",
+            "graph_id": "review",
+            "revision_digest": "sha256:revision",
+            "owner_did": "did:key:owner",
+            "caller_did": "did:key:owner",
+            "entry_name": "review",
+            "correlation": "run-1",
+            "status": "succeeded",
+            "input": {},
+            "cancellation_requested_at": null,
+            "cancellation_requested_by": null,
+            "cancellation_reason": null,
+            "error": null,
+            "created_at": "2026-08-26T00:00:00Z",
+            "started_at": "2026-08-26T00:00:00Z",
+            "deadline_at": "2026-08-26T02:00:00Z",
+            "completed_at": "2026-08-26T01:00:00Z",
+            "update_generation": 2,
+            "requests": [],
+            "stages": [],
+            "groups": [],
+            "results": [{
+                "name": "findings",
+                "terminal": true,
+                "satisfied": true,
+                "observed_count": 1,
+                "violation": null,
+                "refs": [],
+                "documents": [{
+                    "_docID": "finding-doc",
+                    "run_id": "run-1",
+                    "severity": "Major",
+                    "path": "src/main.rs",
+                    "line": "42",
+                    "title": "Actionable defect",
+                    "detail": "The complete explanation.",
+                    "evidence": "Exact source evidence.",
+                    "verification": "Independently confirmed."
+                }]
+            }, {
+                "name": "report",
+                "terminal": true,
+                "satisfied": true,
+                "observed_count": 1,
+                "violation": null,
+                "refs": [],
+                "documents": [{
+                    "_docID": "report-doc",
+                    "run_id": "run-1",
+                    "summary": "Block until the confirmed defect is fixed."
+                }]
+            }],
+            "persisted_result_refs": [],
+            "active_request_count": 0,
+            "terminal_request_count": 1,
+            "result_contract_satisfied": true,
+            "failure_evidence": null
+        }"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn result_text_is_a_complete_actionable_handoff() {
+        let mut output = Vec::new();
+        write_result_text(&mut output, &result_view()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        for expected in [
+            "Status: succeeded",
+            "severity: Major",
+            "path: src/main.rs",
+            "line: 42",
+            "title: Actionable defect",
+            "detail: The complete explanation.",
+            "evidence: Exact source evidence.",
+            "verification: Independently confirmed.",
+            "summary: Block until the confirmed defect is fixed.",
+        ] {
+            assert!(output.contains(expected), "missing {expected:?}:\n{output}");
+        }
+        assert!(!output.contains("_docID"));
+        assert!(!output.contains("run_id:"));
+    }
+
+    #[test]
+    fn progress_json_exposes_derived_failure_evidence_as_error() {
+        let mut view = result_view();
+        view.status = "running".to_owned();
+        view.error = None;
+        view.failure_evidence = Some(json!({
+            "code": "result_contract_unsatisfied",
+            "message": "terminal contract failed"
+        }));
+        assert_eq!(
+            progress(&view)["error"]["code"],
+            "result_contract_unsatisfied"
+        );
+    }
 }
