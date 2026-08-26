@@ -249,6 +249,19 @@ fn isolated_workspace_mutation_has_no_host_path() {
         workspace_placement_upsert_mutation(&placement, "2026-08-21T00:00:00Z");
     assert!(placement_mutation.contains("host_path:"));
     assert!(!placement_mutation.contains("[]"));
+    let repository_mutation = repository_placement_upsert_mutation(
+        &RepositoryPlacementRef {
+            repository_id: "repo-1".into(),
+            deployment_id: "deploy-1".into(),
+            host_path: PathBuf::from("/tmp/repo\"quoted"),
+            enabled: true,
+        },
+        "2026-08-21T00:00:00Z",
+    )
+    .unwrap();
+    assert!(repository_mutation.contains("upsert_RepositoryPlacement"));
+    assert!(repository_mutation.contains("/tmp/repo\\\"quoted"));
+    assert!(!repository_mutation.contains("[]"));
     let receipt = WorkspaceReceiptDoc {
         receipt_id: "receipt-writer-ws-1-req-1".into(),
         workspace_id: "ws-1".into(),

@@ -18,6 +18,7 @@ mod executor;
 mod instructions;
 pub(crate) mod journal;
 pub(crate) mod overlay;
+mod quickstart;
 mod runtime;
 
 pub(crate) use action_plan::{
@@ -32,11 +33,11 @@ pub use action_plan::{
     DEFAULT_MAKE_WORKTREE_ARTIFACTS,
 };
 pub use documents::{
-    isolated_workspace_upsert_mutation, workspace_binding_upsert_mutation,
-    workspace_cleanup_docs_mutation, workspace_placement_upsert_mutation,
-    workspace_receipt_create_mutation, IsolatedWorkspaceDoc, MemoryWorkspaceDocuments,
-    ProvisioningObservation, WorkspaceBindingDoc, WorkspaceDocuments, WorkspacePlacementDoc,
-    WorkspaceReceiptDoc,
+    isolated_workspace_upsert_mutation, repository_placement_upsert_mutation,
+    workspace_binding_upsert_mutation, workspace_cleanup_docs_mutation,
+    workspace_placement_upsert_mutation, workspace_receipt_create_mutation, IsolatedWorkspaceDoc,
+    MemoryWorkspaceDocuments, ProvisioningObservation, WorkspaceBindingDoc, WorkspaceDocuments,
+    WorkspacePlacementDoc, WorkspaceReceiptDoc,
 };
 pub use executor::{
     execute_cleanup_workspace_plan, execute_create_workspace_plan,
@@ -50,6 +51,7 @@ pub use instructions::{
     InstructionFile, InstructionManifest, DEFAULT_INSTRUCTION_PATHS,
 };
 pub use journal::{action_journal_prefix_legal, ActionJournalEntry, ActionJournalState};
+pub use quickstart::provision_read_only_workspace;
 pub use runtime::cleanup_workspace;
 pub(crate) use runtime::{
     integrate_on_integrator_success, materialize_workspace_binding, release_writer_binding,
