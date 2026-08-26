@@ -407,15 +407,6 @@ pub(crate) fn merge_surface_tools(
             entry.validate().map_err(|error| {
                 anyhow::anyhow!("DatastoreToolSurface {surface_id} has a malformed entry: {error}")
             })?;
-            if let SurfaceToolDecl::Create(decl) = entry {
-                if !decl.output_obligation_is_well_formed() {
-                    bail!(
-                        "DatastoreToolSurface {} entry {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
-                        surface_id,
-                        decl.tool_name,
-                    );
-                }
-            }
             if !seen.insert(entry.tool_name().to_string()) {
                 bail!(
                     "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for ToolSelection {}",

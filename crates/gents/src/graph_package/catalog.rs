@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::document_config::SurfaceToolDecl;
 use crate::graph_pipeline::{
     EntryBinding, GraphIntent, GraphLimits, PortSpec, ResultContract, StageAuthorityCeiling,
     COMPILER_VERSION,
@@ -15,6 +16,11 @@ const CODE_REVIEW_INTENT: &str =
     include_str!("../../assets/graph_packages/code-review/graph.intent.json");
 const CODE_REVIEW_CAPABILITIES: &str =
     include_str!("../../assets/graph_packages/code-review/capabilities.json");
+
+#[derive(Deserialize)]
+struct BundledToolSurface {
+    entries: Vec<SurfaceToolDecl>,
+}
 
 fn code_review_asset(path: &str) -> Option<&'static [u8]> {
     Some(match path {
@@ -288,6 +294,19 @@ fn digest_assets(paths: &[String]) -> Result<String> {
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
+fn validate_tool_surface_asset(path: &str) -> Result<()> {
+    let bytes = code_review_asset(path)
+        .with_context(|| format!("bundled package references missing asset {path:?}"))?;
+    let surface: BundledToolSurface = serde_json::from_slice(bytes)
+        .with_context(|| format!("bundled tool surface asset {path:?} is malformed"))?;
+    for entry in &surface.entries {
+        entry
+            .validate()
+            .with_context(|| format!("bundled tool surface asset {path:?} is invalid"))?;
+    }
+    Ok(())
+}
+
 fn load_code_review() -> Result<BundledGraphPackage> {
     let manifest: GraphPackageManifest = serde_json::from_str(CODE_REVIEW_MANIFEST)?;
     if manifest.manifest_version != 1 {
@@ -339,6 +358,9 @@ fn load_code_review() -> Result<BundledGraphPackage> {
             capability.task_prompt_asset.clone(),
             capability.tool_selection_asset.clone(),
         ]);
+        for path in &capability.tool_surface_assets {
+            validate_tool_surface_asset(path)?;
+        }
         assets.extend(capability.tool_surface_assets.iter().cloned());
     }
     assets.sort();
