@@ -27,6 +27,26 @@ pub enum Collection {
     EventTrigger,
 }
 
+/// Canonical dependency order for desired-state writes. Consumers may select
+/// a subset, but must preserve this order. Deletes intentionally have no
+/// equivalent runtime API: pruning is an operator CLI concern, never a package
+/// installation primitive.
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 13] = [
+    Collection::PeerPairingDesired,
+    Collection::InferenceBackend,
+    Collection::InferenceProfile,
+    Collection::ToolServiceRegistry,
+    Collection::DatastoreToolSurface,
+    Collection::ToolSelection,
+    Collection::Skill,
+    Collection::AgentBehavior,
+    Collection::ProjectionAcpBinding,
+    Collection::Task,
+    Collection::Schedule,
+    Collection::EventTrigger,
+    Collection::AgentPrincipal,
+];
+
 impl Collection {
     // NOTE: `WorkspaceRoot` is intentionally NOT a member of `ALL`. `ALL`
     // drives the full desired-state config CRUD surface (CONFIG_APPLY_ORDER,

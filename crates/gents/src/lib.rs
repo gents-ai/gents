@@ -113,7 +113,7 @@ pub mod watcher;
 pub mod workspace;
 
 pub use callback::reject_secret_bearing_callback_fields;
-pub use collection::Collection;
+pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 
 pub use adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
