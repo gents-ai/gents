@@ -384,7 +384,11 @@
 
   @media (max-width: 760px) {
     .app-shell {
-      height: 100dvh;
+      position: fixed;
+      top: var(--mobile-visual-viewport-top, 0px);
+      left: var(--mobile-visual-viewport-left, 0px);
+      width: var(--mobile-visual-viewport-width, 100dvw);
+      height: var(--mobile-visual-viewport-height, 100dvh);
       min-height: 0;
       padding: calc(var(--space-5) + env(safe-area-inset-top))
         calc(var(--space-5) + env(safe-area-inset-right))

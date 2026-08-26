@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { bridgeCommand } from "@source-inc/gents-desktop-client";
 
 type NativeE2eConfig = {
   agentLabel: string;
@@ -44,12 +45,21 @@ export function startNativeSimulatorE2e(): Promise<void> {
     return Promise.resolve();
   }
 
-  activeRun = runNativeSimulatorE2e();
+  activeRun = runNativeSimulatorE2e().catch(async (error) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    const status = { stage: "failed", detail };
+    renderStatus(status);
+    await invoke(bridgeCommand("desktop_native_e2e_status"), { status }).catch(
+      () => {},
+    );
+  });
   return activeRun;
 }
 
 async function runNativeSimulatorE2e() {
-  const config = await invoke<NativeE2eConfig | null>("desktop_native_e2e_config");
+  const config = await invoke<NativeE2eConfig | null>(
+    bridgeCommand("desktop_native_e2e_config"),
+  );
   if (!config) {
     return;
   }
@@ -281,6 +291,12 @@ async function waitFor<T>(
     if (pairingError?.textContent?.trim()) {
       throw new Error(pairingError.textContent.trim());
     }
+    const globalError = document.querySelector<HTMLElement>(
+      '[data-testid="error-banner"] .error-banner-message',
+    );
+    if (globalError?.textContent?.trim()) {
+      throw new Error(globalError.textContent.trim());
+    }
     await delay(250);
   }
   throw new Error(`Timed out waiting for ${description}`);
@@ -304,7 +320,7 @@ async function waitForOptional<T>(
 async function reportStatus(status: NativeE2eStatus) {
   const observerResult = activeConfig?.measurePerformance
     ? await Promise.race([
-        invoke("desktop_observer_metrics")
+        invoke(bridgeCommand("desktop_observer_metrics"))
           .then((observer) => ({ observer, timedOut: false }))
           .catch(() => ({ observer: null, timedOut: false })),
         delay(1_000).then(() => ({ observer: null, timedOut: true })),
@@ -332,7 +348,7 @@ async function reportStatus(status: NativeE2eStatus) {
       }
     : status;
   renderStatus(measured);
-  await invoke("desktop_native_e2e_status", { status: measured });
+  await invoke(bridgeCommand("desktop_native_e2e_status"), { status: measured });
 }
 
 function renderStatus(status: NativeE2eStatus) {

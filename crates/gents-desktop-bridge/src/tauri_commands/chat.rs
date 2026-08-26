@@ -64,22 +64,52 @@ pub async fn desktop_session_snapshot(
     } else {
         None
     };
-    let transcript_page = gents_desktop_core::client::load_session_transcript_page(
+    let page_read = gents_desktop_core::client::load_session_transcript_page(
         core.node(),
         &session_id,
         agent_did.as_deref(),
         requester_scope.as_deref(),
         timeline_before_item_key.as_deref(),
         timeline_limit,
-    )
-    .await
-    .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    );
+    let (transcript_page, context_store) = if timeline_before_item_key.is_none() {
+        let context_read = gents_desktop_core::client::load_session_context_store(
+            core.node(),
+            &session_id,
+            agent_did.as_deref(),
+            requester_scope.as_deref(),
+        );
+        let (page, context) = tokio::join!(page_read, context_read);
+        let page = page.map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        let context = match context {
+            Ok(store) => Some(store),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    error = %error,
+                    "session context query failed; returning the bounded transcript with inexact totals"
+                );
+                None
+            }
+        };
+        (page, context)
+    } else {
+        (
+            page_read
+                .await
+                .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?,
+            None,
+        )
+    };
     let mut snapshot = build_session_snapshot_for_agent_with_transcript(
         core.as_ref(),
         agent_did.as_deref(),
         &session_id,
         request_id.as_deref(),
         Some(&transcript_page.store),
+        context_store.as_ref(),
+        context_store.is_some(),
         timeline_before_item_key.is_none(),
     )
     .await;

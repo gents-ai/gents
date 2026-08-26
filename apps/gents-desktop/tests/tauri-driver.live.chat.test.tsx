@@ -138,10 +138,12 @@ describeLive("Tauri app live bridge runner chat", () => {
       const deployment = latestSnapshot.client?.deployments[0];
       expect(deployment).toBeDefined();
       expect(deployment?.conversations[0]?.sessionId).toBe(firstResult.sessionId);
-      expect(deployment?.conversations[0]?.messageCount).toBeGreaterThanOrEqual(6);
-      expect(deployment?.conversations[0]?.toolCallCount).toBeGreaterThan(0);
+      expect(finalSession.context.durableMessageCount).toBeGreaterThanOrEqual(6);
+      expect(toolGroupsAfterTurnThree).toBeGreaterThan(0);
+      expect(deployment?.conversations[0]?.messageCount).toBeNull();
+      expect(deployment?.conversations[0]?.toolCallCount).toBeNull();
       logTurn(
-        `final snapshot sessionId=${firstResult.sessionId} messageCount=${deployment?.conversations[0]?.messageCount ?? 0} toolCallCount=${deployment?.conversations[0]?.toolCallCount ?? 0}`,
+        `final snapshot sessionId=${firstResult.sessionId} durableMessageCount=${finalSession.context.durableMessageCount} toolGroupCount=${toolGroupsAfterTurnThree}`,
       );
     });
   }, 600_000);

@@ -14,6 +14,7 @@ import { applyShellPlatform } from "./lib/shellPlatform";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
+import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
 import { Sidebar } from "./components/Sidebar";
 import { StartupScreen } from "./components/StartupScreen";
 import { useDesktopShell, type DesktopShellBridge } from "./hooks/useDesktopShell";
@@ -30,6 +31,7 @@ function App({ bridge }: { bridge?: DesktopShellBridge } = {}) {
 }
 
 function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
+  useMobileVisualViewport();
   const defaultBridge = useMemo<DesktopShellBridge>(() => {
     const client = createDesktopClient();
     return {

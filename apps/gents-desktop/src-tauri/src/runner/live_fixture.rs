@@ -442,7 +442,7 @@ mod tests {
     use gents_desktop_bridge::commands::{
         delete_skill_config, save_skill_config, send_chat_message,
     };
-    use gents_desktop_bridge::snapshot::build_session_snapshot_from_store_for_agent;
+    use gents_desktop_bridge::snapshot::build_session_snapshot_for_agent_with_transcript;
     use gents_desktop_bridge::types::{ChatSendRequest, SkillDeleteRequest, SkillSaveRequest};
 
     const MODEL_NAME: &str = "desktop-live-skill-mock";
@@ -566,13 +566,33 @@ mod tests {
         )
         .await?;
 
-        let desktop_store = fixture.desktop_core().store().snapshot();
-        let session = build_session_snapshot_from_store_for_agent(
-            desktop_store.as_ref(),
+        let transcript_page = gents_desktop_core::client::load_session_transcript_page(
+            fixture.desktop_core().node(),
+            &submitted.session_id,
+            Some(&agent_did),
+            None,
+            None,
+            None,
+        )
+        .await?;
+        let context_store = gents_desktop_core::client::load_session_context_store(
+            fixture.desktop_core().node(),
+            &submitted.session_id,
+            Some(&agent_did),
+            None,
+        )
+        .await?;
+        let session = build_session_snapshot_for_agent_with_transcript(
+            fixture.desktop_core().as_ref(),
             Some(&agent_did),
             &submitted.session_id,
             Some(&submitted.request_id),
+            Some(&transcript_page.store),
+            Some(&context_store),
+            true,
+            true,
         )
+        .await
         .context("desktop session snapshot missing after skill chat submit")?;
         let pending_turn = session
             .pending_turn

@@ -425,7 +425,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .conversation_rows(&peer.agent_did)
                 .into_iter()
                 .map(|row| {
-                    let transcript = store.transcript_for_agent(&row.session_id, &peer.agent_did);
                     let task_tag = conversation_task_tag(
                         store.as_ref(),
                         &peer.agent_did,
@@ -460,8 +459,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                             .and_then(|request_id| store.derive_turn_for_request(request_id))
                             .map(turn_state_label)
                             .map(str::to_owned),
-                        message_count: transcript.messages.len(),
-                        tool_call_count: transcript.tool_calls.len(),
+                        message_count: None,
+                        tool_call_count: None,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -979,8 +978,8 @@ mod behavior_environment_tests {
             created_at: None,
             updated_at: None,
             turn_state: turn_state.map(str::to_string),
-            message_count: 0,
-            tool_call_count: 0,
+            message_count: None,
+            tool_call_count: None,
         }
     }
 

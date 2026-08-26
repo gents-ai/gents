@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { arch, cpus, platform, release, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,17 +70,19 @@ try {
   }
 
   const environment = collectEnvironment(browserVersion);
+  const workingTreeDirty = git(["status", "--porcelain"]).trim().length > 0;
   const artifact = {
     schemaVersion: 1,
     harness: "gents-mobile-interactions",
     generatedAt: new Date().toISOString(),
     baselineCommit: git(["rev-parse", "HEAD"]).trim(),
     baselineRef: git(["branch", "--show-current"]).trim(),
-    workingTreeDirty: git(["status", "--porcelain"]).trim().length > 0,
+    workingTreeDirty,
+    workingTreeFingerprint: workingTreeDirty ? workingTreeFingerprint() : null,
     measurementClass:
       "deterministic Chromium proxy at iPhone viewport; first browser-process sample is cold and excluded from warm distributions",
     comparableOnlyWhen: [
-      "baselineCommit, fixture.id, browser engine, viewport, host class, and build profile match",
+      "baselineCommit and clean/dirty working-tree fingerprint, fixture.id, browser engine, viewport, host class, and build profile match",
       "cold simulator samples are reported separately from this warm browser distribution",
     ],
     environment,
@@ -573,6 +576,7 @@ function humanSummary(artifact) {
     "# Mobile performance evidence",
     "",
     `Baseline: \`${artifact.baselineCommit}\` (\`${artifact.baselineRef}\`)`,
+    `Working tree: ${artifact.workingTreeDirty ? `dirty; SHA-256 \`${artifact.workingTreeFingerprint}\`` : "clean"}`,
     `Environment: ${artifact.environment.host.platform} ${artifact.environment.host.release}, ${artifact.environment.host.arch}, Chromium ${artifact.environment.browser.version}, ${VIEWPORT.width}x${VIEWPORT.height}`,
     `Fixture: \`${artifact.fixture.id}\`; ${artifact.fixture.sessionIndexCount} session cards; ${artifact.fixture.largeSessionTimelineItems} large-session timeline items.`,
     `Measurement class: ${artifact.measurementClass}.`,
@@ -695,4 +699,18 @@ function integerArgument(name, fallback) {
 
 function git(commandArgs) {
   return execFileSync("git", commandArgs, { cwd: REPOSITORY_ROOT, encoding: "utf8" });
+}
+
+function workingTreeFingerprint() {
+  const hash = createHash("sha256");
+  hash.update(git(["diff", "--binary", "HEAD", "--", "."]));
+  const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"])
+    .split("\0")
+    .filter(Boolean)
+    .sort();
+  for (const path of untracked) {
+    hash.update(`\0${path}\0`);
+    hash.update(readFileSync(resolve(REPOSITORY_ROOT, path)));
+  }
+  return hash.digest("hex");
 }

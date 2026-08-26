@@ -13,6 +13,96 @@ import {
 } from "./desktopTest";
 
 test.describe("desktop UI harness", () => {
+  test("mobile conversation pins the title and composer to the viewport", async ({
+    page,
+  }) => {
+    test.skip((page.viewportSize()?.width ?? 761) > 760, "mobile viewport only");
+    await page.addInitScript(() => {
+      const viewport = new EventTarget() as EventTarget & {
+        height: number;
+        width: number;
+        offsetTop: number;
+        offsetLeft: number;
+      };
+      Object.assign(viewport, {
+        height: window.innerHeight,
+        width: window.innerWidth,
+        offsetTop: 0,
+        offsetLeft: 0,
+      });
+      Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        value: viewport,
+      });
+      Object.assign(window, {
+        __setTestVisualViewport(height: number, offsetTop: number) {
+          viewport.height = height;
+          viewport.offsetTop = offsetTop;
+          viewport.dispatchEvent(new Event("resize"));
+        },
+      });
+    });
+    await gotoHarness(page);
+    await openChat(page);
+
+    await page.evaluate(() => {
+      (
+        window as typeof window & {
+          __setTestVisualViewport: (height: number, offsetTop: number) => void;
+        }
+      ).__setTestVisualViewport(1, 0);
+    });
+    await expect(page.locator(".app-shell")).toHaveCSS(
+      "height",
+      `${page.viewportSize()?.height ?? 844}px`,
+    );
+    await expect(page.locator(".chat-header")).toBeVisible();
+
+    await page.evaluate(() => {
+      (
+        window as typeof window & {
+          __setTestVisualViewport: (height: number, offsetTop: number) => void;
+        }
+      ).__setTestVisualViewport(560, 24);
+    });
+    await expect(page.locator(".app-shell")).toHaveCSS("height", "560px");
+    await expect(page.locator(".app-shell")).toHaveCSS("top", "24px");
+
+    await page.evaluate(() => {
+      (
+        window as typeof window & {
+          __setTestVisualViewport: (height: number, offsetTop: number) => void;
+        }
+      ).__setTestVisualViewport(window.innerHeight, 0);
+    });
+    await expect(page.locator(".app-shell")).toHaveCSS(
+      "height",
+      `${page.viewportSize()?.height ?? 844}px`,
+    );
+
+    const geometry = await page.evaluate(() => {
+      const shell = document.querySelector<HTMLElement>(".app-shell");
+      const header = document.querySelector<HTMLElement>(".chat-header");
+      const composer = document.querySelector<HTMLElement>(".composer-panel");
+      if (!shell || !header || !composer) throw new Error("chat geometry missing");
+      return {
+        shellPosition: getComputedStyle(shell).position,
+        shell: shell.getBoundingClientRect().toJSON(),
+        header: header.getBoundingClientRect().toJSON(),
+        composer: composer.getBoundingClientRect().toJSON(),
+        viewportHeight: window.innerHeight,
+      };
+    });
+
+    expect(geometry.shellPosition).toBe("fixed");
+    expect(geometry.shell.top).toBe(0);
+    expect(geometry.shell.bottom).toBe(geometry.viewportHeight);
+    expect(geometry.header.top).toBeGreaterThanOrEqual(0);
+    expect(geometry.composer.bottom).toBeLessThanOrEqual(geometry.viewportHeight);
+    expect(geometry.viewportHeight - geometry.composer.bottom).toBeLessThan(32);
+    await expect(page.locator(".chat-header")).toBeVisible();
+  });
+
   test("fleet dashboard connects a local runtime and opens chat/config", async ({
     page,
   }, testInfo) => {

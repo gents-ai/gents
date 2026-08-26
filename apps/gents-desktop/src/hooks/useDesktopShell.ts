@@ -1,92 +1,32 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type SetStateAction,
-} from "react";
+import { useEffect, useRef, useState } from "react";
 
-import {
-  isTerminalTurnState,
-  projectChatShell,
-  reconcileProjectedWorkflow,
-  type ChatWorkflowState,
-  type OptimisticPendingTurn,
-} from "@source-inc/gents-desktop-chat";
-import {
-  delay,
-  applySessionLiveDelta,
-  dismissMailboxItemAndClearMatchingRoute,
-  logShellEvent,
-  mergeOlderSessionTimelinePage,
-  mergeSessionTipSnapshot,
-  sessionLiveDeltaRequest,
-  SESSION_TIMELINE_PAGE_SIZE,
-  setDesktopShellTimingConfigForTests,
-  timingConfig,
-  trackedRequestIdForSession,
-} from "./desktopShellRuntime";
+import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
 import { createDesktopShellConfigActions } from "./desktopShellConfigActions";
 import { useDesktopShellEffects } from "./desktopShellEffects";
+import { useDesktopClientLifecycle } from "./useDesktopClientLifecycle";
+import { useDesktopChatProjectionState } from "./useDesktopChatProjectionState";
+import { useDesktopMailboxRoute } from "./useDesktopMailboxRoute";
+import { useDesktopSessionProjection } from "./useDesktopSessionProjection";
 import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
 import { createDesktopShellTaskActions } from "./desktopShellTaskActions";
 import type {
   DesktopApiAdapter,
   DesktopClientUpdatedListenerFactory,
-  DesktopClientSnapshot,
-  DesktopSessionSnapshot,
-  MailboxItemView,
-  P2PHealth,
 } from "@source-inc/gents-desktop-client";
 
 export { setDesktopShellTimingConfigForTests };
+export type { DesktopStartupPhase } from "./useDesktopClientLifecycle";
 
 export type DesktopShellBridge = {
   api: DesktopApiAdapter;
   listenToUpdates: DesktopClientUpdatedListenerFactory;
 };
 
-export type DesktopStartupPhase =
-  | "loading-configuration"
-  | "starting-client"
-  | "configuration-error"
-  | "client-error"
-  | "ready";
-
 export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
-  const autostartAttempted = useRef(false);
-  const localServerAvailable = useRef<boolean | null>(null);
-  const autoRestartInFlight = useRef(false);
-  const lastP2PAutoRestartAt = useRef<number | null>(null);
-  const lastObservedP2PHealth = useRef<P2PHealth | null>(null);
   const selectedSessionIdRef = useRef<string | null>(null);
   const selectedAgentDidRef = useRef<string | null>(null);
   const selectedTrackedRequestIdRef = useRef<string | null>(null);
-  const snapshotRefreshSeq = useRef(0);
-  const sessionRefreshSeq = useRef(0);
-  const newConversationAgentRef = useRef<string | null>(null);
-  const pendingMailboxRouteRef = useRef<{
-    itemId: string;
-    agentDid: string;
-    behaviorId: string;
-    sessionId: string | null;
-  } | null>(null);
-  const startupPhaseRef = useRef<DesktopStartupPhase>("loading-configuration");
-  /** Coalesce concurrent shell start paths (autostart + pair + add-peer). */
-  const startClientInFlight = useRef<Promise<DesktopClientSnapshot | null> | null>(
-    null,
-  );
-  const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
-  const [session, setSession] = useState<DesktopSessionSnapshot | null>(null);
-  const sessionRef = useRef<DesktopSessionSnapshot | null>(null);
-  const [startupPhase, setStartupPhaseState] = useState<DesktopStartupPhase>(
-    "loading-configuration",
-  );
-  const [loading, setLoading] = useState(true);
-  const [starting, setStarting] = useState(false);
-  const [stopping, setStopping] = useState(false);
   const [sending, setSending] = useState(false);
   const [savingBehaviorConfig, setSavingBehaviorConfig] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
@@ -94,344 +34,101 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   const [repairingP2P, setRepairingP2P] = useState(false);
   const [runningTask, setRunningTask] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const {
+    session,
+    setSession,
+    refreshSession,
+    refreshSessionLiveDelta,
+    loadOlderSessionTimeline,
+  } = useDesktopSessionProjection({
+    api,
+    selectedAgentDidRef,
+    selectedSessionIdRef,
+    selectedTrackedRequestIdRef,
+    setError,
+  });
+  const {
+    autostartAttempted,
+    localServerAvailable,
+    autoRestartInFlight,
+    lastP2PAutoRestartAt,
+    lastObservedP2PHealth,
+    snapshot,
+    setSnapshot,
+    startupPhase,
+    loading,
+    starting,
+    setStarting,
+    stopping,
+    refreshSnapshot,
+    ensureDesktopClientStarted,
+    onStartClient,
+    onRetryStartup,
+    restartDesktopClient,
+  } = useDesktopClientLifecycle({
+    api,
+    refreshSession,
+    selectedSessionIdRef,
+    setError,
+    setSession,
+  });
   const [selectedAgentDid, setSelectedAgentDid] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState<string | null>(null);
-  const [pendingMailboxCauseId, setPendingMailboxCauseId] = useState<string | null>(
-    null,
-  );
-  const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({
-    kind: "ready",
+  const {
+    newConversationAgentRef,
+    pendingMailboxCauseId,
+    setPendingMailboxCauseId,
+    clearPendingMailboxCause,
+    onOpenMailboxItem,
+    onDismissMailboxItem,
+    selectAgent,
+    selectSession,
+    selectBehavior,
+  } = useDesktopMailboxRoute({
+    api,
+    refreshSnapshot,
+    selectedAgentDid,
+    selectedBehaviorId,
+    selectedSessionId,
+    setError,
+    setSelectedAgentDid,
+    setSelectedBehaviorId,
+    setSelectedSessionId,
+    setSession,
   });
-  const [optimisticPendingTurn, setOptimisticPendingTurn] =
-    useState<OptimisticPendingTurn | null>(null);
-  const [draftsByContext, setDraftsByContext] = useState<Record<string, string>>({});
-
   const deployments = snapshot?.client?.deployments ?? [];
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
-  const draftContextKey = JSON.stringify(
-    selectedSessionId
-      ? ["session", selectedAgentDid, selectedSessionId]
-      : [
-          "new",
-          selectedAgentDid,
-          selectedBehaviorId ?? selectedDeployment?.defaultBehaviorId ?? null,
-        ],
-  );
-  const draft = draftsByContext[draftContextKey] ?? "";
-  const setDraft = useCallback(
-    (next: SetStateAction<string>) => {
-      setDraftsByContext((current) => {
-        const currentDraft = current[draftContextKey] ?? "";
-        const nextDraft = typeof next === "function" ? next(currentDraft) : next;
-        if (nextDraft === currentDraft) {
-          return current;
-        }
-        if (!nextDraft) {
-          const remaining = { ...current };
-          delete remaining[draftContextKey];
-          return remaining;
-        }
-        return { ...current, [draftContextKey]: nextDraft };
-      });
-    },
-    [draftContextKey],
-  );
   const selectedConversation =
     selectedDeployment?.conversations.find(
       (conversation) => conversation.sessionId === selectedSessionId,
     ) ?? null;
   const behaviorOptions = selectedDeployment?.behaviors ?? [];
   const runtimeHealth = snapshot?.client?.p2pHealth ?? null;
-  const shellProjection = useMemo(
-    () =>
-      projectChatShell({
-        clientAvailable: Boolean(snapshot?.client),
-        selectedAgentDid,
-        selectedSessionId,
-        draft,
-        sending,
-        session,
-        selectedConversation,
-        localWorkflow,
-      }),
-    [
-      draft,
-      localWorkflow,
-      selectedAgentDid,
-      selectedConversation,
-      selectedSessionId,
-      sending,
-      session,
-      snapshot?.client,
-    ],
-  );
+  const {
+    draft,
+    setDraft,
+    localWorkflow,
+    setLocalWorkflow,
+    optimisticPendingTurn,
+    setOptimisticPendingTurn,
+    shellProjection,
+    selectedTrackedRequestId,
+  } = useDesktopChatProjectionState({
+    clientAvailable: Boolean(snapshot?.client),
+    selectedAgentDid,
+    selectedBehaviorId,
+    selectedConversation,
+    selectedDeployment,
+    selectedSessionId,
+    sending,
+    session,
+  });
   const canSendMessage = shellProjection.sendStatus.kind === "ready";
-
-  useEffect(() => {
-    if (!pendingMailboxCauseId) {
-      pendingMailboxRouteRef.current = null;
-      return;
-    }
-    const route = pendingMailboxRouteRef.current;
-    if (
-      !route ||
-      route.itemId !== pendingMailboxCauseId ||
-      route.agentDid !== selectedAgentDid ||
-      route.behaviorId !== selectedBehaviorId ||
-      route.sessionId !== selectedSessionId
-    ) {
-      pendingMailboxRouteRef.current = null;
-      newConversationAgentRef.current = null;
-      setPendingMailboxCauseId(null);
-    }
-  }, [pendingMailboxCauseId, selectedAgentDid, selectedBehaviorId, selectedSessionId]);
-
-  function setStartupPhase(next: DesktopStartupPhase) {
-    startupPhaseRef.current = next;
-    setStartupPhaseState(next);
-  }
-
-  useEffect(() => {
-    setLocalWorkflow((current) =>
-      reconcileProjectedWorkflow(current, shellProjection.workflow),
-    );
-  }, [shellProjection.workflow]);
-
-  useEffect(() => {
-    setOptimisticPendingTurn((current) => {
-      if (!current || current.sessionId !== session?.sessionId) {
-        return current;
-      }
-      const durableOwner = session.timelineItems.some(
-        (item) =>
-          (item.kind === "pendingUserTurn" && item.requestId === current.requestId) ||
-          (item.kind === "userMessage" && item.requestId === current.requestId),
-      );
-      return durableOwner ? null : current;
-    });
-  }, [session]);
-
-  const selectedTrackedRequestId =
-    trackedRequestIdForSession(selectedSessionId, shellProjection.workflow) ??
-    (!isTerminalTurnState(shellProjection.turnState)
-      ? shellProjection.activeRequestId
-      : null);
   selectedAgentDidRef.current = selectedAgentDid;
   selectedSessionIdRef.current = selectedSessionId;
   selectedTrackedRequestIdRef.current = selectedTrackedRequestId;
-  sessionRef.current = session;
-
-  async function refreshSnapshot() {
-    const refreshSeq = snapshotRefreshSeq.current + 1;
-    snapshotRefreshSeq.current = refreshSeq;
-    const resolvingConfiguration = startupPhaseRef.current === "loading-configuration";
-    setLoading(true);
-    try {
-      const next = await api.fetchDesktopSnapshot();
-      if (snapshotRefreshSeq.current === refreshSeq) {
-        setSnapshot(next);
-        setError(null);
-        if (resolvingConfiguration) {
-          setStartupPhase(
-            next.client || next.bootstrap.savedPeers.length === 0
-              ? "ready"
-              : "starting-client",
-          );
-        }
-      }
-    } catch (err) {
-      if (snapshotRefreshSeq.current === refreshSeq) {
-        setError(String(err));
-        if (resolvingConfiguration) {
-          setStartupPhase("configuration-error");
-        }
-      }
-    } finally {
-      if (snapshotRefreshSeq.current === refreshSeq) {
-        setLoading(false);
-      }
-    }
-  }
-
-  async function refreshSession(
-    nextSessionId: string | null,
-  ): Promise<DesktopSessionSnapshot | null> {
-    const refreshSeq = sessionRefreshSeq.current + 1;
-    sessionRefreshSeq.current = refreshSeq;
-
-    if (!nextSessionId) {
-      if (sessionRefreshSeq.current === refreshSeq) {
-        setSession(null);
-      }
-      return null;
-    }
-
-    try {
-      const next = await api.fetchSessionSnapshot(
-        nextSessionId,
-        selectedAgentDidRef.current,
-        selectedTrackedRequestIdRef.current,
-        { limit: SESSION_TIMELINE_PAGE_SIZE },
-      );
-      if (sessionRefreshSeq.current === refreshSeq) {
-        setSession((current) => {
-          const merged = next ? mergeSessionTipSnapshot(current, next) : null;
-          sessionRef.current = merged;
-          return merged;
-        });
-      }
-      return next;
-    } catch (err) {
-      if (sessionRefreshSeq.current === refreshSeq) {
-        setError(String(err));
-      }
-      return null;
-    }
-  }
-
-  async function refreshSessionLiveDelta(): Promise<boolean> {
-    const current = sessionRef.current;
-    const requestId = selectedTrackedRequestIdRef.current;
-    if (!current || !requestId || !api.fetchSessionLiveDelta) return false;
-    const request = sessionLiveDeltaRequest(current, requestId);
-    if (!request) return false;
-    try {
-      const delta = await api.fetchSessionLiveDelta(request);
-      if (!delta || selectedSessionIdRef.current !== current.sessionId) return false;
-      const latest = sessionRef.current;
-      if (!latest || latest.sessionId !== current.sessionId) return true;
-      const next = applySessionLiveDelta(latest, delta);
-      if (!next) return false;
-      sessionRef.current = next;
-      setSession(next);
-      return true;
-    } catch (err) {
-      setError(String(err));
-      return false;
-    }
-  }
-
-  async function loadOlderSessionTimeline(): Promise<boolean> {
-    const current = sessionRef.current;
-    const cursor = current?.timelinePage?.oldestItemKey ?? null;
-    if (!current || !current.timelinePage?.hasOlder || !cursor) {
-      return false;
-    }
-
-    try {
-      const older = await api.fetchSessionSnapshot(
-        current.sessionId,
-        current.agentDid ?? selectedAgentDidRef.current,
-        selectedTrackedRequestIdRef.current,
-        { limit: SESSION_TIMELINE_PAGE_SIZE, beforeItemKey: cursor },
-      );
-      if (!older || selectedSessionIdRef.current !== current.sessionId) {
-        return false;
-      }
-      setSession((latest) => mergeOlderSessionTimelinePage(latest, older));
-      return older.timelineItems.length > 0;
-    } catch (err) {
-      setError(String(err));
-      return false;
-    }
-  }
-
-  async function ensureDesktopClientStarted(): Promise<DesktopClientSnapshot | null> {
-    if (startClientInFlight.current) {
-      return startClientInFlight.current;
-    }
-
-    setStarting(true);
-    setError(null);
-    const pending = (async () => {
-      let started = false;
-      try {
-        const next = await api.startDesktopClient();
-        setSnapshot(next);
-        started = true;
-        return next;
-      } catch (err) {
-        setError(String(err));
-        return null;
-      } finally {
-        if (startupPhaseRef.current === "starting-client") {
-          setStartupPhase(started ? "ready" : "client-error");
-        }
-        startClientInFlight.current = null;
-        setStarting(false);
-      }
-    })();
-    startClientInFlight.current = pending;
-    return pending;
-  }
-
-  async function onStartClient() {
-    await ensureDesktopClientStarted();
-  }
-
-  async function onRetryStartup() {
-    autostartAttempted.current = false;
-    setStartupPhase("loading-configuration");
-    await refreshSnapshot();
-  }
-
-  async function restartDesktopClient(reason: string) {
-    if (autoRestartInFlight.current) {
-      return;
-    }
-
-    autoRestartInFlight.current = true;
-    const sessionId = selectedSessionIdRef.current;
-    logShellEvent(`restart begin reason="${reason}" sessionId=${sessionId ?? "none"}`);
-    setStopping(true);
-    setStarting(true);
-    setError(null);
-
-    try {
-      let next: DesktopClientSnapshot | null = null;
-      for (
-        let attempt = 1;
-        attempt <= timingConfig().clientRestartMaxAttempts;
-        attempt += 1
-      ) {
-        try {
-          logShellEvent(`restart attempt=${attempt} phase=shutdown`);
-          await api.shutdownDesktopClient();
-          logShellEvent(`restart attempt=${attempt} phase=start`);
-          next = await api.startDesktopClient();
-          logShellEvent(`restart attempt=${attempt} phase=started`);
-          break;
-        } catch (err) {
-          logShellEvent(`restart attempt=${attempt} failed error=${String(err)}`);
-          if (attempt === timingConfig().clientRestartMaxAttempts) {
-            throw err;
-          }
-          await delay(timingConfig().clientRestartBackoffMs);
-        }
-      }
-
-      if (!next) {
-        throw new Error("desktop restart returned no snapshot");
-      }
-
-      setSnapshot(next);
-      if (sessionId) {
-        await refreshSession(sessionId);
-      } else {
-        setSession(null);
-      }
-      logShellEvent(`restart complete reason="${reason}"`);
-    } catch (err) {
-      logShellEvent(`restart failed reason="${reason}" error=${String(err)}`);
-      setError(`desktop client restart failed after ${reason}: ${String(err)}`);
-    } finally {
-      setStopping(false);
-      setStarting(false);
-      autoRestartInFlight.current = false;
-    }
-  }
 
   useDesktopShellEffects({
     api,
@@ -589,69 +286,6 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
 
   function onDismissError() {
     setError(null);
-  }
-
-  async function onOpenMailboxItem(itemId: string): Promise<MailboxItemView> {
-    try {
-      const item = await api.startMailboxRequest(itemId);
-      pendingMailboxRouteRef.current = {
-        itemId: item.itemId,
-        agentDid: item.targetAgentDid,
-        behaviorId: item.targetBehaviorId,
-        sessionId: item.sessionId ?? null,
-      };
-      newConversationAgentRef.current = item.targetAgentDid;
-      setSelectedAgentDid(item.targetAgentDid);
-      setSelectedBehaviorId(item.targetBehaviorId);
-      setSelectedSessionId(item.sessionId ?? null);
-      setSession(null);
-      setPendingMailboxCauseId(item.itemId);
-      setError(null);
-      return item;
-    } catch (error) {
-      setError(String(error));
-      throw error;
-    }
-  }
-
-  async function onDismissMailboxItem(itemId: string) {
-    try {
-      await dismissMailboxItemAndClearMatchingRoute(
-        itemId,
-        (dismissedItemId) => api.dismissMailboxItem(dismissedItemId),
-        () => pendingMailboxRouteRef.current?.itemId ?? null,
-        () => {
-          pendingMailboxRouteRef.current = null;
-          newConversationAgentRef.current = null;
-          setPendingMailboxCauseId(null);
-        },
-      );
-      await refreshSnapshot();
-    } catch (error) {
-      setError(String(error));
-      throw error;
-    }
-  }
-
-  function clearPendingMailboxCause() {
-    pendingMailboxRouteRef.current = null;
-    newConversationAgentRef.current = null;
-    setPendingMailboxCauseId(null);
-  }
-
-  function selectAgent(agentDid: string | null) {
-    if (agentDid !== selectedAgentDid) clearPendingMailboxCause();
-    setSelectedAgentDid(agentDid);
-  }
-
-  function selectSession(sessionId: string | null) {
-    if (sessionId !== selectedSessionId) clearPendingMailboxCause();
-    setSelectedSessionId(sessionId);
-  }
-
-  function selectBehavior(behaviorId: string | null) {
-    if (behaviorId !== selectedBehaviorId) clearPendingMailboxCause();
-    setSelectedBehaviorId(behaviorId);
   }
 
   return {

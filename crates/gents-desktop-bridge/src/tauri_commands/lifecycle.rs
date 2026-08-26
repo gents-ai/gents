@@ -437,6 +437,9 @@ pub struct DesktopObserverMetrics {
     pub fetch_failures: u64,
     pub response_in_place_merges: u64,
     pub response_copy_on_write_merges: u64,
+    /// Transcript-content database changes that invalidated bounded session
+    /// projections without copying their rows into the global observer.
+    pub transcript_invalidations: u64,
 }
 
 #[tauri::command]
@@ -459,6 +462,7 @@ pub async fn desktop_observer_metrics(
         fetch_failures: snap.fetch_failures,
         response_in_place_merges: snap.response_in_place_merges,
         response_copy_on_write_merges: snap.response_copy_on_write_merges,
+        transcript_invalidations: snap.transcript_invalidations,
     }))
 }
 

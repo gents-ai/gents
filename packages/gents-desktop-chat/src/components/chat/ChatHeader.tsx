@@ -58,11 +58,12 @@ function ContextMeter({
     ? Math.round((projectedAway / durable) * 100)
     : 0;
   const recentCompactions = context.compactions.slice(-3).reverse();
+  const transcriptTotalsExact = context.transcriptTotalsExact !== false;
   const title = lastRequest
     ? `Last assembled provider input: ${used.toLocaleString()} of ` +
       `${window.toLocaleString()} tokens. Compaction decision: ` +
       `${lastRequest.compactionReason}.`
-    : `Estimated durable conversation context: ${used.toLocaleString()} of ` +
+    : `${transcriptTotalsExact ? "Estimated" : "At least"} durable conversation context: ${used.toLocaleString()} of ` +
       `${window.toLocaleString()} tokens. Compaction threshold: ` +
       `${threshold.toLocaleString()} tokens.`;
   const compactionDecision = lastRequest
@@ -167,6 +168,7 @@ function ContextMeter({
           <div>
             <dt>Provider view</dt>
             <dd>
+              {transcriptTotalsExact ? "" : "at least "}
               {context.providerMessageCount.toLocaleString()} /{" "}
               {context.durableMessageCount.toLocaleString()} messages
             </dd>

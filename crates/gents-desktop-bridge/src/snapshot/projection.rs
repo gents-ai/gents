@@ -384,8 +384,8 @@ mod tests {
                         created_at: None,
                         updated_at: None,
                         turn_state: None,
-                        message_count: 1,
-                        tool_call_count: 0,
+                        message_count: Some(1),
+                        tool_call_count: Some(0),
                     }],
                     mailbox_items: vec![MailboxItemView {
                         item_id: "mailbox-1".into(),
