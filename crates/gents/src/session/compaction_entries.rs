@@ -392,8 +392,9 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
 
             let sequence = u32::try_from(rows.len() + 1).context("compaction sequence overflow")?;
             let compaction_key = format!("{session_id}:{sequence}");
-            let created_at =
-                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true);
+            let created_at = canonical_compaction_created_at(
+                &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            )?;
             let cursor_field = compacted_through_sequence
                 .map(|cursor| cursor.to_string())
                 .unwrap_or_else(|| "null".to_string());

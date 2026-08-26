@@ -7,6 +7,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
+fn canonical_compaction_created_at(value: &str) -> Result<String> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(value)
+        .map_err(|error| anyhow::anyhow!("invalid compaction created_at {value:?}: {error}"))?;
+    let mut canonical = parsed
+        .with_timezone(&chrono::Utc)
+        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    canonical.pop();
+    while canonical.ends_with('0') {
+        canonical.pop();
+    }
+    if canonical.ends_with('.') {
+        canonical.pop();
+    }
+    canonical.push('Z');
+    Ok(canonical)
+}
+
 mod compaction_entries;
 mod conversation;
 mod fork;

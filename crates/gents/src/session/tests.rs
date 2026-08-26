@@ -5,6 +5,18 @@ use crate::test_support::first_content;
 use gents_protocol::transcript::decode_persisted_message;
 
 #[test]
+fn compaction_created_at_canonicalizes_fractional_trailing_zeroes() {
+    assert_eq!(
+        canonical_compaction_created_at("2026-08-26T03:10:11.948510Z").unwrap(),
+        "2026-08-26T03:10:11.94851Z"
+    );
+    assert_eq!(
+        canonical_compaction_created_at("2026-08-26T03:10:11.000000Z").unwrap(),
+        "2026-08-26T03:10:11Z"
+    );
+}
+
+#[test]
 fn test_load_history_deserializes_plain_text() {
     let user_msg = Message::User {
         content: vec![UserContent::Text(Text {

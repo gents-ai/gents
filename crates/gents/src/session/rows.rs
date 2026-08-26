@@ -55,7 +55,7 @@ impl TryFrom<CompactionEntryRow> for CompactionEntry {
             compacted_through_sequence: row.compacted_through_sequence,
             original_tokens: row.original_tokens,
             compacted_tokens: row.compacted_tokens,
-            created_at: row.created_at,
+            created_at: canonical_compaction_created_at(&row.created_at)?,
         })
     }
 }
