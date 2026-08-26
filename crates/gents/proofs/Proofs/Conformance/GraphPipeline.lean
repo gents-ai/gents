@@ -170,7 +170,8 @@ def runTerminalCases : List RunTerminalCase :=
             , activeWorkTerminal := activeWorkTerminal
             , failureProven := failureProven
             , expectedSucceed :=
-                transitionAllowed state (.succeedRun resultContractSatisfied)
+                transitionAllowed state
+                  (.succeedRun resultContractSatisfied activeWorkTerminal)
             , expectedFail := transitionAllowed state (.failRun failureProven)
             , expectedCancel := transitionAllowed state (.cancelRun activeWorkTerminal)
             }

@@ -10,121 +10,11 @@ use crate::graph_pipeline::{
     COMPILER_VERSION,
 };
 
-const CODE_REVIEW_MANIFEST: &str =
-    include_str!("../../assets/graph_packages/code-review/manifest.json");
-const CODE_REVIEW_INTENT: &str =
-    include_str!("../../assets/graph_packages/code-review/graph.intent.json");
-const CODE_REVIEW_CAPABILITIES: &str =
-    include_str!("../../assets/graph_packages/code-review/capabilities.json");
+include!(concat!(env!("OUT_DIR"), "/bundled_graph_packages.rs"));
 
 #[derive(Deserialize)]
 struct BundledToolSurface {
     entries: Vec<SurfaceToolDecl>,
-}
-
-fn code_review_asset(path: &str) -> Option<&'static [u8]> {
-    Some(match path {
-        "manifest.json" => CODE_REVIEW_MANIFEST.as_bytes(),
-        "graph.intent.json" => CODE_REVIEW_INTENT.as_bytes(),
-        "capabilities.json" => CODE_REVIEW_CAPABILITIES.as_bytes(),
-        "schemas/review_job.graphql" => {
-            include_bytes!("../../assets/graph_packages/code-review/schemas/review_job.graphql")
-        }
-        "schemas/review_area.graphql" => {
-            include_bytes!("../../assets/graph_packages/code-review/schemas/review_area.graphql")
-        }
-        "schemas/candidate_finding.graphql" => {
-            include_bytes!("../../assets/graph_packages/code-review/schemas/candidate_finding.graphql")
-        }
-        "schemas/scan_result.graphql" => {
-            include_bytes!("../../assets/graph_packages/code-review/schemas/scan_result.graphql")
-        }
-        "schemas/finding_verdict.graphql" => {
-            include_bytes!("../../assets/graph_packages/code-review/schemas/finding_verdict.graphql")
-        }
-        "schemas/finding.graphql" => {
-            include_bytes!("../../assets/graph_packages/code-review/schemas/finding.graphql")
-        }
-        "schemas/verification_summary.graphql" => {
-            include_bytes!("../../assets/graph_packages/code-review/schemas/verification_summary.graphql")
-        }
-        "schemas/triage_report.graphql" => {
-            include_bytes!("../../assets/graph_packages/code-review/schemas/triage_report.graphql")
-        }
-        "agent-behaviors/review-recon/object.json" => {
-            include_bytes!("../../assets/graph_packages/code-review/agent-behaviors/review-recon/object.json")
-        }
-        "agent-behaviors/review-recon/system_prompt.md" => include_bytes!(
-            "../../assets/graph_packages/code-review/agent-behaviors/review-recon/system_prompt.md"
-        ),
-        "tasks/review-recon-task/prompt.md" => {
-            include_bytes!("../../assets/graph_packages/code-review/tasks/review-recon-task/prompt.md")
-        }
-        "tasks/review-recon-task/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/tasks/review-recon-task/object.json"
-        ),
-        "tool-selections/review-recon-tools/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/tool-selections/review-recon-tools/object.json"
-        ),
-        "datastore-tool-surfaces/review-recon-writes/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/datastore-tool-surfaces/review-recon-writes/object.json"
-        ),
-        "agent-behaviors/review-scan/object.json" => {
-            include_bytes!("../../assets/graph_packages/code-review/agent-behaviors/review-scan/object.json")
-        }
-        "agent-behaviors/review-scan/system_prompt.md" => include_bytes!(
-            "../../assets/graph_packages/code-review/agent-behaviors/review-scan/system_prompt.md"
-        ),
-        "tasks/review-scan-task/prompt.md" => {
-            include_bytes!("../../assets/graph_packages/code-review/tasks/review-scan-task/prompt.md")
-        }
-        "tasks/review-scan-task/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/tasks/review-scan-task/object.json"
-        ),
-        "tool-selections/review-scan-tools/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/tool-selections/review-scan-tools/object.json"
-        ),
-        "datastore-tool-surfaces/review-scan-writes/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/datastore-tool-surfaces/review-scan-writes/object.json"
-        ),
-        "agent-behaviors/review-verify/object.json" => {
-            include_bytes!("../../assets/graph_packages/code-review/agent-behaviors/review-verify/object.json")
-        }
-        "agent-behaviors/review-verify/system_prompt.md" => include_bytes!(
-            "../../assets/graph_packages/code-review/agent-behaviors/review-verify/system_prompt.md"
-        ),
-        "tasks/review-verify-task/prompt.md" => {
-            include_bytes!("../../assets/graph_packages/code-review/tasks/review-verify-task/prompt.md")
-        }
-        "tasks/review-verify-task/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/tasks/review-verify-task/object.json"
-        ),
-        "tool-selections/review-verify-tools/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/tool-selections/review-verify-tools/object.json"
-        ),
-        "datastore-tool-surfaces/review-verify-writes/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/datastore-tool-surfaces/review-verify-writes/object.json"
-        ),
-        "agent-behaviors/review-triage/object.json" => {
-            include_bytes!("../../assets/graph_packages/code-review/agent-behaviors/review-triage/object.json")
-        }
-        "agent-behaviors/review-triage/system_prompt.md" => include_bytes!(
-            "../../assets/graph_packages/code-review/agent-behaviors/review-triage/system_prompt.md"
-        ),
-        "tasks/review-triage-task/prompt.md" => {
-            include_bytes!("../../assets/graph_packages/code-review/tasks/review-triage-task/prompt.md")
-        }
-        "tasks/review-triage-task/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/tasks/review-triage-task/object.json"
-        ),
-        "tool-selections/review-triage-tools/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/tool-selections/review-triage-tools/object.json"
-        ),
-        "datastore-tool-surfaces/review-triage-writes/object.json" => include_bytes!(
-            "../../assets/graph_packages/code-review/datastore-tool-surfaces/review-triage-writes/object.json"
-        ),
-        _ => return None,
-    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,7 +142,8 @@ impl BundledGraphPackage {
                 self.manifest.name
             );
         }
-        code_review_asset(path).with_context(|| format!("bundled asset {path:?} is missing"))
+        bundled_graph_package_asset(&self.manifest.name, path)
+            .with_context(|| format!("bundled asset {path:?} is missing"))
     }
 
     pub fn asset_text(&self, path: &str) -> Result<&'static str> {
@@ -281,10 +172,10 @@ impl BundledGraphPackage {
     }
 }
 
-fn digest_assets(paths: &[String]) -> Result<String> {
+fn digest_assets(package_name: &str, paths: &[String]) -> Result<String> {
     let mut hasher = Sha256::new();
     for path in paths {
-        let bytes = code_review_asset(path)
+        let bytes = bundled_graph_package_asset(package_name, path)
             .with_context(|| format!("bundled package references missing asset {path:?}"))?;
         hasher.update((path.len() as u64).to_be_bytes());
         hasher.update(path.as_bytes());
@@ -294,8 +185,8 @@ fn digest_assets(paths: &[String]) -> Result<String> {
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
-fn validate_tool_surface_asset(path: &str) -> Result<()> {
-    let bytes = code_review_asset(path)
+fn validate_tool_surface_asset(package_name: &str, path: &str) -> Result<()> {
+    let bytes = bundled_graph_package_asset(package_name, path)
         .with_context(|| format!("bundled package references missing asset {path:?}"))?;
     let surface: BundledToolSurface = serde_json::from_slice(bytes)
         .with_context(|| format!("bundled tool surface asset {path:?} is malformed"))?;
@@ -307,8 +198,16 @@ fn validate_tool_surface_asset(path: &str) -> Result<()> {
     Ok(())
 }
 
-fn load_code_review() -> Result<BundledGraphPackage> {
-    let manifest: GraphPackageManifest = serde_json::from_str(CODE_REVIEW_MANIFEST)?;
+fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
+    let manifest_bytes = bundled_graph_package_asset(package_name, "manifest.json")
+        .with_context(|| format!("bundled package {package_name:?} has no manifest"))?;
+    let manifest: GraphPackageManifest = serde_json::from_slice(manifest_bytes)?;
+    if manifest.name != package_name {
+        anyhow::bail!(
+            "bundled package directory {package_name:?} disagrees with manifest name {:?}",
+            manifest.name
+        );
+    }
     if manifest.manifest_version != 1 {
         anyhow::bail!("unsupported bundled package manifest version");
     }
@@ -319,9 +218,18 @@ fn load_code_review() -> Result<BundledGraphPackage> {
             COMPILER_VERSION
         );
     }
-    let intent: GraphIntent = serde_json::from_str(CODE_REVIEW_INTENT)?;
-    let capabilities: Vec<PackageCapabilityTemplate> =
-        serde_json::from_str(CODE_REVIEW_CAPABILITIES)?;
+    let intent: GraphIntent = serde_json::from_slice(
+        bundled_graph_package_asset(package_name, &manifest.intent)
+            .with_context(|| format!("bundled package intent {:?} is missing", manifest.intent))?,
+    )?;
+    let capabilities: Vec<PackageCapabilityTemplate> = serde_json::from_slice(
+        bundled_graph_package_asset(package_name, &manifest.capabilities).with_context(|| {
+            format!(
+                "bundled package capabilities {:?} are missing",
+                manifest.capabilities
+            )
+        })?,
+    )?;
     if intent.limits != manifest.graph_ceiling {
         anyhow::bail!("package intent limits do not match the declared graph ceiling");
     }
@@ -359,13 +267,13 @@ fn load_code_review() -> Result<BundledGraphPackage> {
             capability.tool_selection_asset.clone(),
         ]);
         for path in &capability.tool_surface_assets {
-            validate_tool_surface_asset(path)?;
+            validate_tool_surface_asset(package_name, path)?;
         }
         assets.extend(capability.tool_surface_assets.iter().cloned());
     }
     assets.sort();
     assets.dedup();
-    let package_digest = digest_assets(&assets)?;
+    let package_digest = digest_assets(package_name, &assets)?;
     let catalog_digest = format!(
         "sha256:{:x}",
         Sha256::digest(
@@ -387,14 +295,17 @@ fn load_code_review() -> Result<BundledGraphPackage> {
 }
 
 pub fn load_bundled_graph_package(name: &str) -> Result<BundledGraphPackage> {
-    match name {
-        "code-review" => load_code_review(),
-        _ => anyhow::bail!("unknown bundled graph package {name:?}"),
+    if !BUNDLED_GRAPH_PACKAGE_NAMES.contains(&name) {
+        anyhow::bail!("unknown bundled graph package {name:?}");
     }
+    load_package(name)
 }
 
 pub fn graph_package_catalog() -> Result<Vec<GraphPackageCatalogEntry>> {
-    Ok(vec![load_code_review()?.catalog_entry()])
+    BUNDLED_GRAPH_PACKAGE_NAMES
+        .iter()
+        .map(|name| Ok(load_package(name)?.catalog_entry()))
+        .collect()
 }
 
 #[cfg(test)]

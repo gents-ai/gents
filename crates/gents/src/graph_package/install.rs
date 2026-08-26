@@ -23,6 +23,114 @@ use super::{load_bundled_graph_package, BundledGraphPackage};
 // GraphRevision records retain the real installation/materialization time.
 const PACKAGE_DOCUMENT_TIMESTAMP: &str = "1970-01-01T00:00:00Z";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SchemaFieldContract {
+    kind: Value,
+    crdt_type: Value,
+    relation_name: Value,
+    is_primary: bool,
+    default_value: Value,
+    size: u64,
+    immutable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct SchemaIndexContract {
+    fields: Vec<(String, bool)>,
+    unique: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CollectionSchemaContract {
+    fields: BTreeMap<String, SchemaFieldContract>,
+    indexes: Vec<SchemaIndexContract>,
+    branchable: bool,
+    embedded_only: bool,
+}
+
+fn collection_schema_contract(version: &Value) -> Result<CollectionSchemaContract> {
+    let mut fields = BTreeMap::new();
+    for field in version
+        .get("Fields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let name = field
+            .get("Name")
+            .and_then(Value::as_str)
+            .context("collection schema field is missing Name")?;
+        if name == "_docID" {
+            continue;
+        }
+        fields.insert(
+            name.to_owned(),
+            SchemaFieldContract {
+                kind: field.get("Kind").cloned().unwrap_or(Value::Null),
+                crdt_type: field.get("Typ").cloned().unwrap_or(Value::Null),
+                relation_name: field.get("RelationName").cloned().unwrap_or(Value::Null),
+                is_primary: field
+                    .get("IsPrimary")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                default_value: field.get("DefaultValue").cloned().unwrap_or(Value::Null),
+                size: field.get("Size").and_then(Value::as_u64).unwrap_or(0),
+                immutable: field
+                    .get("Immutable")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            },
+        );
+    }
+    let mut indexes = version
+        .get("Indexes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|index| {
+            let fields = index
+                .get("Fields")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|field| {
+                    Ok((
+                        field
+                            .get("Name")
+                            .and_then(Value::as_str)
+                            .context("collection index field is missing Name")?
+                            .to_owned(),
+                        field
+                            .get("Descending")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(SchemaIndexContract {
+                fields,
+                unique: index
+                    .get("Unique")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    indexes.sort();
+    Ok(CollectionSchemaContract {
+        fields,
+        indexes,
+        branchable: version
+            .get("IsBranchable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        embedded_only: version
+            .get("IsEmbeddedOnly")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphPackageInstallBindings {
@@ -102,7 +210,13 @@ pub async fn default_bundled_graph_package_install_bindings(
     let deployment_response = access
         .execute(r#"{ HostDeployment(order: { created_at: ASC }, limit: 8) { deployment_id } }"#)
         .await?;
-    let deployment_id = response_rows(&deployment_response, "HostDeployment")
+    let deployments = response_rows(&deployment_response, "HostDeployment");
+    if deployments.len() != 1 {
+        anyhow::bail!(
+            "default package binding requires exactly one unambiguous local HostDeployment"
+        );
+    }
+    let deployment_id = deployments
         .first()
         .and_then(|row| row.get("deployment_id"))
         .and_then(Value::as_str)
@@ -750,20 +864,18 @@ async fn ensure_package_schemas(
             anyhow::bail!("package schema {path:?} declares no collection");
         }
         let mut missing = false;
+        let mut existing = false;
         for collection in &expected {
-            match access.collection_fields(&collection.name).await? {
-                Some(live_fields) => {
-                    let expected_fields = collection
-                        .fields
-                        .iter()
-                        .map(|field| field.name.clone())
-                        .collect::<BTreeSet<_>>();
-                    if expected_fields != live_fields {
+            match access.collection_version(&collection.name).await? {
+                Some(live_version) => {
+                    existing = true;
+                    let expected_version = serde_json::to_value(collection)?;
+                    let expected_contract = collection_schema_contract(&expected_version)?;
+                    let live_contract = collection_schema_contract(&live_version)?;
+                    if expected_contract != live_contract {
                         anyhow::bail!(
-                            "existing collection {:?} does not match bundled schema {path:?}: expected {:?}, found {:?}",
+                            "existing collection {:?} does not match bundled schema {path:?}: expected {expected_contract:?}, found {live_contract:?}",
                             collection.name,
-                            expected_fields,
-                            live_fields,
                         );
                     }
                 }
@@ -771,11 +883,7 @@ async fn ensure_package_schemas(
             }
         }
         if missing {
-            let mut any_existing = false;
-            for collection in &expected {
-                any_existing |= access.collection_fields(&collection.name).await?.is_some();
-            }
-            if any_existing {
+            if existing {
                 anyhow::bail!("package schema {path:?} mixes existing and missing collections");
             }
             access
@@ -784,7 +892,7 @@ async fn ensure_package_schemas(
                 .with_context(|| format!("add bundled package schema {path:?}"))?;
             for collection in &expected {
                 let live = access
-                    .collection_fields(&collection.name)
+                    .collection_version(&collection.name)
                     .await?
                     .with_context(|| {
                         format!(
@@ -792,17 +900,13 @@ async fn ensure_package_schemas(
                             collection.name
                         )
                     })?;
-                let expected_fields = collection
-                    .fields
-                    .iter()
-                    .map(|field| field.name.clone())
-                    .collect::<BTreeSet<_>>();
-                if live != expected_fields {
+                let expected_version = serde_json::to_value(collection)?;
+                let expected_contract = collection_schema_contract(&expected_version)?;
+                let live_contract = collection_schema_contract(&live)?;
+                if live_contract != expected_contract {
                     anyhow::bail!(
-                        "new collection {:?} does not match bundled schema {path:?}: expected {:?}, found {:?}",
+                        "new collection {:?} does not match bundled schema {path:?}: expected {expected_contract:?}, found {live_contract:?}",
                         collection.name,
-                        expected_fields,
-                        live,
                     );
                 }
             }
@@ -820,16 +924,23 @@ pub async fn install_bundled_graph_package(
     if actor_did != bindings.owner_did {
         anyhow::bail!("install authority is separate and currently requires the graph owner");
     }
-    let package = load_bundled_graph_package(package_name)?;
-    validate_bindings(&package, bindings)?;
-    ensure_package_schemas(access, &package).await?;
+    // Complete every read-only package, binding, and desired-state check
+    // before adding globally visible schema. Schema registration remains an
+    // additive, idempotent prerequisite; package artifacts and the immutable
+    // revision are committed together below.
     let prepared = prepare_bundled_graph_package_install(access, package_name, bindings).await?;
-    crate::graph_pipeline::ensure_graph_revision_receipt_with_access(
-        access,
-        &bindings.owner_did,
-        &prepared.plan,
+    let preflight = access.begin_apply_txn().await?;
+    let preflight_result = crate::config_client::verify_existing_desired_state_plan(
+        &preflight,
+        &prepared.desired_state,
     )
-    .await?;
+    .await;
+    let discard_result = preflight.discard().await;
+    preflight_result?;
+    discard_result.context("discard graph package install preflight")?;
+
+    let package = load_bundled_graph_package(package_name)?;
+    ensure_package_schemas(access, &package).await?;
 
     let txn = access.begin_apply_txn().await?;
     let result = async {
@@ -847,12 +958,6 @@ pub async fn install_bundled_graph_package(
     .await;
     if let Err(error) = result {
         let _ = txn.discard().await;
-        let _ = crate::graph_pipeline::record_graph_revision_materialization_failure_with_access(
-            access,
-            &prepared.plan.digest,
-            &format!("{error:#}"),
-        )
-        .await;
         return Err(error);
     }
     txn.commit()
@@ -916,6 +1021,59 @@ mod tests {
             ]),
             variables: BTreeMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn live_binding_failure_does_not_register_package_schema() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let access = ConfigAccess::Local(node.clone());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let mut bindings = create_fixture_bindings(node.as_ref()).await;
+        for role in bindings.roles.values_mut() {
+            role.backend_id = Some("missing-backend".to_owned());
+        }
+
+        let error =
+            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("missing or ambiguous"));
+        assert!(node.get_collection("CodeReviewJob").unwrap().is_none());
+
+        drop(access);
+        let node = Arc::try_unwrap(node).unwrap_or_else(|_| panic!("test retained node clone"));
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn existing_package_schema_must_match_types_indexes_and_immutability() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let access = ConfigAccess::Local(node.clone());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let bindings = create_fixture_bindings(node.as_ref()).await;
+        let package = load_bundled_graph_package("code-review").unwrap();
+        let expected = package.asset_text("schemas/review_job.graphql").unwrap();
+        let incompatible = expected.replace(
+            "run_id: String @index(unique: true) @immutable",
+            "run_id: Int",
+        );
+        assert_ne!(incompatible, expected);
+        node.add_schema(&incompatible).await.unwrap();
+
+        let error =
+            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+                .await
+                .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("does not match bundled schema"),
+            "{message}"
+        );
+        assert!(node.get_collection("CodeReviewArea").unwrap().is_none());
+
+        drop(access);
+        let node = Arc::try_unwrap(node).unwrap_or_else(|_| panic!("test retained node clone"));
+        node.shutdown().await;
     }
 
     #[tokio::test]

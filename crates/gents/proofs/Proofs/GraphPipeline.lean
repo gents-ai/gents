@@ -120,7 +120,7 @@ inductive Action where
   | retire
   | startRun (runId : RunId)
   | requestCancel
-  | succeedRun (resultContractSatisfied : Bool)
+  | succeedRun (resultContractSatisfied activeWorkTerminal : Bool)
   | failRun (failureProven : Bool)
   | cancelRun (activeWorkTerminal : Bool)
   deriving DecidableEq, Repr
@@ -194,10 +194,11 @@ def step? (state : State) : Action → Option State
           else
             none
       | none => none
-  | .succeedRun resultContractSatisfied =>
+  | .succeedRun resultContractSatisfied activeWorkTerminal =>
       match state.run with
       | some run =>
-          if run.status = .running ∧ resultContractSatisfied = true then
+          if run.status = .running ∧ resultContractSatisfied = true ∧
+              activeWorkTerminal = true then
             some { state with
               run := some
                 { run with status := .succeeded, resultsCommitted := true }
@@ -294,7 +295,7 @@ theorem step_preserves_revision_identity
       · have h_revision := updateRunStatus_preserves_revision h
         simp [h_revision]
       · simp at h
-  | requestCancel | succeedRun _ | cancelRun _ =>
+  | requestCancel | succeedRun _ _ | cancelRun _ =>
       simp only [step?] at h
       split at h
       · split at h
@@ -351,10 +352,10 @@ theorem start_commits_seed_and_enters_running
     simp
   · simp at h
 
-theorem success_requires_result_contract_and_commits_results
-    {pre post : State} {resultContractSatisfied : Bool}
-    (h : step? pre (.succeedRun resultContractSatisfied) = some post) :
-    resultContractSatisfied = true ∧
+theorem success_requires_result_contract_terminal_work_and_commits_results
+    {pre post : State} {resultContractSatisfied activeWorkTerminal : Bool}
+    (h : step? pre (.succeedRun resultContractSatisfied activeWorkTerminal) = some post) :
+    resultContractSatisfied = true ∧ activeWorkTerminal = true ∧
       ∃ run, post.run = some run ∧
         run.status = .succeeded ∧ run.resultsCommitted = true := by
   simp only [step?] at h
@@ -404,7 +405,7 @@ theorem terminal_run_rejects_further_terminal_writes
     (state : State) (run : Run)
     (h_run : state.run = some run)
     (h_terminal : run.status.terminal = true) :
-    step? state (.succeedRun true) = none ∧
+    step? state (.succeedRun true true) = none ∧
       step? state (.failRun true) = none ∧
       step? state (.cancelRun true) = none := by
   cases h_status : run.status <;>
@@ -456,7 +457,7 @@ theorem safe_preserved
       split at h_step
       · exact updateRunStatus_preserves_safe h_safe h_step
       · simp at h_step
-  | requestCancel | succeedRun _ | cancelRun _ =>
+  | requestCancel | succeedRun _ _ | cancelRun _ =>
       simp only [step?] at h_step
       split at h_step
       · split at h_step <;>

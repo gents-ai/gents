@@ -77,7 +77,7 @@ pub fn graph_run_terminal_decision(
 ) -> GraphRunTerminalDecision {
     let running = status == "running";
     GraphRunTerminalDecision {
-        may_succeed: running && result_contract_satisfied,
+        may_succeed: running && result_contract_satisfied && active_work_terminal,
         may_fail: running && failure_proven,
         may_cancel: running && cancellation_requested && active_work_terminal,
     }
@@ -614,93 +614,6 @@ pub async fn publish_graph_plan(
     })
 }
 
-/// Commit the resumable, non-runnable installation receipt before resource
-/// materialization. Schemas must already be ready. A failed second phase may
-/// update this receipt with bounded evidence and retry the same immutable plan.
-pub(crate) async fn ensure_graph_revision_receipt_with_access(
-    access: &ConfigAccess,
-    owner_did: &str,
-    plan: &GraphPlan,
-) -> Result<()> {
-    if !verify_graph_plan_digest(plan) {
-        anyhow::bail!("refusing a GraphPlan with an invalid digest");
-    }
-    digest_hex(&plan.digest)?;
-    let plan_json = serde_json::to_string(plan)?;
-    let now = chrono::Utc::now().to_rfc3339();
-    let txn = access.begin_apply_txn().await?;
-    let result = async {
-        match query_graph_definition(&txn, &plan.graph_id).await? {
-            Some(definition)
-                if definition.get("owner_did").and_then(Value::as_str) != Some(owner_did) =>
-            {
-                anyhow::bail!("graph {:?} belongs to a different principal", plan.graph_id)
-            }
-            Some(_) => {}
-            None => {
-                create_document(
-                    &txn,
-                    "GraphDefinition",
-                    &json!({
-                        "graph_id": plan.graph_id,
-                        "owner_did": owner_did,
-                        "enabled": true,
-                        "active_revision_digest": Value::Null,
-                        "generation": 0,
-                        "created_at": now,
-                        "updated_at": now,
-                    }),
-                )
-                .await?;
-            }
-        }
-        match query_graph_revision(&txn, &plan.digest).await? {
-            Some(revision)
-                if revision.get("graph_id").and_then(Value::as_str)
-                    != Some(plan.graph_id.as_str())
-                    || revision.get("owner_did").and_then(Value::as_str) != Some(owner_did)
-                    || revision.get("plan_json").and_then(Value::as_str)
-                        != Some(plan_json.as_str()) =>
-            {
-                anyhow::bail!("stored graph revision does not match compiled plan identity")
-            }
-            Some(_) => {}
-            None => {
-                create_document(
-                    &txn,
-                    "GraphRevision",
-                    &json!({
-                        "revision_id": revision_id(plan),
-                        "graph_id": plan.graph_id,
-                        "digest": plan.digest,
-                        "owner_did": owner_did,
-                        "status": "validated",
-                        "compiler_version": plan.compiler_version,
-                        "plan_json": plan_json,
-                        "artifacts_complete": false,
-                        "materialization_error": Value::Null,
-                        "materialization_failed_at": Value::Null,
-                        "created_at": now,
-                        "materialized_at": Value::Null,
-                        "activated_at": Value::Null,
-                        "retired_at": Value::Null,
-                    }),
-                )
-                .await?;
-            }
-        }
-        Result::<()>::Ok(())
-    }
-    .await;
-    match result {
-        Ok(()) => txn.commit().await.context("commit graph revision receipt"),
-        Err(error) => {
-            discard_with_context(txn, "revision_receipt").await;
-            Err(error)
-        }
-    }
-}
-
 pub(crate) async fn materialize_graph_revision_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner_did: &str,
@@ -712,39 +625,6 @@ pub(crate) async fn materialize_graph_revision_in_txn(
     let plan_json = serde_json::to_string(plan)?;
     let now = chrono::Utc::now().to_rfc3339();
     materialize_in_txn(txn, owner_did, plan, &plan_json, &now).await
-}
-
-pub(crate) async fn record_graph_revision_materialization_failure_with_access(
-    access: &ConfigAccess,
-    digest: &str,
-    error: &str,
-) -> Result<()> {
-    let bounded: String = error.chars().take(4_096).collect();
-    let txn = access.begin_apply_txn().await?;
-    let revision = query_graph_revision(&txn, digest)
-        .await?
-        .context("graph revision failure receipt is missing")?;
-    if revision.get("artifacts_complete").and_then(Value::as_bool) == Some(true) {
-        txn.discard().await?;
-        return Ok(());
-    }
-    let doc_id = revision
-        .get("_docID")
-        .and_then(Value::as_str)
-        .context("GraphRevision is missing _docID")?;
-    update_document(
-        &txn,
-        "GraphRevision",
-        doc_id,
-        &json!({
-            "materialization_error": bounded,
-            "materialization_failed_at": chrono::Utc::now().to_rfc3339(),
-        }),
-    )
-    .await?;
-    txn.commit()
-        .await
-        .context("commit materialization failure receipt")
 }
 
 async fn materialize_in_txn(
@@ -2017,6 +1897,42 @@ mod tests {
             ))
             .await;
         assert!(!result.has_errors(), "{:?}", result.errors);
+
+        // Ordinary automation may deliberately reuse the run UUID as a
+        // correlation value. Only requests/groups owned by this pinned
+        // revision's trigger IDs contribute to graph completion.
+        let unrelated = node
+            .execute(&format!(
+                r#"mutation {{
+                    request: create_AgentRequest(input: {{
+                        request_id: "unrelated-request", agent_did: "did:key:worker",
+                        requester_did: "did:key:owner", behavior_id: "operator-behavior",
+                        status: "processing", lifecycle_state: "processing",
+                        caused_by_trigger_id: "operator-trigger",
+                        caused_by_correlation: "{}", created_at: "{}"
+                    }}) {{ _docID }}
+                    group: create_EventTriggerGroupState(input: {{
+                        group_key: "unrelated-group", trigger_id: "operator-trigger",
+                        trigger_config_key: "operator-trigger-v1", correlation: "{}",
+                        first_seen_at: "{}", quiesced_at: "{}",
+                        quiesced_reason: "operator timeout"
+                    }}) {{ _docID }}
+                }}"#,
+                escape_graphql_string(&run.correlation),
+                escape_graphql_string(&now),
+                escape_graphql_string(&run.correlation),
+                escape_graphql_string(&now),
+                escape_graphql_string(&now),
+            ))
+            .await;
+        assert!(!unrelated.has_errors(), "{:?}", unrelated.errors);
+        let scoped = super::super::load_graph_run_view(&node, "did:key:owner", &run.run_id)
+            .await
+            .unwrap();
+        assert_eq!(scoped.requests.len(), 1);
+        assert!(scoped.groups.is_empty());
+        assert_eq!(scoped.active_request_count, 0);
+        assert!(scoped.failure_evidence.is_none());
 
         assert!(
             super::super::load_graph_run_view(&node, "did:key:intruder", &run.run_id)

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents_protocol::graphql::graphql_input_literal;
+use gents_protocol::graphql::{graphql_input_literal, graphql_string_list_literal};
 use identity::Did;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -231,27 +231,7 @@ fn request_succeeded(state: Option<&str>, status: &str) -> bool {
     state.unwrap_or(status) == "completed" && matches!(status, "complete" | "completed")
 }
 
-async fn load_requests(
-    executor: &(impl GraphRunQuery + ?Sized),
-    correlation: &str,
-    plan: &GraphPlan,
-) -> Result<Vec<GraphRunRequestView>> {
-    let limit = usize::try_from(plan.limits.max_total_invocations)
-        .unwrap_or(usize::MAX)
-        .saturating_add(1);
-    let response = executor
-        .execute_graph_query(&format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{ caused_by_correlation: {{ _eq: "{}" }} }},
-                    order: {{ created_at: ASC }}, limit: {limit}
-                ) {{
-                    request_id session_id behavior_id caused_by_trigger_id status lifecycle_state failure_reason
-                }}
-            }}"#,
-            escape_graphql_string(correlation),
-        ))
-        .await?;
+fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>> {
     let mut nodes_by_trigger = BTreeMap::new();
     for entry in &plan.entries {
         let route = format!(
@@ -273,6 +253,39 @@ async fn load_requests(
             edge.to.node_id.clone(),
         );
     }
+    if nodes_by_trigger.is_empty() {
+        anyhow::bail!("pinned graph plan has no materialized trigger routes");
+    }
+    Ok(nodes_by_trigger)
+}
+
+async fn load_requests(
+    executor: &(impl GraphRunQuery + ?Sized),
+    correlation: &str,
+    plan: &GraphPlan,
+) -> Result<Vec<GraphRunRequestView>> {
+    let nodes_by_trigger = planned_trigger_nodes(plan)?;
+    let trigger_ids = nodes_by_trigger.keys().cloned().collect::<Vec<_>>();
+    let limit = usize::try_from(plan.limits.max_total_invocations)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1);
+    let response = executor
+        .execute_graph_query(&format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{
+                        caused_by_correlation: {{ _eq: "{}" }},
+                        caused_by_trigger_id: {{ _in: {} }}
+                    }},
+                    order: {{ created_at: ASC }}, limit: {limit}
+                ) {{
+                    request_id session_id behavior_id caused_by_trigger_id status lifecycle_state failure_reason
+                }}
+            }}"#,
+            escape_graphql_string(correlation),
+            graphql_string_list_literal(&trigger_ids),
+        ))
+        .await?;
     let mut requests = rows(&response, "AgentRequest")
         .iter()
         .map(|row| {
@@ -324,16 +337,25 @@ async fn load_requests(
 async fn load_groups(
     executor: &(impl GraphRunQuery + ?Sized),
     correlation: &str,
+    plan: &GraphPlan,
 ) -> Result<Vec<GraphRunGroupView>> {
+    let trigger_ids = planned_trigger_nodes(plan)?.into_keys().collect::<Vec<_>>();
+    let limit = usize::try_from(plan.limits.max_total_invocations)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1);
     let response = executor
         .execute_graph_query(&format!(
             r#"{{
                 EventTriggerGroupState(
-                    filter: {{ correlation: {{ _eq: "{}" }} }},
-                    order: {{ first_seen_at: ASC }}
+                    filter: {{
+                        correlation: {{ _eq: "{}" }},
+                        trigger_id: {{ _in: {} }}
+                    }},
+                    order: {{ first_seen_at: ASC }}, limit: {limit}
                 ) {{ group_key trigger_id first_seen_at quiesced_at quiesced_reason }}
             }}"#,
             escape_graphql_string(correlation),
+            graphql_string_list_literal(&trigger_ids),
         ))
         .await?;
     rows(&response, "EventTriggerGroupState")
@@ -659,7 +681,7 @@ async fn load_graph_run_view_with(
     let plan = load_plan(executor, revision_digest).await?;
     let correlation = required_string(&run, "correlation")?;
     let requests = load_requests(executor, correlation, &plan).await?;
-    let groups = load_groups(executor, correlation).await?;
+    let groups = load_groups(executor, correlation, &plan).await?;
     let mut loaded_results = Vec::with_capacity(plan.results.len());
     for result in &plan.results {
         loaded_results.push(load_result(executor, correlation, result, &plan.results).await?);
@@ -947,50 +969,40 @@ async fn commit_terminal(
     identity: Option<Did>,
     view: &GraphRunView,
     status: &str,
-    error: Option<&Value>,
-    result_refs: Option<&[GraphResultRef]>,
 ) -> Result<()> {
     let txn = ConfigApplyTxn::begin_local(node, identity).await?;
-    commit_terminal_txn(txn, view, status, error, result_refs).await
+    commit_terminal_txn(txn, view, status).await
 }
 
 async fn commit_terminal_with_access(
     access: &ConfigAccess,
     view: &GraphRunView,
     status: &str,
-    error: Option<&Value>,
-    result_refs: Option<&[GraphResultRef]>,
 ) -> Result<()> {
     let txn = access.begin_apply_txn().await?;
-    commit_terminal_txn(txn, view, status, error, result_refs).await
+    commit_terminal_txn(txn, view, status).await
 }
 
 async fn commit_terminal_txn(
     txn: ConfigApplyTxn<'_>,
     view: &GraphRunView,
     status: &str,
-    error: Option<&Value>,
-    result_refs: Option<&[GraphResultRef]>,
 ) -> Result<()> {
     let result = async {
-        let current = query_run(&txn, &view.run_id).await?;
-        let current_status = required_string(&current, "status")?;
-        let current_generation = current
-            .get("update_generation")
-            .and_then(Value::as_i64)
-            .unwrap_or_default();
-        if current_status != "running" || current_generation != view.update_generation {
+        // The terminal predicate depends on AgentRequest, group-state, and
+        // result documents as well as GraphRun. Rebuild that complete view in
+        // the same transaction that writes terminal state so a concurrent
+        // graph materialization conflicts instead of committing stale success.
+        let fresh = load_graph_run_view_with(&txn, &view.owner_did, &view.run_id).await?;
+        if fresh.status != "running" || fresh.update_generation != view.update_generation {
             anyhow::bail!("graph run terminal CAS lost; reload the durable run");
         }
         let decision = graph_run_terminal_decision(
-            current_status,
-            current
-                .get("cancel_requested_at")
-                .and_then(Value::as_str)
-                .is_some(),
-            view.result_contract_satisfied,
-            view.active_request_count == 0,
-            error.is_some(),
+            &fresh.status,
+            fresh.cancellation_requested_at.is_some(),
+            fresh.result_contract_satisfied,
+            fresh.active_request_count == 0,
+            fresh.failure_evidence.is_some(),
         );
         let allowed = match status {
             "succeeded" => decision.may_succeed,
@@ -1001,11 +1013,17 @@ async fn commit_terminal_txn(
         if !allowed {
             anyhow::bail!("graph run terminal transition is not legal");
         }
+        let current = query_run(&txn, &view.run_id).await?;
+        let current_generation = fresh.update_generation;
         let doc_id = required_string(&current, "_docID")?;
+        let result_refs = (status == "succeeded").then(|| fresh.successful_result_refs());
+        let error = (status == "failed")
+            .then_some(fresh.failure_evidence.as_ref())
+            .flatten();
         let input = json!({
             "status": status,
             "error": error.map(serde_json::to_string).transpose()?,
-            "result_refs_json": result_refs.map(serde_json::to_string).transpose()?,
+            "result_refs_json": result_refs.as_ref().map(serde_json::to_string).transpose()?,
             "update_generation": current_generation.saturating_add(1),
             "completed_at": chrono::Utc::now().to_rfc3339(),
         });
@@ -1073,10 +1091,8 @@ pub async fn reconcile_graph_run(
         interrupt_active_requests(node, &view.requests).await?;
     }
     let terminal = terminal_projection(&view);
-    if let Some((status, error, refs)) = terminal {
-        if let Err(commit_error) =
-            commit_terminal(node, identity, &view, status, error, refs.as_deref()).await
-        {
+    if let Some((status, _, _)) = terminal {
+        if let Err(commit_error) = commit_terminal(node, identity, &view, status).await {
             let reloaded = load_graph_run_view(node, actor_did, run_id).await?;
             if reloaded.is_terminal() {
                 return Ok(reloaded);
@@ -1099,10 +1115,8 @@ pub async fn reconcile_graph_run_with_access(
     if view.is_terminal() {
         return Ok(view);
     }
-    if let Some((status, error, refs)) = terminal_projection(&view) {
-        if let Err(commit_error) =
-            commit_terminal_with_access(access, &view, status, error, refs.as_deref()).await
-        {
+    if let Some((status, _, _)) = terminal_projection(&view) {
+        if let Err(commit_error) = commit_terminal_with_access(access, &view, status).await {
             let reloaded = load_graph_run_view_with_access(access, actor_did, run_id).await?;
             if reloaded.is_terminal() {
                 return Ok(reloaded);

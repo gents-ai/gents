@@ -148,15 +148,29 @@ impl ConfigAccess {
     /// DefraDB's read-only collection-version API, which EmbeddedNode exposes
     /// without enabling destructive collection management.
     pub async fn collection_fields(&self, collection: &str) -> Result<Option<BTreeSet<String>>> {
+        Ok(self.collection_version(collection).await?.map(|version| {
+            version
+                .get("Fields")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|field| field.get("Name").and_then(Value::as_str))
+                .map(ToOwned::to_owned)
+                .collect()
+        }))
+    }
+
+    /// Return the active DefraDB collection version so callers that own a
+    /// schema contract can compare field kinds, directives, and indexes—not
+    /// merely the set of field names.
+    pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
         crate::graphql::validate_collection_identifier(collection)?;
         match self {
-            Self::Local(node) => Ok(node.get_collection(collection)?.map(|collection| {
-                collection
-                    .fields
-                    .into_iter()
-                    .map(|field| field.name)
-                    .collect()
-            })),
+            Self::Local(node) => node
+                .get_collection(collection)?
+                .map(serde_json::to_value)
+                .transpose()
+                .context("serializing active collection version"),
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql)?;
                 let url = format!("{api_base}/collections/versions");
@@ -182,16 +196,7 @@ impl ConfigAccess {
                                     .and_then(Value::as_bool)
                                     .unwrap_or(true)
                         })
-                        .map(|version| {
-                            version
-                                .get("Fields")
-                                .and_then(Value::as_array)
-                                .into_iter()
-                                .flatten()
-                                .filter_map(|field| field.get("Name").and_then(Value::as_str))
-                                .map(ToOwned::to_owned)
-                                .collect()
-                        })
+                        .cloned()
                 }))
             }
         }

@@ -21,15 +21,12 @@ pub use run::{
     request_graph_run_cancellation_with_access, GraphResultRef, GraphRunGroupView,
     GraphRunRequestView, GraphRunResultView, GraphRunStageView, GraphRunView,
 };
+pub(crate) use runtime::materialize_graph_revision_in_txn;
 pub use runtime::{
     activate_graph_revision, activate_graph_revision_with_access, graph_run_terminal_decision,
     materialize_graph_revision, publish_graph_plan, revision_gate_decision, start_graph_run,
     start_graph_run_with_access, ActivationReceipt, GraphRunReceipt, GraphRunTerminalDecision,
     MaterializedRevision, PublishedGraph, RevisionGateDecision,
-};
-pub(crate) use runtime::{
-    ensure_graph_revision_receipt_with_access, materialize_graph_revision_in_txn,
-    record_graph_revision_materialization_failure_with_access,
 };
 pub(crate) use runtime::{
     graph_artifact_is_reserved, graph_artifact_is_visible, graph_materialization_denial,

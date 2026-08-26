@@ -28,6 +28,34 @@ fn repository_id(path: &Path, deployment_id: &str) -> String {
     format!("local-repository-{}", &digest[..24])
 }
 
+async fn require_local_deployment(access: &ConfigAccess, expected: &str) -> Result<()> {
+    let response = access
+        .execute("{ HostDeployment(limit: 2) { deployment_id } }")
+        .await?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("HostDeployment"))
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    if rows.len() != 1 {
+        anyhow::bail!(
+            "local repository placement requires exactly one unambiguous HostDeployment on the connected server"
+        );
+    }
+    let local = rows[0]
+        .get("deployment_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .context("connected server HostDeployment is missing deployment_id")?;
+    if local != expected {
+        anyhow::bail!(
+            "package deployment {expected:?} is not the connected server's local deployment {local:?}; refusing to persist a client-local repository path"
+        );
+    }
+    Ok(())
+}
+
 async fn upsert_repository_placement(
     access: &ConfigAccess,
     repository_id: &str,
@@ -109,6 +137,7 @@ pub async fn provision_read_only_workspace(
     deployment_id: &str,
     principal_did: &str,
 ) -> Result<CreateWorkspaceOutcome> {
+    require_local_deployment(access, deployment_id).await?;
     let repository_path = std::fs::canonicalize(repository_path).with_context(|| {
         format!(
             "canonicalizing repository placement {}",
@@ -157,4 +186,51 @@ pub async fn provision_read_only_workspace(
     };
     flush_workspace_documents(access, &documents).await?;
     outcome.map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use defra_node::EmbeddedNode;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn local_repository_paths_require_the_connected_deployment() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+        let response = node
+            .execute(
+                r#"mutation { create_HostDeployment(input: {
+                    deployment_id: "local", display_name: "Local"
+                }) { _docID } }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        require_local_deployment(&access, "local").await.unwrap();
+        let mismatch = require_local_deployment(&access, "remote")
+            .await
+            .unwrap_err();
+        assert!(mismatch.to_string().contains("refusing to persist"));
+
+        let response = node
+            .execute(
+                r#"mutation { create_HostDeployment(input: {
+                    deployment_id: "replica", display_name: "Replica"
+                }) { _docID } }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let ambiguous = require_local_deployment(&access, "local")
+            .await
+            .unwrap_err();
+        assert!(ambiguous.to_string().contains("exactly one unambiguous"));
+
+        drop(access);
+        let node = Arc::try_unwrap(node).unwrap_or_else(|_| panic!("test retained node clone"));
+        node.shutdown().await;
+    }
 }
