@@ -1,10 +1,107 @@
-import { describe, expect, it } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   conversationRowCount,
+  findAgentChatButton,
+  findAgentDeploymentControl,
   findAssistantResponseMarker,
+  findNewChatButton,
+  findPairingReadyStatus,
   isConversationTurnSettled,
+  startNativeSimulatorE2e,
 } from "./nativeSimulatorE2e";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
+beforeEach(() => {
+  vi.mocked(invoke).mockReset();
+});
+
+describe("startNativeSimulatorE2e", () => {
+  it("does not probe test-only bridge commands in an ordinary Tauri build", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: { invoke: vi.fn() },
+    });
+
+    await startNativeSimulatorE2e(false);
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("findAgentDeploymentControl", () => {
+  it("finds the current fleet detail control after pairing materializes a deployment", () => {
+    document.body.innerHTML = `
+      <button data-testid="fleet-detail-name-peer-a">iPhone E2E</button>
+    `;
+
+    expect(findAgentDeploymentControl("iPhone E2E")).not.toBeNull();
+  });
+
+  it("uses an exact label instead of colliding with a similarly named deployment", () => {
+    document.body.innerHTML = `
+      <button data-testid="fleet-detail-name-peer-a">iPhone E2E staging</button>
+      <button data-testid="fleet-detail-name-peer-b">iPhone E2E</button>
+    `;
+
+    expect(findAgentDeploymentControl("iPhone E2E")?.dataset.testid).toBe(
+      "fleet-detail-name-peer-b",
+    );
+  });
+});
+
+describe("findAgentChatButton", () => {
+  it("waits for the matching deployment's signed-ready chat control", () => {
+    document.body.innerHTML = `
+      <button aria-label="Open iPhone E2E staging chat" data-testid="fleet-chat-peer-a"></button>
+      <button aria-label="Open iPhone E2E chat" data-testid="fleet-chat-peer-b" disabled></button>
+    `;
+
+    expect(findAgentDeploymentControl("iPhone E2E")).not.toBeNull();
+    expect(findAgentChatButton("iPhone E2E")).toBeNull();
+
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-chat-peer-b"]')
+      ?.removeAttribute("disabled");
+
+    expect(findAgentChatButton("iPhone E2E")?.dataset.testid).toBe("fleet-chat-peer-b");
+  });
+});
+
+describe("findNewChatButton", () => {
+  it("finds the enabled environment action in the current sessions flow", () => {
+    document.body.innerHTML = `
+      <button data-testid="sidebar-new-chat-disabled" disabled>New session</button>
+      <button data-testid="sidebar-new-chat-default">New session</button>
+    `;
+
+    expect(findNewChatButton("iPhone E2E")?.disabled).toBe(false);
+  });
+
+  it("does not silently choose between multiple enabled environments", () => {
+    document.body.innerHTML = `
+      <button data-testid="sidebar-new-chat-default">New session</button>
+      <button data-testid="sidebar-new-chat-review">New session</button>
+    `;
+
+    expect(findNewChatButton("iPhone E2E")).toBeNull();
+  });
+});
+
+describe("findPairingReadyStatus", () => {
+  it("waits for the requested deployment's truthful signed readiness", () => {
+    document.body.innerHTML = `
+      <p data-testid="fleet-pair-status">
+        iPhone E2E is ready. Signed membership and bidirectional replication were observed.
+      </p>
+    `;
+
+    expect(findPairingReadyStatus("iPhone E2E")).not.toBeNull();
+    expect(findPairingReadyStatus("iPhone E2E staging")).toBeNull();
+  });
+});
 
 describe("findAssistantResponseMarker", () => {
   it("does not mistake the user prompt for an assistant response", () => {
