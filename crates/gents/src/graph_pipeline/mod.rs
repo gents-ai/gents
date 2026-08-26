@@ -5,6 +5,7 @@
 //! ordinary EventTriggers; the existing runtime remains the sole executor.
 
 mod compiler;
+mod run;
 mod runtime;
 mod tools;
 mod types;
@@ -13,9 +14,23 @@ pub use compiler::{
     bind_package_plan, compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy,
     GraphCompileError,
 };
+pub(crate) use run::run_graph_run_reconciler;
+pub use run::{
+    load_graph_run_result_view_with_access, load_graph_run_view, load_graph_run_view_with_access,
+    reconcile_graph_run, reconcile_graph_run_with_access, reconcile_owned_graph_runs,
+    request_graph_run_cancellation, request_graph_run_cancellation_with_access, GraphResultRef,
+    GraphRunGroupView, GraphRunRequestView, GraphRunResultView, GraphRunStageView, GraphRunView,
+};
 pub use runtime::{
-    graph_run_terminal_decision, publish_graph_plan, revision_gate_decision,
-    GraphRunTerminalDecision, PublishedGraph, RevisionGateDecision,
+    activate_graph_revision, activate_graph_revision_with_access, graph_run_terminal_decision,
+    load_active_graph_plan_with_access, materialize_graph_revision, publish_graph_plan,
+    revision_gate_decision, set_graph_enabled_with_access, start_graph_run,
+    start_graph_run_with_access, ActivationReceipt, GraphRunReceipt, GraphRunTerminalDecision,
+    MaterializedRevision, PublishedGraph, RevisionGateDecision,
+};
+pub(crate) use runtime::{
+    graph_artifact_is_reserved, graph_artifact_is_visible, graph_materialization_denial,
+    load_visible_package_artifact_ids,
 };
 pub use tools::{
     CompileGraphArgs, CompileGraphResponse, CompileGraphTool, GraphPipelineToolError,

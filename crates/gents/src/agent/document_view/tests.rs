@@ -842,7 +842,7 @@ async fn create_event_trigger(
     source_collection: &str,
     event_kind: &str,
     concurrency: &str,
-) {
+) -> String {
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let escaped_task_id = escape_graphql_string(task_id);
     let escaped_source_collection = escape_graphql_string(source_collection);
@@ -866,6 +866,46 @@ async fn create_event_trigger(
         "create EventTrigger failed: {:?}",
         response.errors
     );
+    created_skill_doc_id(response.data.as_ref()).expect("created EventTrigger _docID")
+}
+
+#[tokio::test]
+async fn apply_control_update_full_reloads_reserved_graph_triggers() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-graph-trigger"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-document-view-graph-trigger",
+        "http://127.0.0.1:8123/v1",
+    )
+    .await;
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("initial document view");
+    let doc_id = create_event_trigger(
+        node.as_ref(),
+        "graph-trigger-not-a-valid-revision",
+        "operator-task",
+        "AgentRequest",
+        "created",
+        "serial",
+    )
+    .await;
+
+    let outcome = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "EventTrigger",
+        &doc_id,
+        &mut view,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, ControlUpdateOutcome::FullReload);
+
+    node.shutdown().await;
 }
 
 async fn create_schedule(node: &defra_node::EmbeddedNode, schedule_id: &str, task_id: &str) {
@@ -1728,7 +1768,97 @@ fn empty_runtime_view(agent_did: &str) -> DocumentRuntimeView {
         tasks: Default::default(),
         schedules: Default::default(),
         event_triggers: Default::default(),
+        graph_definitions: Default::default(),
+        graph_run_pins: Default::default(),
+        visible_graph_package_artifact_ids: Default::default(),
     }
+}
+
+#[test]
+fn graph_artifact_visibility_unions_active_revisions_with_nonterminal_run_pins() {
+    let mut view = empty_runtime_view("did:key:owner");
+    view.graph_definitions.insert(
+        "graph".to_owned(),
+        DocumentRecord {
+            doc_id: "definition-doc".to_owned(),
+            value: crate::document_config::GraphDefinition {
+                graph_id: "graph".to_owned(),
+                owner_did: "did:key:owner".to_owned(),
+                enabled: true,
+                active_revision_digest: Some("sha256:active".to_owned()),
+                generation: Some(2),
+                created_at: None,
+                updated_at: None,
+            },
+        },
+    );
+    view.graph_definitions.insert(
+        "foreign-graph".to_owned(),
+        DocumentRecord {
+            doc_id: "foreign-definition-doc".to_owned(),
+            value: crate::document_config::GraphDefinition {
+                graph_id: "foreign-graph".to_owned(),
+                owner_did: "did:key:foreign".to_owned(),
+                enabled: true,
+                active_revision_digest: Some("sha256:foreign-active".to_owned()),
+                generation: Some(1),
+                created_at: None,
+                updated_at: None,
+            },
+        },
+    );
+    view.graph_definitions.insert(
+        "disabled-graph".to_owned(),
+        DocumentRecord {
+            doc_id: "disabled-definition-doc".to_owned(),
+            value: crate::document_config::GraphDefinition {
+                graph_id: "disabled-graph".to_owned(),
+                owner_did: "did:key:owner".to_owned(),
+                enabled: false,
+                active_revision_digest: Some("sha256:disabled".to_owned()),
+                generation: Some(1),
+                created_at: None,
+                updated_at: None,
+            },
+        },
+    );
+    for (run_id, digest, status) in [
+        ("running", "sha256:pinned", "running"),
+        ("done", "sha256:retired", "succeeded"),
+    ] {
+        view.graph_run_pins.insert(
+            run_id.to_owned(),
+            DocumentRecord {
+                doc_id: format!("{run_id}-doc"),
+                value: crate::document_config::GraphRunPin {
+                    run_id: run_id.to_owned(),
+                    revision_digest: digest.to_owned(),
+                    owner_did: "did:key:owner".to_owned(),
+                    status: status.to_owned(),
+                },
+            },
+        );
+    }
+    view.graph_run_pins.insert(
+        "foreign-running".to_owned(),
+        DocumentRecord {
+            doc_id: "foreign-running-doc".to_owned(),
+            value: crate::document_config::GraphRunPin {
+                run_id: "foreign-running".to_owned(),
+                revision_digest: "sha256:foreign-pinned".to_owned(),
+                owner_did: "did:key:foreign".to_owned(),
+                status: "running".to_owned(),
+            },
+        },
+    );
+
+    assert_eq!(
+        super::active_graph_revision_pins(&view),
+        (
+            std::collections::BTreeSet::from(["sha256:active".to_owned()]),
+            std::collections::BTreeSet::from(["sha256:pinned".to_owned()]),
+        )
+    );
 }
 
 #[test]

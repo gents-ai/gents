@@ -239,6 +239,10 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         for schema in [
             gents_protocol::schemas::GRAPH_DEFINITION,
+            gents_protocol::schemas::GRAPH_REVISION,
+            gents_protocol::schemas::GRAPH_RUN,
+            gents_protocol::schemas::AGENT_REQUEST,
+            gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
             gents_protocol::schemas::TASK,
             gents_protocol::schemas::EVENT_TRIGGER,
         ] {

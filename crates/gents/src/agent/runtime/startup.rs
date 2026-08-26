@@ -26,6 +26,7 @@ enum BackgroundTaskResult {
     Reconcile(Result<()>),
     Control(Result<()>),
     SubagentCompletion(Result<()>),
+    GraphRunReconcile(Result<()>),
     CrossDeploymentCancelMirror(Result<()>),
     PairingReconcile(Result<()>),
     RegistryHeartbeat(Result<()>),
@@ -418,6 +419,20 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let graph_run_node = agent.node.clone();
+    let graph_run_owner_did = agent.agent_did().to_string();
+    let graph_run_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::GraphRunReconcile(
+            crate::graph_pipeline::run_graph_run_reconciler(
+                graph_run_node,
+                graph_run_owner_did,
+                graph_run_cancel,
+            )
+            .await,
+        )
+    });
+
     let cancel_mirror_node = agent.node.clone();
     let cancel_mirror_snapshot_rx = active_snapshot_rx.clone();
     let cancel_mirror_cancel = cancel.child_token();
@@ -676,6 +691,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::Reconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::Control(result)) => (result, false),
             Ok(BackgroundTaskResult::SubagentCompletion(result)) => (result, false),
+            Ok(BackgroundTaskResult::GraphRunReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::CrossDeploymentCancelMirror(result)) => (result, false),
             Ok(BackgroundTaskResult::PairingReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::RegistryHeartbeat(result)) => (result, false),

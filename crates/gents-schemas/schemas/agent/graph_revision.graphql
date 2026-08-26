@@ -1,0 +1,16 @@
+type GraphRevision @branchable {
+    revision_id: String @index(unique: true) @immutable
+    graph_id: String @index @immutable
+    digest: String @index(unique: true) @immutable
+    owner_did: String @index @immutable
+    status: String @index
+    compiler_version: String @immutable
+    plan_json: String @immutable
+    artifacts_complete: Boolean @index
+    materialization_error: String
+    materialization_failed_at: DateTime @index(direction: DESC)
+    created_at: DateTime @index(direction: DESC) @immutable
+    materialized_at: DateTime @index(direction: DESC)
+    activated_at: DateTime @index(direction: DESC)
+    retired_at: DateTime @index(direction: DESC)
+}

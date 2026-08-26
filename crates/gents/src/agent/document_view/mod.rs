@@ -6,14 +6,14 @@ pub(crate) use apply::apply_control_update;
 pub(crate) use load::load_document_runtime_view;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::backend_registry::InferenceBackend;
 use crate::chatgpt_codex::OAuthCredential;
 use crate::document_config::{
-    AgentBehavior, AgentPrincipal, DatastoreToolSurfaceDocument, EventTrigger, InferenceProfile,
-    QueryToolDecl, Schedule, SkillDocument, SurfaceToolDecl, Task, ToolSelectionDocument,
-    WriteToolDecl,
+    AgentBehavior, AgentPrincipal, DatastoreToolSurfaceDocument, EventTrigger, GraphDefinition,
+    GraphRunPin, InferenceProfile, QueryToolDecl, Schedule, SkillDocument, SurfaceToolDecl, Task,
+    ToolSelectionDocument, WriteToolDecl,
 };
 
 #[derive(Debug, Clone)]
@@ -36,6 +36,11 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) tasks: HashMap<String, DocumentRecord<Task>>,
     pub(crate) schedules: HashMap<String, DocumentRecord<Schedule>>,
     pub(crate) event_triggers: HashMap<String, DocumentRecord<EventTrigger>>,
+    pub(crate) graph_definitions: HashMap<String, DocumentRecord<GraphDefinition>>,
+    pub(crate) graph_run_pins: HashMap<String, DocumentRecord<GraphRunPin>>,
+    /// Package-owned behavior/selection/surface ids admitted by an active or
+    /// nonterminal-run-pinned immutable revision for this principal.
+    pub(crate) visible_graph_package_artifact_ids: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,9 +48,28 @@ pub(crate) enum ControlUpdateOutcome {
     Irrelevant,
     Applied,
     PendingVisibility,
+    FullReload,
 }
 
 impl DocumentRuntimeView {
+    fn has_package_config_artifact_doc_id(&self, doc_id: &str) -> bool {
+        self.behaviors
+            .iter()
+            .any(|(id, record)| id.starts_with("pkg-") && record.doc_id == doc_id)
+            || self
+                .tool_selections
+                .iter()
+                .any(|(id, record)| id.starts_with("pkg-") && record.doc_id == doc_id)
+            || self
+                .datastore_tool_surfaces
+                .iter()
+                .any(|(id, record)| id.starts_with("pkg-") && record.doc_id == doc_id)
+            || self
+                .tasks
+                .iter()
+                .any(|(id, record)| id.starts_with("pkg-") && record.doc_id == doc_id)
+    }
+
     fn has_behavior_doc_id(&self, doc_id: &str) -> bool {
         self.behaviors
             .values()
@@ -94,6 +118,17 @@ impl DocumentRuntimeView {
             .any(|record| record.doc_id == doc_id)
     }
 
+    fn has_graph_definition_doc_id(&self, doc_id: &str) -> bool {
+        self.graph_definitions
+            .values()
+            .any(|record| record.doc_id == doc_id)
+    }
+
+    fn has_graph_run_doc_id(&self, doc_id: &str) -> bool {
+        self.graph_run_pins
+            .values()
+            .any(|record| record.doc_id == doc_id)
+    }
     fn remove_behavior_by_doc_id(&mut self, doc_id: &str) -> bool {
         let key = self.behaviors.iter().find_map(|(behavior_id, record)| {
             (record.doc_id == doc_id).then_some(behavior_id.clone())
@@ -241,6 +276,26 @@ impl DocumentRuntimeView {
     }
 }
 
+fn active_graph_revision_pins(view: &DocumentRuntimeView) -> (BTreeSet<String>, BTreeSet<String>) {
+    let agent_did = view.principal.value.agent_did.as_str();
+    let active = view
+        .graph_definitions
+        .values()
+        .filter(|record| record.value.owner_did == agent_did && record.value.enabled)
+        .filter_map(|record| record.value.active_revision_digest.clone())
+        .collect();
+    let pinned = view
+        .graph_run_pins
+        .values()
+        .filter(|record| record.value.owner_did == agent_did && !record.value.is_terminal())
+        .map(|record| record.value.revision_digest.clone())
+        .collect();
+    (active, pinned)
+}
+
+fn package_config_artifact_is_visible(view: &DocumentRuntimeView, id: &str) -> bool {
+    !id.starts_with("pkg-") || view.visible_graph_package_artifact_ids.contains(id)
+}
 fn validate_subagent_targets_resolve(
     selection: &ToolSelectionDocument,
     view: &DocumentRuntimeView,
@@ -352,15 +407,6 @@ pub(crate) fn merge_surface_tools(
             entry.validate().map_err(|error| {
                 anyhow::anyhow!("DatastoreToolSurface {surface_id} has a malformed entry: {error}")
             })?;
-            if let SurfaceToolDecl::Create(decl) = entry {
-                if !decl.output_obligation_is_well_formed() {
-                    bail!(
-                        "DatastoreToolSurface {} entry {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
-                        surface_id,
-                        decl.tool_name,
-                    );
-                }
-            }
             if !seen.insert(entry.tool_name().to_string()) {
                 bail!(
                     "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for ToolSelection {}",

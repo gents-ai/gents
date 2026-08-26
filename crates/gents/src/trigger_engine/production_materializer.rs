@@ -242,6 +242,17 @@ impl MaterializerHandle for ProductionMaterializer {
                 .map(String::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
+            if let Some(trigger_id) = trigger_id.as_deref() {
+                if let Some(reason) = crate::graph_pipeline::graph_materialization_denial(
+                    node.as_ref(),
+                    trigger_id,
+                    correlation.as_deref(),
+                )
+                .await?
+                {
+                    return Err(MaterializeSkip { reason }.into());
+                }
+            }
             let mut workspace = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
             workspace.require_authority_if_workspace_id()?;
             if workspace.owner_deployment_id().is_some()

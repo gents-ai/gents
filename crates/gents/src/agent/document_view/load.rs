@@ -4,9 +4,10 @@ use defra_node::EmbeddedNode;
 use crate::backend_registry::list_backend_records;
 use crate::document_config::{
     ensure_agent_principal, list_agent_behavior_records, list_all_tool_selection_records,
-    list_datastore_tool_surface_records, list_event_trigger_records,
-    list_inference_profile_records, list_schedule_records, list_skill_records, list_task_records,
-    list_tool_selection_records, load_tool_selection_record, ToolSelectionDocument,
+    list_datastore_tool_surface_records, list_event_trigger_records, list_graph_definition_records,
+    list_graph_run_pin_records, list_inference_profile_records, list_schedule_records,
+    list_skill_records, list_task_records, list_tool_selection_records, load_tool_selection_record,
+    ToolSelectionDocument,
 };
 
 use super::{DocumentRecord, DocumentRuntimeView};
@@ -38,9 +39,41 @@ pub(crate) async fn load_document_runtime_view(
         tasks: HashMap::new(),
         schedules: HashMap::new(),
         event_triggers: HashMap::new(),
+        graph_definitions: HashMap::new(),
+        graph_run_pins: HashMap::new(),
+        visible_graph_package_artifact_ids: Default::default(),
     };
 
+    for (doc_id, definition) in list_graph_definition_records(node).await? {
+        view.graph_definitions.insert(
+            definition.graph_id.clone(),
+            DocumentRecord {
+                doc_id,
+                value: definition,
+            },
+        );
+    }
+
+    for (doc_id, run) in list_graph_run_pin_records(node).await? {
+        view.graph_run_pins
+            .insert(run.run_id.clone(), DocumentRecord { doc_id, value: run });
+    }
+
+    let (active_revision_digests, pinned_revision_digests) =
+        super::active_graph_revision_pins(&view);
+    let (visible_artifact_ids, visible_graph_digests) =
+        crate::graph_pipeline::load_visible_package_artifact_ids(
+            node,
+            agent_did,
+            &active_revision_digests,
+            &pinned_revision_digests,
+        )
+        .await?;
+    view.visible_graph_package_artifact_ids = visible_artifact_ids;
     for (doc_id, selection) in list_tool_selection_records(node, agent_did).await? {
+        if !super::package_config_artifact_is_visible(&view, &selection.selection_id) {
+            continue;
+        }
         view.tool_selections.insert(
             selection.selection_id.clone(),
             DocumentRecord {
@@ -93,6 +126,9 @@ pub(crate) async fn load_document_runtime_view(
     }
 
     for (doc_id, behavior) in list_agent_behavior_records(node, agent_did).await? {
+        if !super::package_config_artifact_is_visible(&view, &behavior.behavior_id) {
+            continue;
+        }
         let behavior_id = behavior.behavior_id.clone();
         view.behaviors.insert(
             behavior_id,
@@ -141,6 +177,9 @@ pub(crate) async fn load_document_runtime_view(
                     );
                     continue;
                 }
+                if !super::package_config_artifact_is_visible(&view, surface.surface_id.trim()) {
+                    continue;
+                }
                 // Trimmed to match the lookup below and the CLI's link
                 // validation; keying raw diverges from what apply accepts.
                 view.datastore_tool_surfaces.insert(
@@ -167,6 +206,9 @@ pub(crate) async fn load_document_runtime_view(
                 doc_id = %doc_id,
                 "runtime document view skipped Task document with empty task_id"
             );
+            continue;
+        }
+        if !super::package_config_artifact_is_visible(&view, task.task_id.trim()) {
             continue;
         }
         let task_id = task.task_id.clone();
@@ -203,6 +245,12 @@ pub(crate) async fn load_document_runtime_view(
                 doc_id = %doc_id,
                 "runtime document view ignoring EventTrigger with empty trigger_id"
             );
+            continue;
+        }
+        if !crate::graph_pipeline::graph_artifact_is_visible(
+            &trigger.trigger_id,
+            &visible_graph_digests,
+        ) {
             continue;
         }
         view.event_triggers.insert(
@@ -261,6 +309,9 @@ async fn hydrate_referenced_tool_selections(
                 selection_agent_did = %selection.agent_did,
                 "runtime document view ignored referenced tool selection owned by another agent"
             );
+            continue;
+        }
+        if !super::package_config_artifact_is_visible(view, &selection.selection_id) {
             continue;
         }
         tracing::warn!(
