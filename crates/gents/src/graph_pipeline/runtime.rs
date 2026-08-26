@@ -26,6 +26,48 @@ pub struct PublishedGraph {
     pub trigger_ids: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RevisionGateDecision {
+    pub may_activate: bool,
+    pub may_start: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphRunTerminalDecision {
+    pub may_succeed: bool,
+    pub may_fail: bool,
+    pub may_cancel: bool,
+}
+
+/// Executable refinement of the Lean GraphRun terminal transition guards.
+pub fn graph_run_terminal_decision(
+    status: &str,
+    cancellation_requested: bool,
+    result_contract_satisfied: bool,
+    active_work_terminal: bool,
+    failure_proven: bool,
+) -> GraphRunTerminalDecision {
+    let running = status == "running";
+    GraphRunTerminalDecision {
+        may_succeed: running && result_contract_satisfied && active_work_terminal,
+        may_fail: running && failure_proven && active_work_terminal,
+        may_cancel: running && cancellation_requested && active_work_terminal,
+    }
+}
+
+/// Executable refinement of the Lean publication gate for one revision.
+pub fn revision_gate_decision(
+    status: &str,
+    artifacts_complete: bool,
+    activation_precondition_met: bool,
+    pointer_matches: bool,
+) -> RevisionGateDecision {
+    RevisionGateDecision {
+        may_activate: status == "validated" && artifacts_complete && activation_precondition_met,
+        may_start: status == "active" && artifacts_complete && pointer_matches,
+    }
+}
+
 fn digest_hex(digest: &str) -> Result<&str> {
     let Some(hex) = digest.strip_prefix("sha256:") else {
         anyhow::bail!("graph plan digest must use sha256:<64 lowercase hex>");
