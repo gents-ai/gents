@@ -90,8 +90,6 @@ struct RequestRow {
     #[serde(default)]
     caused_by_trigger_context: Option<String>,
     #[serde(default)]
-    caused_by_source_doc_id: Option<String>,
-    #[serde(default)]
     workspace_id: Option<String>,
     #[serde(default)]
     workspace_authority: Option<String>,
@@ -144,7 +142,7 @@ impl RequestRow {
             caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
             caused_by_trigger_id: None,
             caused_by_trigger_kind: None,
-            caused_by_source_doc_id: self.caused_by_source_doc_id,
+            caused_by_source_doc_id: None,
             caused_by_correlation: self.caused_by_correlation,
             caused_by_trigger_context: self.caused_by_trigger_context,
             workspace_id: self.workspace_id,
