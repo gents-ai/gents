@@ -14,6 +14,7 @@ const FIXTURE_ENV: &str = "GENTS_CALLBACK_FIXTURE_CREATE_WORKSPACE_WASM_PATH";
 
 fn main() {
     let workspace_root = workspace_root();
+    generate_bundled_graph_packages(&workspace_root);
     let fixture_dir = workspace_root
         .join("crates")
         .join("gents-callbacks")
@@ -39,6 +40,76 @@ fn main() {
         FIXTURE_ARTIFACT,
         FIXTURE_ENV,
     );
+}
+
+fn generate_bundled_graph_packages(workspace_root: &Path) {
+    let root = workspace_root
+        .join("crates")
+        .join("gents")
+        .join("assets")
+        .join("graph_packages");
+    println!("cargo:rerun-if-changed={}", root.display());
+
+    let mut packages = std::fs::read_dir(&root)
+        .expect("read bundled graph package directory")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .collect::<Vec<_>>();
+    packages.sort_by_key(|entry| entry.file_name());
+
+    let mut names = Vec::new();
+    let mut arms = Vec::new();
+    for package in packages {
+        let name = package.file_name().to_string_lossy().into_owned();
+        names.push(name.clone());
+        let mut files = Vec::new();
+        collect_files(
+            package.path().as_path(),
+            package.path().as_path(),
+            &mut files,
+        );
+        files.sort();
+        for (relative, absolute) in files {
+            arms.push(format!(
+                "        ({name:?}, {relative:?}) => Some(include_bytes!({absolute:?})),",
+                absolute = absolute.to_string_lossy(),
+            ));
+        }
+    }
+
+    let generated = format!(
+        "pub(crate) const BUNDLED_GRAPH_PACKAGE_NAMES: &[&str] = &{names:?};\n\
+         pub(crate) fn bundled_graph_package_asset(package: &str, path: &str) -> Option<&'static [u8]> {{\n\
+             match (package, path) {{\n{}\n\
+                 _ => None,\n\
+             }}\n\
+         }}\n",
+        arms.join("\n"),
+    );
+    let output =
+        PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("bundled_graph_packages.rs");
+    std::fs::write(output, generated).expect("write bundled graph package inventory");
+}
+
+fn collect_files(root: &Path, directory: &Path, output: &mut Vec<(String, PathBuf)>) {
+    let mut entries = std::fs::read_dir(directory)
+        .expect("read bundled graph package assets")
+        .filter_map(|entry| entry.ok())
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            collect_files(root, &path, output);
+        } else if entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let relative = path
+                .strip_prefix(root)
+                .expect("asset is beneath package root")
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            output.push((relative, path));
+        }
+    }
 }
 
 fn build_fixture(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &str) {

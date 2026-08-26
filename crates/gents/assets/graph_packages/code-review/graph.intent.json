@@ -1,0 +1,60 @@
+{
+  "graph_id": "code-review",
+  "nodes": [
+    {"node_id": "recon", "capability_id": "review-recon", "capability_revision": "v1"},
+    {"node_id": "scan", "capability_id": "review-scan", "capability_revision": "v1"},
+    {"node_id": "verify", "capability_id": "review-verify", "capability_revision": "v1"},
+    {"node_id": "triage", "capability_id": "review-triage", "capability_revision": "v1"}
+  ],
+  "edges": [
+    {
+      "from": {"node_id": "recon", "port": "areas"},
+      "to": {"node_id": "scan", "port": "area"},
+      "delivery": {"kind": "per_document"},
+      "concurrency": "parallel"
+    },
+    {
+      "from": {"node_id": "scan", "port": "scan_results"},
+      "to": {"node_id": "verify", "port": "scan_results"},
+      "delivery": {"kind": "per_group", "expected": {"kind": "source_field", "field": "expected_total"}},
+      "concurrency": "serial"
+    },
+    {
+      "from": {"node_id": "verify", "port": "summary"},
+      "to": {"node_id": "triage", "port": "summary"},
+      "delivery": {"kind": "per_document"},
+      "concurrency": "serial"
+    }
+  ],
+  "entries": [
+    {
+      "name": "review",
+      "collection": "CodeReviewJob",
+      "schema": "CodeReviewJob/v1",
+      "input_contract": "review-input/v1",
+      "to": {"node_id": "recon", "port": "job"}
+    }
+  ],
+  "results": [
+    {
+      "name": "findings",
+      "from": {"node_id": "verify", "port": "findings"},
+      "cardinality": {"kind": "at_most", "count": 128},
+      "terminal": true
+    },
+    {
+      "name": "report",
+      "from": {"node_id": "triage", "port": "report"},
+      "cardinality": {"kind": "exactly", "count": 1},
+      "terminal": true
+    }
+  ],
+  "limits": {
+    "max_nodes": 8,
+    "max_edges": 16,
+    "max_depth": 8,
+    "max_fan_out": 16,
+    "max_total_invocations": 128,
+    "max_runtime_secs": 7200
+  }
+}

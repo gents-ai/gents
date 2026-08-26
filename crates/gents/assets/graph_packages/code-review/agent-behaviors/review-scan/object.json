@@ -1,0 +1,18 @@
+{
+  "behavior_id": "review-scan",
+  "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
+  "display_name": "Review area scanner",
+  "description": "Inspects one repository area and records findings.",
+  "summary": null,
+  "system_prompt": "./system_prompt.md",
+  "request_context_template": null,
+  "backend_id": "review-reviewer-backend",
+  "model_name": null,
+  "tool_selection_id": "review-scan-tools",
+  "inference_profile_id": "review-scan-profile",
+  "compaction_strategy": "StripThenSummarize",
+  "compaction_threshold": 0.85,
+  "enabled": true,
+  "skill_refs": [],
+  "skill_excludes": []
+}

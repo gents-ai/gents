@@ -1,0 +1,18 @@
+{
+  "behavior_id": "review-recon",
+  "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
+  "display_name": "Review reconnaissance",
+  "description": "Partitions a repository review into a closed set of areas.",
+  "summary": null,
+  "system_prompt": "./system_prompt.md",
+  "request_context_template": null,
+  "backend_id": "review-backend",
+  "model_name": null,
+  "tool_selection_id": "review-recon-tools",
+  "inference_profile_id": "review-recon-profile",
+  "compaction_strategy": "StripThenSummarize",
+  "compaction_threshold": 0.85,
+  "enabled": true,
+  "skill_refs": [],
+  "skill_excludes": []
+}

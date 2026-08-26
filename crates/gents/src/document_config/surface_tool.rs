@@ -106,7 +106,16 @@ impl SurfaceToolDecl {
 
     pub fn validate(&self) -> Result<()> {
         match self {
-            Self::Create(decl) => decl.validate(),
+            Self::Create(decl) => {
+                decl.validate()?;
+                if !decl.output_obligation_is_well_formed() {
+                    anyhow::bail!(
+                        "entry {:?} output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",
+                        decl.tool_name,
+                    );
+                }
+                Ok(())
+            }
             Self::Query(decl) => {
                 validate_query_tool_declarations(std::slice::from_ref(decl), &[], &[])
             }
