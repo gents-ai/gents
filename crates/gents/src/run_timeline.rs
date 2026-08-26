@@ -37,6 +37,20 @@ pub struct RunTimelineRows {
     pub rendered_request_refs: Vec<TimelineRenderedRequestRef>,
 }
 
+/// Bounded, prompt-free activity rows for a live observer. These reuse the
+/// same durable row vocabulary as [`RunTimelineRows`] without loading message
+/// bodies, tool arguments/results, or full request timelines on every poll.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunActivityRows {
+    #[serde(default)]
+    pub sessions: Vec<TimelineSessionRow>,
+    #[serde(default)]
+    pub inference_calls: Vec<TimelineInferenceCallRow>,
+    #[serde(default)]
+    pub tool_calls: Vec<TimelineToolCallRow>,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunTimeline {
     pub request_id: String,

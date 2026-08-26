@@ -70,8 +70,8 @@ async fn pick_backend() -> Result<BackendSelection> {
         None => eprintln!("  2) local server     (e.g. ollama / llama-server)"),
     }
     eprintln!("  3) custom URL");
-    eprintln!("  4) ChatGPT / Codex subscription   (uses your ChatGPT plan; log in after init)");
-    eprintln!("  5) Grok subscription (SuperGrok / X Premium+)   (log in after init)");
+    eprintln!("  4) ChatGPT / Codex subscription   (uses your ChatGPT plan; OAuth setup included)");
+    eprintln!("  5) Grok subscription (SuperGrok / X Premium+)   (OAuth setup included)");
     let choice = prompt_line("> ").await?;
     match choice.trim() {
         "1" | "" => {
@@ -133,32 +133,20 @@ async fn pick_backend() -> Result<BackendSelection> {
                 api_key: None,
             })
         }
-        "4" => {
-            eprintln!(
-                "\nAfter init, run `gents codex-login` to store the subscription\n\
-                 credential for this agent. `gents init` only seeds the backend."
-            );
-            Ok(BackendSelection {
-                inference_url: None,
-                backend_preset: Some(BackendPresetArg::ChatGptCodex),
-                model_name: None,
-                api_key: None,
-                label: "ChatGPT / Codex subscription".to_string(),
-            })
-        }
-        "5" => {
-            eprintln!(
-                "\nAfter init, run `gents grok-login` to store the SuperGrok / X Premium+\n\
-                 OAuth credential for this agent. `gents init` only seeds the backend."
-            );
-            Ok(BackendSelection {
-                inference_url: None,
-                backend_preset: Some(BackendPresetArg::XaiGrokOAuth),
-                model_name: None,
-                api_key: None,
-                label: "Grok subscription (SuperGrok / X Premium+)".to_string(),
-            })
-        }
+        "4" => Ok(BackendSelection {
+            inference_url: None,
+            backend_preset: Some(BackendPresetArg::ChatGptCodex),
+            model_name: None,
+            api_key: None,
+            label: "ChatGPT / Codex subscription".to_string(),
+        }),
+        "5" => Ok(BackendSelection {
+            inference_url: None,
+            backend_preset: Some(BackendPresetArg::XaiGrokOAuth),
+            model_name: None,
+            api_key: None,
+            label: "Grok subscription (SuperGrok / X Premium+)".to_string(),
+        }),
         other => bail!("unrecognized choice: {other}"),
     }
 }

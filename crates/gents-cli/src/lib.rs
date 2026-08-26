@@ -452,6 +452,7 @@ async fn async_main() -> Result<()> {
         Command::Mcp { command } => commands::mcp::dispatch(command).await,
         Command::Fleet { command } => commands::fleet::dispatch(command).await,
         Command::Task { command } => commands::task::dispatch(command).await,
+        Command::Graph { command } => commands::graph::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
         Command::Tools { command } => commands::tools::dispatch(command).await,
         Command::Config { command } => commands::config::dispatch(command).await,
