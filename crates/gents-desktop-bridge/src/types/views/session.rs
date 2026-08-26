@@ -336,6 +336,11 @@ pub struct SessionRequestContextView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionContextView {
+    /// True when the durable transcript/context rows were read to exhaustion.
+    /// False means the remaining fields describe only the bounded visible page.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub transcript_totals_exact: Option<bool>,
     pub estimated_durable_tokens: i64,
     pub estimated_conversation_tokens: i64,
     pub context_window: i64,

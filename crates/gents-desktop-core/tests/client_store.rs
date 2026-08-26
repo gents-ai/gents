@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents_desktop_core::client::{
-    ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows, DesktopPaths,
+    load_session_transcript_page, ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows,
+    DesktopPaths,
 };
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::row::{
@@ -598,7 +599,7 @@ fn local_chat_patch_updates_durable_transcript_without_creating_projection_twins
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn local_request_refresh_preserves_replica_identity_and_foreign_twins() -> Result<()> {
+async fn local_request_refresh_preserves_projection_boundaries_and_database_truth() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
@@ -622,6 +623,7 @@ async fn local_request_refresh_preserves_replica_identity_and_foreign_twins() ->
                 create_AgentMessage(input: {
                     message_key: "session-1:2"
                     session_id: "session-1"
+                    agent_did: "did:test:amy"
                     request_id: "request-1"
                     sequence: 2
                     role: "assistant"
@@ -631,6 +633,7 @@ async fn local_request_refresh_preserves_replica_identity_and_foreign_twins() ->
                 create_AgentToolCall(input: {
                     tool_call_key: "session-1:tool-1"
                     session_id: "session-1"
+                    agent_did: "did:test:amy"
                     request_id: "request-1"
                     message_sequence: 2
                     tool_name: "bash_unrestricted"
@@ -644,33 +647,8 @@ async fn local_request_refresh_preserves_replica_identity_and_foreign_twins() ->
         .await;
     assert!(!response.has_errors(), "seed rows: {:?}", response.errors);
     core.refresh_store().await?;
-
-    let foreign_message: AgentMessageRow = serde_json::from_value(serde_json::json!({
-        "message_key": "session-1:2",
-        "session_id": "session-1",
-        "request_id": "request-1",
-        "sequence": 2,
-        "role": "assistant",
-        "content": "foreign"
-    }))?;
-    let foreign_tool: AgentToolCallRow = serde_json::from_value(serde_json::json!({
-        "tool_call_key": "session-1:tool-1",
-        "session_id": "session-1",
-        "request_id": "request-1",
-        "message_sequence": 2,
-        "tool_name": "bash_unrestricted",
-        "tool_call_id": "tool-1",
-        "status": "running",
-        "lifecycle_state": "running"
-    }))?;
-    core.store()
-        .merge_snapshot(ClientStore::from_rows(ClientStoreRows {
-            messages: vec![foreign_message],
-            tool_calls: vec![foreign_tool],
-            message_source_agent_dids: vec![Some("did:test:bea".to_string())],
-            tool_call_source_agent_dids: vec![Some("did:test:bea".to_string())],
-            ..ClientStoreRows::default()
-        }));
+    assert!(core.store().snapshot().messages.is_empty());
+    assert!(core.store().snapshot().tool_calls.is_empty());
 
     let response = core
         .node()
@@ -694,32 +672,26 @@ async fn local_request_refresh_preserves_replica_identity_and_foreign_twins() ->
         .is_some());
 
     let snapshot = core.store().snapshot();
-    assert_eq!(snapshot.messages.len(), 2);
-    assert_eq!(snapshot.tool_calls.len(), 2);
-    let local_message = snapshot
-        .messages
-        .iter()
-        .zip(snapshot.message_source_agent_dids.iter())
-        .find(|(_, source)| source.is_none())
-        .expect("local message");
-    assert_eq!(local_message.0.content.as_deref(), Some("complete"));
-    let local_tool = snapshot
-        .tool_calls
-        .iter()
-        .zip(snapshot.tool_call_source_agent_dids.iter())
-        .find(|(_, source)| source.is_none())
-        .expect("local tool call");
-    assert_eq!(local_tool.0.lifecycle_state.as_deref(), Some("completed"));
-    assert!(snapshot
-        .messages
-        .iter()
-        .zip(snapshot.message_source_agent_dids.iter())
-        .any(|(row, source)| row.content.as_deref() == Some("foreign")
-            && source.as_deref() == Some("did:test:bea")));
-    assert!(snapshot
-        .tool_call_source_agent_dids
-        .iter()
-        .any(|source| source.as_deref() == Some("did:test:bea")));
+    assert!(snapshot.messages.is_empty());
+    assert!(snapshot.tool_calls.is_empty());
+    drop(snapshot);
+
+    let page = load_session_transcript_page(
+        core.node(),
+        "session-1",
+        Some("did:test:amy"),
+        None,
+        None,
+        Some(40),
+    )
+    .await?;
+    assert_eq!(page.store.messages.len(), 1);
+    assert_eq!(page.store.messages[0].content.as_deref(), Some("complete"));
+    assert_eq!(page.store.tool_calls.len(), 1);
+    assert_eq!(
+        page.store.tool_calls[0].lifecycle_state.as_deref(),
+        Some("completed")
+    );
 
     core.shutdown().await?;
     Ok(())
@@ -837,27 +809,37 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn incremental_observer_handles_long_session() -> Result<()> {
+async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Result<()> {
     let tmp = tempfile::TempDir::new().expect("tmpdir");
     let paths = DesktopPaths::from_root(tmp.path());
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
 
-    for i in 0..1_000usize {
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentMessage(input: {{
-                    message_key: "long:{i}",
-                    session_id: "long",
-                    sequence: {i},
-                    role: "user",
-                    content: "msg",
-                    timestamp: "2026-05-07T00:00:00Z"
-                }}) {{ _docID }}
-            }}"#
+    for chunk_start in (0..50usize).step_by(50) {
+        let messages = (chunk_start..chunk_start + 50)
+            .map(|i| {
+                format!(
+                    r#"m{i}: create_AgentMessage(input: {{
+                        message_key: "long:{i}",
+                        session_id: "long",
+                        sequence: {i},
+                        role: "user",
+                        content: "msg",
+                        timestamp: "2026-05-07T00:00:00Z"
+                    }}) {{ _docID }}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let resp = core
+            .node()
+            .execute(&format!("mutation {{ {messages} }}"))
+            .await;
+        assert!(
+            !resp.has_errors(),
+            "seed message chunk {chunk_start}: {:?}",
+            resp.errors
         );
-        let resp = core.node().execute(&mutation).await;
-        assert!(!resp.has_errors(), "seed message {i}: {:?}", resp.errors);
     }
 
     let resp = core
@@ -886,12 +868,7 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
     timeout(Duration::from_millis(2000), async {
         loop {
             let snap = core.store().snapshot();
-            if snap
-                .messages
-                .iter()
-                .filter(|m| m.session_id.as_deref() == Some("long"))
-                .count()
-                >= 1_000
+            if snap.messages.is_empty()
                 && snap.responses.iter().any(|r| r.response_key == "long-req")
             {
                 return Ok::<(), anyhow::Error>(());
@@ -902,12 +879,18 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
     .await
     .context("timed out waiting for seed to drain")??;
 
+    let page =
+        load_session_transcript_page(core.node(), "long", None, None, None, Some(40)).await?;
+    assert_eq!(page.message_query_limit, 41);
+    assert_eq!(page.store.messages.len(), 40);
+    assert_eq!(page.queried_rows, 41);
+
     let baseline = core
         .observer_metrics()
         .await
         .expect("observer running and exposing metrics");
 
-    let updates = (1..=100usize)
+    let updates = (1..=50usize)
         .map(|i| {
             format!(
                 r#"update_{i}: update_AgentResponse(
@@ -928,7 +911,7 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
             if snap
                 .responses
                 .iter()
-                .any(|r| r.response_key == "long-req" && r.progress_seq == Some(100))
+                .any(|r| r.response_key == "long-req" && r.progress_seq == Some(50))
             {
                 return Ok::<(), anyhow::Error>(());
             }
@@ -936,7 +919,7 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         }
     })
     .await
-    .context("timed out waiting for progress_seq=100")??;
+    .context("timed out waiting for progress_seq=50")??;
 
     let snap = core.store().snapshot();
     let resp = snap
@@ -946,8 +929,8 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         .expect("response present");
     assert_eq!(
         resp.progress_seq,
-        Some(100),
-        "final progress_seq should be 100"
+        Some(50),
+        "final progress_seq should be 50"
     );
 
     let after = core

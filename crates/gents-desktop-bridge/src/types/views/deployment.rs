@@ -275,8 +275,10 @@ pub struct ConversationSummary {
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub turn_state: Option<String>,
-    pub message_count: usize,
-    pub tool_call_count: usize,
+    /// Absent when the bounded deployment projection did not query transcript
+    /// aggregates. Never inferred from resident transcript rows.
+    pub message_count: Option<usize>,
+    pub tool_call_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

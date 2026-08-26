@@ -48,8 +48,8 @@ fn conversation_summary(
         created_at: Some("2026-04-21T12:00:00Z".to_string()),
         updated_at: Some(updated_at.to_string()),
         turn_state: None,
-        message_count: 0,
-        tool_call_count: 0,
+        message_count: None,
+        tool_call_count: None,
     }
 }
 

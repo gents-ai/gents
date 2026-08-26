@@ -39,7 +39,13 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeErro
 
     #[cfg(debug_assertions)]
     {
-        if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() != Some("1") {
+        let enabled = std::env::var("GENTS_NATIVE_E2E").ok().as_deref() == Some("1");
+        tracing::info!(
+            target: "gents_desktop_bridge::mobile_performance",
+            enabled,
+            "native E2E configuration requested"
+        );
+        if !enabled {
             return Ok(None);
         }
 

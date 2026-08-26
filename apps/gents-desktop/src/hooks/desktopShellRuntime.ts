@@ -2,7 +2,6 @@ import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type {
   DesktopSessionSnapshot,
   P2PHealth,
-  RenderedTimelineItem,
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
 
@@ -64,7 +63,7 @@ export function shouldAutoRestartP2P(
 }
 
 export type DesktopUpdateRefreshScope =
-  "snapshot" | "sessionDelta" | "session" | "full";
+  "snapshot" | "sessionDelta" | "session" | "sessionEvent" | "full";
 
 export function desktopUpdateRefreshScope(
   reason: string | undefined,
@@ -75,7 +74,7 @@ export function desktopUpdateRefreshScope(
   if (reason === "health") return "snapshot";
   if (selectedSessionId && selectedTrackedRequestId) {
     if (reason === "store" && responseOnly) return "sessionDelta";
-    return "session";
+    return "sessionEvent";
   }
   return "full";
 }
@@ -186,19 +185,24 @@ export function applySessionLiveDelta(
     reasoning,
   };
   const timelineItems = current.timelineItems.slice();
-  timelineItems[liveIndex] = {
-    kind: "liveAssistant",
-    itemKey: timelineItems[liveIndex].itemKey,
-    content,
-    reasoning,
-  };
+  const liveTailCleared = content === null && reasoning === null;
+  if (liveTailCleared) {
+    timelineItems.splice(liveIndex, 1);
+  } else {
+    timelineItems[liveIndex] = {
+      kind: "liveAssistant",
+      itemKey: timelineItems[liveIndex].itemKey,
+      content,
+      reasoning,
+    };
+  }
   return {
     ...current,
     turnState: delta.turnState,
     latestResponse: current.latestResponse
       ? { ...current.latestResponse, ...nextResponse }
       : nextResponse,
-    activeResponseOverlay: nextResponse,
+    activeResponseOverlay: liveTailCleared ? null : nextResponse,
     timelineItems,
     projectionRevision: delta.revision,
   };
@@ -206,212 +210,6 @@ export function applySessionLiveDelta(
 
 export async function delay(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export type TrailingRefreshQueue = {
-  request: () => Promise<void>;
-  dispose: () => void;
-};
-
-export function createTrailingRefreshQueue(
-  refresh: () => Promise<void>,
-): TrailingRefreshQueue {
-  let active: Promise<void> | null = null;
-  let disposed = false;
-  let pending = false;
-
-  const drain = async () => {
-    do {
-      pending = false;
-      try {
-        await refresh();
-      } catch (error) {
-        logShellEvent(`coalesced refresh failed error=${String(error)}`);
-      }
-    } while (!disposed && pending);
-  };
-
-  return {
-    request() {
-      if (disposed) {
-        return Promise.resolve();
-      }
-
-      pending = true;
-      if (!active) {
-        // Start in the next microtask so a synchronous event wave becomes one
-        // bridge read. Events received while that read is active still retain
-        // exactly one trailing pass.
-        active = Promise.resolve()
-          .then(drain)
-          .finally(() => {
-            active = null;
-          });
-      }
-      return active;
-    },
-    dispose() {
-      disposed = true;
-      pending = false;
-    },
-  };
-}
-
-function timelineItemIdentity(item: RenderedTimelineItem) {
-  return `${item.kind}:${item.itemKey}`;
-}
-
-function sameOptionalStrings(left: string[] | undefined, right: string[] | undefined) {
-  if (left === right) return true;
-  if (!left || !right || left.length !== right.length) return false;
-  return left.every((value, index) => value === right[index]);
-}
-
-function timelineItemUnchanged(
-  previous: RenderedTimelineItem,
-  next: RenderedTimelineItem,
-) {
-  if (previous.kind !== next.kind || previous.itemKey !== next.itemKey) return false;
-  switch (previous.kind) {
-    case "userMessage":
-      return (
-        next.kind === "userMessage" &&
-        previous.requestId === next.requestId &&
-        previous.sequence === next.sequence &&
-        previous.content === next.content &&
-        previous.timestamp === next.timestamp
-      );
-    case "assistantMessage":
-      return (
-        next.kind === "assistantMessage" &&
-        previous.sequence === next.sequence &&
-        previous.content === next.content &&
-        previous.reasoning === next.reasoning &&
-        previous.timestamp === next.timestamp
-      );
-    case "pendingUserTurn":
-      return (
-        next.kind === "pendingUserTurn" &&
-        previous.requestId === next.requestId &&
-        previous.content === next.content &&
-        previous.lifecycleState === next.lifecycleState &&
-        previous.createdAt === next.createdAt &&
-        sameOptionalStrings(previous.selectedSkillIds, next.selectedSkillIds)
-      );
-    case "liveAssistant":
-      return (
-        next.kind === "liveAssistant" &&
-        previous.content === next.content &&
-        previous.reasoning === next.reasoning
-      );
-    case "toolGroup":
-      return (
-        next.kind === "toolGroup" && JSON.stringify(previous) === JSON.stringify(next)
-      );
-  }
-}
-
-function reuseUnchangedTimelineItems(
-  previous: RenderedTimelineItem[],
-  next: RenderedTimelineItem[],
-) {
-  const previousByIdentity = new Map(
-    previous.map((item) => [timelineItemIdentity(item), item]),
-  );
-  return next.map((item) => {
-    const existing = previousByIdentity.get(timelineItemIdentity(item));
-    return existing && timelineItemUnchanged(existing, item) ? existing : item;
-  });
-}
-
-/**
- * Merge an authoritative tip page into any older pages the reader explicitly
- * loaded. Rows inside the incoming tip are replaced, rows before its cursor
- * retain object identity, and stale live-tail rows disappear.
- */
-export function mergeSessionTipSnapshot(
-  current: DesktopSessionSnapshot | null,
-  next: DesktopSessionSnapshot,
-): DesktopSessionSnapshot {
-  if (
-    !current ||
-    current.sessionId !== next.sessionId ||
-    !next.timelinePage ||
-    next.timelinePage.hasNewer
-  ) {
-    return next;
-  }
-
-  const firstIncoming = next.timelineItems[0];
-  const overlapIndex = firstIncoming
-    ? current.timelineItems.findIndex(
-        (item) => timelineItemIdentity(item) === timelineItemIdentity(firstIncoming),
-      )
-    : -1;
-  const retainedPrefix =
-    next.timelinePage.hasOlder && overlapIndex >= 0
-      ? current.timelineItems.slice(0, overlapIndex)
-      : [];
-  const timelineItems = reuseUnchangedTimelineItems(current.timelineItems, [
-    ...retainedPrefix,
-    ...next.timelineItems,
-  ]);
-
-  return {
-    ...next,
-    timelineItems,
-    timelinePage: {
-      ...next.timelinePage,
-      pageItems: timelineItems.length,
-      oldestItemKey: timelineItems[0]?.itemKey ?? null,
-    },
-  };
-}
-
-/** Merge an explicit older page without allowing its older metadata to regress the live tip. */
-export function mergeOlderSessionTimelinePage(
-  current: DesktopSessionSnapshot | null,
-  older: DesktopSessionSnapshot,
-): DesktopSessionSnapshot {
-  if (!current || current.sessionId !== older.sessionId || !older.timelinePage) {
-    return current ?? older;
-  }
-  const currentIdentities = new Set(current.timelineItems.map(timelineItemIdentity));
-  const prefix = older.timelineItems.filter(
-    (item) => !currentIdentities.has(timelineItemIdentity(item)),
-  );
-  const timelineItems = [...prefix, ...current.timelineItems];
-  const currentPage = current.timelinePage ?? older.timelinePage;
-  const totalItemsExact =
-    (currentPage.totalItemsExact ?? true) &&
-    (older.timelinePage.totalItemsExact ?? true);
-  return {
-    ...current,
-    timelineItems,
-    timelinePage: {
-      ...currentPage,
-      totalItems: totalItemsExact
-        ? Math.max(currentPage.totalItems, older.timelinePage.totalItems)
-        : -1,
-      totalItemsExact,
-      pageItems: timelineItems.length,
-      hasOlder: older.timelinePage.hasOlder,
-      hasNewer: false,
-      oldestItemKey: timelineItems[0]?.itemKey ?? null,
-      newestItemKey: timelineItems[timelineItems.length - 1]?.itemKey ?? null,
-      queryCount: (currentPage.queryCount ?? 0) + (older.timelinePage.queryCount ?? 0),
-      queriedRows:
-        (currentPage.queriedRows ?? 0) + (older.timelinePage.queriedRows ?? 0),
-      messageQueryLimit: Math.max(
-        currentPage.messageQueryLimit ?? 0,
-        older.timelinePage.messageQueryLimit ?? 0,
-      ),
-      toolCallQueryLimit: Math.max(
-        currentPage.toolCallQueryLimit ?? 0,
-        older.timelinePage.toolCallQueryLimit ?? 0,
-      ),
-    },
-  };
 }
 
 export function logShellEvent(message: string) {

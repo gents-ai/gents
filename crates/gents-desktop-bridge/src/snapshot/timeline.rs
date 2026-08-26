@@ -98,6 +98,11 @@ fn overlay_has_durable_owner(
         return false;
     }
 
+    let owned_prefix = |overlay: &Option<String>, durable: Option<&str>| {
+        overlay.as_deref().is_none_or(|overlay| {
+            normalize_optional(durable).is_some_and(|durable| durable.starts_with(overlay))
+        })
+    };
     messages.iter().any(|message| {
         (message.request_id.as_deref() == Some(request_id)
             || normalize_optional(message.request_id.as_deref()).is_none())
@@ -108,8 +113,8 @@ fn overlay_has_durable_owner(
                 .is_some_and(|role| role.eq_ignore_ascii_case("assistant"))
             && !message.has_tool_results
             && !message.runtime_control
-            && normalize_optional(message.display_content.as_deref()) == *overlay_content
-            && normalize_optional(message.reasoning.as_deref()) == *overlay_reasoning
+            && owned_prefix(overlay_content, message.display_content.as_deref())
+            && owned_prefix(overlay_reasoning, message.reasoning.as_deref())
     })
 }
 
@@ -562,6 +567,21 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn stale_partial_tail_is_hidden_when_a_durable_assistant_message_completes_it() {
+        let stale_partial = "Got it — several things to parse here:";
+        let durable = format!("{stale_partial}\n\n1. First item\n2. Second item");
+        let messages = vec![assistant_message("assistant-6", "request-1", 6, &durable)];
+        let response = streaming_response(stale_partial);
+
+        let timeline =
+            build_rendered_timeline(&messages, &[], None, Some(&response), Some("request-1"));
+
+        assert!(!timeline
+            .iter()
+            .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
     }
 
     #[test]

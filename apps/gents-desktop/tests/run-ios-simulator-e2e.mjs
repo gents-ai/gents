@@ -88,9 +88,11 @@ function issuerSettings() {
   }
 
   const remote = process.env.GENTS_E2E_ISSUER_SSH?.trim();
+  const releaseBinary = resolve(APP_ROOT, "..", "..", "target", "release", "gents");
+  const debugBinary = resolve(APP_ROOT, "..", "..", "target", "debug", "gents");
   const binary =
     process.env.GENTS_E2E_ISSUER_GENTS?.trim() ||
-    resolve(APP_ROOT, "..", "..", "target", "release", "gents");
+    (existsSync(releaseBinary) ? releaseBinary : debugBinary);
   const home =
     process.env.GENTS_E2E_ISSUER_HOME?.trim() ||
     join(homedir(), ".gents", "iphone-e2e");

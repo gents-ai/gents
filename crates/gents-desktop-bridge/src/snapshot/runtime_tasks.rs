@@ -143,7 +143,6 @@ pub(super) fn request_backed_conversation_summaries(
     latest_requests_by_session
         .into_iter()
         .map(|(session_id, request)| {
-            let transcript = store.transcript_for_agent(&session_id, agent_did);
             let task_tag = conversation_task_tag(
                 store,
                 agent_did,
@@ -183,8 +182,8 @@ pub(super) fn request_backed_conversation_summaries(
                     .derive_turn_for_request(&latest_request_id)
                     .map(turn_state_label)
                     .map(str::to_owned),
-                message_count: transcript.messages.len(),
-                tool_call_count: transcript.tool_calls.len(),
+                message_count: None,
+                tool_call_count: None,
             }
         })
         .collect()

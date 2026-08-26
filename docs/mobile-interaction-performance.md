@@ -11,6 +11,14 @@ The source baseline is commit
 were captured from the optimization stages described below, all rooted at that
 commit, on 2026-08-25 in America/Los_Angeles.
 
+The database-owned projection-controller extension was developed from current
+`main` commit `8b0b6eb731ab1404a1e761aec57f592951c7a5c1` (`feat: add
+owner-scoped mobile mailbox (#1205)`) on 2026-08-26. Its final dirty-tree
+measurement fingerprint is
+`e86db8ae4535aa9923f2ab3bea3a0f076b521c1d7bfb22e7ca8db482a8c72ccd`.
+Its deterministic structural results are reported separately; no wall-clock or
+memory trend is claimed against the older measurement root.
+
 | Property      | Browser evidence class                                                            | Native simulator class                                         |
 | ------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | Host          | MacBook Pro `Mac17,6`, Apple M5 Max, 18 logical cores, 128 GiB                    | same                                                           |
@@ -35,16 +43,16 @@ a one-item short session, a 600-item large transcript, a 40-item transcript page
 short/large navigation cycles. IDs, text lengths, ordering, and counts are
 deterministic. Changing the shape requires a new fixture ID and a fresh baseline.
 
-| Required scenario      | Current boundary and evidence                                                                 | Current limitation                                                                                       |
-| ---------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Cold launch to shell   | native process launch to `shell-interactive`; browser navigation proxy reported separately    | only native is product launch evidence                                                                   |
-| Paired launch to index | native launch to visible `.conversation-list`; browser agent selection to 120 visible rows    | native seeded long index is future work                                                                  |
-| Cached short session   | click to visible known local message                                                          | browser projection fixture today                                                                         |
-| Large local tip        | click to visible last item of 600; record the bounded bridge page and mounted rows            | bridge projection CPU still starts from the observed in-memory store; native durable seed is future work |
+| Required scenario      | Current boundary and evidence                                                                          | Current limitation                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Cold launch to shell   | native process launch to `shell-interactive`; browser navigation proxy reported separately             | only native is product launch evidence                                                                   |
+| Paired launch to index | native launch to visible `.conversation-list`; browser agent selection to 120 visible rows             | native seeded long index is future work                                                                  |
+| Cached short session   | click to visible known local message                                                                   | browser projection fixture today                                                                         |
+| Large local tip        | click to visible last item of 600; record the bounded bridge page and mounted rows                     | bridge projection CPU still starts from the observed in-memory store; native durable seed is future work |
 | Page older             | query-level DefraDB cursor page plus bridge merge; assert the prior expensive DOM node remains mounted | deterministic browser UI merging is paired with real-node Rust integration coverage                      |
-| Sustained stream       | 50 sequential update events, each observed in the transcript                                  | deterministic adapter models event/refresh pressure, not provider token cadence                          |
-| Foreground recovery    | native correlated status stream plus observer counters; browser projects stalled then healthy | real iOS suspend/network repair awaits #1143/#893                                                        |
-| Remote hydration       | reserved fixture contract below                                                               | intentionally not implemented on this branch                                                             |
+| Sustained stream       | 50 sequential update events, each observed in the transcript                                           | deterministic adapter models event/refresh pressure, not provider token cadence                          |
+| Foreground recovery    | native correlated status stream plus observer counters; browser projects stalled then healthy          | real iOS suspend/network repair awaits #1143/#893                                                        |
+| Remote hydration       | reserved fixture contract below                                                                        | intentionally not implemented on this branch                                                             |
 
 The future `mobile-hydration-v1` fixture should seed 600 transcript documents on
 the paired server while the phone has only the session index row. Opening it must
@@ -95,7 +103,7 @@ CPU time every 250 ms. These owners make the artifact actionable:
 | commit duration and rerenders | React profiler; chat/shell owner                                                                                                      |
 | bridge bytes and frequency    | adapter call ledger/native event record; bridge/projection owner                                                                      |
 | DefraDB query/merge proxies   | observer fetched-doc, scope-reload, failure, and drop-recovery counters; desktop-core owner                                           |
-| response merge allocation    | observer in-place and copy-on-write response merge counters; desktop-core owner                                                       |
+| response merge allocation     | observer in-place and copy-on-write response merge counters; desktop-core owner                                                       |
 | materialized/rendered rows    | fixture snapshot plus DOM counts; projection/chat owner                                                                               |
 | memory high-water/growth      | simulator RSS and browser JS heap; native/UI owner respectively                                                                       |
 | CPU/energy proxy              | simulator process CPU and Chromium task duration/long tasks; no energy claim                                                          |
@@ -112,6 +120,9 @@ npm run perf:mobile -- \
   --runs=5 --output=test-results/mobile-performance/local
 
 # Requires Xcode, XcodeGen, an issuer, and an available simulator.
+# The issuer home must be initialized, have an AgentNetwork, and be served by a
+# running P2P-enabled `gents server`. The runner prefers target/release/gents and
+# falls back to target/debug/gents.
 npm run test:ui:ios:e2e -- \
   --runs=3 --measure --artifacts=test-results/mobile-performance/ios
 ```
@@ -129,25 +140,35 @@ suspension, and App Store build performance. Simulator CPU is only a proxy.
 
 ### Native validation result
 
-On the simulator environment recorded above, the `aarch64-sim` debug archive
-completed successfully, including the `native-e2e` feature and measurement
-bridge. The prompt round-trip did not produce its first app status record after
-launch, even though the app process stayed alive with the expected E2E
-environment. That run was stopped and is not a performance sample. No native
-wall-clock, RSS, CPU, or observer number is published from it. This is a harness
-defect to resolve in the iOS CI slice (#890), and demonstrates why the native
-lane must fail on an observable boundary instead of accepting a spinner or
-process liveness as success.
+On the simulator environment recorded above, the current `aarch64-sim` debug
+archive built, installed, and reached the correlated `shell-interactive` and
+`pairing` boundaries. That exercise found and fixed three harness defects: raw
+Tauri command names were not qualified with the bridge plugin, a transient
+near-zero WKWebView visual viewport could collapse the shell, and a global
+pairing error did not terminate the observable-state wait. The command now
+falls back to an available debug issuer CLI, rejects unusable viewport samples,
+resamples on page/window lifecycle events, and turns bridge/global failures into
+an explicit `failed` boundary.
+
+The round trip then established P2P connectivity and replicated the signed
+grant, but the phone truthfully rejected `BearerPairingReady` after its current
+signed endpoint differed from the endpoint bound into the acknowledgement. That
+is a sync/iOS-hardening dependency, not a successful performance sample. No
+native wall-clock, RSS, CPU, or observer distribution is published. The next
+native acceptance run must first make readiness stable across signed endpoint
+publication; #890 should run the corrected harness, while the pairing/sync
+owner should close the endpoint race without relaxing verification.
 
 ### Live inference acceptance
 
 Acceptance uses the real desktop bridge, two embedded DefraDB nodes, P2P
 replication, request persistence, the runtime completion loop, and the rendered
-React transcript. On 2026-08-25 both live lanes passed:
+React transcript. On 2026-08-26 both live lanes passed:
 
 - `npm run test:ui:live:e2e` completed a browser-to-runtime turn against the
-  deterministic local OpenAI-compatible inference server with two visible
-  transcript rows and no browser errors;
+  deterministic local OpenAI-compatible inference server, including the
+  production one-query transcript tip assertion, with two visible transcript
+  rows and no browser errors;
 - `npm run test:live:chat` completed three turns in one durable session against
   the configured real OpenAI-compatible GLM-5.2 endpoint, ending with 10
   materialized messages and two tool calls.
@@ -163,11 +184,12 @@ change is gated by the existing `install_replicators_on_bootstrap = false`
 fixture option; default product behavior is unchanged.
 
 The deterministic live lane also asserts the production transcript query path.
-The final path performs one bounded message query followed by one tool query at
-the tip (plus one cursor-resolution query for older pages), reports a
-41-message lookahead and 321-tool-row overscan limit, and materializes only
-complete sequence groups. Those counts are attached to the live smoke
-JSON/Markdown artifact.
+The final path fetches the bounded message and tool windows in one DefraDB
+GraphQL evaluation at the tip (plus one cursor-validation query for older
+pages), reports a 41-message lookahead and 321-tool-row overscan limit, and
+materializes only complete sequence groups. The atomic read prevents a live tip
+insert from producing an orphan tool group between two page queries. Those
+counts are attached to the live smoke JSON/Markdown artifact.
 
 ## Measured browser baseline
 
@@ -309,10 +331,10 @@ tools. Only a single sequence group larger than 320 tool rows fails truthfully.
 The durable 600-message DefraDB fixture returns 41 message rows for a tip page,
 93.2% fewer than the former 600-row transcript read, and materializes 40 visible
 items, 93.3% fewer than the former full projection. A tip request performs one
-bounded message query and one tool-window query. An older request first resolves
-the cursor, then performs the same two bounded queries. The cursor uses `_lt` on
-the durable sequence, so new tip inserts cannot shift or duplicate an older
-page. Equal-sequence rows remain atomic. A page containing only non-rendering
+atomic bounded GraphQL query for both message and tool windows. An older request
+first validates and resolves the cursor, then performs the same bounded query.
+The cursor uses `_lt` on the durable sequence, so new tip inserts cannot shift
+or duplicate an older page. Equal-sequence rows remain atomic. A page containing only non-rendering
 durable rows receives a synthetic durable continuation cursor instead of
 silently ending pagination, and old orphan tool groups cannot move the page
 boundary. Every lookup is scoped to the selected agent and, when present, the
@@ -330,10 +352,85 @@ is treated as evidence; future workstation reviews must use an isolated clean
 worktree and an observable readiness boundary.
 
 Modern sessions retain their exact request-owned provider context accounting.
-For legacy sessions without an `InferenceCall` accounting row, the bridge still
-derives the fallback context meter from the observed full transcript. This is a
-deliberate correctness fallback and is reported below as remaining resident
-store work, not hidden inside the page result.
+For legacy sessions without an `InferenceCall` accounting row, a tip read now
+derives the fallback meter from a short-lived, selected-session DefraDB context
+query. Those rows are dropped after projection and never join the global
+observer. This remains a potentially expensive selected-session query, but it
+is no longer permanent process residency or a second React source of truth.
+
+### Database-owned projection-controller result
+
+The process-wide observer no longer loads or retains `AgentMessage`,
+`AgentToolCall`, `AgentToolResult`, or `CompactionEntry` content during full
+bootstrap, agent-scoped reload, request refresh, or document-event handling.
+Transcript events advance the authoritative reconcile revision and increment
+`transcript_invalidations`; the selected screen responds with its bounded
+DefraDB page. A deterministic embedded-node test seeds message, tool, and
+compaction rows, proves the observer contains zero transcript-content rows, and
+then proves an ephemeral selected-session query still reads the durable source
+truthfully.
+
+The React shell now has one projection controller instead of four independent
+trailing queues plus separate selection, polling, and foreground effects. It
+coalesces mixed work, lets a full session projection supersede a live delta,
+promotes a continuity failure to one bounded database read, and refreshes the
+session index once at terminal state. The 1.5-second safety poll follows the
+live cursor; it no longer runs the full legacy context query on its healthy
+path. Unit tests deterministically fence all five behaviors without wall-clock
+assertions.
+
+Conversation summary transcript counts are now absent when no aggregate query
+was performed, rather than reporting zero from an intentionally empty observer.
+React therefore holds only the bounded selected page and live overlay needed to
+render. DefraDB remains the durable transcript source of truth.
+
+Two phone-only presentation failures are fenced at the same ownership boundary.
+The mobile shell tracks the visual viewport through bounded CSS variables,
+rejects transient unusable WKWebView dimensions, and resamples resize, scroll,
+orientation, page-show, and window-resize signals. The narrow Playwright lane
+forces a one-pixel bad sample, a keyboard-sized viewport, and recovery while
+asserting that the title and composer remain visible. Separately, a durable
+assistant prefix now owns completed content as soon as it covers the live
+overlay; an empty replacement clears that overlay immediately. The beginning
+of a streamed turn can therefore no longer remain duplicated at the tail until
+terminal state.
+
+The organization follows the ownership boundaries: the former 2,027-line query
+file is split into snapshot, agent-scope, document-patch, session-transcript,
+and focused test modules; observer state/event handling, client-store merges and
+lookups, session context/live-delta/pagination/projection, and shell projection
+lifecycle are likewise separated. Application projection implementation files
+target 400 lines or fewer (the largest focused observer test module is 386
+lines, the main session projection is 382, and the shell hook is 377), reducing
+merge hotspots for future agent work without changing provider/runtime
+semantics.
+
+### Final current-main distribution
+
+The final current-main working tree was measured with five browser-process
+samples. The first process sample is cold `n=1` evidence (355.1 ms) and is not
+included below. The table is the remaining fresh-context warm distribution
+(`n=4`) on the exact environment and dirty-tree fingerprint above. It is a new
+baseline, not a trend against the older `3b3e4dc4` stages.
+
+| Scenario                                  | median ms | p95 ms | median bridge response | median React work |
+| ----------------------------------------- | --------: | -----: | ---------------------: | ----------------: |
+| Shell proxy                               |     116.3 |  121.5 |               55.3 KiB |           13.3 ms |
+| Paired index                              |      81.5 |   82.5 |                    4 B |           33.0 ms |
+| Cached short session                      |      52.5 |   57.0 |                    0 B |           17.5 ms |
+| Large transcript tip                      |      97.2 |   97.7 |               11.1 KiB |           52.7 ms |
+| Older transcript page                     |      82.8 |   83.1 |               11.3 KiB |           37.5 ms |
+| 50 sustained updates                      |     543.8 |  604.3 |               15.9 KiB |          150.1 ms |
+| 25-event coalescing burst                 |      36.6 |   37.0 |                  712 B |           14.5 ms |
+| Foreground truthful-connected projection  |      52.2 |   63.5 |              260.1 KiB |           22.9 ms |
+| Ten repeated navigation cycles            |   1,351.9 | 1,387.1 |              158.0 KiB |          443.7 ms |
+
+All structural assertions passed: the large tip mounted 39 rows against a
+40-row limit; one prepend reached 79 against 80; the active burst used one live
+delta and zero snapshots; sustained streaming used zero session snapshots;
+fifty deltas totaled 16,319 bytes against 64 KiB; and the largest page response
+was 11,537 bytes against 16 KiB. Wall-clock and React-work values remain
+report-only.
 
 ## Initial budget policy
 
@@ -358,9 +455,15 @@ Hard CI failures are deterministic bounds:
   held-reader case must preserve the prior revision through copy-on-write.
 - a 40-item DefraDB transcript page queries at most 41 message rows and 321
   tool-call rows, materializes only complete sequence groups, and uses two
-  queries at the tip or three when resolving an older-page cursor; tool-call
+  query at the tip or two queries when resolving an older-page cursor; tool-call
   overflow marks the source as having older data, while a single group larger
   than 320 rows fails truthfully instead of being silently split.
+- full/scoped observer snapshots and observer document patches retain zero
+  message, tool-call, tool-result, and compaction rows; transcript database
+  events publish invalidations without fetching those payloads.
+- a synchronous mixed refresh wave has exactly one serialized projection owner;
+  a healthy active-session safety poll requests a live delta, and only a failed
+  continuity check promotes it to one bounded session query.
 
 Elapsed time, commit work, heap/RSS growth, CPU, and long-task values are
 reported only. A wall-clock limit requires at least 30 samples across multiple
@@ -371,22 +474,33 @@ failure is a correctness failure/state outcome, never a faster successful run.
 
 ## Evidence-backed bottlenecks and follow-ups
 
-1. **The observed store still retains historical transcript rows.** Session
-   reads and rendering are query-bounded, but bootstrap/agent reload and the
-   legacy context fallback still populate the observer's authoritative store.
-   Removing those resident rows requires a database-owned summary/count seam;
-   it must not become a second UI cache or weaken legacy context truth.
-2. **Live traffic is linear; acknowledged rendering is still per update.** The
+1. **Legacy context calculation still scans the selected transcript once.** It
+   is now ephemeral and database-owned rather than globally resident, but the
+   exact fallback token estimate remains O(selected-session messages) on tip,
+   foreground, or structural reconcile. Add a durable database-owned aggregate
+   only if it can preserve compaction/provider-view truth; do not create a UI
+   cache.
+2. **Historical `AgentResponse` rows remain in the observer.** The response
+   stream needs a small live overlay, but completed response bodies across all
+   sessions are still loaded. The next residency slice should retain only the
+   active/request-index data needed for lifecycle truth and query completed
+   content with the selected page.
+3. **Live traffic is linear; acknowledged rendering is still per update.** The
    sustained fixture now uses zero full projections and 15.9 KiB total, but it
    deliberately waits for every update to become visible and therefore records
    100 profiler entries. Measure real provider cadence before adding a
    frame-window reducer; a terminal update must always flush and revision gaps
    must always reconcile.
-3. **The entire 120-row session index renders.** The desktop snapshot is about
+4. **The entire 120-row session index renders.** The desktop snapshot is about
    55 KiB and the DOM has 120 conversation rows. Follow-up: DB-backed cursor
    pagination plus list virtualization, after preserving the eager mobile index
    contract from #1141.
-4. **Suspend/resume performance is unknown, not fast.** Add real foreground and
+5. **Foreground projection is the largest remaining browser bridge payload.**
+   The deterministic truthful-connected projection transfers 260.1 KiB. Split
+   repair/health evidence from unrelated control-plane projection only after
+   the sync owner defines the authoritative healthy/stalled/terminal boundary;
+   do not substitute UI-local status.
+6. **Suspend/resume performance is unknown, not fast.** Add real foreground and
    network-change boundaries with #1143, report truthful stalled/terminal state
    with #1144, and validate the product decision in #893 on a device.
 
@@ -402,19 +516,23 @@ Proposed follow-up issue slices, in dependency order:
 1. Add the documented remote hydration fixture on the landed #1154 foundation
    without duplicating its lifecycle; accepted hydration merges must advance
    the authoritative reconcile revision.
-2. Split resident transcript summaries/counts from on-demand content reads in
-   the observer; acceptance: cold bootstrap memory is independent of transcript
-   content bytes while legacy context accounting remains truthful.
+2. Replace the ephemeral legacy context scan with a truthful database-owned
+   aggregate, then bound observer `AgentResponse` residency to active requests;
+   acceptance: bootstrap memory is independent of historical transcript and
+   completed-response content bytes.
 3. Measure a terminal-flushing frame cadence reducer on real provider streams;
    acceptance: fewer commits without losing any acknowledged terminal or
    reconcile state.
 4. Add cursor-backed session-index virtualization; acceptance: 1,000 durable
    index rows keep bridge and mounted-row counts bounded without a second cache.
-5. Extend `mobile-hydration-v1` after #1142/#1143 and expose truthful progress
+5. Stabilize signed endpoint publication across bearer readiness before the
+   acknowledgement is accepted; acceptance: the corrected native lane reaches
+   paired index repeatedly without relaxing issuer/claimant/endpoint checks.
+6. Extend `mobile-hydration-v1` after #1142/#1143 and expose truthful progress
    after #1144.
-6. Put the native build/smoke artifact on the macOS runner under #890, then
+7. Put the native build/smoke artifact on the macOS runner under #890, then
    establish simulator wall-clock distributions.
-7. Fail measurement classification loudly on pair-time schema skew and surface
+8. Fail measurement classification loudly on pair-time schema skew and surface
    merge rejection with #1122; schema-incompatible runs are invalid performance
    samples.
 
@@ -430,11 +548,15 @@ desktop-core stage removes all 50 uncontended whole-store rebuilds structurally.
 The final query stage reduces the durable 600-message page read to 41 message
 rows and the visible projection to at most 40 sequence-atomic items. Tool reads
 use 321-row overscan, defer incomplete groups instead of failing long sessions,
-and retain a cursor even when a durable window renders no visible item. Native
-wall-clock and memory impact remain
-intentionally unclaimed until the native lane produces a valid distribution.
-Native cold launch, observer resident-transcript memory, suspend repair, device
-memory/energy, and remote hydration remain unknown until their named lanes or
-dependencies exist. This track is ready to merge as measurement infrastructure
-plus independently fenced optimizations; hydration integration and resident
-store reduction remain separate follow-up work.
+and retain a cursor even when a durable window renders no visible item. The
+database-owned extension then removes all historical transcript-content rows
+from the global observer and replaces competing React refresh owners with one
+bounded controller. Native wall-clock and memory impact remain intentionally
+unclaimed until the native lane produces a valid distribution. Native cold
+launch, ephemeral legacy context-query cost, completed-response residency,
+suspend repair, device memory/energy, and remote hydration remain unknown until
+their named lanes or dependencies exist. The next smallest major optimization
+slice is to remove completed `AgentResponse` bodies from global observer
+residency and replace the legacy selected-session context scan with a truthful
+database-owned aggregate; together those make bootstrap memory independent of
+historical transcript size without creating a second cache.

@@ -150,10 +150,10 @@ pub use session::attach_last_request_context;
 pub use session::build_session_live_delta;
 #[cfg(test)]
 pub(crate) use session::build_session_live_delta_from_store;
-pub use session::build_session_snapshot_for_agent;
 pub use session::build_session_snapshot_for_agent_with_transcript;
 #[cfg(test)]
 pub use session::build_session_snapshot_from_store;
+#[cfg(test)]
 pub use session::build_session_snapshot_from_store_for_agent;
 
 pub async fn build_client_snapshot_with_grants(

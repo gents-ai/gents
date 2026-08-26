@@ -3,13 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import {
   applySessionLiveDelta,
-  createTrailingRefreshQueue,
   desktopUpdateRefreshScope,
   dismissMailboxItemAndClearMatchingRoute,
-  mergeOlderSessionTimelinePage,
-  mergeSessionTipSnapshot,
   sessionLiveDeltaRequest,
 } from "../src/hooks/desktopShellRuntime";
+import {
+  mergeOlderSessionTimelinePage,
+  mergeSessionTipSnapshot,
+} from "../src/hooks/desktopTimelinePaging";
 
 function deferred() {
   let resolve!: () => void;
@@ -19,61 +20,13 @@ function deferred() {
   return { promise, resolve };
 }
 
-describe("createTrailingRefreshQueue", () => {
-  it("collapses a same-turn burst and retains one update received during refresh", async () => {
-    const passes = [deferred(), deferred()];
-    let active = 0;
-    let maxActive = 0;
-    const refresh = vi.fn(async () => {
-      const pass = passes[refresh.mock.calls.length - 1];
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      await pass.promise;
-      active -= 1;
-    });
-    const queue = createTrailingRefreshQueue(refresh);
-
-    const first = queue.request();
-    const second = queue.request();
-    const third = queue.request();
-    expect(refresh).toHaveBeenCalledTimes(0);
-    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
-    const duringRefresh = queue.request();
-
-    passes[0].resolve();
-    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
-    expect(maxActive).toBe(1);
-
-    passes[1].resolve();
-    await Promise.all([first, second, third, duringRefresh]);
-    expect(refresh).toHaveBeenCalledTimes(2);
-    expect(maxActive).toBe(1);
-  });
-
-  it("drops a queued trailing refresh when disposed", async () => {
-    const pass = deferred();
-    const refresh = vi.fn(() => pass.promise);
-    const queue = createTrailingRefreshQueue(refresh);
-
-    const active = queue.request();
-    void queue.request();
-    queue.dispose();
-    pass.resolve();
-    await active;
-
-    expect(refresh).toHaveBeenCalledTimes(1);
-    await queue.request();
-    expect(refresh).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("desktopUpdateRefreshScope", () => {
   it("keeps health, active-turn, and general store reads separate", () => {
     expect(desktopUpdateRefreshScope("health", "session-1", "request-1")).toBe(
       "snapshot",
     );
     expect(desktopUpdateRefreshScope("store", "session-1", "request-1")).toBe(
-      "session",
+      "sessionEvent",
     );
     expect(desktopUpdateRefreshScope("store", "session-1", "request-1", true)).toBe(
       "sessionDelta",
@@ -167,6 +120,123 @@ describe("live session deltas", () => {
     });
     expect(next?.activeResponseOverlay?.content).toBe("hello world");
     expect(next?.timelineItems[0]).toBe(historical);
+    expect(next?.timelineItems.at(-1)).toMatchObject({ content: "hello world" });
+  });
+
+  it("removes a reset live tail between tool-loop assistant turns", () => {
+    const current = session(["k1"], null);
+    current.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
+    current.latestResponse = {
+      status: "streaming",
+      content: "stale opening prefix",
+      reasoning: null,
+      errorMessage: null,
+      tokenCount: null,
+      materializedMessageSequence: null,
+      materializedAt: null,
+      interruptedAt: null,
+      completedAt: null,
+    };
+    current.activeResponseOverlay = { ...current.latestResponse };
+    current.timelineItems.push({
+      kind: "liveAssistant",
+      itemKey: "live-assistant",
+      content: "stale opening prefix",
+      reasoning: null,
+    });
+
+    const next = applySessionLiveDelta(current, {
+      outcome: "delta",
+      revision: { storeVersion: 8, reconcileVersion: 3 },
+      requestId: "request-1",
+      progressSeq: 3,
+      turnState: "streaming",
+      status: "streaming",
+      content: {
+        mode: "replace",
+        value: "",
+        byteLen: 0,
+        hash: "811c9dc5",
+      },
+      reasoning: {
+        mode: "unchanged",
+        value: "",
+        byteLen: 0,
+        hash: "811c9dc5",
+      },
+    });
+
+    expect(next?.activeResponseOverlay).toBeNull();
+    expect(next?.timelineItems).toHaveLength(1);
+    expect(next?.timelineItems[0].itemKey).toBe("k1");
+  });
+
+  it("keeps a loaded older page when a live delta arrives", () => {
+    const current = session(["k8"], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 1,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k8",
+      newestItemKey: "k8",
+    });
+    current.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
+    current.latestResponse = {
+      status: "streaming",
+      content: "hello",
+      reasoning: null,
+      errorMessage: null,
+      tokenCount: null,
+      materializedMessageSequence: null,
+      materializedAt: null,
+      interruptedAt: null,
+      completedAt: null,
+    };
+    current.activeResponseOverlay = { ...current.latestResponse };
+    current.timelineItems.push({
+      kind: "liveAssistant",
+      itemKey: "live-assistant",
+      content: "hello",
+      reasoning: null,
+    });
+    const older = session(["k1"], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: true,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    const withOlder = mergeOlderSessionTimelinePage(current, older);
+
+    const next = applySessionLiveDelta(withOlder, {
+      outcome: "delta",
+      revision: { storeVersion: 8, reconcileVersion: 3 },
+      requestId: "request-1",
+      progressSeq: 2,
+      turnState: "streaming",
+      status: "streaming",
+      content: {
+        mode: "append",
+        value: " world",
+        byteLen: 11,
+        hash: "d58b3fa7",
+      },
+      reasoning: {
+        mode: "unchanged",
+        value: "",
+        byteLen: 0,
+        hash: "811c9dc5",
+      },
+    });
+
+    expect(next?.timelineItems.map((item) => item.itemKey)).toEqual([
+      "k1",
+      "k8",
+      "live-assistant",
+    ]);
     expect(next?.timelineItems.at(-1)).toMatchObject({ content: "hello world" });
   });
 
@@ -325,6 +395,78 @@ describe("session timeline page merging", () => {
       "k5",
     ]);
     expect(merged.status).toBe("processing");
+    expect(merged.timelinePage?.hasOlder).toBe(false);
+  });
+
+  it("advances through an older page containing only hidden durable rows", () => {
+    const current = session(["k8", "k9"], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 2,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k8",
+      newestItemKey: "k9",
+    });
+    const older = session([], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 0,
+      hasOlder: true,
+      hasNewer: true,
+      oldestItemKey: "tools-7",
+      newestItemKey: "tools-7",
+    });
+
+    const merged = mergeOlderSessionTimelinePage(current, older);
+
+    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual(["k8", "k9"]);
+    expect(merged.timelinePage?.oldestItemKey).toBe("tools-7");
+    expect(merged.timelinePage?.hasOlder).toBe(true);
+
+    const refreshedTip = session(["k8", "k9"], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 2,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k8",
+      newestItemKey: "k9",
+    });
+    const afterTipRefresh = mergeSessionTipSnapshot(merged, refreshedTip);
+    expect(afterTipRefresh.timelinePage?.oldestItemKey).toBe("tools-7");
+    expect(afterTipRefresh.timelinePage?.hasOlder).toBe(true);
+  });
+
+  it("keeps an exhausted older-page boundary across a tip refresh", () => {
+    const current = session(["k1", "k2", "k8", "k9"], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 4,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k9",
+    });
+    const refreshedTip = session(["k8", "k9"], {
+      totalItems: -1,
+      totalItemsExact: false,
+      pageItems: 2,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k8",
+      newestItemKey: "k9",
+    });
+
+    const merged = mergeSessionTipSnapshot(current, refreshedTip);
+
+    expect(merged.timelineItems.map((item) => item.itemKey)).toEqual([
+      "k1",
+      "k2",
+      "k8",
+      "k9",
+    ]);
+    expect(merged.timelinePage?.oldestItemKey).toBe("k1");
     expect(merged.timelinePage?.hasOlder).toBe(false);
   });
 });

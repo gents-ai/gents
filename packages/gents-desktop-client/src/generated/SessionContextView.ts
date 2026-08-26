@@ -8,4 +8,9 @@ import type { SessionRequestContextView } from "./SessionRequestContextView.js";
  * remaining fields project the durable conversation and remain available as
  * a fallback for sessions created before request accounting was introduced.
  */
-export type SessionContextView = { estimatedDurableTokens: number, estimatedConversationTokens: number, contextWindow: number, compactionThreshold: number, compactionThresholdTokens: number, compactionStrategy: string, durableMessageCount: number, providerMessageCount: number, totalCompactedMessages: number, compactions: Array<SessionCompactionView>, lastRequest: SessionRequestContextView | null, };
+export type SessionContextView = {
+/**
+ * True when the durable transcript/context rows were read to exhaustion.
+ * False means the remaining fields describe only the bounded visible page.
+ */
+transcriptTotalsExact?: boolean | null, estimatedDurableTokens: number, estimatedConversationTokens: number, contextWindow: number, compactionThreshold: number, compactionThresholdTokens: number, compactionStrategy: string, durableMessageCount: number, providerMessageCount: number, totalCompactedMessages: number, compactions: Array<SessionCompactionView>, lastRequest: SessionRequestContextView | null, };

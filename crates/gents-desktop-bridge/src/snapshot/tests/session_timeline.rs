@@ -313,6 +313,24 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
     );
     assert_eq!(replaced.content.expect("replacement").mode, "replace");
 
+    let cleared_store = make_streaming_store_with_response_content("");
+    let cleared = build_session_live_delta_from_store(
+        &cleared_store,
+        revision,
+        "sess-1",
+        Some("did:test:amy"),
+        "req-1",
+        4,
+        5,
+        &test_live_text_hash("hello"),
+        0,
+        &test_live_text_hash(""),
+    );
+    let cleared_content = cleared.content.expect("cleared content patch");
+    assert_eq!(cleared_content.mode, "replace");
+    assert!(cleared_content.value.is_empty());
+    assert_eq!(cleared_content.byte_len, 0);
+
     let fenced = build_session_live_delta_from_store(
         &store,
         revision,
