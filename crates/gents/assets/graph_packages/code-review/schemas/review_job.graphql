@@ -1,0 +1,14 @@
+type CodeReviewJob {
+  run_id: String @index(unique: true) @immutable
+  repository_path: String
+  base_ref: String
+  head_ref: String
+  workspace_id: String
+  workspace_authority: String
+  workspace_owner_deployment_id: String
+  lens_count: String
+  lens_min: String
+  lens_max: String
+  pr_number: String
+  focus: String
+}

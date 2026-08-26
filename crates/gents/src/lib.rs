@@ -31,6 +31,7 @@ pub mod error;
 pub mod event_delivery_contract;
 pub mod external_adapter_capture;
 pub mod goal;
+pub mod graph_package;
 pub mod graph_pipeline;
 pub mod graphql;
 pub mod health_checker;

@@ -70,6 +70,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_mailbox_vocabularies_and_machine_match_lean_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::graph_pipeline::generated_revision_gate_cases_fence_publication_and_start_readiness",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/graph_pipeline.rs",
+            module_path: "conformance::graph_pipeline",
+            function: "generated_revision_gate_cases_fence_publication_and_start_readiness",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::graph_pipeline::generated_run_terminal_cases_fence_completion_cas",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/graph_pipeline.rs",
+            module_path: "conformance::graph_pipeline",
+            function: "generated_run_terminal_cases_fence_completion_cas",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance/goals.rs",

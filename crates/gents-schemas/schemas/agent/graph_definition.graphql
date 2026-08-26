@@ -1,7 +1,9 @@
 type GraphDefinition @branchable {
     graph_id: String @index(unique: true) @immutable
     owner_did: String @index @immutable
-    digest: String @index @immutable
-    plan_json: String @immutable
+    enabled: Boolean
+    active_revision_digest: String @index
+    generation: Int
     created_at: DateTime @index(direction: DESC) @immutable
+    updated_at: DateTime @index(direction: DESC)
 }

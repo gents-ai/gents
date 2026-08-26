@@ -1,0 +1,7 @@
+type CodeReviewTriageReport {
+  run_id: String @index(unique: true) @immutable
+  high_priority_count: String
+  confirmed_count: String
+  refuted_count: String
+  summary: String
+}

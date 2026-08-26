@@ -121,6 +121,7 @@ mod tests {
     use super::*;
     use crate::graph_pipeline::{
         EntryBinding, GraphLimits, GraphNode, PortCardinality, PortRef, PortSpec,
+        ResultCardinality, ResultContract,
     };
 
     #[derive(Deserialize)]
@@ -208,16 +209,28 @@ mod tests {
                 name: "input".to_owned(),
                 collection: "PipelineInput".to_owned(),
                 schema: "PipelineInput/v1".to_owned(),
+                input_contract: None,
                 to: PortRef {
                     node_id: "worker".to_owned(),
                     port: "input".to_owned(),
                 },
+            }],
+            results: vec![ResultContract {
+                name: "result".to_owned(),
+                from: PortRef {
+                    node_id: "worker".to_owned(),
+                    port: "result".to_owned(),
+                },
+                cardinality: ResultCardinality::Exactly { count: 1 },
+                terminal: true,
             }],
             limits: GraphLimits {
                 max_nodes: 2,
                 max_edges: 2,
                 max_depth: 2,
                 max_fan_out: 2,
+                max_total_invocations: 2,
+                max_runtime_secs: 60,
             },
         }
     }
@@ -226,6 +239,10 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         for schema in [
             gents_protocol::schemas::GRAPH_DEFINITION,
+            gents_protocol::schemas::GRAPH_REVISION,
+            gents_protocol::schemas::GRAPH_RUN,
+            gents_protocol::schemas::AGENT_REQUEST,
+            gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
             gents_protocol::schemas::TASK,
             gents_protocol::schemas::EVENT_TRIGGER,
         ] {

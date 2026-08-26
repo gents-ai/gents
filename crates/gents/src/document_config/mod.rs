@@ -1,6 +1,8 @@
 mod behavior;
 mod datastore_tool_surface;
 mod event_trigger;
+mod graph_definition;
+mod graph_run;
 mod graphql_fields;
 mod inference_profile;
 mod principal;
@@ -67,6 +69,10 @@ pub(crate) use event_trigger::{
     list_event_trigger_records, load_event_trigger_by_doc_id, update_event_trigger_runtime_fields,
     EventTrigger, EventTriggerRuntimeUpdate,
 };
+pub(crate) use graph_definition::{
+    list_graph_definition_records, load_graph_definition_by_doc_id, GraphDefinition,
+};
+pub(crate) use graph_run::{list_graph_run_pin_records, load_graph_run_pin_by_doc_id, GraphRunPin};
 #[allow(unused_imports)]
 pub(crate) use schedule::{
     list_schedule_records, load_schedule_by_doc_id, load_schedule_next_run_at,
