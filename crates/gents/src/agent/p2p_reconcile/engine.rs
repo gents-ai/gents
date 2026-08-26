@@ -1701,7 +1701,15 @@ pub fn merge_layered_desired(
         (Some(desired), None) | (None, Some(desired)) => Some(desired),
         (Some(mut left), Some(right)) => {
             left.collections.extend(right.collections);
-            left.replicator_addresses.extend(right.replicator_addresses);
+            // A materialized data-plane layer is derived from the peer's
+            // currently verified signed endpoint. It supersedes the bootstrap
+            // address captured by the bearer claim, which may have rotated
+            // while the claimant was bringing up its embedded node. Unioning
+            // both bindings keeps a dead replicator desired and prevents exact
+            // bearer readiness from ever being earned.
+            if !right.replicator_addresses.is_empty() {
+                left.replicator_addresses = right.replicator_addresses;
+            }
             left.replicator_collections
                 .extend(right.replicator_collections);
             left.replicator_filter.extend(right.replicator_filter);

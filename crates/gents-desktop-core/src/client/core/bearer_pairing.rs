@@ -161,11 +161,12 @@ impl ClientCore {
         .await?;
         wait_for_bearer_readiness(
             self.node.as_ref(),
+            &self.p2p,
             &self.principal,
             &token.issuer_did,
             &token.network_id,
             &token.template,
-            &local_endpoint,
+            local_endpoint,
             BEARER_GRANT_TIMEOUT,
         )
         .await?;
@@ -219,26 +220,69 @@ impl ClientCore {
 
 async fn wait_for_bearer_readiness(
     node: &EmbeddedNode,
+    p2p: &Arc<dyn P2POps>,
     identity: &dyn AgentIdentity,
     issuer_did: &str,
     network_id: &str,
     template: &str,
-    local_endpoint: &EndpointRecord,
+    mut published_endpoint: EndpointRecord,
     wait_timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + wait_timeout;
     loop {
+        // Installing the replicator can teach Iroh a better shareable address.
+        // Keep the signed control-plane row aligned with that live binding and
+        // never accept an acknowledgement for the endpoint captured before the
+        // replicator was installed.
+        if let Err(error) =
+            refresh_published_endpoint_if_rotated(node, p2p, identity, &mut published_endpoint)
+                .await
+        {
+            tracing::warn!(
+                target: "gents_desktop_core::bearer_pairing",
+                error = %error,
+                "could not revalidate the current signed endpoint; bearer readiness will retry"
+            );
+            if Instant::now() >= deadline {
+                return Err(error).context(
+                    "timed out while revalidating the current signed endpoint for bearer readiness",
+                );
+            }
+            sleep(BEARER_GRANT_POLL_INTERVAL).await;
+            continue;
+        }
+
         if observe_bearer_pairing_readiness(
             node,
             identity,
             issuer_did,
             network_id,
             template,
-            local_endpoint,
+            &published_endpoint,
         )
         .await?
         {
-            return Ok(());
+            // Close the window where the transport rotates after the query but
+            // before readiness is persisted. A rotated endpoint is published
+            // and must receive its own issuer-signed acknowledgement.
+            match refresh_published_endpoint_if_rotated(
+                node,
+                p2p,
+                identity,
+                &mut published_endpoint,
+            )
+            .await
+            {
+                Ok(false) => return Ok(()),
+                Ok(true) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        target: "gents_desktop_core::bearer_pairing",
+                        error = %error,
+                        "could not close the signed-endpoint readiness window; bearer readiness will retry"
+                    );
+                }
+            }
         }
 
         if Instant::now() >= deadline {
@@ -769,14 +813,49 @@ pub(super) async fn publish_local_endpoint(
     p2p: &Arc<dyn P2POps>,
     identity: &dyn AgentIdentity,
 ) -> Result<EndpointRecord> {
-    let mut record = current_local_endpoint(p2p, identity).await?;
+    let record = current_local_endpoint(p2p, identity).await?;
+    publish_endpoint_record(node, identity, record).await
+}
+
+async fn publish_endpoint_record(
+    node: &EmbeddedNode,
+    identity: &dyn AgentIdentity,
+    mut record: EndpointRecord,
+) -> Result<EndpointRecord> {
     record.sig = identity
         .sign(&record.signing_payload())
         .await
         .context("signing desktop PeerEndpoint")?;
-    let response = node.execute(&peer_endpoint_upsert_mutation(&record)).await;
-    ensure_no_errors(&response, "publishing desktop PeerEndpoint")?;
+    gents::graphql::graphql_mutation_with_transaction_retry(
+        node,
+        &peer_endpoint_upsert_mutation(&record),
+        "publishing desktop PeerEndpoint",
+    )
+    .await?;
     Ok(record)
+}
+
+pub(super) fn endpoint_binding_matches(left: &EndpointRecord, right: &EndpointRecord) -> bool {
+    left.node_id == right.node_id && left.address == right.address
+}
+
+pub(super) async fn refresh_published_endpoint_if_rotated(
+    node: &EmbeddedNode,
+    p2p: &Arc<dyn P2POps>,
+    identity: &dyn AgentIdentity,
+    published_endpoint: &mut EndpointRecord,
+) -> Result<bool> {
+    let current_endpoint = current_local_endpoint(p2p, identity).await?;
+    if endpoint_binding_matches(published_endpoint, &current_endpoint) {
+        return Ok(false);
+    }
+
+    *published_endpoint = publish_endpoint_record(node, identity, current_endpoint).await?;
+    tracing::info!(
+        target: "gents_desktop_core::bearer_pairing",
+        "republished signed endpoint after the local P2P binding rotated"
+    );
+    Ok(true)
 }
 
 pub(super) async fn current_local_endpoint(
@@ -1233,6 +1312,48 @@ mod tests {
         .await
         .expect_err("stale endpoint acknowledgement");
         assert!(error.to_string().contains("current signed endpoint"));
+
+        let mut rotated_record = record;
+        rotated_record.address = rotated_endpoint.address.clone();
+        rotated_record.acknowledged_at =
+            (now + chrono::Duration::seconds(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        rotated_record.sig = identity
+            .sign(&rotated_record.signing_payload())
+            .expect("sign rotated readiness");
+        let rotated_row = BearerPairingReadyObservationRow {
+            address: Some(rotated_record.address.clone()),
+            acknowledged_at: Some(rotated_record.acknowledged_at.clone()),
+            issuer_sig: Some(bs58::encode(&rotated_record.sig).into_string()),
+            ..row
+        };
+        verify_bearer_pairing_ready_row(
+            &identity,
+            identity.did(),
+            &rotated_endpoint.did,
+            "conversation",
+            &rotated_endpoint,
+            &rotated_row,
+        )
+        .await
+        .expect("rotated endpoint acknowledgement");
+    }
+
+    #[test]
+    fn endpoint_rotation_ignores_heartbeat_only_changes() {
+        let endpoint = EndpointRecord {
+            did: "did:key:phone".into(),
+            node_id: "phone-node".into(),
+            address: "phone-ticket".into(),
+            updated_at: "2026-08-26T10:00:00Z".into(),
+            sig: vec![1],
+        };
+        let mut heartbeat = endpoint.clone();
+        heartbeat.updated_at = "2026-08-26T10:00:30Z".into();
+        heartbeat.sig = vec![2];
+        assert!(endpoint_binding_matches(&endpoint, &heartbeat));
+
+        heartbeat.address = "rotated-ticket".into();
+        assert!(!endpoint_binding_matches(&endpoint, &heartbeat));
     }
 
     #[test]

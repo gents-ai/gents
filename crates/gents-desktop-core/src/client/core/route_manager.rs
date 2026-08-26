@@ -461,7 +461,7 @@ impl ClientRouteManager {
                     target: "gents_desktop_core::pairing_reconcile",
                     directory_peer_id = %record.peer_id,
                     label = %record.label,
-                    error = %error,
+                    error = %format_args!("{error:#}"),
                     "client route reconcile tick failed"
                 );
                 return RouteReconcileState::Unavailable;

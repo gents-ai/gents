@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -366,13 +366,32 @@ impl Default for GraphqlRequestOptions {
     }
 }
 
+static GRAPHQL_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn graphql_http_client() -> Result<&'static reqwest::Client> {
+    if let Some(client) = GRAPHQL_HTTP_CLIENT.get() {
+        return Ok(client);
+    }
+
+    let client = reqwest::Client::builder()
+        .build()
+        .context("building shared GraphQL HTTP client")?;
+    // Concurrent first callers may both construct a client. Only the winner is
+    // retained; all callers use that same client from this point onward.
+    let _ = GRAPHQL_HTTP_CLIENT.set(client);
+    GRAPHQL_HTTP_CLIENT
+        .get()
+        .ok_or_else(|| anyhow!("shared GraphQL HTTP client was not initialized"))
+}
+
 pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOptions) -> bool {
-    let client = match reqwest::Client::builder().timeout(options.timeout).build() {
+    let client = match graphql_http_client() {
         Ok(client) => client,
         Err(_) => return false,
     };
     match client
         .post(graphql)
+        .timeout(options.timeout)
         .json(&serde_json::json!({ "query": "{ __typename }" }))
         .send()
         .await
@@ -396,14 +415,13 @@ pub async fn execute_graphql_async_with_tx(
     options: GraphqlRequestOptions,
     txn_id: Option<&str>,
 ) -> Result<serde_json::Value> {
-    let client = reqwest::Client::builder()
-        .timeout(options.timeout)
-        .build()?;
+    let client = graphql_http_client()?;
     let mut last_error = None;
 
     for attempt in 0..options.max_attempts.max(1) {
         let mut request = client
             .post(graphql)
+            .timeout(options.timeout)
             .json(&serde_json::json!({ "query": query }));
         if let Some(id) = txn_id {
             request = request.header("x-defradb-tx", id);
@@ -1066,6 +1084,14 @@ fn graphql_string_literal(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graphql_http_client_is_reused() {
+        let first = graphql_http_client().expect("build shared GraphQL HTTP client");
+        let second = graphql_http_client().expect("reuse shared GraphQL HTTP client");
+
+        assert!(std::ptr::eq(first, second));
+    }
 
     #[test]
     fn turn_state_parser_derives_completed() {

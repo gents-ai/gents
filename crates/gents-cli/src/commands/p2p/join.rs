@@ -16,7 +16,8 @@ use crate::request_helpers::parse_duration_suffix;
 use crate::{graphql_rows, print_json, resolve_config_access, resolve_graphql_endpoint};
 
 use super::invite::resolve_home_identity;
-use super::network_admin::{load_membership_record, load_optional_network_record};
+use super::membership_records::load_membership_record;
+use super::network_records::load_optional_network_record;
 use super::pairings::{
     complement_subagent_template, peer_pairing_exists, resolve_pairing_template,
     wait_for_pairing_connected, write_layered_join_desired,

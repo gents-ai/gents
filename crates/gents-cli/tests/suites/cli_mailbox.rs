@@ -46,9 +46,9 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
         did = escape_graphql_string(&agent_did),
     );
     let created = graphql_query(&graphql, &mutation).await?;
-    let doc_id = created["data"]["create_MailboxItem"]["_docID"]
+    let doc_id = created["data"]["add_MailboxItem"][0]["_docID"]
         .as_str()
-        .context("created mailbox doc id")?;
+        .with_context(|| format!("created mailbox doc id from response {created}"))?;
 
     let listed = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
     let rows = listed.as_array().context("mailbox list array")?;

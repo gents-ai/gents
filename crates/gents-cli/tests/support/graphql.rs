@@ -1,8 +1,8 @@
-use anyhow::{anyhow, bail, Context, Result};
-use gents::retry::{
-    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
-    DEFRA_DB_CONFLICT_MAX_RETRIES,
-};
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Result};
+use gents::retry::{DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS, DEFRA_DB_CONFLICT_MAX_RETRIES};
+use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::Value;
 
 // Re-export the canonical escaper instead of duplicating it, so test-support
@@ -10,26 +10,16 @@ use serde_json::Value;
 pub use gents::graphql::escape_graphql_string;
 
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
-    let client = reqwest::Client::new();
-    for attempt in 0..=DEFRA_DB_CONFLICT_MAX_RETRIES {
-        let response = client
-            .post(graphql)
-            .json(&serde_json::json!({ "query": query }))
-            .send()
-            .await
-            .with_context(|| format!("posting GraphQL to {graphql}"))?;
-        let value: Value = response.json().await.context("decoding GraphQL response")?;
-        if let Some(errors) = value.get("errors") {
-            let transient = is_defradb_transaction_conflict_text(&errors.to_string());
-            if transient && attempt < DEFRA_DB_CONFLICT_MAX_RETRIES {
-                tokio::time::sleep(defradb_conflict_retry_backoff(attempt)).await;
-                continue;
-            }
-            bail!("graphql returned errors: {errors}");
-        }
-        return Ok(value);
-    }
-    unreachable!("graphql_query loop always returns or bails within MAX_ATTEMPTS")
+    execute_graphql_async(
+        graphql,
+        query,
+        GraphqlRequestOptions {
+            timeout: Duration::from_secs(30),
+            max_attempts: DEFRA_DB_CONFLICT_MAX_RETRIES as usize + 1,
+            retry_backoff: Duration::from_millis(DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS),
+        },
+    )
+    .await
 }
 
 pub fn first_graphql_row<'a>(response: &'a Value, field: &str) -> Result<&'a Value> {

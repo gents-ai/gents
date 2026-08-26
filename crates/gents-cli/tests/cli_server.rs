@@ -1241,6 +1241,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
     )?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     assert_runtime_init_state(
         &graphql,

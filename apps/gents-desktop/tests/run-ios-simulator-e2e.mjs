@@ -20,6 +20,10 @@ const STATUS_FILENAME = "native-e2e-status.json";
 const EVENTS_FILENAME = "native-e2e-events.jsonl";
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_POST_PASS_STABILITY_MS = 30_000;
+const nativeE2eBuildEnv = {
+  ...process.env,
+  VITE_GENTS_NATIVE_E2E: "1",
+};
 
 const args = new Set(process.argv.slice(2));
 const skipBuild = args.has("--skip-build");
@@ -365,7 +369,7 @@ const appBundle =
   join(APPLE_ROOT, "build", "arm64-sim", "Gents.app");
 
 if (!skipBuild) {
-  run("npm", ["run", "build"]);
+  run("npm", ["run", "build"], { env: nativeE2eBuildEnv });
   const priorTauriBuild = join(APPLE_ROOT, "build");
   if (existsSync(priorTauriBuild)) {
     renameSync(priorTauriBuild, join(artifactRoot, "prior-tauri-build"));
@@ -388,7 +392,7 @@ if (!skipBuild) {
       "--features",
       "native-e2e",
     ],
-    { cwd: APP_ROOT },
+    { cwd: APP_ROOT, env: nativeE2eBuildEnv },
   );
 }
 

@@ -3392,10 +3392,6 @@ mod tests {
             ("defend-scan", "DefenseReviewArea"),
             ("defend-verifier", "DefenseVerificationAssignment"),
             ("defend-contract-review", "DefenseRootCauseCluster"),
-            ("defend-patch", "DefensePatchAssignment"),
-            ("defend-patch-validation", "DefensePatchCandidate"),
-            ("defend-patch-review", "DefensePatchValidation"),
-            ("defend-patch-security-review", "DefensePatchReview"),
         ] {
             let source = manifest
                 .expect
@@ -3405,6 +3401,23 @@ mod tests {
             assert_eq!(source.collection, collection);
             assert_eq!(source.correlation_field, "run_id");
             assert_eq!(source.expected_count_field, "expected_total");
+        }
+
+        for trigger in [
+            "defend-patch",
+            "defend-patch-validation",
+            "defend-patch-review",
+            "defend-patch-security-review",
+        ] {
+            let source = manifest
+                .expect
+                .trigger_request_count_sources
+                .get(trigger)
+                .unwrap_or_else(|| panic!("{trigger} should have a count source"));
+            assert_eq!(source.collection, "DefensePatchAssignment");
+            assert_eq!(source.correlation_field, "run_id");
+            assert_eq!(source.match_field.as_deref(), Some("status"));
+            assert_eq!(source.match_value.as_deref(), Some("ready"));
         }
 
         let fan_in = manifest.expect.fan_in.as_ref().expect("fan-in contract");
@@ -3439,7 +3452,7 @@ mod tests {
             ),
             (
                 "defend-patch-validation",
-                "DefensePatchCandidate",
+                "WorkspaceReceipt",
                 "per_document",
             ),
             (
@@ -3637,10 +3650,10 @@ mod tests {
                 .get("fields")
                 .and_then(Value::as_array)
                 .is_some_and(|fields| fields.iter().any(|field| {
-                    field.get("name").and_then(Value::as_str) == Some("reason")
+                    field.get("name").and_then(Value::as_str) == Some("status")
                         && field.get("required").and_then(Value::as_bool) == Some(true)
                 })),
-            "verification completions must durably explain blocked handoffs"
+            "verification completions must durably close every handoff"
         );
         let verdict_write = verifier_surface
             .get("entries")
@@ -4028,16 +4041,16 @@ mod tests {
             (
                 "defend-patch-task",
                 "defend-patch-io",
-                "DefensePatchAssignment",
-                "{{ doc.assignment_id }}",
-                "read_defense_patch_assignment",
+                "WorkspaceReceipt",
+                "{{ doc.work_unit_id }}",
+                "read_workspace_receipt",
             ),
             (
                 "defend-patch-validation-task",
                 "defend-patch-validation-writes",
-                "DefensePatchCandidate",
-                "{{ doc.diff }}",
-                "read_defense_patch_candidate",
+                "WorkspaceReceipt",
+                "{{ doc.seal_hash }}",
+                "read_workspace_receipt",
             ),
             (
                 "defend-patch-review-task",

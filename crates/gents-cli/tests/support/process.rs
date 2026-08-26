@@ -311,6 +311,7 @@ pub fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new(cli_bin())
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
+        .current_dir(home_dir)
         .args(args)
         .output()
         .with_context(|| format!("running gents {}", args.join(" ")))?;

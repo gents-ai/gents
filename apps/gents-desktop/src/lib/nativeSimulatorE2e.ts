@@ -1,6 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
 import { bridgeCommand } from "@source-inc/gents-desktop-client";
 
+import {
+  conversationRowCount,
+  findAgentChatButton,
+  findAssistantResponseMarker,
+  findNewChatButton,
+  findPairingReadyStatus,
+  isConversationTurnSettled,
+} from "./nativeSimulatorE2eDom";
+
+export {
+  conversationRowCount,
+  findAgentChatButton,
+  findAssistantResponseMarker,
+  findNewChatButton,
+  findPairingReadyStatus,
+  isConversationTurnSettled,
+} from "./nativeSimulatorE2eDom";
+
 type NativeE2eConfig = {
   agentLabel: string;
   pairToken: string;
@@ -37,7 +55,12 @@ type TauriBridgeWindow = Window & {
 let activeRun: Promise<void> | null = null;
 let activeConfig: NativeE2eConfig | null = null;
 
-export function startNativeSimulatorE2e(): Promise<void> {
+export function startNativeSimulatorE2e(
+  enabled = import.meta.env.VITE_GENTS_NATIVE_E2E === "1",
+): Promise<void> {
+  if (!enabled) {
+    return Promise.resolve();
+  }
   if (activeRun) {
     return activeRun;
   }
@@ -70,6 +93,7 @@ async function runNativeSimulatorE2e() {
     await waitForText("Fleet Dashboard", 30_000);
     await reportStatus({ stage: "shell-interactive" });
 
+    let pairedThisRun = false;
     let chatButton = await waitForOptional(
       () => findAgentChatButton(config.agentLabel),
       15_000,
@@ -77,29 +101,54 @@ async function runNativeSimulatorE2e() {
     if (!chatButton) {
       await reportStatus({ stage: "pairing" });
       await pairAgent(config);
+      pairedThisRun = true;
       chatButton = await waitFor(
         () => findAgentChatButton(config.agentLabel),
         300_000,
         `${config.agentLabel} deployment`,
       );
     }
+    if (pairedThisRun) {
+      await waitFor(
+        () => findPairingReadyStatus(config.agentLabel),
+        300_000,
+        `${config.agentLabel} signed pairing readiness`,
+      );
+    }
 
     await reportStatus({ stage: "waiting-ready" });
-    chatButton.click();
+    const currentChatButton = await waitFor(
+      () => findAgentChatButton(config.agentLabel),
+      30_000,
+      `${config.agentLabel} current deployment control`,
+    );
+    currentChatButton.click();
     await waitFor(
-      () => document.querySelector<HTMLElement>(".conversation-list"),
+      () => document.querySelector<HTMLButtonElement>('[data-testid="session-new"]'),
       30_000,
       "visible session index",
     );
     await reportStatus({ stage: "session-index-visible" });
 
+    const environmentReadinessDeadline = window.performance.now() + 300_000;
+    const chooseEnvironmentButton = await waitFor(
+      () => {
+        const button = document.querySelector<HTMLButtonElement>(
+          '[data-testid="session-new"]',
+        );
+        return button && !button.disabled ? button : null;
+      },
+      remainingMs(environmentReadinessDeadline),
+      `${config.agentLabel} session creation readiness`,
+    );
+    chooseEnvironmentButton.click();
+
     const newChatButton = await waitFor(
       () => findNewChatButton(config.agentLabel),
-      300_000,
-      `${config.agentLabel} default behavior readiness`,
+      remainingMs(environmentReadinessDeadline),
+      `${config.agentLabel} unique enabled behavior readiness`,
     );
     if (config.expectEmptyConversationSlice) {
-      await delay(3_000);
       const conversationCount = conversationRowCount(document);
       if (conversationCount > 0) {
         throw new Error(
@@ -107,7 +156,14 @@ async function runNativeSimulatorE2e() {
         );
       }
     }
-    newChatButton.click();
+    const currentNewChatButton = config.expectEmptyConversationSlice
+      ? await waitFor(
+          () => findNewChatButton(config.agentLabel),
+          remainingMs(environmentReadinessDeadline),
+          `${config.agentLabel} current unique enabled behavior`,
+        )
+      : newChatButton;
+    currentNewChatButton.click();
 
     const composer = await waitFor(
       () =>
@@ -194,61 +250,6 @@ async function pairAgent(config: NativeE2eConfig) {
   submit.click();
 }
 
-function findAgentChatButton(label: string): HTMLButtonElement | null {
-  const expected = normalized(label);
-  return (
-    Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        '[data-testid^="fleet-chat-name-"], [aria-label^="Open "][aria-label$=" chat"]',
-      ),
-    ).find((button) => normalized(button.textContent ?? "").includes(expected)) ?? null
-  );
-}
-
-function findNewChatButton(label: string): HTMLButtonElement | null {
-  const expected = normalized(`Start new chat with ${label}`);
-  return (
-    Array.from(
-      document.querySelectorAll<HTMLButtonElement>(
-        '[aria-label^="Start new chat with "]',
-      ),
-    ).find(
-      (button) => normalized(button.getAttribute("aria-label") ?? "") === expected,
-    ) ?? null
-  );
-}
-
-export function findAssistantResponseMarker(
-  root: ParentNode,
-  expectedResponse: string,
-): HTMLElement | null {
-  return (
-    Array.from(
-      root.querySelectorAll<HTMLElement>('[data-testid="assistant-message"]'),
-    ).find((message) =>
-      message
-        .querySelector<HTMLElement>(".message-content")
-        ?.textContent?.includes(expectedResponse),
-    ) ?? null
-  );
-}
-
-export function conversationRowCount(root: ParentNode): number {
-  return root.querySelectorAll(
-    '.conversation-list .conversation-row > button[data-testid^="conversation-"]',
-  ).length;
-}
-
-export function isConversationTurnSettled(
-  root: ParentNode,
-  expectedResponse: string,
-): boolean {
-  return (
-    findAssistantResponseMarker(root, expectedResponse) !== null &&
-    root.querySelector('[data-testid="cancel-button"]') === null
-  );
-}
-
 function setControlledValue(
   element: HTMLInputElement | HTMLTextAreaElement,
   value: string,
@@ -279,8 +280,8 @@ async function waitFor<T>(
   timeoutMs: number,
   description: string,
 ): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = window.performance.now() + timeoutMs;
+  while (window.performance.now() < deadline) {
     const value = sample();
     if (value) {
       return value;
@@ -306,8 +307,8 @@ async function waitForOptional<T>(
   sample: () => T | null | undefined,
   timeoutMs: number,
 ): Promise<T | null> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = window.performance.now() + timeoutMs;
+  while (window.performance.now() < deadline) {
     const value = sample();
     if (value) {
       return value;
@@ -375,10 +376,10 @@ function renderStatus(status: NativeE2eStatus) {
   banner.textContent = `Native E2E: ${status.stage}${detail}`;
 }
 
-function normalized(value: string) {
-  return value.trim().toLocaleLowerCase();
-}
-
 function delay(milliseconds: number) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function remainingMs(deadline: number) {
+  return Math.max(0, deadline - window.performance.now());
 }

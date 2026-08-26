@@ -221,6 +221,33 @@ fn merge_desired_unions_control_and_data_plane_state() {
 }
 
 #[test]
+fn signed_data_plane_endpoint_supersedes_stale_bearer_claim_address() {
+    let control = bearer_desired(
+        "network-control",
+        "did:key:claimant",
+        "peer-a@127.0.0.1:4100",
+    );
+    let data = bearer_desired("conversation", "did:key:claimant", "peer-a@127.0.0.1:4200");
+
+    let merged = merge_desired(Some(control), Some(data)).expect("merged desired");
+
+    assert_eq!(
+        merged.replicator_addresses,
+        set(&["peer-a@127.0.0.1:4200"]),
+        "the verified signed endpoint must replace the stale bootstrap binding"
+    );
+    let applied = PairingApplied {
+        replicator_addresses: merged.replicator_addresses.clone(),
+        replicator_filter: merged.replicator_filter.clone(),
+        ..Default::default()
+    };
+    assert!(
+        earned_bearer_readiness(Some(&merged), &applied, "did:key:issuer").is_some(),
+        "endpoint rotation must not permanently withhold exact readiness"
+    );
+}
+
+#[test]
 fn data_plane_only_desired_is_replicator_only() {
     let data = PairingDesired {
         collections: set(&["AgentRequest"]),

@@ -10,6 +10,7 @@ use defra_p2p_adapter::{
     ReplicationFilter, ReplicatorInfo,
 };
 
+use super::bearer_pairing::{publish_local_endpoint, refresh_published_endpoint_if_rotated};
 use super::route_manager::cleanup_saved_peer_p2p;
 use super::supervisor::{
     p2p_health_materially_changed, probe_p2p_health, repair_saved_peer,
@@ -22,6 +23,7 @@ use crate::client::PeerRecord;
 struct RecordingP2P {
     notify_calls: AtomicUsize,
     local_peer_id_error: StdRwLock<Option<String>>,
+    shareable_address: StdRwLock<Option<String>>,
     listen_addresses: StdRwLock<Vec<String>>,
     listen_addresses_error: StdRwLock<Option<String>>,
     connected_peers: StdRwLock<Vec<String>>,
@@ -52,6 +54,13 @@ impl RecordingP2P {
             .listen_addresses
             .write()
             .expect("listen addresses lock poisoned") = addrs;
+    }
+
+    fn set_shareable_address(&self, address: Option<&str>) {
+        *self
+            .shareable_address
+            .write()
+            .expect("shareable address lock poisoned") = address.map(ToOwned::to_owned);
     }
 
     fn set_listen_addresses_error(&self, error: Option<&str>) {
@@ -149,6 +158,14 @@ impl P2POps for RecordingP2P {
             .listen_addresses
             .read()
             .expect("listen addresses lock poisoned")
+            .clone())
+    }
+
+    async fn shareable_address(&self) -> P2PResult<Option<String>> {
+        Ok(self
+            .shareable_address
+            .read()
+            .expect("shareable address lock poisoned")
             .clone())
     }
 
@@ -286,6 +303,67 @@ impl P2POps for RecordingP2P {
     async fn sync_collection_versions(&self, _version_ids: Vec<String>) -> P2PResult<()> {
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn rotated_local_endpoint_is_republished_once_before_readiness_can_advance() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().to_path_buf()),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let recording = Arc::new(RecordingP2P::default());
+    recording.set_shareable_address(Some("phone-ticket-a"));
+    let p2p: Arc<dyn P2POps> = recording.clone();
+
+    let mut published = publish_local_endpoint(core.node(), &p2p, core.principal())
+        .await
+        .expect("publish initial endpoint");
+    assert_eq!(published.address, "phone-ticket-a");
+    assert!(!published.sig.is_empty());
+
+    recording.set_shareable_address(Some("phone-ticket-b"));
+    assert!(refresh_published_endpoint_if_rotated(
+        core.node(),
+        &p2p,
+        core.principal(),
+        &mut published,
+    )
+    .await
+    .expect("republish rotated endpoint"));
+    assert_eq!(published.address, "phone-ticket-b");
+    assert!(!published.sig.is_empty());
+    assert!(!refresh_published_endpoint_if_rotated(
+        core.node(),
+        &p2p,
+        core.principal(),
+        &mut published,
+    )
+    .await
+    .expect("stable endpoint does not republish"));
+
+    let response = core
+        .node()
+        .execute("{ PeerEndpoint { did node_id address updated_at binding_sig } }")
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("PeerEndpoint"))
+        .and_then(serde_json::Value::as_array)
+        .expect("PeerEndpoint rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("address").and_then(serde_json::Value::as_str),
+        Some("phone-ticket-b")
+    );
+
+    core.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ use gents::agent::p2p_reconcile::intervals::endpoint_interval;
 use gents::agent::p2p_reconcile::{
     compute_pairing_diff, DiffOp, PairingActual, PairingDesired, RemoteP2pAdmin,
 };
+use gents_protocol::network_token::EndpointRecord;
 use tokio::sync::{mpsc, watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -17,8 +18,9 @@ use tokio::time::{Instant, MissedTickBehavior};
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
 use super::bearer_pairing::{
-    current_local_endpoint, install_bearer_replicator_for_record, is_bearer_peer,
-    observe_bearer_pairing_readiness, publish_local_endpoint,
+    current_local_endpoint, endpoint_binding_matches, install_bearer_replicator_for_record,
+    is_bearer_peer, observe_bearer_pairing_readiness, publish_local_endpoint,
+    refresh_published_endpoint_if_rotated,
 };
 use super::bootstrap::{
     connect_peer_with_retry, force_connect_peer_with_retry, is_connected_peer, request_index_sync,
@@ -51,6 +53,7 @@ pub(super) fn spawn_p2p_supervisor_task(
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let endpoint_refresh_interval = endpoint_interval();
         let mut last_endpoint_refresh = Instant::now() - endpoint_refresh_interval;
+        let mut published_bearer_endpoint = None;
         let mut index_requests = BTreeSet::new();
         let mut route_reconciled_at = BTreeMap::new();
         let mut removal_retries = BTreeMap::new();
@@ -89,6 +92,21 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &mut removal_retries,
             )
             .await;
+
+            let endpoint_refresh_due = last_endpoint_refresh.elapsed() >= endpoint_refresh_interval;
+            published_bearer_endpoint = maintain_bearer_endpoint(
+                &node,
+                &p2p,
+                &peer_directory,
+                &remote_admin_actor,
+                published_bearer_endpoint,
+                endpoint_refresh_due || manual_repair,
+            )
+            .await;
+            if endpoint_refresh_due {
+                last_endpoint_refresh = Instant::now();
+            }
+
             run_saved_peer_repair_cycle(
                 &node,
                 &p2p,
@@ -98,21 +116,11 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &route_manager,
                 install_replicators_on_bootstrap,
                 manual_repair,
+                &mut published_bearer_endpoint,
                 &mut index_requests,
                 &mut route_reconciled_at,
             )
             .await;
-
-            if last_endpoint_refresh.elapsed() >= endpoint_refresh_interval {
-                refresh_bearer_endpoint_heartbeat(
-                    &node,
-                    &p2p,
-                    &peer_directory,
-                    &remote_admin_actor,
-                )
-                .await;
-                last_endpoint_refresh = Instant::now();
-            }
 
             let next_health = probe_p2p_health(&p2p, &health).await;
             if p2p_health_materially_changed(&health, &next_health) {
@@ -188,12 +196,14 @@ fn removal_retry_delay(failures: u32) -> Duration {
     Duration::from_secs(2_u64.saturating_pow(failures.min(5)))
 }
 
-async fn refresh_bearer_endpoint_heartbeat(
+async fn maintain_bearer_endpoint(
     node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
     peer_directory: &Arc<RwLock<PeerDirectory>>,
     remote_admin_actor: &Arc<PrincipalIdentity>,
-) {
+    previously_published: Option<EndpointRecord>,
+    heartbeat_due: bool,
+) -> Option<EndpointRecord> {
     let has_bearer_peer = peer_directory
         .read()
         .await
@@ -201,23 +211,59 @@ async fn refresh_bearer_endpoint_heartbeat(
         .iter()
         .any(is_bearer_peer);
     if !has_bearer_peer {
-        return;
+        return None;
+    }
+
+    let current = match current_local_endpoint(p2p, remote_admin_actor.as_ref()).await {
+        Ok(current) => current,
+        Err(error) => {
+            tracing::warn!(
+                target: "gents_desktop_core::peer_maintenance",
+                error = %error,
+                "failed to inspect the local endpoint; preserving the last published binding"
+            );
+            return previously_published;
+        }
+    };
+    let rotated = previously_published
+        .as_ref()
+        .is_none_or(|published| !endpoint_binding_matches(published, &current));
+    if !heartbeat_due && !rotated {
+        return previously_published;
     }
 
     match publish_local_endpoint(node.as_ref(), p2p, remote_admin_actor.as_ref()).await {
-        Ok(_) => {
+        Ok(published) => {
             tracing::debug!(
                 target: "gents_desktop_core::peer_maintenance",
-                "refreshed signed desktop endpoint heartbeat"
+                rotated,
+                "refreshed signed desktop endpoint before bearer readiness validation"
             );
+            Some(published)
         }
         Err(error) => {
             tracing::warn!(
                 target: "gents_desktop_core::peer_maintenance",
                 error = %error,
-                "failed to refresh signed desktop endpoint heartbeat"
+                rotated,
+                "failed to publish the current signed endpoint"
             );
+            endpoint_after_publish_failure(previously_published, rotated)
         }
+    }
+}
+
+fn endpoint_after_publish_failure(
+    previously_published: Option<EndpointRecord>,
+    rotated: bool,
+) -> Option<EndpointRecord> {
+    if rotated {
+        // A stale binding must never retain readiness after rotation.
+        None
+    } else {
+        // A heartbeat failure does not invalidate the last signed row; keep
+        // serving that binding and retry the refresh next tick.
+        previously_published
     }
 }
 
@@ -230,6 +276,7 @@ async fn run_saved_peer_repair_cycle(
     route_manager: &Arc<ClientRouteManager>,
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
+    published_bearer_endpoint: &mut Option<EndpointRecord>,
     index_requests: &mut BTreeSet<String>,
     route_reconciled_at: &mut BTreeMap<String, Instant>,
 ) {
@@ -314,6 +361,7 @@ async fn run_saved_peer_repair_cycle(
                 peer_statuses,
                 remote_admin_actor,
                 &record,
+                published_bearer_endpoint,
             )
             .await;
         }
@@ -416,6 +464,7 @@ async fn revalidate_bearer_pairing_readiness(
     peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     remote_admin_actor: &Arc<PrincipalIdentity>,
     record: &PeerRecord,
+    published_endpoint: &mut Option<EndpointRecord>,
 ) {
     let result = async {
         let network_id = record
@@ -423,14 +472,23 @@ async fn revalidate_bearer_pairing_readiness(
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| anyhow::anyhow!("saved bearer peer has no signed network id"))?;
-        let local_endpoint = current_local_endpoint(p2p, remote_admin_actor.as_ref()).await?;
+        let local_endpoint = published_endpoint.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("the current local endpoint has not been signed and published")
+        })?;
+        refresh_published_endpoint_if_rotated(
+            node.as_ref(),
+            p2p,
+            remote_admin_actor.as_ref(),
+            local_endpoint,
+        )
+        .await?;
         observe_bearer_pairing_readiness(
             node.as_ref(),
             remote_admin_actor.as_ref(),
             &record.agent_did,
             network_id,
             record.pairing_template.as_deref().unwrap_or("conversation"),
-            &local_endpoint,
+            local_endpoint,
         )
         .await
     }
@@ -730,6 +788,23 @@ mod pairing_reconcile_tests {
         assert_eq!(removal_retry_delay(2), Duration::from_secs(4));
         assert_eq!(removal_retry_delay(5), Duration::from_secs(32));
         assert_eq!(removal_retry_delay(50), Duration::from_secs(32));
+    }
+
+    #[test]
+    fn heartbeat_failure_preserves_only_the_current_signed_binding() {
+        let endpoint = EndpointRecord {
+            did: "did:key:phone".into(),
+            node_id: "phone-node".into(),
+            address: "phone-ticket".into(),
+            updated_at: "2026-08-26T12:00:00Z".into(),
+            sig: vec![1, 2, 3],
+        };
+
+        assert_eq!(
+            endpoint_after_publish_failure(Some(endpoint.clone()), false),
+            Some(endpoint.clone())
+        );
+        assert_eq!(endpoint_after_publish_failure(Some(endpoint), true), None);
     }
     use crate::remote_admin::{RemoteP2pAdminResult, RemoteReplicator};
 
