@@ -399,6 +399,12 @@ schema/resources cannot reconcile or start it; local readiness is derived by the
 checks and reported as an error, not stored as a new placement document. Convergence
 is idempotent after the missing schema/resources arrive.
 
+Readiness failure excludes only that revision's reserved artifacts. Missing,
+incomplete, malformed, or drifted package state must not abort the ordinary document
+view or the control watcher; a failed hot reload keeps the previous active generation
+and retries through the existing settle path. Activation and run start still perform
+the strict readiness check and fail closed.
+
 `enabled=false` is checked by new-start/replay admission, not artifact visibility.
 Otherwise disabling during a run would strand its existing triggers and requests.
 Successor install may stage or activate a revision while disabled, but does not
@@ -581,7 +587,10 @@ transcript or cache on `GraphRun`.
 A run succeeds when every required stage/request relevant to terminal results is
 terminal-successful, all required result predicates hold, no required group failed or
 timed out, and the pinned invocation limits hold. It fails with typed evidence on a
-required request/group failure, timeout, contract drift, or limit violation.
+required request/group failure, a completed terminal stage with an unsatisfied result
+contract, the pinned wall-clock deadline, contract drift, or limit violation. The
+deadline is derived from durable `started_at + GraphLimits.max_runtime_secs`; restart
+never resets it and no volatile timer becomes execution state.
 
 ### Run completion and cancellation state machine
 
@@ -617,13 +626,15 @@ Extend `Proofs/GraphPipeline.lean` before the Rust terminal writer:
    pin;
 2. succeeded requires one abstract `result_contract_satisfied` predicate and no
    required failure;
-3. failed/cancelled/succeeded are terminal and preserve the run's immutable
+3. failed requires one abstract `failure_proven` predicate; an arbitrary projector or
+   caller cannot terminalize a healthy run as failed;
+4. failed/cancelled/succeeded are terminal and preserve the run's immutable
    `revision_digest`; only nonterminal runs retain executable resources in the runtime
    admission set;
-4. cancellation intent forbids new correlated materialization and permits the direct
+5. cancellation intent forbids new correlated materialization and permits the direct
    terminal cancelled transition once active requests terminalize;
-5. success/failure/cancel races have at most one terminal winner; and
-6. disable, activation, successor installation, and revision retirement cannot alter
+6. success/failure/cancel races have at most one terminal winner; and
+7. disable, activation, successor installation, and revision retirement cannot alter
    an in-flight run contract.
 
 The abstract success predicate belongs in Lean because it gates a legal lifecycle

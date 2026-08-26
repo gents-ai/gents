@@ -228,6 +228,7 @@ pub(crate) struct LeanGraphPipelineRunTerminalCase {
     pub(crate) cancellation_requested: bool,
     pub(crate) result_contract_satisfied: bool,
     pub(crate) active_work_terminal: bool,
+    pub(crate) failure_proven: bool,
     pub(crate) expected_succeed: bool,
     pub(crate) expected_fail: bool,
     pub(crate) expected_cancel: bool,

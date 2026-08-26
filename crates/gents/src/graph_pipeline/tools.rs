@@ -221,6 +221,7 @@ mod tests {
                 max_depth: 2,
                 max_fan_out: 2,
                 max_total_invocations: 2,
+                max_runtime_secs: 60,
             },
         }
     }

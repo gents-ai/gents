@@ -102,6 +102,7 @@ fn linear_intent() -> GraphIntent {
             max_depth: 8,
             max_fan_out: 4,
             max_total_invocations: 32,
+            max_runtime_secs: 7_200,
         },
     }
 }
@@ -423,6 +424,15 @@ fn rejects_cycles_and_unreachable_nodes() {
 fn rejects_requested_and_actual_resource_limit_violations() {
     let mut requested = linear_intent();
     requested.limits.max_nodes = CompilerPolicy::default().max_nodes + 1;
+    let error = compile(&requested, &catalog()).unwrap_err();
+    assert!(has_code(&error, DiagnosticCode::PlatformLimitExceeded));
+
+    requested = linear_intent();
+    requested.limits.max_runtime_secs = 0;
+    let error = compile(&requested, &catalog()).unwrap_err();
+    assert!(has_code(&error, DiagnosticCode::PlatformLimitExceeded));
+
+    requested.limits.max_runtime_secs = CompilerPolicy::default().max_runtime_secs + 1;
     let error = compile(&requested, &catalog()).unwrap_err();
     assert!(has_code(&error, DiagnosticCode::PlatformLimitExceeded));
 

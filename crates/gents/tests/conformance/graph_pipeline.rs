@@ -41,6 +41,7 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
             max_depth: 2,
             max_fan_out: 2,
             max_total_invocations: 2,
+            max_runtime_secs: 60,
         },
     };
     let capability = StageCapability {
@@ -142,7 +143,7 @@ fn generated_run_terminal_cases_fence_completion_cas() {
     let cases = &lean_contract_snapshot().graph_pipeline_run_terminal_cases;
     assert_eq!(
         cases.len(),
-        32,
+        64,
         "Lean must emit the complete terminal matrix"
     );
 
@@ -152,6 +153,7 @@ fn generated_run_terminal_cases_fence_completion_cas() {
             test_case.cancellation_requested,
             test_case.result_contract_satisfied,
             test_case.active_work_terminal,
+            test_case.failure_proven,
         );
         assert_eq!(
             decision.may_succeed, test_case.expected_succeed,

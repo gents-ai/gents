@@ -628,9 +628,22 @@ pub async fn prepare_bundled_graph_package_install(
         .schemas
         .iter()
         .map(|path| {
+            let collections = query::parse_sdl(package.asset_text(path)?)?
+                .into_iter()
+                .map(|collection| {
+                    let mut fields = collection
+                        .fields
+                        .into_iter()
+                        .map(|field| field.name)
+                        .collect::<Vec<_>>();
+                    fields.sort();
+                    (collection.name, fields)
+                })
+                .collect();
             Ok(RequiredSchemaDigest {
                 namespace: path.clone(),
                 digest: digest_bytes(package.asset(path)?),
+                collections,
             })
         })
         .collect::<Result<Vec<_>>>()?;

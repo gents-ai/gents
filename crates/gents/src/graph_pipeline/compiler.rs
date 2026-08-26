@@ -21,6 +21,7 @@ pub struct CompilerPolicy {
     pub max_depth: u32,
     pub max_fan_out: u32,
     pub max_total_invocations: u32,
+    pub max_runtime_secs: u64,
     pub max_group_size: u32,
     pub max_group_timeout_secs: u64,
 }
@@ -33,6 +34,7 @@ impl Default for CompilerPolicy {
             max_depth: 32,
             max_fan_out: 16,
             max_total_invocations: 1_024,
+            max_runtime_secs: 86_400,
             max_group_size: 256,
             max_group_timeout_secs: 86_400,
         }
@@ -110,6 +112,17 @@ fn check_requested_limits(
                 format!("requested {value}, platform ceiling is {ceiling}"),
             );
         }
+    }
+    if requested.max_runtime_secs == 0 || requested.max_runtime_secs > policy.max_runtime_secs {
+        diagnostic(
+            diagnostics,
+            DiagnosticCode::PlatformLimitExceeded,
+            "/limits/max_runtime_secs",
+            format!(
+                "requested {}, platform range is 1..={}",
+                requested.max_runtime_secs, policy.max_runtime_secs
+            ),
+        );
     }
 
     let node_count = intent.nodes.len() as u32;

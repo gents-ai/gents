@@ -88,6 +88,7 @@ pub struct GraphRunView {
     pub error: Option<Value>,
     pub created_at: String,
     pub started_at: Option<String>,
+    pub deadline_at: Option<String>,
     pub completed_at: Option<String>,
     pub update_generation: i64,
     pub requests: Vec<GraphRunRequestView>,
@@ -441,6 +442,23 @@ fn scalar_usize(value: &Value) -> Option<usize> {
     }
 }
 
+fn graph_run_deadline(
+    started_at: Option<&str>,
+    max_runtime_secs: u64,
+) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>> {
+    started_at
+        .map(|started_at| {
+            let started_at = chrono::DateTime::parse_from_rfc3339(started_at)
+                .context("GraphRun started_at is not RFC3339")?;
+            let seconds = i64::try_from(max_runtime_secs)
+                .context("graph max_runtime_secs exceeds the supported clock range")?;
+            started_at
+                .checked_add_signed(chrono::TimeDelta::seconds(seconds))
+                .context("graph run deadline exceeds the supported clock range")
+        })
+        .transpose()
+}
+
 fn scalar_values(docs: &[Value], field: &str) -> Option<Vec<String>> {
     docs.iter()
         .map(|doc| doc.get(field).and_then(scalar_key))
@@ -680,6 +698,34 @@ async fn load_graph_run_view_with(
         .find(|request| request.terminal && !request.succeeded);
     let over_limit = requests.len() > plan.limits.max_total_invocations as usize;
     let invalid_group = groups.iter().find(|group| group.quiesced_at.is_some());
+    let started_at = run
+        .get("started_at")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let deadline = graph_run_deadline(started_at.as_deref(), plan.limits.max_runtime_secs)?;
+    let deadline_exceeded = deadline
+        .as_ref()
+        .is_some_and(|deadline| chrono::Utc::now() >= *deadline);
+    let terminal_results = results
+        .iter()
+        .filter(|result| result.terminal)
+        .collect::<Vec<_>>();
+    let result_contract_satisfied =
+        !terminal_results.is_empty() && results.iter().all(|result| result.satisfied);
+    let terminal_nodes = plan
+        .results
+        .iter()
+        .filter(|result| result.terminal)
+        .map(|result| result.from.node_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let terminal_stages_completed = !terminal_nodes.is_empty()
+        && terminal_nodes.iter().all(|node_id| {
+            requests.iter().any(|request| {
+                request.node_id.as_deref() == Some(*node_id)
+                    && request.terminal
+                    && request.succeeded
+            })
+        });
     let failure_evidence = if let Some(group) = invalid_group {
         Some(json!({
             "version": 1, "code": "group_quiesced",
@@ -698,22 +744,36 @@ async fn load_graph_run_view_with(
             "message": "correlated request count exceeds the pinned graph limit",
             "observed": requests.len(), "limit": plan.limits.max_total_invocations,
         }))
+    } else if deadline_exceeded {
+        Some(json!({
+            "version": 1,
+            "code": "run_deadline_exceeded",
+            "message": "graph run exceeded its pinned maximum runtime",
+            "max_runtime_secs": plan.limits.max_runtime_secs,
+            "deadline_at": deadline.map(|value| value.to_rfc3339()),
+        }))
+    } else if let Some(request) = failed_request {
+        Some(json!({
+            "version": 1, "code": "required_request_failed",
+            "message": request.failure_reason.as_deref().unwrap_or("required graph request did not complete successfully"),
+            "request_id": request.request_id,
+            "lifecycle_state": request.lifecycle_state,
+        }))
+    } else if active_request_count == 0 && terminal_stages_completed && !result_contract_satisfied {
+        Some(json!({
+            "version": 1,
+            "code": "result_contract_unsatisfied",
+            "message": "terminal graph stages completed but the declared result contract is unsatisfied",
+            "violations": results.iter().filter_map(|result| {
+                result.violation.as_ref().map(|violation| json!({
+                    "name": result.name,
+                    "violation": violation,
+                }))
+            }).collect::<Vec<_>>(),
+        }))
     } else {
-        failed_request.map(|request| {
-            json!({
-                "version": 1, "code": "required_request_failed",
-                "message": request.failure_reason.as_deref().unwrap_or("required graph request did not complete successfully"),
-                "request_id": request.request_id,
-                "lifecycle_state": request.lifecycle_state,
-            })
-        })
+        None
     };
-    let terminal_results = results
-        .iter()
-        .filter(|result| result.terminal)
-        .collect::<Vec<_>>();
-    let result_contract_satisfied =
-        !terminal_results.is_empty() && results.iter().all(|result| result.satisfied);
     let persisted_result_refs = run
         .get("result_refs_json")
         .and_then(Value::as_str)
@@ -751,10 +811,8 @@ async fn load_graph_run_view_with(
             .map(ToOwned::to_owned),
         error,
         created_at: required_string(&run, "created_at")?.to_owned(),
-        started_at: run
-            .get("started_at")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+        started_at,
+        deadline_at: deadline.map(|value| value.to_rfc3339()),
         completed_at: run
             .get("completed_at")
             .and_then(Value::as_str)
@@ -911,6 +969,7 @@ async fn commit_terminal_txn(
                 .is_some(),
             view.result_contract_satisfied,
             view.active_request_count == 0,
+            error.is_some(),
         );
         let allowed = match status {
             "succeeded" => decision.may_succeed,
@@ -964,6 +1023,18 @@ fn terminal_projection(
     }
 }
 
+async fn interrupt_active_requests(
+    node: &EmbeddedNode,
+    requests: &[GraphRunRequestView],
+) -> Result<()> {
+    for request in requests {
+        if !request.terminal && !request.request_id.is_empty() {
+            crate::interrupt_request(node, &request.request_id).await?;
+        }
+    }
+    Ok(())
+}
+
 /// Re-evaluate durable run state and, when a terminal predicate holds, race
 /// the single terminal transaction. A losing reconciler reloads on its next
 /// pass; no completion-owner lock exists.
@@ -976,6 +1047,9 @@ pub async fn reconcile_graph_run(
     let view = load_graph_run_view(node, actor_did, run_id).await?;
     if view.is_terminal() {
         return Ok(view);
+    }
+    if view.cancellation_requested_at.is_some() && view.active_request_count > 0 {
+        interrupt_active_requests(node, &view.requests).await?;
     }
     let terminal = terminal_projection(&view);
     if let Some((status, error, refs)) = terminal {
@@ -1038,11 +1112,7 @@ pub async fn request_graph_run_cancellation(
     }
     let txn = ConfigApplyTxn::begin_local(node, identity).await?;
     persist_cancellation_intent(txn, actor_did, run_id, reason).await?;
-    for request in &before.requests {
-        if !request.terminal && !request.request_id.is_empty() {
-            crate::interrupt_request(node, &request.request_id).await?;
-        }
-    }
+    interrupt_active_requests(node, &before.requests).await?;
     reconcile_graph_run(node, None, actor_did, run_id).await
 }
 
@@ -1142,6 +1212,74 @@ pub async fn request_graph_run_cancellation_with_access(
 mod tests {
     use super::*;
     use crate::graph_pipeline::PortRef;
+
+    fn terminal_view(failure_evidence: Option<Value>) -> GraphRunView {
+        GraphRunView {
+            view_version: GRAPH_RUN_VIEW_VERSION,
+            run_id: "run".to_owned(),
+            graph_id: "graph".to_owned(),
+            revision_digest: "sha256:revision".to_owned(),
+            owner_did: "did:key:owner".to_owned(),
+            caller_did: "did:key:owner".to_owned(),
+            entry_name: "review".to_owned(),
+            correlation: "run".to_owned(),
+            status: "running".to_owned(),
+            input: json!({}),
+            cancellation_requested_at: None,
+            cancellation_requested_by: None,
+            cancellation_reason: None,
+            error: None,
+            created_at: "2026-08-25T00:00:00Z".to_owned(),
+            started_at: Some("2026-08-25T00:00:00Z".to_owned()),
+            deadline_at: Some("2026-08-25T02:00:00+00:00".to_owned()),
+            completed_at: None,
+            update_generation: 0,
+            requests: vec![GraphRunRequestView {
+                request_id: "request".to_owned(),
+                node_id: Some("terminal".to_owned()),
+                behavior_id: "behavior".to_owned(),
+                status: "completed".to_owned(),
+                lifecycle_state: Some("completed".to_owned()),
+                failure_reason: None,
+                terminal: true,
+                succeeded: true,
+            }],
+            stages: vec![],
+            groups: vec![],
+            results: vec![],
+            persisted_result_refs: vec![],
+            active_request_count: 0,
+            terminal_request_count: 1,
+            result_contract_satisfied: false,
+            failure_evidence,
+        }
+    }
+
+    #[test]
+    fn terminal_projection_requires_and_commits_proven_failure_evidence() {
+        let pending = terminal_view(None);
+        assert!(terminal_projection(&pending).is_none());
+
+        let evidence = json!({
+            "version": 1,
+            "code": "result_contract_unsatisfied",
+            "message": "terminal graph stages completed but the declared result contract is unsatisfied",
+        });
+        let failed = terminal_view(Some(evidence.clone()));
+        let projected = terminal_projection(&failed).expect("proven failure must terminalize");
+        assert_eq!(projected.0, "failed");
+        assert_eq!(projected.1, Some(&evidence));
+        assert!(projected.2.is_none());
+    }
+
+    #[test]
+    fn durable_started_at_derives_a_restart_stable_run_deadline() {
+        let deadline = graph_run_deadline(Some("2026-08-25T00:00:00Z"), 7_200)
+            .unwrap()
+            .expect("deadline");
+        assert_eq!(deadline.to_rfc3339(), "2026-08-25T02:00:00+00:00");
+        assert!(graph_run_deadline(Some("not-a-time"), 7_200).is_err());
+    }
 
     fn result(name: &str, predicates: Vec<ResultPredicate>) -> PlannedResult {
         PlannedResult {

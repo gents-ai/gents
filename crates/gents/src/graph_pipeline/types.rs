@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub const COMPILER_VERSION: &str = "graph-intent-v2";
+pub const COMPILER_VERSION: &str = "graph-intent-v3";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -191,6 +191,8 @@ pub struct GraphLimits {
     pub max_fan_out: u32,
     /// Whole-run ceiling enforced by the durable GraphRun reconciler.
     pub max_total_invocations: u32,
+    /// Wall-clock run bound enforced from the durable `GraphRun.started_at`.
+    pub max_runtime_secs: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -389,6 +391,10 @@ pub struct PlannedPackageArtifact {
 pub struct RequiredSchemaDigest {
     pub namespace: String,
     pub digest: String,
+    /// Minimal runtime readiness shape derived from the pinned SDL. The digest
+    /// keeps provenance exact; this map lets peers fail closed without needing
+    /// the originating binary's bundled catalog.
+    pub collections: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

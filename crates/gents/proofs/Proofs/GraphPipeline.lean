@@ -121,7 +121,7 @@ inductive Action where
   | startRun (runId : RunId)
   | requestCancel
   | succeedRun (resultContractSatisfied : Bool)
-  | failRun
+  | failRun (failureProven : Bool)
   | cancelRun (activeWorkTerminal : Bool)
   deriving DecidableEq, Repr
 
@@ -205,7 +205,11 @@ def step? (state : State) : Action → Option State
           else
             none
       | none => none
-  | .failRun => updateRunStatus state .running .failed
+  | .failRun failureProven =>
+      if failureProven = true then
+        updateRunStatus state .running .failed
+      else
+        none
   | .cancelRun activeWorkTerminal =>
       match state.run with
       | some run =>
@@ -284,9 +288,12 @@ theorem step_preserves_revision_identity
       · cases h
         simp
       · simp at h
-  | failRun =>
-      have h_revision := updateRunStatus_preserves_revision h
-      simp [h_revision]
+  | failRun failureProven =>
+      simp only [step?] at h
+      split at h
+      · have h_revision := updateRunStatus_preserves_revision h
+        simp [h_revision]
+      · simp at h
   | requestCancel | succeedRun _ | cancelRun _ =>
       simp only [step?] at h
       split at h
@@ -358,6 +365,13 @@ theorem success_requires_result_contract_and_commits_results
     · simp at h
   · simp at h
 
+theorem failure_requires_durable_evidence
+    {pre post : State} {failureProven : Bool}
+    (h : step? pre (.failRun failureProven) = some post) :
+    failureProven = true := by
+  simp only [step?] at h
+  split at h <;> simp_all
+
 theorem cancellation_intent_suppresses_correlated_materialization
     {pre post : State}
     (h : step? pre .requestCancel = some post) :
@@ -391,7 +405,7 @@ theorem terminal_run_rejects_further_terminal_writes
     (h_run : state.run = some run)
     (h_terminal : run.status.terminal = true) :
     step? state (.succeedRun true) = none ∧
-      step? state .failRun = none ∧
+      step? state (.failRun true) = none ∧
       step? state (.cancelRun true) = none := by
   cases h_status : run.status <;>
     simp_all [RunStatus.terminal, step?, updateRunStatus]
@@ -437,8 +451,11 @@ theorem safe_preserved
         simp_all [State.safe, State.pointerAligned, State.activeReady,
           State.runPinned]
       · simp at h_step
-  | failRun =>
-      exact updateRunStatus_preserves_safe h_safe h_step
+  | failRun failureProven =>
+      simp only [step?] at h_step
+      split at h_step
+      · exact updateRunStatus_preserves_safe h_safe h_step
+      · simp at h_step
   | requestCancel | succeedRun _ | cancelRun _ =>
       simp only [step?] at h_step
       split at h_step

@@ -106,6 +106,7 @@ structure RunTerminalCase where
   cancellationRequested : Bool
   resultContractSatisfied : Bool
   activeWorkTerminal : Bool
+  failureProven : Bool
   expectedSucceed : Bool
   expectedFail : Bool
   expectedCancel : Bool
@@ -154,24 +155,27 @@ def runTerminalCases : List RunTerminalCase :=
   runStatuses.flatMap fun (status, statusName) =>
     boolValues.flatMap fun cancellationRequested =>
       boolValues.flatMap fun resultContractSatisfied =>
-        boolValues.map fun activeWorkTerminal =>
-          let state := runState status cancellationRequested
-          { name :=
-              "status=" ++ statusName ++
-                ",cancel_requested=" ++ toString cancellationRequested ++
-                ",results_satisfied=" ++ toString resultContractSatisfied ++
-                ",work_terminal=" ++ toString activeWorkTerminal
-          , status := statusName
-          , cancellationRequested := cancellationRequested
-          , resultContractSatisfied := resultContractSatisfied
-          , activeWorkTerminal := activeWorkTerminal
-          , expectedSucceed :=
-              transitionAllowed state (.succeedRun resultContractSatisfied)
-          , expectedFail := transitionAllowed state .failRun
-          , expectedCancel := transitionAllowed state (.cancelRun activeWorkTerminal)
-          }
+      boolValues.flatMap fun activeWorkTerminal =>
+        boolValues.map fun failureProven =>
+            let state := runState status cancellationRequested
+            { name :=
+                "status=" ++ statusName ++
+                  ",cancel_requested=" ++ toString cancellationRequested ++
+                  ",results_satisfied=" ++ toString resultContractSatisfied ++
+                  ",work_terminal=" ++ toString activeWorkTerminal ++
+                  ",failure_proven=" ++ toString failureProven
+            , status := statusName
+            , cancellationRequested := cancellationRequested
+            , resultContractSatisfied := resultContractSatisfied
+            , activeWorkTerminal := activeWorkTerminal
+            , failureProven := failureProven
+            , expectedSucceed :=
+                transitionAllowed state (.succeedRun resultContractSatisfied)
+            , expectedFail := transitionAllowed state (.failRun failureProven)
+            , expectedCancel := transitionAllowed state (.cancelRun activeWorkTerminal)
+            }
 
-theorem runTerminalCases_count : runTerminalCases.length = 32 := by native_decide
+theorem runTerminalCases_count : runTerminalCases.length = 64 := by native_decide
 
 def runTerminalCaseJson (testCase : RunTerminalCase) : String :=
   "{"
@@ -182,6 +186,7 @@ def runTerminalCaseJson (testCase : RunTerminalCase) : String :=
     ++ "\"result_contract_satisfied\":" ++
       boolJson testCase.resultContractSatisfied ++ ","
     ++ "\"active_work_terminal\":" ++ boolJson testCase.activeWorkTerminal ++ ","
+    ++ "\"failure_proven\":" ++ boolJson testCase.failureProven ++ ","
     ++ "\"expected_succeed\":" ++ boolJson testCase.expectedSucceed ++ ","
     ++ "\"expected_fail\":" ++ boolJson testCase.expectedFail ++ ","
     ++ "\"expected_cancel\":" ++ boolJson testCase.expectedCancel

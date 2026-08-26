@@ -73,11 +73,12 @@ pub fn graph_run_terminal_decision(
     cancellation_requested: bool,
     result_contract_satisfied: bool,
     active_work_terminal: bool,
+    failure_proven: bool,
 ) -> GraphRunTerminalDecision {
     let running = status == "running";
     GraphRunTerminalDecision {
         may_succeed: running && result_contract_satisfied,
-        may_fail: running,
+        may_fail: running && failure_proven,
         may_cancel: running && cancellation_requested && active_work_terminal,
     }
 }
@@ -163,69 +164,131 @@ pub(crate) async fn load_visible_package_artifact_ids(
 ) -> Result<BTreeSet<String>> {
     let mut visible = BTreeSet::new();
     for digest in revision_digests {
-        let response = node
-            .execute(&format!(
-                r#"{{
+        match load_visible_package_artifact_ids_for_revision(node, agent_did, digest).await {
+            Ok(ids) => visible.extend(ids),
+            Err(error) => {
+                tracing::warn!(
+                    revision_digest = %digest,
+                    agent_did = %agent_did,
+                    error = %error,
+                    "graph package revision is not ready; excluding its artifacts from the runtime view"
+                );
+            }
+        }
+    }
+    Ok(visible)
+}
+
+async fn load_visible_package_artifact_ids_for_revision(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    digest: &str,
+) -> Result<BTreeSet<String>> {
+    let response = node
+        .execute(&format!(
+            r#"{{
                     GraphRevision(filter: {{ digest: {{ _eq: "{}" }} }}, limit: 2) {{
                         owner_did artifacts_complete plan_json
                     }}
                 }}"#,
-                escape_graphql_string(digest),
-            ))
-            .await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "load graph package artifact visibility failed: {:?}",
-                response.errors
-            );
-        }
-        let data = json!({ "data": response.data.unwrap_or(Value::Null) });
-        let revisions = rows(&data, "GraphRevision");
-        if revisions.len() != 1 {
-            anyhow::bail!("visible GraphRevision {digest:?} is missing or ambiguous");
-        }
-        let revision = &revisions[0];
-        if revision.get("owner_did").and_then(Value::as_str) != Some(agent_did) {
-            anyhow::bail!("visible GraphRevision {digest:?} is owned by another principal");
-        }
-        if revision.get("artifacts_complete").and_then(Value::as_bool) != Some(true) {
-            anyhow::bail!("visible GraphRevision {digest:?} has incomplete artifacts");
-        }
-        let plan: GraphPlan = serde_json::from_str(
-            revision
-                .get("plan_json")
-                .and_then(Value::as_str)
-                .context("visible GraphRevision is missing plan_json")?,
-        )?;
-        if plan.digest != *digest || !verify_graph_plan_digest(&plan) {
-            anyhow::bail!(
-                "visible GraphRevision {digest:?} failed immutable identity verification"
-            );
-        }
-        let Some(package) = plan.package else {
-            continue;
-        };
-        if package
-            .roles
-            .values()
-            .any(|role| role.principal_did != agent_did)
-        {
-            anyhow::bail!(
-                "graph package v1 requires every logical role to bind the revision owner"
-            );
-        }
-        let txn = ConfigApplyTxn::begin_local(node, None).await?;
-        let readiness = verify_package_artifacts_in_txn(&txn, &package).await;
-        let _ = txn.discard().await;
-        readiness?;
-        visible.extend(
-            package
-                .artifacts
-                .into_iter()
-                .map(|artifact| artifact.physical_id),
+            escape_graphql_string(digest),
+        ))
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "load graph package artifact visibility failed: {:?}",
+            response.errors
         );
     }
-    Ok(visible)
+    let data = json!({ "data": response.data.unwrap_or(Value::Null) });
+    let revisions = rows(&data, "GraphRevision");
+    if revisions.len() != 1 {
+        anyhow::bail!("visible GraphRevision {digest:?} is missing or ambiguous");
+    }
+    let revision = &revisions[0];
+    if revision.get("owner_did").and_then(Value::as_str) != Some(agent_did) {
+        anyhow::bail!("visible GraphRevision {digest:?} is owned by another principal");
+    }
+    if revision.get("artifacts_complete").and_then(Value::as_bool) != Some(true) {
+        anyhow::bail!("visible GraphRevision {digest:?} has incomplete artifacts");
+    }
+    let plan: GraphPlan = serde_json::from_str(
+        revision
+            .get("plan_json")
+            .and_then(Value::as_str)
+            .context("visible GraphRevision is missing plan_json")?,
+    )?;
+    if plan.digest != digest || !verify_graph_plan_digest(&plan) {
+        anyhow::bail!("visible GraphRevision {digest:?} failed immutable identity verification");
+    }
+    let Some(package) = plan.package else {
+        return Ok(BTreeSet::new());
+    };
+    if package
+        .roles
+        .values()
+        .any(|role| role.principal_did != agent_did)
+    {
+        anyhow::bail!("graph package v1 requires every logical role to bind the revision owner");
+    }
+    let txn = ConfigApplyTxn::begin_local(node, None).await?;
+    let readiness = async {
+        verify_package_schemas_in_txn(&txn, &package).await?;
+        verify_package_artifacts_in_txn(&txn, &package).await
+    }
+    .await;
+    let _ = txn.discard().await;
+    readiness?;
+    Ok(package
+        .artifacts
+        .into_iter()
+        .map(|artifact| artifact.physical_id)
+        .collect())
+}
+
+async fn verify_package_schemas_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    package: &PackagePlan,
+) -> Result<()> {
+    for schema in &package.required_schema_digests {
+        if schema.collections.is_empty() {
+            anyhow::bail!(
+                "package schema {:?} has no pinned runtime readiness shape",
+                schema.namespace
+            );
+        }
+        for (collection, fields) in &schema.collections {
+            let query = crate::defra_query::introspection_query(collection)?;
+            let response = txn.execute(&query).await.with_context(|| {
+                format!(
+                    "package schema {:?} collection {collection:?} is not locally ready",
+                    schema.namespace
+                )
+            })?;
+            let live = crate::defra_query::parse_collection_schema(response.get("data"))
+                .with_context(|| {
+                    format!(
+                        "package schema {:?} collection {collection:?} is not locally ready",
+                        schema.namespace
+                    )
+                })?;
+            let live_fields = live
+                .fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<BTreeSet<_>>();
+            if fields
+                .iter()
+                .any(|field| !live_fields.contains(field.as_str()))
+            {
+                anyhow::bail!(
+                    "package schema {:?} collection {collection:?} does not match its pinned field shape",
+                    schema.namespace
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn verify_package_artifacts_in_txn(
@@ -1181,6 +1244,7 @@ async fn start_run_in_txn(
         anyhow::bail!("active graph revision failed immutable identity verification");
     }
     if let Some(package) = plan.package.as_ref() {
+        verify_package_schemas_in_txn(txn, package).await?;
         verify_package_artifacts_in_txn(txn, package).await?;
     }
     let entry = plan
@@ -1251,9 +1315,106 @@ mod tests {
 
     use super::*;
     use crate::graph_pipeline::{
-        compile_graph, CompilerPolicy, EntryBinding, GraphIntent, GraphLimits, GraphNode,
-        PortCardinality, PortRef, PortSpec, ResultCardinality, ResultContract, StageCapability,
+        compile_graph, BundledProvenance, CompilerPolicy, EntryBinding, GraphIntent, GraphLimits,
+        GraphNode, PortCardinality, PortRef, PortSpec, RequiredSchemaDigest, ResultCardinality,
+        ResultContract, StageCapability,
     };
+
+    #[tokio::test]
+    async fn unavailable_package_revisions_fail_closed_without_failing_the_runtime_view() {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        node.add_schema(gents_protocol::schemas::GRAPH_REVISION)
+            .await
+            .unwrap();
+        let created_at = chrono::Utc::now().to_rfc3339();
+        for (revision_id, digest, complete) in [
+            ("incomplete", "sha256:incomplete", false),
+            ("malformed", "sha256:malformed", true),
+        ] {
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{ create_GraphRevision(input: {{
+                        revision_id: "{revision_id}", graph_id: "graph", digest: "{digest}",
+                        owner_did: "did:key:owner", status: "validated",
+                        compiler_version: "test", plan_json: "{{}}",
+                        artifacts_complete: {complete}, created_at: "{created_at}"
+                    }}) {{ _docID }} }}"#,
+                    revision_id = escape_graphql_string(revision_id),
+                    digest = escape_graphql_string(digest),
+                    created_at = escape_graphql_string(&created_at),
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+
+        let digests = BTreeSet::from([
+            "sha256:missing".to_owned(),
+            "sha256:incomplete".to_owned(),
+            "sha256:malformed".to_owned(),
+        ]);
+        let visible = load_visible_package_artifact_ids(&node, "did:key:owner", &digests)
+            .await
+            .unwrap();
+        assert!(visible.is_empty());
+
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn package_schema_readiness_reuses_live_schema_introspection_and_fails_closed() {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        node.add_schema("type ReadyInput { graph_run_id: String }")
+            .await
+            .unwrap();
+        let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+        let mut package = PackagePlan {
+            name: "test-package".to_owned(),
+            version: "1.0.0".to_owned(),
+            package_digest: format!("sha256:{}", "1".repeat(64)),
+            catalog_digest: format!("sha256:{}", "2".repeat(64)),
+            bundled_provenance: BundledProvenance {
+                binary_version: "test".to_owned(),
+                build_commit: "test".to_owned(),
+            },
+            bindings: Default::default(),
+            roles: Default::default(),
+            effective_authority_ceiling: Default::default(),
+            predecessor_revision_digest: None,
+            artifacts: vec![],
+            required_schema_digests: vec![RequiredSchemaDigest {
+                namespace: "test.graphql".to_owned(),
+                digest: format!("sha256:{}", "3".repeat(64)),
+                collections: std::collections::BTreeMap::from([(
+                    "ReadyInput".to_owned(),
+                    vec!["graph_run_id".to_owned()],
+                )]),
+            }],
+        };
+
+        verify_package_schemas_in_txn(&txn, &package).await.unwrap();
+        package.required_schema_digests[0]
+            .collections
+            .get_mut("ReadyInput")
+            .unwrap()
+            .push("missing_field".to_owned());
+        assert!(verify_package_schemas_in_txn(&txn, &package)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not match its pinned field shape"));
+        package.required_schema_digests[0].collections = std::collections::BTreeMap::from([(
+            "MissingInput".to_owned(),
+            vec!["graph_run_id".to_owned()],
+        )]);
+        assert!(verify_package_schemas_in_txn(&txn, &package)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("is not locally ready"));
+
+        txn.discard().await.unwrap();
+        node.shutdown().await;
+    }
 
     fn test_plan(configuration: &str) -> GraphPlan {
         let input = PortSpec {
@@ -1290,6 +1451,7 @@ mod tests {
                     max_depth: 2,
                     max_fan_out: 2,
                     max_total_invocations: 2,
+                    max_runtime_secs: 60,
                 },
             },
             &[StageCapability {
@@ -1378,6 +1540,7 @@ mod tests {
                     max_depth: 2,
                     max_fan_out: 2,
                     max_total_invocations: 2,
+                    max_runtime_secs: 60,
                 },
             },
             &[
@@ -1456,6 +1619,7 @@ mod tests {
                     max_depth: 1,
                     max_fan_out: 1,
                     max_total_invocations: 1,
+                    max_runtime_secs: 60,
                 },
             },
             &[StageCapability {
@@ -1667,15 +1831,71 @@ mod tests {
         );
         assert_eq!(switched.generation, 2);
 
-        let cancelled = super::super::request_graph_run_cancellation(
-            &node,
-            None,
-            "did:key:owner",
-            &run.run_id,
-            Some("operator stopped the run"),
-        )
-        .await
-        .unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let request = node
+            .execute(&format!(
+                r#"mutation {{ create_AgentRequest(input: {{
+                    request_id: "cancel-recovery-request", agent_did: "did:key:worker",
+                    requester_did: "did:key:owner", behavior_id: "worker-v1",
+                    status: "processing", lifecycle_state: "processing",
+                    caused_by_trigger_id: "{}", caused_by_correlation: "{}",
+                    created_at: "{}"
+                }}) {{ _docID }} }}"#,
+                escape_graphql_string(&materialized.trigger_ids[0]),
+                escape_graphql_string(&run.correlation),
+                escape_graphql_string(&now),
+            ))
+            .await;
+        assert!(!request.has_errors(), "{:?}", request.errors);
+        let cancel_intent = node
+            .execute(&format!(
+                r#"mutation {{ update_GraphRun(
+                    filter: {{ run_id: {{ _eq: "{}" }} }},
+                    input: {{ cancel_requested_at: "{}", cancel_requested_by: "did:key:owner",
+                        cancel_reason: "operator stopped the run", update_generation: 1 }}
+                ) {{ _docID }} }}"#,
+                escape_graphql_string(&run.run_id),
+                escape_graphql_string(&now),
+            ))
+            .await;
+        assert!(!cancel_intent.has_errors(), "{:?}", cancel_intent.errors);
+
+        let recovering =
+            super::super::reconcile_graph_run(&node, None, "did:key:owner", &run.run_id)
+                .await
+                .unwrap();
+        assert_eq!(recovering.status, "running");
+        assert_eq!(recovering.active_request_count, 1);
+        let interrupted = node
+            .execute(
+                r#"{ AgentRequest(filter: { request_id: { _eq: "cancel-recovery-request" } }) {
+                    interrupt_requested_at
+                } }"#,
+            )
+            .await;
+        assert!(!interrupted.has_errors(), "{:?}", interrupted.errors);
+        assert!(
+            interrupted.data.unwrap()["AgentRequest"][0]["interrupt_requested_at"]
+                .as_str()
+                .is_some()
+        );
+        let terminal_request = node
+            .execute(
+                r#"mutation { update_AgentRequest(
+                    filter: { request_id: { _eq: "cancel-recovery-request" } },
+                    input: { status: "interrupted", lifecycle_state: "interrupted" }
+                ) { _docID } }"#,
+            )
+            .await;
+        assert!(
+            !terminal_request.has_errors(),
+            "{:?}",
+            terminal_request.errors
+        );
+        let cancelled =
+            super::super::reconcile_graph_run(&node, None, "did:key:owner", &run.run_id)
+                .await
+                .unwrap();
         assert_eq!(cancelled.status, "cancelled");
         assert_eq!(cancelled.update_generation, 2);
         assert_eq!(
@@ -1758,6 +1978,17 @@ mod tests {
             ))
             .await;
         assert!(!request.has_errors(), "{:?}", request.errors);
+        let unsatisfied = super::super::load_graph_run_view(&node, "did:key:owner", &run.run_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            unsatisfied
+                .failure_evidence
+                .as_ref()
+                .and_then(|error| error.get("code"))
+                .and_then(Value::as_str),
+            Some("result_contract_unsatisfied")
+        );
         let result = node
             .execute(&format!(
                 r#"mutation {{ create_PipelineResult(input: {{

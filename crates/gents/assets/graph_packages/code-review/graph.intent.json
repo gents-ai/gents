@@ -115,6 +115,7 @@
     "max_edges": 16,
     "max_depth": 8,
     "max_fan_out": 16,
-    "max_total_invocations": 128
+    "max_total_invocations": 128,
+    "max_runtime_secs": 7200
   }
 }
