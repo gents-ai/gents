@@ -336,6 +336,16 @@ fn compact_bearer_qr_payload_v2(token: &BearerInviteToken) -> Result<Vec<u8>> {
         Some(id) => Value::Text(id.clone()),
         None => Value::Null,
     };
+    // Must ride the payload: `bearer_signing_payload` serializes the whole
+    // token, and the scanner verifies the issuer signature over the struct it
+    // RECONSTRUCTS here. Dropping the digest would change the signing payload
+    // for every digest-bearing invite (signature verification fails outright),
+    // and where it didn't, it would silently downgrade the #1122 schema
+    // preflight to "no check" on exactly the QR path.
+    let schema_digest_value = match &token.schema_digest {
+        Some(digest) => Value::Text(digest.clone()),
+        None => Value::Null,
+    };
     let network_value = Value::Array(vec![
         Value::Text(token.network.display_name.clone()),
         Value::Text(token.network.default_template.clone()),
@@ -353,6 +363,7 @@ fn compact_bearer_qr_payload_v2(token: &BearerInviteToken) -> Result<Vec<u8>> {
         issued_at_value,
         Value::Text(token.template.clone()),
         default_behavior_value,
+        schema_digest_value,
         network_value,
         Value::Bytes(token.sig.clone()),
     ]);
@@ -399,13 +410,13 @@ fn decode_compact_bearer_qr_payload_v2(body: &[u8]) -> Result<BearerInviteToken>
     let items = value
         .into_array()
         .map_err(|_| anyhow::anyhow!("v2 compact bearer invite payload is not a CBOR array"))?;
-    let items: [Value; 11] = items.try_into().map_err(|items: Vec<Value>| {
+    let items: [Value; 12] = items.try_into().map_err(|items: Vec<Value>| {
         anyhow::anyhow!(
-            "v2 compact bearer invite payload has {} elements, expected 11",
+            "v2 compact bearer invite payload has {} elements, expected 12",
             items.len()
         )
     })?;
-    let [v_raw, issuer_did_raw, peer_id_raw, ticket_raw, nonce_raw, network_id_raw, issued_at_raw, template_raw, default_behavior_raw, network_raw, sig_raw] =
+    let [v_raw, issuer_did_raw, peer_id_raw, ticket_raw, nonce_raw, network_id_raw, issued_at_raw, template_raw, default_behavior_raw, schema_digest_raw, network_raw, sig_raw] =
         items;
 
     let v = v_raw
@@ -466,6 +477,12 @@ fn decode_compact_bearer_qr_payload_v2(body: &[u8]) -> Result<BearerInviteToken>
         _ => anyhow::bail!("v2 payload: default_behavior_id field has unexpected CBOR type"),
     };
 
+    let schema_digest = match schema_digest_raw {
+        Value::Null => None,
+        Value::Text(text) => Some(text),
+        _ => anyhow::bail!("v2 payload: schema_digest field has unexpected CBOR type"),
+    };
+
     let network_items = network_raw
         .into_array()
         .map_err(|_| anyhow::anyhow!("v2 payload: network field is not an array"))?;
@@ -504,6 +521,7 @@ fn decode_compact_bearer_qr_payload_v2(body: &[u8]) -> Result<BearerInviteToken>
         issued_at,
         template,
         default_behavior_id,
+        schema_digest,
         sig,
     })
 }
@@ -835,7 +853,9 @@ mod tests {
     use std::io::Read;
 
     use flate2::read::GzDecoder;
-    use gents_protocol::bearer_token::{encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION};
+    use gents_protocol::bearer_token::{
+        bearer_signing_payload, encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION,
+    };
     use gents_protocol::network_token::{MembershipRecord, NetworkRecord};
 
     use super::*;
@@ -989,6 +1009,54 @@ mod tests {
     }
 
     #[test]
+    fn compact_bearer_qr_v2_carries_the_schema_digest_through_the_round_trip() {
+        // Regression fence for the #1122/#938 interaction: the v2 payload is a
+        // POSITIONAL array, so a field added to `BearerInviteToken` is silently
+        // dropped unless a slot is added here too. `bearer_signing_payload`
+        // serializes the whole token and the scanner verifies the issuer
+        // signature over the struct it RECONSTRUCTS — so a dropped
+        // `schema_digest` breaks signature verification for every
+        // digest-bearing invite, and where it didn't, would downgrade the
+        // schema preflight to "no check" on exactly the QR path.
+        let mut token = bearer_token();
+        token.schema_digest = Some("7fH3kq9mZp".to_string());
+
+        let payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        let decoded = decode_compact_bearer_qr_payload_v2(&payload[BEARER_QR_MAGIC_V2.len()..])
+            .expect("decode compact v2 QR payload");
+
+        assert_eq!(decoded.schema_digest.as_deref(), Some("7fH3kq9mZp"));
+        assert_eq!(decoded, token);
+        assert_eq!(
+            bearer_signing_payload(&decoded),
+            bearer_signing_payload(&token),
+            "reconstructed token must reproduce the issuer's signing payload byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn compact_bearer_qr_v2_round_trips_a_token_without_a_schema_digest() {
+        // The `None` arm must stay distinguishable from the `Some` arm: serde
+        // SKIPS the key entirely when None, so a payload that encoded null-as-
+        // empty-string would change the signing payload of every legacy invite.
+        let token = bearer_token();
+        assert!(
+            token.schema_digest.is_none(),
+            "fixture should have no digest"
+        );
+
+        let payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        let decoded = decode_compact_bearer_qr_payload_v2(&payload[BEARER_QR_MAGIC_V2.len()..])
+            .expect("decode compact v2 QR payload");
+
+        assert_eq!(decoded.schema_digest, None);
+        assert_eq!(
+            bearer_signing_payload(&decoded),
+            bearer_signing_payload(&token)
+        );
+    }
+
+    #[test]
     fn compact_bearer_qr_v2_preserves_signing_payload_bytes() {
         let token = bearer_token();
         let original_signing_payload = bearer_signing_payload(&token);
@@ -1112,40 +1180,5 @@ mod tests {
         let mut wrong_network = grant;
         wrong_network.network_id = "net-other".to_string();
         assert!(validate_invite_grant(&network, &wrong_network, "did:key:agent-b").is_err());
-    }
-}
-
-#[cfg(test)]
-mod scratch_v1_fixture_probe {
-    use super::*;
-    use gents_protocol::bearer_token::{BearerInviteToken, BEARER_TOKEN_VERSION};
-    use gents_protocol::network_token::NetworkRecord;
-
-    #[test]
-    fn probe() {
-        let token = BearerInviteToken {
-            v: BEARER_TOKEN_VERSION,
-            issuer_did: "did:key:z6MktestIssuerFixture".to_string(),
-            peer_id: "peerlegacyabc123".to_string(),
-            ticket: "peerlegacyabc123@127.0.0.1:4242".to_string(),
-            nonce: "3fa85f64-5717-4562-b3fc-2c963f66afa6".to_string(),
-            network_id: "net-test-fixture".to_string(),
-            issued_at: "2026-07-08T00:00:00Z".to_string(),
-            template: "conversation".to_string(),
-            default_behavior_id: Some("default".to_string()),
-            network: NetworkRecord {
-                network_id: "net-test-fixture".to_string(),
-                admin_did: "did:key:z6MktestIssuerFixture".to_string(),
-                display_name: "Test Net".to_string(),
-                default_template: "conversation".to_string(),
-                created_at: "2026-07-08T00:00:00Z".to_string(),
-                sig: vec![1, 2, 3, 4],
-            },
-            sig: vec![9, 9, 9, 9],
-        };
-
-        let v1_payload = compact_bearer_qr_payload(&token).expect("v1 payload");
-        let raw_v1_cbor = gunzip(&v1_payload[BEARER_QR_MAGIC.len()..]).expect("gunzip v1");
-        println!("RAW_V1_CBOR={:?}", raw_v1_cbor);
     }
 }

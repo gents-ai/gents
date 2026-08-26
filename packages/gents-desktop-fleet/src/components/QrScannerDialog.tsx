@@ -25,8 +25,8 @@ const BASE58_ALPHABET =
 
 // v2 positional array layout (see `compact_bearer_qr_payload_v2` in Rust):
 // [v, issuer_did, peer_id|null, ticket, nonce, network_id, issued_at,
-//  template, default_behavior_id|null, network, sig]
-const V2_ARRAY_LENGTH = 11;
+//  template, default_behavior_id|null, schema_digest|null, network, sig]
+const V2_ARRAY_LENGTH = 12;
 // network sub-array: [display_name, default_template, created_at, sig]
 const V2_NETWORK_ARRAY_LENGTH = 4;
 
@@ -274,6 +274,20 @@ function cborBytes(value: Uint8Array): number[] {
   return [...cborUintHeader(2, value.length), ...value];
 }
 
+/** Serde serializes a Rust `Vec<u8>` as a CBOR ARRAY OF INTEGERS (major type
+ * 4), not a byte string (major type 2) — `serde_bytes` would be needed for the
+ * latter, and `BearerInviteToken` doesn't use it. The signature fields must be
+ * re-encoded this way or the bytes diverge from the issuer's signing payload
+ * and every scanned invite fails verification. The divergence is invisible for
+ * signatures whose every byte is < 24 (both encodings are then the same
+ * length), which is exactly why it needs a pinned cross-language fixture. */
+function cborUintArray(value: Uint8Array): number[] {
+  return [
+    ...cborUintHeader(4, value.length),
+    ...[...value].flatMap((byte) => cborUint(byte)),
+  ];
+}
+
 function cborText(value: string): number[] {
   const bytes = new TextEncoder().encode(value);
   return [...cborUintHeader(3, bytes.length), ...bytes];
@@ -298,14 +312,15 @@ type ReconstructedBearerToken = {
   issuedAt: string;
   template: string;
   defaultBehaviorId: string | null;
+  schemaDigest: string | null;
   network: ReconstructedNetwork;
   sig: Uint8Array;
 };
 
 /** Rebuilds the same struct-as-map CBOR bytes `encode_bearer` (Rust) would
  * produce for this token: a definite-length map keyed by the exact
- * `BearerInviteToken` field names, `default_behavior_id` present only when
- * set. `decode_bearer` reads CBOR maps by key (via serde's struct
+ * `BearerInviteToken` field names, `default_behavior_id` and `schema_digest`
+ * present only when set. `decode_bearer` reads CBOR maps by key (via serde's struct
  * deserialization), so key order doesn't matter here — only presence and
  * names do. */
 function encodeBearerTokenAsMapCbor(token: ReconstructedBearerToken): Uint8Array {
@@ -325,6 +340,12 @@ function encodeBearerTokenAsMapCbor(token: ReconstructedBearerToken): Uint8Array
   if (token.defaultBehaviorId !== null) {
     push("default_behavior_id", cborText(token.defaultBehaviorId));
   }
+  // Mirrors serde's `skip_serializing_if = "Option::is_none"`: the key must be
+  // ABSENT (not null) when unset, or the re-encoded bytes diverge from the
+  // signing payload the issuer signed and verification fails.
+  if (token.schemaDigest !== null) {
+    push("schema_digest", cborText(token.schemaDigest));
+  }
 
   const networkFields: number[][] = [
     [cborText("network_id"), cborText(token.network.networkId)].flat(),
@@ -335,14 +356,14 @@ function encodeBearerTokenAsMapCbor(token: ReconstructedBearerToken): Uint8Array
       cborText(token.network.defaultTemplate),
     ].flat(),
     [cborText("created_at"), cborText(token.network.createdAt)].flat(),
-    [cborText("sig"), cborBytes(token.network.sig)].flat(),
+    [cborText("sig"), cborUintArray(token.network.sig)].flat(),
   ];
   push("network", [
     ...cborUintHeader(5, networkFields.length),
     ...networkFields.flat(),
   ]);
 
-  push("sig", cborBytes(token.sig));
+  push("sig", cborUintArray(token.sig));
 
   return Uint8Array.from([
     ...cborUintHeader(5, entries.length),
@@ -363,7 +384,7 @@ function decodeCompactV2(compressed: Uint8Array): string | null {
     const ticket = asText(items[3], "ticket");
     const networkId = asText(items[5], "network_id");
     const template = asText(items[7], "template");
-    const sig = asBytes(items[10], "sig");
+    const sig = asBytes(items[11], "sig");
 
     const peerIdRaw = items[2];
     const peerId =
@@ -389,7 +410,13 @@ function decodeCompactV2(compressed: Uint8Array): string | null {
         ? null
         : asText(defaultBehaviorRaw, "default_behavior_id");
 
-    const networkItems = asArray(items[9], "network");
+    const schemaDigestRaw = items[9];
+    const schemaDigest =
+      schemaDigestRaw === null
+        ? null
+        : asText(schemaDigestRaw, "schema_digest");
+
+    const networkItems = asArray(items[10], "network");
     if (networkItems.length !== V2_NETWORK_ARRAY_LENGTH) return null;
 
     const token: ReconstructedBearerToken = {
@@ -402,6 +429,7 @@ function decodeCompactV2(compressed: Uint8Array): string | null {
       issuedAt,
       template,
       defaultBehaviorId,
+      schemaDigest,
       network: {
         networkId,
         adminDid: issuerDid,
