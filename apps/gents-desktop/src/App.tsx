@@ -260,17 +260,20 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               setMobileChatPane("conversation");
             }}
             onOpenMailboxItem={(itemId) => {
-              void shell.onOpenMailboxItem(itemId).then(() => {
-                setWorkspaceView("chat");
-                setMobileChatPane("conversation");
-                requestAnimationFrame(() => {
-                  document
-                    .querySelector<HTMLTextAreaElement>(
-                      '[data-testid="composer-input"]',
-                    )
-                    ?.focus();
-                });
-              }).catch(() => {});
+              void shell
+                .onOpenMailboxItem(itemId)
+                .then(() => {
+                  setWorkspaceView("chat");
+                  setMobileChatPane("conversation");
+                  requestAnimationFrame(() => {
+                    document
+                      .querySelector<HTMLTextAreaElement>(
+                        '[data-testid="composer-input"]',
+                      )
+                      ?.focus();
+                  });
+                })
+                .catch(() => {});
             }}
             onDismissMailboxItem={(itemId) => {
               void shell.onDismissMailboxItem(itemId).catch(() => {});
@@ -282,7 +285,10 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
 
           <section className="chat-column">
             {shell.pendingMailboxCauseId ? (
-              <div className="mailbox-compose-banner" data-testid="mailbox-compose-banner">
+              <div
+                className="mailbox-compose-banner"
+                data-testid="mailbox-compose-banner"
+              >
                 This reply is linked to a mailbox item.
                 <button onClick={shell.clearPendingMailboxCause} type="button">
                   Cancel link

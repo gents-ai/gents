@@ -61,7 +61,9 @@ describe("mailbox sidebar", () => {
     const { onOpenMailboxItem, onDismissMailboxItem } = renderSidebar([item()]);
     expect(screen.getByTestId("agent-tab-mailbox")).toHaveTextContent("Mailbox (1)");
     expect(screen.getByText("Review the result")).toBeInTheDocument();
-    expect(screen.getByText("The graph is waiting for a decision.")).toBeInTheDocument();
+    expect(
+      screen.getByText("The graph is waiting for a decision."),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("mailbox-open-item-1"));
     expect(onOpenMailboxItem).toHaveBeenCalledWith("item-1");

@@ -128,7 +128,9 @@ export function Sidebar({
                     {item.sourceKind} · {item.sourceId}
                   </div>
                   {item.summary ? <p>{item.summary}</p> : null}
-                  {item.payload ? <p className="mailbox-payload">{item.payload}</p> : null}
+                  {item.payload ? (
+                    <p className="mailbox-payload">{item.payload}</p>
+                  ) : null}
                   <div className="mailbox-actions">
                     {item.action === "ack" ? (
                       item.sessionId && onOpenSession ? (
