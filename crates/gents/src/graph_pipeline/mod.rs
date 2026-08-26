@@ -32,7 +32,8 @@ pub(crate) use runtime::{
     record_graph_revision_materialization_failure,
 };
 pub(crate) use runtime::{
-    graph_artifact_is_visible, graph_materialization_denial, load_visible_package_artifact_ids,
+    graph_artifact_is_reserved, graph_artifact_is_visible, graph_materialization_denial,
+    load_visible_package_artifact_ids,
 };
 pub use tools::{
     CompileGraphArgs, CompileGraphResponse, CompileGraphTool, GraphPipelineToolError,

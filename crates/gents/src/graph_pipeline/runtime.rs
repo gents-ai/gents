@@ -143,14 +143,29 @@ pub(crate) fn graph_artifact_revision_digest(id: &str) -> Option<String> {
     Some(format!("sha256:{digest}"))
 }
 
+pub(crate) fn graph_artifact_is_reserved(id: &str) -> bool {
+    id.starts_with(TRIGGER_PREFIX)
+}
+
 pub(crate) fn graph_artifact_is_visible(
     id: &str,
     active_digests: &std::collections::BTreeSet<String>,
 ) -> bool {
-    if !id.starts_with(TRIGGER_PREFIX) {
+    if !graph_artifact_is_reserved(id) {
         return true;
     }
     graph_artifact_revision_digest(id).is_some_and(|digest| active_digests.contains(&digest))
+}
+
+fn verify_package_role_bindings(package: &PackagePlan, owner_did: &str) -> Result<()> {
+    if package
+        .roles
+        .values()
+        .any(|role| role.principal_did != owner_did)
+    {
+        anyhow::bail!("graph package v1 requires every logical role to bind the revision owner");
+    }
+    Ok(())
 }
 
 /// Resolve package-owned ordinary configuration resources through the same
@@ -224,13 +239,7 @@ async fn load_visible_package_artifact_ids_for_revision(
     let Some(package) = plan.package else {
         return Ok(BTreeSet::new());
     };
-    if package
-        .roles
-        .values()
-        .any(|role| role.principal_did != agent_did)
-    {
-        anyhow::bail!("graph package v1 requires every logical role to bind the revision owner");
-    }
+    verify_package_role_bindings(&package, agent_did)?;
     let txn = ConfigApplyTxn::begin_local(node, None).await?;
     let readiness = async {
         verify_package_schemas_in_txn(&txn, &package).await?;
@@ -1050,6 +1059,9 @@ async fn activate_in_txn(
     if plan.graph_id != graph_id || plan.digest != digest || !verify_graph_plan_digest(&plan) {
         anyhow::bail!("candidate revision plan failed immutable identity verification");
     }
+    if let Some(package) = plan.package.as_ref() {
+        verify_package_role_bindings(package, owner_did)?;
+    }
     if current.as_deref() == Some(digest) {
         let gate = revision_gate_decision(
             revision
@@ -1219,6 +1231,11 @@ async fn start_run_in_txn(
     let revision = query_graph_revision(txn, digest)
         .await?
         .context("active graph revision is missing")?;
+    if revision.get("graph_id").and_then(Value::as_str) != Some(graph_id)
+        || revision.get("owner_did").and_then(Value::as_str) != Some(owner_did)
+    {
+        anyhow::bail!("active graph revision does not belong to this graph and owner");
+    }
     if !revision_gate_decision(
         revision
             .get("status")
@@ -1244,6 +1261,7 @@ async fn start_run_in_txn(
         anyhow::bail!("active graph revision failed immutable identity verification");
     }
     if let Some(package) = plan.package.as_ref() {
+        verify_package_role_bindings(package, owner_did)?;
         verify_package_schemas_in_txn(txn, package).await?;
         verify_package_artifacts_in_txn(txn, package).await?;
     }
@@ -1647,6 +1665,9 @@ mod tests {
             None
         );
         let active = BTreeSet::from([digest.clone()]);
+        assert!(graph_artifact_is_reserved(&id));
+        assert!(graph_artifact_is_reserved("graph-trigger-not-a-digest-x"));
+        assert!(!graph_artifact_is_reserved("operator-task"));
         assert!(graph_artifact_is_visible(&id, &active));
         assert!(graph_artifact_is_visible("operator-task", &BTreeSet::new()));
         assert!(!graph_artifact_is_visible(&id, &BTreeSet::new()));

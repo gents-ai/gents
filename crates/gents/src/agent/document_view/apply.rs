@@ -235,6 +235,9 @@ pub(crate) async fn apply_control_update(
     }
 
     if let Some((loaded_doc_id, trigger)) = load_event_trigger_by_doc_id(node, doc_id).await? {
+        if crate::graph_pipeline::graph_artifact_is_reserved(&trigger.trigger_id) {
+            return Ok(ControlUpdateOutcome::FullReload);
+        }
         if trigger.trigger_id.trim().is_empty() {
             return Ok(ControlUpdateOutcome::Irrelevant);
         }

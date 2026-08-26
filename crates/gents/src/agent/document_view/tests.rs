@@ -842,7 +842,7 @@ async fn create_event_trigger(
     source_collection: &str,
     event_kind: &str,
     concurrency: &str,
-) {
+) -> String {
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let escaped_task_id = escape_graphql_string(task_id);
     let escaped_source_collection = escape_graphql_string(source_collection);
@@ -866,6 +866,46 @@ async fn create_event_trigger(
         "create EventTrigger failed: {:?}",
         response.errors
     );
+    created_skill_doc_id(response.data.as_ref()).expect("created EventTrigger _docID")
+}
+
+#[tokio::test]
+async fn apply_control_update_full_reloads_reserved_graph_triggers() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-graph-trigger"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-document-view-graph-trigger",
+        "http://127.0.0.1:8123/v1",
+    )
+    .await;
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("initial document view");
+    let doc_id = create_event_trigger(
+        node.as_ref(),
+        "graph-trigger-not-a-valid-revision",
+        "operator-task",
+        "AgentRequest",
+        "created",
+        "serial",
+    )
+    .await;
+
+    let outcome = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "EventTrigger",
+        &doc_id,
+        &mut view,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, ControlUpdateOutcome::FullReload);
+
+    node.shutdown().await;
 }
 
 async fn create_schedule(node: &defra_node::EmbeddedNode, schedule_id: &str, task_id: &str) {

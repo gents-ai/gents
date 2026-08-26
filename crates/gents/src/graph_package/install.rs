@@ -489,6 +489,12 @@ async fn active_revision_plan(node: &EmbeddedNode, graph_id: &str) -> Result<Opt
             .and_then(Value::as_str)
             .context("active package revision is missing plan_json")?,
     )?;
+    if plan.graph_id != graph_id
+        || plan.digest != digest
+        || !crate::graph_pipeline::verify_graph_plan_digest(&plan)
+    {
+        anyhow::bail!("active package revision failed immutable identity verification");
+    }
     Ok(Some(plan))
 }
 

@@ -662,6 +662,10 @@ Ordinary non-graph requests keep their existing path. A graph-attributed child r
 must have controller-authored lineage to a nonterminal pinned run. Publishing/
 activation and starting are separate ACP decisions even when one CLI invocation asks
 for both.
+The same authority boundary owns the terminal/materialization race: terminal compare-
+and-set cannot rely on a stale request view while another path can durably admit a
+correlated child. The owning request-intent design must provide one durable fence and
+a conformance case for both race orderings, rather than a graph-only request path.
 Cancel and observe are independently checked. Each decision is auditable through the
 affected revision/run and existing identity/ACP records; bundling writes no grant.
 
@@ -777,6 +781,10 @@ commits.
   direct `create_AgentRequest` sites using the owning ACP/request-intent design.
 - Require controller-authored nonterminal GraphRun correlation for graph-owned child
   requests.
+- Make graph-correlated request admission/materialization and the terminal evidence
+  snapshot share one durable fence. A child admitted before terminalization must be
+  included in that snapshot; a child arriving after the terminal winner must fail
+  closed. Model the race in Lean before changing the Rust boundary.
 - This may progress alongside issues 1-5, but it is a merge/shipping gate before the
   executable CLI slice. Package work consumes its API and does not name a parallel
   grant document.
