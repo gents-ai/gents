@@ -104,8 +104,7 @@ mod tests {
     #[test]
     fn whitespace_only_edits_do_not_change_the_digest() {
         let original: &[(&str, &str)] = &[("Foo", "type Foo {\n    id: String\n}\n")];
-        let reindented: &[(&str, &str)] =
-            &[("Foo", "type   Foo   {\n\tid:    String\n}\n\n\n")];
+        let reindented: &[(&str, &str)] = &[("Foo", "type   Foo   {\n\tid:    String\n}\n\n\n")];
         assert_eq!(
             schema_bundle_digest(original),
             schema_bundle_digest(reindented)
@@ -115,17 +114,14 @@ mod tests {
     #[test]
     fn a_real_field_change_produces_a_different_digest() {
         let before: &[(&str, &str)] = &[("Foo", "type Foo {\n    id: String\n}\n")];
-        let added: &[(&str, &str)] =
-            &[("Foo", "type Foo {\n    id: String\n    extra: Int\n}\n")];
+        let added: &[(&str, &str)] = &[("Foo", "type Foo {\n    id: String\n    extra: Int\n}\n")];
         assert_ne!(schema_bundle_digest(before), schema_bundle_digest(added));
 
         let removed: &[(&str, &str)] = &[("Foo", "type Foo {\n}\n")];
         assert_ne!(schema_bundle_digest(before), schema_bundle_digest(removed));
 
-        let reordered: &[(&str, &str)] = &[(
-            "Foo",
-            "type Foo {\n    extra: Int\n    id: String\n}\n",
-        )];
+        let reordered: &[(&str, &str)] =
+            &[("Foo", "type Foo {\n    extra: Int\n    id: String\n}\n")];
         assert_ne!(schema_bundle_digest(added), schema_bundle_digest(reordered));
     }
 

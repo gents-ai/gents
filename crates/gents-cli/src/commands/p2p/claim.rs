@@ -392,10 +392,7 @@ mod tests {
         assert!(err.contains("machine"), "unexpected: {err}");
         assert!(err.contains("localDigest1"), "unexpected: {err}");
         assert!(err.contains("remoteDigest2"), "unexpected: {err}");
-        assert!(
-            err.contains("--allow-schema-mismatch"),
-            "unexpected: {err}"
-        );
+        assert!(err.contains("--allow-schema-mismatch"), "unexpected: {err}");
     }
 
     #[test]

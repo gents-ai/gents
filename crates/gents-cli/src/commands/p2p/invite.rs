@@ -570,6 +570,7 @@ mod tests {
             issued_at: "2026-07-23T21:30:00Z".to_string(),
             template: "conversation".to_string(),
             default_behavior_id: Some("default".to_string()),
+            schema_digest: None,
             network: NetworkRecord {
                 network_id: "net-Euv46XiYtc8knZqM7cJBAE".to_string(),
                 admin_did:
