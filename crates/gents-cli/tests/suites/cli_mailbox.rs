@@ -46,9 +46,8 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
         did = escape_graphql_string(&agent_did),
     );
     let created = graphql_query(&graphql, &mutation).await?;
-    let doc_id = created["data"]["create_MailboxItem"]["_docID"]
-        .as_str()
-        .context("created mailbox doc id")?;
+    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&created, "MailboxItem")
+        .with_context(|| format!("created mailbox doc id: {created}"))?;
 
     let listed = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
     let rows = listed.as_array().context("mailbox list array")?;
@@ -58,7 +57,7 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
 
     let dismissed = run_cli_json(
         &home_dir,
-        &["mailbox", "dismiss", doc_id, "--graphql", &graphql],
+        &["mailbox", "dismiss", &doc_id, "--graphql", &graphql],
     )?;
     assert_eq!(dismissed["status"], "dismissed");
     let open = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
