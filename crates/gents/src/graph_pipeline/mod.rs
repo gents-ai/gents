@@ -28,8 +28,8 @@ pub use runtime::{
     MaterializedRevision, PublishedGraph, RevisionGateDecision,
 };
 pub(crate) use runtime::{
-    ensure_graph_revision_receipt, materialize_graph_revision_in_txn,
-    record_graph_revision_materialization_failure,
+    ensure_graph_revision_receipt_with_access, materialize_graph_revision_in_txn,
+    record_graph_revision_materialization_failure_with_access,
 };
 pub(crate) use runtime::{
     graph_artifact_is_reserved, graph_artifact_is_visible, graph_materialization_denial,

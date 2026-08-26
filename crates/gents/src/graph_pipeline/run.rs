@@ -38,6 +38,10 @@ pub struct GraphRunResultView {
     pub observed_count: usize,
     pub violation: Option<String>,
     pub refs: Vec<GraphResultRef>,
+    /// Exact documents used to evaluate this named result contract. The
+    /// durable run projection exposes values as well as immutable references
+    /// so every observer can render useful output without a second UI model.
+    pub documents: Vec<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -609,6 +613,16 @@ async fn load_result(
         });
     }
     refs.sort_by(|left, right| left.document_id.cmp(&right.document_id));
+    let documents = docs
+        .iter()
+        .cloned()
+        .map(|mut document| {
+            if let Some(object) = document.as_object_mut() {
+                object.remove("_version");
+            }
+            document
+        })
+        .collect();
     Ok(LoadedResult {
         plan: result.clone(),
         docs,
@@ -619,6 +633,7 @@ async fn load_result(
             observed_count: refs.len(),
             violation,
             refs,
+            documents,
         },
     })
 }

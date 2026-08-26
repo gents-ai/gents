@@ -50,19 +50,28 @@ gpt-5.4-mini`. Add `--desktop` to launch the native app as soon as the runtime
 is ready.
 
 The binary also carries an immutable catalog of useful graphs. Cataloging is
-read-only; installation writes one explicit, attributable revision into an
-initialized home and publication is a separate confirmation step:
+read-only. Interactive init can configure OpenAI API access, ChatGPT/Codex
+OAuth, Grok OAuth, a local model, or a custom endpoint. A bundled graph inherits
+that default backend when it is installed:
 
 ```bash
+gents init                 # choose ChatGPT / Codex and complete OAuth
+gents server               # keep this running in another terminal
+
 gents graph catalog code-review
 gents graph install code-review
-# Run the exact `gents graph publish ...` command in the install receipt.
-gents server
-gents graph run code-review --repo /path/to/repo --base origin/main --head HEAD --watch
+
+cd /path/to/repo
+gents graph run code-review
+gents graph watch <run-id>
+gents graph result <run-id>
 ```
 
-Use `gents graph result <run-id>` to retrieve durable result document and commit
-references, or `gents graph cancel <run-id>` to request cancellation. The
+The run command defaults to the current directory, `origin/main`, and `HEAD`;
+use `--repo`, `--base`, or `--head` to override them. Add `--output json` to
+install, run, watch, or result for machine-readable output. Result prints the
+durable review report and confirmed findings as well as retaining their exact
+document/commit references. Use `gents graph cancel <run-id>` to request cancellation. The
 code-review graph accepts any local Git work tree and uses the existing
 principal, deployment, tool-surface, workspace, request, trigger, and graph-run
 machinery; bundling it grants no tools or execution authority.

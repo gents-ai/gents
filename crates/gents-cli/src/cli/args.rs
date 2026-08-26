@@ -198,8 +198,6 @@ pub(crate) enum GraphCommand {
     Catalog(GraphCatalogArgs),
     #[command(about = "Materialize a bundled package into an initialized home")]
     Install(GraphInstallArgs),
-    #[command(about = "Activate an exact installed revision")]
-    Publish(GraphPublishArgs),
     #[command(about = "Start a run of an installed active graph")]
     Run(GraphRunArgs),
     #[command(about = "Watch durable graph progress until terminal")]
@@ -239,36 +237,27 @@ pub(crate) struct GraphInstallArgs {
         help = "JSON file containing typed owner, role, deployment, model, and install-variable bindings"
     )]
     pub(crate) bindings: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) agent_did: Option<String>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct GraphPublishArgs {
-    pub(crate) package: String,
-    #[arg(long)]
-    pub(crate) revision: String,
-    #[arg(long, help = "Repeat the exact revision digest being activated")]
-    pub(crate) confirm_revision: String,
     #[command(flatten)]
     pub(crate) scope: GraphScopeArgs,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]
 pub(crate) struct GraphRunArgs {
     pub(crate) package: String,
-    #[arg(long)]
+    #[arg(long, default_value = ".")]
     pub(crate) repo: PathBuf,
-    #[arg(long)]
+    #[arg(long, default_value = "origin/main")]
     pub(crate) base: String,
-    #[arg(long)]
+    #[arg(long, default_value = "HEAD")]
     pub(crate) head: String,
     #[arg(long)]
     pub(crate) focus: Option<String>,
     #[arg(long, default_value_t = false)]
     pub(crate) watch: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
     #[command(flatten)]
     pub(crate) scope: GraphScopeArgs,
 }
@@ -278,6 +267,8 @@ pub(crate) struct GraphWatchArgs {
     pub(crate) run_id: String,
     #[arg(long, default_value_t = 1_000)]
     pub(crate) interval_ms: u64,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
     #[command(flatten)]
     pub(crate) scope: GraphScopeArgs,
 }
@@ -285,6 +276,8 @@ pub(crate) struct GraphWatchArgs {
 #[derive(clap::Args)]
 pub(crate) struct GraphResultArgs {
     pub(crate) run_id: String,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
     #[command(flatten)]
     pub(crate) scope: GraphScopeArgs,
 }

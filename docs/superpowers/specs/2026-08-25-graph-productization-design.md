@@ -1,8 +1,8 @@
 # Graph productization: bundled packages, execution contracts, and authoring UX
 
-**Status:** accepted implementation contract for the first productization work after
-`feat/graph-model-tools` (`2d39ade3`). This work does not modify, rebase, or absorb
-the four open graph-pipeline commits.
+**Status:** accepted implementation contract for productization on top of the graph
+pipeline now landed on `main`. The foundation remains owned by its landed commits;
+this track extends it only through the reuse seams identified below.
 
 **First acceptance package:** `code-review`, stored only in the canonical bundled
 asset tree. The pre-release checkout-relative demo pack is removed rather than kept
@@ -32,20 +32,22 @@ The smallest initial command surface is:
 ```text
 gents graph catalog [<package>]
 gents graph install code-review [--version <version>] [--bindings <file>]
-gents graph publish code-review --revision <digest> --confirm-revision <digest>
-gents graph run code-review --repo /path/to/repo --base origin/main --head HEAD
+gents graph run code-review [--repo .] [--base origin/main] [--head HEAD]
 gents graph watch <run-id>
 gents graph result <run-id>
 gents graph cancel <run-id>
 gents graph disable|enable code-review
 ```
 
-`install` never activates. It returns an immutable revision receipt and the exact
-`publish` command. Publication performs a distinct authorization check and requires
-the revision digest to be repeated through `--confirm-revision`. Starting/replaying,
-cancelling, and observing use their own checks. Bundling or installing never grants
-any of them. The default quickstart binding reuses the initialized home's existing
-principal, deployment, behavior backend/profile/model and prints the full mapping;
+For a trusted package bundled in the binary, `install` materializes and activates the
+exact revision it just compiled. This is one user command but remains two existing
+control-plane operations: resumable installation followed by separately authorized
+CAS activation. The digest is preserved in documents and never becomes a quickstart
+argument. Model/human-authored graphs retain an explicit prospective-digest review and
+publish-confirmation boundary when authoring ships. Starting/replaying, cancelling,
+and observing use their own checks; install never starts a run. Bundling grants none
+of these authorities. The default quickstart binding reuses the initialized home's existing
+principal, deployment, behavior backend/profile/model; `--output json` exposes the full mapping;
 `--bindings` accepts the same typed structure for explicit successor configuration.
 The local-repository v1 slice binds every logical role to that one owner principal
 and host deployment while allowing independent backend/profile/model choices per
@@ -57,7 +59,10 @@ single successor-revision operation; v1 does not expose separate `configure` and
 `upgrade` commands. Exact GC rules exist from the start, but a destructive public GC
 command follows the proven vertical slice.
 
-`run` does not implicitly install. `disable` blocks new runs and replays; it does not
+The ordinary product path uses a running local server for installation, execution,
+recovery, and observation. `ConfigAccess` is the single local-or-GraphQL seam for both
+schema and desired-state operations; there is no graph-install HTTP endpoint. `run`
+does not implicitly install. `disable` blocks new runs and replays; it does not
 hide active artifacts or stop observation, so already-pinned runs can finish.
 “Preinstalled” means this bundled, immediately discoverable catalog entry—not eager
 document writes in every home.
@@ -76,6 +81,7 @@ abstractions.
 | `demo/code-review` | Demonstrates recon, scanner fan-out, verifier dynamic fan-in, triage, durable ledgers, and result export, but resolves checkout-relative files and writes filesystem-only metadata/results. | Bundle those assets, accept any eligible local Git repository, lower the pack to one revision, and replace demo-only observation with `GraphRun` projection. |
 | Event trigger runtime | `expected_count_field` is already supported for `per_group`. | Thread a `SourceField` count through `DeliveryMode`, compiler, and graph materializer instead of inventing join behavior. The current pack's model-produced `expected_total` must be immutable, canonical, consistent, and bounded after first write; it cannot be assumed controller-authored. |
 | Desired-state apply/diff/prune | Applies schemas first and configuration collections in dependency order. Prune intentionally removes live-only resources for the whole manifest/principal. | Reuse its normalization, validation, ordering, transaction, and diff code with prune always disabled for packages. Package Tasks remain ordinary desired-state resources; exact GC considers only package-owned IDs from an inactive revision plan. |
+| DefraDB embedded HTTP | Explicit transaction begin/GraphQL/commit-discard, SDL retrieval, and read-only collection versions are already served. `EmbeddedNode` did not attach its existing schema-add operation, so `POST /api/v0/schema` returned `503` even though in-process schema add and the standalone DefraDB server worked. | Land the reusable `defra-node` schema adapter, repin Gents, and keep package installation on ordinary `ConfigAccess`; inspect collection shape through the intentionally read-only collection-version API rather than enabling destructive collection management. |
 | Behavior tool surface | Behavior to selection to datastore/MCP/host tools is resolved at reconcile time and fails closed for missing, disabled, cross-owner, malformed, or over-ceiling resources. | Materialize ordinary behaviors, selections, and surfaces, then let the existing reconciler remain authoritative. Pin their immutable IDs and canonical document digests in the revision plan. |
 | `run_timeline_fetch` and adapter projections | Reconstruct an `AgentRequest` timeline and export ATIF, OpenAI/Codex, LangGraph, and multi-agent views from durable rows. | Join correlated request IDs once for a graph run and compose the existing per-request timeline/projections. Do not invent a graph-specific transcript. |
 | Principal/deployment/workspace documents | Principal is the identity/ACP boundary; behaviors belong to principals; deployments place them; isolated workspaces and repository placement already exist. | Bind manifest roles only to explicit eligible principals/deployments and pass the existing workspace binding into the seed. Do not store host paths in shared package/revision documents. |
@@ -224,7 +230,7 @@ Illustrative shape:
 
 `requested_effects` is typed catalog/confirmation data used to reject effects above an
 operator ceiling. It does not name grants and package code never maps it to an ACP
-action. Install, publish, start, cancel, and observe authorization belongs to the
+action. Install, activation, start, cancel, and observe authorization belongs to the
 corresponding hardened runtime endpoint regardless of manifest contents.
 
 Manifest rules:
@@ -334,21 +340,20 @@ The operation is:
 
 1. Read, digest, validate, resolve compatibility, and type-check every explicit
    variable/role/deployment/backend/ceiling binding before writes.
-2. Compile the fully bound package to one canonical `GraphPlan`. Allocate desired
+2. Provision package SDL/patches through `ConfigAccess` and verify the required
+   collection field shapes. No configuration resource or revision receipt is written
+   before this succeeds.
+3. Compile the fully bound package to one canonical `GraphPlan`. Allocate desired
    resource IDs in the reserved `pkg-<package>-<configuration>-<component>` namespace,
    where the configuration component covers bundled bytes and typed bindings. The plan
    lists each exact owned ID and canonical expected content digest. Configuration IDs
    cannot embed the final revision digest because those IDs are themselves inputs to
    that digest; the exact plan allowlist avoids a second mutable ownership ledger.
-3. Create the deterministic `GraphDefinition` with `enabled=true` and a null active
+4. Create the deterministic `GraphDefinition` with `enabled=true` and a null active
    pointer if absent, or verify the existing definition without changing its enabled
    state. Then create or verify its inactive `GraphRevision` receipt with
    `artifacts_complete=false`. An existing digest is accepted only if `graph_id` and
-   `plan_json` are byte-identical. `--no-activate` therefore leaves a complete revision
-   attached to a definition, never an orphan keyed only by digest.
-4. Provision package SDL/patches using the current schema-first code and verify the
-   required collection versions. No configuration resource is considered ready before
-   this succeeds.
+   `plan_json` are byte-identical.
 5. Generate one existing desired-state bundle per bound principal as necessary and
    apply schemas, behaviors, tool selections/surfaces, and Tasks in current dependency
    order with prune disabled. Then use existing graph materialization for deterministic
@@ -358,9 +363,11 @@ The operation is:
    ordinary tool-surface reconciler and verify bindings/ceilings. On success set
    `artifacts_complete=true` and clear the retry error; on failure leave the revision
    inactive and record a bounded error on that same receipt.
-7. Return the immutable revision receipt and exact publish command. A later explicit
-   `publish` performs authorization and exact-digest confirmation, then uses the
-   existing expected-generation CAS to advance `GraphDefinition.active_revision_digest`.
+7. For the bundled-package CLI, immediately perform the existing separately authorized
+   expected-generation CAS to activate the exact digest returned by installation, then
+   return one receipt containing both effects. Repeated install/activation is
+   idempotent. The authoring surface does not use this convenience: it reviews and
+   explicitly confirms its prospective digest before calling the same activation API.
    Never change `enabled` implicitly.
 
 Repeated installation with the same manifest and bindings produces the same revision
@@ -435,7 +442,7 @@ provenance even after its owned executable/config artifacts are collected. V1 sh
 the exact GC library and tests, but not an all-purpose uninstall or destructive public
 GC command in the first slice. Nothing calls `--apply-prune`, and unrelated home
 configuration is never a candidate. GC has a distinct destructive authorization; it
-is never implied by install or publish.
+is never implied by install or activation.
 
 ### Installation invariants and proof boundary
 
@@ -527,7 +534,7 @@ contain checkout paths.
 
 The atomic start operation:
 
-1. authenticates start authority independently of publish/install authority;
+1. authenticates start authority independently of activation/install authority;
 2. requires `GraphDefinition.enabled=true` and one active, complete, locally ready
    revision;
 3. validates typed entry input and graph/operator limits;
@@ -702,8 +709,9 @@ The first authoring UX is a typed form/structured JSON editor, not a canvas:
 - the review screen shows prospective plan/revision digest, predecessor, role and
   deployment mappings, selected tool surfaces, schemas, ceilings, and authority
   deltas; and
-- publish requires confirmation of that exact digest through the separate publish
-  endpoint. Validation never implies publish, and publish never implies start.
+- authoring publication requires confirmation of that exact digest before calling the
+  activation API. Validation never implies publication, and publication never implies
+  start. Bundled install is the deliberately narrower convenience described above.
 
 ## Code-review quickstart acceptance
 
@@ -715,25 +723,44 @@ ledger. An optional live-model lane measures quality but is not a lifecycle gate
 | Case | Required assertion |
 | --- | --- |
 | Clean catalog | With no home, `graph catalog --json` finds and validates bundled `code-review` and creates no files. |
-| Clean install | Explicit bindings lower to ordinary desired-state resources and one complete revision; schema provisioning occurs first; exact digest confirmation and publish authorization activate it; a separate start authorization is required. Every document is attributable through package plan, revision, principal, and deployment. |
+| Clean init/OAuth | From a release binary, interactive `gents init` selects ChatGPT/Codex or Grok and completes OAuth in the same flow (with `codex-login`/`grok-login` retained as recovery commands). The resulting default behavior names the selected backend/profile/model. |
+| Running-server install | With `gents server` running, the human command `gents graph install code-review` uses the ordinary GraphQL/schema and desired-state seams, inherits the initialized default behavior binding, materializes one complete revision, and separately authorizes/activates that exact digest without exposing it as an argument. A separate start authorization is still required. |
 | Repeated install | The identical command is a no-op: revision digest, active generation, document counts, and content digests do not change. |
 | Interrupted install | Inject failure after receipt, schemas, and resource subsets. The incomplete revision records bounded failure, no partial graph artifact is visible/startable, and retry re-observes by digest and activates exactly once. |
 | Shared-home isolation | Seed unrelated behaviors, selections, surfaces, tasks, and triggers. Install, failed install, successor install, disable, and GC never mutate/delete them; package code never invokes apply-prune. |
 | Configuration change | Install with a changed reviewer backend or lens bound. A successor revision activates; bundled bytes and predecessor remain identical. An already-running predecessor run completes against its pinned manifest. |
-| Run start | Run against the temporary repository. Input persists resolved SHAs and logical placement, not checkout-relative package paths. The isolated workspace stays within the operator ceiling and the source repository remains unchanged. |
-| Progress/completion | Watch observes recon, four scanner requests, one verifier, and one triage. Source-field group count is immutable/consistent/bounded. Success occurs only after generic balanced-ledger predicates and the terminal report pass. |
-| Output retrieval | Result returns exactly one report plus confirmed findings with document IDs and commit CIDs. Repeated retrieval is byte-stable; stage timelines and all existing adapter projections remain available. |
+| Run start | From the repository under review, `gents graph run code-review` defaults to `.`, `origin/main`, and `HEAD`; explicit flags override them. Input persists resolved SHAs and logical placement, not checkout-relative package paths. The isolated workspace stays within the operator ceiling and the source repository remains unchanged. |
+| Progress/completion | `graph watch <run-id>` renders concise changes from the durable `GraphRunView` and observes recon, four scanner requests, one verifier, and one triage. `--output json` exposes the same projection. Success occurs only after generic balanced-ledger predicates and all declared terminal outputs pass. |
+| Output retrieval | `graph result <run-id>` renders the actual report and confirmed finding documents, not only references; `--output json` includes those documents plus IDs and commit CIDs from the same projection. Repeated retrieval is byte-stable; stage timelines and existing adapter projections remain available. |
 | Restart/reconnect | Restart after seed and during fan-out. Trigger, request, workspace, and completion recovery converge. Restart watch; its final view/result digest equals uninterrupted observation. |
 | Replay | `run --replay-of` creates a fresh run/correlation pinned to the source revision/input, not the current active revision, after fresh authority/readiness/ceiling checks and explicit or resolved current repository placement. |
 | Upgrade | A fixture catalog offers v1.1. Failed successor install leaves v1 active. Successful install CAS-activates v1.1; new runs use it. While an old run is nonterminal, GC refuses its executable artifacts; afterward those artifacts may be collected while old run/results remain inspectable. |
 | Disable/enable | Disable during an active run: it finishes and remains observable, while new run/replay is denied. Successor install does not re-enable. Enable rechecks readiness before admission. |
 | Cancellation | Cancel during fan-out and restart. No new correlated requests appear, existing requests converge terminal, the run becomes cancelled, and partial outputs are inspectable but not successful results. |
-| Authority denial | Independently deny schema/install, publish, start/replay, cancel, observe, and destructive GC. Wrong role principal/deployment, cross-owner tool resource, requested network, workspace escape, and over-ceiling graph all fail closed. Bundling alone grants nothing. |
+| Authority denial | Independently deny schema/install, activation, start/replay, cancel, observe, and destructive GC. The one-command bundled install must surface activation denial rather than treating materialization as execution authority. Wrong role principal/deployment, cross-owner tool resource, requested network, workspace escape, and over-ceiling graph all fail closed. Bundling alone grants nothing. |
 | Replication/drift | Deliver active pointer/config before schema or mutate an expected revision-owned resource in fault fixtures. Reconcile/start fails closed with typed readiness/drift evidence and never falls back to current unrelated config. |
 | GC | The library's exact inactive-revision allowlist deletion preserves active/nonterminal-run-pinned resources, all schemas/results, revision provenance, and every unrelated home document. A public command is follow-on. |
 
 GraphQL tests additionally require `graphql::escape_graphql_string()` for every
 interpolation and `null`, never `[]`, for nillable empty arrays.
+
+The manual release-candidate gate is intentionally the same path a user sees:
+
+```bash
+gents init                         # choose ChatGPT / Codex; finish OAuth in-flow
+gents server                       # terminal 1
+gents graph install code-review    # terminal 2; no digest or bindings required
+cd <checkout-of-this-pr>
+gents graph run code-review        # defaults: repo ., base origin/main, head HEAD
+gents graph watch <run-id>
+gents graph result <run-id>
+```
+
+Acceptance requires a successful terminal run, a readable merge summary and confirmed
+findings (including zero findings), an unchanged source checkout, and the same result
+after stopping/restarting the server and reconnecting with `watch`/`result`. The
+release candidate must run from outside a Gents source checkout and must not read any
+checkout-relative demo assets.
 
 The P0 vertical slice gates clean/repeated/interrupted install, shared-home isolation,
 run/progress/result/restart, disable, cancellation, authority denial, and replication/
@@ -847,6 +874,9 @@ commits.
 
 ### 6. Read-only catalog and first revision-backed install
 
+- Land and repin the DefraDB `EmbeddedNode` schema HTTP adapter before enabling the
+  running-server install gate. Its real-node test must prove schema add and retrieval
+  while destructive collection management remains unavailable.
 - Add focused `crates/gents/src/graph_package.rs` code and assets at
   `crates/gents/assets/graph_packages/code-review/`; reuse graph intent, desired-state
   DTOs, canonical JSON, and compiler types.
@@ -857,7 +887,7 @@ commits.
   `enabled` and `graph_revision.graphql` with bounded materialization diagnostics;
   update migrations, exports, DTOs, and readiness conformance.
 - Implement definition creation, incomplete revision receipt, schema/apply/materialize,
-  exact digest re-observation, publish-authorized CAS activation, and disable/enable.
+  exact digest re-observation, separately authorized CAS activation, and disable/enable.
   Add interrupted/repeated install and non-empty shared-home tests.
 - Move code-review assets only when the catalog/install gate passes; remove the
   pre-release checkout-relative pack without a compatibility lookup.
@@ -868,6 +898,10 @@ commits.
   and lower the current desired state/experiment checks to the generic manifest/plan.
 - Add run/watch/result/cancel command handlers using existing repository
   placement and isolated-workspace APIs plus `load_graph_run_view`.
+- Make the release path human-first: interactive init completes Codex/Grok OAuth,
+  bundled install inherits the default behavior and activates in one command, run
+  defaults to the current checkout, and text watch/result render the durable view;
+  retain `--output json` for automation.
 - Add release-binary tests under `crates/gents-cli/tests/` with temporary Git repo,
   fake backend, restarts, authority denials, output commits, disable, cancellation,
   drift, and replication ordering.
@@ -929,11 +963,8 @@ run, and observation contracts and cannot add an executor.
 Repository evidence resolves the architecture. These deployment policy values require
 operator/product choice:
 
-1. Which existing principal DID and host deployment bind each code-review role, and
-   which backend/profile each role may use. An interactive single-candidate
-   quickstart may propose the full mapping but still requires confirmation.
-2. Whether a deployment permits the isolated write/build profile and optional network
+1. Whether a deployment permits the isolated write/build profile and optional network
    access within its ceiling. Defaults are network-off and fail-closed.
-3. On hosts that cannot enforce workspace writes, whether v1 ships a strictly
+2. On hosts that cannot enforce workspace writes, whether v1 ships a strictly
    read-only/no-build profile or limits the full quickstart to platforms with the
    required sandbox.

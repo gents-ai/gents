@@ -1,15 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
-use identity::Did;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config_client::{
-    apply_desired_state_plan, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::graph_pipeline::{
     bind_package_plan, compile_graph, BundledProvenance, CompilerPolicy, GraphPlan,
@@ -57,36 +55,75 @@ pub struct PreparedGraphPackageInstall {
 /// home's existing principal, local deployment, and default behavior model
 /// configuration. This creates no principal or tool grant.
 pub async fn default_bundled_graph_package_install_bindings(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     package_name: &str,
     owner_did: &str,
 ) -> Result<GraphPackageInstallBindings> {
     let package = load_bundled_graph_package(package_name)?;
-    let principal = crate::load_agent_principal(node, owner_did)
-        .await?
-        .context("package owner principal does not exist")?;
-    if !principal.enabled {
+    if let ConfigAccess::Local(node) = access {
+        crate::callback::ensure_local_host_deployment(node).await?;
+    }
+    let principal_response = access
+        .execute(&format!(
+            r#"{{ AgentPrincipal(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did enabled default_behavior_id }} }}"#,
+            crate::graphql::escape_graphql_string(owner_did),
+        ))
+        .await?;
+    let principals = response_rows(&principal_response, "AgentPrincipal");
+    if principals.len() != 1 {
+        anyhow::bail!("package owner principal is missing or ambiguous");
+    }
+    let principal = &principals[0];
+    if principal.get("enabled").and_then(Value::as_bool) != Some(true) {
         anyhow::bail!("package owner principal is disabled");
     }
     let behavior_id = principal
-        .default_behavior_id
-        .as_deref()
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .context("package owner has no default behavior")?;
-    let behavior = crate::load_agent_behavior(node, behavior_id)
-        .await?
-        .context("package owner default behavior does not exist")?;
-    if !behavior.enabled || behavior.agent_did != owner_did {
+    let behavior_response = access
+        .execute(&format!(
+            r#"{{ AgentBehavior(filter: {{ behavior_id: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did enabled backend_id inference_profile_id model_name }} }}"#,
+            crate::graphql::escape_graphql_string(behavior_id),
+        ))
+        .await?;
+    let behaviors = response_rows(&behavior_response, "AgentBehavior");
+    if behaviors.len() != 1 {
+        anyhow::bail!("package owner default behavior is missing or ambiguous");
+    }
+    let behavior = &behaviors[0];
+    if behavior.get("enabled").and_then(Value::as_bool) != Some(true)
+        || behavior.get("agent_did").and_then(Value::as_str) != Some(owner_did)
+    {
         anyhow::bail!("package owner default behavior is disabled or cross-owner");
     }
-    let deployment_id = crate::callback::ensure_local_host_deployment(node).await?;
+    let deployment_response = access
+        .execute(r#"{ HostDeployment(order: { created_at: ASC }, limit: 8) { deployment_id } }"#)
+        .await?;
+    let deployment_id = response_rows(&deployment_response, "HostDeployment")
+        .first()
+        .and_then(|row| row.get("deployment_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .context("the running server has no local host deployment")?
+        .to_owned();
     let role = PackageRoleBinding {
         principal_did: owner_did.to_owned(),
         deployment_id,
-        backend_id: behavior.backend_id.clone(),
-        profile_id: behavior.inference_profile_id.clone(),
-        model_name: behavior.model_name.clone(),
+        backend_id: behavior
+            .get("backend_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        profile_id: behavior
+            .get("inference_profile_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        model_name: behavior
+            .get("model_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
     };
     let roles = package
         .manifest
@@ -101,6 +138,15 @@ pub async fn default_bundled_graph_package_install_bindings(
     };
     validate_bindings(&package, &bindings)?;
     Ok(bindings)
+}
+
+fn response_rows<'a>(response: &'a Value, collection: &str) -> &'a [Value] {
+    response
+        .get("data")
+        .and_then(|data| data.get(collection))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {
@@ -230,32 +276,20 @@ fn validate_bindings(
 }
 
 async fn require_live_binding(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     collection: &str,
     field: &str,
     value: &str,
 ) -> Result<()> {
     crate::graphql::validate_collection_identifier(collection)?;
     crate::graphql::validate_graphql_name(field)?;
-    let response = node
+    let response = access
         .execute(&format!(
             r#"{{ {collection}(filter: {{ {field}: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(value),
         ))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "validate package binding {collection}.{field} failed: {:?}",
-            response.errors
-        );
-    }
-    let count = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(collection))
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default();
+        .await?;
+    let count = response_rows(&response, collection).len();
     if count != 1 {
         anyhow::bail!("package binding {collection}.{field}={value:?} is missing or ambiguous");
     }
@@ -263,22 +297,28 @@ async fn require_live_binding(
 }
 
 async fn validate_live_bindings(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     bindings: &GraphPackageInstallBindings,
 ) -> Result<()> {
-    require_live_binding(node, "AgentPrincipal", "agent_did", &bindings.owner_did).await?;
+    require_live_binding(access, "AgentPrincipal", "agent_did", &bindings.owner_did).await?;
     for role in bindings.roles.values() {
-        require_live_binding(node, "AgentPrincipal", "agent_did", &role.principal_did).await?;
-        require_live_binding(node, "HostDeployment", "deployment_id", &role.deployment_id).await?;
+        require_live_binding(access, "AgentPrincipal", "agent_did", &role.principal_did).await?;
         require_live_binding(
-            node,
+            access,
+            "HostDeployment",
+            "deployment_id",
+            &role.deployment_id,
+        )
+        .await?;
+        require_live_binding(
+            access,
             "InferenceBackend",
             "backend_id",
             role.backend_id.as_deref().expect("validated"),
         )
         .await?;
         require_live_binding(
-            node,
+            access,
             "InferenceProfile",
             "profile_id",
             role.profile_id.as_deref().expect("validated"),
@@ -439,19 +479,15 @@ fn artifact(
     })
 }
 
-async fn active_revision_plan(node: &EmbeddedNode, graph_id: &str) -> Result<Option<GraphPlan>> {
-    let response = node
+async fn active_revision_plan(access: &ConfigAccess, graph_id: &str) -> Result<Option<GraphPlan>> {
+    let response = access
         .execute(&format!(
             r#"{{ GraphDefinition(filter: {{ graph_id: {{ _eq: "{}" }} }}, limit: 1) {{ active_revision_digest }} }}"#,
             crate::graphql::escape_graphql_string(graph_id),
         ))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!("query package predecessor failed: {:?}", response.errors);
-    }
+        .await?;
     let Some(digest) = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("GraphDefinition"))
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
@@ -461,21 +497,14 @@ async fn active_revision_plan(node: &EmbeddedNode, graph_id: &str) -> Result<Opt
     else {
         return Ok(None);
     };
-    let response = node
+    let response = access
         .execute(&format!(
             r#"{{ GraphRevision(filter: {{ digest: {{ _eq: "{}" }} }}, limit: 2) {{ plan_json }} }}"#,
             crate::graphql::escape_graphql_string(digest),
         ))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query active package revision failed: {:?}",
-            response.errors
-        );
-    }
+        .await?;
     let plans = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("GraphRevision"))
         .and_then(Value::as_array)
         .map(Vec::as_slice)
@@ -517,16 +546,16 @@ fn same_install_configuration(active: &GraphPlan, base: &GraphPlan, package: &Pa
 }
 
 pub async fn prepare_bundled_graph_package_install(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     package_name: &str,
     bindings: &GraphPackageInstallBindings,
 ) -> Result<PreparedGraphPackageInstall> {
     let package = load_bundled_graph_package(package_name)?;
     validate_bindings(&package, bindings)?;
-    validate_live_bindings(node, bindings).await?;
+    validate_live_bindings(access, bindings).await?;
     let prefix = package_configuration_prefix(&package, bindings)?;
     let graph_id = bundled_graph_id(package_name, &bindings.owner_did)?;
-    let active_plan = active_revision_plan(node, &graph_id).await?;
+    let active_plan = active_revision_plan(access, &graph_id).await?;
     let now = PACKAGE_DOCUMENT_TIMESTAMP;
     let mut documents = Vec::new();
     let mut artifacts = Vec::new();
@@ -710,7 +739,10 @@ pub async fn prepare_bundled_graph_package_install(
     })
 }
 
-async fn ensure_package_schemas(node: &EmbeddedNode, package: &BundledGraphPackage) -> Result<()> {
+async fn ensure_package_schemas(
+    access: &ConfigAccess,
+    package: &BundledGraphPackage,
+) -> Result<()> {
     for path in &package.manifest.schemas {
         let sdl = package.asset_text(path)?;
         let expected = query::parse_sdl(sdl)?;
@@ -719,22 +751,19 @@ async fn ensure_package_schemas(node: &EmbeddedNode, package: &BundledGraphPacka
         }
         let mut missing = false;
         for collection in &expected {
-            match node.get_collection(&collection.name)? {
-                Some(live) => {
+            match access.collection_fields(&collection.name).await? {
+                Some(live_fields) => {
                     let expected_fields = collection
                         .fields
                         .iter()
-                        .map(|field| field.name.as_str())
-                        .collect::<BTreeSet<_>>();
-                    let live_fields = live
-                        .fields
-                        .iter()
-                        .map(|field| field.name.as_str())
+                        .map(|field| field.name.clone())
                         .collect::<BTreeSet<_>>();
                     if expected_fields != live_fields {
                         anyhow::bail!(
-                            "existing collection {:?} does not match bundled schema {path:?}",
-                            collection.name
+                            "existing collection {:?} does not match bundled schema {path:?}: expected {:?}, found {:?}",
+                            collection.name,
+                            expected_fields,
+                            live_fields,
                         );
                     }
                 }
@@ -742,25 +771,48 @@ async fn ensure_package_schemas(node: &EmbeddedNode, package: &BundledGraphPacka
             }
         }
         if missing {
-            if expected.iter().any(|collection| {
-                node.get_collection(&collection.name)
-                    .ok()
-                    .flatten()
-                    .is_some()
-            }) {
+            let mut any_existing = false;
+            for collection in &expected {
+                any_existing |= access.collection_fields(&collection.name).await?.is_some();
+            }
+            if any_existing {
                 anyhow::bail!("package schema {path:?} mixes existing and missing collections");
             }
-            node.add_schema(sdl)
+            access
+                .add_schema(sdl)
                 .await
                 .with_context(|| format!("add bundled package schema {path:?}"))?;
+            for collection in &expected {
+                let live = access
+                    .collection_fields(&collection.name)
+                    .await?
+                    .with_context(|| {
+                        format!(
+                            "bundled package schema {path:?} was accepted but collection {:?} is not discoverable",
+                            collection.name
+                        )
+                    })?;
+                let expected_fields = collection
+                    .fields
+                    .iter()
+                    .map(|field| field.name.clone())
+                    .collect::<BTreeSet<_>>();
+                if live != expected_fields {
+                    anyhow::bail!(
+                        "new collection {:?} does not match bundled schema {path:?}: expected {:?}, found {:?}",
+                        collection.name,
+                        expected_fields,
+                        live,
+                    );
+                }
+            }
         }
     }
     Ok(())
 }
 
 pub async fn install_bundled_graph_package(
-    node: &EmbeddedNode,
-    identity: Option<Did>,
+    access: &ConfigAccess,
     actor_did: &str,
     package_name: &str,
     bindings: &GraphPackageInstallBindings,
@@ -770,17 +822,16 @@ pub async fn install_bundled_graph_package(
     }
     let package = load_bundled_graph_package(package_name)?;
     validate_bindings(&package, bindings)?;
-    ensure_package_schemas(node, &package).await?;
-    let prepared = prepare_bundled_graph_package_install(node, package_name, bindings).await?;
-    crate::graph_pipeline::ensure_graph_revision_receipt(
-        node,
-        identity.clone(),
+    ensure_package_schemas(access, &package).await?;
+    let prepared = prepare_bundled_graph_package_install(access, package_name, bindings).await?;
+    crate::graph_pipeline::ensure_graph_revision_receipt_with_access(
+        access,
         &bindings.owner_did,
         &prepared.plan,
     )
     .await?;
 
-    let txn = ConfigApplyTxn::begin_local(node, identity.clone()).await?;
+    let txn = access.begin_apply_txn().await?;
     let result = async {
         crate::config_client::verify_existing_desired_state_plan(&txn, &prepared.desired_state)
             .await?;
@@ -796,9 +847,8 @@ pub async fn install_bundled_graph_package(
     .await;
     if let Err(error) = result {
         let _ = txn.discard().await;
-        let _ = crate::graph_pipeline::record_graph_revision_materialization_failure(
-            node,
-            identity,
+        let _ = crate::graph_pipeline::record_graph_revision_materialization_failure_with_access(
+            access,
             &prepared.plan.digest,
             &format!("{error:#}"),
         )
@@ -828,6 +878,7 @@ mod tests {
     use super::*;
     use crate::graph_pipeline::{activate_graph_revision, start_graph_run};
     use defra_node::EmbeddedNode;
+    use std::sync::Arc;
 
     async fn create_fixture_bindings(node: &EmbeddedNode) -> GraphPackageInstallBindings {
         let owner = "did:key:package-owner";
@@ -869,7 +920,8 @@ mod tests {
 
     #[tokio::test]
     async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let access = ConfigAccess::Local(node.clone());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let bindings = create_fixture_bindings(&node).await;
         let unrelated = node
@@ -883,24 +935,14 @@ mod tests {
             .await;
         assert!(!unrelated.has_errors(), "{:?}", unrelated.errors);
 
-        let first = install_bundled_graph_package(
-            &node,
-            None,
-            &bindings.owner_did,
-            "code-review",
-            &bindings,
-        )
-        .await
-        .unwrap();
-        let second = install_bundled_graph_package(
-            &node,
-            None,
-            &bindings.owner_did,
-            "code-review",
-            &bindings,
-        )
-        .await
-        .unwrap();
+        let first =
+            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+                .await
+                .unwrap();
+        let second =
+            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+                .await
+                .unwrap();
         assert_eq!(first, second);
         assert_eq!(first.desired_documents, 16);
 
@@ -956,15 +998,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let after_activation = install_bundled_graph_package(
-            &node,
-            None,
-            &bindings.owner_did,
-            "code-review",
-            &bindings,
-        )
-        .await
-        .unwrap();
+        let after_activation =
+            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+                .await
+                .unwrap();
         assert_eq!(first, after_activation);
         let active_view = crate::agent::load_document_runtime_view(&node, &bindings.owner_did)
             .await
@@ -1012,8 +1049,7 @@ mod tests {
             .unwrap()
             .profile_id = Some("test-profile-successor".to_owned());
         let successor = install_bundled_graph_package(
-            &node,
-            None,
+            &access,
             &bindings.owner_did,
             "code-review",
             &successor_bindings,
@@ -1171,8 +1207,7 @@ mod tests {
         .unwrap_err();
         assert!(format!("{start_error:#}").contains("drifted"));
         let retry_error = install_bundled_graph_package(
-            &node,
-            None,
+            &access,
             &bindings.owner_did,
             "code-review",
             &successor_bindings,
@@ -1180,6 +1215,8 @@ mod tests {
         .await
         .unwrap_err();
         assert!(format!("{retry_error:#}").contains("drifted"));
+        drop(access);
+        let node = Arc::try_unwrap(node).unwrap_or_else(|_| panic!("test retained node clone"));
         node.shutdown().await;
     }
 }

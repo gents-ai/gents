@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
+use std::{io, io::Write as _};
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
@@ -16,9 +17,10 @@ use gents::graph_pipeline::{
 use gents::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
+use crate::cli::output_format::OutputFormat;
 use crate::cli::{
-    GraphCancelArgs, GraphCatalogArgs, GraphCommand, GraphInstallArgs, GraphPublishArgs,
-    GraphResultArgs, GraphRunArgs, GraphScopeArgs, GraphToggleArgs, GraphWatchArgs,
+    GraphCancelArgs, GraphCatalogArgs, GraphCommand, GraphInstallArgs, GraphResultArgs,
+    GraphRunArgs, GraphScopeArgs, GraphToggleArgs, GraphWatchArgs,
 };
 use crate::{print_json, resolve_agent_did, resolve_config_access};
 
@@ -26,7 +28,6 @@ pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
     match command {
         GraphCommand::Catalog(args) => catalog(args),
         GraphCommand::Install(args) => install(args).await,
-        GraphCommand::Publish(args) => publish(args).await,
         GraphCommand::Run(args) => run(args).await,
         GraphCommand::Watch(args) => watch(args).await,
         GraphCommand::Result(args) => result(args).await,
@@ -61,13 +62,7 @@ async fn install(args: GraphInstallArgs) -> Result<()> {
             args.version.as_deref().unwrap_or_default()
         );
     }
-    let owner_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
-    let (access, _) = resolve_config_access(args.home.as_deref(), None).await?;
-    let ConfigAccess::Local(node) = access else {
-        anyhow::bail!(
-            "graph install currently requires direct home access; stop the running server and retry with --home"
-        );
-    };
+    let (access, owner_did) = access_and_actor(&args.scope).await?;
     let bindings = if let Some(path) = args.bindings.as_deref() {
         let bindings: GraphPackageInstallBindings = serde_json::from_slice(
             &std::fs::read(path)
@@ -83,18 +78,41 @@ async fn install(args: GraphInstallArgs) -> Result<()> {
         }
         bindings
     } else {
-        default_bundled_graph_package_install_bindings(&node, &args.package, &owner_did).await?
+        default_bundled_graph_package_install_bindings(&access, &args.package, &owner_did).await?
     };
     let receipt =
-        install_bundled_graph_package(&node, None, &owner_did, &args.package, &bindings).await?;
-    print_json(&json!({
-        "install": receipt,
-        "bindings": bindings,
-        "next": format!(
-            "gents graph publish {} --revision {} --confirm-revision {}",
-            args.package, receipt.revision_digest, receipt.revision_digest
-        ),
-    }))
+        install_bundled_graph_package(&access, &owner_did, &args.package, &bindings).await?;
+    let previous = active_digest(&access, &receipt.graph_id, &owner_did).await?;
+    let activation = activate_graph_revision_with_access(
+        &access,
+        &owner_did,
+        &receipt.graph_id,
+        &receipt.revision_digest,
+        previous.as_deref(),
+    )
+    .await?;
+    match args
+        .output
+        .ensure_supported("graph install", &[OutputFormat::Text, OutputFormat::Json])?
+    {
+        OutputFormat::Json => print_json(&json!({
+            "install": receipt,
+            "activation": activation,
+            "bindings": bindings,
+        })),
+        OutputFormat::Text => {
+            let mut out = io::stdout().lock();
+            writeln!(
+                out,
+                "Installed and activated {} {}",
+                receipt.package_name, receipt.package_version
+            )?;
+            writeln!(out, "Backend: inherited from your default behavior")?;
+            writeln!(out, "Run: gents graph run {}", receipt.package_name)?;
+            Ok(())
+        }
+        _ => unreachable!("validated output format"),
+    }
 }
 
 async fn access_and_actor(scope: &GraphScopeArgs) -> Result<(ConfigAccess, String)> {
@@ -169,24 +187,6 @@ async fn active_digest(
         .map(ToOwned::to_owned))
 }
 
-async fn publish(args: GraphPublishArgs) -> Result<()> {
-    if args.revision != args.confirm_revision {
-        anyhow::bail!("--confirm-revision must exactly match --revision");
-    }
-    let (access, actor) = access_and_actor(&args.scope).await?;
-    let plan = load_revision_plan(&access, &args.revision, &args.package, &actor).await?;
-    let previous = active_digest(&access, &plan.graph_id, &actor).await?;
-    let receipt = activate_graph_revision_with_access(
-        &access,
-        &actor,
-        &plan.graph_id,
-        &args.revision,
-        previous.as_deref(),
-    )
-    .await?;
-    print_json(&serde_json::to_value(receipt)?)
-}
-
 fn git_output(repo: &Path, arguments: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .arg("-C")
@@ -248,7 +248,7 @@ async fn run(args: GraphRunArgs) -> Result<()> {
     let graph_id = bundled_graph_id(&args.package, &actor)?;
     let digest = active_digest(&access, &graph_id, &actor)
         .await?
-        .context("graph has no active revision; install and publish it first")?;
+        .context("graph is not installed; run `gents graph install code-review` first")?;
     let plan = load_revision_plan(&access, &digest, &args.package, &actor).await?;
     let deployments = plan
         .package
@@ -293,9 +293,28 @@ async fn run(args: GraphRunArgs) -> Result<()> {
     )
     .await?;
     if args.watch {
-        watch_run(&access, &actor, &receipt.run_id, Duration::from_secs(1)).await
+        watch_run(
+            &access,
+            &actor,
+            &receipt.run_id,
+            Duration::from_secs(1),
+            args.output,
+        )
+        .await
     } else {
-        print_json(&serde_json::to_value(receipt)?)
+        match args
+            .output
+            .ensure_supported("graph run", &[OutputFormat::Text, OutputFormat::Json])?
+        {
+            OutputFormat::Json => print_json(&serde_json::to_value(receipt)?),
+            OutputFormat::Text => {
+                let mut out = io::stdout().lock();
+                writeln!(out, "Started {}", receipt.run_id)?;
+                writeln!(out, "Watch: gents graph watch {}", receipt.run_id)?;
+                Ok(())
+            }
+            _ => unreachable!("validated output format"),
+        }
     }
 }
 
@@ -314,18 +333,111 @@ fn progress(view: &GraphRunView) -> Value {
     })
 }
 
+fn print_progress_text(view: &GraphRunView) -> Result<()> {
+    let stages = view
+        .stages
+        .iter()
+        .map(|stage| {
+            let completed = stage.succeeded + stage.failed;
+            let suffix = if stage.failed > 0 {
+                format!(", {} failed", stage.failed)
+            } else if stage.active > 0 {
+                format!(", {} active", stage.active)
+            } else {
+                String::new()
+            };
+            format!("{} {}/{}{}", stage.node_id, completed, stage.total, suffix)
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let mut out = io::stdout().lock();
+    if stages.is_empty() {
+        writeln!(out, "{} · {}", view.run_id, view.status)?;
+    } else {
+        writeln!(out, "{} · {} · {}", view.run_id, view.status, stages)?;
+    }
+    if let Some(error) = view.error.as_ref().or(view.failure_evidence.as_ref()) {
+        writeln!(out, "  {}", serde_json::to_string(error)?)?;
+    }
+    Ok(())
+}
+
+fn display_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Null => "null".to_owned(),
+        other => other.to_string(),
+    }
+}
+
+fn print_result_text(view: &GraphRunView) -> Result<()> {
+    let mut out = io::stdout().lock();
+    writeln!(out, "Run: {}", view.run_id)?;
+    writeln!(out, "Status: {}", view.status)?;
+    if let Some(error) = view.error.as_ref().or(view.failure_evidence.as_ref()) {
+        writeln!(out, "Error: {}", serde_json::to_string_pretty(error)?)?;
+    }
+    let outputs = view
+        .results
+        .iter()
+        .filter(|result| result.terminal)
+        .collect::<Vec<_>>();
+    if outputs.is_empty() {
+        writeln!(out, "Outputs: none declared")?;
+        return Ok(());
+    }
+    for result in outputs {
+        writeln!(out)?;
+        writeln!(out, "{} ({})", result.name, result.documents.len())?;
+        if let Some(violation) = result.violation.as_deref() {
+            writeln!(out, "  Contract violation: {violation}")?;
+        }
+        for (index, document) in result.documents.iter().enumerate() {
+            if result.documents.len() > 1 {
+                writeln!(out, "  #{}", index + 1)?;
+            }
+            let Some(fields) = document.as_object() else {
+                writeln!(out, "  {}", display_value(document))?;
+                continue;
+            };
+            for (field, value) in fields {
+                if field.starts_with('_') || field == "run_id" {
+                    continue;
+                }
+                let rendered = display_value(value);
+                if rendered.contains('\n') {
+                    writeln!(out, "  {field}:")?;
+                    for line in rendered.lines() {
+                        writeln!(out, "    {line}")?;
+                    }
+                } else {
+                    writeln!(out, "  {field}: {rendered}")?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn watch_run(
     access: &ConfigAccess,
     actor: &str,
     run_id: &str,
     interval: Duration,
+    output: OutputFormat,
 ) -> Result<()> {
+    let output =
+        output.ensure_supported("graph watch", &[OutputFormat::Text, OutputFormat::Json])?;
     let mut last = Value::Null;
     loop {
         let view = load_graph_run_view_with_access(access, actor, run_id).await?;
         let current = progress(&view);
         if current != last {
-            print_json(&current)?;
+            match output {
+                OutputFormat::Json => print_json(&current)?,
+                OutputFormat::Text => print_progress_text(&view)?,
+                _ => unreachable!("validated output format"),
+            }
             last = current;
         }
         if view.is_terminal() {
@@ -345,6 +457,7 @@ async fn watch(args: GraphWatchArgs) -> Result<()> {
         &actor,
         &args.run_id,
         Duration::from_millis(args.interval_ms.max(100)),
+        args.output,
     )
     .await
 }
@@ -352,14 +465,21 @@ async fn watch(args: GraphWatchArgs) -> Result<()> {
 async fn result(args: GraphResultArgs) -> Result<()> {
     let (access, actor) = access_and_actor(&args.scope).await?;
     let view = load_graph_run_view_with_access(&access, &actor, &args.run_id).await?;
-    print_json(&json!({
-        "run_id": view.run_id,
-        "status": view.status,
-        "revision_digest": view.revision_digest,
-        "results": view.results,
-        "result_refs": view.persisted_result_refs,
-        "error": view.error,
-    }))
+    match args
+        .output
+        .ensure_supported("graph result", &[OutputFormat::Text, OutputFormat::Json])?
+    {
+        OutputFormat::Json => print_json(&json!({
+            "run_id": view.run_id,
+            "status": view.status,
+            "revision_digest": view.revision_digest,
+            "results": view.results,
+            "result_refs": view.persisted_result_refs,
+            "error": view.error,
+        })),
+        OutputFormat::Text => print_result_text(&view),
+        _ => unreachable!("validated output format"),
+    }
 }
 
 async fn cancel(args: GraphCancelArgs) -> Result<()> {

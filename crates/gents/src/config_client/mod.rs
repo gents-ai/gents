@@ -55,9 +55,10 @@ pub use txn::ConfigApplyTxn;
 
 mod tool_selection;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::{json, Value};
@@ -103,6 +104,94 @@ impl ConfigAccess {
                 .await?;
                 Ok(json!({
                     "data": response.data.unwrap_or(Value::Null),
+                }))
+            }
+        }
+    }
+
+    /// Apply schema SDL through the same local-or-HTTP control-plane seam as
+    /// configuration writes. Callers must still perform their own structural
+    /// compatibility check before invoking this operation.
+    pub async fn add_schema(&self, sdl: &str) -> Result<()> {
+        match self {
+            Self::Graphql(graphql) => {
+                let api_base = graphql_api_base(graphql)?;
+                let url = format!("{api_base}/schema");
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()?;
+                let response = client
+                    .post(&url)
+                    .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .body(sdl.to_owned())
+                    .send()
+                    .await
+                    .with_context(|| format!("posting schema SDL to {url}"))?;
+                let status = response.status();
+                let bytes = response
+                    .bytes()
+                    .await
+                    .with_context(|| format!("reading schema SDL response from {url}"))?;
+                if !status.is_success() {
+                    anyhow::bail!(
+                        "schema SDL request to {url} failed with {status}: {}",
+                        String::from_utf8_lossy(&bytes)
+                    );
+                }
+                Ok(())
+            }
+            Self::Local(node) => node.add_schema(sdl).await.context("adding schema SDL"),
+        }
+    }
+
+    /// Return the declared field shape for one collection. HTTP callers use
+    /// DefraDB's read-only collection-version API, which EmbeddedNode exposes
+    /// without enabling destructive collection management.
+    pub async fn collection_fields(&self, collection: &str) -> Result<Option<BTreeSet<String>>> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        match self {
+            Self::Local(node) => Ok(node.get_collection(collection)?.map(|collection| {
+                collection
+                    .fields
+                    .into_iter()
+                    .map(|field| field.name)
+                    .collect()
+            })),
+            Self::Graphql(graphql) => {
+                let api_base = graphql_api_base(graphql)?;
+                let url = format!("{api_base}/collections/versions");
+                let versions: Value = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()?
+                    .get(&url)
+                    .send()
+                    .await
+                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .error_for_status()
+                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .json()
+                    .await
+                    .with_context(|| format!("decoding collection versions from {url}"))?;
+                Ok(versions.as_array().and_then(|versions| {
+                    versions
+                        .iter()
+                        .find(|version| {
+                            version.get("Name").and_then(Value::as_str) == Some(collection)
+                                && version
+                                    .get("IsActive")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(true)
+                        })
+                        .map(|version| {
+                            version
+                                .get("Fields")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|field| field.get("Name").and_then(Value::as_str))
+                                .map(ToOwned::to_owned)
+                                .collect()
+                        })
                 }))
             }
         }

@@ -617,9 +617,8 @@ pub async fn publish_graph_plan(
 /// Commit the resumable, non-runnable installation receipt before resource
 /// materialization. Schemas must already be ready. A failed second phase may
 /// update this receipt with bounded evidence and retry the same immutable plan.
-pub(crate) async fn ensure_graph_revision_receipt(
-    node: &EmbeddedNode,
-    identity: Option<Did>,
+pub(crate) async fn ensure_graph_revision_receipt_with_access(
+    access: &ConfigAccess,
     owner_did: &str,
     plan: &GraphPlan,
 ) -> Result<()> {
@@ -629,7 +628,7 @@ pub(crate) async fn ensure_graph_revision_receipt(
     digest_hex(&plan.digest)?;
     let plan_json = serde_json::to_string(plan)?;
     let now = chrono::Utc::now().to_rfc3339();
-    let txn = ConfigApplyTxn::begin_local(node, identity).await?;
+    let txn = access.begin_apply_txn().await?;
     let result = async {
         match query_graph_definition(&txn, &plan.graph_id).await? {
             Some(definition)
@@ -715,14 +714,13 @@ pub(crate) async fn materialize_graph_revision_in_txn(
     materialize_in_txn(txn, owner_did, plan, &plan_json, &now).await
 }
 
-pub(crate) async fn record_graph_revision_materialization_failure(
-    node: &EmbeddedNode,
-    identity: Option<Did>,
+pub(crate) async fn record_graph_revision_materialization_failure_with_access(
+    access: &ConfigAccess,
     digest: &str,
     error: &str,
 ) -> Result<()> {
     let bounded: String = error.chars().take(4_096).collect();
-    let txn = ConfigApplyTxn::begin_local(node, identity).await?;
+    let txn = access.begin_apply_txn().await?;
     let revision = query_graph_revision(&txn, digest)
         .await?
         .context("graph revision failure receipt is missing")?;

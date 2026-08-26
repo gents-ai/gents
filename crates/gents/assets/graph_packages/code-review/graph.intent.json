@@ -80,7 +80,7 @@
       "name": "findings",
       "from": {"node_id": "verify", "port": "findings"},
       "cardinality": {"kind": "at_most", "count": 128},
-      "terminal": false,
+      "terminal": true,
       "predicates": [
         {"kind": "distinct", "field": "finding_id"},
         {"kind": "all_match", "field": "verdict", "value": "confirmed"},

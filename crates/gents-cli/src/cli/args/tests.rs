@@ -644,7 +644,7 @@ fn parse_graph(argv: &[&str]) -> GraphCommand {
 }
 
 #[test]
-fn graph_catalog_install_and_publish_parse() {
+fn graph_catalog_and_install_parse() {
     assert!(matches!(
         parse_graph(&["catalog", "code-review"]),
         GraphCommand::Catalog(GraphCatalogArgs { package: Some(package) }) if package == "code-review"
@@ -668,27 +668,24 @@ fn graph_catalog_install_and_publish_parse() {
                 Some(std::path::Path::new("/tmp/bindings.json"))
             );
             assert_eq!(
-                args.home.as_deref(),
+                args.scope.home.as_deref(),
                 Some(std::path::Path::new("/tmp/gents-home"))
             );
         }
         _ => panic!("expected graph install"),
     }
+}
 
-    assert!(matches!(
-        parse_graph(&[
-            "publish",
-            "code-review",
-            "--revision",
-            "sha256:abc",
-            "--confirm-revision",
-            "sha256:abc",
-        ]),
-        GraphCommand::Publish(args)
-            if args.package == "code-review"
-                && args.revision == "sha256:abc"
-                && args.confirm_revision == "sha256:abc"
-    ));
+#[test]
+fn graph_run_defaults_to_current_checkout() {
+    match parse_graph(&["run", "code-review"]) {
+        GraphCommand::Run(args) => {
+            assert_eq!(args.repo, std::path::PathBuf::from("."));
+            assert_eq!(args.base, "origin/main");
+            assert_eq!(args.head, "HEAD");
+        }
+        _ => panic!("expected graph run"),
+    }
 }
 
 #[test]
