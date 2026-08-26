@@ -289,7 +289,7 @@ impl P2POps for RecordingP2P {
 }
 
 #[tokio::test]
-async fn index_sync_request_targets_exactly_the_session_index() {
+async fn index_sync_request_targets_exactly_the_client_index() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -306,7 +306,10 @@ async fn index_sync_request_targets_exactly_the_session_index() {
     let requested = super::bootstrap::request_index_sync(core.node(), &p2p)
         .await
         .expect("request index sync");
-    assert_eq!(requested, ["AgentConversation", "AgentSession"]);
+    assert_eq!(
+        requested,
+        ["AgentConversation", "AgentSession", "MailboxItem"]
+    );
 
     let mut expected = crate::client::schema::index_collection_names()
         .into_iter()
@@ -354,13 +357,20 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
     }]));
     let mut saved = BTreeSet::from(["saved-alpha".to_string()]);
     let mut requested_for = BTreeSet::new();
+    let index_collection_count = crate::client::schema::index_collection_names().len();
 
     request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
-    assert_eq!(recording.sync_branchable_calls().len(), 2);
+    assert_eq!(
+        recording.sync_branchable_calls().len(),
+        index_collection_count
+    );
     assert_eq!(requested_for, saved);
 
     request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
-    assert_eq!(recording.sync_branchable_calls().len(), 2);
+    assert_eq!(
+        recording.sync_branchable_calls().len(),
+        index_collection_count
+    );
 
     statuses
         .write()
@@ -378,12 +388,18 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
         });
     saved.insert("saved-beta".to_string());
     request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
-    assert_eq!(recording.sync_branchable_calls().len(), 4);
+    assert_eq!(
+        recording.sync_branchable_calls().len(),
+        index_collection_count * 2
+    );
     assert_eq!(requested_for, saved);
 
     requested_for.remove("saved-alpha");
     request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
-    assert_eq!(recording.sync_branchable_calls().len(), 6);
+    assert_eq!(
+        recording.sync_branchable_calls().len(),
+        index_collection_count * 3
+    );
 
     requested_for.remove("saved-alpha");
     recording.set_connected_peers(Vec::new());

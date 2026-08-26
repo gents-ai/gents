@@ -5,6 +5,7 @@ import type { BearerPairingRequest as GeneratedBearerPairingRequest } from "../g
 import type { BehaviorDeleteRequest as GeneratedBehaviorDeleteRequest } from "../generated/BehaviorDeleteRequest.js";
 import type { BehaviorSaveRequest as GeneratedBehaviorSaveRequest } from "../generated/BehaviorSaveRequest.js";
 import type { ChatSendRequest as GeneratedChatSendRequest } from "../generated/ChatSendRequest.js";
+import type { MailboxItemRequest as GeneratedMailboxItemRequest } from "../generated/MailboxItemRequest.js";
 import type { ConversationRenameRequest as GeneratedConversationRenameRequest } from "../generated/ConversationRenameRequest.js";
 import type { DesktopInitRequest as GeneratedDesktopInitRequest } from "../generated/DesktopInitRequest.js";
 import type { EventTriggerDeleteRequest as GeneratedEventTriggerDeleteRequest } from "../generated/EventTriggerDeleteRequest.js";
@@ -45,6 +46,7 @@ export type BehaviorDeleteRequest =
   RequestInput<GeneratedBehaviorDeleteRequest>;
 export type BehaviorSaveRequest = RequestInput<GeneratedBehaviorSaveRequest>;
 export type ChatSendRequest = RequestInput<GeneratedChatSendRequest>;
+export type MailboxItemRequest = RequestInput<GeneratedMailboxItemRequest>;
 export type ConversationRenameRequest =
   RequestInput<GeneratedConversationRenameRequest>;
 export type DesktopInitRequest = RequestInput<GeneratedDesktopInitRequest>;

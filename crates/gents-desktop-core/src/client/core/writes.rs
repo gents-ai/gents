@@ -118,6 +118,21 @@ fn peer_record_owning_agent(records: &[PeerRecord], agent_did: &str) -> Option<P
 }
 
 impl ClientCore {
+    /// Dismiss an open mailbox item as the authenticated local principal.
+    pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
+        let result =
+            gents::mailbox::dismiss_mailbox_item(self.node.as_ref(), doc_id, self.principal.did())
+                .await;
+        match result {
+            Ok(item) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                Ok(item)
+            }
+            Err(error) => Err(self.record_mutation_error("dismiss mailbox item", error)),
+        }
+    }
+
     pub async fn submit_request(
         &self,
         session_id: &str,

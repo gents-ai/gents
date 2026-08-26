@@ -10,6 +10,8 @@ mod goal_continuation_live;
 mod interrupt_live;
 #[path = "e2e_live/lsp_live.rs"]
 mod lsp_live;
+#[path = "e2e_live/mailbox_live.rs"]
+mod mailbox_live;
 #[path = "e2e_live/p2p_admission_concurrent_live.rs"]
 mod p2p_admission_concurrent_live;
 #[path = "e2e_live/seed_live.rs"]

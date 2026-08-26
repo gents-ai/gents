@@ -222,6 +222,7 @@ fn client_route_filters(
         "AgentSession",
         "AgentConversation",
         "CompactionEntry",
+        "MailboxItem",
     ] {
         filters.insert(
             collection.to_string(),

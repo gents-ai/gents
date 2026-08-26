@@ -63,6 +63,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_validation_cases_fence_whole_graph_compilation_gate",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/mailbox.rs",
+            module_path: "conformance::mailbox",
+            function: "rust_mailbox_vocabularies_and_machine_match_lean_contract",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance/goals.rs",

@@ -183,6 +183,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         PeerProbeRequest,
         BearerPairingRequest,
         ChatSendRequest,
+        MailboxItemRequest,
         ConversationRenameRequest,
         AgentConfigSaveRequest,
         BehaviorSaveRequest,

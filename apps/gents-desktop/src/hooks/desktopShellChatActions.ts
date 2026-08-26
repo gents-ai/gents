@@ -22,6 +22,7 @@ type ChatActionParams = {
   selectedBehaviorId: string | null;
   selectedDeployment: DeploymentView | null;
   selectedSessionId: string | null;
+  pendingMailboxCauseId: string | null;
   session: DesktopSessionSnapshot | null;
   setDraft: Dispatch<SetStateAction<string>>;
   setError: Dispatch<SetStateAction<string | null>>;
@@ -30,6 +31,7 @@ type ChatActionParams = {
   setSelectedBehaviorId: Dispatch<SetStateAction<string | null>>;
   setSelectedSessionId: Dispatch<SetStateAction<string | null>>;
   setSending: Dispatch<SetStateAction<boolean>>;
+  setPendingMailboxCauseId: Dispatch<SetStateAction<string | null>>;
   setSession: Dispatch<SetStateAction<DesktopSessionSnapshot | null>>;
   shellProjection: ChatShellProjection;
 };
@@ -43,6 +45,7 @@ export function createDesktopShellChatActions({
   selectedBehaviorId,
   selectedDeployment,
   selectedSessionId,
+  pendingMailboxCauseId,
   session,
   setDraft,
   setError,
@@ -51,6 +54,7 @@ export function createDesktopShellChatActions({
   setSelectedBehaviorId,
   setSelectedSessionId,
   setSending,
+  setPendingMailboxCauseId,
   setSession,
   shellProjection,
 }: ChatActionParams) {
@@ -77,7 +81,9 @@ export function createDesktopShellChatActions({
         behaviorId: selectedBehaviorId,
         sessionId: selectedSessionId,
         content,
+        causedBySourceDocId: pendingMailboxCauseId,
       });
+      setPendingMailboxCauseId(null);
       newConversationAgentRef.current = null;
       setSelectedSessionId(result.sessionId);
       setOptimisticPendingTurn({
@@ -164,6 +170,7 @@ export function createDesktopShellChatActions({
   }
 
   function onSelectSession(sessionId: string) {
+    setPendingMailboxCauseId(null);
     const conversation = selectedDeployment?.conversations.find(
       (conversation) => conversation.sessionId === sessionId,
     );
@@ -181,6 +188,7 @@ export function createDesktopShellChatActions({
     if (!selectedDeployment) {
       return;
     }
+    setPendingMailboxCauseId(null);
     if (
       behaviorId &&
       selectedDeployment.behaviors.some(

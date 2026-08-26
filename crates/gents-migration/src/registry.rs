@@ -473,6 +473,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreig5hlyzlujmegnnlww6tjt6krquzuq2ltgh2pjqwwzxzjbognuguu"
     ),
     baseline_entry!(
+        gents_protocol::schemas::MAILBOX_ITEM_NAME,
+        gents_protocol::schemas::MAILBOX_ITEM,
+        "bafyreidaq3d7gfg2vkux3w5fz3kk4akgwnq356niwalgggqitnr4xlj4ma"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::AGENT_MESSAGE_NAME,
         gents_protocol::schemas::AGENT_MESSAGE,
         "bafyreig7x5jbsj5mlpd2k2whc2v6d4tbwnwik6l3nvu67oiwb2vc4x2wru"
@@ -762,4 +767,5 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
     gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
     gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,
+    gents_protocol::schemas::MAILBOX_ITEM_NAME,
 ];

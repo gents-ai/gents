@@ -8,6 +8,7 @@ export type { DesktopRuntimeSnapshot as RuntimeSnapshot } from "../generated/Des
 export type { EventTriggerView } from "../generated/EventTriggerView.js";
 export type { InferenceBackendView } from "../generated/InferenceBackendView.js";
 export type { InferenceProfileView } from "../generated/InferenceProfileView.js";
+export type { MailboxItemView } from "../generated/MailboxItemView.js";
 export type { NetworkReplicatorView } from "../generated/NetworkReplicatorView.js";
 export type { NetworkSavedPeerView } from "../generated/NetworkSavedPeerView.js";
 export type { NetworkStatusView } from "../generated/NetworkStatusView.js";

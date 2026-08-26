@@ -167,6 +167,7 @@ struct RequestShowHeader {
     caused_by_trigger_kind: Option<String>,
     caused_by_correlation: Option<String>,
     caused_by_trigger_context: Option<String>,
+    caused_by_source_doc_id: Option<String>,
     workspace_id: Option<String>,
     workspace_authority: Option<String>,
     workspace_owner_deployment_id: Option<String>,
@@ -450,6 +451,7 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "caused_by_trigger_kind",
         "caused_by_correlation",
         "caused_by_trigger_context",
+        "caused_by_source_doc_id",
         "subagent_depth",
     ];
     append_optional_fields(
@@ -557,6 +559,7 @@ fn request_header_view(
         caused_by_trigger_kind: string_field(row, "caused_by_trigger_kind"),
         caused_by_correlation: string_field(row, "caused_by_correlation"),
         caused_by_trigger_context: string_field(row, "caused_by_trigger_context"),
+        caused_by_source_doc_id: string_field(row, "caused_by_source_doc_id"),
         workspace_id: string_field(row, "workspace_id"),
         workspace_authority: string_field(row, "workspace_authority"),
         workspace_owner_deployment_id: string_field(row, "workspace_owner_deployment_id"),

@@ -17,6 +17,7 @@ import {
 import {
   delay,
   applySessionLiveDelta,
+  dismissMailboxItemAndClearMatchingRoute,
   logShellEvent,
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
@@ -36,6 +37,7 @@ import type {
   DesktopClientUpdatedListenerFactory,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
+  MailboxItemView,
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
 
@@ -65,6 +67,12 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   const snapshotRefreshSeq = useRef(0);
   const sessionRefreshSeq = useRef(0);
   const newConversationAgentRef = useRef<string | null>(null);
+  const pendingMailboxRouteRef = useRef<{
+    itemId: string;
+    agentDid: string;
+    behaviorId: string;
+    sessionId: string | null;
+  } | null>(null);
   const startupPhaseRef = useRef<DesktopStartupPhase>("loading-configuration");
   /** Coalesce concurrent shell start paths (autostart + pair + add-peer). */
   const startClientInFlight = useRef<Promise<DesktopClientSnapshot | null> | null>(
@@ -89,6 +97,9 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   const [selectedAgentDid, setSelectedAgentDid] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState<string | null>(null);
+  const [pendingMailboxCauseId, setPendingMailboxCauseId] = useState<string | null>(
+    null,
+  );
   const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({
     kind: "ready",
   });
@@ -157,6 +168,25 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     ],
   );
   const canSendMessage = shellProjection.sendStatus.kind === "ready";
+
+  useEffect(() => {
+    if (!pendingMailboxCauseId) {
+      pendingMailboxRouteRef.current = null;
+      return;
+    }
+    const route = pendingMailboxRouteRef.current;
+    if (
+      !route ||
+      route.itemId !== pendingMailboxCauseId ||
+      route.agentDid !== selectedAgentDid ||
+      route.behaviorId !== selectedBehaviorId ||
+      route.sessionId !== selectedSessionId
+    ) {
+      pendingMailboxRouteRef.current = null;
+      newConversationAgentRef.current = null;
+      setPendingMailboxCauseId(null);
+    }
+  }, [pendingMailboxCauseId, selectedAgentDid, selectedBehaviorId, selectedSessionId]);
 
   function setStartupPhase(next: DesktopStartupPhase) {
     startupPhaseRef.current = next;
@@ -526,6 +556,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     selectedBehaviorId,
     selectedDeployment,
     selectedSessionId,
+    pendingMailboxCauseId,
     session,
     setDraft,
     setError,
@@ -534,6 +565,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     setSelectedBehaviorId,
     setSelectedSessionId,
     setSending,
+    setPendingMailboxCauseId,
     setSession,
     shellProjection,
   });
@@ -559,6 +591,69 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     setError(null);
   }
 
+  async function onOpenMailboxItem(itemId: string): Promise<MailboxItemView> {
+    try {
+      const item = await api.startMailboxRequest(itemId);
+      pendingMailboxRouteRef.current = {
+        itemId: item.itemId,
+        agentDid: item.targetAgentDid,
+        behaviorId: item.targetBehaviorId,
+        sessionId: item.sessionId ?? null,
+      };
+      newConversationAgentRef.current = item.targetAgentDid;
+      setSelectedAgentDid(item.targetAgentDid);
+      setSelectedBehaviorId(item.targetBehaviorId);
+      setSelectedSessionId(item.sessionId ?? null);
+      setSession(null);
+      setPendingMailboxCauseId(item.itemId);
+      setError(null);
+      return item;
+    } catch (error) {
+      setError(String(error));
+      throw error;
+    }
+  }
+
+  async function onDismissMailboxItem(itemId: string) {
+    try {
+      await dismissMailboxItemAndClearMatchingRoute(
+        itemId,
+        (dismissedItemId) => api.dismissMailboxItem(dismissedItemId),
+        () => pendingMailboxRouteRef.current?.itemId ?? null,
+        () => {
+          pendingMailboxRouteRef.current = null;
+          newConversationAgentRef.current = null;
+          setPendingMailboxCauseId(null);
+        },
+      );
+      await refreshSnapshot();
+    } catch (error) {
+      setError(String(error));
+      throw error;
+    }
+  }
+
+  function clearPendingMailboxCause() {
+    pendingMailboxRouteRef.current = null;
+    newConversationAgentRef.current = null;
+    setPendingMailboxCauseId(null);
+  }
+
+  function selectAgent(agentDid: string | null) {
+    if (agentDid !== selectedAgentDid) clearPendingMailboxCause();
+    setSelectedAgentDid(agentDid);
+  }
+
+  function selectSession(sessionId: string | null) {
+    if (sessionId !== selectedSessionId) clearPendingMailboxCause();
+    setSelectedSessionId(sessionId);
+  }
+
+  function selectBehavior(behaviorId: string | null) {
+    if (behaviorId !== selectedBehaviorId) clearPendingMailboxCause();
+    setSelectedBehaviorId(behaviorId);
+  }
+
   return {
     snapshot,
     session,
@@ -579,6 +674,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     selectedAgentDid,
     selectedSessionId,
     selectedBehaviorId,
+    pendingMailboxCauseId,
     draft,
     deployments,
     selectedDeployment,
@@ -593,10 +689,13 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
       shellProjection.workflow.kind === "awaitingObservation" ||
       shellProjection.workflow.kind === "turnInProgress",
     sendStatus: shellProjection.sendStatus,
-    setSelectedAgentDid,
-    setSelectedSessionId,
-    setSelectedBehaviorId,
+    setSelectedAgentDid: selectAgent,
+    setSelectedSessionId: selectSession,
+    setSelectedBehaviorId: selectBehavior,
     setDraft,
+    clearPendingMailboxCause,
+    onOpenMailboxItem,
+    onDismissMailboxItem,
     onSelectSession,
     onStartNewConversation,
     refreshSession,

@@ -72,7 +72,8 @@ pub struct SelfConfigToolConfig {
 
 impl ToolSurface {
     pub(crate) fn source_fill_fields(&self) -> std::collections::BTreeSet<String> {
-        self.write_tools
+        let mut fields = self
+            .write_tools
             .iter()
             .flat_map(|decl| decl.fields.iter())
             .chain(
@@ -86,7 +87,18 @@ impl ToolSurface {
                 }
                 _ => None,
             })
-            .collect()
+            .collect::<std::collections::BTreeSet<_>>();
+        if self
+            .write_tools
+            .iter()
+            .any(|decl| decl.collection == crate::mailbox::MAILBOX_COLLECTION)
+        {
+            // Mailbox-capable EventTrigger stages require explicit human-owner
+            // lineage from the source document. This is capture, not a model
+            // fill vocabulary.
+            fields.insert("requester_did".to_string());
+        }
+        fields
     }
 
     pub(crate) fn output_obligations(
@@ -266,20 +278,28 @@ impl ToolSurface {
         ));
         let mut registered_names: HashSet<String> = tools.iter().map(|tool| tool.name()).collect();
         for decl in &self.write_tools {
-            let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
-            if !tool.is_well_formed() || !decl.output_obligation_is_well_formed() {
+            crate::mailbox::validate_mailbox_write_decl(decl)?;
+            if !decl.is_well_formed() || !decl.output_obligation_is_well_formed() {
                 anyhow::bail!(
                     "write tool `{}` reached registration with an invalid declaration",
                     decl.tool_name
                 );
             }
-            if !registered_names.insert(tool.name()) {
+            if !registered_names.insert(decl.tool_name.clone()) {
                 anyhow::bail!(
                     "write tool `{}` reached registration with a duplicate tool name",
                     decl.tool_name
                 );
             }
-            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+            if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
+                tools.push(
+                    Box::new(crate::mailbox::MailboxCreateTool::new(runtime.node.clone()))
+                        as Box<dyn ToolDyn>,
+                );
+            } else {
+                let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
+                tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+            }
         }
         for decl in &self.query_tools {
             let tool = BoundedQueryTool::new(runtime.node.clone(), decl.clone());

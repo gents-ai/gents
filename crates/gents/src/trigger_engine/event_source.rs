@@ -51,6 +51,31 @@ const GROUP_DUE_RECONCILE_BUDGET: usize = 16;
 const MAX_ACTIVE_GROUP_TIMERS: usize = 4096;
 const MAX_DORMANT_GROUP_TIMERS: usize = 4096;
 
+fn captured_source_field(doc: &serde_json::Value, field: &str) -> anyhow::Result<Option<String>> {
+    let Some(value) = doc.get(field) else {
+        if field == "requester_did" {
+            return Ok(None);
+        }
+        anyhow::bail!("source document is missing runtime-filled field `{field}`");
+    };
+    let canonical = match value {
+        serde_json::Value::Null if field == "requester_did" => return Ok(None),
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Number(value)
+            if value.as_i64().is_some() || value.as_u64().is_some() =>
+        {
+            value.to_string()
+        }
+        _ => anyhow::bail!(
+            "runtime-filled source field `{field}` must be a string or integral number"
+        ),
+    };
+    if field == "requester_did" && canonical.trim().is_empty() {
+        anyhow::bail!("runtime-filled source field `requester_did` must be non-empty");
+    }
+    Ok(Some(canonical))
+}
+
 pub(super) fn group_candidate_eligible(
     actual_count: usize,
     expected_count: Option<usize>,
@@ -1024,21 +1049,13 @@ impl EventSource {
             .unwrap_or_default();
         let mut source_fields = std::collections::BTreeMap::new();
         for field in fields {
-            let value = doc.get(&field).ok_or_else(|| {
-                anyhow::anyhow!("source document is missing runtime-filled field `{field}`")
-            })?;
-            let canonical = match value {
-                serde_json::Value::String(value) => value.clone(),
-                serde_json::Value::Number(value)
-                    if value.as_i64().is_some() || value.as_u64().is_some() =>
-                {
-                    value.to_string()
-                }
-                _ => anyhow::bail!(
-                    "runtime-filled source field `{field}` must be a string or integral number"
-                ),
-            };
-            source_fields.insert(field, canonical);
+            // Mailbox-capable stages capture an owner when the source has
+            // one. Ownerless automation still runs; the stamped mailbox tool
+            // itself fails closed if that stage tries to file without owner
+            // lineage.
+            if let Some(canonical) = captured_source_field(doc, &field)? {
+                source_fields.insert(field, canonical);
+            }
         }
         crate::lifecycle::snapshot_workspace_lineage_source_fields(
             doc,
@@ -2309,5 +2326,34 @@ impl TriggerSource for EventSource {
                 return self.take_first_and_queue_rest(build.intents);
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod mailbox_owner_capture_tests {
+    use super::captured_source_field;
+
+    #[test]
+    fn ownerless_source_is_optional_but_declared_source_fills_are_not() {
+        let doc = serde_json::json!({"run_id": "run-1"});
+        assert_eq!(captured_source_field(&doc, "requester_did").unwrap(), None);
+        let null_owner = serde_json::json!({"requester_did": null});
+        assert_eq!(
+            captured_source_field(&null_owner, "requester_did").unwrap(),
+            None
+        );
+        assert!(captured_source_field(&doc, "required_route").is_err());
+        assert_eq!(
+            captured_source_field(&doc, "run_id").unwrap().as_deref(),
+            Some("run-1")
+        );
+    }
+
+    #[test]
+    fn malformed_present_owner_is_rejected() {
+        let doc = serde_json::json!({"requester_did": ["did:test:owner"]});
+        assert!(captured_source_field(&doc, "requester_did").is_err());
+        let blank = serde_json::json!({"requester_did": "   "});
+        assert!(captured_source_field(&blank, "requester_did").is_err());
     }
 }

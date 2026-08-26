@@ -149,6 +149,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
       if (agentDid) {
         shell.setSelectedAgentDid(agentDid);
       }
+      shell.clearPendingMailboxCause();
       // Fleet selects an agent instance first. On narrow screens the sidebar is
       // that instance view (behaviors + conversations); opening the conversation
       // pane here made it impossible to reach that navigation from Fleet.
@@ -158,6 +159,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   }
 
   function openConfig(agentDid?: string) {
+    shell.clearPendingMailboxCause();
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
@@ -233,11 +235,16 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
         >
           <Sidebar
             conversations={shell.selectedDeployment?.conversations ?? []}
+            mailboxItems={shell.selectedDeployment?.mailboxItems ?? []}
             deployments={shell.deployments}
             onConfigureDeployment={(agentDid) => openConfig(agentDid)}
-            onOpenFleet={() => setWorkspaceView("fleet")}
+            onOpenFleet={() => {
+              shell.clearPendingMailboxCause();
+              setWorkspaceView("fleet");
+            }}
             onSelectBehavior={shell.setSelectedBehaviorId}
             onSelectAgent={(agentDid) => {
+              shell.clearPendingMailboxCause();
               shell.setSelectedAgentDid(agentDid);
               shell.setSelectedSessionId(null);
             }}
@@ -252,12 +259,42 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               shell.onStartNewConversation(behaviorId);
               setMobileChatPane("conversation");
             }}
+            onOpenMailboxItem={(itemId) => {
+              void shell
+                .onOpenMailboxItem(itemId)
+                .then(() => {
+                  setWorkspaceView("chat");
+                  setMobileChatPane("conversation");
+                  requestAnimationFrame(() => {
+                    document
+                      .querySelector<HTMLTextAreaElement>(
+                        '[data-testid="composer-input"]',
+                      )
+                      ?.focus();
+                  });
+                })
+                .catch(() => {});
+            }}
+            onDismissMailboxItem={(itemId) => {
+              void shell.onDismissMailboxItem(itemId).catch(() => {});
+            }}
             selectedAgentDid={shell.selectedAgentDid}
             selectedBehaviorId={shell.selectedBehaviorId}
             selectedSessionId={shell.selectedSessionId}
           />
 
           <section className="chat-column">
+            {shell.pendingMailboxCauseId ? (
+              <div
+                className="mailbox-compose-banner"
+                data-testid="mailbox-compose-banner"
+              >
+                This reply is linked to a mailbox item.
+                <button onClick={shell.clearPendingMailboxCause} type="button">
+                  Cancel link
+                </button>
+              </div>
+            ) : null}
             <ChatWorkspace
               api={bridge.api}
               activeRequestId={

@@ -12,6 +12,7 @@ pub(crate) mod goal;
 pub(crate) mod grok_auth_probe;
 pub(crate) mod grok_login;
 pub(crate) mod init;
+pub(crate) mod mailbox;
 pub(crate) mod mcp;
 pub(crate) mod native_fs_runner;
 pub(crate) mod p2p;

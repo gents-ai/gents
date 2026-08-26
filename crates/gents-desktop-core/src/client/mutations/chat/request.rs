@@ -52,6 +52,9 @@ pub struct SubmitRequestOptions {
     pub max_total_tokens: Option<i64>,
     /// Free-form metadata attached to the request (submitter-defined JSON/string).
     pub metadata: Option<String>,
+    /// Mailbox item `_docID` that caused this user submission. Only the
+    /// mailbox compose route sets this field.
+    pub caused_by_source_doc_id: Option<String>,
 }
 
 pub async fn submit_request(
@@ -78,6 +81,22 @@ pub async fn submit_request(
     let request_id = Uuid::new_v4().to_string();
     let created_at = Utc::now().to_rfc3339();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
+    if let Some(mailbox_item_id) = options
+        .caused_by_source_doc_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        validate_mailbox_submission_cause(
+            node,
+            mailbox_item_id,
+            requester_did,
+            agent_did,
+            binding.behavior_id.as_deref().unwrap_or(""),
+            session_id,
+        )
+        .await?;
+    }
 
     // Thread retry linkage: carry parent's retry root forward, else this row is
     // the root of its own retry chain.
@@ -122,6 +141,65 @@ pub async fn submit_request(
         agent_did: agent_did.to_string(),
         behavior_id: binding.behavior_id,
     })
+}
+
+async fn validate_mailbox_submission_cause(
+    node: &EmbeddedNode,
+    item_id: &str,
+    requester_did: &str,
+    agent_did: &str,
+    behavior_id: &str,
+    session_id: &str,
+) -> Result<()> {
+    let query = format!(
+        r#"query {{
+            MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
+                requester_did status action target_agent_did target_behavior_id session_id
+            }}
+        }}"#,
+        escape_graphql_string(item_id)
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        bail!(
+            "validate mailbox submission cause failed: {:?}",
+            response.errors
+        );
+    }
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("MailboxItem"))
+        .and_then(Value::as_array)
+        .context("mailbox cause query returned no row array")?;
+    if rows.len() != 1 {
+        bail!("mailbox submission cause must identify exactly one item");
+    }
+    let row = &rows[0];
+    let field = |name: &str| row.get(name).and_then(Value::as_str).unwrap_or("");
+    if field("requester_did") != requester_did {
+        bail!("mailbox submission cause is owned by another requester");
+    }
+    if field("status") != "open" {
+        bail!("mailbox submission cause is no longer open");
+    }
+    if !matches!(field("action"), "start_request" | "write_document") {
+        bail!("mailbox submission cause does not open a compose surface");
+    }
+    if field("target_agent_did") != agent_did || field("target_behavior_id") != behavior_id {
+        bail!("mailbox submission route does not match the target agent behavior");
+    }
+    if let Some(expected_session) = row
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if expected_session != session_id {
+            bail!("mailbox submission route does not match the target session");
+        }
+    }
+    Ok(())
 }
 
 fn prepare_prompt_submission(
@@ -651,6 +729,17 @@ fn submit_request_extra_fields(options: &SubmitRequestOptions) -> String {
             escape_graphql_string(metadata)
         ));
     }
+    if let Some(source_doc_id) = options
+        .caused_by_source_doc_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        override_parts.push(format!(
+            r#"caused_by_source_doc_id: "{}""#,
+            escape_graphql_string(source_doc_id)
+        ));
+    }
     let override_fields = if override_parts.is_empty() {
         String::new()
     } else {
@@ -763,6 +852,7 @@ pub async fn resend_request(
             max_tokens: stale.max_tokens,
             max_total_tokens: stale.max_total_tokens,
             metadata: stale.metadata.clone(),
+            caused_by_source_doc_id: None,
         },
     )
     .await

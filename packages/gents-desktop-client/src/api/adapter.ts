@@ -11,6 +11,7 @@ import type {
   InferenceProbeResult,
   InitSummary,
   InterruptRequestResult,
+  MailboxItemView,
   MCPServiceHealthView,
   McpServiceProbeResult,
   NetworkStatusView,
@@ -164,6 +165,16 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop<ChatSendResult>("desktop_chat_send", { request }),
+    listMailbox: () =>
+      invokeDesktop<MailboxItemView[]>("desktop_mailbox_list"),
+    startMailboxRequest: (itemId) =>
+      invokeDesktop<MailboxItemView>("desktop_mailbox_start_request", {
+        request: { itemId },
+      }),
+    dismissMailboxItem: (itemId) =>
+      invokeDesktop<void>("desktop_mailbox_dismiss", {
+        request: { itemId },
+      }),
     renameConversation: (request) =>
       invokeDesktop<void>("desktop_conversation_rename", { request }),
     resendRequest: (requestId) =>

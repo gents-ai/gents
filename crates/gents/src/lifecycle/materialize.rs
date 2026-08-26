@@ -154,6 +154,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
         conversation_title,
         None,
         None,
+        None,
     )
     .await
 }
@@ -168,6 +169,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     conversation_title: Option<&str>,
     workspace_lineage: Option<&WorkspaceLineage>,
     request_id: Option<&str>,
+    requester_did: Option<&str>,
 ) -> Result<EnqueuedAgentRequest> {
     if trigger_lineage.trigger_kind.as_deref() == Some("manual")
         && trigger_lineage.trigger_id.is_some()
@@ -197,6 +199,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     let execution_origin = execution_origin.as_str();
     let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage)?;
     let workspace_fields = workspace_lineage_graphql_fields(workspace_lineage);
+    let requester_did_field = crate::session::requester_did_create_field(requester_did);
     let initial_status = if workspace_lineage.is_some_and(WorkspaceLineage::is_bound) {
         "workspace_binding_pending"
     } else {
@@ -234,6 +237,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
+                {requester_did_field}
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",

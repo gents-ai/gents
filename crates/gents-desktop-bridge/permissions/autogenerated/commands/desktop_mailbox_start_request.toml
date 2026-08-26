@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-mailbox-start-request"
+description = "Enables the desktop_mailbox_start_request command without any pre-configured scope."
+commands.allow = ["desktop_mailbox_start_request"]
+
+[[permission]]
+identifier = "deny-desktop-mailbox-start-request"
+description = "Denies the desktop_mailbox_start_request command without any pre-configured scope."
+commands.deny = ["desktop_mailbox_start_request"]

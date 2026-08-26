@@ -234,6 +234,14 @@ impl MaterializerHandle for ProductionMaterializer {
 
         Box::pin(async move {
             let (behavior_name, behavior_did, _deadline_secs, _backend_id) = resolved?;
+            let parsed_trigger_context =
+                crate::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
+            let requester_did = parsed_trigger_context
+                .source_fields
+                .get("requester_did")
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
             let mut workspace = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
             workspace.require_authority_if_workspace_id()?;
             if workspace.owner_deployment_id().is_some()
@@ -286,6 +294,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     Some(&conversation_title),
                     workspace_ref,
                     Some(&request_id),
+                    requester_did,
                 )
                 .await?;
             if workspace_ref.is_some() {

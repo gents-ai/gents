@@ -99,6 +99,23 @@ impl BackgroundCompletionObserver {
     }
 
     async fn run_reconcilers(&mut self) -> Result<()> {
+        match crate::mailbox::sweep_open_mailbox_items(self.node.as_ref()).await {
+            Ok(mailbox)
+                if mailbox.acted > 0
+                    || mailbox.expired > 0
+                    || mailbox.skipped_unsupported > 0
+                    || mailbox.skipped_errors > 0 =>
+            {
+                tracing::debug!(?mailbox, "mailbox close sweep applied");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                // A failed read/transition must leave rows open and retry on
+                // the next ordinary reconciler tick; it must not take down
+                // the other background reconcilers.
+                tracing::warn!(%error, "mailbox close sweep failed; will retry");
+            }
+        }
         for run in crate::periodic_recovery::run_periodic_recovery_sweeps(
             self.node.as_ref(),
             &self.local_did,

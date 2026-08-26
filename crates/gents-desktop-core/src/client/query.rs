@@ -7,14 +7,14 @@ use gents_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
     AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
     CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
-    ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    MailboxItemRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
 use gents_protocol::schemas::{
     AGENT_BEHAVIOR_NAME, AGENT_CONVERSATION_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
     AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
     AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME,
-    GOAL_NAME, INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, SKILL_NAME,
-    TASK_NAME, TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
+    GOAL_NAME, INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, SCHEDULE_NAME,
+    SKILL_NAME, TASK_NAME, TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
 };
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -48,7 +48,7 @@ const AGENT_PRINCIPAL_FIELDS: &str =
 const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
 const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count behavior_executor_capacity behavior_executor_queue_depth last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did requester_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
-const AGENT_REQUEST_FIELDS: &str = "request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content temperature top_p top_k seed max_tokens max_total_tokens metadata status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until workspace_id workspace_authority workspace_owner_deployment_id workspace_seal_hash";
+const AGENT_REQUEST_FIELDS: &str = "request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content temperature top_p top_k seed max_tokens max_total_tokens metadata status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until workspace_id workspace_authority workspace_owner_deployment_id workspace_seal_hash";
 const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did requester_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
 const AGENT_MESSAGE_FIELDS: &str =
     "message_key session_id request_id requester_did sequence role content reasoning timestamp";
@@ -66,6 +66,7 @@ const TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_
 const INFERENCE_BACKEND_FIELDS: &str = "backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
 const INFERENCE_PROFILE_FIELDS: &str = "profile_id display_name context_window max_output_tokens max_turns temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty reasoning_effort stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_max_transport retry_backoff_ms retry_max_resample retry_allow_repair retry_interactive_max";
 const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path status version updated_at";
+const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did agent_did status kind action title summary payload source_kind source_id session_id request_id graph_run_id cause_doc_id target_agent_did target_behavior_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
 pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
@@ -74,6 +75,7 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         runtimes: load_agent_runtimes(node).await?,
         conversations: load_agent_conversations(node).await?,
         requests: load_agent_requests(node).await?,
+        mailbox_items: load_mailbox_items(node).await?,
         responses: load_agent_responses(node).await?,
         messages: load_agent_messages(node).await?,
         sessions: load_agent_sessions(node).await?,
@@ -290,6 +292,15 @@ pub async fn load_agent_requests(node: &EmbeddedNode) -> Result<Vec<AgentRequest
         node,
         AGENT_REQUEST_NAME,
         &format!("query {{ {AGENT_REQUEST_NAME} {{ {AGENT_REQUEST_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_mailbox_items(node: &EmbeddedNode) -> Result<Vec<MailboxItemRow>> {
+    load_rows(
+        node,
+        MAILBOX_ITEM_NAME,
+        &format!("query {{ {MAILBOX_ITEM_NAME} {{ {MAILBOX_ITEM_FIELDS} }} }}"),
     )
     .await
 }
@@ -889,6 +900,14 @@ pub async fn fetch_doc_patch(
             )
             .await?;
         }
+        MAILBOX_ITEM_NAME => {
+            rows.mailbox_items = load_rows(
+                node,
+                MAILBOX_ITEM_NAME,
+                &format!("query {{ {MAILBOX_ITEM_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {MAILBOX_ITEM_FIELDS} }} }}"),
+            )
+            .await?;
+        }
         AGENT_RESPONSE_NAME => {
             rows.responses = load_rows(
                 node,
@@ -1022,6 +1041,7 @@ pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
             | AGENT_RUNTIME_NAME
             | AGENT_CONVERSATION_NAME
             | AGENT_REQUEST_NAME
+            | MAILBOX_ITEM_NAME
             | AGENT_RESPONSE_NAME
             | AGENT_MESSAGE_NAME
             | AGENT_SESSION_NAME
@@ -1085,6 +1105,12 @@ pub async fn load_agent_scoped_snapshot(
         node,
         AGENT_REQUEST_NAME,
         &format!("query {{ {AGENT_REQUEST_NAME}({did_filter}) {{ {AGENT_REQUEST_FIELDS} }} }}"),
+    )
+    .await?;
+    let mailbox_items: Vec<MailboxItemRow> = load_rows(
+        node,
+        MAILBOX_ITEM_NAME,
+        &format!("query {{ {MAILBOX_ITEM_NAME}({did_filter}) {{ {MAILBOX_ITEM_FIELDS} }} }}"),
     )
     .await?;
     let responses: Vec<AgentResponseRow> = load_rows(
@@ -1184,6 +1210,7 @@ pub async fn load_agent_scoped_snapshot(
         runtimes,
         conversations,
         requests,
+        mailbox_items,
         responses,
         messages,
         sessions,
@@ -1340,6 +1367,63 @@ mod tests {
             .await
             .expect("fetch_doc_patch");
         assert_eq!(patch.messages.len(), 1, "expected exactly one row");
+    }
+
+    #[tokio::test]
+    async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_MailboxItem(input: {
+                        item_key: "graph:wait-live:ask:1",
+                        requester_did: "did:test:owner",
+                        agent_did: "did:test:agent",
+                        status: "open",
+                        kind: "ask",
+                        action: "start_request",
+                        title: "Live item",
+                        source_kind: "graph",
+                        source_id: "wait-live",
+                        target_agent_did: "did:test:agent",
+                        target_behavior_id: "operator",
+                        created_at: "2026-08-25T00:00:00Z",
+                        updated_at: "2026-08-25T00:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let lookup = node
+            .execute(
+                r#"query {
+                    MailboxItem(filter: { item_key: { _eq: "graph:wait-live:ask:1" } }) {
+                        _docID
+                    }
+                }"#,
+            )
+            .await;
+        assert!(!lookup.has_errors(), "{:?}", lookup.errors);
+        let doc_id = lookup
+            .data
+            .as_ref()
+            .and_then(|data| data.get("MailboxItem"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("_docID"))
+            .and_then(Value::as_str)
+            .expect("mailbox doc id");
+
+        let patch = fetch_doc_patch(node.as_ref(), MAILBOX_ITEM_NAME, &[doc_id])
+            .await
+            .expect("mailbox patch");
+        assert_eq!(patch.mailbox_items.len(), 1);
+        assert_eq!(patch.mailbox_items[0].title, "Live item");
+        assert!(supports_doc_patch_collection(MAILBOX_ITEM_NAME));
     }
 
     #[tokio::test]

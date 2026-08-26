@@ -288,6 +288,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "AgentConversation",
     "CompactionEntry",
+    "MailboxItem",
     "BearerPairingReady",
     "PeerEndpoint",
     "SessionHydrationRequest",
@@ -317,6 +318,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "AgentConversation",
     "CompactionEntry",
+    "MailboxItem",
     "BearerPairingReady",
     "PeerEndpoint",
     "SessionHydrationRequest",
@@ -372,7 +374,8 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
 
 /// Requester-scoped session-index grant. Complete historical index hydration
 /// is handled separately by the desktop's node-global branchable pull.
-pub const CLIENT_INDEX_COLLECTIONS: [&str; 2] = ["AgentConversation", "AgentSession"];
+pub const CLIENT_INDEX_COLLECTIONS: [&str; 3] =
+    ["AgentConversation", "AgentSession", "MailboxItem"];
 
 const CLIENT_INDEX_RULES: &[CollectionRule] = &[
     CollectionRule {
@@ -382,6 +385,11 @@ const CLIENT_INDEX_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "AgentSession",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "MailboxItem",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
@@ -403,6 +411,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "AgentConversation",
     "CompactionEntry",
+    "MailboxItem",
     "BearerPairingReady",
     "AgentBehavior",
     "ToolSelection",
@@ -454,6 +463,11 @@ const MACHINE_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "CompactionEntry",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "MailboxItem",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
@@ -858,14 +872,17 @@ mod tests {
     }
 
     #[test]
-    fn client_index_is_requester_scoped_push_of_the_session_index() {
+    fn client_index_is_requester_scoped_push_of_the_literal_index() {
         let t = resolve_template(CLIENT_INDEX_TEMPLATE).unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(t.collections, &["AgentConversation", "AgentSession"]);
+        assert_eq!(
+            t.collections,
+            &["AgentConversation", "AgentSession", "MailboxItem"]
+        );
 
         let filter = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:home");
-        assert_eq!(filter.len(), 2);
+        assert_eq!(filter.len(), 3);
         for collection in &CLIENT_INDEX_COLLECTIONS {
             let predicate = filter
                 .get(*collection)
@@ -997,7 +1014,7 @@ mod tests {
     fn machine_template_scopes_conversation_and_issuer_owned_directory() {
         let t = resolve_template("machine").expect("machine template registered");
         assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections.len(), 19);
+        assert_eq!(t.collections.len(), MACHINE_COLLECTIONS.len());
         assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
         let filters = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:server");
         // Conversation collections stay member-scoped exactly like `conversation`.

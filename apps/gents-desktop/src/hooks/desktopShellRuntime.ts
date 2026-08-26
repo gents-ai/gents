@@ -80,6 +80,18 @@ export function desktopUpdateRefreshScope(
   return "full";
 }
 
+export async function dismissMailboxItemAndClearMatchingRoute(
+  itemId: string,
+  dismiss: (itemId: string) => Promise<void>,
+  currentRouteItemId: () => string | null,
+  clearMatchingRoute: () => void,
+) {
+  await dismiss(itemId);
+  if (currentRouteItemId() === itemId) {
+    clearMatchingRoute();
+  }
+}
+
 const utf8 = new TextEncoder();
 
 function liveTextHash(value: string) {

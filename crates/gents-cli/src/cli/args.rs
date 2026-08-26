@@ -175,6 +175,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: GoalCommand,
     },
+    #[command(about = "List and resolve human-attention mailbox items")]
+    Mailbox {
+        #[command(subcommand)]
+        command: MailboxCommand,
+    },
     #[command(
         about = "Inspect and control background subagents",
         after_help = SUBAGENT_AFTER_HELP
@@ -3179,6 +3184,44 @@ pub(crate) struct GoalSetArgs {
         help = "Remove the charged-token budget"
     )]
     pub(crate) clear_token_budget: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum MailboxCommand {
+    #[command(about = "List open mailbox items for the local principal")]
+    List(MailboxListArgs),
+    #[command(about = "Show one mailbox item")]
+    Show(MailboxItemArgs),
+    #[command(about = "Dismiss one open mailbox item as its owner")]
+    Dismiss(MailboxItemArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct MailboxAccessArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for a running runtime")]
+    pub(crate) graphql: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct MailboxListArgs {
+    #[command(flatten)]
+    pub(crate) access: MailboxAccessArgs,
+    #[arg(long, help = "Include terminal mailbox history")]
+    pub(crate) all: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct MailboxItemArgs {
+    #[command(flatten)]
+    pub(crate) access: MailboxAccessArgs,
+    #[arg(value_name = "DOC_ID")]
+    pub(crate) doc_id: String,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
 }

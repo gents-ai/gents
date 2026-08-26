@@ -126,6 +126,8 @@ mod inference_call;
 mod interrupts_manual;
 #[path = "conformance/lsp.rs"]
 mod lsp;
+#[path = "conformance/mailbox.rs"]
+mod mailbox;
 #[path = "conformance/managed_exec.rs"]
 mod managed_exec;
 #[path = "conformance/mcp_health.rs"]

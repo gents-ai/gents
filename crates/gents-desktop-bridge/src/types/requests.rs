@@ -60,6 +60,14 @@ pub struct ChatSendRequest {
     pub behavior_id: Option<String>,
     pub session_id: Option<String>,
     pub content: String,
+    #[serde(default)]
+    pub caused_by_source_doc_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MailboxItemRequest {
+    pub item_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

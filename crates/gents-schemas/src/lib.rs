@@ -27,6 +27,8 @@ pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
+pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
+pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
 pub const AGENT_TOOL_APPROVAL_NAME: &str = "AgentToolApproval";
@@ -150,6 +152,7 @@ pub const ALL: &[&str] = &[
     AGENT_TOOL_RESULT,
     AGENT_SESSION,
     GOAL,
+    MAILBOX_ITEM,
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
     AGENT_TOOL_APPROVAL,
@@ -205,6 +208,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
+    MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     AGENT_TOOL_APPROVAL_NAME,
@@ -249,6 +253,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
+    MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     AGENT_TOOL_APPROVAL_NAME,
@@ -351,6 +356,55 @@ mod tests {
         for name in LOCAL_AUDIT_COLLECTION_NAMES {
             assert!(ALL_COLLECTION_NAMES.contains(name));
             assert!(!BRANCHABLE_COLLECTION_NAMES.contains(name));
+        }
+    }
+
+    #[test]
+    fn mailbox_envelope_is_immutable_except_for_close_state() {
+        let immutable_fields = [
+            "item_key",
+            "requester_did",
+            "agent_did",
+            "kind",
+            "action",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "source_id",
+            "session_id",
+            "request_id",
+            "graph_run_id",
+            "cause_doc_id",
+            "target_agent_did",
+            "target_behavior_id",
+            "expected_collection",
+            "parent_item_id",
+            "deadline_at",
+            "created_at",
+        ];
+        let mutable_close_fields = ["status", "updated_at", "resolved_at", "resolved_doc_id"];
+        let field_line = |field: &str| {
+            MAILBOX_ITEM
+                .lines()
+                .map(str::trim)
+                .find(|line| line.starts_with(&format!("{field}:")))
+                .unwrap_or_else(|| panic!("MailboxItem is missing field {field}"))
+        };
+
+        assert!(type_declaration(MAILBOX_ITEM_NAME).contains("@branchable"));
+        assert!(field_line("item_key").contains("@index(unique: true)"));
+        for field in immutable_fields {
+            assert!(
+                field_line(field).contains("@immutable"),
+                "MailboxItem.{field} must be immutable"
+            );
+        }
+        for field in mutable_close_fields {
+            assert!(
+                !field_line(field).contains("@immutable"),
+                "MailboxItem.{field} is close state and must remain mutable"
+            );
         }
     }
 

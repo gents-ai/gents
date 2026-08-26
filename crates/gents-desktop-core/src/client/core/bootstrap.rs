@@ -353,7 +353,6 @@ pub(super) async fn request_index_sync(
         anyhow::bail!("no connected peers available for session index request");
     }
 
-    let [conversation_name, session_name] = index_collection_names();
     let resolve_id = |collection_name| -> Result<String> {
         let collection = node
             .get_collection(collection_name)
@@ -363,18 +362,14 @@ pub(super) async fn request_index_sync(
             .ok_or_else(|| anyhow::anyhow!("collection {collection_name} not found"))?;
         Ok(collection.collection_id)
     };
-    let conversation_id = resolve_id(conversation_name)?;
-    let session_id = resolve_id(session_name)?;
+    let mut requested = Vec::new();
+    for collection_name in index_collection_names() {
+        let collection_id = resolve_id(collection_name)?;
+        p2p_sync_branchable_collection(p2p, &collection_id).await?;
+        requested.push(collection_name.to_string());
+    }
 
-    tokio::try_join!(
-        p2p_sync_branchable_collection(p2p, &conversation_id),
-        p2p_sync_branchable_collection(p2p, &session_id),
-    )?;
-
-    Ok(vec![
-        conversation_name.to_string(),
-        session_name.to_string(),
-    ])
+    Ok(requested)
 }
 
 pub(super) async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {

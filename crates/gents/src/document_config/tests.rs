@@ -199,6 +199,30 @@ fn validate_rejects_invalid_write_tool_field_identifiers() {
 }
 
 #[test]
+fn validate_rejects_model_provided_requester_identity() {
+    let mut decl = WriteToolDecl {
+        tool_name: "write_gate".to_string(),
+        collection: "GraphGate".to_string(),
+        description: String::new(),
+        fields: vec![WriteToolField {
+            name: "requester_did".to_string(),
+            required: true,
+            fill: None,
+        }],
+        output_obligation: None,
+    };
+    assert!(decl
+        .validate()
+        .expect_err("models must not choose requester identity")
+        .to_string()
+        .contains("must be runtime-filled"));
+
+    decl.fields[0].required = false;
+    decl.fields[0].fill = Some(WriteToolFieldFill::SourceField("requester_did".to_string()));
+    assert!(decl.validate().is_ok());
+}
+
+#[test]
 fn validate_rejects_duplicate_write_tool_names() {
     let decl = |collection: &str| WriteToolDecl {
         tool_name: "request_action".to_string(),

@@ -6,6 +6,7 @@ use crate::types::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SnapshotGrants {
     pub session_read: bool,
+    pub mailbox_read: bool,
     pub fleet_read: bool,
     pub config_read: bool,
     pub operations_read: bool,
@@ -16,6 +17,7 @@ impl Default for SnapshotGrants {
     fn default() -> Self {
         Self {
             session_read: false,
+            mailbox_read: false,
             fleet_read: false,
             config_read: false,
             operations_read: false,
@@ -32,6 +34,7 @@ impl SnapshotGrants {
     pub fn all() -> Self {
         Self {
             session_read: true,
+            mailbox_read: true,
             fleet_read: true,
             config_read: true,
             operations_read: true,
@@ -42,6 +45,7 @@ impl SnapshotGrants {
     pub fn chat_package() -> Self {
         Self {
             session_read: true,
+            mailbox_read: false,
             fleet_read: false,
             config_read: false,
             operations_read: false,
@@ -52,10 +56,18 @@ impl SnapshotGrants {
     pub fn fleet_package() -> Self {
         Self {
             session_read: false,
+            mailbox_read: false,
             fleet_read: true,
             config_read: false,
             operations_read: false,
             runtime_admin: false,
+        }
+    }
+
+    pub fn mailbox_package() -> Self {
+        Self {
+            mailbox_read: true,
+            ..Self::default()
         }
     }
 }
@@ -129,6 +141,9 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
             environment.session_count = 0;
             environment.active_session_count = 0;
         }
+    }
+    if !grants.mailbox_read {
+        deployment.mailbox_items.clear();
     }
 
     if grants.config_read {
@@ -219,7 +234,7 @@ mod tests {
     use crate::types::{
         AgentPrincipalView, BehaviorEnvironmentView, BehaviorView, ClientRouteStatusView,
         ConversationSummary, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
-        DesktopRuntimeSnapshot, P2PHealthView, SavedPeerView, SkillView,
+        DesktopRuntimeSnapshot, MailboxItemView, P2PHealthView, SavedPeerView, SkillView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
@@ -372,6 +387,30 @@ mod tests {
                         message_count: 1,
                         tool_call_count: 0,
                     }],
+                    mailbox_items: vec![MailboxItemView {
+                        item_id: "mailbox-1".into(),
+                        item_key: "runtime:request-1:ask:1".into(),
+                        requester_did: "did:test:local".into(),
+                        agent_did: "did:test:local".into(),
+                        status: "open".into(),
+                        kind: "ask".into(),
+                        action: "ack".into(),
+                        title: "Review".into(),
+                        summary: Some("Needs attention".into()),
+                        payload: None,
+                        source_kind: "runtime".into(),
+                        source_id: "request-1".into(),
+                        session_id: Some("sess_1".into()),
+                        request_id: Some("request-1".into()),
+                        graph_run_id: None,
+                        cause_doc_id: None,
+                        target_agent_did: "did:test:local".into(),
+                        target_behavior_id: "default".into(),
+                        expected_collection: None,
+                        parent_item_id: None,
+                        deadline_at: None,
+                        created_at: "2026-08-25T12:00:00Z".into(),
+                    }],
                 }],
             }),
         }
@@ -387,6 +426,7 @@ mod tests {
         assert!(client.listen_addresses.is_empty());
         let dep = &client.deployments[0];
         assert!(dep.conversations.is_empty());
+        assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.behavior_environments[0].session_count, 0);
         assert!(dep.behavior_environments[0].workspace_root.is_none());
         assert!(dep.behavior_environments[0]
@@ -413,6 +453,7 @@ mod tests {
         assert_eq!(dep.routes.len(), 2);
         assert!(dep.routes.iter().all(|route| route.live_match));
         assert_eq!(dep.conversations.len(), 1);
+        assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.behavior_environments[0].session_count, 1);
         assert!(dep.behavior_environments[0].workspace_root.is_none());
         assert!(dep.behavior_environments[0]
@@ -422,6 +463,16 @@ mod tests {
         assert_eq!(dep.behaviors[0].model_name.as_deref(), Some("gpt"));
         assert!(dep.skills[0].instructions.is_none());
         assert_eq!(dep.behaviors[0].skill_refs, vec!["skill_a".to_string()]);
+    }
+
+    #[test]
+    fn mailbox_read_is_independent_from_session_read() {
+        let projected =
+            project_client_snapshot(sample_snapshot(), SnapshotGrants::mailbox_package());
+        let dep = &projected.client.as_ref().unwrap().deployments[0];
+        assert!(dep.conversations.is_empty());
+        assert_eq!(dep.mailbox_items.len(), 1);
+        assert_eq!(dep.mailbox_items[0].item_id, "mailbox-1");
     }
 
     #[test]

@@ -69,6 +69,18 @@
       "permissionSet": "chat-write"
     },
     {
+      "name": "desktop_mailbox_list",
+      "permissionSet": "mailbox-read"
+    },
+    {
+      "name": "desktop_mailbox_start_request",
+      "permissionSet": "mailbox-control"
+    },
+    {
+      "name": "desktop_mailbox_dismiss",
+      "permissionSet": "mailbox-control"
+    },
+    {
       "name": "desktop_request_resend",
       "permissionSet": "resend-control"
     },
@@ -273,7 +285,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "1.3",
+  "contractVersion": "1.4",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -334,6 +346,14 @@
     {
       "kind": "mutate",
       "name": "chat-write"
+    },
+    {
+      "kind": "read",
+      "name": "mailbox-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "mailbox-control"
     },
     {
       "kind": "mutate",

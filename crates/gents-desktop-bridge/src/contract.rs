@@ -8,6 +8,7 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 1.4: additive — owner-scoped mailbox read/start/dismiss commands.
 // 1.3: additive — query-level transcript page evidence and exact-total marker.
 // 1.2: additive — observer response in-place/copy-on-write merge counters.
 // 1.1: additive — revisioned desktop_session_live_delta read and store event metadata.
@@ -21,7 +22,7 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "1.3";
+pub const CONTRACT_VERSION: &str = "1.4";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -95,6 +96,10 @@ pub fn command_inventory() -> Vec<CommandContract> {
         // chat-write
         ("desktop_chat_send", "chat-write"),
         ("desktop_conversation_rename", "chat-write"),
+        // mailbox-read / mailbox-control
+        ("desktop_mailbox_list", "mailbox-read"),
+        ("desktop_mailbox_start_request", "mailbox-control"),
+        ("desktop_mailbox_dismiss", "mailbox-control"),
         // resend-control
         ("desktop_request_resend", "resend-control"),
         ("desktop_request_retry", "resend-control"),
@@ -181,6 +186,8 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("trace-read", "read"),
         ("tool-surface-read", "read"),
         ("chat-write", "mutate"),
+        ("mailbox-read", "read"),
+        ("mailbox-control", "mutate"),
         ("resend-control", "mutate"),
         ("fleet-read", "read"),
         ("workspace-read", "read"),
@@ -519,6 +526,9 @@ mod tests {
             ("desktop_tool_surface_explain", "read"),
             ("desktop_chat_send", "mutate"),
             ("desktop_conversation_rename", "mutate"),
+            ("desktop_mailbox_list", "read"),
+            ("desktop_mailbox_start_request", "mutate"),
+            ("desktop_mailbox_dismiss", "mutate"),
             ("desktop_request_resend", "mutate"),
             ("desktop_request_retry", "mutate"),
             ("desktop_peer_status_fetch", "read"),

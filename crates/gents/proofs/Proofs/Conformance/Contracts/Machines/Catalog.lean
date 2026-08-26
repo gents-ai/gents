@@ -10,6 +10,7 @@ import Proofs.Conformance.Contracts.Machines.ToolCall
 import Proofs.Conformance.Contracts.Machines.ManagedExec
 import Proofs.Conformance.Contracts.Machines.Subagent
 import Proofs.Conformance.Contracts.Machines.Goal
+import Proofs.Conformance.Contracts.Machines.Mailbox
 import Proofs.CompletionRetry.Contracts
 
 namespace Conformance.Contracts
@@ -53,6 +54,10 @@ def vocabularies : List VocabularyContract :=
     , values := ["failed", "dead", "interrupted", "superseded"]
     }
   , { domain := "GoalStatus", values := goalStatusNames }
+  , { domain := "MailboxStatus", values := Mailbox.statusVocabulary }
+  , { domain := "MailboxKind", values := Mailbox.kindVocabulary }
+  , { domain := "MailboxHandling", values := Mailbox.handlingVocabulary }
+  , { domain := "MailboxSourceKind", values := Mailbox.sourceKindVocabulary }
   ]
 
 def stateMachines : List StateMachineContract :=
@@ -72,6 +77,7 @@ def stateMachines : List StateMachineContract :=
   , cancelPolicyMachine
   , childTerminalMachine
   , goalMachine
+  , mailboxMachine
   ]
 
 end Conformance.Contracts

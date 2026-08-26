@@ -290,6 +290,11 @@ impl WriteToolDecl {
             crate::graphql::validate_graphql_name(&field.name).map_err(|error| {
                 anyhow::anyhow!("invalid field[{index}] name {:?}: {error}", field.name)
             })?;
+            if field.name == "requester_did" && field.fill.is_none() {
+                anyhow::bail!(
+                    "field[{index}] requester_did is principal identity and must be runtime-filled"
+                );
+            }
         }
         Ok(())
     }
@@ -329,6 +334,12 @@ pub(crate) fn validate_write_tool_declarations(
         decl.validate().map_err(|error| {
             anyhow::anyhow!(
                 "write_tools[{i}] (tool {:?}) is malformed: {error}",
+                decl.tool_name
+            )
+        })?;
+        crate::mailbox::validate_mailbox_write_decl(decl).map_err(|error| {
+            anyhow::anyhow!(
+                "write_tools[{i}] (tool {:?}) violates mailbox registration policy: {error}",
                 decl.tool_name
             )
         })?;

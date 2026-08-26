@@ -3,6 +3,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use gents_desktop_core::client::PeerMutationResult;
+use gents_protocol::row::MailboxItemRow;
 
 use super::bootstrap::DesktopBootstrapSummary;
 
@@ -280,6 +281,62 @@ pub struct ConversationSummary {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct MailboxItemView {
+    pub item_id: String,
+    pub item_key: String,
+    pub requester_did: String,
+    pub agent_did: String,
+    pub status: String,
+    pub kind: String,
+    pub action: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub payload: Option<String>,
+    pub source_kind: String,
+    pub source_id: String,
+    pub session_id: Option<String>,
+    pub request_id: Option<String>,
+    pub graph_run_id: Option<String>,
+    pub cause_doc_id: Option<String>,
+    pub target_agent_did: String,
+    pub target_behavior_id: String,
+    pub expected_collection: Option<String>,
+    pub parent_item_id: Option<String>,
+    pub deadline_at: Option<String>,
+    pub created_at: String,
+}
+
+impl From<&MailboxItemRow> for MailboxItemView {
+    fn from(row: &MailboxItemRow) -> Self {
+        Self {
+            item_id: row.doc_id.clone(),
+            item_key: row.item_key.clone(),
+            requester_did: row.requester_did.clone(),
+            agent_did: row.agent_did.clone(),
+            status: row.status.clone(),
+            kind: row.kind.clone(),
+            action: row.action.clone(),
+            title: row.title.clone(),
+            summary: row.summary.clone(),
+            payload: row.payload.clone(),
+            source_kind: row.source_kind.clone(),
+            source_id: row.source_id.clone(),
+            session_id: row.session_id.clone(),
+            request_id: row.request_id.clone(),
+            graph_run_id: row.graph_run_id.clone(),
+            cause_doc_id: row.cause_doc_id.clone(),
+            target_agent_did: row.target_agent_did.clone(),
+            target_behavior_id: row.target_behavior_id.clone(),
+            expected_collection: row.expected_collection.clone(),
+            parent_item_id: row.parent_item_id.clone(),
+            deadline_at: row.deadline_at.clone(),
+            created_at: row.created_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientRouteStatusView {
     pub route_id: String,
     pub direction: String,
@@ -325,6 +382,7 @@ pub struct DeploymentView {
     pub schedules: Vec<ScheduleView>,
     pub event_triggers: Vec<EventTriggerView>,
     pub conversations: Vec<ConversationSummary>,
+    pub mailbox_items: Vec<MailboxItemView>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

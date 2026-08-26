@@ -1,4 +1,14 @@
 @layer shell {
+  .mailbox-compose-banner {
+    align-items: center;
+    background: var(--color-surface-raised, #f4f1e9);
+    border-bottom: 1px solid var(--color-border, #d8d2c5);
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+    padding: 0.55rem 0.85rem;
+  }
+
   .titlebar-drag-region {
     display: none;
   }

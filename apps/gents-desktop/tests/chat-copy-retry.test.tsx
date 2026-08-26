@@ -280,6 +280,7 @@ describe("error card retry", () => {
       selectedBehaviorId: deployment.defaultBehaviorId ?? null,
       selectedDeployment: deployment,
       selectedSessionId: "s1",
+      pendingMailboxCauseId: null,
       session,
       setDraft: vi.fn(),
       setError: vi.fn(),
@@ -288,6 +289,7 @@ describe("error card retry", () => {
       setSelectedBehaviorId: vi.fn(),
       setSelectedSessionId: vi.fn(),
       setSending: vi.fn(),
+      setPendingMailboxCauseId: vi.fn(),
       setSession: vi.fn(),
       shellProjection,
     });
@@ -326,6 +328,7 @@ describe("error card retry", () => {
       selectedBehaviorId: deployment.defaultBehaviorId ?? null,
       selectedDeployment: deployment,
       selectedSessionId: "s1",
+      pendingMailboxCauseId: null,
       session,
       setDraft,
       setError: vi.fn(),
@@ -334,6 +337,7 @@ describe("error card retry", () => {
       setSelectedBehaviorId: vi.fn(),
       setSelectedSessionId: vi.fn(),
       setSending: vi.fn(),
+      setPendingMailboxCauseId: vi.fn(),
       setSession: vi.fn(),
       shellProjection,
     });

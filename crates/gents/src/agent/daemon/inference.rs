@@ -715,16 +715,21 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // stream's construction and its drain loop: the SSE transports connect
         // lazily on first poll, so the HTTP send that the capturing transport
         // intercepts usually happens during polling.
-        let outcome = crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
-            request_deadline,
-            request_token.clone(),
-            workspace,
-            None,
-            Some(session_id.clone()),
-            trigger_correlation.clone(),
-            trigger_context.source_fields.clone(),
-            false,
-            inference,
+        let outcome = crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+            request.requester_did.clone(),
+            Some(request.agent_did.clone()),
+            Some(behavior_id.to_string()),
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+                request_deadline,
+                request_token.clone(),
+                workspace,
+                None,
+                Some(session_id.clone()),
+                trigger_correlation.clone(),
+                trigger_context.source_fields.clone(),
+                false,
+                inference,
+            ),
         )
         .await?;
 

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-mailbox-list"
+description = "Enables the desktop_mailbox_list command without any pre-configured scope."
+commands.allow = ["desktop_mailbox_list"]
+
+[[permission]]
+identifier = "deny-desktop-mailbox-list"
+description = "Denies the desktop_mailbox_list command without any pre-configured scope."
+commands.deny = ["desktop_mailbox_list"]

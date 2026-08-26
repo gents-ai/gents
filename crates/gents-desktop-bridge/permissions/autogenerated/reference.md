@@ -700,6 +700,84 @@ Denies the desktop_list_tool_call_holds command without any pre-configured scope
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-mailbox-dismiss`
+
+</td>
+<td>
+
+Enables the desktop_mailbox_dismiss command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-mailbox-dismiss`
+
+</td>
+<td>
+
+Denies the desktop_mailbox_dismiss command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-mailbox-list`
+
+</td>
+<td>
+
+Enables the desktop_mailbox_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-mailbox-list`
+
+</td>
+<td>
+
+Denies the desktop_mailbox_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-mailbox-start-request`
+
+</td>
+<td>
+
+Enables the desktop_mailbox_start_request command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-mailbox-start-request`
+
+</td>
+<td>
+
+Denies the desktop_mailbox_start_request command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-managed-server-start`
 
 </td>
@@ -1863,6 +1941,32 @@ Tool-surface explain (config family)
 <td>
 
 Chat send and rename
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:mailbox-read`
+
+</td>
+<td>
+
+Owner-scoped mailbox envelope reads
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:mailbox-control`
+
+</td>
+<td>
+
+Start or dismiss owner-scoped mailbox actions
 
 </td>
 </tr>

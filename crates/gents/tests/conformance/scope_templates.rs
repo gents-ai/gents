@@ -101,6 +101,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "AgentSession",
         "AgentConversation",
         "CompactionEntry",
+        "MailboxItem",
     ];
     const CLIENT_TO_RUNTIME: &[&str] = &[
         "AgentRequest",
@@ -111,6 +112,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "AgentSession",
         "AgentConversation",
         "CompactionEntry",
+        "MailboxItem",
         "BearerPairingReady",
         "PeerEndpoint",
         "SessionHydrationRequest",
@@ -135,6 +137,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "AgentSession",
         "AgentConversation",
         "CompactionEntry",
+        "MailboxItem",
         "BearerPairingReady",
         "PeerEndpoint",
         "SessionHydrationRequest",
@@ -323,10 +326,13 @@ fn conversation_scope_excludes_another_requester_on_the_same_agent() {
 /// Mirrors Lean `clientIndex_filter_eq` and
 /// `clientIndex_filters_requester_lineage`.
 #[test]
-fn client_index_scope_is_exactly_the_requester_scoped_session_index() {
+fn client_index_scope_is_exactly_the_requester_scoped_literal_index() {
     let template = resolve_template("client-index").expect("client-index in catalog");
     assert_eq!(template.delivery, Delivery::Push);
-    assert_eq!(template.collections, &["AgentConversation", "AgentSession"]);
+    assert_eq!(
+        template.collections,
+        &["AgentConversation", "AgentSession", "MailboxItem"]
+    );
 
     let phone = scope_filter(
         &template.scope,
@@ -334,7 +340,7 @@ fn client_index_scope_is_exactly_the_requester_scoped_session_index() {
         "did:key:phone",
         "did:key:home",
     );
-    assert_eq!(phone.len(), 2);
+    assert_eq!(phone.len(), 3);
     for collection in template.collections {
         let predicate = phone.get(*collection).expect("collection filtered");
         assert_eq_filter(predicate, "requester_did", "did:key:phone");
