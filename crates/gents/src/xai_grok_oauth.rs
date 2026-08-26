@@ -7,6 +7,7 @@ use std::{fmt, fmt::Formatter};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use defra_node::EmbeddedNode;
+use futures::StreamExt as _;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient,
     Response, StreamingResponse,
@@ -295,7 +296,7 @@ where
             }
             let mut response = result?;
             ensure_event_stream_content_type(response.headers_mut());
-            Ok(response)
+            Ok(normalize_xai_usage_stream(response))
         }
     }
 }
@@ -307,6 +308,140 @@ fn ensure_event_stream_content_type(headers: &mut HeaderMap) {
             HeaderValue::from_static("text/event-stream"),
         );
     }
+}
+
+fn normalize_xai_usage_stream(response: StreamingResponse) -> StreamingResponse {
+    let (parts, mut body) = response.into_parts();
+    let stream = async_stream::stream! {
+        let mut buffer = Vec::new();
+        while let Some(item) = body.next().await {
+            match item {
+                Ok(chunk) => {
+                    buffer.extend_from_slice(&chunk);
+                    while let Some(end) = sse_event_end(&buffer) {
+                        let remaining = buffer.split_off(end);
+                        let event = std::mem::replace(&mut buffer, remaining);
+                        yield Ok(normalize_xai_usage_event(&event));
+                    }
+                }
+                Err(error) => {
+                    if !buffer.is_empty() {
+                        yield Ok(Bytes::from(std::mem::take(&mut buffer)));
+                    }
+                    yield Err(error);
+                    return;
+                }
+            }
+        }
+        if !buffer.is_empty() {
+            yield Ok(Bytes::from(buffer));
+        }
+    };
+    Response::from_parts(parts, Box::pin(stream))
+}
+
+fn sse_event_end(buffer: &[u8]) -> Option<usize> {
+    for index in 0..buffer.len() {
+        if buffer[index..].starts_with(b"\r\n\r\n") {
+            return Some(index + 4);
+        }
+        if buffer[index..].starts_with(b"\n\n") {
+            return Some(index + 2);
+        }
+    }
+    None
+}
+
+fn normalize_xai_usage_event(event: &[u8]) -> Bytes {
+    let Ok(text) = std::str::from_utf8(event) else {
+        return Bytes::copy_from_slice(event);
+    };
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let content = text.trim_end_matches(['\r', '\n']);
+    let lines = content.lines().collect::<Vec<_>>();
+    let data = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            line.strip_prefix("data:")
+                .map(|data| (index, data.strip_prefix(' ').unwrap_or(data)))
+        })
+        .collect::<Vec<_>>();
+    let [(data_index, data)] = data.as_slice() else {
+        return Bytes::copy_from_slice(event);
+    };
+    let Ok(mut value) = serde_json::from_str::<Value>(data) else {
+        return Bytes::copy_from_slice(event);
+    };
+    if !promote_xai_context_usage(&mut value) {
+        return Bytes::copy_from_slice(event);
+    }
+    let Ok(data) = serde_json::to_string(&value) else {
+        return Bytes::copy_from_slice(event);
+    };
+    let mut normalized = lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == *data_index {
+                format!("data: {data}")
+            } else {
+                (*line).to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(newline);
+    normalized.push_str(newline);
+    normalized.push_str(newline);
+    Bytes::from(normalized)
+}
+
+fn promote_xai_context_usage(value: &mut Value) -> bool {
+    if !matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("response.completed" | "response.incomplete")
+    ) {
+        return false;
+    }
+    let Some(usage) = value
+        .pointer_mut("/response/usage")
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+    let reported_input = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let reported_output = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    if reported_input > 0 || reported_output > 0 {
+        return false;
+    }
+    // The subscription proxy can leave cumulative billing counters at zero
+    // while reporting actual model context in this xAI extension. Gents
+    // accounts model work, so normalize it into Rig's provider Usage shape.
+    let Some(context) = usage.get("context_details").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(input) = context.get("input_tokens").and_then(Value::as_u64) else {
+        return false;
+    };
+    let Some(output) = context.get("output_tokens").and_then(Value::as_u64) else {
+        return false;
+    };
+    if input == 0 && output == 0 {
+        return false;
+    }
+    usage.insert("input_tokens".to_owned(), Value::from(input));
+    usage.insert("output_tokens".to_owned(), Value::from(output));
+    usage.insert(
+        "total_tokens".to_owned(),
+        Value::from(input.saturating_add(output)),
+    );
+    true
 }
 
 fn patch_store_false(body: &[u8]) -> Option<Bytes> {
@@ -486,6 +621,78 @@ mod tests {
         let forbidden = http_client::Error::InvalidStatusCode("403".parse().expect("valid status"));
         assert!(is_bearer_rejection(&unauthorized));
         assert!(!is_bearer_rejection(&forbidden));
+    }
+
+    #[test]
+    fn terminal_context_usage_fills_zero_subscription_counters() {
+        let mut event = serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "context_details": {
+                        "input_tokens": 6310,
+                        "output_tokens": 412
+                    }
+                }
+            }
+        });
+        assert!(promote_xai_context_usage(&mut event));
+        assert_eq!(event["response"]["usage"]["input_tokens"], 6310);
+        assert_eq!(event["response"]["usage"]["output_tokens"], 412);
+        assert_eq!(event["response"]["usage"]["total_tokens"], 6722);
+    }
+
+    #[test]
+    fn terminal_context_usage_never_replaces_reported_usage() {
+        let mut event = serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "total_tokens": 120,
+                    "context_details": {
+                        "input_tokens": 90,
+                        "output_tokens": 10
+                    }
+                }
+            }
+        });
+        let original = event.clone();
+        assert!(!promote_xai_context_usage(&mut event));
+        assert_eq!(event, original);
+    }
+
+    #[tokio::test]
+    async fn usage_stream_normalizes_an_event_split_across_chunks() {
+        let chunks = vec![
+            Ok(Bytes::from_static(
+                b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":0,",
+            )),
+            Ok(Bytes::from_static(
+                b"\"output_tokens\":0,\"total_tokens\":0,\"context_details\":{\"input_tokens\":55,\"output_tokens\":8}}}}\n\n",
+            )),
+        ];
+        let body: rig::http_client::sse::BoxedStream = Box::pin(futures::stream::iter(chunks));
+        let response = Response::builder().status(200).body(body).unwrap();
+        let mut body = normalize_xai_usage_stream(response).into_body();
+        let mut output = Vec::new();
+        while let Some(chunk) = body.next().await {
+            output.extend_from_slice(&chunk.unwrap());
+        }
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.starts_with("event: response.completed\ndata: "));
+        let data = output
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap();
+        let event: Value = serde_json::from_str(data).unwrap();
+        assert_eq!(event["response"]["usage"]["input_tokens"], 55);
+        assert_eq!(event["response"]["usage"]["output_tokens"], 8);
+        assert_eq!(event["response"]["usage"]["total_tokens"], 63);
     }
 
     #[derive(Clone, Debug, Default)]

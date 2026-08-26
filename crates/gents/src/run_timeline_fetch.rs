@@ -109,7 +109,7 @@ pub async fn load_run_activity_rows(
                 ) {{
                     call_id request_id call_seq attempt call_state failure_reason
                     queued_at started_at ended_at backend_id behavior_id agent_did call_kind
-                    prompt_tokens completion_tokens cached_input_tokens
+                    prompt_tokens completion_tokens cached_input_tokens context_accounting_json
                 }}
                 AgentToolCall(
                     filter: {{ request_id: {{ _in: [{request_list}] }} }},
@@ -499,6 +499,7 @@ mod tests {
                         prompt_tokens: 120
                         completion_tokens: 30
                         cached_input_tokens: 64
+                        context_accounting_json: "{\"estimated_input_tokens\":144}"
                     }) { _docID }
                     create_AgentToolCall(input: {
                         tool_call_key: "activity-tool-key"
@@ -528,6 +529,10 @@ mod tests {
         .unwrap();
         assert_eq!(rows.sessions[0].status.as_deref(), Some("active"));
         assert_eq!(rows.inference_calls[0].prompt_tokens, Some(120));
+        assert_eq!(
+            rows.inference_calls[0].context_accounting_json.as_deref(),
+            Some(r#"{"estimated_input_tokens":144}"#)
+        );
         assert_eq!(rows.tool_calls[0].tool_name, "read_file");
         assert!(rows.tool_calls[0].args.is_empty());
         assert!(rows.tool_calls[0].result.is_empty());

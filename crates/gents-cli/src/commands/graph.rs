@@ -16,8 +16,9 @@ use gents::graph_pipeline::{
     revision_gate_decision, start_graph_run_with_access, GraphPlan, GraphRunView,
 };
 use gents::graphql::escape_graphql_string;
-use gents::run_timeline::{RunActivityRows, TimelineToolCallRow};
+use gents::run_timeline::{RunActivityRows, TimelineInferenceCallRow, TimelineToolCallRow};
 use gents::run_timeline_fetch::load_run_activity_rows;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
@@ -355,6 +356,82 @@ fn compact_count(value: i64) -> String {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+struct RunUsageSummary {
+    reported_input_tokens: i64,
+    reported_cached_input_tokens: i64,
+    reported_output_tokens: i64,
+    estimated_input_tokens: i64,
+    unreported_completed_calls: usize,
+}
+
+fn context_input_estimate(call: &TimelineInferenceCallRow) -> Option<i64> {
+    let value: Value = serde_json::from_str(call.context_accounting_json.as_deref()?).ok()?;
+    let estimate = value.get("estimated_input_tokens")?.as_u64()?;
+    Some(i64::try_from(estimate).unwrap_or(i64::MAX))
+}
+
+fn run_usage_summary(calls: &[TimelineInferenceCallRow]) -> RunUsageSummary {
+    let mut summary = RunUsageSummary::default();
+    for call in calls {
+        let input = call.prompt_tokens.unwrap_or_default().max(0);
+        let cached = call.cached_input_tokens.unwrap_or_default().max(0);
+        let output = call.completion_tokens.unwrap_or_default().max(0);
+        if input > 0 || cached > 0 || output > 0 {
+            summary.reported_input_tokens = summary.reported_input_tokens.saturating_add(input);
+            summary.reported_cached_input_tokens =
+                summary.reported_cached_input_tokens.saturating_add(cached);
+            summary.reported_output_tokens = summary.reported_output_tokens.saturating_add(output);
+        } else if call.call_state == "completed" {
+            summary.unreported_completed_calls += 1;
+            summary.estimated_input_tokens = summary
+                .estimated_input_tokens
+                .saturating_add(context_input_estimate(call).unwrap_or_default());
+        }
+    }
+    summary
+}
+
+fn usage_detail(summary: &RunUsageSummary) -> String {
+    if summary.unreported_completed_calls == 0 {
+        return format!(
+            "{} input · {} cached · {} output",
+            compact_count(summary.reported_input_tokens),
+            compact_count(summary.reported_cached_input_tokens),
+            compact_count(summary.reported_output_tokens),
+        );
+    }
+    let suffix = if summary.unreported_completed_calls == 1 {
+        "1 completed call unreported".to_owned()
+    } else {
+        format!(
+            "{} completed calls unreported",
+            summary.unreported_completed_calls
+        )
+    };
+    let estimate = if summary.estimated_input_tokens > 0 {
+        format!(
+            "~{} input estimated",
+            compact_count(summary.estimated_input_tokens)
+        )
+    } else {
+        "input unavailable".to_owned()
+    };
+    if summary.reported_input_tokens > 0
+        || summary.reported_cached_input_tokens > 0
+        || summary.reported_output_tokens > 0
+    {
+        format!(
+            "{} input reported · {} cached · {} output · {estimate} · {suffix}",
+            compact_count(summary.reported_input_tokens),
+            compact_count(summary.reported_cached_input_tokens),
+            compact_count(summary.reported_output_tokens),
+        )
+    } else {
+        format!("{estimate} · output unavailable · {suffix}")
+    }
+}
+
 fn tool_state(tool: &TimelineToolCallRow) -> (&'static str, &str) {
     let state = tool
         .lifecycle_state
@@ -373,21 +450,7 @@ fn print_progress_text(
     activity: &RunActivityRows,
     redraw: bool,
 ) -> Result<()> {
-    let input_tokens = activity
-        .inference_calls
-        .iter()
-        .filter_map(|call| call.prompt_tokens)
-        .sum::<i64>();
-    let output_tokens = activity
-        .inference_calls
-        .iter()
-        .filter_map(|call| call.completion_tokens)
-        .sum::<i64>();
-    let cached_tokens = activity
-        .inference_calls
-        .iter()
-        .filter_map(|call| call.cached_input_tokens)
-        .sum::<i64>();
+    let usage = run_usage_summary(&activity.inference_calls);
     let active_models = activity
         .inference_calls
         .iter()
@@ -420,12 +483,10 @@ fn print_progress_text(
     writeln!(out, "Graph run {} · {}", view.run_id, view.status)?;
     writeln!(
         out,
-        "Models  {} calls ({} active) · {} input · {} cached · {} output",
+        "Models  {} calls ({} active) · {}",
         activity.inference_calls.len(),
         active_models,
-        compact_count(input_tokens),
-        compact_count(cached_tokens),
-        compact_count(output_tokens),
+        usage_detail(&usage),
     )?;
     writeln!(
         out,
@@ -623,7 +684,8 @@ async fn watch_run(
             .filter_map(|request| request.session_id.clone())
             .collect::<Vec<_>>();
         let activity = load_run_activity_rows(access, &request_ids, &session_ids).await?;
-        let current = json!({ "run": progress(&view), "activity": activity });
+        let usage = run_usage_summary(&activity.inference_calls);
+        let current = json!({ "run": progress(&view), "activity": activity, "usage": usage });
         if current != last {
             match output {
                 OutputFormat::Json => print_json(&current)?,
@@ -848,6 +910,63 @@ mod tests {
         assert_eq!(
             progress(&view)["error"]["code"],
             "result_contract_unsatisfied"
+        );
+    }
+
+    #[test]
+    fn live_usage_uses_durable_context_estimates_only_for_unreported_completed_calls() {
+        let calls = vec![
+            TimelineInferenceCallRow {
+                call_state: "completed".to_owned(),
+                prompt_tokens: Some(120),
+                completion_tokens: Some(30),
+                cached_input_tokens: Some(40),
+                ..TimelineInferenceCallRow::default()
+            },
+            TimelineInferenceCallRow {
+                call_state: "completed".to_owned(),
+                prompt_tokens: Some(0),
+                completion_tokens: Some(0),
+                cached_input_tokens: Some(0),
+                context_accounting_json: Some(r#"{"estimated_input_tokens":6310}"#.to_owned()),
+                ..TimelineInferenceCallRow::default()
+            },
+            TimelineInferenceCallRow {
+                call_state: "running".to_owned(),
+                context_accounting_json: Some(r#"{"estimated_input_tokens":9999}"#.to_owned()),
+                ..TimelineInferenceCallRow::default()
+            },
+        ];
+        let summary = run_usage_summary(&calls);
+        assert_eq!(
+            summary,
+            RunUsageSummary {
+                reported_input_tokens: 120,
+                reported_cached_input_tokens: 40,
+                reported_output_tokens: 30,
+                estimated_input_tokens: 6310,
+                unreported_completed_calls: 1,
+            }
+        );
+        assert_eq!(
+            usage_detail(&summary),
+            "120 input reported · 40 cached · 30 output · ~6.3k input estimated · 1 completed call unreported"
+        );
+    }
+
+    #[test]
+    fn live_usage_does_not_render_missing_provider_usage_as_zero() {
+        let summary = run_usage_summary(&[TimelineInferenceCallRow {
+            call_state: "completed".to_owned(),
+            prompt_tokens: Some(0),
+            completion_tokens: Some(0),
+            cached_input_tokens: Some(0),
+            context_accounting_json: Some(r#"{"estimated_input_tokens":8900000}"#.to_owned()),
+            ..TimelineInferenceCallRow::default()
+        }]);
+        assert_eq!(
+            usage_detail(&summary),
+            "~8.9m input estimated · output unavailable · 1 completed call unreported"
         );
     }
 }
