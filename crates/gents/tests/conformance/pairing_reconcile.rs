@@ -138,17 +138,18 @@ fn operator_delete_owns_endpoint_despite_observed_configuration_drift() {
 
 #[test]
 fn layered_desired_merge_keeps_data_plane_replicator_only() {
-    let address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-a";
+    let bootstrap_address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-a";
+    let signed_address = "/ip4/127.0.0.1/tcp/5103/p2p/peer-a";
     let control = PairingDesired {
         collections: set(&["AgentNetwork", "NetworkMembership", "PeerEndpoint"]),
-        replicator_addresses: set(&[address]),
+        replicator_addresses: set(&[bootstrap_address]),
         replicator_collections: set(&["AgentNetwork", "NetworkMembership", "PeerEndpoint"]),
         replicator_filter: PairingFilters::new(),
         template_ids: BTreeSet::new(),
     };
     let data_plane = PairingDesired {
         collections: set(&["AgentRequest", "AgentResponse"]),
-        replicator_addresses: set(&[address]),
+        replicator_addresses: set(&[signed_address]),
         replicator_collections: set(&["AgentRequest", "AgentResponse"]),
         replicator_filter: one_filter("AgentRequest", "requester_did", "did:key:a")
             .into_iter()
@@ -174,7 +175,7 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
             "AgentResponse",
         ])
     );
-    assert_eq!(merged.replicator_addresses, set(&[address]));
+    assert_eq!(merged.replicator_addresses, set(&[signed_address]));
     assert_eq!(
         merged
             .replicator_filter

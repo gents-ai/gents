@@ -1701,7 +1701,10 @@ pub fn merge_layered_desired(
         (Some(desired), None) | (None, Some(desired)) => Some(desired),
         (Some(mut left), Some(right)) => {
             left.collections.extend(right.collections);
-            left.replicator_addresses.extend(right.replicator_addresses);
+            // The data-plane layer comes from the verified current PeerEndpoint.
+            if !right.replicator_addresses.is_empty() {
+                left.replicator_addresses = right.replicator_addresses;
+            }
             left.replicator_collections
                 .extend(right.replicator_collections);
             left.replicator_filter.extend(right.replicator_filter);
