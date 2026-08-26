@@ -47,6 +47,7 @@ pub struct GraphRunResultView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphRunRequestView {
     pub request_id: String,
+    pub session_id: Option<String>,
     pub node_id: Option<String>,
     pub behavior_id: String,
     pub status: String,
@@ -245,7 +246,7 @@ async fn load_requests(
                     filter: {{ caused_by_correlation: {{ _eq: "{}" }} }},
                     order: {{ created_at: ASC }}, limit: {limit}
                 ) {{
-                    request_id behavior_id caused_by_trigger_id status lifecycle_state failure_reason
+                    request_id session_id behavior_id caused_by_trigger_id status lifecycle_state failure_reason
                 }}
             }}"#,
             escape_graphql_string(correlation),
@@ -296,6 +297,11 @@ async fn load_requests(
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned(),
+                session_id: row
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToOwned::to_owned),
                 node_id: caused_by_trigger_id
                     .and_then(|trigger_id| nodes_by_trigger.get(trigger_id))
                     .cloned(),
@@ -1251,6 +1257,7 @@ mod tests {
             update_generation: 0,
             requests: vec![GraphRunRequestView {
                 request_id: "request".to_owned(),
+                session_id: Some("session".to_owned()),
                 node_id: Some("terminal".to_owned()),
                 behavior_id: "behavior".to_owned(),
                 status: "completed".to_owned(),

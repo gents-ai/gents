@@ -16,13 +16,15 @@ use crate::descendant_graph::{
 };
 use crate::graphql::escape_graphql_string;
 use crate::run_timeline::{
-    build_run_timeline, RunTimeline, RunTimelineRows, TimelineCompactionRow,
+    build_run_timeline, RunActivityRows, RunTimeline, RunTimelineRows, TimelineCompactionRow,
     TimelineConversationRow, TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
     TimelineProviderContextReductionRow, TimelineRenderedRequestRef, TimelineRenderedRequestRow,
     TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolApprovalRow,
     TimelineToolCallRow,
 };
 use gents_protocol::graphql::graphql_rows_from_response;
+
+const MAX_RUN_ACTIVITY_ROWS: usize = 10_000;
 
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
     let mut timeline = build_run_timeline(load_run_timeline_rows(access, request_id).await?);
@@ -54,6 +56,98 @@ pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Resul
         }
     }
     Ok(timeline)
+}
+
+/// Load the prompt-free subset of ordinary timeline rows needed by live run
+/// observers. One bounded query serves CLI and future bridge projections.
+pub async fn load_run_activity_rows(
+    access: &ConfigAccess,
+    request_ids: &[String],
+    session_ids: &[String],
+) -> Result<RunActivityRows> {
+    let request_ids = request_ids
+        .iter()
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .collect::<BTreeSet<_>>();
+    if request_ids.is_empty() {
+        return Ok(RunActivityRows::default());
+    }
+    let request_list = request_ids
+        .iter()
+        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let session_ids = session_ids
+        .iter()
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .collect::<BTreeSet<_>>();
+    let session_query = if session_ids.is_empty() {
+        String::new()
+    } else {
+        let session_list = session_ids
+            .iter()
+            .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "AgentSession(filter: {{ session_id: {{ _in: [{session_list}] }} }}) {{ session_id behavior_id started ended status }}"
+        )
+    };
+    let limit = MAX_RUN_ACTIVITY_ROWS + 1;
+    let response = access
+        .execute(&format!(
+            r#"{{
+                {session_query}
+                InferenceCall(
+                    filter: {{
+                        request_id: {{ _in: [{request_list}] }},
+                        call_kind: {{ _eq: "inference" }}
+                    }},
+                    order: {{ started_at: ASC }}, limit: {limit}
+                ) {{
+                    call_id request_id call_seq attempt call_state failure_reason
+                    queued_at started_at ended_at backend_id behavior_id agent_did call_kind
+                    prompt_tokens completion_tokens cached_input_tokens
+                }}
+                AgentToolCall(
+                    filter: {{ request_id: {{ _in: [{request_list}] }} }},
+                    order: {{ started_at: ASC }}, limit: {limit}
+                ) {{
+                    request_id session_id message_sequence tool_name tool_call_id status
+                    lifecycle_state started_at completed_at tool_failure_class latency_ms
+                }}
+            }}"#
+        ))
+        .await?;
+    let mut sessions = graphql_rows_from_response(&response, "AgentSession")
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<Vec<TimelineSessionRow>, _>>()
+        .context("decoding live AgentSession activity")?;
+    let mut inference_calls = graphql_rows_from_response(&response, "InferenceCall")
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<Vec<TimelineInferenceCallRow>, _>>()
+        .context("decoding live InferenceCall activity")?;
+    let mut tool_calls = graphql_rows_from_response(&response, "AgentToolCall")
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<Vec<TimelineToolCallRow>, _>>()
+        .context("decoding live AgentToolCall activity")?;
+    let truncated = sessions.len() > MAX_RUN_ACTIVITY_ROWS
+        || inference_calls.len() > MAX_RUN_ACTIVITY_ROWS
+        || tool_calls.len() > MAX_RUN_ACTIVITY_ROWS;
+    sessions.truncate(MAX_RUN_ACTIVITY_ROWS);
+    inference_calls.truncate(MAX_RUN_ACTIVITY_ROWS);
+    tool_calls.truncate(MAX_RUN_ACTIVITY_ROWS);
+    Ok(RunActivityRows {
+        sessions,
+        inference_calls,
+        tool_calls,
+        truncated,
+    })
 }
 
 async fn load_timeline_descendant_edges(
@@ -378,6 +472,66 @@ mod tests {
             .and_then(Value::as_str)
             .expect("created _docID")
             .to_string()
+    }
+
+    #[tokio::test]
+    async fn activity_rows_reuse_prompt_free_timeline_vocabulary() {
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_schemas(node.as_ref()).await.unwrap();
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_AgentSession(input: {
+                        session_id: "activity-session"
+                        agent_name: "agent"
+                        agent_did: "did:test:agent"
+                        behavior_id: "review"
+                        started: "2026-08-26T00:00:00Z"
+                        status: "active"
+                    }) { _docID }
+                    create_InferenceCall(input: {
+                        call_id: "activity-call"
+                        request_id: "activity-request"
+                        call_seq: 1
+                        attempt: 1
+                        call_kind: "inference"
+                        call_state: "completed"
+                        prompt_tokens: 120
+                        completion_tokens: 30
+                        cached_input_tokens: 64
+                    }) { _docID }
+                    create_AgentToolCall(input: {
+                        tool_call_key: "activity-tool-key"
+                        request_id: "activity-request"
+                        session_id: "activity-session"
+                        agent_did: "did:test:agent"
+                        tool_name: "read_file"
+                        tool_call_id: "activity-tool"
+                        status: "completed"
+                        lifecycle_state: "completed"
+                    }) { _docID }
+                }"#,
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "seed activity rows: {:?}",
+            response.errors
+        );
+
+        let rows = load_run_activity_rows(
+            &ConfigAccess::Local(node.clone()),
+            &["activity-request".to_owned()],
+            &["activity-session".to_owned()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows.sessions[0].status.as_deref(), Some("active"));
+        assert_eq!(rows.inference_calls[0].prompt_tokens, Some(120));
+        assert_eq!(rows.tool_calls[0].tool_name, "read_file");
+        assert!(rows.tool_calls[0].args.is_empty());
+        assert!(rows.tool_calls[0].result.is_empty());
+        node.shutdown().await;
     }
 
     #[tokio::test]

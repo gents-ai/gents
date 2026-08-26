@@ -1,7 +1,8 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
-use std::{io, io::Write as _};
+use std::{io, io::IsTerminal as _, io::Write as _};
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
@@ -15,6 +16,8 @@ use gents::graph_pipeline::{
     start_graph_run_with_access, GraphPlan, GraphRunView,
 };
 use gents::graphql::escape_graphql_string;
+use gents::run_timeline::{RunActivityRows, TimelineToolCallRow};
+use gents::run_timeline_fetch::load_run_activity_rows;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
@@ -333,32 +336,195 @@ fn progress(view: &GraphRunView) -> Value {
     })
 }
 
-fn print_progress_text(view: &GraphRunView) -> Result<()> {
-    let stages = view
-        .stages
+fn compact_count(value: i64) -> String {
+    match value.max(0) {
+        value if value >= 1_000_000 => format!("{:.1}m", value as f64 / 1_000_000.0),
+        value if value >= 1_000 => format!("{:.1}k", value as f64 / 1_000.0),
+        value => value.to_string(),
+    }
+}
+
+fn tool_state(tool: &TimelineToolCallRow) -> (&'static str, &str) {
+    let state = tool
+        .lifecycle_state
+        .as_deref()
+        .unwrap_or(tool.status.as_str());
+    let marker = match state {
+        "completed" => "✓",
+        "failed" | "timedOut" | "cancelled" => "×",
+        _ => "●",
+    };
+    (marker, state)
+}
+
+fn print_progress_text(
+    view: &GraphRunView,
+    activity: &RunActivityRows,
+    redraw: bool,
+) -> Result<()> {
+    let input_tokens = activity
+        .inference_calls
         .iter()
-        .map(|stage| {
-            let completed = stage.succeeded + stage.failed;
-            let suffix = if stage.failed > 0 {
-                format!(", {} failed", stage.failed)
-            } else if stage.active > 0 {
-                format!(", {} active", stage.active)
-            } else {
-                String::new()
-            };
-            format!("{} {}/{}{}", stage.node_id, completed, stage.total, suffix)
+        .filter_map(|call| call.prompt_tokens)
+        .sum::<i64>();
+    let output_tokens = activity
+        .inference_calls
+        .iter()
+        .filter_map(|call| call.completion_tokens)
+        .sum::<i64>();
+    let cached_tokens = activity
+        .inference_calls
+        .iter()
+        .filter_map(|call| call.cached_input_tokens)
+        .sum::<i64>();
+    let active_models = activity
+        .inference_calls
+        .iter()
+        .filter(|call| {
+            !matches!(
+                call.call_state.as_str(),
+                "completed" | "failed" | "cancelled"
+            )
         })
-        .collect::<Vec<_>>()
-        .join(" · ");
+        .count();
+    let mut tool_counts = BTreeMap::new();
+    let mut completed_tools = 0;
+    let mut failed_tools = 0;
+    for tool in &activity.tool_calls {
+        *tool_counts.entry(tool.tool_name.as_str()).or_insert(0usize) += 1;
+        match tool_state(tool).1 {
+            "completed" => completed_tools += 1,
+            "failed" | "timedOut" | "cancelled" => failed_tools += 1,
+            _ => {}
+        }
+    }
+    let active_tools = activity
+        .tool_calls
+        .len()
+        .saturating_sub(completed_tools + failed_tools);
     let mut out = io::stdout().lock();
-    if stages.is_empty() {
-        writeln!(out, "{} · {}", view.run_id, view.status)?;
-    } else {
-        writeln!(out, "{} · {} · {}", view.run_id, view.status, stages)?;
+    if redraw {
+        write!(out, "\x1b[2J\x1b[H")?;
+    }
+    writeln!(out, "Graph run {} · {}", view.run_id, view.status)?;
+    writeln!(
+        out,
+        "Models  {} calls ({} active) · {} input · {} cached · {} output",
+        activity.inference_calls.len(),
+        active_models,
+        compact_count(input_tokens),
+        compact_count(cached_tokens),
+        compact_count(output_tokens),
+    )?;
+    writeln!(
+        out,
+        "Tools   {} calls · {} completed · {} active · {} failed",
+        activity.tool_calls.len(),
+        completed_tools,
+        active_tools,
+        failed_tools,
+    )?;
+    writeln!(out)?;
+    writeln!(out, "Stages")?;
+    for stage in &view.stages {
+        let completed = stage.succeeded + stage.failed;
+        let marker = if stage.failed > 0 {
+            "×"
+        } else if stage.active > 0 {
+            "●"
+        } else if stage.total > 0 && completed == stage.total {
+            "✓"
+        } else {
+            "○"
+        };
+        writeln!(
+            out,
+            "  {marker} {:<12} {completed}/{} · {} active · {} failed",
+            stage.node_id, stage.total, stage.active, stage.failed
+        )?;
+    }
+    writeln!(out)?;
+    writeln!(out, "Agent sessions")?;
+    if view.requests.is_empty() {
+        writeln!(out, "  Waiting for the entry request")?;
+    }
+    for request in &view.requests {
+        let session = request.session_id.as_deref().and_then(|session_id| {
+            activity
+                .sessions
+                .iter()
+                .find(|session| session.session_id == session_id)
+        });
+        let session_id = request.session_id.as_deref().unwrap_or("pending");
+        let status = request
+            .lifecycle_state
+            .as_deref()
+            .or_else(|| session.and_then(|session| session.status.as_deref()))
+            .unwrap_or(request.status.as_str());
+        let node = request.node_id.as_deref().unwrap_or("unknown");
+        let calls = activity
+            .inference_calls
+            .iter()
+            .filter(|call| call.request_id == request.request_id)
+            .count();
+        let tools = activity
+            .tool_calls
+            .iter()
+            .filter(|tool| tool.request_id.as_deref() == Some(request.request_id.as_str()))
+            .count();
+        writeln!(
+            out,
+            "  {node:<12} {status:<12} · {calls} model calls · {tools} tools"
+        )?;
+        writeln!(
+            out,
+            "    session {session_id} · request {}",
+            request.request_id
+        )?;
+    }
+    if !tool_counts.is_empty() {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "Tool usage  {}",
+            tool_counts
+                .into_iter()
+                .map(|(name, count)| format!("{name} {count}"))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        )?;
+    }
+    if !activity.tool_calls.is_empty() {
+        writeln!(out)?;
+        writeln!(out, "Recent tool calls")?;
+        for tool in activity.tool_calls.iter().rev().take(8).rev() {
+            let (marker, state) = tool_state(tool);
+            let latency = tool
+                .latency_ms
+                .map(|value| format!(" · {value}ms"))
+                .unwrap_or_default();
+            let failure = tool
+                .tool_failure_class
+                .as_deref()
+                .map(|value| format!(" · {value}"))
+                .unwrap_or_default();
+            writeln!(
+                out,
+                "  {marker} {:<24} {state}{latency}{failure}",
+                tool.tool_name
+            )?;
+        }
+    }
+    if activity.truncated {
+        writeln!(
+            out,
+            "\nWarning: activity counts exceeded the bounded observation window"
+        )?;
     }
     if let Some(error) = view.error.as_ref().or(view.failure_evidence.as_ref()) {
-        writeln!(out, "  {}", serde_json::to_string(error)?)?;
+        writeln!(out, "\nError: {}", serde_json::to_string(error)?)?;
     }
+    out.flush()?;
     Ok(())
 }
 
@@ -429,13 +595,25 @@ async fn watch_run(
     let output =
         output.ensure_supported("graph watch", &[OutputFormat::Text, OutputFormat::Json])?;
     let mut last = Value::Null;
+    let redraw = output == OutputFormat::Text && io::stdout().is_terminal();
     loop {
         let view = load_graph_run_view_with_access(access, actor, run_id).await?;
-        let current = progress(&view);
+        let request_ids = view
+            .requests
+            .iter()
+            .map(|request| request.request_id.clone())
+            .collect::<Vec<_>>();
+        let session_ids = view
+            .requests
+            .iter()
+            .filter_map(|request| request.session_id.clone())
+            .collect::<Vec<_>>();
+        let activity = load_run_activity_rows(access, &request_ids, &session_ids).await?;
+        let current = json!({ "run": progress(&view), "activity": activity });
         if current != last {
             match output {
                 OutputFormat::Json => print_json(&current)?,
-                OutputFormat::Text => print_progress_text(&view)?,
+                OutputFormat::Text => print_progress_text(&view, &activity, redraw)?,
                 _ => unreachable!("validated output format"),
             }
             last = current;
