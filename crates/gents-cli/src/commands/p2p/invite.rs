@@ -21,7 +21,8 @@ use crate::{
     resolve_home_dir,
 };
 
-use super::network_admin::{load_membership_record, load_single_network_record};
+use super::membership_records::load_membership_record;
+use super::network_records::load_single_network_record;
 use super::output::resolve_p2p_peer_id;
 use super::pairings::resolve_pairing_template;
 

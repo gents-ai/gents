@@ -16,7 +16,7 @@ use crate::{
 };
 
 use super::invite::resolve_home_identity;
-use super::network_admin::{load_optional_network_record, write_agent_network};
+use super::network_records::{load_optional_network_record, write_agent_network};
 use super::output::resolve_p2p_peer_id;
 use super::p2p_http_client;
 use super::pairings::{peer_pairing_exists, resolve_pairing_template, write_pairing_desired};
