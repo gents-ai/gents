@@ -7,33 +7,6 @@ NPM ?= npm
 DESKTOP_DIR := apps/gents-desktop
 PROOFS_DIR := crates/gents/proofs
 FUZZ_TIME ?= 30s
-REVIEW_ROOT ?= $(CURDIR)
-REVIEW_BASE ?= origin/main
-REVIEW_HEAD ?= HEAD
-REVIEW_PROMPT ?= Review the PR diff for merge-blocking correctness, durability, authorization, concurrency, and provider-boundary defects.
-REVIEW_LENSES ?= auto
-REVIEW_MIN_LENSES ?= 4
-REVIEW_MAX_LENSES ?= 12
-REVIEW_PR ?= auto
-REVIEW_PORT ?= 19191
-REVIEW_PAGE_PORT ?= 19190
-REVIEW_HOME ?= $(CURDIR)/demo/code-review/runs/demo-home
-REVIEW_PACK ?= $(CURDIR)/demo/code-review
-REVIEW_JOB_ID ?=
-REVIEW_KEEP_HOME ?=
-REVIEW_RESET ?=
-REVIEW_CONTEXT_WINDOW ?= 262144
-REVIEW_MAX_OUTPUT_TOKENS ?= 65536
-REVIEW_MAX_TURNS ?= 1000000
-REVIEW_TEMPERATURE ?= 1.0
-REVIEW_TOP_P ?= 0.95
-REVIEW_COMPACTION_THRESHOLD ?= 0.85
-REVIEW_DEADLINE_SECS ?= 86400
-REVIEW_AWAIT_TIMEOUT_SECS ?= 86400
-REVIEW_STREAM_LIVENESS_SECS ?= 86400
-REVIEW_STREAM_BATCH_MS ?= 5000
-REVIEW_RETRY_MAX_TRANSPORT ?= 720
-REVIEW_RETRY_MAX_RESAMPLE ?= 32
 MAINTENANCE_ROOT ?= $(CURDIR)
 MAINTENANCE_BRANCH ?=
 MAINTENANCE_HEAD ?= HEAD
@@ -139,21 +112,10 @@ help:
 	@echo "  make live-agent            Run ignored live runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
-	@echo "Review:"
-	@echo "  make review-page           Open the talk page on :$(REVIEW_PAGE_PORT)"
-	@echo "  make review-serve          Start a durable pack node on :$(REVIEW_PORT)"
-	@echo "    REVIEW_RESET=1           Wipe REVIEW_HOME before init"
-	@echo "  make review                Seed a ReviewJob against the running pack node"
-	@echo "    REVIEW_PROMPT='...'       Override the review focus"
-	@echo "    REVIEW_LENSES=auto        Let recon choose the review-lens count"
-	@echo "    REVIEW_MIN_LENSES=4       Set the automatic lower bound"
-	@echo "    REVIEW_MAX_LENSES=12      Set the automatic upper bound"
-	@echo "    REVIEW_PR=auto            Discover the current branch's GitHub PR"
-	@echo "    REVIEW_CONTEXT_WINDOW=N   Match the serving endpoint's context window"
-	@echo "    REVIEW_MAX_OUTPUT_TOKENS=N Reserve output tokens per model turn"
-	@echo "    REVIEW_TEMPERATURE=N      Set the provider sampling temperature"
-	@echo "    REVIEW_TOP_P=N            Set the provider nucleus-sampling threshold"
-	@echo "    REVIEW_STREAM_BATCH_MS=N  Batch live token persistence writes"
+	@echo "Bundled graphs:"
+	@echo "  gents graph catalog        Inspect graphs shipped in the binary"
+	@echo "  gents graph install code-review"
+	@echo "  gents graph run code-review --repo DIR --base origin/main --head HEAD"
 	@echo
 	@echo "Maintenance:"
 	@echo "  make maintain              Audit MAINTENANCE_ROOT and emit small cleanup work packages"
@@ -195,76 +157,6 @@ build:
 
 build-cli:
 	$(CARGO) build -p gents-cli
-
-export GENTS_REVIEW_ROOT := $(abspath $(REVIEW_ROOT))
-export GENTS_REVIEW_BASE_REF := $(REVIEW_BASE)
-export GENTS_REVIEW_HEAD_REF := $(REVIEW_HEAD)
-export GENTS_REVIEW_PROMPT := $(REVIEW_PROMPT)
-export GENTS_REVIEW_LENS_COUNT := $(REVIEW_LENSES)
-export GENTS_REVIEW_MIN_LENSES := $(REVIEW_MIN_LENSES)
-export GENTS_REVIEW_MAX_LENSES := $(REVIEW_MAX_LENSES)
-export GENTS_REVIEW_CONTEXT_WINDOW := $(REVIEW_CONTEXT_WINDOW)
-export GENTS_REVIEW_MAX_OUTPUT_TOKENS := $(REVIEW_MAX_OUTPUT_TOKENS)
-export GENTS_REVIEW_MAX_TURNS := $(REVIEW_MAX_TURNS)
-export GENTS_REVIEW_TEMPERATURE := $(REVIEW_TEMPERATURE)
-export GENTS_REVIEW_TOP_P := $(REVIEW_TOP_P)
-export GENTS_REVIEW_COMPACTION_THRESHOLD := $(REVIEW_COMPACTION_THRESHOLD)
-export GENTS_REVIEW_DEADLINE_SECS := $(REVIEW_DEADLINE_SECS)
-export GENTS_REVIEW_AWAIT_TIMEOUT_SECS := $(REVIEW_AWAIT_TIMEOUT_SECS)
-export GENTS_REVIEW_STREAM_LIVENESS_SECS := $(REVIEW_STREAM_LIVENESS_SECS)
-export GENTS_REVIEW_STREAM_BATCH_MS := $(REVIEW_STREAM_BATCH_MS)
-export GENTS_REVIEW_RETRY_MAX_TRANSPORT := $(REVIEW_RETRY_MAX_TRANSPORT)
-export GENTS_REVIEW_RETRY_MAX_RESAMPLE := $(REVIEW_RETRY_MAX_RESAMPLE)
-
-.PHONY: review-page
-review-page:
-	@echo "page     http://127.0.0.1:$(REVIEW_PAGE_PORT)"
-	@echo "runtime  http://127.0.0.1:$(REVIEW_PORT)  (start with make review-serve)"
-	@REVIEW_PORT="$(REVIEW_PORT)" REVIEW_PAGE_PORT="$(REVIEW_PAGE_PORT)" $(NPM) --prefix apps/review-demo run dev
-
-.PHONY: review-serve
-review-serve:
-	@test -d "$(REVIEW_ROOT)" || { echo "REVIEW_ROOT is not a directory: $(REVIEW_ROOT)" >&2; exit 2; }
-	@if test -n "$(REVIEW_RESET)"; then rm -rf "$(REVIEW_HOME)"; fi
-	@mkdir -p "$(REVIEW_HOME)"
-	@if ! test -f "$(REVIEW_HOME)/review-root"; then printf '%s\n' "$(abspath $(REVIEW_ROOT))" > "$(REVIEW_HOME)/review-root"; fi
-	@if ! test -f "$(REVIEW_HOME)/init.json"; then \
-		echo "init     $(REVIEW_HOME)"; \
-		$(CARGO) run -p gents-cli -- demo init "$(REVIEW_PACK)" --home "$(REVIEW_HOME)"; \
-	fi
-	@echo "page     http://127.0.0.1:$(REVIEW_PAGE_PORT)"
-	@echo "graphql  http://127.0.0.1:$(REVIEW_PORT)/api/v0/graphql"
-	@echo "home     $(REVIEW_HOME)"
-	@$(CARGO) run -p gents-cli -- server \
-		--home "$(REVIEW_HOME)" \
-		--http-port "$(REVIEW_PORT)" \
-		--apply-root "$(REVIEW_PACK)" \
-		--p2p-transport none \
-		--no-codex-shim
-
-.PHONY: review
-review:
-	@test -d "$(REVIEW_ROOT)" || { echo "REVIEW_ROOT is not a directory: $(REVIEW_ROOT)" >&2; exit 2; }
-	@case "$(REVIEW_LENSES)" in auto) ;; ''|*[!0-9]*) echo "REVIEW_LENSES must be auto or a positive integer: $(REVIEW_LENSES)" >&2; exit 2;; *) test "$(REVIEW_LENSES)" -gt 0 || { echo "REVIEW_LENSES must be greater than zero" >&2; exit 2; };; esac
-	@case "$(REVIEW_MIN_LENSES)" in ''|*[!0-9]*) echo "REVIEW_MIN_LENSES must be a positive integer: $(REVIEW_MIN_LENSES)" >&2; exit 2;; esac
-	@case "$(REVIEW_MAX_LENSES)" in ''|*[!0-9]*) echo "REVIEW_MAX_LENSES must be a positive integer: $(REVIEW_MAX_LENSES)" >&2; exit 2;; esac
-	@test "$(REVIEW_MIN_LENSES)" -gt 0 && test "$(REVIEW_MAX_LENSES)" -ge "$(REVIEW_MIN_LENSES)" || { echo "review lens bounds must satisfy 0 < REVIEW_MIN_LENSES <= REVIEW_MAX_LENSES" >&2; exit 2; }
-	@cd "$(REVIEW_ROOT)" && git rev-parse --verify "$(REVIEW_BASE)^{commit}" >/dev/null || { echo "REVIEW_BASE is not a commit: $(REVIEW_BASE)" >&2; exit 2; }
-	@cd "$(REVIEW_ROOT)" && git rev-parse --verify "$(REVIEW_HEAD)^{commit}" >/dev/null || { echo "REVIEW_HEAD is not a commit: $(REVIEW_HEAD)" >&2; exit 2; }
-	@if test -n "$(REVIEW_PR)" && test "$(REVIEW_PR)" != auto; then command -v gh >/dev/null 2>&1 || { echo "REVIEW_PR requires gh on PATH" >&2; exit 2; }; cd "$(REVIEW_ROOT)" && gh pr view "$(REVIEW_PR)" --json number >/dev/null || exit 2; fi
-	@command -v rust-analyzer >/dev/null 2>&1 || echo "warning: rust-analyzer not found on PATH; review will fall back to file/search tools" >&2
-	@review_pr="$(REVIEW_PR)"; \
-	if test "$$review_pr" = auto; then \
-		if command -v gh >/dev/null 2>&1; then review_pr=$$(cd "$(REVIEW_ROOT)" && gh pr view --json number --jq .number 2>/dev/null || true); else review_pr=; fi; \
-	fi; \
-	if test -n "$$review_pr"; then echo "reviewing GitHub PR $$review_pr"; else echo "no GitHub PR detected; reviewing the local ref diff"; fi; \
-	GENTS_REVIEW_PR_NUMBER="$$review_pr" \
-	$(CARGO) run -p gents-cli -- demo seed "$(REVIEW_PACK)" \
-		--http-port "$(REVIEW_PORT)" \
-		--home "$(REVIEW_HOME)" \
-		--page-port "$(REVIEW_PAGE_PORT)" \
-		--prompt "$(REVIEW_PROMPT)" \
-		$(if $(REVIEW_JOB_ID),--job-id "$(REVIEW_JOB_ID)",)
 
 .PHONY: maintain
 maintain:

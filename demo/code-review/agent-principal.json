@@ -1,6 +1,0 @@
-{
-  "agent_did": "did:key:zCodeReviewAgentPlaceholder0000000000000000000000000",
-  "display_name": "Repository Review Graph",
-  "default_behavior_id": "review-recon",
-  "enabled": true
-}
