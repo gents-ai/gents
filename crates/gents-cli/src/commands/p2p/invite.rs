@@ -1,9 +1,14 @@
+#[cfg(test)]
+use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
+use ciborium::value::{Integer, Value};
+#[cfg(test)]
+use flate2::read::GzDecoder;
 use flate2::{write::GzEncoder, Compression};
 use gents::agent::p2p_reconcile::templates::{resolve_template, template_schema_digest};
 use gents::{graphql::escape_graphql_string, AgentIdentity, KeyIdentity};
@@ -26,7 +31,18 @@ use super::network_admin::{load_membership_record, load_single_network_record};
 use super::output::resolve_p2p_peer_id;
 use super::pairings::resolve_pairing_template;
 
+/// v1 compact QR magic. Superseded by `BEARER_QR_MAGIC_V2` for newly-minted
+/// invites; only referenced from the v1 encode/decode test-fixture pair now
+/// (see `compact_bearer_qr_payload`).
+#[cfg(test)]
 const BEARER_QR_MAGIC: &[u8] = b"dabear1z\0";
+/// v2 compact QR magic. Same transport shell as v1 (magic + gzip), but the
+/// gzip body is a positional CBOR array instead of a struct-as-map, and it
+/// omits fields the scanner can losslessly reconstruct (see
+/// `compact_bearer_qr_payload_v2`). The signature is verified over
+/// `bearer_signing_payload`, computed from the *reconstructed* struct, so
+/// this is purely a transport encoding — no token-format or signing change.
+const BEARER_QR_MAGIC_V2: &[u8] = b"dabear2z\0";
 
 pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
     if args.bearer {
@@ -154,7 +170,7 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
     let encoded = encode_bearer(&token)?;
 
     if args.qr {
-        let payload = compact_bearer_qr_payload(&token)?;
+        let payload = compact_bearer_qr_payload_v2(&token)?;
         let code = qrcode::QrCode::with_error_correction_level(&payload, qrcode::EcLevel::L)
             .context("encoding bearer invite token as a QR code")?;
         let rendered = code
@@ -202,6 +218,11 @@ async fn load_default_behavior_id(access: &ConfigAccess, agent_did: &str) -> Res
         .context("conversation bearer invite requires AgentPrincipal.default_behavior_id")
 }
 
+/// v1 compact QR payload: magic + gzip(struct-as-map CBOR). Superseded by
+/// `compact_bearer_qr_payload_v2` for newly-minted invites; kept (and its
+/// decode path in `decode_compact_bearer_qr_payload_v1`) so QR codes already
+/// in the wild — and older `gents` binaries — keep decoding.
+#[cfg(test)]
 fn compact_bearer_qr_payload(token: &BearerInviteToken) -> Result<Vec<u8>> {
     let mut cbor = Vec::new();
     ciborium::ser::into_writer(token, &mut cbor)
@@ -219,6 +240,307 @@ fn compact_bearer_qr_payload(token: &BearerInviteToken) -> Result<Vec<u8>> {
     payload.extend_from_slice(BEARER_QR_MAGIC);
     payload.extend_from_slice(&compressed);
     Ok(payload)
+}
+
+/// True if `peer_id` is recoverable from `ticket` using only the simple,
+/// string-level address shapes: `id@host:port`, a legacy `.../p2p/<id>`
+/// suffix, or a bare id (optionally `iroh://`-prefixed). When true, the v2
+/// payload omits `peer_id` and the decoder rederives it via
+/// `resolve_p2p_peer_id`; when false, the payload keeps `peer_id` explicit.
+///
+/// Deliberately narrower than `resolve_p2p_peer_id` / the iroh
+/// `parse_public_peer_addr` it wraps: that helper *also* decodes the compact
+/// binary `EndpointTicket` wire format (iroh's own postcard-based ticket
+/// encoding) — the shape most real, freshly-minted tickets actually use.
+/// This function mirrors only the three plain-string branches, because the
+/// real consumer of an omitted `peer_id` isn't this Rust decoder (which
+/// could always fall back to the full parser) — it's the phone/TS scanner
+/// (`QrScannerDialog.tsx`), which reconstructs the omitted field with its
+/// own small, independent implementation and has no practical way to embed
+/// iroh's ticket decoder. Omitting `peer_id` is only sound when *every*
+/// legitimate decoder can recover the same value, so the gate here is
+/// exactly what a plain-string implementation on the other side can match.
+fn peer_id_derivable_from_ticket(peer_id: &str, ticket: &str) -> bool {
+    fn normalize(id: &str) -> &str {
+        let trimmed = id.trim();
+        trimmed.strip_prefix("iroh://").unwrap_or(trimmed)
+    }
+
+    let trimmed = ticket.trim();
+    if let Some((endpoint_id, _host_port)) = trimmed.split_once('@') {
+        return normalize(endpoint_id) == peer_id;
+    }
+    if let Some(pos) = trimmed.rfind("/p2p/") {
+        return normalize(&trimmed[pos + 5..]) == peer_id;
+    }
+    normalize(trimmed) == peer_id
+}
+
+/// If `nonce` is a canonical (lowercase, hyphenated) UUID string, returns its
+/// 16 raw bytes. Round-trips through `Uuid::to_string()` first so a
+/// differently-cased or otherwise non-canonical nonce falls back to the text
+/// encoding rather than silently changing shape on decode.
+fn uuid_nonce_bytes(nonce: &str) -> Option<[u8; 16]> {
+    let parsed = uuid::Uuid::parse_str(nonce).ok()?;
+    (parsed.to_string() == nonce).then(|| *parsed.as_bytes())
+}
+
+/// If `issued_at` is an RFC3339 timestamp at seconds precision in the exact
+/// form `issued_at` (`SecondsFormat::Secs`, `Z` suffix — the form every
+/// bearer invite is minted with), returns its Unix epoch seconds. Anything
+/// else (sub-second precision, a non-UTC offset that renders differently,
+/// non-RFC3339 text) falls back to the text encoding.
+fn epoch_seconds_issued_at(issued_at: &str) -> Option<i64> {
+    let parsed = DateTime::parse_from_rfc3339(issued_at).ok()?;
+    let utc = parsed.with_timezone(&Utc);
+    (utc.to_rfc3339_opts(SecondsFormat::Secs, true) == issued_at).then(|| utc.timestamp())
+}
+
+/// v2 compact QR payload: `BEARER_QR_MAGIC_V2` + gzip(CBOR array).
+///
+/// Fields omitted from the array (and reconstructed by the decoder):
+/// - `peer_id`, when it is losslessly derivable from `ticket`.
+/// - `network.network_id`, always reconstructed as the top-level
+///   `network_id`.
+/// - `network.admin_did`, always reconstructed as the top-level
+///   `issuer_did`.
+///
+/// The `network.network_id == network_id` and `network.admin_did ==
+/// issuer_did` reconstructions are sound for any bearer invite that will
+/// pass claim validation: `p2p_invite_bearer` always mints tokens with those
+/// fields equal, and `check_token_network_authority`
+/// (`commands/p2p/claim.rs:174-183`) independently *requires*
+/// `issuer_did == network.admin_did` before a claim is accepted — so a
+/// token where reconstruction would diverge from the original is already
+/// not a token the claim path would honor.
+///
+/// `nonce` and `issued_at` are packed into a smaller wire form when they
+/// round-trip losslessly (raw 16 bytes for a canonical UUID nonce, integer
+/// epoch seconds for a `SecondsFormat::Secs` RFC3339 timestamp), and kept as
+/// text otherwise.
+fn compact_bearer_qr_payload_v2(token: &BearerInviteToken) -> Result<Vec<u8>> {
+    let peer_id_value = if peer_id_derivable_from_ticket(&token.peer_id, &token.ticket) {
+        Value::Null
+    } else {
+        Value::Text(token.peer_id.clone())
+    };
+    let nonce_value = match uuid_nonce_bytes(&token.nonce) {
+        Some(bytes) => Value::Bytes(bytes.to_vec()),
+        None => Value::Text(token.nonce.clone()),
+    };
+    let issued_at_value = match epoch_seconds_issued_at(&token.issued_at) {
+        Some(secs) => Value::Integer(Integer::from(secs)),
+        None => Value::Text(token.issued_at.clone()),
+    };
+    let default_behavior_value = match &token.default_behavior_id {
+        Some(id) => Value::Text(id.clone()),
+        None => Value::Null,
+    };
+    // Must ride the payload: `bearer_signing_payload` serializes the whole
+    // token, and the scanner verifies the issuer signature over the struct it
+    // RECONSTRUCTS here. Dropping the digest would change the signing payload
+    // for every digest-bearing invite (signature verification fails outright),
+    // and where it didn't, it would silently downgrade the #1122 schema
+    // preflight to "no check" on exactly the QR path.
+    let schema_digest_value = match &token.schema_digest {
+        Some(digest) => Value::Text(digest.clone()),
+        None => Value::Null,
+    };
+    let network_value = Value::Array(vec![
+        Value::Text(token.network.display_name.clone()),
+        Value::Text(token.network.default_template.clone()),
+        Value::Text(token.network.created_at.clone()),
+        Value::Bytes(token.network.sig.clone()),
+    ]);
+
+    let array = Value::Array(vec![
+        Value::Integer(Integer::from(token.v)),
+        Value::Text(token.issuer_did.clone()),
+        peer_id_value,
+        Value::Text(token.ticket.clone()),
+        nonce_value,
+        Value::Text(token.network_id.clone()),
+        issued_at_value,
+        Value::Text(token.template.clone()),
+        default_behavior_value,
+        schema_digest_value,
+        network_value,
+        Value::Bytes(token.sig.clone()),
+    ]);
+
+    let mut cbor = Vec::new();
+    ciborium::ser::into_writer(&array, &mut cbor)
+        .context("encoding v2 compact bearer invite CBOR array")?;
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+    encoder
+        .write_all(&cbor)
+        .context("compressing v2 compact bearer invite for QR")?;
+    let compressed = encoder
+        .finish()
+        .context("finishing v2 compact bearer invite QR")?;
+
+    let mut payload = Vec::with_capacity(BEARER_QR_MAGIC_V2.len() + compressed.len());
+    payload.extend_from_slice(BEARER_QR_MAGIC_V2);
+    payload.extend_from_slice(&compressed);
+    Ok(payload)
+}
+
+#[cfg(test)]
+fn gunzip(body: &[u8]) -> Result<Vec<u8>> {
+    let mut decoder = GzDecoder::new(body);
+    let mut out = Vec::new();
+    decoder
+        .read_to_end(&mut out)
+        .context("decompressing compact bearer QR payload")?;
+    Ok(out)
+}
+
+#[cfg(test)]
+fn decode_compact_bearer_qr_payload_v1(body: &[u8]) -> Result<BearerInviteToken> {
+    let cbor = gunzip(body)?;
+    ciborium::de::from_reader(cbor.as_slice()).context("decoding v1 compact bearer invite CBOR")
+}
+
+#[cfg(test)]
+fn decode_compact_bearer_qr_payload_v2(body: &[u8]) -> Result<BearerInviteToken> {
+    let cbor = gunzip(body)?;
+    let value: Value = ciborium::de::from_reader(cbor.as_slice())
+        .context("decoding v2 compact bearer invite CBOR array")?;
+    let items = value
+        .into_array()
+        .map_err(|_| anyhow::anyhow!("v2 compact bearer invite payload is not a CBOR array"))?;
+    let items: [Value; 12] = items.try_into().map_err(|items: Vec<Value>| {
+        anyhow::anyhow!(
+            "v2 compact bearer invite payload has {} elements, expected 12",
+            items.len()
+        )
+    })?;
+    let [v_raw, issuer_did_raw, peer_id_raw, ticket_raw, nonce_raw, network_id_raw, issued_at_raw, template_raw, default_behavior_raw, schema_digest_raw, network_raw, sig_raw] =
+        items;
+
+    let v = v_raw
+        .into_integer()
+        .ok()
+        .and_then(|i| u8::try_from(i).ok())
+        .context("v2 payload: invalid version field")?;
+    let issuer_did = issuer_did_raw
+        .into_text()
+        .map_err(|_| anyhow::anyhow!("v2 payload: issuer_did is not text"))?;
+    let ticket = ticket_raw
+        .into_text()
+        .map_err(|_| anyhow::anyhow!("v2 payload: ticket is not text"))?;
+    let network_id = network_id_raw
+        .into_text()
+        .map_err(|_| anyhow::anyhow!("v2 payload: network_id is not text"))?;
+    let template = template_raw
+        .into_text()
+        .map_err(|_| anyhow::anyhow!("v2 payload: template is not text"))?;
+    let sig = sig_raw
+        .into_bytes()
+        .map_err(|_| anyhow::anyhow!("v2 payload: sig is not bytes"))?;
+
+    let peer_id = match peer_id_raw {
+        Value::Null => resolve_p2p_peer_id(None, Some(&ticket), &[], None)
+            .context("v2 payload: peer_id omitted but not derivable from ticket")?,
+        Value::Text(text) => text,
+        _ => anyhow::bail!("v2 payload: peer_id field has unexpected CBOR type"),
+    };
+
+    let nonce = match nonce_raw {
+        Value::Bytes(bytes) => {
+            let arr: [u8; 16] = bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("v2 payload: nonce bytes are not 16 bytes"))?;
+            uuid::Uuid::from_bytes(arr).to_string()
+        }
+        Value::Text(text) => text,
+        _ => anyhow::bail!("v2 payload: nonce field has unexpected CBOR type"),
+    };
+
+    let issued_at = match issued_at_raw {
+        Value::Integer(i) => {
+            let secs = i64::try_from(i)
+                .map_err(|_| anyhow::anyhow!("v2 payload: issued_at epoch is out of range"))?;
+            let dt = DateTime::<Utc>::from_timestamp(secs, 0)
+                .context("v2 payload: issued_at epoch is out of range")?;
+            dt.to_rfc3339_opts(SecondsFormat::Secs, true)
+        }
+        Value::Text(text) => text,
+        _ => anyhow::bail!("v2 payload: issued_at field has unexpected CBOR type"),
+    };
+
+    let default_behavior_id = match default_behavior_raw {
+        Value::Null => None,
+        Value::Text(text) => Some(text),
+        _ => anyhow::bail!("v2 payload: default_behavior_id field has unexpected CBOR type"),
+    };
+
+    let schema_digest = match schema_digest_raw {
+        Value::Null => None,
+        Value::Text(text) => Some(text),
+        _ => anyhow::bail!("v2 payload: schema_digest field has unexpected CBOR type"),
+    };
+
+    let network_items = network_raw
+        .into_array()
+        .map_err(|_| anyhow::anyhow!("v2 payload: network field is not an array"))?;
+    let [display_name, default_template, created_at, network_sig]: [Value; 4] = network_items
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("v2 payload: network field has unexpected length"))?;
+    let display_name = display_name
+        .into_text()
+        .map_err(|_| anyhow::anyhow!("v2 payload: network.display_name is not text"))?;
+    let default_template = default_template
+        .into_text()
+        .map_err(|_| anyhow::anyhow!("v2 payload: network.default_template is not text"))?;
+    let created_at = created_at
+        .into_text()
+        .map_err(|_| anyhow::anyhow!("v2 payload: network.created_at is not text"))?;
+    let network_sig = network_sig
+        .into_bytes()
+        .map_err(|_| anyhow::anyhow!("v2 payload: network.sig is not bytes"))?;
+
+    Ok(BearerInviteToken {
+        v,
+        // Reconstructed: see the soundness note on `compact_bearer_qr_payload_v2`.
+        network: NetworkRecord {
+            network_id: network_id.clone(),
+            admin_did: issuer_did.clone(),
+            display_name,
+            default_template,
+            created_at,
+            sig: network_sig,
+        },
+        issuer_did,
+        peer_id,
+        ticket,
+        nonce,
+        network_id,
+        issued_at,
+        template,
+        default_behavior_id,
+        schema_digest,
+        sig,
+    })
+}
+
+/// Decodes a compact bearer invite QR payload produced by either
+/// `compact_bearer_qr_payload` (v1) or `compact_bearer_qr_payload_v2` (v2),
+/// dispatching on the leading magic. Kept for symmetry with the encoders and
+/// to exercise both formats from Rust; the phone scanner is the real
+/// consumer (`QrScannerDialog.tsx`'s `decodePairingQrPayload`), reimplemented
+/// there since that's where compact QR payloads are actually scanned.
+#[cfg(test)]
+fn decode_compact_bearer_qr_payload(payload: &[u8]) -> Result<BearerInviteToken> {
+    if let Some(body) = payload.strip_prefix(BEARER_QR_MAGIC_V2) {
+        return decode_compact_bearer_qr_payload_v2(body);
+    }
+    if let Some(body) = payload.strip_prefix(BEARER_QR_MAGIC) {
+        return decode_compact_bearer_qr_payload_v1(body);
+    }
+    anyhow::bail!("unrecognized compact bearer QR payload magic")
 }
 
 async fn resolve_invite_transport(home: Option<&Path>, graphql: &str) -> Result<(String, String)> {
@@ -531,7 +853,9 @@ mod tests {
     use std::io::Read;
 
     use flate2::read::GzDecoder;
-    use gents_protocol::bearer_token::{encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION};
+    use gents_protocol::bearer_token::{
+        bearer_signing_payload, encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION,
+    };
     use gents_protocol::network_token::{MembershipRecord, NetworkRecord};
 
     use super::*;
@@ -604,6 +928,220 @@ mod tests {
         let decoded: BearerInviteToken =
             ciborium::de::from_reader(cbor.as_slice()).expect("decode compact QR CBOR");
         assert_eq!(decoded, token);
+    }
+
+    #[test]
+    fn compact_bearer_qr_v2_round_trips_for_realistic_token() {
+        let token = bearer_token();
+        let payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        assert!(payload.starts_with(BEARER_QR_MAGIC_V2));
+
+        let decoded = decode_compact_bearer_qr_payload_v2(&payload[BEARER_QR_MAGIC_V2.len()..])
+            .expect("decode compact v2 QR payload");
+        assert_eq!(decoded, token);
+
+        // The fixture's ticket is a real iroh `EndpointTicket` string (the
+        // shape freshly-minted tickets actually use), which only the full
+        // iroh parser — not the plain-string rule `peer_id_derivable_from_
+        // ticket` deliberately limits itself to — can decode. So peer_id
+        // stays explicit in the v2 payload here; see the derivable-fallback
+        // test below for a ticket shape where omission does apply.
+        assert!(
+            !peer_id_derivable_from_ticket(&token.peer_id, &token.ticket),
+            "fixture ticket is an EndpointTicket string; peer_id must stay explicit"
+        );
+    }
+
+    #[test]
+    fn compact_bearer_qr_v2_omits_peer_id_for_legacy_at_host_tickets() {
+        // A `peer_id@host:port` ticket is one of the plain-string shapes
+        // `peer_id_derivable_from_ticket` recognizes (mirroring iroh's own
+        // legacy address format), and the phone/TS scanner can recover the
+        // same value with an equally simple string split — so v2 should
+        // omit `peer_id` here and the decoder should reconstruct it exactly.
+        let mut token = bearer_token();
+        token.ticket = format!("{}@127.0.0.1:4242", token.peer_id);
+        assert!(
+            peer_id_derivable_from_ticket(&token.peer_id, &token.ticket),
+            "legacy id@host ticket should derive the token's peer_id"
+        );
+
+        let payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        let decoded = decode_compact_bearer_qr_payload_v2(&payload[BEARER_QR_MAGIC_V2.len()..])
+            .expect("decode compact v2 QR payload");
+        assert_eq!(decoded, token);
+    }
+
+    #[test]
+    fn compact_bearer_qr_v2_round_trips_without_default_behavior_id() {
+        let mut token = bearer_token();
+        token.default_behavior_id = None;
+
+        let payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        let decoded = decode_compact_bearer_qr_payload_v2(&payload[BEARER_QR_MAGIC_V2.len()..])
+            .expect("decode compact v2 QR payload");
+        assert_eq!(decoded, token);
+        assert_eq!(decoded.default_behavior_id, None);
+    }
+
+    #[test]
+    fn compact_bearer_qr_v2_round_trips_fallback_forms() {
+        let mut token = bearer_token();
+        // Non-UUID nonce, non-RFC3339 issued_at, and a ticket that does not
+        // encode the token's peer_id: every optional/compact slot must fall
+        // back to its explicit text (or non-derivable-peer_id) form and
+        // still round-trip exactly, byte for byte.
+        token.nonce = "not-a-uuid-nonce".to_string();
+        token.issued_at = "not-a-timestamp".to_string();
+        token.ticket = "opaque-ticket-with-no-embedded-peer-id".to_string();
+        assert!(
+            !peer_id_derivable_from_ticket(&token.peer_id, &token.ticket),
+            "test ticket must not accidentally encode the fixture peer_id"
+        );
+
+        let payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        let decoded = decode_compact_bearer_qr_payload_v2(&payload[BEARER_QR_MAGIC_V2.len()..])
+            .expect("decode compact v2 QR payload");
+        assert_eq!(decoded, token);
+        assert_eq!(decoded.nonce, "not-a-uuid-nonce");
+        assert_eq!(decoded.issued_at, "not-a-timestamp");
+        assert_eq!(decoded.peer_id, token.peer_id);
+    }
+
+    #[test]
+    fn compact_bearer_qr_v2_carries_the_schema_digest_through_the_round_trip() {
+        // Regression fence for the #1122/#938 interaction: the v2 payload is a
+        // POSITIONAL array, so a field added to `BearerInviteToken` is silently
+        // dropped unless a slot is added here too. `bearer_signing_payload`
+        // serializes the whole token and the scanner verifies the issuer
+        // signature over the struct it RECONSTRUCTS — so a dropped
+        // `schema_digest` breaks signature verification for every
+        // digest-bearing invite, and where it didn't, would downgrade the
+        // schema preflight to "no check" on exactly the QR path.
+        let mut token = bearer_token();
+        token.schema_digest = Some("7fH3kq9mZp".to_string());
+
+        let payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        let decoded = decode_compact_bearer_qr_payload_v2(&payload[BEARER_QR_MAGIC_V2.len()..])
+            .expect("decode compact v2 QR payload");
+
+        assert_eq!(decoded.schema_digest.as_deref(), Some("7fH3kq9mZp"));
+        assert_eq!(decoded, token);
+        assert_eq!(
+            bearer_signing_payload(&decoded),
+            bearer_signing_payload(&token),
+            "reconstructed token must reproduce the issuer's signing payload byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn compact_bearer_qr_v2_round_trips_a_token_without_a_schema_digest() {
+        // The `None` arm must stay distinguishable from the `Some` arm: serde
+        // SKIPS the key entirely when None, so a payload that encoded null-as-
+        // empty-string would change the signing payload of every legacy invite.
+        let token = bearer_token();
+        assert!(
+            token.schema_digest.is_none(),
+            "fixture should have no digest"
+        );
+
+        let payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        let decoded = decode_compact_bearer_qr_payload_v2(&payload[BEARER_QR_MAGIC_V2.len()..])
+            .expect("decode compact v2 QR payload");
+
+        assert_eq!(decoded.schema_digest, None);
+        assert_eq!(
+            bearer_signing_payload(&decoded),
+            bearer_signing_payload(&token)
+        );
+    }
+
+    #[test]
+    fn compact_bearer_qr_v2_preserves_signing_payload_bytes() {
+        let token = bearer_token();
+        let original_signing_payload = bearer_signing_payload(&token);
+
+        let payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        let decoded = decode_compact_bearer_qr_payload_v2(&payload[BEARER_QR_MAGIC_V2.len()..])
+            .expect("decode compact v2 QR payload");
+
+        // This byte-identity IS the crypto safety property: the reconstructed
+        // struct must serialize to the exact bytes the issuer signed, or the
+        // existing (unmodified) signature over `original_signing_payload`
+        // would no longer verify against the decoded token.
+        assert_eq!(bearer_signing_payload(&decoded), original_signing_payload);
+        assert_eq!(decoded.sig, token.sig);
+    }
+
+    #[test]
+    fn compact_bearer_qr_v2_is_materially_smaller_than_v1_and_bs58_text() {
+        let token = bearer_token();
+        let bs58_text = encode_bearer(&token).expect("encode bearer bs58 text");
+        let v1_payload = compact_bearer_qr_payload(&token).expect("compact v1 QR payload");
+        let v2_payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+
+        // 0.85, not a tighter ratio: this fixture's ticket is a real iroh
+        // `EndpointTicket` string, so `peer_id` stays explicit (see
+        // `peer_id_derivable_from_ticket`'s doc comment — omitting it here
+        // would require the TS/mobile scanner to embed an iroh ticket
+        // decoder, which isn't a sound trade for the extra bytes). The
+        // remaining savings — positional array, no text keys, byte-string
+        // sigs, deduped network_id/admin_did, compact nonce/issued_at — are
+        // still a real, material reduction on their own.
+        assert!(
+            (v2_payload.len() as f64) <= 0.85 * (v1_payload.len() as f64),
+            "v2 ({} bytes) should be at most 85% of v1 ({} bytes)",
+            v2_payload.len(),
+            v1_payload.len()
+        );
+        assert!(
+            v1_payload.len() < bs58_text.len(),
+            "v1 compact ({} bytes) should be smaller than bs58 text ({} bytes)",
+            v1_payload.len(),
+            bs58_text.len()
+        );
+        assert!(
+            v2_payload.len() < bs58_text.len(),
+            "v2 compact ({} bytes) should be smaller than bs58 text ({} bytes)",
+            v2_payload.len(),
+            bs58_text.len()
+        );
+
+        let bs58_qr = qrcode::QrCode::with_error_correction_level(&bs58_text, qrcode::EcLevel::L)
+            .expect("encode bs58 text as QR");
+        let v1_qr = qrcode::QrCode::with_error_correction_level(&v1_payload, qrcode::EcLevel::L)
+            .expect("encode v1 compact payload as QR");
+        let v2_qr = qrcode::QrCode::with_error_correction_level(&v2_payload, qrcode::EcLevel::L)
+            .expect("encode v2 compact payload as QR");
+
+        println!(
+            "bearer QR payload sizes (EC level L): bs58 text = {} bytes, {}x{} modules; \
+             v1 compact = {} bytes, {}x{} modules; v2 compact = {} bytes, {}x{} modules",
+            bs58_text.len(),
+            bs58_qr.width(),
+            bs58_qr.width(),
+            v1_payload.len(),
+            v1_qr.width(),
+            v1_qr.width(),
+            v2_payload.len(),
+            v2_qr.width(),
+            v2_qr.width(),
+        );
+    }
+
+    #[test]
+    fn compact_bearer_qr_v1_payloads_still_decode_via_dispatcher() {
+        let token = bearer_token();
+
+        let v1_payload = compact_bearer_qr_payload(&token).expect("compact v1 QR payload");
+        let decoded_v1 =
+            decode_compact_bearer_qr_payload(&v1_payload).expect("decode v1 via dispatcher");
+        assert_eq!(decoded_v1, token);
+
+        let v2_payload = compact_bearer_qr_payload_v2(&token).expect("compact v2 QR payload");
+        let decoded_v2 =
+            decode_compact_bearer_qr_payload(&v2_payload).expect("decode v2 via dispatcher");
+        assert_eq!(decoded_v2, token);
     }
 
     #[test]
