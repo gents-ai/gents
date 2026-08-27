@@ -18,6 +18,7 @@ import type {
   McpServiceProbeResult,
   PeerAddRequest,
   SubagentTreeView,
+  SyncHealthView,
   TaskRunResult,
   ToolServiceTestResult,
 } from "@source-inc/gents-desktop-client";
@@ -43,7 +44,11 @@ export type DesktopUiHarnessScenario =
   | "active-turn"
   | "cascade-turn"
   | "coding"
-  | "mobile-performance";
+  | "mobile-performance"
+  | "session-hydration"
+  | "sync-offline"
+  | "sync-stalled"
+  | "sync-failed";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -81,11 +86,18 @@ export type MobilePerformanceHarnessController = {
   setP2PStatus(status: "healthy" | "degraded" | "wedged"): void;
 };
 
+export type SessionSyncHarnessController = {
+  progress(mergedCount: number, servedCount: number): void;
+  complete(): void;
+  fail(): void;
+};
+
 type DesktopUiHarness = {
   adapter: DesktopApiAdapter;
   listenerFactory: DesktopClientUpdatedListenerFactory;
   scenario: DesktopUiHarnessScenario;
   performance: MobilePerformanceHarnessController | null;
+  sessionSync: SessionSyncHarnessController;
 };
 
 export const MOBILE_PERFORMANCE_FIXTURE = {
@@ -119,11 +131,14 @@ export function createDesktopUiHarness(
   let rowCount = 42;
   let deployment = createDeployment();
   let removed = false;
-  let p2pStatus: "healthy" | "degraded" | "wedged" = "healthy";
+  let p2pStatus: "healthy" | "degraded" | "wedged" =
+    scenario === "sync-offline" ? "wedged" : "healthy";
+  let syncHealth: SyncHealthView = initialSyncHealth(scenario);
   let updateEvents = 0;
   let storeVersion = 1;
   let reconcileVersion = 1;
   let streamSequence = 0;
+  let hydrationRedrive = false;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
   let commits: MobilePerformanceCommit[] = [];
 
@@ -284,6 +299,39 @@ export function createDesktopUiHarness(
         : []),
     ],
   });
+  if (scenario === "session-hydration") {
+    sessions.set("session-remote", {
+      sessionId: "session-remote",
+      agentDid: AGENT_DID,
+      behaviorId: DEFAULT_BEHAVIOR_ID,
+      title: "Desktop-started session",
+      createdAt: THIRTY_DAYS_AGO,
+      updatedAt: TWO_HOURS_AGO,
+      previewText: "hello from desktop",
+      status: "completed",
+      turnState: "completed",
+      latestRequestId: "request-remote",
+      latestResponse: null,
+      pendingTurn: null,
+      activeResponseOverlay: null,
+      timelineItems: [
+        {
+          kind: "userMessage",
+          itemKey: "remote-user",
+          sequence: 1,
+          content: "hello from desktop",
+          timestamp: THIRTY_DAYS_AGO,
+        },
+      ],
+      hydration: {
+        sessionId: "session-remote",
+        agentDid: AGENT_DID,
+        phase: "requested",
+        mergedCount: 1,
+        servedCount: null,
+      },
+    });
+  }
   if (scenario === "mobile-performance") {
     sessions.set("session-large", createLargePerformanceSession());
     for (
@@ -310,6 +358,19 @@ export function createDesktopUiHarness(
       MOBILE_PERFORMANCE_FIXTURE.shortSessionTimelineItems;
   }
   syncConversations();
+
+  if (typeof window !== "undefined") {
+    window.addEventListener(
+      "click",
+      (event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest("[data-testid='session-hydration-retry']")) {
+          hydrationRedrive = true;
+        }
+      },
+      true,
+    );
+  }
 
   function notify(reason: string, responseOnly = false) {
     updateEvents += 1;
@@ -423,6 +484,7 @@ export function createDesktopUiHarness(
         localPeerId: "peer-bombadil-local",
         listenAddresses: ["/ip4/127.0.0.1/tcp/9292"],
         p2pHealth: health,
+        syncHealth,
         bootstrapErrors: [],
         lastMutationError: null,
         focusedRequestId: null,
@@ -789,7 +851,21 @@ export function createDesktopUiHarness(
       };
     },
     async repairP2P() {
-      notify("runtime");
+      p2pStatus = "healthy";
+      const hydrationPhase = syncHealth.hydration?.phase;
+      syncHealth = {
+        ...syncHealth,
+        state:
+          hydrationPhase === "failed"
+            ? "failed"
+            : hydrationPhase === "requested" || hydrationPhase === "serving"
+              ? "syncing"
+              : "healthy",
+        offlineSince: null,
+        stalledSince: null,
+        connectedPeerCount: 1,
+        lastError: null,
+      };
       return snapshot();
     },
     async fetchSessionSnapshot(_sessionId, _agentDid, _requestId, timelinePage) {
@@ -798,6 +874,24 @@ export function createDesktopUiHarness(
       if (!session) return null;
       const snapshot = clone(session);
       snapshot.projectionRevision = { storeVersion, reconcileVersion };
+      if (snapshot.hydration?.phase === "failed" && hydrationRedrive) {
+        hydrationRedrive = false;
+        snapshot.hydration = {
+          ...snapshot.hydration,
+          phase: "requested",
+          mergedCount: snapshot.timelineItems.length,
+          servedCount: null,
+        };
+        sessions.set(sessionId, clone(snapshot));
+        syncHealth = {
+          ...syncHealth,
+          state: "syncing",
+          lastErrorClass: null,
+          lastError: null,
+          hydration: snapshot.hydration,
+        };
+        notify("hydration");
+      }
       if (!timelinePage) return snapshot;
 
       const totalItems = snapshot.timelineItems.length;
@@ -1556,7 +1650,89 @@ export function createDesktopUiHarness(
       })
     : adapter;
 
-  return { adapter: measuredAdapter, listenerFactory, scenario, performance };
+  function remoteHydration(
+    phase: NonNullable<DesktopSessionSnapshot["hydration"]>["phase"],
+    mergedCount: number,
+    servedCount: number | null,
+  ) {
+    return {
+      sessionId: "session-remote",
+      agentDid: AGENT_DID,
+      phase,
+      mergedCount,
+      servedCount,
+    };
+  }
+
+  const sessionSync: SessionSyncHarnessController = {
+    progress(mergedCount, servedCount) {
+      const session = sessions.get("session-remote");
+      if (!session) return;
+      const timelineItems = [...session.timelineItems];
+      if (
+        mergedCount >= 2 &&
+        !timelineItems.some((item) => item.itemKey === "remote-assistant")
+      ) {
+        timelineItems.push({
+          kind: "assistantMessage",
+          itemKey: "remote-assistant",
+          sequence: 2,
+          content: "history arrived from the desktop",
+          timestamp: TWO_HOURS_AGO,
+        });
+      }
+      sessions.set("session-remote", {
+        ...session,
+        previewText: timelineItems.at(-1)?.content ?? session.previewText,
+        timelineItems,
+        hydration: remoteHydration("serving", mergedCount, servedCount),
+      });
+      syncHealth = {
+        ...syncHealth,
+        state: "syncing",
+        hydration: remoteHydration("serving", mergedCount, servedCount),
+      };
+      syncConversations();
+      notify("hydration");
+      notify("store");
+    },
+    complete() {
+      const session = sessions.get("session-remote");
+      if (!session) return;
+      const servedCount =
+        session.hydration?.servedCount ?? Math.max(session.timelineItems.length, 2);
+      const hydration = remoteHydration("complete", servedCount, servedCount);
+      sessions.set("session-remote", { ...session, hydration });
+      syncHealth = { ...syncHealth, state: "healthy", hydration };
+      notify("hydration");
+    },
+    fail() {
+      const session = sessions.get("session-remote");
+      if (!session) return;
+      const hydration = remoteHydration(
+        "failed",
+        session.timelineItems.length,
+        session.hydration?.servedCount ?? null,
+      );
+      sessions.set("session-remote", { ...session, hydration });
+      syncHealth = {
+        ...syncHealth,
+        state: "failed",
+        lastErrorClass: "RemoteUnauthorized",
+        lastError: "hydration rejected",
+        hydration,
+      };
+      notify("hydration");
+    },
+  };
+
+  return {
+    adapter: measuredAdapter,
+    listenerFactory,
+    scenario,
+    performance,
+    sessionSync,
+  };
 }
 
 function createLargePerformanceSession(): DesktopSessionSnapshot {
@@ -1919,6 +2095,84 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
   return rows.map((row, i) => (i === index ? next : row));
 }
 
+function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
+  const hydration = {
+    sessionId: scenario === "session-hydration" ? "session-remote" : "",
+    agentDid: AGENT_DID,
+    phase: scenario === "session-hydration" ? "requested" : "idle",
+    mergedCount: scenario === "session-hydration" ? 1 : 0,
+    servedCount: null as number | null,
+  };
+  if (scenario === "sync-offline") {
+    return {
+      state: "offline",
+      since: STARTED_AT,
+      offlineSince: STARTED_AT,
+      stalledSince: null,
+      lastErrorClass: null,
+      lastError: "fixture transport unavailable",
+      pairingRetryCount: 0,
+      routeRetryCount: 0,
+      connectedPeerCount: 0,
+      hydration,
+    };
+  }
+  if (scenario === "sync-stalled") {
+    return {
+      state: "stalled",
+      since: STARTED_AT,
+      offlineSince: null,
+      stalledSince: STARTED_AT,
+      lastErrorClass: "RpcTimeout",
+      lastError: "pairing retry exhausted",
+      pairingRetryCount: 6,
+      routeRetryCount: 6,
+      connectedPeerCount: 1,
+      hydration,
+    };
+  }
+  if (scenario === "sync-failed") {
+    return {
+      state: "failed",
+      since: STARTED_AT,
+      offlineSince: null,
+      stalledSince: null,
+      lastErrorClass: "RemoteUnauthorized",
+      lastError: "permanently rejected",
+      pairingRetryCount: 1,
+      routeRetryCount: 1,
+      connectedPeerCount: 1,
+      hydration,
+    };
+  }
+  if (scenario === "session-hydration") {
+    return {
+      state: "syncing",
+      since: STARTED_AT,
+      offlineSince: null,
+      stalledSince: null,
+      lastErrorClass: null,
+      lastError: null,
+      pairingRetryCount: 0,
+      routeRetryCount: 0,
+      connectedPeerCount: 1,
+      hydration,
+    };
+  }
+  return {
+    state: "healthy",
+    since: STARTED_AT,
+    offlineSince: null,
+    stalledSince: null,
+    lastErrorClass: null,
+    lastError: null,
+    pairingRetryCount: 0,
+    routeRetryCount: 0,
+    connectedPeerCount: 1,
+    hydration,
+  };
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -1935,6 +2189,10 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "cascade-turn":
     case "coding":
     case "mobile-performance":
+    case "session-hydration":
+    case "sync-offline":
+    case "sync-stalled":
+    case "sync-failed":
       return value;
     default:
       return "default";
