@@ -11,7 +11,7 @@
   "frequency_penalty": null,
   "stream_batch_ms": ${GENTS_SCAN_STREAM_BATCH_MS:-5000},
   "deadline_duration_secs": ${GENTS_SCAN_DEADLINE_SECS:-86400},
-  "stream_liveness_timeout_secs": ${GENTS_SCAN_STREAM_LIVENESS_SECS:-86400},
+  "stream_liveness_timeout_secs": ${GENTS_SCAN_STREAM_LIVENESS_SECS:-1800},
   "retry_max_transport": ${GENTS_SCAN_RETRY_MAX_TRANSPORT:-720},
   "retry_backoff_ms": [5000, 30000, 120000],
   "retry_max_resample": ${GENTS_SCAN_RETRY_MAX_RESAMPLE:-32},
