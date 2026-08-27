@@ -132,6 +132,7 @@ pub(super) async fn read_actual(
             }
             None => {
                 tracing::warn!(
+                    target: "gents::agent::p2p_reconcile::engine",
                     collection_id = %id,
                     "remote P2P collection id has no local name; keeping the id in \
                      the actual set"
@@ -156,7 +157,10 @@ pub(super) async fn read_actual(
         let observed_address = replicator.address.clone();
         let address = canonical_replicator_address(&replicator, applied_addresses);
         let Some(address) = address else {
-            tracing::warn!("remote replicator has neither a peer id nor an address; ignoring it");
+            tracing::warn!(
+                target: "gents::agent::p2p_reconcile::engine",
+                "remote replicator has neither a peer id nor an address; ignoring it"
+            );
             continue;
         };
         replicator_addresses.insert(address.clone());
@@ -213,6 +217,7 @@ pub(super) async fn read_actual(
                 }
                 None => {
                     tracing::debug!(
+                        target: "gents::agent::p2p_reconcile::engine",
                         collection = %id,
                         address = %address,
                         "replicator collection token has no local name; keeping it raw"
@@ -284,6 +289,7 @@ pub(super) async fn apply_op(
                 .with_context(|| format!("install P2P replicator {address}"))?;
             if desired.uses_subagent_template() {
                 tracing::debug!(
+                    target: "gents::agent::p2p_reconcile::engine",
                     address = %address,
                     templates = ?desired.template_ids,
                     "subagent pairing replicator installed with initial full replay"
