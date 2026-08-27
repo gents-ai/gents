@@ -53,7 +53,7 @@ Targets use exactly one semantic strategy:
 {"label":"Server address"}
 {"placeholder":"Ask this agent anything"}
 {"text":"Configure","exact":true}
-{"css":".operations-rail"}
+{"css":".chat-workspace"}
 ```
 
 When a locator has intentional duplicates, add `"index":0`. Role, label,
