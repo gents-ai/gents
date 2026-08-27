@@ -15,9 +15,11 @@ import type {
   GrokLoginResult,
   GrokLoginUrl,
   InferenceProbeResult,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 
 import { ThemeToggle } from "../ThemeToggle";
+import { SyncHealthIndicator } from "../SyncHealthIndicator";
 import { BrandLockup } from "./BrandLockup";
 
 export type FleetHostDashboardProps = Omit<
@@ -34,6 +36,7 @@ export type FleetHostDashboardProps = Omit<
   onCancelCodexLogin: () => Promise<unknown>;
   onGrokLogin: (agentDid: string) => Promise<GrokLoginResult>;
   onCancelGrokLogin: () => Promise<unknown>;
+  syncHealth?: SyncHealthView | null;
 };
 
 export function FleetHostDashboard({
@@ -47,12 +50,21 @@ export function FleetHostDashboard({
   onCancelCodexLogin,
   onGrokLogin,
   onCancelGrokLogin,
+  syncHealth = null,
   ...fleetProps
 }: FleetHostDashboardProps) {
+  const indicator = (
+    <SyncHealthIndicator deployments={fleetProps.deployments} syncHealth={syncHealth} />
+  );
   return (
     <FleetDashboard
       {...fleetProps}
-      brand={<BrandLockup />}
+      brand={
+        <div className="fleet-brand-row">
+          <BrandLockup />
+          {fleetProps.deployments.length === 0 ? indicator : null}
+        </div>
+      }
       copy={{
         ...fleetProps.copy,
         pairingQrHint: fleetProps.copy?.pairingQrHint ?? (
@@ -62,7 +74,12 @@ export function FleetHostDashboard({
           </>
         ),
       }}
-      headerLeadingActions={<ThemeToggle />}
+      headerLeadingActions={
+        <>
+          {fleetProps.deployments.length > 0 ? indicator : null}
+          <ThemeToggle />
+        </>
+      }
       localRuntimeSetup={
         <LocalRuntimeConnect
           bootstrap={fleetProps.bootstrap}

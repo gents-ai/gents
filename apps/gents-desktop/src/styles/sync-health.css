@@ -1,0 +1,127 @@
+@layer components {
+  .fleet-brand-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+  }
+
+  .sidebar .sync-health-indicator {
+    margin: 0 var(--space-4) var(--space-3);
+  }
+
+  .sync-health-indicator {
+    position: relative;
+    font-size: var(--text-sm);
+    color: var(--color-text-soft);
+  }
+
+  .sync-health-indicator > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: 30px;
+    padding: 0 0.65rem;
+    border: 1px solid var(--border-default);
+    background: rgb(var(--color-surface-row-rgb) / 0.88);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .sync-health-indicator > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .sync-health-indicator > summary:focus-visible {
+    outline: 2px solid rgb(var(--source-green-rgb) / 0.36);
+    outline-offset: 2px;
+  }
+
+  .sync-health-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: var(--color-accent);
+    flex: 0 0 auto;
+  }
+
+  .sync-health-indicator.is-syncing .sync-health-dot {
+    background: var(--color-info);
+  }
+
+  .sync-health-indicator.is-stalled .sync-health-dot {
+    background: var(--color-warning);
+  }
+
+  .sync-health-indicator.is-offline .sync-health-dot,
+  .sync-health-indicator.is-failed .sync-health-dot {
+    background: var(--color-error-strong);
+  }
+
+  .sync-health-indicator.is-failed > summary,
+  .sync-health-indicator.is-stalled > summary,
+  .sync-health-indicator.is-offline > summary {
+    border-color: rgb(var(--color-error-strong-rgb) / 0.35);
+  }
+
+  .sync-health-indicator.is-stalled > summary {
+    border-color: rgb(var(--color-warning-rgb) / 0.4);
+  }
+
+  .sync-health-details {
+    position: absolute;
+    right: 0;
+    z-index: 30;
+    margin-top: 0.35rem;
+    width: min(28rem, calc(100vw - 1.5rem));
+    padding: 0.75rem 0.85rem;
+    border: 1px solid var(--border-strong);
+    background: var(--color-surface-strong);
+    color: var(--color-text);
+    box-shadow: 0 12px 32px rgb(var(--scrim-rgb) / 0.35);
+  }
+
+  .sync-health-details dl {
+    display: grid;
+    gap: 0.35rem 0.75rem;
+    margin: 0;
+    grid-template-columns: max-content 1fr;
+  }
+
+  .sync-health-details dt {
+    color: var(--color-text-muted);
+    font-weight: 600;
+  }
+
+  .sync-health-details dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .sync-health-peers {
+    display: grid;
+    gap: 0.45rem;
+    margin: 0.75rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .sync-health-peers li {
+    display: grid;
+    gap: 0.15rem;
+  }
+
+  .sync-health-peers span {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  @media (max-width: 760px) {
+    .sync-health-details {
+      left: auto;
+      right: 0;
+      width: min(100vw - 1rem, 22rem);
+    }
+  }
+}

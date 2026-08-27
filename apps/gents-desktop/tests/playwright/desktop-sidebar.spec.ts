@@ -13,8 +13,10 @@ test.describe("desktop sidebar workflows", () => {
     page,
   }) => {
     await gotoHarness(page);
+    await expect(page.getByTestId("sync-health-indicator")).toBeVisible();
     await openChat(page);
     await openChatNavigation(page);
+    await expect(page.getByTestId("sync-health-indicator")).toBeVisible();
 
     const connectedPeer = page.locator(".connected-peer-card");
     await expect(connectedPeer).toContainText("Bombadil UI Agent");
