@@ -362,16 +362,18 @@ export function createDesktopUiHarness(
   }
   syncConversations();
 
-  window.addEventListener(
-    "click",
-    (event) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest("[data-testid='session-hydration-retry']")) {
-        hydrationRedrive = true;
-      }
-    },
-    true,
-  );
+  if (typeof window !== "undefined") {
+    window.addEventListener(
+      "click",
+      (event) => {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest("[data-testid='session-hydration-retry']")) {
+          hydrationRedrive = true;
+        }
+      },
+      true,
+    );
+  }
 
   function notify(reason: string, responseOnly = false) {
     updateEvents += 1;
