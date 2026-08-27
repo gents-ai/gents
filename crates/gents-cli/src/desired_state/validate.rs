@@ -9,7 +9,8 @@ use gents::template::{
 use gents::{
     is_reserved_builtin_tool_name, parse_template_for_validation,
     schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
-    SubagentTarget, SurfaceToolDecl, VariableRef, WriteToolDecl,
+    SubagentTarget, SurfaceToolDecl, VariableRef, WriteToolDecl, DEFAULT_DEADLINE_DURATION_SECS,
+    DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 
 use super::{DesiredDatastoreToolSurface, DesiredStateManifest, DesiredToolSelection};
@@ -340,13 +341,34 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 "duplicate profile_id in inference-profiles.json: {profile_id}"
             ));
         }
-        if profile
-            .stream_liveness_timeout_secs
-            .is_some_and(|value| value <= 0)
+        let stream_liveness_timeout_secs = match profile.stream_liveness_timeout_secs {
+            Some(value) if value <= 0 => {
+                errors.push(format!(
+                    "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
+                ));
+                None
+            }
+            Some(value) => Some(value),
+            None => Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
+        };
+        let deadline_duration_secs = match profile.deadline_duration_secs {
+            Some(value) if value <= 0 => {
+                errors.push(format!(
+                    "InferenceProfile {profile_id} deadline_duration_secs must be positive"
+                ));
+                None
+            }
+            Some(value) => Some(value),
+            None => Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
+        };
+        if let (Some(stream_liveness_timeout_secs), Some(deadline_duration_secs)) =
+            (stream_liveness_timeout_secs, deadline_duration_secs)
         {
-            errors.push(format!(
-                "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
-            ));
+            if stream_liveness_timeout_secs >= deadline_duration_secs {
+                errors.push(format!(
+                    "InferenceProfile {profile_id} stream_liveness_timeout_secs ({stream_liveness_timeout_secs}) must be less than deadline_duration_secs ({deadline_duration_secs})"
+                ));
+            }
         }
         if profile.seed.is_some_and(|value| value < 0) {
             errors.push(format!(

@@ -1648,6 +1648,196 @@ fn validate_rejects_non_positive_stream_liveness_timeout() {
 }
 
 #[test]
+fn validate_rejects_zero_deadline_without_relationship_error() {
+    let mut manifest = empty_manifest("did:test:test");
+    let mut profile = profile("zero-deadline");
+    profile.stream_liveness_timeout_secs = Some(300);
+    profile.deadline_duration_secs = Some(0);
+    manifest.inference_profiles.push(profile);
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("deadline_duration_secs must be positive")),
+        "expected deadline validation error, got {errors:?}"
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|message| message.contains("must be less than deadline_duration_secs")),
+        "expected no relationship error for an invalid deadline, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_negative_deadline_without_relationship_error() {
+    let mut manifest = empty_manifest("did:test:test");
+    let mut profile = profile("negative-deadline");
+    profile.stream_liveness_timeout_secs = Some(300);
+    profile.deadline_duration_secs = Some(-1);
+    manifest.inference_profiles.push(profile);
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("deadline_duration_secs must be positive")),
+        "expected deadline validation error, got {errors:?}"
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|message| message.contains("must be less than deadline_duration_secs")),
+        "expected no relationship error for an invalid deadline, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_reports_each_invalid_timeout_without_relationship_error() {
+    let mut manifest = empty_manifest("did:test:test");
+    let mut profile = profile("invalid-timeouts");
+    profile.stream_liveness_timeout_secs = Some(0);
+    profile.deadline_duration_secs = Some(0);
+    manifest.inference_profiles.push(profile);
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("stream_liveness_timeout_secs must be positive")),
+        "expected liveness validation error, got {errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("deadline_duration_secs must be positive")),
+        "expected deadline validation error, got {errors:?}"
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|message| message.contains("must be less than deadline_duration_secs")),
+        "expected no relationship error for invalid timeouts, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_stream_liveness_timeout_equal_to_deadline() {
+    let mut manifest = empty_manifest("did:test:test");
+    let mut profile = profile("equal-timeouts");
+    profile.stream_liveness_timeout_secs = Some(300);
+    profile.deadline_duration_secs = Some(300);
+    manifest.inference_profiles.push(profile);
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        errors.iter().any(|message| {
+            message.contains(
+                "stream_liveness_timeout_secs (300) must be less than deadline_duration_secs (300)",
+            )
+        }),
+        "expected ineffective liveness timeout validation error, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_stream_liveness_timeout_greater_than_deadline() {
+    let mut manifest = empty_manifest("did:test:test");
+    let mut profile = profile("late-liveness");
+    profile.stream_liveness_timeout_secs = Some(600);
+    profile.deadline_duration_secs = Some(300);
+    manifest.inference_profiles.push(profile);
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        errors.iter().any(|message| {
+            message.contains(
+                "stream_liveness_timeout_secs (600) must be less than deadline_duration_secs (300)",
+            )
+        }),
+        "expected late liveness timeout validation error, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_stream_liveness_timeout_shorter_than_deadline() {
+    let mut manifest = empty_manifest("did:test:test");
+    let mut profile = profile("early-liveness");
+    profile.stream_liveness_timeout_secs = Some(300);
+    profile.deadline_duration_secs = Some(600);
+    manifest.inference_profiles.push(profile);
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        !errors
+            .iter()
+            .any(|message| message.contains("stream_liveness_timeout_secs")),
+        "expected valid timeout relationship, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_accepts_default_inference_timeouts() {
+    let mut manifest = empty_manifest("did:test:test");
+    manifest
+        .inference_profiles
+        .push(profile("default-timeouts"));
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        !errors
+            .iter()
+            .any(|message| message.contains("stream_liveness_timeout_secs")),
+        "expected shipped default timeout relationship to remain valid, got {errors:?}"
+    );
+}
+
+#[test]
+fn shipped_long_running_demo_manifests_validate() {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+
+    for relative_root in [
+        "demo/security-scan",
+        "demo/defending-code",
+        "demo/repo-maintenance",
+    ] {
+        let root = workspace_root.join(relative_root);
+        let (_, report) = load::load_manifest_root(&root);
+        assert!(
+            report.ok,
+            "expected {relative_root} to validate, got {:?}",
+            report.errors
+        );
+    }
+}
+
+#[test]
+fn validate_rejects_default_liveness_when_explicit_deadline_is_too_short() {
+    let mut manifest = empty_manifest("did:test:test");
+    let mut profile = profile("implicit-liveness");
+    profile.deadline_duration_secs = Some(gents::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64);
+    manifest.inference_profiles.push(profile);
+
+    let errors = validation_errors(&manifest);
+
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("stream_liveness_timeout_secs (1800)")
+                && message.contains("deadline_duration_secs (1800)")
+        }),
+        "expected default liveness relationship validation error, got {errors:?}"
+    );
+}
+
+#[test]
 fn validate_rejects_negative_sampling_seed() {
     let mut manifest = empty_manifest("did:test:test");
     let mut profile = profile("seeded");
