@@ -62,9 +62,9 @@ export function WhatWeWillSee() {
     <section className="talk-block">
       <p className="eyebrow">What we’ll see</p>
       <p className="talk-lead">
-        One seed write. Four document edges. No coordinator process. <code>make review</code>{" "}
-        creates a <code>ReviewJob</code>; each create fires a trigger that materializes that
-        stage’s Task on that stage’s Behavior.
+        One seed write. Four document edges. No coordinator process.{" "}
+        <code>gents graph run code-review --watch</code> creates a <code>ReviewJob</code>; each
+        create fires a trigger that materializes that stage’s Task on that stage’s Behavior.
       </p>
       <ol className="edge-list">
         {EDGES.map((edge) => (
