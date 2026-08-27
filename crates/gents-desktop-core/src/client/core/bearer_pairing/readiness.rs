@@ -132,6 +132,7 @@ pub(in crate::client::core) async fn observe_bearer_pairing_readiness(
         {
             Ok(()) => return Ok(true),
             Err(error) => tracing::warn!(
+                target: "gents_desktop_core::client::core::bearer_pairing",
                 error = %error,
                 issuer_did,
                 "ignoring invalid bearer pairing readiness acknowledgement"
