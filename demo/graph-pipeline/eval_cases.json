@@ -19,11 +19,21 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2,
+        "max_runtime_secs": 60
       }
     },
     "expected_accepted": true,
@@ -49,11 +59,21 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2,
+        "max_runtime_secs": 60
       }
     },
     "expected_accepted": false,
@@ -72,11 +92,21 @@
       ],
       "edges": [],
       "entries": [],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2,
+        "max_runtime_secs": 60
       }
     },
     "expected_accepted": false,
@@ -102,11 +132,21 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 0,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2,
+        "max_runtime_secs": 60
       }
     },
     "expected_accepted": false,
@@ -143,11 +183,21 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "feedback",
+          "from": { "node_id": "reviewer", "port": "feedback" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 3,
         "max_edges": 3,
         "max_depth": 3,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2,
+        "max_runtime_secs": 60
       }
     },
     "expected_accepted": true,
@@ -173,11 +223,21 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2,
+        "max_runtime_secs": 60
       }
     },
     "expected_accepted": false,
@@ -203,11 +263,21 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "result",
+          "from": { "node_id": "worker", "port": "result" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 2,
         "max_edges": 2,
         "max_depth": 2,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2,
+        "max_runtime_secs": 60
       }
     },
     "expected_accepted": false,
@@ -249,11 +319,21 @@
           "to": { "node_id": "worker", "port": "input" }
         }
       ],
+      "results": [
+        {
+          "name": "feedback",
+          "from": { "node_id": "reviewer", "port": "feedback" },
+          "cardinality": { "kind": "exactly", "count": 1 },
+          "terminal": true
+        }
+      ],
       "limits": {
         "max_nodes": 3,
         "max_edges": 3,
         "max_depth": 3,
-        "max_fan_out": 2
+        "max_fan_out": 2,
+        "max_total_invocations": 2,
+        "max_runtime_secs": 60
       }
     },
     "expected_accepted": false,

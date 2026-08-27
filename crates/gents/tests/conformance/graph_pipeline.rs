@@ -1,6 +1,6 @@
 use gents::graph_pipeline::{
     compile_graph, CompilerPolicy, EntryBinding, GraphIntent, GraphLimits, GraphNode,
-    PortCardinality, PortRef, PortSpec, StageCapability,
+    PortCardinality, PortRef, PortSpec, ResultCardinality, ResultContract, StageCapability,
 };
 
 use super::lean_contract_snapshot;
@@ -16,6 +16,14 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
         cardinality: PortCardinality::One,
         required: true,
     };
+    let output = PortSpec {
+        name: "result".to_owned(),
+        collection: "ExperimentResult".to_owned(),
+        schema: "ExperimentResult/v1".to_owned(),
+        correlation_field: "graph_run_id".to_owned(),
+        cardinality: PortCardinality::One,
+        required: false,
+    };
     let intent = GraphIntent {
         graph_id: "lean-validation-fixture".to_owned(),
         nodes: vec![GraphNode {
@@ -28,16 +36,28 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
             name: "job".to_owned(),
             collection: input.collection.clone(),
             schema: input.schema.clone(),
+            input_contract: None,
             to: PortRef {
                 node_id: "worker".to_owned(),
                 port: input.name.clone(),
             },
+        }],
+        results: vec![ResultContract {
+            name: "result".to_owned(),
+            from: PortRef {
+                node_id: "worker".to_owned(),
+                port: output.name.clone(),
+            },
+            cardinality: ResultCardinality::Exactly { count: 1 },
+            terminal: true,
         }],
         limits: GraphLimits {
             max_nodes: 2,
             max_edges: 2,
             max_depth: 2,
             max_fan_out: 2,
+            max_total_invocations: 2,
+            max_runtime_secs: 60,
         },
     };
     let capability = StageCapability {
@@ -45,7 +65,7 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
         revision: "v1".to_owned(),
         task_id: "worker-v1-task".to_owned(),
         input_ports: vec![input],
-        output_ports: vec![],
+        output_ports: vec![output],
         allowed_callers: vec![CALLER_DID.to_owned()],
     };
     (intent, vec![capability])

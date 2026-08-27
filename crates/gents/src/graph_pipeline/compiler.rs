@@ -5,8 +5,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::types::{
-    DeliveryMode, Diagnostic, DiagnosticCode, GraphIntent, GraphPlan, PlannedEdge, PlannedEntry,
-    PlannedNode, PortCardinality, PortRef, PortSpec, StageCapability, COMPILER_VERSION,
+    CapabilityManifestEntry, DeliveryMode, Diagnostic, DiagnosticCode, GraphIntent, GraphPlan,
+    GroupCount, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode, PlannedResult,
+    PortCardinality, PortRef, PortSpec, ResultCardinality, StageCapability, COMPILER_VERSION,
 };
 use crate::graphql::{
     validate_collection_identifier, validate_graphql_filter_fragment, validate_graphql_name,
@@ -18,7 +19,10 @@ pub struct CompilerPolicy {
     pub max_edges: u32,
     pub max_depth: u32,
     pub max_fan_out: u32,
+    pub max_total_invocations: u32,
+    pub max_runtime_secs: u64,
     pub max_group_size: u32,
+    pub max_group_timeout_secs: u64,
 }
 
 impl Default for CompilerPolicy {
@@ -28,7 +32,10 @@ impl Default for CompilerPolicy {
             max_edges: 256,
             max_depth: 32,
             max_fan_out: 16,
+            max_total_invocations: 1_024,
+            max_runtime_secs: 86_400,
             max_group_size: 256,
+            max_group_timeout_secs: 86_400,
         }
     }
 }
@@ -63,10 +70,17 @@ fn output_port<'a>(capability: &'a StageCapability, name: &str) -> Option<&'a Po
         .find(|port| port.name == name)
 }
 
-fn delivery_sort_key(delivery: &DeliveryMode) -> (u8, u32) {
+fn delivery_sort_key(delivery: &DeliveryMode) -> (u8, u32, String, u64) {
     match delivery {
-        DeliveryMode::PerDocument => (0, 0),
-        DeliveryMode::PerGroup { expected_count } => (1, *expected_count),
+        DeliveryMode::PerDocument => (0, 0, String::new(), 0),
+        DeliveryMode::PerGroup {
+            expected: GroupCount::Static { count },
+            timeout_secs,
+        } => (1, *count, String::new(), timeout_secs.unwrap_or_default()),
+        DeliveryMode::PerGroup {
+            expected: GroupCount::SourceField { field },
+            timeout_secs,
+        } => (2, 0, field.clone(), timeout_secs.unwrap_or_default()),
     }
 }
 
@@ -97,6 +111,17 @@ fn check_requested_limits(
                 format!("requested {value}, platform ceiling is {ceiling}"),
             );
         }
+    }
+    if requested.max_runtime_secs == 0 || requested.max_runtime_secs > policy.max_runtime_secs {
+        diagnostic(
+            diagnostics,
+            DiagnosticCode::PlatformLimitExceeded,
+            "/limits/max_runtime_secs",
+            format!(
+                "requested {}, platform range is 1..={}",
+                requested.max_runtime_secs, policy.max_runtime_secs
+            ),
+        );
     }
 
     let node_count = intent.nodes.len() as u32;
@@ -387,7 +412,7 @@ pub fn compile_graph(
                     ),
                 );
             }
-            let cardinality_valid = match edge.delivery {
+            let cardinality_valid = match &edge.delivery {
                 DeliveryMode::PerDocument => source_port.cardinality == target_port.cardinality,
                 DeliveryMode::PerGroup { .. } => {
                     source_port.cardinality == PortCardinality::One
@@ -403,15 +428,43 @@ pub fn compile_graph(
                 );
             }
         }
-        if let DeliveryMode::PerGroup { expected_count } = edge.delivery {
-            if expected_count < 2 || expected_count > policy.max_group_size {
+        if let DeliveryMode::PerGroup {
+            expected,
+            timeout_secs,
+        } = &edge.delivery
+        {
+            match expected {
+                GroupCount::Static { count } if *count < 2 || *count > policy.max_group_size => {
+                    diagnostic(
+                        &mut diagnostics,
+                        DiagnosticCode::InvalidGroupSize,
+                        format!("{path}/delivery/expected/count"),
+                        format!(
+                            "per-group size must be between 2 and {}",
+                            policy.max_group_size
+                        ),
+                    );
+                }
+                GroupCount::SourceField { field } if validate_graphql_name(field).is_err() => {
+                    diagnostic(
+                        &mut diagnostics,
+                        DiagnosticCode::InvalidGroupCountField,
+                        format!("{path}/delivery/expected/field"),
+                        "source-field group count must be a GraphQL field identifier",
+                    );
+                }
+                _ => {}
+            }
+            if timeout_secs
+                .is_some_and(|seconds| seconds == 0 || seconds > policy.max_group_timeout_secs)
+            {
                 diagnostic(
                     &mut diagnostics,
-                    DiagnosticCode::InvalidGroupSize,
-                    format!("{path}/delivery/expected_count"),
+                    DiagnosticCode::InvalidGroupTimeout,
+                    format!("{path}/delivery/timeout_secs"),
                     format!(
-                        "per-group size must be between 2 and {}",
-                        policy.max_group_size
+                        "group timeout must be in 1..={} seconds when present",
+                        policy.max_group_timeout_secs
                     ),
                 );
             }
@@ -504,6 +557,61 @@ pub fn compile_graph(
         }
         *incoming.entry(entry.to.clone()).or_default() += 1;
         entry_nodes.insert(entry.to.node_id.as_str());
+    }
+
+    if !intent.results.iter().any(|result| result.terminal) {
+        diagnostic(
+            &mut diagnostics,
+            DiagnosticCode::MissingTerminalResult,
+            "/results",
+            "a graph must declare at least one terminal result so every completed run can reach a durable terminal state",
+        );
+    }
+    let mut result_names = BTreeSet::new();
+    for (index, result) in intent.results.iter().enumerate() {
+        let path = format!("/results/{index}");
+        if !result_names.insert(result.name.as_str()) {
+            diagnostic(
+                &mut diagnostics,
+                DiagnosticCode::DuplicateResult,
+                format!("{path}/name"),
+                format!("result {:?} is declared more than once", result.name),
+            );
+        }
+        let source_node = nodes.contains(result.from.node_id.as_str());
+        if !source_node {
+            diagnostic(
+                &mut diagnostics,
+                DiagnosticCode::UnknownNode,
+                format!("{path}/from/node_id"),
+                format!("unknown result node {:?}", result.from.node_id),
+            );
+        } else if resolved
+            .get(result.from.node_id.as_str())
+            .and_then(|capability| output_port(capability, &result.from.port))
+            .is_none()
+        {
+            diagnostic(
+                &mut diagnostics,
+                DiagnosticCode::UnknownPort,
+                format!("{path}/from/port"),
+                format!("unknown result output port {:?}", result.from.port),
+            );
+        }
+        let count = match result.cardinality {
+            ResultCardinality::Exactly { count } | ResultCardinality::AtMost { count } => count,
+        };
+        if count == 0 || count > policy.max_total_invocations {
+            diagnostic(
+                &mut diagnostics,
+                DiagnosticCode::InvalidResultCardinality,
+                format!("{path}/cardinality/count"),
+                format!(
+                    "result cardinality must be in 1..={}, found {count}",
+                    policy.max_total_invocations
+                ),
+            );
+        }
     }
 
     for (node_id, capability) in &resolved {
@@ -650,6 +758,7 @@ pub fn compile_graph(
                 target_task_id: resolved[edge.to.node_id.as_str()].task_id.clone(),
                 correlation_field: source_port.correlation_field.clone(),
                 delivery: edge.delivery.clone(),
+                concurrency: edge.concurrency.clone(),
                 predicate: edge.predicate.clone(),
             }
         })
@@ -679,6 +788,7 @@ pub fn compile_graph(
                 name: entry.name.clone(),
                 collection: target_port.collection.clone(),
                 schema: target_port.schema.clone(),
+                input_contract: entry.input_contract.clone(),
                 to: entry.to.clone(),
                 target_task_id: target_capability.task_id.clone(),
                 correlation_field: target_port.correlation_field.clone(),
@@ -689,6 +799,42 @@ pub fn compile_graph(
         (&left.name, &left.schema, &left.to).cmp(&(&right.name, &right.schema, &right.to))
     });
 
+    let mut results: Vec<PlannedResult> = intent
+        .results
+        .iter()
+        .map(|result| {
+            let source_capability = resolved[result.from.node_id.as_str()];
+            let source_port = output_port(source_capability, &result.from.port)
+                .expect("validated result port must resolve");
+            PlannedResult {
+                name: result.name.clone(),
+                from: result.from.clone(),
+                collection: source_port.collection.clone(),
+                schema: source_port.schema.clone(),
+                correlation_field: source_port.correlation_field.clone(),
+                cardinality: result.cardinality.clone(),
+                terminal: result.terminal,
+            }
+        })
+        .collect();
+    results.sort_by(|left, right| (&left.name, &left.from).cmp(&(&right.name, &right.from)));
+
+    let mut manifest: Vec<CapabilityManifestEntry> = resolved
+        .values()
+        .map(|capability| CapabilityManifestEntry {
+            capability_id: capability.capability_id.clone(),
+            revision: capability.revision.clone(),
+            task_id: capability.task_id.clone(),
+        })
+        .collect();
+    manifest.sort_by(|left, right| {
+        (&left.capability_id, &left.revision, &left.task_id).cmp(&(
+            &right.capability_id,
+            &right.revision,
+            &right.task_id,
+        ))
+    });
+    manifest.dedup();
     let mut plan = GraphPlan {
         compiler_version: COMPILER_VERSION.to_owned(),
         graph_id: intent.graph_id.clone(),
@@ -696,7 +842,10 @@ pub fn compile_graph(
         nodes: planned_nodes,
         edges,
         entries,
+        results,
+        capability_manifest: manifest,
         limits: intent.limits.clone(),
+        package: None,
     };
     plan.digest = graph_plan_digest(&plan);
     Ok(plan)
@@ -713,7 +862,10 @@ pub fn graph_plan_digest(plan: &GraphPlan) -> String {
         nodes: &'a [PlannedNode],
         edges: &'a [PlannedEdge],
         entries: &'a [PlannedEntry],
+        results: &'a [PlannedResult],
+        capability_manifest: &'a [CapabilityManifestEntry],
         limits: &'a super::types::GraphLimits,
+        package: &'a Option<PackagePlan>,
     }
 
     let bytes = serde_json::to_vec(&DigestPayload {
@@ -722,10 +874,25 @@ pub fn graph_plan_digest(plan: &GraphPlan) -> String {
         nodes: &plan.nodes,
         edges: &plan.edges,
         entries: &plan.entries,
+        results: &plan.results,
+        capability_manifest: &plan.capability_manifest,
         limits: &plan.limits,
+        package: &plan.package,
     })
     .expect("GraphPlan contains only infallibly serializable fields");
     format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+/// Bind typed package/configuration provenance to an already validated graph.
+/// Package validation owns uniqueness and digest checks; this function only
+/// canonicalizes order and advances the immutable revision identity.
+pub fn bind_package_plan(mut plan: GraphPlan, mut package: PackagePlan) -> GraphPlan {
+    package.artifacts.sort();
+    package.required_schema_digests.sort();
+    plan.package = Some(package);
+    plan.digest.clear();
+    plan.digest = graph_plan_digest(&plan);
+    plan
 }
 
 pub fn verify_graph_plan_digest(plan: &GraphPlan) -> bool {

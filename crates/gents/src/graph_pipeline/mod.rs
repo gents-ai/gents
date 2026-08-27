@@ -10,7 +10,8 @@ mod tools;
 mod types;
 
 pub use compiler::{
-    compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy, GraphCompileError,
+    bind_package_plan, compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy,
+    GraphCompileError,
 };
 pub use runtime::{publish_graph_plan, PublishedGraph};
 pub use tools::{
@@ -18,9 +19,12 @@ pub use tools::{
     COMPILE_GRAPH_TOOL_NAME, GRAPH_PIPELINE_TOOL_NAMES,
 };
 pub use types::{
-    DeliveryMode, Diagnostic, DiagnosticCode, EntryBinding, GraphEdge, GraphIntent, GraphLimits,
-    GraphNode, GraphPlan, PlannedEdge, PlannedEntry, PlannedNode, PortCardinality, PortRef,
-    PortSpec, StageCapability, COMPILER_VERSION,
+    BundledProvenance, CapabilityManifestEntry, DeliveryConcurrency, DeliveryMode, Diagnostic,
+    DiagnosticCode, EntryBinding, GraphEdge, GraphIntent, GraphLimits, GraphNode, GraphPlan,
+    GroupCount, PackageArtifactKind, PackagePlan, PackageRoleBinding, PlannedEdge, PlannedEntry,
+    PlannedNode, PlannedPackageArtifact, PlannedResult, PortCardinality, PortRef, PortSpec,
+    RequiredSchemaDigest, ResultCardinality, ResultContract, StageCapability,
+    WorkspaceAuthorityCeiling, COMPILER_VERSION,
 };
 
 #[cfg(test)]

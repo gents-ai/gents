@@ -13,7 +13,9 @@ use sha2::{Digest, Sha256};
 use crate::config_client::{write_event_trigger_document, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 
-use super::{verify_graph_plan_digest, DeliveryMode, GraphPlan};
+use super::{
+    verify_graph_plan_digest, DeliveryConcurrency, DeliveryMode, GraphPlan, GroupCount,
+};
 
 const TRIGGER_PREFIX: &str = "graph-trigger-";
 
@@ -143,12 +145,44 @@ async fn write_trigger(
     source_collection: &str,
     correlation_field: &str,
     delivery: &DeliveryMode,
+    concurrency: &DeliveryConcurrency,
     predicate: Option<&str>,
     now: &str,
 ) -> Result<()> {
-    let (fire_mode, expected_count) = match delivery {
-        DeliveryMode::PerDocument => ("per_document", Value::Null),
-        DeliveryMode::PerGroup { expected_count } => ("per_group", json!(expected_count)),
+    let (fire_mode, expected_count, expected_count_field, group_timeout_secs) = match delivery {
+        DeliveryMode::PerDocument => (
+            "per_document",
+            Value::Null,
+            Value::Null,
+            Value::Null,
+        ),
+        DeliveryMode::PerGroup {
+            expected: GroupCount::Static { count },
+            timeout_secs,
+        } => (
+            "per_group",
+            json!(count),
+            Value::Null,
+            timeout_secs.map(Value::from).unwrap_or(Value::Null),
+        ),
+        DeliveryMode::PerGroup {
+            expected: GroupCount::SourceField { field },
+            timeout_secs,
+        } => (
+            "per_group",
+            Value::Null,
+            json!(field),
+            timeout_secs.map(Value::from).unwrap_or(Value::Null),
+        ),
+    };
+    let concurrency = match concurrency {
+        DeliveryConcurrency::Parallel => "parallel",
+        DeliveryConcurrency::Serial => "serial",
+    };
+    let group_min_count = if group_timeout_secs.is_null() {
+        Value::Null
+    } else {
+        json!(1)
     };
     let add = json!({
         "trigger_id": id,
@@ -157,13 +191,13 @@ async fn write_trigger(
         "event_kind": "created",
         "filter": predicate.map(Value::from).unwrap_or(Value::Null),
         "enabled": true,
-        "concurrency": "parallel",
+        "concurrency": concurrency,
         "correlation_field": correlation_field,
         "fire_mode": fire_mode,
         "expected_count": expected_count,
-        "expected_count_field": Value::Null,
-        "group_timeout_secs": if matches!(delivery, DeliveryMode::PerGroup { .. }) { json!(300) } else { Value::Null },
-        "group_min_count": expected_count,
+        "expected_count_field": expected_count_field,
+        "group_timeout_secs": group_timeout_secs,
+        "group_min_count": group_min_count,
         "workspace_authority": Value::Null,
         "created_at": now,
         "updated_at": now,
@@ -244,6 +278,7 @@ pub async fn publish_graph_plan(
                 &entry.collection,
                 &entry.correlation_field,
                 &DeliveryMode::PerDocument,
+                &DeliveryConcurrency::Parallel,
                 None,
                 &now,
             )
@@ -264,6 +299,7 @@ pub async fn publish_graph_plan(
                 &edge.source_collection,
                 &edge.correlation_field,
                 &edge.delivery,
+                &edge.concurrency,
                 edge.predicate.as_deref(),
                 &now,
             )
@@ -292,7 +328,7 @@ mod tests {
     use super::*;
     use crate::graph_pipeline::{
         compile_graph, CompilerPolicy, EntryBinding, GraphIntent, GraphLimits, GraphNode,
-        PortCardinality, PortRef, PortSpec, StageCapability,
+        PortCardinality, PortRef, PortSpec, ResultCardinality, ResultContract, StageCapability,
     };
 
     fn plan() -> GraphPlan {
@@ -303,6 +339,14 @@ mod tests {
             correlation_field: "run_id".to_owned(),
             cardinality: PortCardinality::One,
             required: true,
+        };
+        let output = PortSpec {
+            name: "result".to_owned(),
+            collection: "PipelineOutput".to_owned(),
+            schema: "PipelineOutput/v1".to_owned(),
+            correlation_field: "run_id".to_owned(),
+            cardinality: PortCardinality::One,
+            required: false,
         };
         let intent = GraphIntent {
             graph_id: "pipeline".to_owned(),
@@ -316,16 +360,28 @@ mod tests {
                 name: "input".to_owned(),
                 collection: input.collection.clone(),
                 schema: input.schema.clone(),
+                input_contract: None,
                 to: PortRef {
                     node_id: "worker".to_owned(),
                     port: input.name.clone(),
                 },
+            }],
+            results: vec![ResultContract {
+                name: "result".to_owned(),
+                from: PortRef {
+                    node_id: "worker".to_owned(),
+                    port: output.name.clone(),
+                },
+                cardinality: ResultCardinality::Exactly { count: 1 },
+                terminal: true,
             }],
             limits: GraphLimits {
                 max_nodes: 2,
                 max_edges: 2,
                 max_depth: 2,
                 max_fan_out: 2,
+                max_total_invocations: 2,
+                max_runtime_secs: 60,
             },
         };
         compile_graph(
@@ -335,7 +391,7 @@ mod tests {
                 revision: "v1".to_owned(),
                 task_id: "existing-worker-task".to_owned(),
                 input_ports: vec![input],
-                output_ports: vec![],
+                output_ports: vec![output],
                 allowed_callers: vec!["did:key:owner".to_owned()],
             }],
             "did:key:owner",
