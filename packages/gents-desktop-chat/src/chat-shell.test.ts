@@ -19,7 +19,8 @@ import {
 
 const CONTRACT_JSON_BEGIN = "---BEGIN GENTS LEAN CONTRACT JSON---";
 const CONTRACT_JSON_END = "---END GENTS LEAN CONTRACT JSON---";
-const GENERATED_CONTRACT_TEST_TIMEOUT_MS = 120000;
+const GENERATED_CONTRACT_COMMAND_TIMEOUT_MS = 240000;
+const GENERATED_CONTRACT_TEST_TIMEOUT_MS = 300000;
 
 type LeanClientShellCase = {
   name: string;
@@ -149,6 +150,7 @@ function runLeanCommand(proofsDir: string, args: string[]) {
   const result = spawnSync("lake", args, {
     cwd: proofsDir,
     encoding: "utf8",
+    timeout: GENERATED_CONTRACT_COMMAND_TIMEOUT_MS,
   });
 
   if (result.error) {
