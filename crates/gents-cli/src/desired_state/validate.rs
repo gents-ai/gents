@@ -9,7 +9,8 @@ use gents::template::{
 use gents::{
     is_reserved_builtin_tool_name, parse_template_for_validation,
     schedule_cron::validate_cron_schedule, CommandExecutionMode, CommandNetworkMode,
-    SubagentTarget, SurfaceToolDecl, VariableRef, WriteToolDecl,
+    SubagentTarget, SurfaceToolDecl, VariableRef, WriteToolDecl, DEFAULT_DEADLINE_DURATION_SECS,
+    DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 
 use super::{DesiredDatastoreToolSurface, DesiredStateManifest, DesiredToolSelection};
@@ -346,6 +347,17 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         {
             errors.push(format!(
                 "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
+            ));
+        }
+        let stream_liveness_timeout_secs = profile
+            .stream_liveness_timeout_secs
+            .unwrap_or(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64);
+        let deadline_duration_secs = profile
+            .deadline_duration_secs
+            .unwrap_or(DEFAULT_DEADLINE_DURATION_SECS as i64);
+        if stream_liveness_timeout_secs >= deadline_duration_secs {
+            errors.push(format!(
+                "InferenceProfile {profile_id} stream_liveness_timeout_secs ({stream_liveness_timeout_secs}) must be less than deadline_duration_secs ({deadline_duration_secs})"
             ));
         }
         if profile.seed.is_some_and(|value| value < 0) {
