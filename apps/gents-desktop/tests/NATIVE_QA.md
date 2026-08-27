@@ -66,7 +66,9 @@ Run from the repo root.
    - Fleet dashboard opens.
    - Chat composer is reachable.
    - Configure opens the config workspace.
-   - Operations drawer opens and tabs switch.
+   - Background process lifecycle is visible inline in the chat transcript.
+     Operations snapshots and subagent lineage are verified through the live
+     bridge suites, not a conversation drawer.
    - If a local runtime is configured, send one short message and confirm the UI
      reaches a terminal state.
 

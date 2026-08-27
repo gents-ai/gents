@@ -33,9 +33,6 @@ describeLive("Tauri app live operations snapshot", () => {
       });
       const submitted = expectLatestSendResult(runner, "native background turn");
 
-      const session = await runner.waitForRequestCompletion(submitted);
-      expectCompletedSession("native background parent turn", session);
-
       const nativeTool = await waitFor(
         async () => {
           const snapshot = await runner.adapter.fetchOperationsSnapshot({
@@ -62,6 +59,9 @@ describeLive("Tauri app live operations snapshot", () => {
       logTurn(
         `native background process projected toolCallId=${nativeTool.toolCallId} requestId=${submitted.requestId}`,
       );
+
+      const session = await runner.waitForRequestCompletion(submitted);
+      expectCompletedSession("native background parent turn", session);
     });
   }, 600_000);
 });

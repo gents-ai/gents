@@ -137,9 +137,9 @@ async fn seed_live_behavior_documents(
         enable_file_tools: Some(true),
         file_tools_mode: Some("ReadOnly".to_string()),
         file_tool_root: None,
-        // Keep a real native-background lane in the live desktop fixture.  The
-        // Operations rail E2E uses it to observe a `spawn_process` call while
-        // its underlying command is still running.
+        // Keep a real native-background lane in the live desktop fixture. The
+        // operations snapshot E2E uses it to observe a `spawn_process` call
+        // while its underlying command is still running.
         enable_bash: Some(true),
         bash_mode: Some("Unrestricted".to_string()),
         command_execution_policy: None,
