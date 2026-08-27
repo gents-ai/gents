@@ -1,4 +1,4 @@
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::{EmbeddedNode, EventName};
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::BoxFuture;
 use gents::llm::tool::ToolDefinition;
@@ -10,8 +10,10 @@ use gents::{
 };
 use serde::Deserialize;
 use serde_json::Value;
+use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Notify;
 
 use crate::support::{first_row, test_db};
@@ -222,25 +224,48 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
         .unwrap_or_default()
 }
 
+async fn bounded_diagnostic<T: Debug>(
+    timeout_duration: Duration,
+    diagnostic: impl std::future::Future<Output = T>,
+) -> String {
+    match tokio::time::timeout(timeout_duration, diagnostic).await {
+        Ok(value) => format!("{value:?}"),
+        Err(_) => format!("<unavailable: diagnostic query timed out after {timeout_duration:?}>"),
+    }
+}
+
 async fn wait_for_tool_completion_message(
     node: &EmbeddedNode,
     session_id: &str,
     tool_call_id: &str,
 ) -> MessageRow {
     let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if let Some(message) = fetch_messages(node, session_id)
-            .await
-            .into_iter()
-            .find(|message| message.content.contains(&marker))
-        {
-            return message;
+    let mut updates = node.subscribe(&[EventName::Update]);
+    let wait = async {
+        loop {
+            if let Some(message) = fetch_messages(node, session_id)
+                .await
+                .into_iter()
+                .find(|message| message.content.contains(&marker))
+            {
+                return message;
+            }
+            updates
+                .recv()
+                .await
+                .expect("embedded-node update subscription closed");
         }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("tool completion message for {tool_call_id} was not appended");
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(5), wait).await {
+        Ok(message) => message,
+        Err(_) => {
+            let messages =
+                bounded_diagnostic(Duration::from_secs(1), fetch_messages(node, session_id)).await;
+            panic!(
+                "tool completion message for {tool_call_id} was not appended; \
+                 last_messages={messages}"
+            );
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 }
 
@@ -309,6 +334,61 @@ async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &st
         }}"#
     );
     first_row(&node.execute(&query).await, "AgentToolCall")
+}
+
+async fn wait_for_tool_terminal_state(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> ToolCallRow {
+    let mut updates = node.subscribe(&[EventName::Update]);
+    let wait = async {
+        loop {
+            let row = load_tool_call(node, session_id, tool_call_id).await;
+            if row.lifecycle_state.as_deref() != Some("running") {
+                return row;
+            }
+            updates
+                .recv()
+                .await
+                .expect("embedded-node update subscription closed");
+        }
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(5), wait).await {
+        Ok(row) => row,
+        Err(_) => {
+            let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
+            let (last_row, completion) = tokio::join!(
+                bounded_diagnostic(
+                    Duration::from_secs(1),
+                    load_tool_call(node, session_id, tool_call_id),
+                ),
+                bounded_diagnostic(Duration::from_secs(1), async {
+                    fetch_messages(node, session_id)
+                        .await
+                        .into_iter()
+                        .find(|message| message.content.contains(&marker))
+                }),
+            );
+            panic!(
+                "background tool did not terminalize after its durable update; \
+                 last_tool_call={last_row}; completion_marker={completion}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn background_diagnostic_snapshot_is_bounded_and_explicit() {
+    let ready = bounded_diagnostic(Duration::from_secs(1), async { "ready" }).await;
+    assert_eq!(ready, "\"ready\"");
+
+    let unavailable =
+        bounded_diagnostic(Duration::ZERO, std::future::pending::<&'static str>()).await;
+    assert_eq!(
+        unavailable,
+        "<unavailable: diagnostic query timed out after 0ns>"
+    );
 }
 
 async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
@@ -744,18 +824,7 @@ async fn panicking_background_tool_terminalizes_and_notifies() {
     );
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    let row = loop {
-        let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
-        if row.lifecycle_state.as_deref() != Some("running") {
-            break row;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "panicking background tool remained durably running"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    };
+    let row = wait_for_tool_terminal_state(db.node.as_ref(), &session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("failed"));
     assert!(row
         .result
