@@ -27,6 +27,14 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
 }
 
 describe("SyncHealthIndicator", () => {
+  it("does not claim health before a known projection exists", () => {
+    const { rerender } = render(<SyncHealthIndicator syncHealth={null} />);
+    expect(screen.queryByTestId("sync-health-indicator")).not.toBeInTheDocument();
+
+    rerender(<SyncHealthIndicator syncHealth={health({ state: "future-state" })} />);
+    expect(screen.queryByTestId("sync-health-indicator")).not.toBeInTheDocument();
+  });
+
   it("renders each product state and opens diagnostics", () => {
     const { rerender } = render(<SyncHealthIndicator syncHealth={health()} />);
     expect(screen.getByTestId("sync-health-indicator")).toHaveAttribute(

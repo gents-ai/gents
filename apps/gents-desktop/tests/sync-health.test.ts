@@ -68,7 +68,8 @@ describe("syncHealthLabel", () => {
       ),
     ).toBe("Offline since 2h ago");
     expect(syncHealthLabel(health({ state: "failed" }), now)).toBe("Sync failed");
-    expect(syncHealthState(null)).toBe("healthy");
+    expect(syncHealthState(null)).toBeNull();
+    expect(syncHealthState(health({ state: "future-state" }))).toBeNull();
     expect(formatElapsedSince("2026-08-27T11:59:20Z", now)).toBe("40s ago");
   });
 });

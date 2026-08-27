@@ -13,15 +13,16 @@ const STATE_LABEL: Record<SyncHealthStateName, string> = {
 
 export function syncHealthState(
   syncHealth: SyncHealthView | null | undefined,
-): SyncHealthStateName {
+): SyncHealthStateName | null {
   switch (syncHealth?.state) {
+    case "healthy":
     case "syncing":
     case "stalled":
     case "offline":
     case "failed":
       return syncHealth.state;
     default:
-      return "healthy";
+      return null;
   }
 }
 
@@ -30,6 +31,7 @@ export function syncHealthLabel(
   now = Date.now(),
 ): string {
   const state = syncHealthState(syncHealth);
+  if (!state) return "Sync unavailable";
   if (state === "offline") {
     const since = formatElapsedSince(
       syncHealth?.offlineSince ?? syncHealth?.since,

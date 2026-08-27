@@ -16,6 +16,7 @@ export function SyncHealthIndicator({
   syncHealth = null,
 }: SyncHealthIndicatorProps) {
   const state = syncHealthState(syncHealth);
+  if (!state) return null;
   const label = syncHealthLabel(syncHealth);
   const diagnostics = syncHealthDiagnostics(syncHealth, deployments);
   const hydration = diagnostics.hydration;
