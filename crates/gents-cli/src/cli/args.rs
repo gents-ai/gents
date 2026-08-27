@@ -143,6 +143,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    #[command(about = "Discover, install, run, and observe bundled graphs")]
+    Graph {
+        #[command(subcommand)]
+        command: GraphCommand,
+    },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
     #[command(about = "Explain resolved behavior tool surfaces", after_help = TOOLS_AFTER_HELP)]
@@ -190,6 +195,110 @@ pub(crate) enum Command {
     },
     #[command(about = "Interactive, self-contained fleet demo (single node -> paired fleet)")]
     Demo(DemoArgs),
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum GraphCommand {
+    #[command(about = "Inspect immutable graph packages bundled in this binary")]
+    Catalog(GraphCatalogArgs),
+    #[command(about = "Materialize a bundled package into an initialized home")]
+    Install(GraphInstallArgs),
+    #[command(about = "Start a run of an installed active graph")]
+    Run(GraphRunArgs),
+    #[command(about = "Watch durable graph progress until terminal")]
+    Watch(GraphWatchArgs),
+    #[command(about = "Read named durable outputs for a graph run")]
+    Result(GraphResultArgs),
+    #[command(about = "Request cancellation of a running graph")]
+    Cancel(GraphCancelArgs),
+    #[command(about = "Block new runs without interrupting pinned work")]
+    Disable(GraphToggleArgs),
+    #[command(about = "Allow new runs of an active graph")]
+    Enable(GraphToggleArgs),
+}
+
+#[derive(clap::Args, Clone)]
+pub(crate) struct GraphScopeArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) agent_did: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GraphCatalogArgs {
+    pub(crate) package: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GraphInstallArgs {
+    pub(crate) package: String,
+    #[arg(
+        long,
+        help = "JSON file containing explicit owner, role, deployment, and model bindings"
+    )]
+    pub(crate) bindings: Option<PathBuf>,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GraphRunArgs {
+    pub(crate) package: String,
+    #[arg(long, default_value = ".")]
+    pub(crate) repo: PathBuf,
+    #[arg(long, default_value = "origin/main")]
+    pub(crate) base: String,
+    #[arg(long, default_value = "HEAD")]
+    pub(crate) head: String,
+    #[arg(long)]
+    pub(crate) focus: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) watch: bool,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GraphWatchArgs {
+    pub(crate) run_id: String,
+    #[arg(long, default_value_t = 1_000)]
+    pub(crate) interval_ms: u64,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GraphResultArgs {
+    pub(crate) run_id: String,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GraphCancelArgs {
+    pub(crate) run_id: String,
+    #[arg(long)]
+    pub(crate) reason: Option<String>,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GraphToggleArgs {
+    pub(crate) package: String,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
 }
 
 #[derive(clap::Args)]
@@ -287,10 +396,7 @@ pub(crate) struct DemoInitArgs {
 pub(crate) struct DemoSeedArgs {
     #[arg(help = "Pack directory, or a name resolved under demo/")]
     pub(crate) pack: String,
-    #[arg(
-        long,
-        help = "Pack node home; used to refuse a stale review-root stamp"
-    )]
+    #[arg(long, help = "Pack node home used to resolve the initialized identity")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "Seed prompt. Defaults to the pack's default_prompt")]
     pub(crate) prompt: Option<String>,

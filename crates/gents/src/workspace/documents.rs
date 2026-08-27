@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphql::escape_graphql_string;
 
 use super::action_plan::{CreationPolicy, WorkspaceAdapterKind};
+use super::executor::RepositoryPlacementRef;
 use super::LogicalWorkspaceIdentity;
 
 pub(crate) const ADAPTER_VERSION: &str = "gents-workspace-adapter/1";
@@ -327,6 +328,41 @@ pub fn workspace_placement_upsert_mutation(
         provisioning_state = escape_graphql_string(&doc.provisioning_state),
         observed_tree_hash = escape_graphql_string(&doc.observed_tree_hash),
     )
+}
+
+pub fn repository_placement_upsert_mutation(
+    placement: &RepositoryPlacementRef,
+    updated_at: &str,
+) -> Result<String> {
+    let enabled = if placement.enabled { "true" } else { "false" };
+    let host_path = placement
+        .host_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("repository path is not valid UTF-8"))?;
+    Ok(format!(
+        r#"mutation {{
+            upsert_RepositoryPlacement(
+                filter: {{ repository_id: {{ _eq: "{repository_id}" }} }},
+                add: {{
+                    repository_id: "{repository_id}",
+                    deployment_id: "{deployment_id}",
+                    host_path: "{host_path}",
+                    enabled: {enabled},
+                    updated_at: "{updated_at}"
+                }},
+                update: {{
+                    deployment_id: "{deployment_id}",
+                    host_path: "{host_path}",
+                    enabled: {enabled},
+                    updated_at: "{updated_at}"
+                }}
+            ) {{ _docID }}
+        }}"#,
+        repository_id = escape_graphql_string(&placement.repository_id),
+        deployment_id = escape_graphql_string(&placement.deployment_id),
+        host_path = escape_graphql_string(host_path),
+        updated_at = escape_graphql_string(updated_at),
+    ))
 }
 
 pub fn workspace_binding_upsert_mutation(doc: &WorkspaceBindingDoc) -> String {
