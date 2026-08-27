@@ -154,6 +154,17 @@ fn response_field_is_blank(response: &Value, field: &str) -> bool {
         .is_empty()
 }
 
+fn response_is_completed(response: &Value) -> bool {
+    response
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| matches!(status, "complete" | "completed"))
+}
+
+fn response_has_presentation(response: &Value) -> bool {
+    !response_field_is_blank(response, "content") || !response_field_is_blank(response, "reasoning")
+}
+
 fn response_materialized_sequence(response: &Value) -> Option<i64> {
     response
         .get("materialized_message_sequence")
@@ -164,21 +175,60 @@ fn response_materialized_sequence(response: &Value) -> Option<i64> {
         })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MaterializedResponsePresentation {
+    Presentable,
+    Pending,
+    Invalid,
+}
+
+fn classify_materialized_response(
+    response: &Value,
+    blank_completed: MaterializedResponsePresentation,
+) -> MaterializedResponsePresentation {
+    if response_has_presentation(response) || !response_is_completed(response) {
+        MaterializedResponsePresentation::Presentable
+    } else {
+        blank_completed
+    }
+}
+
+pub(crate) fn materialized_response_diagnostic(request_id: &str, response: &Value) -> String {
+    let session_id = response
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("<missing>");
+    let sequence = response_materialized_sequence(response)
+        .map(|sequence| sequence.to_string())
+        .unwrap_or_else(|| "<missing>".to_string());
+    format!(
+        "could not hydrate materialized AgentMessage for request {request_id} \
+         (session_id={session_id}, sequence={sequence}); the referenced message is missing or \
+         invalid"
+    )
+}
+
 pub(crate) async fn hydrate_materialized_response_content(
     graphql: &str,
     response: &mut Value,
-) -> Result<bool> {
+) -> Result<MaterializedResponsePresentation> {
     let content_blank = response_field_is_blank(response, "content");
     let reasoning_blank = response_field_is_blank(response, "reasoning");
     if !content_blank && !reasoning_blank {
-        return Ok(true);
+        return Ok(MaterializedResponsePresentation::Presentable);
     }
 
     let Some(sequence) = response_materialized_sequence(response) else {
-        return Ok(!content_blank || !reasoning_blank);
+        return Ok(classify_materialized_response(
+            response,
+            MaterializedResponsePresentation::Invalid,
+        ));
     };
     let Some(session_id) = response.get("session_id").and_then(Value::as_str) else {
-        return Ok(!content_blank || !reasoning_blank);
+        return Ok(classify_materialized_response(
+            response,
+            MaterializedResponsePresentation::Invalid,
+        ));
     };
 
     let query = materialized_message_query(session_id, sequence);
@@ -188,18 +238,33 @@ pub(crate) async fn hydrate_materialized_response_content(
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
     else {
-        return Ok(false);
+        return Ok(classify_materialized_response(
+            response,
+            MaterializedResponsePresentation::Pending,
+        ));
     };
     let Some(role) = message.get("role").and_then(Value::as_str) else {
-        return Ok(false);
+        return Ok(classify_materialized_response(
+            response,
+            MaterializedResponsePresentation::Invalid,
+        ));
     };
+    if role != "assistant" {
+        return Ok(classify_materialized_response(
+            response,
+            MaterializedResponsePresentation::Invalid,
+        ));
+    }
     let Some(content) = message.get("content").and_then(Value::as_str) else {
-        return Ok(false);
+        return Ok(classify_materialized_response(
+            response,
+            MaterializedResponsePresentation::Invalid,
+        ));
     };
 
     let presentation = present_persisted_message(role, content);
     let Some(object) = response.as_object_mut() else {
-        return Ok(false);
+        return Ok(MaterializedResponsePresentation::Invalid);
     };
 
     if content_blank && !presentation.body_markdown.trim().is_empty() {
@@ -221,7 +286,10 @@ pub(crate) async fn hydrate_materialized_response_content(
         }
     }
 
-    Ok(true)
+    Ok(classify_materialized_response(
+        response,
+        MaterializedResponsePresentation::Invalid,
+    ))
 }
 
 pub(crate) async fn create_agent_request(
@@ -524,15 +592,11 @@ pub(crate) async fn wait_for_terminal_response(
             .and_then(|row| row.get("status"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let should_wait_for_materialized_content =
-            matches!(response_status, "complete" | "completed")
-                && response_row.as_ref().is_some_and(|row| {
-                    response_field_is_blank(row, "content")
-                        && response_materialized_sequence(row).is_some()
-                });
-
         let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
-        let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
+        let terminal_by_response = matches!(
+            response_status,
+            "complete" | "completed" | "error" | "failed" | "interrupted"
+        );
         if terminal_by_request || terminal_by_response {
             let response_row = if response_row.is_some() {
                 let response = post_graphql(graphql, &response_query(request_id)).await?;
@@ -551,16 +615,21 @@ pub(crate) async fn wait_for_terminal_response(
                     "content": null,
                 })
             });
-            let hydrated = hydrate_materialized_response_content(graphql, &mut envelope).await?;
-            if should_wait_for_materialized_content && !hydrated {
-                if last_progress_at.elapsed() >= idle_timeout {
-                    anyhow::bail!(
-                        "timed out waiting for materialized AgentMessage {request_id} after {timeout_secs}s of inactivity\n{}",
-                        request_diagnostic_hint(request_id)
-                    );
+            match hydrate_materialized_response_content(graphql, &mut envelope).await? {
+                MaterializedResponsePresentation::Presentable => {}
+                MaterializedResponsePresentation::Pending => {
+                    if last_progress_at.elapsed() >= idle_timeout {
+                        anyhow::bail!(
+                            "timed out waiting for materialized AgentMessage {request_id} after {timeout_secs}s of inactivity\n{}",
+                            request_diagnostic_hint(request_id)
+                        );
+                    }
+                    tokio::time::sleep(Duration::from_secs(poll_secs)).await;
+                    continue;
                 }
-                tokio::time::sleep(Duration::from_secs(poll_secs)).await;
-                continue;
+                MaterializedResponsePresentation::Invalid => {
+                    anyhow::bail!(materialized_response_diagnostic(request_id, &envelope));
+                }
             }
             if let Some(object) = envelope.as_object_mut() {
                 object.insert(

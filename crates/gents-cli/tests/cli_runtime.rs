@@ -17,6 +17,8 @@ mod cli_mailbox;
 mod cli_reconciliation;
 #[path = "suites/cli_request.rs"]
 mod cli_request;
+#[path = "suites/cli_response.rs"]
+mod cli_response;
 #[path = "suites/cli_session.rs"]
 mod cli_session;
 #[path = "suites/cli_status.rs"]
