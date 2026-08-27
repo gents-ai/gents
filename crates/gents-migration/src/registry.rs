@@ -535,7 +535,17 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::GRAPH_DEFINITION_NAME,
         gents_protocol::schemas::GRAPH_DEFINITION,
-        "bafyreigqm2cvlc34nbgh6pnlcueu6wpigrm6uafofaz27ziewh6rr6azuu"
+        "bafyreih2u3gjfvkom4zmckqkbdnwy7ulc7ntwn7ndgkcclv4wnespmna2m"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::GRAPH_REVISION_NAME,
+        gents_protocol::schemas::GRAPH_REVISION,
+        "bafyreidnpse724dsdau3zqcqihx5vesnldll3ky2u3p6w4hjkd34r6bhgq"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::GRAPH_RUN_NAME,
+        gents_protocol::schemas::GRAPH_RUN,
+        "bafyreigxtaqm3t34jy5yislq4m3ihnwxqzti35dhfwbxhhrqqp7rpn7qki"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SERVICE_REGISTRY_NAME,

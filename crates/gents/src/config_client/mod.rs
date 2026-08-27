@@ -28,6 +28,7 @@ mod desired_state;
 mod event_trigger;
 mod inference_backend;
 mod schedule;
+mod schema_contract;
 mod task;
 mod txn;
 
@@ -47,6 +48,7 @@ pub(crate) use desired_state::{
 pub use event_trigger::write_event_trigger_document;
 pub use inference_backend::{write_inference_backend_document, InferenceBackendUpsertDocument};
 pub use schedule::write_schedule_document;
+pub(crate) use schema_contract::collection_schema_contract_digest;
 pub use task::write_task_document;
 pub use tool_selection::{
     write_tool_selection_document, write_tool_selection_document_with_clear_fields,

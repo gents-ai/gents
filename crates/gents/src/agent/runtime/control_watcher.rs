@@ -204,6 +204,23 @@ pub(super) async fn run_control_watcher(
                     Ok(document_view::ControlUpdateOutcome::PendingVisibility) => {
                         pending_visibility = true;
                     }
+                    Ok(document_view::ControlUpdateOutcome::FullReload) => {
+                        match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
+                            Ok(reloaded) => {
+                                document_view = reloaded;
+                                pending_visibility = document_view.has_unresolved_behavior_references();
+                            }
+                            Err(error) => {
+                                tracing::error!(
+                                    agent_did = %agent_did,
+                                    error = %error,
+                                    "runtime control watcher failed to reload document view; keeping previous active generation"
+                                );
+                                runtime_status.publish_error(&format!("{error:#}")).await;
+                                continue;
+                            }
+                        }
+                    }
                     Err(error) => {
                         tracing::error!(
                             agent_did = %agent_did,

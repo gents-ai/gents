@@ -5,6 +5,7 @@ use crate::backend_registry::lookup_backend_by_doc_id;
 use crate::document_config::{
     load_agent_behavior_by_doc_id, load_agent_principal_by_doc_id,
     load_datastore_tool_surface_by_doc_id, load_event_trigger_by_doc_id,
+    load_graph_definition_by_doc_id, load_graph_run_pin_by_doc_id,
     load_inference_profile_by_doc_id, load_schedule_by_doc_id, load_skill_by_doc_id,
     load_task_by_doc_id, load_tool_selection_by_doc_id,
 };
@@ -21,6 +22,21 @@ pub(crate) async fn apply_control_update(
     doc_id: &str,
     view: &mut DocumentRuntimeView,
 ) -> Result<ControlUpdateOutcome> {
+    if load_graph_definition_by_doc_id(node, doc_id)
+        .await?
+        .is_some()
+        || view.has_graph_definition_doc_id(doc_id)
+    {
+        return Ok(ControlUpdateOutcome::FullReload);
+    }
+    if load_graph_run_pin_by_doc_id(node, doc_id).await?.is_some()
+        || view.has_graph_run_doc_id(doc_id)
+    {
+        return Ok(ControlUpdateOutcome::FullReload);
+    }
+    if view.has_package_config_artifact_doc_id(doc_id) {
+        return Ok(ControlUpdateOutcome::FullReload);
+    }
     if let Some((loaded_doc_id, principal)) = load_agent_principal_by_doc_id(node, doc_id).await? {
         if principal.agent_did != agent_did {
             return Ok(ControlUpdateOutcome::Irrelevant);
@@ -45,6 +61,9 @@ pub(crate) async fn apply_control_update(
     }
 
     if let Some((loaded_doc_id, behavior)) = load_agent_behavior_by_doc_id(node, doc_id).await? {
+        if behavior.behavior_id.starts_with("pkg-") {
+            return Ok(ControlUpdateOutcome::FullReload);
+        }
         if behavior.agent_did != agent_did {
             return Ok(ControlUpdateOutcome::Irrelevant);
         }
@@ -66,6 +85,9 @@ pub(crate) async fn apply_control_update(
     }
 
     if let Some((loaded_doc_id, selection)) = load_tool_selection_by_doc_id(node, doc_id).await? {
+        if selection.selection_id.starts_with("pkg-") {
+            return Ok(ControlUpdateOutcome::FullReload);
+        }
         if selection.agent_did != agent_did {
             return Ok(ControlUpdateOutcome::Irrelevant);
         }
@@ -107,6 +129,9 @@ pub(crate) async fn apply_control_update(
     if let Some((loaded_doc_id, surface)) =
         load_datastore_tool_surface_by_doc_id(node, doc_id).await?
     {
+        if surface.surface_id.starts_with("pkg-") {
+            return Ok(ControlUpdateOutcome::FullReload);
+        }
         if surface.agent_did != agent_did {
             // Ownership moved away: drop the grant now rather than serving the
             // stale copy until restart.
@@ -169,6 +194,9 @@ pub(crate) async fn apply_control_update(
     }
 
     if let Some((loaded_doc_id, task)) = load_task_by_doc_id(node, doc_id).await? {
+        if task.task_id.starts_with("pkg-") {
+            return Ok(ControlUpdateOutcome::FullReload);
+        }
         if task.task_id.trim().is_empty() {
             return Ok(ControlUpdateOutcome::Irrelevant);
         }
@@ -207,6 +235,9 @@ pub(crate) async fn apply_control_update(
     }
 
     if let Some((loaded_doc_id, trigger)) = load_event_trigger_by_doc_id(node, doc_id).await? {
+        if crate::graph_pipeline::graph_artifact_is_reserved(&trigger.trigger_id) {
+            return Ok(ControlUpdateOutcome::FullReload);
+        }
         if trigger.trigger_id.trim().is_empty() {
             return Ok(ControlUpdateOutcome::Irrelevant);
         }
