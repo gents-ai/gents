@@ -79,7 +79,6 @@
     border: 1px solid var(--border-strong);
     background: var(--color-surface-strong);
     color: var(--color-text);
-    box-shadow: 0 12px 32px rgb(var(--scrim-rgb) / 0.35);
   }
 
   .sync-health-details dl {
