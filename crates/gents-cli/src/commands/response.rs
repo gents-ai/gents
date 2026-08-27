@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::cli::args::{ResponseCommand, ResponseShowArgs, ResponseWaitArgs};
 use crate::{
     hydrate_materialized_response_content, post_graphql, print_json, resolve_graphql_endpoint,
-    resolve_request_id, response_query, wait_for_terminal_response,
+    resolve_request_id, response_field_is_blank, response_query, wait_for_terminal_response,
 };
 
 pub(crate) async fn dispatch(command: ResponseCommand) -> Result<()> {
@@ -20,23 +20,29 @@ pub(crate) async fn response_show(args: ResponseShowArgs) -> Result<()> {
     let query = response_query(&request_id);
     let mut response = post_graphql(&graphql, &query).await?;
     if let Some(response_row) = response.pointer_mut("/data/AgentResponse/0") {
-        let materialized_sequence = response_row
-            .get("materialized_message_sequence")
-            .and_then(serde_json::Value::as_i64);
-        let session_id = response_row
-            .get("session_id")
+        hydrate_materialized_response_content(&graphql, response_row).await?;
+        let completed = response_row
+            .get("status")
             .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned);
-        let hydrated = hydrate_materialized_response_content(&graphql, response_row).await?;
-        if !hydrated {
-            if let Some(sequence) = materialized_sequence {
-                let session_id = session_id.as_deref().unwrap_or("<missing>");
-                anyhow::bail!(
-                    "could not hydrate materialized AgentMessage for request {request_id} \
-                     (session_id={session_id}, sequence={sequence}); the referenced message is \
-                     missing or invalid"
-                );
-            }
+            .is_some_and(|status| matches!(status, "complete" | "completed"));
+        if completed
+            && response_field_is_blank(response_row, "content")
+            && response_field_is_blank(response_row, "reasoning")
+        {
+            let sequence = response_row
+                .get("materialized_message_sequence")
+                .and_then(serde_json::Value::as_i64)
+                .map(|sequence| sequence.to_string())
+                .unwrap_or_else(|| "<missing>".to_string());
+            let session_id = response_row
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<missing>");
+            anyhow::bail!(
+                "could not hydrate materialized AgentMessage for request {request_id} \
+                 (session_id={session_id}, sequence={sequence}); the referenced message is \
+                 missing or invalid"
+            );
         }
     }
     print_json(&response)?;

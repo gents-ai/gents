@@ -58,7 +58,9 @@ struct MaterializedResponse<'a> {
     response_content: &'a str,
     response_reasoning: &'a str,
     message_content: Option<&'a str>,
+    message_role: &'a str,
     message_reasoning: &'a str,
+    response_status: &'a str,
     sequence: i64,
 }
 
@@ -72,7 +74,9 @@ async fn insert_materialized_response(
         response_content,
         response_reasoning,
         message_content,
+        message_role,
         message_reasoning,
+        response_status,
         sequence,
     } = fixture;
     let now = chrono::Utc::now().to_rfc3339();
@@ -86,7 +90,7 @@ async fn insert_materialized_response(
                 agent_did: "{agent_did}",
                 request_id: "{request_id}",
                 sequence: {sequence},
-                role: "assistant",
+                role: "{message_role}",
                 content: "{content}",
                 reasoning: "{message_reasoning}",
                 timestamp: "{now}"
@@ -96,6 +100,7 @@ async fn insert_materialized_response(
             agent_did = escape_graphql_string(&runtime.agent_did),
             request_id = escape_graphql_string(request_id),
             content = escape_graphql_string(content),
+            message_role = escape_graphql_string(message_role),
             message_reasoning = escape_graphql_string(message_reasoning),
             now = escape_graphql_string(&now),
         )
@@ -111,7 +116,7 @@ async fn insert_materialized_response(
                 session_id: "{session_id}",
                 content: "{response_content}",
                 reasoning: "{response_reasoning}",
-                status: "complete",
+                status: "{response_status}",
                 error_message: "",
                 token_count: 1241,
                 progress_seq: 31,
@@ -128,6 +133,7 @@ async fn insert_materialized_response(
         session_id = escape_graphql_string(session_id),
         response_content = escape_graphql_string(response_content),
         response_reasoning = escape_graphql_string(response_reasoning),
+        response_status = escape_graphql_string(response_status),
         now = escape_graphql_string(&now),
     );
     graphql_query(&runtime.graphql, &mutation).await?;
@@ -145,6 +151,30 @@ fn response_show(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Valu
             request_id,
         ],
     )
+}
+
+fn assert_materialization_failure(
+    runtime: &ResponseTestRuntime,
+    request_id: &str,
+    session_id: &str,
+    sequence: i64,
+) -> Result<()> {
+    let stderr = run_cli_failure_stderr(
+        &runtime.home_dir,
+        &[
+            "response",
+            "show",
+            "--graphql",
+            &runtime.graphql,
+            request_id,
+        ],
+    )?;
+    assert!(stderr.contains("could not hydrate materialized AgentMessage"));
+    assert!(stderr.contains(&format!("request {request_id}")));
+    assert!(stderr.contains(&format!("session_id={session_id}")));
+    assert!(stderr.contains(&format!("sequence={sequence}")));
+    assert!(stderr.contains("missing or invalid"));
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -169,7 +199,9 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
             response_content: "",
             response_reasoning: "",
             message_content: Some(&persisted_message),
+            message_role: "assistant",
             message_reasoning: &durable_reasoning,
+            response_status: "complete",
             sequence: 409,
         },
     )
@@ -243,7 +275,9 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
             response_content: "already present",
             response_reasoning: "already reasoned",
             message_content: Some("durable replacement that must not win"),
+            message_role: "assistant",
             message_reasoning: "replacement reasoning that must not win",
+            response_status: "complete",
             sequence: 7,
         },
     )
@@ -277,27 +311,135 @@ async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
             response_content: "",
             response_reasoning: "",
             message_content: None,
+            message_role: "assistant",
             message_reasoning: "",
+            response_status: "complete",
             sequence: 73,
         },
     )
     .await?;
 
-    let stderr = run_cli_failure_stderr(
-        &runtime.home_dir,
-        &[
-            "response",
-            "show",
-            "--graphql",
-            &runtime.graphql,
-            &request_id,
-        ],
-    )?;
-    assert!(stderr.contains("could not hydrate materialized AgentMessage"));
-    assert!(stderr.contains(&format!("request {request_id}")));
-    assert!(stderr.contains(&format!("session_id={session_id}")));
-    assert!(stderr.contains("sequence=73"));
-    assert!(stderr.contains("missing or invalid"));
+    assert_materialization_failure(&runtime, &request_id, &session_id, 73)?;
+
+    let partial_request_id = format!("response-partial-{}", Uuid::new_v4().simple());
+    let partial_session_id = format!("session-partial-{}", Uuid::new_v4().simple());
+    insert_materialized_response(
+        &runtime,
+        MaterializedResponse {
+            request_id: &partial_request_id,
+            session_id: &partial_session_id,
+            response_content: "preserve this partial output",
+            response_reasoning: "",
+            message_content: None,
+            message_role: "assistant",
+            message_reasoning: "",
+            response_status: "complete",
+            sequence: 74,
+        },
+    )
+    .await?;
+    let partial = response_show(&runtime, &partial_request_id)?;
+    let partial_row = partial
+        .pointer("/data/AgentResponse/0")
+        .context("partial response show output missing GraphQL envelope row")?;
+    assert_eq!(
+        partial_row.get("content").and_then(Value::as_str),
+        Some("preserve this partial output")
+    );
+    assert_eq!(
+        partial_row.get("reasoning").and_then(Value::as_str),
+        Some("")
+    );
+
+    let wrong_role_request_id = format!("response-wrong-role-{}", Uuid::new_v4().simple());
+    let wrong_role_session_id = format!("session-wrong-role-{}", Uuid::new_v4().simple());
+    let assistant_text = serde_json::json!({
+        "role": "assistant",
+        "id": null,
+        "content": [{ "text": "must not hydrate from a user row" }]
+    })
+    .to_string();
+    insert_materialized_response(
+        &runtime,
+        MaterializedResponse {
+            request_id: &wrong_role_request_id,
+            session_id: &wrong_role_session_id,
+            response_content: "",
+            response_reasoning: "",
+            message_content: Some(&assistant_text),
+            message_role: "user",
+            message_reasoning: "",
+            response_status: "complete",
+            sequence: 75,
+        },
+    )
+    .await?;
+    assert_materialization_failure(&runtime, &wrong_role_request_id, &wrong_role_session_id, 75)?;
+
+    let tool_only = serde_json::json!({
+        "role": "assistant",
+        "id": null,
+        "content": [{
+            "id": "call-1",
+            "call_id": "call-1",
+            "function": { "name": "echo", "arguments": {} },
+            "signature": null,
+            "additional_params": null
+        }]
+    })
+    .to_string();
+    let tool_only_request_id = format!("response-tool-only-{}", Uuid::new_v4().simple());
+    let tool_only_session_id = format!("session-tool-only-{}", Uuid::new_v4().simple());
+    insert_materialized_response(
+        &runtime,
+        MaterializedResponse {
+            request_id: &tool_only_request_id,
+            session_id: &tool_only_session_id,
+            response_content: "",
+            response_reasoning: "",
+            message_content: Some(&tool_only),
+            message_role: "assistant",
+            message_reasoning: "",
+            response_status: "complete",
+            sequence: 76,
+        },
+    )
+    .await?;
+    assert_materialization_failure(&runtime, &tool_only_request_id, &tool_only_session_id, 76)?;
+
+    let interrupted_request_id = format!("response-interrupted-{}", Uuid::new_v4().simple());
+    let interrupted_session_id = format!("session-interrupted-{}", Uuid::new_v4().simple());
+    insert_materialized_response(
+        &runtime,
+        MaterializedResponse {
+            request_id: &interrupted_request_id,
+            session_id: &interrupted_session_id,
+            response_content: "",
+            response_reasoning: "",
+            message_content: Some(&tool_only),
+            message_role: "assistant",
+            message_reasoning: "",
+            response_status: "interrupted",
+            sequence: 77,
+        },
+    )
+    .await?;
+    let interrupted = response_show(&runtime, &interrupted_request_id)?;
+    let interrupted_row = interrupted
+        .pointer("/data/AgentResponse/0")
+        .context("interrupted response show output missing GraphQL envelope row")?;
+    assert_eq!(
+        interrupted_row.get("status").and_then(Value::as_str),
+        Some("interrupted")
+    );
+    assert!(interrupted_row
+        .get("content")
+        .and_then(Value::as_str)
+        .is_some_and(str::is_empty));
+    assert!(interrupted_row
+        .get("reasoning")
+        .and_then(Value::as_str)
+        .is_some_and(str::is_empty));
 
     Ok(())
 }

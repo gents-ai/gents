@@ -145,7 +145,7 @@ pub(crate) fn is_terminal_lifecycle_state(state: &str) -> bool {
     )
 }
 
-fn response_field_is_blank(response: &Value, field: &str) -> bool {
+pub(crate) fn response_field_is_blank(response: &Value, field: &str) -> bool {
     response
         .get(field)
         .and_then(Value::as_str)
@@ -193,6 +193,9 @@ pub(crate) async fn hydrate_materialized_response_content(
     let Some(role) = message.get("role").and_then(Value::as_str) else {
         return Ok(false);
     };
+    if role != "assistant" {
+        return Ok(false);
+    }
     let Some(content) = message.get("content").and_then(Value::as_str) else {
         return Ok(false);
     };
