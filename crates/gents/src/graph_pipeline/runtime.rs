@@ -655,6 +655,19 @@ pub async fn publish_graph_plan(
     })
 }
 
+pub(crate) async fn materialize_graph_revision_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner_did: &str,
+    plan: &GraphPlan,
+) -> Result<MaterializedRevision> {
+    if !verify_graph_plan_digest(plan) {
+        anyhow::bail!("refusing to materialize a GraphPlan with an invalid digest");
+    }
+    let plan_json = serde_json::to_string(plan)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    materialize_in_txn(txn, owner_did, plan, &plan_json, &now).await
+}
+
 async fn materialize_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner_did: &str,

@@ -1,0 +1,9 @@
+{
+  "task_id": "review-triage-task",
+  "name": "Write the merge report",
+  "description": null,
+  "behavior_id": "review-triage",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

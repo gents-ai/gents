@@ -21,6 +21,7 @@ pub use run::{
     request_graph_run_cancellation, request_graph_run_cancellation_with_access, GraphResultRef,
     GraphRunGroupView, GraphRunRequestView, GraphRunResultView, GraphRunStageView, GraphRunView,
 };
+pub(crate) use runtime::materialize_graph_revision_in_txn;
 pub use runtime::{
     activate_graph_revision, activate_graph_revision_with_access, graph_run_terminal_decision,
     load_active_graph_plan_with_access, materialize_graph_revision, publish_graph_plan,
