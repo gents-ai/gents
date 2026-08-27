@@ -16,7 +16,12 @@ import {
   VERSION_POLL_MS,
 } from "./live-bridge-runner/listener";
 import { RunnerLogs, type RunnerExitStatus } from "./live-bridge-runner/logs";
-import { appendRunnerArg, waitForReadyMessage } from "./live-bridge-runner/process";
+import {
+  appendRunnerArg,
+  assertLiveBridgeRunnerPlatform,
+  disposeRunnerProcess,
+  waitForReadyMessage,
+} from "./live-bridge-runner/process";
 import {
   waitForRequestCompletion,
   type RequestCompletionTarget,
@@ -84,6 +89,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
   }
 
   static async start(options: LiveBridgeRunnerOptions = {}) {
+    assertLiveBridgeRunnerPlatform();
     const runnerArgs = [
       "run",
       "-p",
@@ -113,6 +119,10 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     );
     const child = spawn("cargo", runnerArgs, {
       cwd: REPO_ROOT,
+      // Detachment makes bounded process-group cleanup possible. An abrupt
+      // SIGKILL of this Node harness can still strand the group; the enclosing
+      // test job remains the final reaping boundary for that case.
+      detached: true,
       env: {
         ...process.env,
         CARGO_NET_GIT_FETCH_WITH_CLI:
@@ -157,20 +167,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
   }
 
   async dispose() {
-    this.process.stdin.end();
-    const exited = await new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => {
-        this.process.kill("SIGKILL");
-        resolve(false);
-      }, 10_000);
-      this.process.once("exit", () => {
-        clearTimeout(timeout);
-        resolve(true);
-      });
-    });
-    if (!exited) {
-      await new Promise((resolve) => this.process.once("exit", resolve));
-    }
+    await disposeRunnerProcess(this.process);
   }
 
   async getJson<T>(path: string) {
