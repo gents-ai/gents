@@ -886,37 +886,6 @@ fn pack_init_cli_args(
     init_args
 }
 
-fn refuse_stale_review_root(home: &Path, env_root: Option<&Path>) -> Result<()> {
-    let stamp = home.join("review-root");
-    if !stamp.is_file() {
-        return Ok(());
-    }
-    let Some(env_root) = env_root else {
-        return Ok(());
-    };
-    let applied =
-        std::fs::read_to_string(&stamp).with_context(|| format!("reading {}", stamp.display()))?;
-    let applied = applied.trim();
-    if applied.is_empty() {
-        return Ok(());
-    }
-    if !same_path(Path::new(applied), env_root) {
-        bail!(
-            "REVIEW_ROOT {} does not match the pack node at {}; re-run make review-serve (REVIEW_RESET=1 if you meant to retarget)",
-            env_root.display(),
-            applied
-        );
-    }
-    Ok(())
-}
-
-fn same_path(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
-}
-
 fn event_trigger_ready(response: &Value, collection: &str) -> bool {
     response
         .pointer("/data/EventTrigger")
@@ -2514,10 +2483,6 @@ pub(crate) async fn init_pack(args: DemoInitArgs) -> Result<()> {
 pub(crate) async fn seed(args: DemoSeedArgs) -> Result<()> {
     let pack = resolve_pack(&args.pack)?;
     let manifest = load_manifest(&pack)?;
-    if let Some(home) = args.home.as_deref() {
-        let env_root = std::env::var_os("GENTS_REVIEW_ROOT").map(PathBuf::from);
-        refuse_stale_review_root(home, env_root.as_deref())?;
-    }
 
     let port = args.http_port;
     let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
@@ -3068,22 +3033,6 @@ mod tests {
     }
 
     #[test]
-    fn refuse_stale_review_root_when_both_sides_are_set() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        let applied = dir.path().join("applied");
-        let other = dir.path().join("other");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::create_dir_all(&applied).unwrap();
-        std::fs::create_dir_all(&other).unwrap();
-        std::fs::write(home.join("review-root"), format!("{}\n", applied.display())).unwrap();
-        refuse_stale_review_root(&home, Some(&applied)).unwrap();
-        let error = refuse_stale_review_root(&home, Some(&other)).unwrap_err();
-        assert!(error.to_string().contains("does not match the pack node"));
-        refuse_stale_review_root(&home, None).unwrap();
-    }
-
-    #[test]
     fn global_update_subscription_completes_seed_readiness() {
         let log = format!(
             "{COLOURED}\n INFO event source opened global Update subscription collections=1 generation=3"
@@ -3185,202 +3134,6 @@ mod tests {
     }
 
     #[test]
-    fn code_review_prompts_name_the_tools_their_behaviors_advertise() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/code-review");
-        let manifest = load_manifest_defaults(&pack).expect("code-review pack should load");
-        assert_eq!(manifest.expect.prompt_tool_contracts.len(), 4);
-        assert_eq!(manifest.expect.result_documents.len(), 2);
-        let scan_count_source = manifest
-            .expect
-            .trigger_request_count_sources
-            .get("review-scan")
-            .expect("review-scan count source");
-        assert_eq!(scan_count_source.collection, "ReviewArea");
-        assert_eq!(scan_count_source.correlation_field, "run_id");
-        assert_eq!(scan_count_source.expected_count_field, "expected_total");
-        assert_eq!(
-            manifest.seed.fields.get("lens_count").map(String::as_str),
-            Some("auto")
-        );
-        let verify_trigger = read_pack_json_defaults(
-            &pack
-                .join("event_triggers")
-                .join("review-verify")
-                .join("object.json"),
-        )
-        .expect("review-verify trigger");
-        assert!(verify_trigger
-            .get("group_min_count")
-            .is_some_and(Value::is_null));
-        for selection in [
-            "review-recon-tools",
-            "review-scan-tools",
-            "review-verify-tools",
-        ] {
-            let document = read_pack_json_defaults(
-                &pack
-                    .join("tool-selections")
-                    .join(selection)
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
-            assert_eq!(
-                document.get("enable_lsp").and_then(Value::as_bool),
-                Some(true)
-            );
-            assert_eq!(
-                document.get("bash_mode").and_then(Value::as_str),
-                Some("Unrestricted")
-            );
-            assert_eq!(
-                document.get("command_network_mode").and_then(Value::as_str),
-                Some("enabled")
-            );
-            assert_eq!(
-                document
-                    .get("enable_context_budget")
-                    .and_then(Value::as_bool),
-                Some(true)
-            );
-            assert!(document
-                .get("backgroundable_tool_names")
-                .and_then(Value::as_array)
-                .is_some_and(|names| {
-                    names
-                        .iter()
-                        .any(|name| name.as_str() == Some("bash_unrestricted"))
-                }));
-        }
-        for behavior in [
-            "review-recon",
-            "review-scan",
-            "review-verify",
-            "review-triage",
-        ] {
-            let document = read_pack_json_defaults(
-                &pack
-                    .join("agent-behaviors")
-                    .join(behavior)
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{behavior} should load: {error:#}"));
-            assert_eq!(
-                document.get("compaction_strategy").and_then(Value::as_str),
-                Some("StripThenSummarize")
-            );
-            assert_eq!(
-                document.get("compaction_threshold").and_then(Value::as_f64),
-                Some(0.85)
-            );
-        }
-        let triage_tools = read_pack_json_defaults(
-            &pack
-                .join("tool-selections")
-                .join("review-triage-tools")
-                .join("object.json"),
-        )
-        .expect("review-triage-tools should load");
-        assert_eq!(
-            triage_tools
-                .get("enable_context_budget")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        for (surface, tool_name) in [
-            ("review-recon-writes", "write_review_area"),
-            ("review-scan-writes", "write_scan_result"),
-            ("review-verify-writes", "write_verification_summary"),
-            ("review-triage-writes", "write_triage_report"),
-        ] {
-            let document = read_pack_json_defaults(
-                &pack
-                    .join("datastore-tool-surfaces")
-                    .join(surface)
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{surface} should load: {error:#}"));
-            let entry = document["entries"]
-                .as_array()
-                .and_then(|entries| entries.iter().find(|entry| entry["tool_name"] == tool_name))
-                .unwrap_or_else(|| panic!("{surface} should declare {tool_name}"));
-            assert_eq!(entry["output_obligation"]["scope"], "trigger");
-            assert_eq!(entry["output_obligation"]["minimum_writes"], 1);
-            if tool_name == "write_review_area" {
-                assert_eq!(
-                    entry["output_obligation"]["expected_count_field"],
-                    "expected_total"
-                );
-            }
-        }
-        let recon_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("review-recon-task")
-                .join("prompt.md"),
-        )
-        .expect("review recon prompt should load");
-        assert!(recon_prompt.contains("You are not a scanner"));
-        assert!(recon_prompt.contains("Never repeat a successful repository command"));
-        let scan_prompt = std::fs::read_to_string(
-            pack.join("tasks")
-                .join("review-scan-task")
-                .join("prompt.md"),
-        )
-        .expect("review scan prompt should load");
-        assert!(scan_prompt.contains("Never repeat an identical tool call"));
-        for profile in [
-            "review-recon-profile",
-            "review-scan-profile",
-            "review-verify-profile",
-            "review-profile",
-        ] {
-            let document = read_pack_json_defaults(
-                &pack
-                    .join("inference-profiles")
-                    .join(profile)
-                    .join("object.json"),
-            )
-            .unwrap_or_else(|error| panic!("{profile} should load: {error:#}"));
-            assert_eq!(
-                document.get("context_window").and_then(Value::as_u64),
-                Some(262_144)
-            );
-            assert_eq!(
-                document.get("max_output_tokens").and_then(Value::as_u64),
-                Some(65_536)
-            );
-            assert_eq!(
-                document.get("max_turns").and_then(Value::as_u64),
-                Some(1_000_000)
-            );
-            assert_eq!(
-                document.get("temperature").and_then(Value::as_f64),
-                Some(1.0)
-            );
-            assert_eq!(document.get("top_p").and_then(Value::as_f64), Some(0.95));
-            assert_eq!(
-                document.get("stream_batch_ms").and_then(Value::as_u64),
-                Some(5_000)
-            );
-            assert_eq!(
-                document
-                    .get("deadline_duration_secs")
-                    .and_then(Value::as_u64),
-                Some(86_400)
-            );
-            assert_eq!(
-                document
-                    .get("stream_liveness_timeout_secs")
-                    .and_then(Value::as_u64),
-                Some(86_400)
-            );
-            assert_eq!(
-                document.get("retry_max_transport").and_then(Value::as_u64),
-                Some(720)
-            );
-        }
-    }
-
-    #[test]
     fn defending_code_pack_is_typed_static_and_closes_both_fan_outs() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/defending-code");
         let manifest = load_manifest_defaults(&pack).expect("defending-code pack should load");
@@ -3392,10 +3145,6 @@ mod tests {
             ("defend-scan", "DefenseReviewArea"),
             ("defend-verifier", "DefenseVerificationAssignment"),
             ("defend-contract-review", "DefenseRootCauseCluster"),
-            ("defend-patch", "DefensePatchAssignment"),
-            ("defend-patch-validation", "DefensePatchCandidate"),
-            ("defend-patch-review", "DefensePatchValidation"),
-            ("defend-patch-security-review", "DefensePatchReview"),
         ] {
             let source = manifest
                 .expect
@@ -3405,6 +3154,25 @@ mod tests {
             assert_eq!(source.collection, collection);
             assert_eq!(source.correlation_field, "run_id");
             assert_eq!(source.expected_count_field, "expected_total");
+        }
+
+        for (trigger, status) in [
+            ("defend-patch", "ready"),
+            ("defend-patch-skip", "skipped"),
+            ("defend-patch-validation", "ready"),
+            ("defend-patch-review", "ready"),
+            ("defend-patch-security-review", "ready"),
+        ] {
+            let source = manifest
+                .expect
+                .trigger_request_count_sources
+                .get(trigger)
+                .unwrap_or_else(|| panic!("{trigger} should have a filtered source"));
+            assert_eq!(source.collection, "DefensePatchAssignment");
+            assert_eq!(source.correlation_field, "run_id");
+            assert!(source.expected_count_field.is_empty());
+            assert_eq!(source.match_field.as_deref(), Some("status"));
+            assert_eq!(source.match_value.as_deref(), Some(status));
         }
 
         let fan_in = manifest.expect.fan_in.as_ref().expect("fan-in contract");
@@ -3439,7 +3207,7 @@ mod tests {
             ),
             (
                 "defend-patch-validation",
-                "DefensePatchCandidate",
+                "WorkspaceReceipt",
                 "per_document",
             ),
             (
@@ -3637,10 +3405,10 @@ mod tests {
                 .get("fields")
                 .and_then(Value::as_array)
                 .is_some_and(|fields| fields.iter().any(|field| {
-                    field.get("name").and_then(Value::as_str) == Some("reason")
+                    field.get("name").and_then(Value::as_str) == Some("status")
                         && field.get("required").and_then(Value::as_bool) == Some(true)
                 })),
-            "verification completions must durably explain blocked handoffs"
+            "verification completions must durably classify blocked handoffs"
         );
         let verdict_write = verifier_surface
             .get("entries")
@@ -4028,16 +3796,16 @@ mod tests {
             (
                 "defend-patch-task",
                 "defend-patch-io",
-                "DefensePatchAssignment",
-                "{{ doc.assignment_id }}",
-                "read_defense_patch_assignment",
+                "CallbackResult",
+                "{{ doc.work_unit_id }}",
+                "read_callback_result",
             ),
             (
                 "defend-patch-validation-task",
                 "defend-patch-validation-writes",
-                "DefensePatchCandidate",
-                "{{ doc.diff }}",
-                "read_defense_patch_candidate",
+                "WorkspaceReceipt",
+                "{{ doc.seal_hash }}",
+                "read_workspace_receipt",
             ),
             (
                 "defend-patch-review-task",

@@ -37,7 +37,7 @@ make maintain MAINTENANCE_AREAS=7 MAINTENANCE_HISTORY_DEPTH=400
 make maintain MAINTENANCE_KEEP_HOME=1 MAINTENANCE_JOB_ID=cleanup-2026-08
 ```
 
-`MAINTENANCE_ROOT` defaults to the current repository and is the operator tool ceiling. The runtime places the isolated worktree under that ceiling; execute does not `cd` into a sibling the model created. `MAINTENANCE_HEAD` defaults to `HEAD` and `MAINTENANCE_PR_BASE` to `main`. History identifies prior cleanup patterns and avoids reopening merged work; it does not restrict findings to a diff. Automatic runs use 5-10 areas. The usual provider/profile controls mirror `make review` with a `MAINTENANCE_` prefix.
+`MAINTENANCE_ROOT` defaults to the current repository and is the operator tool ceiling. The runtime places the isolated worktree under that ceiling; execute does not `cd` into a sibling the model created. `MAINTENANCE_HEAD` defaults to `HEAD` and `MAINTENANCE_PR_BASE` to `main`. History identifies prior cleanup patterns and avoids reopening merged work; it does not restrict findings to a diff. Automatic runs use 5-10 areas. Provider/profile controls use a `MAINTENANCE_` prefix.
 
 Every run lands under `demo/repo-maintenance/runs/<job-id>/`. `results.json` contains the report, confirmed findings, commit plan, execution ledger, and terminal PR status. A zero-finding run emits one no-safe-work sentinel, provisions no IsolatedWorkspace, and records skipped execution/PR documents without opening a GitHub PR. `green` means the final review has no confirmed findings and every required GitHub check succeeded; all other terminal states retain exact evidence.
 

@@ -1,9 +1,0 @@
-{
-  "task_id": "review-scan-task",
-  "name": "Scan one review area",
-  "description": null,
-  "behavior_id": "review-scan",
-  "prompt_template": "./prompt.md",
-  "enabled": true,
-  "output_schema_ref": null
-}
