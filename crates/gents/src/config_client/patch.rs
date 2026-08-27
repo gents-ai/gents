@@ -22,7 +22,10 @@ use serde_json::{Map, Value};
 use crate::graphql::escape_graphql_string;
 use gents_protocol::graphql::{extract_mutation_doc_id, graphql_input_literal};
 
-use super::ConfigApplyTxn;
+use super::{
+    common::{sanitize_create_input, sanitize_update_input},
+    ConfigApplyTxn,
+};
 
 /// Write targets of the self-config surface. The `automation` tool category
 /// spans `Task`/`Schedule`/`EventTrigger`; targets are per collection.
@@ -633,12 +636,12 @@ pub async fn update_doc_fields_in_txn(
             continue;
         }
         let value = merged.get(field).cloned().unwrap_or(Value::Null);
-        input.insert(field.clone(), sanitize_written_value(value));
+        input.insert(field.clone(), value);
     }
     if input.is_empty() {
         return Ok(doc_id.to_string());
     }
-    let input_literal = graphql_input_literal(&Value::Object(input))?;
+    let input_literal = graphql_input_literal(&sanitize_update_input(&Value::Object(input)))?;
     let mutation = format!(
         r#"mutation {{
             update_{collection}(docID: "{doc_id}", input: {input_literal}) {{ _docID }}
@@ -659,15 +662,9 @@ pub async fn create_doc_in_txn(
     let collection = target.collection_name();
     let mut input = Map::new();
     for (field, value) in merged {
-        if value.is_null() {
-            continue;
-        }
-        if matches!(value, Value::Array(items) if items.is_empty()) {
-            continue;
-        }
         input.insert(field.clone(), value.clone());
     }
-    let input_literal = graphql_input_literal(&Value::Object(input))?;
+    let input_literal = graphql_input_literal(&sanitize_create_input(&Value::Object(input)))?;
     let mutation = format!(
         r#"mutation {{
             create_{collection}(input: {input_literal}) {{ _docID }}
@@ -675,15 +672,6 @@ pub async fn create_doc_in_txn(
     );
     let response = txn.execute(&mutation).await?;
     extract_mutation_doc_id(&response, collection)
-}
-
-/// Empty list values become `null` on update — an empty list literal types as
-/// `JsonArray` in DefraDB and corrupts nillable array columns.
-fn sanitize_written_value(value: Value) -> Value {
-    match value {
-        Value::Array(items) if items.is_empty() => Value::Null,
-        other => other,
-    }
 }
 
 #[cfg(test)]
@@ -769,8 +757,17 @@ mod tests {
 
     #[test]
     fn empty_list_writes_sanitize_to_null() {
-        assert_eq!(sanitize_written_value(json!([])), Value::Null);
-        assert_eq!(sanitize_written_value(json!(["a"])), json!(["a"]));
-        assert_eq!(sanitize_written_value(json!("x")), json!("x"));
+        assert_eq!(
+            sanitize_update_input(&json!({ "field": [] })),
+            json!({ "field": null })
+        );
+        assert_eq!(
+            sanitize_update_input(&json!({ "field": ["a"] })),
+            json!({ "field": ["a"] })
+        );
+        assert_eq!(
+            sanitize_update_input(&json!({ "field": "x" })),
+            json!({ "field": "x" })
+        );
     }
 }

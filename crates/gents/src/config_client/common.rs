@@ -173,10 +173,45 @@ pub fn mint_recreate_identity(add_doc: &serde_json::Value) -> serde_json::Value 
     doc
 }
 
+/// DefraDB cannot type an empty GraphQL list literal for nillable array
+/// columns. Create inputs omit those fields; update inputs use `null` to clear
+/// them. Every config writer that starts from JSON shares these transforms.
+pub(crate) fn sanitize_create_input(value: &Value) -> Value {
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|_, value| {
+            !value.is_null() && !matches!(value, Value::Array(items) if items.is_empty())
+        });
+    }
+    value
+}
+
+pub(crate) fn sanitize_update_input(value: &Value) -> Value {
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        for value in object.values_mut() {
+            if matches!(value, Value::Array(items) if items.is_empty()) {
+                *value = Value::Null;
+            }
+        }
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn defra_json_inputs_never_emit_empty_array_literals() {
+        let input = json!({ "keep": ["value"], "empty": [], "nil": null });
+        assert_eq!(sanitize_create_input(&input), json!({ "keep": ["value"] }));
+        assert_eq!(
+            sanitize_update_input(&input),
+            json!({ "keep": ["value"], "empty": null, "nil": null })
+        );
+    }
 
     #[test]
     fn recreate_identity_preserves_content_and_stamps_updated_at() {

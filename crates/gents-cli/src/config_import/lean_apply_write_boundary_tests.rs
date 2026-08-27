@@ -700,6 +700,14 @@ fn aliased_mutation_response(query: &str) -> Value {
         let alias = capture[1].to_string();
         data.insert(alias.clone(), json!({ "_docID": format!("{alias}-id") }));
     }
+    if data.is_empty() {
+        let field_re = Regex::new(r"\b((?:add|create|update|upsert)_[A-Za-z]+)\s*\(")
+            .expect("mutation field regex");
+        for capture in field_re.captures_iter(query) {
+            let field = capture[1].to_string();
+            data.insert(field.clone(), json!({ "_docID": format!("{field}-id") }));
+        }
+    }
     Value::Object(data)
 }
 

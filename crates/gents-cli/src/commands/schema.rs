@@ -268,13 +268,10 @@ async fn apply_sdl_file(access: &ConfigAccess, path: &Path) -> Result<SchemaAppl
         );
     }
 
-    match access {
-        ConfigAccess::Graphql(endpoint) => post_schema_http(endpoint, &sdl).await?,
-        ConfigAccess::Local(node) => node
-            .add_schema(&sdl)
-            .await
-            .with_context(|| format!("adding schema {}", path.display()))?,
-    }
+    access
+        .add_schema(&sdl)
+        .await
+        .with_context(|| format!("adding schema {}", path.display()))?;
 
     Ok(SchemaApplyFileResult {
         path: path.display().to_string(),
@@ -358,51 +355,17 @@ async fn existing_collections(
 }
 
 async fn collection_exists(access: &ConfigAccess, collection: &str) -> Result<bool> {
-    match access {
-        ConfigAccess::Local(node) => Ok(node.get_collection(collection)?.is_some()),
-        ConfigAccess::Graphql(endpoint) => {
-            let api_base = graphql_api_base(endpoint)?;
-            let client = schema_http_client()?;
-            let response: Value = http_get_json(
-                &client,
-                &format!("{api_base}/collections/{collection}/exists"),
-            )
-            .await?;
-            Ok(response
-                .get("exists")
-                .and_then(Value::as_bool)
-                .unwrap_or(false))
-        }
-    }
+    Ok(access.collection_fields(collection).await?.is_some())
 }
 
 async fn collection_field_names(
     access: &ConfigAccess,
     collection: &str,
 ) -> Result<BTreeSet<String>> {
-    match access {
-        ConfigAccess::Local(node) => {
-            let collection = node
-                .get_collection(collection)?
-                .ok_or_else(|| anyhow::anyhow!("collection {collection} does not exist"))?;
-            Ok(collection
-                .fields
-                .into_iter()
-                .map(|field| field.name)
-                .collect())
-        }
-        ConfigAccess::Graphql(endpoint) => {
-            let describe = describe_collection_http(endpoint, collection).await?;
-            Ok(describe
-                .get("Fields")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|field| field.get("Name").and_then(Value::as_str))
-                .map(ToOwned::to_owned)
-                .collect())
-        }
-    }
+    access
+        .collection_fields(collection)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("collection {collection} does not exist"))
 }
 
 async fn current_collection_version(
@@ -509,20 +472,6 @@ fn filter_existing_field_adds(
         .map(|(_, op)| op.clone())
         .collect::<Vec<_>>();
     Ok((Value::Array(filtered), applied_fields, skipped_fields))
-}
-
-async fn post_schema_http(endpoint: &str, sdl: &str) -> Result<()> {
-    let api_base = graphql_api_base(endpoint)?;
-    let client = schema_http_client()?;
-    let url = format!("{api_base}/schema");
-    let response = client
-        .post(&url)
-        .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(sdl.to_string())
-        .send()
-        .await
-        .with_context(|| format!("posting schema SDL to {url}"))?;
-    ensure_success(response, "schema SDL", &url).await
 }
 
 async fn patch_collection_http(endpoint: &str, patch: &Value) -> Result<()> {
