@@ -72,6 +72,7 @@ export function desktopUpdateRefreshScope(
   responseOnly = false,
 ): DesktopUpdateRefreshScope {
   if (reason === "health") return "snapshot";
+  if (reason === "hydration") return selectedSessionId ? "session" : "snapshot";
   if (selectedSessionId && selectedTrackedRequestId) {
     if (reason === "store" && responseOnly) return "sessionDelta";
     return "sessionEvent";

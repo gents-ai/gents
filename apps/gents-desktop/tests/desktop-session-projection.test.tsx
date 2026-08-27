@@ -51,12 +51,15 @@ function session(
   };
 }
 
-function renderProjection(api: DesktopApiAdapter) {
+function renderProjection(
+  api: DesktopApiAdapter,
+  selectedSessionIdRef: { current: string | null } = { current: "session-1" },
+) {
   return renderHook(() =>
     useDesktopSessionProjection({
       api,
       selectedAgentDidRef: { current: "did:key:test" },
-      selectedSessionIdRef: { current: "session-1" },
+      selectedSessionIdRef,
       selectedTrackedRequestIdRef: { current: "request-1" },
       setError: vi.fn(),
     }),
@@ -218,5 +221,60 @@ describe("useDesktopSessionProjection", () => {
     expect(result.current.session?.timelineItems.at(-1)).toMatchObject({
       content: "hello world",
     });
+  });
+
+  it("drops a delayed snapshot after the selected session changes", async () => {
+    let release!: (value: DesktopSessionSnapshot) => void;
+    const delayed = new Promise<DesktopSessionSnapshot>((resolve) => {
+      release = resolve;
+    });
+    const other = session(["other"], {
+      totalItems: 1,
+      totalItemsExact: true,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "other",
+      newestItemKey: "other",
+    });
+    other.sessionId = "session-2";
+    const fetchSessionSnapshot = vi.fn().mockImplementation((sessionId: string) => {
+      if (sessionId === "session-1") return delayed;
+      return Promise.resolve(other);
+    });
+    const selectedSessionIdRef = { current: "session-1" };
+    const { result } = renderProjection(
+      { fetchSessionSnapshot } as unknown as DesktopApiAdapter,
+      selectedSessionIdRef,
+    );
+
+    let first: Promise<DesktopSessionSnapshot | null>;
+    await act(async () => {
+      first = result.current.refreshSession("session-1");
+    });
+    selectedSessionIdRef.current = "session-2";
+    await act(async () => {
+      await result.current.refreshSession("session-2");
+    });
+    expect(result.current.session?.sessionId).toBe("session-2");
+    expect(result.current.session?.timelineItems[0]?.itemKey).toBe("other");
+
+    const stale = session(["stale"], {
+      totalItems: 1,
+      totalItemsExact: true,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "stale",
+      newestItemKey: "stale",
+    });
+    await act(async () => {
+      release(stale);
+      await first!;
+    });
+    expect(result.current.session?.sessionId).toBe("session-2");
+    expect(result.current.session?.timelineItems.map((item) => item.itemKey)).toEqual([
+      "other",
+    ]);
   });
 });

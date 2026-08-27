@@ -1,0 +1,67 @@
+@layer chat {
+  .session-hydration-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    margin: 0 var(--space-4);
+    padding: 0.45rem 0.7rem;
+    border: 1px solid var(--border-default);
+    border-left-width: 3px;
+    background: rgb(var(--color-surface-row-rgb) / 0.72);
+    color: var(--color-text-soft);
+    font-size: var(--text-sm);
+    letter-spacing: 0.01em;
+  }
+
+  .session-hydration-status.is-requested,
+  .session-hydration-status.is-serving {
+    border-left-color: var(--color-info);
+  }
+
+  .session-hydration-status.is-complete {
+    border-left-color: var(--color-accent);
+    color: var(--color-text-warm);
+  }
+
+  .session-hydration-status.is-failed {
+    border-left-color: var(--color-error-strong);
+    background: rgb(var(--color-error-deep-rgb) / 0.55);
+    color: var(--color-error-soft);
+  }
+
+  .session-hydration-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+  }
+
+  .session-hydration-pulse {
+    width: 0.55rem;
+    height: 0.55rem;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: var(--color-info);
+    animation: session-hydration-pulse var(--motion-pulse) ease-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .session-hydration-pulse {
+      animation: none;
+    }
+  }
+
+  @keyframes session-hydration-pulse {
+    50% {
+      opacity: 0.2;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .session-hydration-status {
+      margin: 0 var(--space-3);
+      padding: 0.4rem 0.55rem;
+    }
+  }
+}
