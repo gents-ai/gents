@@ -36,7 +36,7 @@ describe("createDesktopStore", () => {
         },
         desktop_bridge_contract: () => ({
           contractVersion: "0.7",
-          packageVersion: "0.13.0",
+          packageVersion: "0.14.0",
           events: [],
           eventReasons: [],
           errorCodes: [],
@@ -66,7 +66,7 @@ describe("createDesktopStore", () => {
         desktop_client_start: () => ({}),
         desktop_bridge_contract: () => ({
           contractVersion: "0.7",
-          packageVersion: "0.13.0",
+          packageVersion: "0.14.0",
           events: [],
           eventReasons: [],
           errorCodes: [],

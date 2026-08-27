@@ -1,6 +1,6 @@
 {
   "name": "@source-inc/gents-desktop-ui",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "license": "Apache-2.0",
   "description": "Shared accessible UI primitives for Gents desktop surfaces",
   "type": "module",
@@ -25,12 +25,12 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@source-inc/gents-desktop-tokens": "0.13.0",
+    "@source-inc/gents-desktop-tokens": "0.14.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@source-inc/gents-desktop-tokens": "0.13.0",
+    "@source-inc/gents-desktop-tokens": "0.14.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.3.0",
     "@types/react": "^19.1.8",

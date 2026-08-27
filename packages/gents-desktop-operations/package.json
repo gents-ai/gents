@@ -1,6 +1,6 @@
 {
   "name": "@source-inc/gents-desktop-operations",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "license": "Apache-2.0",
   "description": "Focused holds, health, trace, and workspace surfaces for Gents desktop",
   "type": "module",
@@ -29,14 +29,14 @@
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "@source-inc/gents-desktop-client": "0.13.0",
-    "@source-inc/gents-desktop-tokens": "0.13.0",
-    "@source-inc/gents-desktop-ui": "0.13.0"
+    "@source-inc/gents-desktop-client": "0.14.0",
+    "@source-inc/gents-desktop-tokens": "0.14.0",
+    "@source-inc/gents-desktop-ui": "0.14.0"
   },
   "devDependencies": {
-    "@source-inc/gents-desktop-client": "0.13.0",
-    "@source-inc/gents-desktop-tokens": "0.13.0",
-    "@source-inc/gents-desktop-ui": "0.13.0",
+    "@source-inc/gents-desktop-client": "0.14.0",
+    "@source-inc/gents-desktop-tokens": "0.14.0",
+    "@source-inc/gents-desktop-ui": "0.14.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "react": "^19.1.0",

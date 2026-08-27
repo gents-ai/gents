@@ -6,6 +6,53 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.14.0 - 2026-08-28
+
+### Bridge contract
+
+- Advance the Rust and npm desktop package train together to 0.14.0 and the
+  additive desktop bridge contract from 1.3 to 1.5.
+- Add owner-scoped mailbox commands plus truthful session hydration and
+  global sync-health projections, including explicit progress, stalled, and
+  schema-skew evidence for mobile clients (#1205, #1248-#1252).
+
+### Mobile and desktop
+
+- Move transcript projection into bounded database queries and preserve
+  request-owned session hydration across reconnects and app backgrounding
+  (#1212, #1248-#1252).
+- Bind iOS bearer readiness and issuer records to stable endpoint identity,
+  and harden the native readiness acceptance harness (#1235-#1237).
+- Publish a development-signed arm64 iOS IPA for registered-device testing
+  alongside the CLI and desktop package artifacts.
+
+### Runtime, graphs, and CLI
+
+- Add the Lean-fenced graph execution contract, immutable graph runs, bundled
+  code-review package, and graph quickstart (#1225-#1230).
+- Share desired-state application through the runtime, lengthen long-running
+  agent deadlines, and reject liveness windows that cannot expire before the
+  request deadline (#1219, #1240, #1264).
+- Hydrate materialized `response show` output consistently with wait/chat and
+  scope Codex shim skill toggles to the bound agent (#1242, #1260).
+
+### Reliability and maintainability
+
+- Fail closed on occupied or ambiguous server ports, synchronize runtime and
+  bridge readiness on durable events, and route flaky fixture writes through
+  bounded transaction-conflict retry (#1243, #1253, #1254, #1257-#1259).
+- Split the Codex shim, owned completion loop, desired-state validator, bearer
+  pairing, and P2P reconciliation into domain-focused production and test
+  modules while preserving their public and observability contracts.
+- Retire stale Operations-drawer journeys and replace blind background-tool
+  polling with event-backed terminal-state diagnostics (#1241, #1268).
+
+### Dependencies
+
+- Advance DefraDB to `81ff3cee`, including upstream schema relation/default,
+  query ordering/join, P2P replay-marker, filtered truncate, and embedded HTTP
+  schema-operation fixes.
+
 ## 0.13.0 - 2026-08-25
 
 ### Bridge contract
@@ -233,6 +280,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 | Tag        | Bridge crate | npm packages | contract_version | Notes                                         |
 | ---------- | ------------ | ------------ | ---------------- | --------------------------------------------- |
+| v0.14.0    | 0.14.0       | 0.14.0       | 1.5              | Mobile sync health, graph review, clarity refactors; DefraDB `81ff3cee` |
 | v0.13.0    | 0.13.0       | 0.13.0       | 1.3              | Hydration, bounded mobile transcripts, graph pipeline; DefraDB `54b629b1` |
 | v0.12.0    | 0.12.0       | 0.12.0       | 0.9              | Mobile pairing convergence; eager session index; DefraDB `f928b300` |
 | v0.11.0    | 0.11.0       | 0.11.0       | 0.9              | DefraDB v0.18.0; signed provenance and build metrics |
