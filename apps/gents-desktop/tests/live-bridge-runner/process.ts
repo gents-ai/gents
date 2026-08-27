@@ -4,6 +4,7 @@ import type { RunnerReadyMessage } from "./types";
 
 const RUNNER_STOP_GRACE_MS = 2_000;
 const RUNNER_KILL_DRAIN_MS = 2_000;
+const RUNNER_DISPOSE_GRACE_MS = 10_000;
 
 export async function waitForReadyMessage(
   child: ChildProcessWithoutNullStreams,
@@ -113,16 +114,11 @@ export async function terminateRunnerProcess(
     killDrainMs = RUNNER_KILL_DRAIN_MS,
   }: { graceMs?: number; killDrainMs?: number } = {},
 ) {
-  if (!child.stdin.destroyed && !child.stdin.writableEnded) {
-    child.stdin.end();
-  }
+  endRunnerStdin(child);
   child.stdout.resume();
   child.stderr.resume();
 
-  const processGroupId =
-    process.platform !== "win32" && Number.isInteger(child.pid) && child.pid! > 0
-      ? child.pid!
-      : null;
+  const processGroupId = runnerProcessGroupId(child);
   signalRunnerProcess(child, "SIGTERM", processGroupId);
   if (await waitForRunnerDrain(child, processGroupId, graceMs)) {
     return;
@@ -134,6 +130,29 @@ export async function terminateRunnerProcess(
       `bridge runner process${processGroupId === null ? "" : ` group ${processGroupId}`} did not exit after SIGKILL`,
     );
   }
+}
+
+export async function disposeRunnerProcess(
+  child: ChildProcessWithoutNullStreams,
+  gracefulExitMs = RUNNER_DISPOSE_GRACE_MS,
+) {
+  endRunnerStdin(child);
+  if (await waitForRunnerDrain(child, runnerProcessGroupId(child), gracefulExitMs)) {
+    return;
+  }
+  await terminateRunnerProcess(child);
+}
+
+function endRunnerStdin(child: ChildProcessWithoutNullStreams) {
+  if (!child.stdin.destroyed && !child.stdin.writableEnded) {
+    child.stdin.end();
+  }
+}
+
+function runnerProcessGroupId(child: ChildProcessWithoutNullStreams) {
+  return process.platform !== "win32" && Number.isInteger(child.pid) && child.pid! > 0
+    ? child.pid!
+    : null;
 }
 
 function signalRunnerProcess(

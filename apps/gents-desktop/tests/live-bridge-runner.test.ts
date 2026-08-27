@@ -8,6 +8,7 @@ import {
   type RequestDiagnosticsBundle,
 } from "./live-bridge-runner";
 import {
+  disposeRunnerProcess,
   terminateRunnerProcess,
   waitForReadyMessage,
 } from "./live-bridge-runner/process";
@@ -71,6 +72,59 @@ describe("live bridge runner process lifecycle", () => {
     expect(child.exitCode).toBeNull();
     expect(child.signalCode).toBeNull();
     await terminateRunnerProcess(child);
+  });
+
+  it("preserves graceful stdin disposal before terminating a stalled group", async () => {
+    const gracefulChild = spawnRunnerFixture(`
+      process.stdin.resume();
+      process.stdin.on("end", () => process.exit(0));
+      process.stdout.write(${JSON.stringify(
+        `${JSON.stringify({
+          kind: "ready",
+          baseUrl: "http://127.0.0.1:1234",
+          deploymentLabel: "graceful-fixture",
+          agentDid: "did:key:graceful-fixture",
+          toolRoot: "/tmp/graceful-fixture",
+        })}\n`,
+      )});
+    `);
+    await waitForReadyMessage(gracefulChild, 2_000);
+
+    await disposeRunnerProcess(gracefulChild, 500);
+
+    expect(gracefulChild.exitCode).toBe(0);
+    expect(gracefulChild.signalCode).toBeNull();
+
+    const stalledChild = spawnRunnerFixture(`
+      const { spawn } = require("node:child_process");
+      if (${process.platform !== "win32"}) {
+        spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+          stdio: "ignore",
+        });
+      }
+      process.stdin.resume();
+      process.stdout.write(${JSON.stringify(
+        `${JSON.stringify({
+          kind: "ready",
+          baseUrl: "http://127.0.0.1:1234",
+          deploymentLabel: "stalled-fixture",
+          agentDid: "did:key:stalled-fixture",
+          toolRoot: "/tmp/stalled-fixture",
+        })}\n`,
+      )});
+      setInterval(() => {}, 1_000);
+    `);
+    const stalledGroupId = stalledChild.pid;
+    await waitForReadyMessage(stalledChild, 2_000);
+
+    await disposeRunnerProcess(stalledChild, 50);
+
+    expect(stalledChild.exitCode !== null || stalledChild.signalCode !== null).toBe(
+      true,
+    );
+    if (process.platform !== "win32" && stalledGroupId !== undefined) {
+      expect(() => process.kill(-stalledGroupId, 0)).toThrow();
+    }
   });
 });
 
