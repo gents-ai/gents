@@ -379,8 +379,8 @@ pub fn spawn_backend_prober(
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use axum::{routing::get, Json, Router};
+    use tokio::sync::oneshot;
 
     use super::*;
     use crate::backend_registry::DEFAULT_MAX_QUEUE_DEPTH;
@@ -441,46 +441,41 @@ mod tests {
         }
     }
 
-    /// Minimal single-request /v1/models responder on a real socket. Health
-    /// probes here exercise the same `discover_models` HTTP path production
-    /// uses; dropping the listener yields a genuine connect-refused.
+    /// Minimal /v1/models responder on a real socket. Serving on the ambient
+    /// Tokio runtime keeps the probe client and responder under one scheduler;
+    /// an independently scheduled blocking thread made these tests flaky under
+    /// full-suite CPU contention (#743).
     struct ModelsListener {
         port: u16,
-        stop: Arc<std::sync::atomic::AtomicBool>,
-        handle: Option<std::thread::JoinHandle<()>>,
+        shutdown: Option<oneshot::Sender<()>>,
+        handle: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
     }
 
     impl ModelsListener {
         fn start() -> Self {
-            let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind models listener");
+            let listener =
+                std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind models listener");
+            listener
+                .set_nonblocking(true)
+                .expect("set models listener nonblocking");
             let port = listener.local_addr().expect("local addr").port();
-            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let stop_for_thread = stop.clone();
-            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
-            let handle = std::thread::spawn(move || {
-                ready_tx.send(()).expect("signal models listener ready");
-                loop {
-                    let Ok((mut stream, _)) = listener.accept() else {
-                        break;
-                    };
-                    if stop_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
-                        break;
-                    }
-                    let mut buffer = [0u8; 1024];
-                    let _ = stream.read(&mut buffer);
-                    let body = r#"{"data":[{"id":"test-model"}]}"#;
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    let _ = stream.write_all(response.as_bytes());
-                }
+            let listener =
+                tokio::net::TcpListener::from_std(listener).expect("build async models listener");
+            let app = Router::new().route(
+                "/v1/models",
+                get(|| async { Json(serde_json::json!({"data": [{"id": "test-model"}]})) }),
+            );
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let handle = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await
             });
-            ready_rx.recv().expect("models listener thread started");
             Self {
                 port,
-                stop,
+                shutdown: Some(shutdown_tx),
                 handle: Some(handle),
             }
         }
@@ -488,14 +483,24 @@ mod tests {
         fn endpoint(&self) -> String {
             format!("http://127.0.0.1:{}/v1", self.port)
         }
+
+        async fn shutdown(mut self) {
+            if let Some(shutdown) = self.shutdown.take() {
+                let _ = shutdown.send(());
+            }
+            if let Some(handle) = self.handle.take() {
+                handle
+                    .await
+                    .expect("join models listener task")
+                    .expect("serve models listener");
+            }
+        }
     }
 
     impl Drop for ModelsListener {
         fn drop(&mut self) {
-            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
-            if let Some(handle) = self.handle.take() {
-                let _ = handle.join();
+            if let Some(shutdown) = self.shutdown.take() {
+                let _ = shutdown.send(());
             }
         }
     }
@@ -520,10 +525,7 @@ mod tests {
     fn probe_options() -> BackendProberOptions {
         BackendProberOptions {
             probe_interval: Duration::from_millis(50),
-            // Match the production request budget. The local responder is
-            // immediate, but a two-second test-only timeout can expire before
-            // its thread is scheduled under the full parallel suite (#743).
-            probe_timeout: Duration::from_secs(10),
+            probe_timeout: Duration::from_secs(2),
             failure_threshold_k: 3,
         }
     }
@@ -551,7 +553,7 @@ mod tests {
 
         // Endpoint goes hard down (connect refused): the fleet-evidence
         // regime where probe_status stayed a stored constant for 16h.
-        drop(listener);
+        listener.shutdown().await;
         for cycle in 1..=3u32 {
             let cycle_now = Utc::now();
             let outcome =
