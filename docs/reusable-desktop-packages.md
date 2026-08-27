@@ -638,10 +638,12 @@ config}`. The coarse ping-then-refetch model is the contract; fine-grained
   bridge crate (module `e2e`) behind a **`native-e2e` cargo feature**. Cargo features
   are additive and cannot be tied to build profiles, so the gating is explicit, not
   automatic: the feature is never in `default`; the app crate forwards it
-  (`native-e2e = ["gents-desktop-bridge/native-e2e"]`); the E2E launchers
-  (`run-ios-simulator-e2e.mjs`, the live harness) pass `--features native-e2e` to
-  their build steps; release packaging builds without it, and a release gate asserts
-  the commands are absent. Compilation alone is not activation: the webview must
+  (`native-e2e = ["gents-desktop-bridge/native-e2e"]`); the iOS E2E launcher
+  (`run-ios-simulator-e2e.mjs`) passes `--features native-e2e` to its build step;
+  release packaging builds without it, and a release gate asserts the commands are
+  absent. The launcher also sets `VITE_GENTS_NATIVE_E2E=1` while
+  building the webview; ordinary builds never probe the test-only commands.
+  Compilation alone is not activation: the webview must
   also be _granted_ the plugin's `native-e2e` permission. That grant lives in an
   E2E-only capability file (`capabilities/native-e2e.json`) — and a pitfall makes
   explicit enumeration mandatory: when `app.security.capabilities` is omitted or
