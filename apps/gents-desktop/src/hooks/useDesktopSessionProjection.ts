@@ -67,9 +67,12 @@ export function useDesktopSessionProjection({
         selectedTrackedRequestIdRef.current,
         { limit: SESSION_TIMELINE_PAGE_SIZE },
       );
-      if (refreshSeq.current === currentRefresh) {
-        setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
-      }
+      const stillCurrent =
+        refreshSeq.current === currentRefresh &&
+        selectedSessionIdRef.current === nextSessionId &&
+        (!next || next.sessionId === nextSessionId);
+      if (!stillCurrent) return null;
+      setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
       return next;
     } catch (error) {
       if (refreshSeq.current === currentRefresh) setError(String(error));

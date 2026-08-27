@@ -20,6 +20,7 @@ import {
 } from "@source-inc/gents-desktop-chat";
 import { effectiveBehaviorSkills } from "@source-inc/gents-desktop-chat";
 import { HoldsPanel } from "@source-inc/gents-desktop-operations";
+import { SessionHydrationStatus } from "./SessionHydrationStatus";
 
 export type ChatWorkspaceProps = {
   api?: DesktopApiAdapter;
@@ -46,6 +47,7 @@ export type ChatWorkspaceProps = {
   onSend: (event: FormEvent) => void;
   onRetryMessage?: (requestId: string) => void | Promise<void>;
   onLoadOlderTimeline?: () => Promise<boolean>;
+  onRetryHydration?: () => void | Promise<unknown>;
   onOpenMobileNavigation?: () => void;
   onInterruptAccepted?: () => void | Promise<void>;
 };
@@ -98,6 +100,7 @@ export function ActiveChatWorkspace({
   onSend,
   onRetryMessage,
   onLoadOlderTimeline,
+  onRetryHydration,
   onOpenMobileNavigation,
   onInterruptAccepted,
 }: ActiveChatWorkspaceProps) {
@@ -187,6 +190,12 @@ export function ActiveChatWorkspace({
 
       <section className="chat-workspace">
         <div className="chat-main">
+          <SessionHydrationStatus
+            agentDid={session?.agentDid ?? selectedDeployment.agentDid}
+            hydration={session?.hydration}
+            onRetry={onRetryHydration}
+            sessionId={selectedSessionId}
+          />
           <ChatTranscriptPanel
             selectedSessionId={selectedSessionId}
             session={session}

@@ -33,6 +33,10 @@ describe("desktopUpdateRefreshScope", () => {
     );
     expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
     expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
+    expect(desktopUpdateRefreshScope("hydration", "session-1", "request-1")).toBe(
+      "session",
+    );
+    expect(desktopUpdateRefreshScope("hydration", null, null)).toBe("snapshot");
   });
 });
 
