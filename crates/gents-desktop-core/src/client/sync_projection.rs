@@ -75,6 +75,7 @@ pub fn project_sync_health(
     let mut route_retry_count = 0;
     let mut stalled_since = None;
     let mut last_error_class = None;
+    let mut last_error_class_at = None;
     let mut last_error = health.last_error.clone();
     let mut unauthorized = false;
     let mut unauthorized_since = None;
@@ -98,6 +99,7 @@ pub fn project_sync_health(
                 pairing.last_retry_error_class,
                 pairing.last_retry_at,
                 &mut last_error_class,
+                &mut last_error_class_at,
                 &mut unauthorized,
                 &mut unauthorized_since,
             );
@@ -113,6 +115,7 @@ pub fn project_sync_health(
                 route.last_retry_error_class,
                 route.last_retry_at,
                 &mut last_error_class,
+                &mut last_error_class_at,
                 &mut unauthorized,
                 &mut unauthorized_since,
             );
@@ -130,11 +133,14 @@ pub fn project_sync_health(
         hydration.phase,
         ClientHydrationPhase::Requested | ClientHydrationPhase::Serving
     );
-    let offline_since = offline_since(health, any_configured_peer);
+    let offline = is_offline(health, any_configured_peer);
+    let offline_since = offline
+        .then(|| health.last_failure_at.or(health.last_ok_at))
+        .flatten();
 
     let state = if unauthorized || hydration_failed {
         SyncHealthState::Failed
-    } else if offline_since.is_some() {
+    } else if offline {
         SyncHealthState::Offline
     } else if stalled_since.is_some() {
         SyncHealthState::Stalled
@@ -169,27 +175,19 @@ pub fn project_sync_health(
     }
 }
 
-fn offline_since(health: &P2PHealth, any_configured_peer: bool) -> Option<SystemTime> {
-    let offline = match health.status {
+fn is_offline(health: &P2PHealth, any_configured_peer: bool) -> bool {
+    match health.status {
         P2PHealthStatus::Wedged => true,
         P2PHealthStatus::Degraded => health.connected_peer_count == 0,
         P2PHealthStatus::Healthy => health.connected_peer_count == 0 && any_configured_peer,
-    };
-    if !offline {
-        return None;
     }
-    Some(
-        health
-            .last_failure_at
-            .or(health.last_ok_at)
-            .unwrap_or(SystemTime::UNIX_EPOCH),
-    )
 }
 
 fn record_error_class(
     class: Option<PairingErrorClass>,
     at: Option<SystemTime>,
     last_error_class: &mut Option<PairingErrorClass>,
+    last_error_class_at: &mut Option<SystemTime>,
     unauthorized: &mut bool,
     unauthorized_since: &mut Option<SystemTime>,
 ) {
@@ -199,8 +197,18 @@ fn record_error_class(
         *last_error_class = Some(PairingErrorClass::RemoteUnauthorized);
         return;
     }
-    if last_error_class.is_none() {
-        *last_error_class = class;
+    if *unauthorized {
+        return;
+    }
+    let Some(class) = class else {
+        return;
+    };
+    if last_error_class.is_none()
+        || matches!((at, *last_error_class_at), (Some(next), Some(current)) if next > current)
+        || (at.is_some() && last_error_class_at.is_none())
+    {
+        *last_error_class = Some(class);
+        *last_error_class_at = at;
     }
 }
 
@@ -679,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_since_falls_back_to_epoch_when_no_transport_timestamps() {
+    fn offline_without_transport_timestamps_does_not_invent_a_since_time() {
         let health = P2PHealth {
             status: P2PHealthStatus::Wedged,
             consecutive_failures: 3,
@@ -691,6 +699,32 @@ mod tests {
         };
         let projected = project_sync_health(&health, &[], &idle_hydration());
         assert_eq!(projected.state, SyncHealthState::Offline);
-        assert_eq!(projected.offline_since, Some(SystemTime::UNIX_EPOCH));
+        assert_eq!(projected.offline_since, None);
+        assert_eq!(projected.since, None);
+    }
+
+    #[test]
+    fn latest_retry_error_class_wins_independent_of_peer_order() {
+        let mut older = retrying_pairing(PairingErrorClass::RpcTimeout, 1);
+        older.last_retry_at = Some(t(10));
+        let mut newer = retrying_pairing(PairingErrorClass::LocalError, 1);
+        newer.last_retry_at = Some(t(20));
+        let mut first_peer = peer(vec![older], vec![], true);
+        first_peer.peer_id = "peer-a".into();
+        let mut second_peer = peer(vec![newer], vec![], true);
+        second_peer.peer_id = "peer-b".into();
+
+        let projected = project_sync_health(
+            &healthy_transport(),
+            &[first_peer, second_peer],
+            &idle_hydration(),
+        );
+
+        assert_eq!(projected.state, SyncHealthState::Syncing);
+        assert_eq!(projected.since, Some(t(20)));
+        assert_eq!(
+            projected.last_error_class,
+            Some(PairingErrorClass::LocalError)
+        );
     }
 }
