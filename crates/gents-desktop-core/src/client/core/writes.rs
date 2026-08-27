@@ -1548,7 +1548,8 @@ impl ClientCore {
         if !response.errors.is_empty() {
             anyhow::bail!("upsert SessionHydrationRequest: {:?}", response.errors);
         }
-        self.hydration.send_replace(
+        publish_hydration_progress(
+            &self.hydration,
             gents::agent::p2p_reconcile::session_hydration::begin_hydration_request(
                 &session_id,
                 &agent_did,
@@ -1572,7 +1573,8 @@ impl ClientCore {
         let (served, failed) =
             load_hydration_server_state(self.node.as_ref(), self.local_peer_id(), session_id)
                 .await?;
-        self.hydration.send_replace(
+        publish_hydration_progress(
+            &self.hydration,
             gents::agent::p2p_reconcile::session_hydration::observe_hydration_progress(
                 &self.hydration_progress(),
                 session_id,
@@ -1606,6 +1608,22 @@ impl ClientCore {
 struct HydrationDocIdRow {
     #[serde(rename = "_docID")]
     doc_id: Option<String>,
+}
+
+fn publish_hydration_progress(
+    sender: &tokio::sync::watch::Sender<
+        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+    >,
+    next: gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+) -> bool {
+    sender.send_if_modified(|current| {
+        if *current == next {
+            false
+        } else {
+            *current = next;
+            true
+        }
+    })
 }
 
 fn should_write_session_hydration_request(
@@ -1849,6 +1867,30 @@ mod delete_source_tests {
         }));
 
         assert_eq!(local_hydration_count_from_response(&response).unwrap(), 6);
+    }
+
+    #[test]
+    fn hydration_watch_notifies_only_when_progress_changes() {
+        use gents::agent::p2p_reconcile::session_hydration::{
+            ClientHydrationPhase, ClientHydrationProgress,
+        };
+
+        let serving = ClientHydrationProgress {
+            session_id: "session-1".into(),
+            agent_did: "did:agent".into(),
+            phase: ClientHydrationPhase::Serving,
+            merged_count: 3,
+            served_count: Some(8),
+        };
+        let (tx, mut rx) = tokio::sync::watch::channel(ClientHydrationProgress::default());
+        let _ = rx.borrow_and_update();
+
+        assert!(publish_hydration_progress(&tx, serving.clone()));
+        assert!(rx.has_changed().expect("hydration watch"));
+        let _ = rx.borrow_and_update();
+
+        assert!(!publish_hydration_progress(&tx, serving));
+        assert!(!rx.has_changed().expect("hydration watch"));
     }
 
     #[test]

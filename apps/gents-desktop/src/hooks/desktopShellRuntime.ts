@@ -72,7 +72,8 @@ export function desktopUpdateRefreshScope(
   responseOnly = false,
 ): DesktopUpdateRefreshScope {
   if (reason === "health") return "snapshot";
-  if (reason === "hydration") return selectedSessionId ? "session" : "snapshot";
+  // Hydration progress also drives global syncHealth on the runtime snapshot.
+  if (reason === "hydration") return selectedSessionId ? "full" : "snapshot";
   if (selectedSessionId && selectedTrackedRequestId) {
     if (reason === "store" && responseOnly) return "sessionDelta";
     return "sessionEvent";

@@ -10,7 +10,11 @@ export type HarnessScenario =
   | "long-content"
   | "active-turn"
   | "cascade-turn"
-  | "coding";
+  | "coding"
+  | "session-hydration"
+  | "sync-offline"
+  | "sync-stalled"
+  | "sync-failed";
 
 export const PEER_ID = "peer-bombadil-local";
 
