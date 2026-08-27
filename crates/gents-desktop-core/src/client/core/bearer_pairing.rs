@@ -378,14 +378,14 @@ async fn verify_bearer_pairing_ready_row(
         .into_vec()
         .context("decoding the bearer readiness signature")?,
     };
+    // Iroh tickets include a mutable route set; node_id is the stable endpoint identity.
     if record.issuer_did != issuer_did
         || record.claimant_did != claimant_did
         || record.peer_id != local_endpoint.node_id
-        || record.address != local_endpoint.address
         || record.template != expected_template
     {
         bail!(
-            "bearer readiness acknowledgement does not match issuer, claimant, or the current signed endpoint; pairing rejected"
+            "bearer readiness acknowledgement does not match issuer, claimant, or endpoint identity; pairing rejected"
         );
     }
     match identity
@@ -1123,7 +1123,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn readiness_acknowledgement_is_bound_to_current_endpoint() {
+    async fn readiness_acknowledgement_is_bound_to_stable_endpoint_identity() {
         let now = Utc::now();
         let (_temp, identity, _encoded) = signed_token(now).await;
         let endpoint = EndpointRecord {
@@ -1187,9 +1187,9 @@ mod tests {
         .await
         .expect("valid machine readiness acknowledgement");
 
-        let mut rotated_endpoint = endpoint;
+        let mut rotated_endpoint = endpoint.clone();
         rotated_endpoint.address = "rotated-ticket".into();
-        let error = verify_bearer_pairing_ready_row(
+        verify_bearer_pairing_ready_row(
             &identity,
             identity.did(),
             &rotated_endpoint.did,
@@ -1198,8 +1198,21 @@ mod tests {
             &row,
         )
         .await
-        .expect_err("stale endpoint acknowledgement");
-        assert!(error.to_string().contains("current signed endpoint"));
+        .expect("route-set rotation preserves the signed Iroh endpoint identity");
+
+        let mut different_endpoint = endpoint;
+        different_endpoint.node_id = "different-phone-node".into();
+        let error = verify_bearer_pairing_ready_row(
+            &identity,
+            identity.did(),
+            &different_endpoint.did,
+            "conversation",
+            &different_endpoint,
+            &row,
+        )
+        .await
+        .expect_err("readiness for another Iroh endpoint identity");
+        assert!(error.to_string().contains("endpoint identity"));
     }
 
     #[test]

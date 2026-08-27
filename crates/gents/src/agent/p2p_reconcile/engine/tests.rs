@@ -221,6 +221,20 @@ fn merge_desired_unions_control_and_data_plane_state() {
 }
 
 #[test]
+fn signed_data_plane_route_supersedes_the_bearer_bootstrap_route() {
+    let control = bearer_desired(
+        "network-control",
+        "did:key:claimant",
+        "peer-a@127.0.0.1:4100",
+    );
+    let data = bearer_desired("conversation", "did:key:claimant", "peer-a@127.0.0.1:4200");
+
+    let merged = merge_desired(Some(control), Some(data)).expect("merged desired");
+
+    assert_eq!(merged.replicator_addresses, set(&["peer-a@127.0.0.1:4200"]));
+}
+
+#[test]
 fn data_plane_only_desired_is_replicator_only() {
     let data = PairingDesired {
         collections: set(&["AgentRequest"]),
