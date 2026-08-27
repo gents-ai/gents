@@ -43,8 +43,7 @@
     flex: 0 0 auto;
     border-radius: 999px;
     background: var(--color-info);
-    box-shadow: 0 0 0 0 rgb(var(--color-info-rgb) / 0.45);
-    animation: session-hydration-pulse 1.4s ease-out infinite;
+    animation: session-hydration-pulse var(--motion-pulse) ease-out infinite;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -54,11 +53,8 @@
   }
 
   @keyframes session-hydration-pulse {
-    0% {
-      box-shadow: 0 0 0 0 rgb(var(--color-info-rgb) / 0.4);
-    }
-    100% {
-      box-shadow: 0 0 0 0.55rem rgb(var(--color-info-rgb) / 0);
+    50% {
+      opacity: 0.2;
     }
   }
 
