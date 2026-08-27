@@ -22,8 +22,11 @@ pub const MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
 /// Most file paths rendered per list in the formatted compaction summary.
 pub const DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 100;
 pub const MAX_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 1_000;
+/// Maximum provider-stream silence before treating the connection as dead.
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 1_800;
-pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 1_800;
+/// Overall wall-clock budget for a claimed request. Long-running goals may
+/// legitimately work for many hours while continuing to emit model/tool data.
+pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
 /// Runtime configuration for one loaded behavior executor.
@@ -367,6 +370,11 @@ mod tests {
     #[test]
     fn default_max_turns_supports_long_running_agents() {
         assert_eq!(DEFAULT_MAX_TURNS, 250);
+    }
+
+    #[test]
+    fn default_request_deadline_supports_long_running_agents() {
+        assert_eq!(DEFAULT_DEADLINE_DURATION_SECS, 86_400);
     }
 
     #[test]
