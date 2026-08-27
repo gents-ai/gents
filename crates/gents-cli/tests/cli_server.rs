@@ -1233,14 +1233,17 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
     let backend_id = generated_backend_id_for_agent(&agent_did);
     let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
 
-    let mut serve = spawn_server_with_env(
+    let (_serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         port,
         &[],
         &[("GENTS_TEST_CLI_BACKEND_KEY", "backend-key")],
     )?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    assert_eq!(
+        readiness.get("graphql").and_then(Value::as_str),
+        Some(graphql.as_str()),
+        "serving payload must identify the allocated GraphQL endpoint"
+    );
 
     assert_runtime_init_state(
         &graphql,
