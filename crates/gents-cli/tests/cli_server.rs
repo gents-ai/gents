@@ -126,6 +126,48 @@ fn count_inference_calls(rows: &[Value], behavior_id: Option<&str>, call_state: 
         .count() as i64
 }
 
+fn wait_for_server_exit(
+    serve: &mut ServeProcess,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = serve.child.try_wait().context("checking server exit")? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            let (stdout, stderr) = serve.captured_output()?;
+            return Err(anyhow!(
+                "server did not exit within {timeout:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let mut serve = spawn_server(&home_dir, 0)?;
+    let status = wait_for_server_exit(&mut serve, Duration::from_secs(5))?;
+    let (stdout, stderr) = serve.captured_output()?;
+
+    assert!(!status.success(), "server unexpectedly exited successfully");
+    assert!(
+        !stdout.contains("\"status\": \"serving\""),
+        "server published readiness for an unknowable ephemeral port:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("--http-port 0 is not supported")
+            && stderr.contains("choose an explicit non-zero port"),
+        "missing actionable ephemeral-port diagnostic:\n{stderr}"
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -150,19 +192,7 @@ async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
         std::net::TcpListener::bind(("127.0.0.1", 0)).context("reserving occupied HTTP port")?;
     let port = listener.local_addr()?.port();
     let mut serve = spawn_server(&home_dir, port)?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        if let Some(status) = serve.child.try_wait().context("checking server exit")? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let (stdout, stderr) = serve.captured_output()?;
-            return Err(anyhow!(
-                "server did not fail after its HTTP bind was rejected\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let status = wait_for_server_exit(&mut serve, Duration::from_secs(10))?;
     let (stdout, stderr) = serve.captured_output()?;
 
     assert!(!status.success(), "server unexpectedly exited successfully");

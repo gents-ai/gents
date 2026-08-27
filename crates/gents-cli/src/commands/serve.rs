@@ -401,6 +401,12 @@ pub(crate) async fn serve_with_control(
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     let http_addr = SocketAddr::new(args.http_addr, args.http_port);
+    if args.http_port == 0 {
+        anyhow::bail!(
+            "--http-port 0 is not supported: the embedded HTTP server does not expose its \
+             ephemeral bound port; choose an explicit non-zero port"
+        );
+    }
     let graphql_url = format!(
         "http://{}:{}/api/v0/graphql",
         display_host(args.http_addr),
@@ -1222,6 +1228,32 @@ mod shim_host_tests {
     fn ipv6_shim_hosts_are_bracketed() {
         assert_eq!(display_shim_host("::1".parse().unwrap()), "[::1]");
         assert_eq!(display_shim_host("127.0.0.1".parse().unwrap()), "127.0.0.1");
+    }
+
+    #[tokio::test]
+    async fn embedded_http_probe_rejects_an_unrelated_listener() {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind unrelated listener");
+        let addr = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/probe", get(|| async { "wrong-instance" })),
+            )
+            .await
+        });
+
+        let error = wait_for_embedded_http_bind(addr, "/probe", "expected-instance")
+            .await
+            .expect_err("unrelated listener must not satisfy readiness");
+        assert!(
+            error.to_string().contains("another service may own"),
+            "unexpected diagnostic: {error:#}"
+        );
+
+        server.abort();
+        let _ = server.await;
     }
 
     #[test]
