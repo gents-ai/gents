@@ -5446,6 +5446,27 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         added.get("skill_id").and_then(Value::as_str),
         Some("research")
     );
+    let foreign_agent_did = "did:key:zForeignSkillOwner";
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            foreign_agent_did,
+            "--skill-id",
+            "foreign-skill",
+            "--scope",
+            "principal",
+            "--name",
+            "Foreign",
+            "--instructions",
+            "Must remain enabled.",
+        ],
+    )?;
 
     let (mut ws, _) = serve
         .capturing(async {
@@ -5495,6 +5516,44 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         codex::ClientRequest::SkillsConfigWrite {
             request_id: request_id(3),
             params: codex::SkillsConfigWriteParams {
+                path: Some(std::path::PathBuf::from("/gents/skills/foreign-skill").try_into()?),
+                name: None,
+                enabled: false,
+            },
+        },
+    )
+    .await?;
+    let error = read_error_response(&mut ws, request_id(3)).await?;
+    assert!(
+        error
+            .message
+            .contains("no skill \"foreign-skill\" belongs to bound agent"),
+        "unexpected cross-agent toggle error: {}",
+        error.message
+    );
+    let foreign = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "show",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "foreign-skill",
+        ],
+    )?;
+    assert_eq!(
+        foreign.get("agent_did").and_then(Value::as_str),
+        Some(foreign_agent_did)
+    );
+    assert_eq!(foreign.get("enabled").and_then(Value::as_bool), Some(true));
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::SkillsConfigWrite {
+            request_id: request_id(4),
+            params: codex::SkillsConfigWriteParams {
                 path: None,
                 name: Some("Research".to_string()),
                 enabled: false,
@@ -5503,7 +5562,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     )
     .await?;
     let write: codex::SkillsConfigWriteResponse =
-        read_typed_response(&mut ws, request_id(3)).await?;
+        read_typed_response(&mut ws, request_id(4)).await?;
     assert!(
         !write.effective_enabled,
         "config write should report disabled"
@@ -5512,12 +5571,12 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     send_client_request(
         &mut ws,
         codex::ClientRequest::SkillsList {
-            request_id: request_id(4),
+            request_id: request_id(5),
             params: codex::SkillsListParams::default(),
         },
     )
     .await?;
-    let list: codex::SkillsListResponse = read_typed_response(&mut ws, request_id(4)).await?;
+    let list: codex::SkillsListResponse = read_typed_response(&mut ws, request_id(5)).await?;
     let research = list
         .data
         .iter()

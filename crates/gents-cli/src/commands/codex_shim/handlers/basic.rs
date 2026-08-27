@@ -16,6 +16,7 @@ use super::super::protocol::{
 use super::super::store::{execute_committed, query_node_json};
 use super::super::{Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
+use crate::extract_mutation_doc_id;
 use gents::graphql::escape_graphql_string;
 
 pub(super) async fn handle_basic_request(
@@ -319,20 +320,39 @@ pub(super) async fn handle_skills_config_write(
             .await;
         }
     };
+    let agent_did = escape_graphql_string(&state.agent_did);
     let mutation = format!(
         r#"mutation {{ update_Skill(
-            filter: {{ skill_id: {{ _eq: "{skill_id}" }} }},
+            filter: {{
+                skill_id: {{ _eq: "{skill_id}" }},
+                agent_did: {{ _eq: "{agent_did}" }}
+            }},
             input: {{ enabled: {enabled} }}
         ) {{ _docID }} }}"#,
         skill_id = escape_graphql_string(&skill_id),
         enabled = params.enabled,
     );
-    if let Err(error) = execute_committed(state.node.as_ref(), &mutation).await {
+    let response = match execute_committed(state.node.as_ref(), &mutation).await {
+        Ok(response) => response,
+        Err(error) => {
+            return send_error(
+                outbound,
+                request_id,
+                JSONRPC_INVALID_PARAMS,
+                format!("failed to update skill {skill_id}: {error}"),
+            )
+            .await;
+        }
+    };
+    if extract_mutation_doc_id(&response, "Skill").is_err() {
         return send_error(
             outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
-            format!("failed to update skill {skill_id}: {error}"),
+            format!(
+                "no skill {skill_id:?} belongs to bound agent {:?}",
+                state.agent_did
+            ),
         )
         .await;
     }
