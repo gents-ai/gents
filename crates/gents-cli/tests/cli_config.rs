@@ -20,6 +20,8 @@ mod cli_config_behavior_persona;
 mod cli_config_crud;
 #[path = "suites/cli_config_read.rs"]
 mod cli_config_read;
+#[path = "suites/cli_config_skills.rs"]
+mod cli_config_skills;
 #[path = "suites/cli_config_task_run.rs"]
 mod cli_config_task_run;
 #[path = "suites/cli_config_tools.rs"]

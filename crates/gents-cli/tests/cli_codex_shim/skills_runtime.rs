@@ -145,14 +145,8 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     Ok(())
 }
 
-/// End-to-end proof that a Codex-shim-driven `skills/config/write` disable
-/// reconciles a RUNNING agent without a restart (#340): the shim commits the
-/// toggle in a transaction, the COMMIT wakes the control watcher, the runtime
-/// fingerprint changes (skills now contribute to `AgentBehavior`'s Debug), the
-/// generation bumps, and the disabled skill's catalog entry stops reaching the
-/// model on the next turn. This closes the gap where the shim's enable/disable
-/// used an auto-committed mutation (no `Update` event) and only took effect on
-/// restart.
+/// A committed `skills/config/write` toggle wakes reconciliation so the next
+/// turn uses the updated skill catalog without a restart.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

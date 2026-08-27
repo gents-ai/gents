@@ -195,56 +195,6 @@ async fn stock_codex_remote_pty_smoke_uses_existing_client_codex_home_with_real_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux, stock codex CLI, and the configured real OpenAI-compatible backend"]
-async fn stock_codex_remote_tmux_smoke_uses_existing_client_codex_home_with_real_backend(
-) -> Result<()> {
-    require_command("codex")?;
-    if which("tmux").is_none() {
-        eprintln!("skipping tmux smoke: tmux is not installed");
-        return Ok(());
-    }
-    let prompt_token = "PONGTMUX";
-    let smoke = start_live_codex_shim().await?;
-    let client_codex_home = create_existing_client_codex_home(&smoke, "tmux")?;
-    assert_ne!(client_codex_home, smoke.codex_home);
-    let session = format!("gents-codex-smoke-{}", Uuid::new_v4().simple());
-    let command = format!(
-        "CODEX_HOME={} codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --remote ws://127.0.0.1:{} {}",
-        shell_quote_path(&client_codex_home),
-        smoke.shim_port,
-        shell_quote(&format!(
-            "Reply with exactly this token and no extra words: {prompt_token}"
-        )),
-    );
-
-    let new_status = Command::new("tmux")
-        .args(["new-session", "-d", "-s", &session, &command])
-        .status()
-        .context("starting tmux codex smoke session")?;
-    if !new_status.success() {
-        bail!("tmux new-session failed");
-    }
-    let transcript =
-        wait_for_tmux_token_occurrences(&session, prompt_token, 2, Duration::from_secs(180))?;
-    let _ = Command::new("tmux")
-        .args(["kill-session", "-t", &session])
-        .status();
-    let token_search_text = terminal_token_search_text(&transcript);
-    assert!(
-        token_occurrences(&token_search_text, prompt_token) >= 2,
-        "expected tmux transcript to contain an echoed prompt and assistant response for {prompt_token}, got:\n{transcript}"
-    );
-    let prompt = smoke_prompt(prompt_token);
-    let (_request_id, _session_id, _behavior_id) =
-        wait_for_request(&smoke.graphql, &smoke.agent_did, &prompt).await?;
-    assert_shim_trace_methods(
-        &smoke.shim_trace,
-        &["initialize", "thread/start", "turn/start"],
-    )?;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires tmux, stock codex CLI, and the configured real OpenAI-compatible backend"]
 async fn stock_codex_remote_tmux_multiturn_uses_existing_client_codex_home_with_real_backend(
 ) -> Result<()> {
     require_command("codex")?;

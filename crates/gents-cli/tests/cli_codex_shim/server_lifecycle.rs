@@ -220,7 +220,7 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
     );
     assert!(
         !stderr.contains("Codex endpoint disabled"),
-        "a missing behavior must not be reported as a terminal disable (#699); got:\n{stderr}"
+        "a missing behavior must not be reported as a terminal disable; got:\n{stderr}"
     );
     assert!(
         stderr.contains("behavior-that-does-not-exist"),
@@ -328,8 +328,8 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
         if std::time::Instant::now() >= deadline {
             let (_stdout, stderr) = serve.captured_output()?;
             panic!(
-                "the shim never bound after `config apply` supplied behavior {LATE_BEHAVIOR:?} \
-                 — this is #699: the port stays closed until the process restarts.\nstderr:\n{stderr}"
+                "the shim never bound after `config apply` supplied behavior \
+                 {LATE_BEHAVIOR:?}; stderr:\n{stderr}"
             );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -342,7 +342,7 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
     );
     assert!(
         stderr.contains("no restart was needed"),
-        "the fix is that no restart is needed; got:\n{stderr}"
+        "the shim must converge without a restart; got:\n{stderr}"
     );
     Ok(())
 }

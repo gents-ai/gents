@@ -222,12 +222,8 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     Ok(())
 }
 
-/// End-to-end proof that an EXPLICIT Codex skill selection (`UserInput::Skill`,
-/// the skill "pill") deterministically activates the skill (#340). The shim
-/// forwards only the id; the RUNTIME resolves it against the behavior's
-/// effective set and injects the body as a per-turn system reminder (rather than
-/// relying on the model to pull it). A skill-only turn (no text) must (a) not be
-/// rejected as empty and (b) carry the skill body to the model.
+/// An explicit Codex skill selection resolves through the runtime's effective
+/// set and injects the body even when the turn contains no text.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -374,11 +370,8 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     Ok(())
 }
 
-/// An explicit Codex skill selection must still respect the bound behavior's
-/// effective set (D5): a behavior-scoped skill NOT opted into the bound behavior
-/// (empty skill_refs) cannot be force-activated via the pill (#340). Privilege
-/// scoping — the Codex UI lists all the agent's skills, but selecting one the
-/// behavior didn't opt into must not inject it.
+/// A selection outside the bound behavior's effective set must not inject its
+/// skill body.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

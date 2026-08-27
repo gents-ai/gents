@@ -20,11 +20,7 @@ fn explicit_override(override_behavior_id: Option<&str>) -> Option<String> {
 /// configured `default_behavior_id` — that is the id behaviors are actually
 /// stored under (e.g. `default` from an applied manifest). We only fall back to
 /// the synthesized `<did>:default` form when the principal is missing or has no
-/// default set, which preserves the historical behavior for legacy homes.
-///
-/// Previously this always synthesized `<did>:default`, which never matched a
-/// manifest-applied behavior keyed `default`, so the shim failed to start with
-/// "no AgentBehavior document with that behavior_id exists".
+/// default set, keeping legacy homes that use synthesized ids compatible.
 pub(super) async fn resolve_bound_behavior_id(
     node: &EmbeddedNode,
     override_behavior_id: Option<&str>,

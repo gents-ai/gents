@@ -51,8 +51,6 @@ fn default_backend_id(agent_did: &str) -> String {
 mod background_continuations;
 #[path = "cli_codex_shim/behavior_scope.rs"]
 mod behavior_scope;
-#[path = "cli_codex_shim/config_skills.rs"]
-mod config_skills;
 #[path = "cli_codex_shim/host_runtime.rs"]
 mod host_runtime;
 #[path = "cli_codex_shim/live_backend.rs"]
