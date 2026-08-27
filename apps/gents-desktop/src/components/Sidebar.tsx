@@ -4,12 +4,14 @@ import type {
   ConversationSummary,
   DeploymentView,
   MailboxItemView,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import {
   BehaviorEnvironmentSection,
   ConnectedPeerSection,
   ConversationListSection,
 } from "./sidebar-widgets";
+import { SyncHealthIndicator } from "./SyncHealthIndicator";
 
 export type SidebarProps = {
   deployments: DeploymentView[];
@@ -29,6 +31,7 @@ export type SidebarProps = {
   onDismissMailboxItem: (itemId: string) => void;
   onRepairP2P?: () => Promise<unknown> | void;
   repairingP2P?: boolean;
+  syncHealth?: SyncHealthView | null;
 };
 
 export function Sidebar({
@@ -49,6 +52,7 @@ export function Sidebar({
   onDismissMailboxItem,
   onRepairP2P,
   repairingP2P,
+  syncHealth = null,
 }: SidebarProps) {
   const [section, setSection] = useState<"sessions" | "mailbox" | "behaviors">(
     "sessions",
@@ -71,6 +75,7 @@ export function Sidebar({
         onRepairP2P={onRepairP2P}
         repairingP2P={repairingP2P}
       />
+      <SyncHealthIndicator deployments={deployments} syncHealth={syncHealth} />
 
       <div aria-label="Agent workspace" className="agent-section-tabs" role="group">
         <button

@@ -201,6 +201,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           deployments={shell.deployments}
           loading={shell.loading}
           p2pHealth={shell.runtimeHealth}
+          syncHealth={shell.snapshot?.client?.syncHealth ?? null}
           repairingP2P={shell.repairingP2P}
           starting={shell.starting}
           onAddPeer={shell.onAddPeer}
@@ -257,6 +258,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
             }}
             onRepairP2P={shell.onRepairP2P}
             repairingP2P={shell.repairingP2P}
+            syncHealth={shell.snapshot?.client?.syncHealth ?? null}
             onStartNewConversation={(behaviorId) => {
               shell.onStartNewConversation(behaviorId);
               setMobileChatPane("conversation");

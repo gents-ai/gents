@@ -11,6 +11,7 @@
 @import "./styles/primitives/data.css";
 @import "./styles/shell.css";
 @import "./styles/session-hydration.css";
+@import "./styles/sync-health.css";
 @import "./styles/sidebar/base.css";
 @import "./styles/sidebar/connected-peer.css";
 @import "./styles/sidebar/lists.css";
