@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 use anyhow::anyhow;
 use events::Bus;
+use gents_protocol::bearer_token::BearerPairingReadyRecord;
 
 use super::*;
 use crate::agent::p2p_reconcile::{
