@@ -8,11 +8,12 @@ mod principal_identity;
 mod query;
 mod schema;
 mod store;
+mod sync_projection;
 
 pub use collection_resolver::CollectionResolver;
 pub use core::{
     BearerInvitePreview, BearerPairingResult, ClientCore, ClientCoreOptions, ClientPeerStatus,
-    P2PHealth, P2PHealthStatus,
+    ClientRouteStatus, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
 };
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
@@ -28,3 +29,4 @@ pub use query::{
     DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE, MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use store::{ClientStore, ClientStoreRows, TaskRecentRuns, TranscriptView};
+pub use sync_projection::{project_sync_health, SyncHealth, SyncHealthState};
