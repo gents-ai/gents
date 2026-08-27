@@ -11,7 +11,7 @@
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "finding_id", "required": true},
-        {"name": "area_id", "required": true},
+        {"name": "area_id", "required": false, "fill": {"source_field": "area_id"}},
         {"name": "severity", "required": true},
         {"name": "confidence", "required": true},
         {"name": "path", "required": true},
@@ -28,7 +28,7 @@
       "output_obligation": {"scope": "trigger", "minimum_writes": 1},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "area_id", "required": true},
+        {"name": "area_id", "required": false, "fill": {"source_field": "area_id"}},
         {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}},
         {"name": "summary", "required": true}
       ]

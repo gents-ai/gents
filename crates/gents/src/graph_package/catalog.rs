@@ -228,6 +228,7 @@ pub fn graph_package_catalog() -> Result<Vec<GraphPackageCatalogEntry>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document_config::{SurfaceToolDecl, WriteToolFieldFill};
     use crate::graph_pipeline::{compile_graph, CompilerPolicy, StageCapability};
 
     #[test]
@@ -260,5 +261,37 @@ mod tests {
         assert_eq!(plan.nodes.len(), 4);
         assert_eq!(plan.results.len(), 2);
         assert_eq!(plan.entries[0].name, "review");
+    }
+
+    #[test]
+    fn code_review_scan_writes_use_the_trigger_area_id() {
+        let package = load_bundled_graph_package("code-review").unwrap();
+        let surface: BundledToolSurface = serde_json::from_str(
+            package
+                .asset_text("datastore-tool-surfaces/review-scan-writes/object.json")
+                .unwrap(),
+        )
+        .unwrap();
+        for tool_name in ["write_candidate_finding", "write_scan_result"] {
+            let entry = surface
+                .entries
+                .iter()
+                .find(|entry| entry.tool_name() == tool_name)
+                .unwrap();
+            let SurfaceToolDecl::Create(entry) = entry else {
+                panic!("{tool_name} must be a create tool");
+            };
+            let area_id = entry
+                .fields
+                .iter()
+                .find(|field| field.name == "area_id")
+                .unwrap();
+            assert!(!area_id.required, "{tool_name}");
+            assert_eq!(
+                area_id.fill,
+                Some(WriteToolFieldFill::SourceField("area_id".to_owned())),
+                "{tool_name}"
+            );
+        }
     }
 }
