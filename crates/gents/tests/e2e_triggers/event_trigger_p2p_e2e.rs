@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde::Deserialize;
 use serde_json::Value;
@@ -77,12 +77,9 @@ async fn create_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prom
             }}) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create Task failed: {:?}",
-        response.errors
-    );
+    graphql_mutation_with_transaction_retry(node, &mutation, "create P2P trigger Task fixture")
+        .await
+        .expect("create Task");
 }
 
 async fn create_event_trigger_with_filter(
@@ -112,12 +109,9 @@ async fn create_event_trigger_with_filter(
             }}) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create EventTrigger failed: {:?}",
-        response.errors
-    );
+    graphql_mutation_with_transaction_retry(node, &mutation, "create P2P EventTrigger fixture")
+        .await
+        .expect("create EventTrigger");
 }
 
 async fn wait_for_runtime_snapshot<F>(
@@ -257,12 +251,10 @@ async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &s
             }}) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "add_ReplicatedEvent failed: {:?}",
-        response.errors
-    );
+    let response =
+        graphql_mutation_with_transaction_retry(node, &mutation, "add P2P ReplicatedEvent fixture")
+            .await
+            .expect("add ReplicatedEvent");
     let data = response
         .data
         .as_ref()
