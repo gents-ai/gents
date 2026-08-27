@@ -7,8 +7,9 @@ use gents::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::{
-    hydrate_materialized_response_content, is_terminal_lifecycle_state, post_graphql,
-    request_diagnostic_hint,
+    hydrate_materialized_response_content, is_terminal_lifecycle_state,
+    materialized_response_diagnostic, post_graphql, request_diagnostic_hint,
+    MaterializedResponsePresentation,
 };
 
 use super::SubmittedRequest;
@@ -227,7 +228,10 @@ pub(super) async fn stream_turn_progress(
             .map(|progress| progress.status.as_str())
             .unwrap_or("");
         let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
-        let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
+        let terminal_by_response = matches!(
+            response_status,
+            "complete" | "completed" | "error" | "failed" | "interrupted"
+        );
 
         if terminal_by_request || terminal_by_response {
             let had_response_row = response_row.is_some();
@@ -240,33 +244,31 @@ pub(super) async fn stream_turn_progress(
                     "error_message": failure_reason,
                 })
             });
-            let should_wait_for_materialized_content =
-                matches!(response_status, "complete" | "completed")
-                    && terminal_response
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .unwrap_or_default()
-                        .is_empty()
-                    && terminal_response
-                        .get("materialized_message_sequence")
-                        .is_some_and(|value| !value.is_null());
-            let hydrated = if had_response_row {
+            let presentation = if had_response_row {
                 hydrate_materialized_response_content(graphql, &mut terminal_response).await?
             } else {
-                true
+                MaterializedResponsePresentation::Presentable
             };
-            if should_wait_for_materialized_content && !hydrated {
-                if last_progress_at.elapsed() >= idle_timeout {
-                    anyhow::bail!(
-                        "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
-                        submitted.request_id,
-                        timeout_secs,
-                        request_diagnostic_hint(&submitted.request_id)
-                    );
+            match presentation {
+                MaterializedResponsePresentation::Presentable => {}
+                MaterializedResponsePresentation::Pending => {
+                    if last_progress_at.elapsed() >= idle_timeout {
+                        anyhow::bail!(
+                            "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
+                            submitted.request_id,
+                            timeout_secs,
+                            request_diagnostic_hint(&submitted.request_id)
+                        );
+                    }
+                    tokio::time::sleep(Duration::from_secs(poll_secs)).await;
+                    continue;
                 }
-                tokio::time::sleep(Duration::from_secs(poll_secs)).await;
-                continue;
+                MaterializedResponsePresentation::Invalid => {
+                    anyhow::bail!(materialized_response_diagnostic(
+                        &submitted.request_id,
+                        &terminal_response
+                    ));
+                }
             }
 
             let terminal_content = terminal_response
