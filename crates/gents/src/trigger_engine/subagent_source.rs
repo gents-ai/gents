@@ -35,6 +35,21 @@ use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
 const TOOL_CALL_COLLECTION: &str = "AgentToolCall";
 const SUBAGENT_SOURCE_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
+const RUNNING_BRIDGE_RESCAN_LIMIT: usize = 10_000;
+
+fn running_bridge_rescan_query() -> String {
+    format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    lifecycle_state: {{ _eq: "running" }},
+                    child_request_id: {{ _ne: "" }}
+                }},
+                limit: {RUNNING_BRIDGE_RESCAN_LIMIT}
+            ) {{ _docID }}
+        }}"#
+    )
+}
 
 pub struct SubagentSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -391,15 +406,7 @@ impl SubagentSource {
     }
 
     async fn load_running_bridge_doc_ids(&self) -> anyhow::Result<Vec<String>> {
-        let query = r#"{
-            AgentToolCall(
-                filter: {
-                    lifecycle_state: { _eq: "running" },
-                    child_request_id: { _ne: "" }
-                }
-            ) { _docID }
-        }"#;
-        let response = self.node.execute(query).await;
+        let response = self.node.execute(&running_bridge_rescan_query()).await;
         if response.has_errors() {
             anyhow::bail!(
                 "query running AgentToolCall bridge rows for SubagentSource rescan failed: {:?}",
@@ -412,6 +419,13 @@ impl SubagentSource {
             .and_then(|data| data.get(TOOL_CALL_COLLECTION))
             .and_then(|value| serde_json::from_value(value.clone()).ok())
             .unwrap_or_default();
+        if rows.len() >= RUNNING_BRIDGE_RESCAN_LIMIT {
+            tracing::warn!(
+                row_count = rows.len(),
+                limit = RUNNING_BRIDGE_RESCAN_LIMIT,
+                "subagent source running bridge rescan hit limit; additional rows will wait for a later scan",
+            );
+        }
         Ok(rows.into_iter().map(|row| row.doc_id).collect())
     }
 
@@ -1032,6 +1046,20 @@ impl SubagentSource {
                 }
             }),
         }))
+    }
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::{running_bridge_rescan_query, RUNNING_BRIDGE_RESCAN_LIMIT};
+
+    #[test]
+    fn running_bridge_rescan_query_is_explicitly_bounded() {
+        let query = running_bridge_rescan_query();
+
+        assert!(query.contains(r#"lifecycle_state: { _eq: "running" }"#));
+        assert!(query.contains(r#"child_request_id: { _ne: "" }"#));
+        assert!(query.contains(&format!("limit: {RUNNING_BRIDGE_RESCAN_LIMIT}")));
     }
 }
 
