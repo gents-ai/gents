@@ -1676,6 +1676,7 @@ function createDeployment(): DeploymentView {
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
     dialSucceeded: true,
     pairingReady: true,
+    pairing: [],
     lastError: null,
     defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
     agentPrincipal: {

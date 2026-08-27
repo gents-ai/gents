@@ -19,6 +19,70 @@ pub struct P2PHealthView {
     pub last_failure_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionHydrationView {
+    pub session_id: String,
+    pub agent_did: String,
+    pub phase: String,
+    pub merged_count: usize,
+    pub served_count: Option<usize>,
+}
+
+impl Default for SessionHydrationView {
+    fn default() -> Self {
+        Self {
+            session_id: String::new(),
+            agent_did: String::new(),
+            phase: "idle".into(),
+            merged_count: 0,
+            served_count: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncHealthView {
+    pub state: String,
+    pub since: Option<String>,
+    pub offline_since: Option<String>,
+    pub stalled_since: Option<String>,
+    pub last_error_class: Option<String>,
+    pub last_error: Option<String>,
+    pub pairing_retry_count: u32,
+    pub route_retry_count: u32,
+    pub connected_peer_count: usize,
+    pub hydration: SessionHydrationView,
+}
+
+impl Default for SyncHealthView {
+    fn default() -> Self {
+        Self {
+            state: "healthy".into(),
+            since: None,
+            offline_since: None,
+            stalled_since: None,
+            last_error_class: None,
+            last_error: None,
+            pairing_retry_count: 0,
+            route_retry_count: 0,
+            connected_peer_count: 0,
+            hydration: SessionHydrationView::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingCollectionStatusView {
+    pub collection_id: String,
+    pub pairing_retry_count: u32,
+    pub last_retry_at: Option<String>,
+    pub last_retry_error_class: Option<String>,
+    pub stuck_since: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeView {
@@ -369,6 +433,8 @@ pub struct DeploymentView {
     pub pairing_ready: bool,
     pub chat_safe: bool,
     pub routes: Vec<ClientRouteStatusView>,
+    #[serde(default)]
+    pub pairing: Vec<PairingCollectionStatusView>,
     pub last_error: Option<String>,
     pub default_behavior_id: Option<String>,
     pub agent_principal: AgentPrincipalView,
@@ -393,6 +459,9 @@ pub struct DesktopRuntimeSnapshot {
     pub local_peer_id: String,
     pub listen_addresses: Vec<String>,
     pub p2p_health: P2PHealthView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub sync_health: Option<SyncHealthView>,
     pub bootstrap_errors: Vec<String>,
     pub last_mutation_error: Option<String>,
     pub focused_request_id: Option<String>,

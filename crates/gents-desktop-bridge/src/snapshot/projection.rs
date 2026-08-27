@@ -133,6 +133,7 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
             route.filter_summary.clear();
             route.last_error = None;
         }
+        deployment.pairing.clear();
     }
 
     if !grants.session_read {
@@ -234,7 +235,8 @@ mod tests {
     use crate::types::{
         AgentPrincipalView, BehaviorEnvironmentView, BehaviorView, ClientRouteStatusView,
         ConversationSummary, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
-        DesktopRuntimeSnapshot, MailboxItemView, P2PHealthView, SavedPeerView, SkillView,
+        DesktopRuntimeSnapshot, MailboxItemView, P2PHealthView, PairingCollectionStatusView,
+        SavedPeerView, SkillView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
@@ -273,6 +275,7 @@ mod tests {
                     last_ok_at: None,
                     last_failure_at: None,
                 },
+                sync_health: None,
                 bootstrap_errors: vec![],
                 last_mutation_error: None,
                 focused_request_id: None,
@@ -291,6 +294,13 @@ mod tests {
                     dial_succeeded: true,
                     pairing_ready: true,
                     chat_safe: true,
+                    pairing: vec![PairingCollectionStatusView {
+                        collection_id: "AgentSession".into(),
+                        pairing_retry_count: 2,
+                        last_retry_at: Some("2026-08-25T12:00:00Z".into()),
+                        last_retry_error_class: Some("RpcTimeout".into()),
+                        stuck_since: None,
+                    }],
                     routes: ["client-to-runtime", "runtime-to-client"]
                         .into_iter()
                         .map(|direction| ClientRouteStatusView {
@@ -433,6 +443,7 @@ mod tests {
             .inference_profile_name
             .is_none());
         assert!(dep.addr.is_empty());
+        assert!(dep.pairing.is_empty());
         assert_eq!(dep.routes.len(), 2);
         assert!(dep.routes.iter().all(|route| route.address.is_none()));
         assert!(dep.behaviors[0].system_prompt.is_none());
@@ -453,6 +464,7 @@ mod tests {
         assert_eq!(dep.routes.len(), 2);
         assert!(dep.routes.iter().all(|route| route.live_match));
         assert_eq!(dep.conversations.len(), 1);
+        assert!(dep.pairing.is_empty());
         assert!(dep.mailbox_items.is_empty());
         assert_eq!(dep.behavior_environments[0].session_count, 1);
         assert!(dep.behavior_environments[0].workspace_root.is_none());
@@ -484,6 +496,8 @@ mod tests {
         assert!(projected.bootstrap.saved_peers[0].graphql.is_none());
         let dep = &projected.client.as_ref().unwrap().deployments[0];
         assert_eq!(dep.addr, "/ip4/127.0.0.1/tcp/1");
+        assert_eq!(dep.pairing.len(), 1);
+        assert_eq!(dep.pairing[0].pairing_retry_count, 2);
         assert!(dep.conversations.is_empty());
         assert_eq!(dep.behavior_environments[0].session_count, 0);
         assert!(dep.behavior_environments[0].workspace_root.is_none());

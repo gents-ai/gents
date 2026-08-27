@@ -10,12 +10,17 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use gents_desktop_core::client::{ClientCore, DesktopPaths, P2PHealth, PeerDirectory};
+use gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress;
+use gents_desktop_core::client::{
+    project_sync_health, ClientCore, DesktopPaths, P2PHealth, PairingCollectionStatus,
+    PeerDirectory, SyncHealth,
+};
+use gents_desktop_core::remote_admin::PairingErrorClass;
 
 use super::state::ResolvedBridgePolicy;
 use super::types::{
     normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, P2PHealthView,
-    SavedPeerView,
+    PairingCollectionStatusView, SavedPeerView, SessionHydrationView, SyncHealthView,
 };
 use projection::{project_bootstrap_summary, project_client_snapshot, SnapshotGrants};
 
@@ -43,7 +48,70 @@ fn to_health_view(health: &P2PHealth) -> P2PHealthView {
     }
 }
 
-fn system_time_rfc3339(value: Option<SystemTime>) -> Option<String> {
+pub(crate) fn to_hydration_view(progress: &ClientHydrationProgress) -> SessionHydrationView {
+    SessionHydrationView {
+        session_id: progress.session_id.clone(),
+        agent_did: progress.agent_did.clone(),
+        phase: progress.phase.as_str().to_string(),
+        merged_count: progress.merged_count,
+        served_count: progress.served_count,
+    }
+}
+
+pub(crate) fn hydration_view_for_session(
+    progress: &ClientHydrationProgress,
+    session_id: &str,
+    agent_did: Option<&str>,
+) -> Option<SessionHydrationView> {
+    if progress.session_id != session_id {
+        return None;
+    }
+    if agent_did.is_some_and(|agent_did| progress.agent_did != agent_did) {
+        return None;
+    }
+    Some(to_hydration_view(progress))
+}
+
+pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
+    SyncHealthView {
+        state: health.state.as_str().to_string(),
+        since: system_time_rfc3339(health.since),
+        offline_since: system_time_rfc3339(health.offline_since),
+        stalled_since: system_time_rfc3339(health.stalled_since),
+        last_error_class: pairing_error_class_label(health.last_error_class),
+        last_error: health.last_error.clone(),
+        pairing_retry_count: health.pairing_retry_count,
+        route_retry_count: health.route_retry_count,
+        connected_peer_count: health.connected_peer_count,
+        hydration: to_hydration_view(&health.hydration),
+    }
+}
+
+pub(crate) fn to_pairing_collection_view(
+    status: &PairingCollectionStatus,
+) -> PairingCollectionStatusView {
+    PairingCollectionStatusView {
+        collection_id: status.collection_id.clone(),
+        pairing_retry_count: status.pairing_retry_count,
+        last_retry_at: system_time_rfc3339(status.last_retry_at),
+        last_retry_error_class: pairing_error_class_label(status.last_retry_error_class),
+        stuck_since: system_time_rfc3339(status.stuck_since),
+    }
+}
+
+pub(crate) fn project_core_sync_health(core: &ClientCore) -> SyncHealthView {
+    to_sync_health_view(&project_sync_health(
+        &core.p2p_health(),
+        &core.peer_statuses(),
+        &core.hydration_progress(),
+    ))
+}
+
+fn pairing_error_class_label(class: Option<PairingErrorClass>) -> Option<String> {
+    class.map(|class| format!("{class:?}"))
+}
+
+pub(crate) fn system_time_rfc3339(value: Option<SystemTime>) -> Option<String> {
     value.map(|value| DateTime::<Utc>::from(value).to_rfc3339())
 }
 

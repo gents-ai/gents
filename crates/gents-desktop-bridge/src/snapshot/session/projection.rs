@@ -373,6 +373,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         pending_turn,
         context,
         timeline_items,
+        hydration: None,
         timeline_page: None,
         projection_revision: None,
         messages,

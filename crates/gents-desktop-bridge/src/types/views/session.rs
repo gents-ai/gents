@@ -431,6 +431,9 @@ pub struct DesktopSessionSnapshot {
     pub timeline_items: Vec<RenderedTimelineItem>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
+    pub hydration: Option<super::SessionHydrationView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub timeline_page: Option<SessionTimelinePageView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]

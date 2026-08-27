@@ -543,6 +543,15 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                             .collect()
                     })
                     .unwrap_or_default(),
+                pairing: status
+                    .map(|status| {
+                        status
+                            .pairing
+                            .iter()
+                            .map(super::to_pairing_collection_view)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 last_error: status.and_then(|status| status.last_error.clone()),
                 default_behavior_id,
                 agent_principal,
@@ -569,6 +578,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         local_peer_id: core.local_peer_id().to_string(),
         listen_addresses: core.listen_addresses().to_vec(),
         p2p_health: to_health_view(&core.p2p_health()),
+        sync_health: Some(super::project_core_sync_health(core)),
         bootstrap_errors: core.bootstrap_errors().to_vec(),
         last_mutation_error: core.last_mutation_error(),
         focused_request_id: core.store().focused_request_id(),

@@ -285,7 +285,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "1.4",
+  "contractVersion": "1.5",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -303,6 +303,7 @@
   "eventReasons": [
     "store",
     "health",
+    "hydration",
     "lifecycle",
     "config"
   ],

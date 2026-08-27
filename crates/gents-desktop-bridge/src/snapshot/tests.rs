@@ -106,3 +106,5 @@ mod session_state;
 mod session_timeline;
 #[path = "tests/subagent_lineage.rs"]
 mod subagent_lineage;
+#[path = "tests/sync.rs"]
+mod sync;
