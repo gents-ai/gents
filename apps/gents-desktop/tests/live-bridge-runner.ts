@@ -113,6 +113,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     );
     const child = spawn("cargo", runnerArgs, {
       cwd: REPO_ROOT,
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         CARGO_NET_GIT_FETCH_WITH_CLI:

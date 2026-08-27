@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -5,6 +7,72 @@ import {
   observeRemoteTerminalDesktopStall,
   type RequestDiagnosticsBundle,
 } from "./live-bridge-runner";
+import {
+  terminateRunnerProcess,
+  waitForReadyMessage,
+} from "./live-bridge-runner/process";
+
+function spawnRunnerFixture(script: string) {
+  return spawn(process.execPath, ["-e", script], {
+    detached: process.platform !== "win32",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+describe("live bridge runner process lifecycle", () => {
+  it("kills and awaits a runner process group when readiness times out", async () => {
+    const child = spawnRunnerFixture(`
+      const { spawn } = require("node:child_process");
+      if (${process.platform !== "win32"}) {
+        spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+          stdio: "ignore",
+        });
+      }
+      process.stdout.write("cargo still compiling");
+      process.stderr.write("compiler diagnostic");
+      setInterval(() => {}, 1_000);
+    `);
+    const processGroupId = child.pid;
+
+    let startupError: Error | null = null;
+    try {
+      await waitForReadyMessage(child, 500);
+    } catch (error) {
+      startupError = error as Error;
+    }
+
+    expect(startupError?.message).toContain(
+      "bridge runner did not become ready within 500ms",
+    );
+    expect(startupError?.message).toContain("cargo still compiling");
+    expect(startupError?.message).toContain("compiler diagnostic");
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    if (process.platform !== "win32" && processGroupId !== undefined) {
+      expect(() => process.kill(-processGroupId, 0)).toThrow();
+    }
+  });
+
+  it("leaves a ready runner alive for normal construction", async () => {
+    const readyMessage = {
+      kind: "ready",
+      baseUrl: "http://127.0.0.1:1234",
+      deploymentLabel: "fixture",
+      agentDid: "did:key:fixture",
+      toolRoot: "/tmp/fixture",
+    };
+    const child = spawnRunnerFixture(`
+      process.stdout.write(${JSON.stringify(`${JSON.stringify(readyMessage)}\n`)});
+      setInterval(() => {}, 1_000);
+    `);
+
+    const ready = await waitForReadyMessage(child, 2_000);
+
+    expect(ready.message).toEqual(readyMessage);
+    expect(child.exitCode).toBeNull();
+    expect(child.signalCode).toBeNull();
+    await terminateRunnerProcess(child);
+  });
+});
 
 function requestDiagnosticsBundle({
   desktopTurnState = "streaming",
