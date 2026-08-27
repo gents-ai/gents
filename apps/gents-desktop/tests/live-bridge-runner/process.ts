@@ -6,6 +6,18 @@ const RUNNER_STOP_GRACE_MS = 2_000;
 const RUNNER_KILL_DRAIN_MS = 2_000;
 const RUNNER_DISPOSE_GRACE_MS = 10_000;
 
+type KillByPid = (pid: number, signal: NodeJS.Signals | 0) => boolean;
+
+const killByPid: KillByPid = (pid, signal) => process.kill(pid, signal);
+
+export function assertLiveBridgeRunnerPlatform(platform = process.platform) {
+  if (platform === "win32") {
+    throw new Error(
+      "the live bridge runner requires POSIX process-group cleanup and is not supported on Windows",
+    );
+  }
+}
+
 export async function waitForReadyMessage(
   child: ChildProcessWithoutNullStreams,
   timeoutMs: number,
@@ -94,16 +106,28 @@ async function readReadyMessage(
       );
     };
 
+    const onError = (error: Error) => {
+      cleanup();
+      reject(
+        new Error(
+          `bridge runner process error before ready: ${error.message}\nstdout:\n${stdout}${stdoutBuffer}\nstderr:\n${stderr}`,
+          { cause: error },
+        ),
+      );
+    };
+
     const cleanup = () => {
       clearTimeout(timeout);
       child.stdout.off("data", onStdout);
       child.stderr.off("data", onStderr);
       child.off("exit", onExit);
+      child.off("error", onError);
     };
 
     child.stdout.on("data", onStdout);
     child.stderr.on("data", onStderr);
     child.on("exit", onExit);
+    child.on("error", onError);
   });
 }
 
@@ -112,20 +136,41 @@ export async function terminateRunnerProcess(
   {
     graceMs = RUNNER_STOP_GRACE_MS,
     killDrainMs = RUNNER_KILL_DRAIN_MS,
-  }: { graceMs?: number; killDrainMs?: number } = {},
+    killByPid: signalByPid = killByPid,
+  }: { graceMs?: number; killDrainMs?: number; killByPid?: KillByPid } = {},
 ) {
   endRunnerStdin(child);
   child.stdout.resume();
   child.stderr.resume();
 
-  const processGroupId = runnerProcessGroupId(child);
-  signalRunnerProcess(child, "SIGTERM", processGroupId);
-  if (await waitForRunnerDrain(child, processGroupId, graceMs)) {
+  if (!Number.isInteger(child.pid) || child.pid! <= 0) {
     return;
   }
 
-  signalRunnerProcess(child, "SIGKILL", processGroupId);
-  if (!(await waitForRunnerDrain(child, processGroupId, killDrainMs))) {
+  const processGroupId = runnerProcessGroupId(child);
+  const termSignalSent = signalRunnerProcess(
+    child,
+    "SIGTERM",
+    processGroupId,
+    signalByPid,
+  );
+  if (!termSignalSent) {
+    return;
+  }
+  if (await waitForRunnerDrain(child, processGroupId, graceMs, signalByPid)) {
+    return;
+  }
+
+  const killSignalSent = signalRunnerProcess(
+    child,
+    "SIGKILL",
+    processGroupId,
+    signalByPid,
+  );
+  if (!killSignalSent) {
+    return;
+  }
+  if (!(await waitForRunnerDrain(child, processGroupId, killDrainMs, signalByPid))) {
     throw new Error(
       `bridge runner process${processGroupId === null ? "" : ` group ${processGroupId}`} did not exit after SIGKILL`,
     );
@@ -137,7 +182,14 @@ export async function disposeRunnerProcess(
   gracefulExitMs = RUNNER_DISPOSE_GRACE_MS,
 ) {
   endRunnerStdin(child);
-  if (await waitForRunnerDrain(child, runnerProcessGroupId(child), gracefulExitMs)) {
+  if (
+    await waitForRunnerDrain(
+      child,
+      runnerProcessGroupId(child),
+      gracefulExitMs,
+      killByPid,
+    )
+  ) {
     return;
   }
   await terminateRunnerProcess(child);
@@ -159,13 +211,20 @@ function signalRunnerProcess(
   child: ChildProcessWithoutNullStreams,
   signal: NodeJS.Signals,
   processGroupId: number | null,
+  signalByPid: KillByPid,
 ) {
   if (processGroupId !== null) {
     try {
-      process.kill(-processGroupId, signal);
-      return;
+      signalByPid(-processGroupId, signal);
+      return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" && childHasExited(child)) {
+        // macOS can retain an unsignalable process-group identifier after the
+        // leader has exited. Its successful exit remains authoritative.
+        return false;
+      }
+      if (code !== "ESRCH") {
         throw error;
       }
     }
@@ -174,18 +233,20 @@ function signalRunnerProcess(
   if (child.exitCode === null && child.signalCode === null) {
     child.kill(signal);
   }
+  return true;
 }
 
 async function waitForRunnerDrain(
   child: ChildProcessWithoutNullStreams,
   processGroupId: number | null,
   timeoutMs: number,
+  signalByPid: KillByPid,
 ) {
   const [childExited, processGroupExited] = await Promise.all([
     waitForChildExit(child, timeoutMs),
     processGroupId === null
       ? Promise.resolve(true)
-      : waitForProcessGroupExit(processGroupId, timeoutMs),
+      : waitForProcessGroupExit(processGroupId, timeoutMs, signalByPid),
   ]);
   return childExited && processGroupExited;
 }
@@ -207,9 +268,13 @@ function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: numb
   });
 }
 
-async function waitForProcessGroupExit(processGroupId: number, timeoutMs: number) {
+async function waitForProcessGroupExit(
+  processGroupId: number,
+  timeoutMs: number,
+  signalByPid: KillByPid,
+) {
   const deadline = Date.now() + timeoutMs;
-  while (processGroupExists(processGroupId)) {
+  while (processGroupExists(processGroupId, signalByPid)) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
       return false;
@@ -219,9 +284,9 @@ async function waitForProcessGroupExit(processGroupId: number, timeoutMs: number
   return true;
 }
 
-function processGroupExists(processGroupId: number) {
+function processGroupExists(processGroupId: number, signalByPid: KillByPid) {
   try {
-    process.kill(-processGroupId, 0);
+    signalByPid(-processGroupId, 0);
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") {
@@ -232,6 +297,10 @@ function processGroupExists(processGroupId: number) {
     }
     throw error;
   }
+}
+
+function childHasExited(child: ChildProcessWithoutNullStreams) {
+  return child.exitCode !== null || child.signalCode !== null;
 }
 
 export function appendRunnerArg(args: string[], flag: string, value?: string | null) {

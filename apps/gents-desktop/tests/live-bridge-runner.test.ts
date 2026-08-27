@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 
 import { describe, expect, it } from "vitest";
 
@@ -8,6 +9,7 @@ import {
   type RequestDiagnosticsBundle,
 } from "./live-bridge-runner";
 import {
+  assertLiveBridgeRunnerPlatform,
   disposeRunnerProcess,
   terminateRunnerProcess,
   waitForReadyMessage,
@@ -15,67 +17,116 @@ import {
 
 function spawnRunnerFixture(script: string) {
   return spawn(process.execPath, ["-e", script], {
-    detached: process.platform !== "win32",
+    detached: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
 }
 
-describe("live bridge runner process lifecycle", () => {
-  it("kills and awaits a runner process group when readiness times out", async () => {
-    const child = spawnRunnerFixture(`
-      const { spawn } = require("node:child_process");
-      if (${process.platform !== "win32"}) {
-        spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
-          stdio: "ignore",
-        });
+async function forceCleanupRunnerFixture(child: ChildProcessWithoutNullStreams) {
+  if (!child.stdin.destroyed && !child.stdin.writableEnded) {
+    child.stdin.destroy();
+  }
+  child.stdout.resume();
+  child.stderr.resume();
+
+  if (Number.isInteger(child.pid) && child.pid! > 0) {
+    try {
+      process.kill(-child.pid!, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        throw error;
       }
+    }
+  }
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+    await Promise.race([
+      once(child, "exit"),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+  }
+}
+
+function permissionDenied() {
+  const error = new Error("operation not permitted") as NodeJS.ErrnoException;
+  error.code = "EPERM";
+  return error;
+}
+
+describe("live bridge runner platform contract", () => {
+  it("fails early on Windows rather than claiming process-tree cleanup", () => {
+    expect(() => assertLiveBridgeRunnerPlatform("win32")).toThrow(
+      "requires POSIX process-group cleanup",
+    );
+    expect(() => assertLiveBridgeRunnerPlatform("darwin")).not.toThrow();
+    expect(() => assertLiveBridgeRunnerPlatform("linux")).not.toThrow();
+  });
+});
+
+describe.skipIf(process.platform === "win32")(
+  "live bridge runner process lifecycle",
+  () => {
+    it("kills and awaits a runner process group when readiness times out", async () => {
+      const child = spawnRunnerFixture(`
+      const { spawn } = require("node:child_process");
+      spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+        stdio: "ignore",
+      });
       process.stdout.write("cargo still compiling");
       process.stderr.write("compiler diagnostic");
       setInterval(() => {}, 1_000);
     `);
-    const processGroupId = child.pid;
+      const processGroupId = child.pid;
 
-    let startupError: Error | null = null;
-    try {
-      await waitForReadyMessage(child, 500);
-    } catch (error) {
-      startupError = error as Error;
-    }
+      try {
+        let startupError: Error | null = null;
+        try {
+          await waitForReadyMessage(child, 500);
+        } catch (error) {
+          startupError = error as Error;
+        }
 
-    expect(startupError?.message).toContain(
-      "bridge runner did not become ready within 500ms",
-    );
-    expect(startupError?.message).toContain("cargo still compiling");
-    expect(startupError?.message).toContain("compiler diagnostic");
-    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
-    if (process.platform !== "win32" && processGroupId !== undefined) {
-      expect(() => process.kill(-processGroupId, 0)).toThrow();
-    }
-  });
+        expect(startupError?.message).toContain(
+          "bridge runner did not become ready within 500ms",
+        );
+        expect(startupError?.message).toContain("cargo still compiling");
+        expect(startupError?.message).toContain("compiler diagnostic");
+        expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+        if (processGroupId !== undefined) {
+          expect(() => process.kill(-processGroupId, 0)).toThrow();
+        }
+      } finally {
+        await forceCleanupRunnerFixture(child);
+      }
+    });
 
-  it("leaves a ready runner alive for normal construction", async () => {
-    const readyMessage = {
-      kind: "ready",
-      baseUrl: "http://127.0.0.1:1234",
-      deploymentLabel: "fixture",
-      agentDid: "did:key:fixture",
-      toolRoot: "/tmp/fixture",
-    };
-    const child = spawnRunnerFixture(`
+    it("leaves a ready runner alive for normal construction", async () => {
+      const readyMessage = {
+        kind: "ready",
+        baseUrl: "http://127.0.0.1:1234",
+        deploymentLabel: "fixture",
+        agentDid: "did:key:fixture",
+        toolRoot: "/tmp/fixture",
+      };
+      const child = spawnRunnerFixture(`
       process.stdout.write(${JSON.stringify(`${JSON.stringify(readyMessage)}\n`)});
       setInterval(() => {}, 1_000);
     `);
 
-    const ready = await waitForReadyMessage(child, 2_000);
+      try {
+        const ready = await waitForReadyMessage(child, 2_000);
 
-    expect(ready.message).toEqual(readyMessage);
-    expect(child.exitCode).toBeNull();
-    expect(child.signalCode).toBeNull();
-    await terminateRunnerProcess(child);
-  });
+        expect(ready.message).toEqual(readyMessage);
+        expect(child.exitCode).toBeNull();
+        expect(child.signalCode).toBeNull();
+        await terminateRunnerProcess(child);
+      } finally {
+        await forceCleanupRunnerFixture(child);
+      }
+    });
 
-  it("preserves graceful stdin disposal before terminating a stalled group", async () => {
-    const gracefulChild = spawnRunnerFixture(`
+    it("preserves graceful stdin disposal", async () => {
+      const gracefulChild = spawnRunnerFixture(`
       process.stdin.resume();
       process.stdin.on("end", () => process.exit(0));
       process.stdout.write(${JSON.stringify(
@@ -88,20 +139,23 @@ describe("live bridge runner process lifecycle", () => {
         })}\n`,
       )});
     `);
-    await waitForReadyMessage(gracefulChild, 2_000);
+      try {
+        await waitForReadyMessage(gracefulChild, 2_000);
+        await disposeRunnerProcess(gracefulChild, 500);
 
-    await disposeRunnerProcess(gracefulChild, 500);
-
-    expect(gracefulChild.exitCode).toBe(0);
-    expect(gracefulChild.signalCode).toBeNull();
-
-    const stalledChild = spawnRunnerFixture(`
-      const { spawn } = require("node:child_process");
-      if (${process.platform !== "win32"}) {
-        spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
-          stdio: "ignore",
-        });
+        expect(gracefulChild.exitCode).toBe(0);
+        expect(gracefulChild.signalCode).toBeNull();
+      } finally {
+        await forceCleanupRunnerFixture(gracefulChild);
       }
+    });
+
+    it("terminates a stalled ready runner and its descendant during disposal", async () => {
+      const stalledChild = spawnRunnerFixture(`
+      const { spawn } = require("node:child_process");
+      spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+        stdio: "ignore",
+      });
       process.stdin.resume();
       process.stdout.write(${JSON.stringify(
         `${JSON.stringify({
@@ -114,19 +168,118 @@ describe("live bridge runner process lifecycle", () => {
       )});
       setInterval(() => {}, 1_000);
     `);
-    const stalledGroupId = stalledChild.pid;
-    await waitForReadyMessage(stalledChild, 2_000);
+      const stalledGroupId = stalledChild.pid;
+      try {
+        await waitForReadyMessage(stalledChild, 2_000);
+        await disposeRunnerProcess(stalledChild, 50);
 
-    await disposeRunnerProcess(stalledChild, 50);
+        expect(stalledChild.exitCode !== null || stalledChild.signalCode !== null).toBe(
+          true,
+        );
+        if (stalledGroupId !== undefined) {
+          expect(() => process.kill(-stalledGroupId, 0)).toThrow();
+        }
+      } finally {
+        await forceCleanupRunnerFixture(stalledChild);
+      }
+    });
 
-    expect(stalledChild.exitCode !== null || stalledChild.signalCode !== null).toBe(
-      true,
-    );
-    if (process.platform !== "win32" && stalledGroupId !== undefined) {
-      expect(() => process.kill(-stalledGroupId, 0)).toThrow();
-    }
-  });
-});
+    it("captures process errors and cleans up before rejecting", async () => {
+      const child = spawnRunnerFixture(`
+      process.stdout.write("startup stdout");
+      process.stderr.write("startup stderr");
+      setInterval(() => {}, 1_000);
+    `);
+      try {
+        const stdoutSeen = once(child.stdout, "data");
+        const stderrSeen = once(child.stderr, "data");
+        const ready = waitForReadyMessage(child, 2_000);
+        await Promise.all([stdoutSeen, stderrSeen]);
+        const processError = new Error("synthetic EACCES") as NodeJS.ErrnoException;
+        processError.code = "EACCES";
+        child.emit("error", processError);
+
+        await expect(ready).rejects.toThrow("synthetic EACCES");
+        await expect(ready).rejects.toThrow("startup stdout");
+        await expect(ready).rejects.toThrow("startup stderr");
+        expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+      } finally {
+        await forceCleanupRunnerFixture(child);
+      }
+    });
+
+    it("handles a spawn ENOENT without waiting for the readiness timeout", async () => {
+      const child = spawn("gents-live-bridge-command-that-does-not-exist", [], {
+        detached: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      await expect(waitForReadyMessage(child, 2_000)).rejects.toThrow("ENOENT");
+    });
+
+    it("ignores process-group EPERM only after the leader exits", async () => {
+      const exitedChild = spawnRunnerFixture("process.exit(0)");
+      const exitedPid = exitedChild.pid;
+      try {
+        await once(exitedChild, "exit");
+        const exitedSignals: Array<[number, string | number]> = [];
+
+        await terminateRunnerProcess(exitedChild, {
+          killByPid: (pid, signal) => {
+            exitedSignals.push([pid, signal]);
+            throw permissionDenied();
+          },
+        });
+
+        expect(exitedSignals).toEqual([[-exitedPid!, "SIGTERM"]]);
+
+        const probeSignals: Array<[number, string | number]> = [];
+        await terminateRunnerProcess(exitedChild, {
+          graceMs: 1,
+          killByPid: (pid, signal) => {
+            probeSignals.push([pid, signal]);
+            if (signal === "SIGTERM") {
+              return true;
+            }
+            throw permissionDenied();
+          },
+        });
+        expect(probeSignals[0]).toEqual([-exitedPid!, "SIGTERM"]);
+        expect(probeSignals).toContainEqual([-exitedPid!, 0]);
+        expect(probeSignals[probeSignals.length - 1]).toEqual([-exitedPid!, "SIGKILL"]);
+      } finally {
+        await forceCleanupRunnerFixture(exitedChild);
+      }
+
+      const liveChild = spawnRunnerFixture(`
+      process.stdout.write(${JSON.stringify(
+        `${JSON.stringify({
+          kind: "ready",
+          baseUrl: "http://127.0.0.1:1234",
+          deploymentLabel: "eperm-fixture",
+          agentDid: "did:key:eperm-fixture",
+          toolRoot: "/tmp/eperm-fixture",
+        })}\n`,
+      )});
+      setInterval(() => {}, 1_000);
+    `);
+      try {
+        await waitForReadyMessage(liveChild, 2_000);
+        await expect(
+          terminateRunnerProcess(liveChild, {
+            killByPid: () => {
+              throw permissionDenied();
+            },
+          }),
+        ).rejects.toMatchObject({ code: "EPERM" });
+        expect(liveChild.exitCode).toBeNull();
+        expect(liveChild.signalCode).toBeNull();
+      } finally {
+        await forceCleanupRunnerFixture(liveChild);
+      }
+    });
+  },
+);
 
 function requestDiagnosticsBundle({
   desktopTurnState = "streaming",

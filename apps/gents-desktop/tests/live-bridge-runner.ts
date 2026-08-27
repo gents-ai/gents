@@ -18,6 +18,7 @@ import {
 import { RunnerLogs, type RunnerExitStatus } from "./live-bridge-runner/logs";
 import {
   appendRunnerArg,
+  assertLiveBridgeRunnerPlatform,
   disposeRunnerProcess,
   waitForReadyMessage,
 } from "./live-bridge-runner/process";
@@ -88,6 +89,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
   }
 
   static async start(options: LiveBridgeRunnerOptions = {}) {
+    assertLiveBridgeRunnerPlatform();
     const runnerArgs = [
       "run",
       "-p",
@@ -117,7 +119,10 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     );
     const child = spawn("cargo", runnerArgs, {
       cwd: REPO_ROOT,
-      detached: process.platform !== "win32",
+      // Detachment makes bounded process-group cleanup possible. An abrupt
+      // SIGKILL of this Node harness can still strand the group; the enclosing
+      // test job remains the final reaping boundary for that case.
+      detached: true,
       env: {
         ...process.env,
         CARGO_NET_GIT_FETCH_WITH_CLI:
