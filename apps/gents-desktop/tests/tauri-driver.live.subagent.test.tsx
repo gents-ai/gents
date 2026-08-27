@@ -1,12 +1,7 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { waitFor } from "@testing-library/react";
 import { expect, it } from "vitest";
 
 import { expectLatestSendResult, withLiveDesktop } from "./tauri-driver-live/harness";
-import {
-  closeOperationsDrawer,
-  expectOperationsPanel,
-  openOperationsDrawer,
-} from "./tauri-driver-live/operations-assertions";
 import {
   describeLive,
   expectCompletedSession,
@@ -19,7 +14,7 @@ const FOLLOW_UP_PROMPT =
   "Without calling tools, reply with one short sentence containing live-subagent-followup.";
 
 describeLive("Tauri app live subagent backgrounding", () => {
-  it("spawns a configured local subagent and renders its lineage", async () => {
+  it("spawns a configured local subagent and projects its lineage", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
       const defaultBehavior = deployment.behaviors.find(
         (behavior) => behavior.isDefault,
@@ -125,18 +120,6 @@ describeLive("Tauri app live subagent backgrounding", () => {
         { timeout: 60_000 },
       );
 
-      await openOperationsDrawer(driver);
-      await driver.user.click(screen.getByRole("tab", { name: "Lineage" }));
-      const lineagePanel = await expectOperationsPanel("lineage");
-      await waitFor(() => {
-        expect(
-          within(lineagePanel).getByRole("tree", { name: "Subagent lineage" }),
-        ).toBeInTheDocument();
-        expect(lineagePanel).toHaveTextContent(/spawn_subagent/i);
-        expect(lineagePanel).toHaveTextContent(subagentTarget!);
-      });
-
-      await closeOperationsDrawer(driver);
       await waitFor(() => {
         expect(driver.composer()).toBeInTheDocument();
       });

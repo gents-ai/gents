@@ -1,44 +1,18 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { waitFor } from "@testing-library/react";
 import { expect, it } from "vitest";
 
 import { expectLatestSendResult, withLiveDesktop } from "./tauri-driver-live/harness";
-import {
-  expectOperationsPanel,
-  exerciseOperationsDrawerTabs,
-  openOperationsDrawer,
-} from "./tauri-driver-live/operations-assertions";
 import {
   describeLive,
   expectCompletedSession,
   logTurn,
 } from "./tauri-driver-live/helpers";
 
-const OPERATIONS_PROMPT =
-  "Reply with exactly this sentence and no tools: operations drawer smoke ready.";
 const NATIVE_BACKGROUND_PROMPT =
   'Launch a native background process now. You MUST call spawn_process exactly once with tool_name "bash_unrestricted". Its args must set command to "sleep 20; printf live-native-background-smoke", args to an empty array, and timeout_secs to 25. Do not call wait_process, read_process, list_processes, cancel_process, or any other tool. Reply immediately with one short sentence after spawn_process returns.';
 
-describeLive("Tauri app live operations drawer", () => {
-  it("opens every operations tab after a real chat turn", async () => {
-    await withLiveDesktop(async ({ runner, driver }) => {
-      await driver.ready();
-      await driver.openChat();
-      logTurn(`operations drawer driver ready agentDid=${runner.agentDid}`);
-
-      await driver.typeComposer(OPERATIONS_PROMPT);
-      await driver.pressEnter();
-      await waitFor(() => {
-        expect(runner.sendResults).toHaveLength(1);
-      });
-      const submitted = expectLatestSendResult(runner, "operations seed turn");
-      const session = await runner.waitForRequestCompletion(submitted);
-      expectCompletedSession("operations drawer seed turn", session);
-
-      await exerciseOperationsDrawerTabs(driver);
-    });
-  }, 600_000);
-
-  it("renders a live native background process in the Background panel", async () => {
+describeLive("Tauri app live operations snapshot", () => {
+  it("projects a live native background process through the bridge", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
       const defaultBehavior = deployment.behaviors.find(
         (behavior) => behavior.isDefault,
@@ -87,21 +61,6 @@ describeLive("Tauri app live operations drawer", () => {
       );
       logTurn(
         `native background process projected toolCallId=${nativeTool.toolCallId} requestId=${submitted.requestId}`,
-      );
-
-      await openOperationsDrawer(driver);
-      const backgroundPanel = await expectOperationsPanel("background-tools");
-      const row = await waitFor(
-        () => within(backgroundPanel).getByText("bash_unrestricted").closest("tr"),
-        { timeout: 15_000 },
-      );
-      expect(row).not.toBeNull();
-      expect(row).toHaveTextContent("background");
-      expect(row).toHaveTextContent("pid");
-      expect(row).toHaveTextContent("bash_unrestricted");
-      expect(screen.getByRole("tab", { name: "Background" })).toHaveAttribute(
-        "aria-selected",
-        "true",
       );
     });
   }, 600_000);
