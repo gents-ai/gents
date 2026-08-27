@@ -64,7 +64,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use gents::graphql::escape_graphql_string;
+use gents::graphql::{
+    escape_graphql_string, graphql_mutation_with_transaction_retry, single_mutation_document,
+};
 use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeiling};
 use serde_json::Value;
@@ -155,11 +157,23 @@ async fn set_schedule_enabled(
             ) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mutation).await;
+    let resp = graphql_mutation_with_transaction_retry(
+        node,
+        &mutation,
+        "update Schedule.enabled in generation-bump fixture",
+    )
+    .await
+    .expect("update Schedule.enabled");
+    let updated = single_mutation_document(&resp, "update_Schedule").unwrap_or_else(|error| {
+        panic!(
+            "decode Schedule.enabled update for {schedule_id}: {error}; response data: {:?}",
+            resp.data
+        )
+    });
     assert!(
-        !resp.has_errors(),
-        "update Schedule.enabled failed: {:?}",
-        resp.errors
+        updated.is_some(),
+        "update Schedule.enabled must match exactly one document for {schedule_id}; response data: {:?}",
+        resp.data
     );
 }
 
