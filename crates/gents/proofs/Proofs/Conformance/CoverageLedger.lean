@@ -743,6 +743,16 @@ def caseCoverage : List CoverageEntry :=
       "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "graph_pipeline_revision_gate_cases"
+      "GraphPipelineRevisionGateCases"
+      "conformance::graph_pipeline::generated_revision_gate_cases_fence_publication_and_start_readiness")
+      "graph-pipeline" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "graph_pipeline_run_terminal_cases"
+      "GraphPipelineRunTerminalCases"
+      "conformance::graph_pipeline::generated_run_terminal_cases_fence_completion_cas")
+      "graph-pipeline" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "recovery_equivalence_cases"
       "RecoveryEquivalenceCases"
       "conformance::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract")

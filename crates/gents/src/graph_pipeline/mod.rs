@@ -13,7 +13,10 @@ pub use compiler::{
     bind_package_plan, compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy,
     GraphCompileError,
 };
-pub use runtime::{publish_graph_plan, PublishedGraph};
+pub use runtime::{
+    graph_run_terminal_decision, publish_graph_plan, revision_gate_decision,
+    GraphRunTerminalDecision, PublishedGraph, RevisionGateDecision,
+};
 pub use tools::{
     CompileGraphArgs, CompileGraphResponse, CompileGraphTool, GraphPipelineToolError,
     COMPILE_GRAPH_TOOL_NAME, GRAPH_PIPELINE_TOOL_NAMES,

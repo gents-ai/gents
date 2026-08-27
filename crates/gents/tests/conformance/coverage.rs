@@ -513,6 +513,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GraphPipelineValidationCases".to_string(),
         ));
     }
+    if !snapshot.graph_pipeline_revision_gate_cases.is_empty() {
+        emitted.insert((
+            "graph_pipeline_revision_gate_cases".to_string(),
+            "GraphPipelineRevisionGateCases".to_string(),
+        ));
+    }
+    if !snapshot.graph_pipeline_run_terminal_cases.is_empty() {
+        emitted.insert((
+            "graph_pipeline_run_terminal_cases".to_string(),
+            "GraphPipelineRunTerminalCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.trigger_dispatch_case_count,
         snapshot.trigger_dispatch_cases.len(),
@@ -1137,6 +1149,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "goal_decision_cases",
         "goal_transition_cases",
         "graph_pipeline_validation_cases",
+        "graph_pipeline_revision_gate_cases",
+        "graph_pipeline_run_terminal_cases",
         "workspace_cases",
         "workspace_binding_cases",
         "callback_cases",
