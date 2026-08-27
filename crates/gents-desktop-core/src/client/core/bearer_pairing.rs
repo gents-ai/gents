@@ -15,7 +15,7 @@ use gents_protocol::bearer_token::{
     bearer_signing_payload, check_bearer_freshness, decode_bearer, derive_bearer_readiness_key,
     BearerClaimRecord, BearerInviteToken, BearerPairingReadyRecord,
 };
-use gents_protocol::network_token::{EndpointRecord, MembershipRecord, NetworkRecord};
+use gents_protocol::network_token::{EndpointRecord, MembershipRecord};
 use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
 use tokio::time::{sleep, timeout, Instant};
@@ -120,7 +120,6 @@ impl ClientCore {
         .context("connecting to the verified bearer-invite peer")?;
 
         ensure_local_network_match(self.node.as_ref(), token).await?;
-        write_agent_network(self.node.as_ref(), &token.network).await?;
         let local_endpoint =
             publish_local_endpoint(self.node.as_ref(), &self.p2p, &self.principal).await?;
         write_bearer_claim_if_absent(
@@ -904,39 +903,6 @@ async fn ensure_local_network_match(node: &EmbeddedNode, token: &BearerInviteTok
     Ok(())
 }
 
-async fn write_agent_network(node: &EmbeddedNode, record: &NetworkRecord) -> Result<()> {
-    let network_id = escape_graphql_string(&record.network_id);
-    let admin_did = escape_graphql_string(&record.admin_did);
-    let display_name = escape_graphql_string(&record.display_name);
-    let default_template = escape_graphql_string(&record.default_template);
-    let created_at = escape_graphql_string(&record.created_at);
-    let admin_sig = escape_graphql_string(&bs58::encode(&record.sig).into_string());
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentNetwork(
-                filter: {{ network_id: {{ _eq: "{network_id}" }} }},
-                add: {{
-                    network_id: "{network_id}",
-                    admin_did: "{admin_did}",
-                    display_name: "{display_name}",
-                    default_template: "{default_template}",
-                    created_at: "{created_at}",
-                    admin_sig: "{admin_sig}"
-                }},
-                update: {{
-                    admin_did: "{admin_did}",
-                    display_name: "{display_name}",
-                    default_template: "{default_template}",
-                    created_at: "{created_at}",
-                    admin_sig: "{admin_sig}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    ensure_no_errors(&response, "pinning signed bearer network root")
-}
-
 fn bearer_claim_create_mutation(record: &BearerClaimRecord) -> String {
     let token = escape_graphql_string(&record.token);
     let claimant_did = escape_graphql_string(&record.claimant_did);
@@ -978,6 +944,7 @@ mod tests {
     use super::*;
     use crate::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::bearer_token::{encode_bearer, BearerInviteToken, BEARER_TOKEN_VERSION};
+    use gents_protocol::network_token::NetworkRecord;
 
     async fn signed_token(now: DateTime<Utc>) -> (tempfile::TempDir, PrincipalIdentity, String) {
         let temp = tempfile::tempdir().expect("tempdir");
