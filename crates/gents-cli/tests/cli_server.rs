@@ -126,6 +126,89 @@ fn count_inference_calls(rows: &[Value], behavior_id: Option<&str>, call_state: 
         .count() as i64
 }
 
+fn wait_for_server_exit(
+    serve: &mut ServeProcess,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = serve.child.try_wait().context("checking server exit")? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            let (stdout, stderr) = serve.captured_output()?;
+            return Err(anyhow!(
+                "server did not exit within {timeout:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let mut serve = spawn_server(&home_dir, 0)?;
+    let status = wait_for_server_exit(&mut serve, Duration::from_secs(5))?;
+    let (stdout, stderr) = serve.captured_output()?;
+
+    assert!(!status.success(), "server unexpectedly exited successfully");
+    assert!(
+        !stdout.contains("\"status\": \"serving\""),
+        "server published readiness for an unknowable ephemeral port:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("--http-port 0 is not supported")
+            && stderr.contains("choose an explicit non-zero port"),
+        "missing actionable ephemeral-port diagnostic:\n{stderr}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-bind-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-bind-{}", Uuid::new_v4().simple());
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).context("reserving occupied HTTP port")?;
+    let port = listener.local_addr()?.port();
+    let mut serve = spawn_server(&home_dir, port)?;
+    let status = wait_for_server_exit(&mut serve, Duration::from_secs(10))?;
+    let (stdout, stderr) = serve.captured_output()?;
+
+    assert!(!status.success(), "server unexpectedly exited successfully");
+    assert!(
+        !stdout.contains("\"status\": \"serving\""),
+        "server published readiness after bind failure:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("embedded HTTP listener cannot bind")
+            && stderr.contains(&format!("127.0.0.1:{port}")),
+        "missing actionable bind diagnostic:\n{stderr}"
+    );
+    drop(listener);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

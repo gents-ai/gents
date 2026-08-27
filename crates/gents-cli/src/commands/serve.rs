@@ -2,10 +2,10 @@ use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use axum::http::Uri;
+use axum::{http::Uri, routing::get, Router};
 use gents::defra_node::EmbeddedNode;
 use gents::{
     AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, ProcessLifecycleObserver,
@@ -13,6 +13,7 @@ use gents::{
 };
 use serde_json::{json, Value};
 use tokio::sync::watch;
+use uuid::Uuid;
 
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
@@ -299,6 +300,81 @@ pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
     serve_with_control(args, None, None).await
 }
 
+async fn preflight_embedded_http_bind(addr: SocketAddr) -> Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("embedded HTTP listener cannot bind to {addr}"))?;
+    drop(listener);
+    Ok(())
+}
+
+fn embedded_http_probe_addr(addr: SocketAddr) -> SocketAddr {
+    if !addr.ip().is_unspecified() {
+        return addr;
+    }
+
+    match addr {
+        SocketAddr::V4(addr) => SocketAddr::new(Ipv4Addr::LOCALHOST.into(), addr.port()),
+        SocketAddr::V6(addr) => SocketAddr::new(std::net::Ipv6Addr::LOCALHOST.into(), addr.port()),
+    }
+}
+
+fn embedded_http_probe_router(path: &str, token: String) -> Router {
+    Router::new().route(
+        path,
+        get(move || {
+            let token = token.clone();
+            async move { token }
+        }),
+    )
+}
+
+async fn wait_for_embedded_http_bind(
+    addr: SocketAddr,
+    path: &str,
+    expected_token: &str,
+) -> Result<()> {
+    let probe_addr = embedded_http_probe_addr(addr);
+    let url = format!("http://{probe_addr}{path}");
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_millis(250))
+        .timeout(Duration::from_millis(500))
+        .build()
+        .context("building embedded HTTP readiness client")?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_error;
+
+    loop {
+        match client.get(&url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                let body = response
+                    .text()
+                    .await
+                    .context("reading embedded HTTP readiness response")?;
+                if status.is_success() && body == expected_token {
+                    return Ok(());
+                }
+                anyhow::bail!(
+                    "embedded HTTP listener at {addr} answered the instance-specific readiness \
+                     probe with status {status} and an unexpected body; another service may own \
+                     the configured address"
+                );
+            }
+            Err(error) => last_error = error,
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "embedded HTTP listener did not become ready at {addr} within 5 seconds: \
+                 {last_error}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 pub(crate) async fn serve_with_control(
     mut args: ServeArgs,
     external_shutdown: Option<watch::Receiver<bool>>,
@@ -325,6 +401,12 @@ pub(crate) async fn serve_with_control(
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     let http_addr = SocketAddr::new(args.http_addr, args.http_port);
+    if args.http_port == 0 {
+        anyhow::bail!(
+            "--http-port 0 is not supported: the embedded HTTP server does not expose its \
+             ephemeral bound port; choose an explicit non-zero port"
+        );
+    }
     let graphql_url = format!(
         "http://{}:{}/api/v0/graphql",
         display_host(args.http_addr),
@@ -431,17 +513,24 @@ pub(crate) async fn serve_with_control(
                 reason: "the Codex shim has not bound yet".to_string(),
             }
         }));
-    let mut node_builder = crate::persistent_node_builder(&data_dir)?.with_http(
-        defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(runtime_contract_router(
-            graphql_url.clone(),
-            agent_name.clone(),
-            identity.did().to_string(),
-            mcp_query_scope,
-            Some(backend_health.clone()),
-            p2p_admission_state.clone(),
-            Some(codex_shim_health.clone()),
-        )),
-    );
+    preflight_embedded_http_bind(http_addr).await?;
+    let bind_probe_token = Uuid::new_v4().simple().to_string();
+    let bind_probe_path = format!("/_gents/http-bind/{}", Uuid::new_v4().simple());
+    let extra_routes = runtime_contract_router(
+        graphql_url.clone(),
+        agent_name.clone(),
+        identity.did().to_string(),
+        mcp_query_scope,
+        Some(backend_health.clone()),
+        p2p_admission_state.clone(),
+        Some(codex_shim_health.clone()),
+    )
+    .merge(embedded_http_probe_router(
+        &bind_probe_path,
+        bind_probe_token.clone(),
+    ));
+    let mut node_builder = crate::persistent_node_builder(&data_dir)?
+        .with_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
         node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
     }
@@ -454,6 +543,12 @@ pub(crate) async fn serve_with_control(
             .await
             .context("building embedded DefraDB node")?,
     );
+    if let Err(error) =
+        wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await
+    {
+        node.shutdown().await;
+        return Err(error);
+    }
     gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
     let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
@@ -1133,6 +1228,32 @@ mod shim_host_tests {
     fn ipv6_shim_hosts_are_bracketed() {
         assert_eq!(display_shim_host("::1".parse().unwrap()), "[::1]");
         assert_eq!(display_shim_host("127.0.0.1".parse().unwrap()), "127.0.0.1");
+    }
+
+    #[tokio::test]
+    async fn embedded_http_probe_rejects_an_unrelated_listener() {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind unrelated listener");
+        let addr = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/probe", get(|| async { "wrong-instance" })),
+            )
+            .await
+        });
+
+        let error = wait_for_embedded_http_bind(addr, "/probe", "expected-instance")
+            .await
+            .expect_err("unrelated listener must not satisfy readiness");
+        assert!(
+            error.to_string().contains("another service may own"),
+            "unexpected diagnostic: {error:#}"
+        );
+
+        server.abort();
+        let _ = server.await;
     }
 
     #[test]
