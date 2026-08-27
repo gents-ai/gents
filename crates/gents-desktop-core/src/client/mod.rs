@@ -14,6 +14,7 @@ pub use collection_resolver::CollectionResolver;
 pub use core::{
     BearerInvitePreview, BearerPairingResult, ClientCore, ClientCoreOptions, ClientPeerStatus,
     ClientRouteStatus, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
+    STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{

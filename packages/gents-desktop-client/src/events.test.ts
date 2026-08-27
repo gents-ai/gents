@@ -51,4 +51,18 @@ describe("listenToDesktopClientUpdates", () => {
     unlisten();
     expect(cleanup).toHaveBeenCalledOnce();
   });
+
+  it("forwards hydration wake events on the existing client-updated channel", async () => {
+    let registered: DesktopClientUpdatedHandler | null = null;
+    setDesktopClientUpdatedListenerFactoryForTests(async (handler) => {
+      registered = handler;
+      return vi.fn();
+    });
+    const received: string[] = [];
+    await listenToDesktopClientUpdates((event) => {
+      if (event.reason) received.push(event.reason);
+    });
+    await registered!({ reason: "hydration" });
+    expect(received).toEqual(["hydration"]);
+  });
 });

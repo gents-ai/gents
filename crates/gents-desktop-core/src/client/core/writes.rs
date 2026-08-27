@@ -1501,10 +1501,7 @@ impl ClientCore {
         self.refresh_hydration_progress(&session_id, &agent_did)
             .await?;
         let progress = self.hydration_progress();
-        if matches!(
-            progress.phase,
-            gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase::Complete
-        ) {
+        if !should_write_session_hydration_request(&progress, &session_id, &agent_did) {
             return Ok(());
         }
         self.request_session_hydration(&session_id, &agent_did)
@@ -1609,6 +1606,21 @@ impl ClientCore {
 struct HydrationDocIdRow {
     #[serde(rename = "_docID")]
     doc_id: Option<String>,
+}
+
+fn should_write_session_hydration_request(
+    progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+    session_id: &str,
+    agent_did: &str,
+) -> bool {
+    use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
+    if progress.session_id != session_id || progress.agent_did != agent_did {
+        return true;
+    }
+    matches!(
+        progress.phase,
+        ClientHydrationPhase::Idle | ClientHydrationPhase::Failed
+    )
 }
 
 async fn load_local_hydration_count(
@@ -1837,6 +1849,58 @@ mod delete_source_tests {
         }));
 
         assert_eq!(local_hydration_count_from_response(&response).unwrap(), 6);
+    }
+
+    #[test]
+    fn hydration_request_is_written_only_for_idle_failed_or_session_change() {
+        use gents::agent::p2p_reconcile::session_hydration::{
+            ClientHydrationPhase, ClientHydrationProgress,
+        };
+
+        let serving = ClientHydrationProgress {
+            session_id: "session-1".into(),
+            agent_did: "did:agent".into(),
+            phase: ClientHydrationPhase::Serving,
+            merged_count: 3,
+            served_count: Some(8),
+        };
+        assert!(!should_write_session_hydration_request(
+            &serving,
+            "session-1",
+            "did:agent",
+        ));
+        assert!(should_write_session_hydration_request(
+            &serving,
+            "session-2",
+            "did:agent",
+        ));
+
+        let failed = ClientHydrationProgress {
+            phase: ClientHydrationPhase::Failed,
+            ..serving.clone()
+        };
+        assert!(should_write_session_hydration_request(
+            &failed,
+            "session-1",
+            "did:agent",
+        ));
+
+        let complete = ClientHydrationProgress {
+            phase: ClientHydrationPhase::Complete,
+            merged_count: 8,
+            served_count: Some(8),
+            ..serving
+        };
+        assert!(!should_write_session_hydration_request(
+            &complete,
+            "session-1",
+            "did:agent",
+        ));
+        assert!(should_write_session_hydration_request(
+            &ClientHydrationProgress::default(),
+            "session-1",
+            "did:agent",
+        ));
     }
 
     #[test]

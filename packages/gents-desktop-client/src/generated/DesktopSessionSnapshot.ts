@@ -5,7 +5,8 @@ import type { RenderedTimelineItem } from "./RenderedTimelineItem.js";
 import type { ResponseView } from "./ResponseView.js";
 import type { RetryEligibilityView } from "./RetryEligibilityView.js";
 import type { SessionContextView } from "./SessionContextView.js";
+import type { SessionHydrationView } from "./SessionHydrationView.js";
 import type { SessionProjectionRevisionView } from "./SessionProjectionRevisionView.js";
 import type { SessionTimelinePageView } from "./SessionTimelinePageView.js";
 
-export type DesktopSessionSnapshot = { sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestResponse: ResponseView | null, activeResponseOverlay: ResponseView | null, pendingTurn: PendingTurnView | null, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };
+export type DesktopSessionSnapshot = { sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestResponse: ResponseView | null, activeResponseOverlay: ResponseView | null, pendingTurn: PendingTurnView | null, context: SessionContextView, timelineItems: Array<RenderedTimelineItem>, hydration?: SessionHydrationView | null, timelinePage?: SessionTimelinePageView | null, projectionRevision?: SessionProjectionRevisionView | null, };

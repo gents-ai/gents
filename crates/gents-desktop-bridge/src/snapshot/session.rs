@@ -211,6 +211,8 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
             store_version: projection_revision.store_version,
             reconcile_version: projection_revision.reconcile_version,
         });
+        snapshot.hydration =
+            super::hydration_view_for_session(&core.hydration_progress(), session_id, agent_did);
     }
     snapshot
 }

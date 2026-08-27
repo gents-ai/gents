@@ -36,6 +36,7 @@ export const deployment: DeploymentView = {
   graphql: null,
   dialSucceeded: true,
   pairingReady: true,
+  pairing: [],
   defaultBehaviorId: "default",
   agentPrincipal: {
     agentDid: "did:key:z6MkAgent",
