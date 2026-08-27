@@ -33,6 +33,7 @@ test.describe("mobile session sync fixture", () => {
       "data-hydration-phase",
       "complete",
     );
+    await expect(page.getByTestId("session-hydration-status")).toContainText("4 of 4");
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
       "healthy",
@@ -94,16 +95,15 @@ test.describe("mobile session sync fixture", () => {
   });
 
   test("offline recovers through the existing reconnect control", async ({ page }) => {
-    await gotoHarness(page, "session-hydration");
-    await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.goOffline());
+    await gotoHarness(page, "sync-offline");
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
       "offline",
     );
-    await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.recover());
+    await page.getByTestId("fleet-repair-p2p").click();
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
-      "syncing",
+      "healthy",
     );
   });
 });

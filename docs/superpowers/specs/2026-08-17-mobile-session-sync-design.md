@@ -144,7 +144,7 @@ Client writes it on session open (upsert by `request_key`); it rides the
 admits rows from paired, membership-valid peers whose session ownership checks
 out, enumerates the session's docs across the transcript collections
 (AgentRequest, AgentResponse, AgentMessage, AgentToolCall, AgentToolResult,
-AgentToolApproval, CompactionEntry), pushes them through the **existing
+CompactionEntry), pushes them through the **existing
 doc-pusher under the existing admission bounds and persisted retry ladder** —
 no new delivery machinery — then writes `served` + `served_doc_count`.
 Failures write `rejected` + detail; retry is the client's decision.

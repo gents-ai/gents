@@ -90,9 +90,6 @@ export type SessionSyncHarnessController = {
   progress(mergedCount: number, servedCount: number): void;
   complete(): void;
   fail(): void;
-  goOffline(): void;
-  recover(): void;
-  stall(): void;
 };
 
 type DesktopUiHarness = {
@@ -854,7 +851,21 @@ export function createDesktopUiHarness(
       };
     },
     async repairP2P() {
-      notify("runtime");
+      p2pStatus = "healthy";
+      const hydrationPhase = syncHealth.hydration?.phase;
+      syncHealth = {
+        ...syncHealth,
+        state:
+          hydrationPhase === "failed"
+            ? "failed"
+            : hydrationPhase === "requested" || hydrationPhase === "serving"
+              ? "syncing"
+              : "healthy",
+        offlineSince: null,
+        stalledSince: null,
+        connectedPeerCount: 1,
+        lastError: null,
+      };
       return snapshot();
     },
     async fetchSessionSnapshot(_sessionId, _agentDid, _requestId, timelinePage) {
@@ -1688,8 +1699,9 @@ export function createDesktopUiHarness(
     complete() {
       const session = sessions.get("session-remote");
       if (!session) return;
-      const mergedCount = Math.max(session.timelineItems.length, 2);
-      const hydration = remoteHydration("complete", mergedCount, mergedCount);
+      const servedCount =
+        session.hydration?.servedCount ?? Math.max(session.timelineItems.length, 2);
+      const hydration = remoteHydration("complete", servedCount, servedCount);
       sessions.set("session-remote", { ...session, hydration });
       syncHealth = { ...syncHealth, state: "healthy", hydration };
       notify("hydration");
@@ -1711,44 +1723,6 @@ export function createDesktopUiHarness(
         hydration,
       };
       notify("hydration");
-    },
-    goOffline() {
-      p2pStatus = "wedged";
-      syncHealth = {
-        ...syncHealth,
-        state: "offline",
-        offlineSince: STARTED_AT,
-        connectedPeerCount: 0,
-      };
-      notify("health");
-    },
-    recover() {
-      p2pStatus = "healthy";
-      const hydrationPhase = syncHealth.hydration?.phase;
-      syncHealth = {
-        ...syncHealth,
-        state:
-          hydrationPhase === "failed"
-            ? "failed"
-            : hydrationPhase === "requested" || hydrationPhase === "serving"
-              ? "syncing"
-              : "healthy",
-        offlineSince: null,
-        stalledSince: null,
-        connectedPeerCount: 1,
-        lastError: null,
-      };
-      notify("health");
-    },
-    stall() {
-      syncHealth = {
-        ...syncHealth,
-        state: "stalled",
-        stalledSince: STARTED_AT,
-        lastErrorClass: "RpcTimeout",
-        pairingRetryCount: 6,
-      };
-      notify("health");
     },
   };
 
