@@ -70,7 +70,6 @@ export function BearerPairingForm({
         onSubmit={(event) => void handleSubmit(event)}
       >
         <div className="fleet-pairing-copy">
-          <p className="eyebrow">Recommended</p>
           <h3>Pair with a signed invite</h3>
           <p className="muted">
             Scan the QR code on your agent or paste its one-time invite. The app

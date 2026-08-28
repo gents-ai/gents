@@ -44,12 +44,6 @@ export function AddPeerForm({
 
   return (
     <div className="fleet-pairing">
-      <BearerPairingForm
-        addingPeer={addingPeer}
-        busy={busy}
-        onPairBearer={onPairBearer}
-        pairingQrHint={pairingQrHint}
-      />
       <ManualPeerDiscoveryForm
         addingPeer={addingPeer}
         busy={busy}
@@ -59,6 +53,15 @@ export function AddPeerForm({
         peerForm={peerForm}
         onPeerFormChange={onPeerFormChange}
       />
+      <details className="fleet-alternative-disclosure">
+        <summary>Use a signed pairing invite</summary>
+        <BearerPairingForm
+          addingPeer={addingPeer}
+          busy={busy}
+          onPairBearer={onPairBearer}
+          pairingQrHint={pairingQrHint}
+        />
+      </details>
     </div>
   );
 }

@@ -78,21 +78,16 @@ export function useManualPeerDiscovery({
     }
   }
 
-  async function submit() {
+  async function connectFromStatus() {
     try {
-      const request = manualPeerReady
-        ? withGraphqlFallback(peerForm, serverAddress)
-        : await fetchServerStatus();
+      const request = await fetchServerStatus();
       await onSubmit(request);
-    } catch {
-    }
+    } catch {}
   }
 
-  async function fetchStatus() {
-    try {
-      await fetchServerStatus();
-    } catch {
-    }
+  async function submitManual() {
+    if (!manualPeerReady) return;
+    await onSubmit(withGraphqlFallback(peerForm, serverAddress));
   }
 
   return {
@@ -103,8 +98,8 @@ export function useManualPeerDiscovery({
     manualPeerReady,
     serverAddress,
     serverAddressReady,
-    fetchStatus,
-    submit,
+    connectFromStatus,
+    submitManual,
     updateConnectionJson,
     updateServerAddress,
   };

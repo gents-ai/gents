@@ -113,7 +113,7 @@ describe("FleetHostDashboard add connection flow", () => {
     fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
       target: { value: "http://127.0.0.1:9181" },
     });
-    fireEvent.click(screen.getByTestId("fleet-add-submit"));
+    fireEvent.click(screen.getByTestId("fleet-fetch-status"));
 
     await waitFor(() => {
       expect(onProbePeerAddress).toHaveBeenCalledWith("http://127.0.0.1:9181");
@@ -126,7 +126,7 @@ describe("FleetHostDashboard add connection flow", () => {
     });
   });
 
-  it("lets users preview discovered /status details before adding", async () => {
+  it("keeps discovered details available when adding the connection fails", async () => {
     const onProbePeerAddress = vi.fn(async () => ({
       agent_name: "api-gateway",
       agent_did: "did:key:z6MkGateway",
@@ -142,7 +142,9 @@ describe("FleetHostDashboard add connection flow", () => {
         p2pHealth={null}
         repairingP2P={false}
         starting={false}
-        onAddPeer={vi.fn()}
+        onAddPeer={vi.fn(async () => {
+          throw new Error("connection rejected");
+        })}
         onPairBearer={vi.fn()}
         onProbePeerAddress={onProbePeerAddress}
         onInitLocalRuntime={vi.fn()}
@@ -170,6 +172,7 @@ describe("FleetHostDashboard add connection flow", () => {
       expect(
         (screen.getByTestId("fleet-add-connection-json") as HTMLTextAreaElement).value,
       ).toContain('"agent_name": "api-gateway"');
+      expect(screen.getByText("connection rejected")).toBeInTheDocument();
     });
   });
 
@@ -247,6 +250,7 @@ describe("FleetHostDashboard add connection flow", () => {
     fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
       target: { value: "http://100.73.235.38:9181/api/v0/graphql" },
     });
+    fireEvent.click(screen.getByText("Enter connection details manually"));
     fireEvent.change(screen.getByTestId("fleet-add-label"), {
       target: { value: "studio-1-steward" },
     });
@@ -312,6 +316,7 @@ describe("FleetHostDashboard add connection flow", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Add Agent" }));
+    fireEvent.click(screen.getByText("Use a signed pairing invite"));
     fireEvent.change(screen.getByTestId("fleet-pair-label"), {
       target: { value: "amygdalabook-steward" },
     });

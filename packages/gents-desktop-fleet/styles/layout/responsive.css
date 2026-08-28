@@ -17,6 +17,7 @@
     }
 
     .fleet-local-runtime,
+    .fleet-status-form,
     .fleet-bearer-form,
     .fleet-discovery-row,
     .fleet-add-form,
@@ -57,6 +58,5 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
     }
-
   }
 }

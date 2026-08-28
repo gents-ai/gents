@@ -186,19 +186,40 @@ test.describe("desktop responsive layout guardrails", () => {
       .getByTestId("fleet-remote-disclosure")
       .locator(":scope > summary")
       .click();
-    await page.getByText("Advanced manual discovery", { exact: true }).click();
+
+    const statusForm = page.getByTestId("fleet-status-form");
+    const manualAlternative = page.locator(".fleet-manual-disclosure");
+    const signedAlternative = page.locator(".fleet-alternative-disclosure");
+    await expect(statusForm).toBeVisible();
+    await expect(manualAlternative).not.toHaveAttribute("open", "");
+    await expect(signedAlternative).not.toHaveAttribute("open", "");
+
+    const pairingOrder = await Promise.all(
+      [statusForm, manualAlternative, signedAlternative].map((locator) =>
+        locator.evaluate((element) => element.getBoundingClientRect().top),
+      ),
+    );
+    expect(pairingOrder[0]).toBeLessThan(pairingOrder[1]);
+    expect(pairingOrder[1]).toBeLessThan(pairingOrder[2]);
+
     await page.getByTestId("fleet-add-server-address").fill("http://studio-1:9191");
 
-    const submit = page.getByTestId("fleet-add-submit");
+    const submit = page.getByTestId("fleet-fetch-status");
     await expect(submit).toBeAttached();
     await submit.scrollIntoViewIfNeeded();
     await expect(submit).toBeVisible();
     await submit.click({ trial: true });
 
-    const shellScrollTop = await page
-      .locator(".app-shell")
-      .evaluate((element) => element.scrollTop);
-    expect(shellScrollTop).toBeGreaterThan(0);
+    const submitRect = await submit.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { bottom: rect.bottom, left: rect.left, right: rect.right, top: rect.top };
+    });
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    expect(submitRect.top).toBeGreaterThanOrEqual(0);
+    expect(submitRect.left).toBeGreaterThanOrEqual(0);
+    expect(submitRect.right).toBeLessThanOrEqual(viewport!.width);
+    expect(submitRect.bottom).toBeLessThanOrEqual(viewport!.height);
     await expectNoPageHorizontalOverflow(page);
   });
 
@@ -212,7 +233,6 @@ test.describe("desktop responsive layout guardrails", () => {
 
     await gotoHarness(page);
     await page.getByRole("button", { name: "Add Agent", exact: true }).click();
-    await page.getByText("Advanced manual discovery", { exact: true }).click();
 
     const address = page.getByTestId("fleet-add-server-address");
     const fetchStatus = page.getByTestId("fleet-fetch-status");
@@ -224,17 +244,16 @@ test.describe("desktop responsive layout guardrails", () => {
     await expect(fetchStatus).toBeVisible();
     await fetchStatus.click({ trial: true });
 
-    const dashboardScroll = await page
-      .getByTestId("fleet-dashboard")
-      .evaluate((element) => ({
-        clientHeight: element.clientHeight,
-        overflowY: getComputedStyle(element).overflowY,
-        scrollHeight: element.scrollHeight,
-        scrollTop: element.scrollTop,
-      }));
-    expect(dashboardScroll.overflowY).toBe("auto");
-    expect(dashboardScroll.scrollHeight).toBeGreaterThan(dashboardScroll.clientHeight);
-    expect(dashboardScroll.scrollTop).toBeGreaterThan(0);
+    const fetchStatusRect = await fetchStatus.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { bottom: rect.bottom, left: rect.left, right: rect.right, top: rect.top };
+    });
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    expect(fetchStatusRect.top).toBeGreaterThanOrEqual(0);
+    expect(fetchStatusRect.left).toBeGreaterThanOrEqual(0);
+    expect(fetchStatusRect.right).toBeLessThanOrEqual(viewport!.width);
+    expect(fetchStatusRect.bottom).toBeLessThanOrEqual(viewport!.height);
     await expectNoPageHorizontalOverflow(page);
   });
 });
