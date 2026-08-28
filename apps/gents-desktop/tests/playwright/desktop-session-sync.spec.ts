@@ -124,12 +124,37 @@ test.describe("mobile session sync fixture", () => {
     );
 
     await gotoHarness(page, "sync-stalled");
+    await page.evaluate(() => {
+      const root = document.documentElement;
+      root.style.setProperty("--mobile-safe-area-top", "47px");
+      root.style.setProperty("--mobile-safe-area-right", "13px");
+      root.style.setProperty("--mobile-safe-area-bottom", "34px");
+      root.style.setProperty("--mobile-safe-area-left", "11px");
+    });
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
       "stalled",
     );
     await page.getByTestId("sync-health-summary").click();
-    await expect(page.getByTestId("sync-health-details")).toContainText("RpcTimeout");
+    const details = page.getByTestId("sync-health-details");
+    await expect(details).toContainText("RpcTimeout");
+    const bounds = await details.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+        viewportHeight: window.innerHeight,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    if (bounds.viewportWidth <= 760) {
+      expect(bounds.top).toBeGreaterThanOrEqual(47 + 64);
+      expect(bounds.left).toBeGreaterThanOrEqual(11 + 8);
+      expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth - 13 - 8);
+      expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight - 34);
+    }
     await expectNoPageHorizontalOverflow(page);
 
     await gotoHarness(page, "sync-failed");

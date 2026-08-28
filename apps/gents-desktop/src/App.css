@@ -22,6 +22,7 @@
 @import "@source-inc/gents-desktop-chat/styles.css";
 @import "@source-inc/gents-desktop-fleet/styles.css";
 @import "@source-inc/gents-desktop-fleet/local-runtime.css";
+@import "@source-inc/gents-desktop-operations/styles.css";
 @import "./styles/config/workspace.css";
 @import "./styles/config/agent-behavior.css";
 @import "./styles/config/documents.css";

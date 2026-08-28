@@ -56,8 +56,12 @@
   }
 
   .holds-panel-tool {
+    min-width: 0;
+    overflow: hidden;
     font-weight: 600;
     color: var(--color-text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .holds-panel-args {
@@ -79,6 +83,7 @@
   .holds-panel-row-meta {
     font-size: var(--text-xs);
     color: var(--color-text-muted);
+    overflow-wrap: anywhere;
   }
 
   .holds-panel-args-details {

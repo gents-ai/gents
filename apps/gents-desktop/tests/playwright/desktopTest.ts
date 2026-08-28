@@ -8,6 +8,8 @@ export type HarnessScenario =
   | "save-error"
   | "backend-health-error"
   | "backend-unavailable"
+  | "tool-hold"
+  | "mailbox-overflow"
   | "long-content"
   | "active-turn"
   | "cascade-turn"
@@ -218,9 +220,13 @@ export async function expectNoPageHorizontalOverflow(page: Page) {
             ".config-editor",
             ".config-actions",
             ".confirm-dialog",
+            ".dialog",
             ".fleet-qr-dialog",
             ".context-meter-popover",
             ".sync-health-details",
+            ".holds-panel",
+            ".holds-panel-row",
+            ".mailbox-item",
           ].join(", "),
         ),
       )

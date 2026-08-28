@@ -18,6 +18,7 @@ const chatScenarios = [
   "coding",
   "session-hydration",
   "backend-unavailable",
+  "tool-hold",
 ] as const;
 
 const shellScenarios = [
@@ -66,6 +67,21 @@ test.describe("desktop responsive layout guardrails", () => {
       await expect(page.locator(".config-editor").first()).toBeVisible();
       await expectNoPageHorizontalOverflow(page);
     }
+  });
+
+  test("adversarial mailbox content stays inside the phone sidebar", async ({
+    page,
+  }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+    await gotoHarness(page, "mailbox-overflow");
+    await openChat(page);
+    await openChatNavigation(page);
+    await page.getByTestId("agent-tab-mailbox").click();
+    await expect(page.locator(".mailbox-item")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
   });
 
   test("phone chat uses one full-screen pane at a time", async ({ page }) => {
