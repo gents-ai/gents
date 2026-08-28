@@ -76,18 +76,27 @@ code-review graph accepts any local Git work tree and uses the existing
 principal, deployment, tool-surface, workspace, request, trigger, and graph-run
 machinery; bundling it grants no tools or execution authority.
 
-The catalog also includes a web deep-research graph. Register a healthy
-`web-research-mcp` service from the public
-[`source-inc/web-research-mcp`](https://github.com/source-inc/web-research-mcp)
-release, then run:
+The catalog also includes a web deep-research graph. First stand up the public
+search and extraction stack; its single entrypoint waits for real SearXNG and
+Firecrawl smoke checks before returning:
+
+```bash
+git clone https://github.com/source-inc/web-research-mcp.git
+cd web-research-mcp
+./scripts/stack up
+```
+
+Register the resulting `http://127.0.0.1:9213/mcp` endpoint as the online
+`web-research-mcp` service in Gents. Then install the graph and run it with live
+fan-out progress:
 
 ```bash
 gents graph install web-deep-research
 gents graph run web-deep-research \
   --question "What changed in the MCP security guidance, and what should operators do?" \
-  --investigator-count 4
-gents graph watch <run-id>
-gents graph result <run-id>
+  --investigator-count 4 \
+  --watch
+gents graph result <run-id> | tee web-research-report.md
 ```
 
 The graph plans a closed assignment set, fans out investigators, waits for the
