@@ -145,7 +145,6 @@ impl DefraSessionHook {
         lifecycle.start_running().await?;
 
         let node = self.node.clone();
-        let executions = self.background_executions.clone();
         let live_outputs = self.background_live_outputs.clone();
         let execution_call_id = background_tool_call_id.clone();
         let execution_session_id = session_id.clone();
@@ -402,10 +401,12 @@ impl DefraSessionHook {
                 }
             }
 
-            executions.remove(&execution_call_id).await;
             live_outputs.remove(&execution_call_id).await;
+            // Keep volatile ownership attached to the spawned task itself.
+            // Dropping this guard after cleanup signals ordinary completion;
+            // task panic or abort also releases ownership for recovery.
+            drop(execution_reservation);
         });
-        execution_reservation.disarm();
 
         Ok(self.skip_tool_result(
             SPAWN_PROCESS_TOOL_NAME,
