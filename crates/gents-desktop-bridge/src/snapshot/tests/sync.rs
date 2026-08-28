@@ -11,9 +11,7 @@ use gents_desktop_core::remote_admin::PairingErrorClass;
 use serde_json::json;
 
 use crate::contract::EVENT_REASONS;
-use crate::snapshot::{
-    hydration_view_for_session, to_hydration_view, to_pairing_collection_view, to_sync_health_view,
-};
+use crate::snapshot::{to_hydration_view, to_pairing_collection_view, to_sync_health_view};
 use crate::types::ClientUpdateEvent;
 
 fn t(secs: u64) -> SystemTime {
@@ -55,14 +53,6 @@ fn hydration_view_copies_receiver_counts_exactly() {
 }
 
 #[test]
-fn session_snapshot_suppresses_hydration_from_another_session() {
-    let progress = serving_progress();
-    assert!(hydration_view_for_session(&progress, "session-1", Some("did:test:agent")).is_some());
-    assert!(hydration_view_for_session(&progress, "session-2", Some("did:test:agent")).is_none());
-    assert!(hydration_view_for_session(&progress, "session-1", Some("did:other")).is_none());
-}
-
-#[test]
 fn sync_health_view_keeps_failed_from_collapsing_into_syncing() {
     let mut pairing = PairingCollectionStatus::new("AgentSession");
     pairing.record_retry(PairingErrorClass::RemoteUnauthorized);
@@ -77,14 +67,11 @@ fn sync_health_view_keeps_failed_from_collapsing_into_syncing() {
             last_failure_at: None,
         },
         &[connected_peer(vec![pairing])],
-        &serving_progress(),
     );
     assert_eq!(health.state, SyncHealthState::Failed);
     let view = to_sync_health_view(&health);
     assert_eq!(view.state, "failed");
     assert_eq!(view.last_error_class.as_deref(), Some("RemoteUnauthorized"));
-    assert_eq!(view.hydration.phase, "serving");
-    assert_eq!(view.hydration.merged_count, 4);
     assert_eq!(view.pairing_retry_count, 1);
 }
 
@@ -108,11 +95,12 @@ fn pairing_collection_view_preserves_retry_stuck_and_timestamps() {
 }
 
 #[test]
-fn client_update_event_serializes_hydration_reason() {
-    let event = ClientUpdateEvent::coarse("hydration");
+fn client_update_event_serializes_store_reason_for_projection_wakes() {
+    let event = ClientUpdateEvent::coarse("store");
     assert_eq!(
         serde_json::to_value(&event).unwrap(),
-        json!({ "reason": "hydration" })
+        json!({ "reason": "store" })
     );
-    assert!(EVENT_REASONS.contains(&"hydration"));
+    assert!(EVENT_REASONS.contains(&"store"));
+    assert!(!EVENT_REASONS.contains(&"hydration"));
 }

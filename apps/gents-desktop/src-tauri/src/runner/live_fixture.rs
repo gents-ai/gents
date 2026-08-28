@@ -222,7 +222,6 @@ impl LiveBridgeFixture {
             runtime.spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
                 let mut health_updates = desktop_core.p2p_health_updates();
-                let mut hydration_updates = desktop_core.hydration_progress_updates();
                 loop {
                     tokio::select! {
                         changed = store_updates.changed() => {
@@ -232,12 +231,6 @@ impl LiveBridgeFixture {
                             update_version.fetch_add(1, Ordering::SeqCst);
                         }
                         changed = health_updates.changed() => {
-                            if changed.is_err() {
-                                break;
-                            }
-                            update_version.fetch_add(1, Ordering::SeqCst);
-                        }
-                        changed = hydration_updates.changed() => {
                             if changed.is_err() {
                                 break;
                             }
@@ -318,7 +311,6 @@ impl LiveBridgeFixture {
             runtime.spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
                 let mut health_updates = desktop_core.p2p_health_updates();
-                let mut hydration_updates = desktop_core.hydration_progress_updates();
                 loop {
                     tokio::select! {
                         changed = store_updates.changed() => {
@@ -328,12 +320,6 @@ impl LiveBridgeFixture {
                             update_version.fetch_add(1, Ordering::SeqCst);
                         }
                         changed = health_updates.changed() => {
-                            if changed.is_err() {
-                                break;
-                            }
-                            update_version.fetch_add(1, Ordering::SeqCst);
-                        }
-                        changed = hydration_updates.changed() => {
                             if changed.is_err() {
                                 break;
                             }

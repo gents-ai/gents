@@ -97,7 +97,9 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
     core.ensure_session_hydration_started(session_id, agent_did)
         .await?;
 
-    let progress = core.hydration_progress();
+    let progress = core
+        .session_hydration_progress(session_id, agent_did)
+        .await?;
     assert_eq!(progress.phase.as_str(), "serving");
     assert_eq!(progress.merged_count, 2);
     assert_eq!(progress.served_count, None);
@@ -147,8 +149,13 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
     let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
     let agent_did = "did:test:amy";
     let session_id = "session-rejected";
+    let other_session_id = "session-other";
     let request_key =
         gents::graphql::escape_graphql_string(&format!("{}:{session_id}", core.local_peer_id()));
+    let other_request_key = gents::graphql::escape_graphql_string(&format!(
+        "{}:{other_session_id}",
+        core.local_peer_id()
+    ));
     let response = core
         .node()
         .execute(&format!(
@@ -164,6 +171,16 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
                     served_doc_count: 0
                     processed_at: "2026-08-28T00:00:01Z"
                 }}) {{ _docID }}
+                other: create_SessionHydrationRequest(input: {{
+                    request_key: "{other_request_key}"
+                    requester_did: "{requester_did}"
+                    agent_did: "{agent_did}"
+                    session_id: "{other_session_id}"
+                    created_at: "2026-08-28T00:00:00Z"
+                    status: "pending"
+                    status_detail: ""
+                    served_doc_count: 0
+                }}) {{ _docID }}
             }}"#
         ))
         .await;
@@ -177,44 +194,75 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         .await?;
     core.ensure_session_hydration_started(session_id, agent_did)
         .await?;
-    assert_eq!(core.hydration_progress().phase.as_str(), "failed");
+    assert_eq!(
+        core.session_hydration_progress(session_id, agent_did)
+            .await?
+            .phase
+            .as_str(),
+        "failed"
+    );
     assert_eq!(
         hydration_request_status(&core, &request_key).await?,
         Some("rejected".to_string()),
         "passive focus must not rewrite a terminal request"
     );
 
-    let failed_progress = core.hydration_progress();
+    let failed_progress = core
+        .session_hydration_progress(session_id, agent_did)
+        .await?;
+    let other_progress = core
+        .session_hydration_progress(other_session_id, agent_did)
+        .await?;
+    assert_eq!(other_progress.phase.as_str(), "requested");
     assert!(core
         .ensure_session_hydration_started(session_id, "did:test:wrong-agent")
         .await
         .is_err());
     assert_eq!(
-        core.hydration_progress(),
+        core.session_hydration_progress(session_id, agent_did)
+            .await?,
         failed_progress,
-        "a mismatched passive start must not retarget published progress"
+        "a mismatched passive start must not alter the original target"
     );
     assert!(core
         .retry_session_hydration(session_id, "did:test:wrong-agent")
         .await
         .is_err());
     assert_eq!(
-        core.hydration_progress(),
+        core.session_hydration_progress(session_id, agent_did)
+            .await?,
         failed_progress,
-        "a rejected retry must not retarget published progress"
+        "a rejected retry must not alter the original target"
     );
     assert_eq!(
         hydration_request_status(&core, &request_key).await?,
         Some("rejected".to_string()),
         "a rejected retry must not rewrite the terminal request"
     );
+    assert_eq!(
+        core.session_hydration_progress(other_session_id, agent_did)
+            .await?,
+        other_progress,
+        "observing and rejecting another target must not overwrite this session"
+    );
 
     core.retry_session_hydration(session_id, agent_did).await?;
-    assert_eq!(core.hydration_progress().phase.as_str(), "requested");
+    assert_eq!(
+        core.session_hydration_progress(session_id, agent_did)
+            .await?
+            .phase
+            .as_str(),
+        "requested"
+    );
     assert_eq!(
         hydration_request_status(&core, &request_key).await?,
         Some("pending".to_string()),
         "explicit retry owns the terminal reset"
+    );
+    assert_eq!(
+        hydration_request_status(&core, &other_request_key).await?,
+        Some("pending".to_string()),
+        "retrying one target must not rewrite another request row"
     );
 
     core.shutdown().await?;

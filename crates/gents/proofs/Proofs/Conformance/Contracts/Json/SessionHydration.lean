@@ -228,4 +228,49 @@ def sessionHydrationProgressCaseJson (w : SessionHydrationProgressCase) : String
 def sessionHydrationProgressCasesJson : String :=
   jsonArray (sessionHydrationProgressCases.map sessionHydrationProgressCaseJson)
 
+structure SessionHydrationDurableCase where
+  name : String
+  status : String
+  merged : Nat
+  served : Option Nat
+
+def durableRequest (w : SessionHydrationDurableCase) : SessionHydration.DurableRequest :=
+  match w.status with
+  | "pending" => .pending
+  | "served" => .served (w.served.getD 0)
+  | "rejected" => .rejected w.served
+  | _ => .missing
+
+def sessionHydrationDurableCases : List SessionHydrationDurableCase :=
+  [ { name := "missing_with_local_rows_stays_idle", status := "missing", merged := 3,
+      served := none }
+  , { name := "pending_without_rows_is_requested", status := "pending", merged := 0,
+      served := none }
+  , { name := "pending_with_rows_is_serving", status := "pending", merged := 2,
+      served := none }
+  , { name := "served_waits_for_coverage", status := "served", merged := 2,
+      served := some 5 }
+  , { name := "served_completes_at_coverage", status := "served", merged := 5,
+      served := some 5 }
+  , { name := "empty_served_completes", status := "served", merged := 0,
+      served := some 0 }
+  , { name := "rejected_is_failed", status := "rejected", merged := 2,
+      served := some 5 }
+  ]
+
+def sessionHydrationDurableCaseJson (w : SessionHydrationDurableCase) : String :=
+  let next := SessionHydration.projectDurable
+    (durableRequest w) w.merged "session-exact" "agent-exact"
+  "{"
+    ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"status\":" ++ jsonString w.status ++ ","
+    ++ "\"merged\":" ++ toString w.merged ++ ","
+    ++ "\"served\":" ++ optionNatString w.served ++ ","
+    ++ "\"expected_phase\":" ++ jsonString (phaseString next.phase) ++ ","
+    ++ "\"expected_merged\":" ++ toString next.mergedCount
+    ++ "}"
+
+def sessionHydrationDurableCasesJson : String :=
+  jsonArray (sessionHydrationDurableCases.map sessionHydrationDurableCaseJson)
+
 end Conformance.Contracts

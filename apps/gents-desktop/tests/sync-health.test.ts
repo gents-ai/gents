@@ -19,13 +19,6 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     pairingRetryCount: 0,
     routeRetryCount: 0,
     connectedPeerCount: 1,
-    hydration: {
-      sessionId: "session-1",
-      agentDid: "did:test:agent",
-      phase: "idle",
-      mergedCount: 0,
-      servedCount: null,
-    },
     ...overrides,
   };
 }
@@ -34,21 +27,7 @@ describe("syncHealthLabel", () => {
   it("names healthy, syncing, stalled, offline-since, and failed", () => {
     const now = Date.parse("2026-08-27T12:00:00Z");
     expect(syncHealthLabel(health(), now)).toBe("Sync healthy");
-    expect(
-      syncHealthLabel(
-        health({
-          state: "syncing",
-          hydration: {
-            sessionId: "session-1",
-            agentDid: "did:test:agent",
-            phase: "serving",
-            mergedCount: 3,
-            servedCount: 9,
-          },
-        }),
-        now,
-      ),
-    ).toBe("Syncing · 3 of 9");
+    expect(syncHealthLabel(health({ state: "syncing" }), now)).toBe("Syncing");
     expect(
       syncHealthLabel(
         health({
@@ -75,7 +54,7 @@ describe("syncHealthLabel", () => {
 });
 
 describe("syncHealthDiagnostics", () => {
-  it("exposes pairing, route, error-class, stuck-since, and hydration counters", () => {
+  it("exposes global pairing, route, error-class, and stuck-since counters", () => {
     const diagnostics = syncHealthDiagnostics(
       health({
         state: "stalled",

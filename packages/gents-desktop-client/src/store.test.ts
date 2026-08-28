@@ -33,7 +33,7 @@ describe("createDesktopStore", () => {
     });
     const client = createDesktopClient(transport);
 
-    await client.api.retrySessionHydration?.("session-1");
+    await client.api.retrySessionHydration("session-1");
 
     expect(transport.calls).toEqual([
       {

@@ -113,12 +113,6 @@ pub fn project_runtime_snapshot(
     if !grants.fleet_read {
         runtime.listen_addresses.clear();
     }
-    if !grants.session_read {
-        if let Some(sync_health) = runtime.sync_health.as_mut() {
-            sync_health.hydration.session_id.clear();
-            sync_health.hydration.agent_did.clear();
-        }
-    }
     runtime.deployments = runtime
         .deployments
         .into_iter()
@@ -242,7 +236,7 @@ mod tests {
         AgentPrincipalView, BehaviorEnvironmentView, BehaviorView, ClientRouteStatusView,
         ConversationSummary, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
         DesktopRuntimeSnapshot, MailboxItemView, P2PHealthView, PairingCollectionStatusView,
-        SavedPeerView, SessionHydrationView, SkillView, SyncHealthView,
+        SavedPeerView, SkillView, SyncHealthView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
@@ -281,16 +275,7 @@ mod tests {
                     last_ok_at: None,
                     last_failure_at: None,
                 },
-                sync_health: Some(SyncHealthView {
-                    hydration: SessionHydrationView {
-                        session_id: "session-secret".into(),
-                        agent_did: "did:test:secret".into(),
-                        phase: "serving".into(),
-                        merged_count: 2,
-                        served_count: Some(4),
-                    },
-                    ..SyncHealthView::default()
-                }),
+                sync_health: Some(SyncHealthView::default()),
                 bootstrap_errors: vec![],
                 last_mutation_error: None,
                 focused_request_id: None,
@@ -449,12 +434,6 @@ mod tests {
         assert!(projected.bootstrap.saved_peers.is_empty());
         let client = projected.client.expect("client");
         assert!(client.listen_addresses.is_empty());
-        let hydration = &client.sync_health.as_ref().expect("sync health").hydration;
-        assert!(hydration.session_id.is_empty());
-        assert!(hydration.agent_did.is_empty());
-        assert_eq!(hydration.phase, "serving");
-        assert_eq!(hydration.merged_count, 2);
-        assert_eq!(hydration.served_count, Some(4));
         let dep = &client.deployments[0];
         assert!(dep.conversations.is_empty());
         assert!(dep.mailbox_items.is_empty());
@@ -483,14 +462,6 @@ mod tests {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::chat_package());
         let client = projected.client.as_ref().unwrap();
         let dep = &client.deployments[0];
-        assert_eq!(
-            client.sync_health.as_ref().unwrap().hydration.session_id,
-            "session-secret"
-        );
-        assert_eq!(
-            client.sync_health.as_ref().unwrap().hydration.agent_did,
-            "did:test:secret"
-        );
         assert_eq!(dep.routes.len(), 2);
         assert!(dep.routes.iter().all(|route| route.live_match));
         assert_eq!(dep.conversations.len(), 1);
@@ -525,16 +496,6 @@ mod tests {
         assert!(projected.bootstrap.saved_peers[0].addr.is_empty());
         assert!(projected.bootstrap.saved_peers[0].graphql.is_none());
         let dep = &projected.client.as_ref().unwrap().deployments[0];
-        let hydration = &projected
-            .client
-            .as_ref()
-            .unwrap()
-            .sync_health
-            .as_ref()
-            .unwrap()
-            .hydration;
-        assert!(hydration.session_id.is_empty());
-        assert!(hydration.agent_did.is_empty());
         assert_eq!(dep.addr, "/ip4/127.0.0.1/tcp/1");
         assert_eq!(dep.pairing.len(), 1);
         assert_eq!(dep.pairing[0].pairing_retry_count, 2);

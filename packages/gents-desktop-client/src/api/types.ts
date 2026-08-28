@@ -104,7 +104,7 @@ export type DesktopApiAdapter = {
       beforeItemKey?: string | null;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
-  retrySessionHydration?: (
+  retrySessionHydration: (
     sessionId: string,
     agentDid?: string | null,
   ) => Promise<void>;

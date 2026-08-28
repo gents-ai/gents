@@ -77,6 +77,37 @@ def observe (prev : ClientProgress) (mergedCount : Nat) (servedCount : Option Na
       (mergeServed base.servedCount servedCount)
       failed with session, agent }
 
+/-- Durable control-row state for one exact session/agent target. -/
+inductive DurableRequest where
+  | missing
+  | pending
+  | served (count : Nat)
+  | rejected (count : Option Nat)
+  deriving DecidableEq, Repr
+
+/-- Projecting a snapshot is a pure query over one durable control row plus
+the locally merged count. It retains no process-wide receiver state. -/
+def projectDurable (request : DurableRequest) (mergedCount : Nat)
+    (session agent : String) : ClientProgress :=
+  match request with
+  | .missing => observe { session, agent } mergedCount none false session agent
+  | .pending => observe (beginRequest session agent) mergedCount none false session agent
+  | .served count =>
+      observe (beginRequest session agent) mergedCount (some count) false session agent
+  | .rejected count =>
+      observe (beginRequest session agent) mergedCount count true session agent
+
+theorem projectDurable_exact_target (request : DurableRequest) (mergedCount : Nat)
+    (session agent : String) :
+    (projectDurable request mergedCount session agent).session = session ∧
+      (projectDurable request mergedCount session agent).agent = agent := by
+  cases request <;> simp [projectDurable, observe]
+
+theorem projectDurable_rejected_failed (count : Option Nat) (mergedCount : Nat)
+    (session agent : String) :
+    (projectDurable (.rejected count) mergedCount session agent).phase = .failed := by
+  simp [projectDurable, observe, observeCore]
+
 theorem observeCore_mergedCount (prev : ClientProgress) (merged : Nat)
     (served : Option Nat) (failed : Bool) :
     (observeCore prev merged served failed).mergedCount = merged := by

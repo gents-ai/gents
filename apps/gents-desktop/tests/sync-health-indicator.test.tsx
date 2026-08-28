@@ -15,13 +15,6 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     pairingRetryCount: 0,
     routeRetryCount: 0,
     connectedPeerCount: 1,
-    hydration: {
-      sessionId: "session-1",
-      agentDid: "did:test:agent",
-      phase: "idle",
-      mergedCount: 0,
-      servedCount: null,
-    },
     ...overrides,
   };
 }

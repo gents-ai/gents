@@ -46,16 +46,6 @@ export function syncHealthLabel(
     );
     return since ? `Sync stalled since ${since}` : STATE_LABEL.stalled;
   }
-  if (state === "syncing") {
-    const hydration = syncHealth?.hydration;
-    if (
-      hydration &&
-      (hydration.phase === "requested" || hydration.phase === "serving") &&
-      hydration.servedCount != null
-    ) {
-      return `Syncing · ${hydration.mergedCount} of ${hydration.servedCount}`;
-    }
-  }
   return STATE_LABEL[state];
 }
 
@@ -81,7 +71,6 @@ export function syncHealthDiagnostics(
   syncHealth: SyncHealthView | null | undefined,
   deployments: DeploymentView[],
 ) {
-  const hydration = syncHealth?.hydration;
   return {
     state: syncHealthState(syncHealth),
     since: syncHealth?.since ?? null,
@@ -92,14 +81,6 @@ export function syncHealthDiagnostics(
     pairingRetryCount: syncHealth?.pairingRetryCount ?? 0,
     routeRetryCount: syncHealth?.routeRetryCount ?? 0,
     connectedPeerCount: syncHealth?.connectedPeerCount ?? 0,
-    hydration: hydration
-      ? {
-          sessionId: hydration.sessionId,
-          phase: hydration.phase,
-          mergedCount: hydration.mergedCount,
-          servedCount: hydration.servedCount,
-        }
-      : null,
     peers: deployments.map((deployment) => ({
       label: deployment.label,
       agentDid: deployment.agentDid,

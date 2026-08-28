@@ -46,6 +46,13 @@ describe("visibleSessionHydration", () => {
     ).toBeNull();
     expect(visibleSessionHydration(hydration(), "session-2")).toBeNull();
     expect(visibleSessionHydration(hydration(), "session-1", "did:other")).toBeNull();
+    expect(
+      visibleSessionHydration(
+        hydration({ agentDid: "" }),
+        "session-1",
+        "did:test:agent",
+      ),
+    ).toBeNull();
   });
 });
 

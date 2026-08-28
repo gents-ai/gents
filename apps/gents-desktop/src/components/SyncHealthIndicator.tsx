@@ -19,7 +19,6 @@ export function SyncHealthIndicator({
   if (!state) return null;
   const label = syncHealthLabel(syncHealth);
   const diagnostics = syncHealthDiagnostics(syncHealth, deployments);
-  const hydration = diagnostics.hydration;
 
   return (
     <details
@@ -77,16 +76,6 @@ export function SyncHealthIndicator({
           <div>
             <dt>Connected peers</dt>
             <dd>{diagnostics.connectedPeerCount}</dd>
-          </div>
-          <div>
-            <dt>Hydration</dt>
-            <dd>
-              {hydration
-                ? `${hydration.phase} · ${hydration.mergedCount}${
-                    hydration.servedCount == null ? "" : ` of ${hydration.servedCount}`
-                  }${hydration.sessionId ? ` · ${hydration.sessionId}` : ""}`
-                : "—"}
-            </dd>
           </div>
         </dl>
         {diagnostics.peers.length > 0 ? (

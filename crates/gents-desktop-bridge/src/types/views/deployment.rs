@@ -29,18 +29,6 @@ pub struct SessionHydrationView {
     pub served_count: Option<usize>,
 }
 
-impl Default for SessionHydrationView {
-    fn default() -> Self {
-        Self {
-            session_id: String::new(),
-            agent_did: String::new(),
-            phase: "idle".into(),
-            merged_count: 0,
-            served_count: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncHealthView {
@@ -53,7 +41,6 @@ pub struct SyncHealthView {
     pub pairing_retry_count: u32,
     pub route_retry_count: u32,
     pub connected_peer_count: usize,
-    pub hydration: SessionHydrationView,
 }
 
 impl Default for SyncHealthView {
@@ -68,7 +55,6 @@ impl Default for SyncHealthView {
             pairing_retry_count: 0,
             route_retry_count: 0,
             connected_peer_count: 0,
-            hydration: SessionHydrationView::default(),
         }
     }
 }

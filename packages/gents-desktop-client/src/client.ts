@@ -16,9 +16,9 @@ import type {
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.14.0";
-// The default adapter exposes explicit hydration retry without capability
-// gating, so 1.6 is the first bridge this client can honestly support.
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "1.6";
+// The global sync-health/session-hydration ownership split removed a
+// serialized field, so this client requires the breaking 2.0 bridge.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "2.0";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);

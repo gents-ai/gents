@@ -95,7 +95,6 @@ pub fn spawn_client_update_task<R: Runtime>(
     spawn(async move {
         let mut store_updates = core.store_change_updates();
         let mut health_updates = core.p2p_health_updates();
-        let mut hydration_updates = core.hydration_progress_updates();
 
         loop {
             tokio::select! {
@@ -111,15 +110,6 @@ pub fn spawn_client_update_task<R: Runtime>(
                         break;
                     }
                     let _ = app.emit("desktop://client-updated", ClientUpdateEvent::coarse("health"));
-                }
-                changed = hydration_updates.changed() => {
-                    if changed.is_err() {
-                        break;
-                    }
-                    let _ = app.emit(
-                        "desktop://client-updated",
-                        ClientUpdateEvent::coarse("hydration"),
-                    );
                 }
             }
         }

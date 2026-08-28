@@ -543,6 +543,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::session_hydration::generated_session_hydration_progress_cases_match_observe")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "session_hydration_durable_cases"
+      "SessionHydrationDurableCases"
+      "conformance::session_hydration::generated_session_hydration_durable_cases_match_storage_projection")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_decision_cases"
       "GoalDecisionCases"
       "goal_continuation_live::durable_goal_continues_with_real_inference_until_model_completes")

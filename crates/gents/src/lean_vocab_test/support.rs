@@ -48,6 +48,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) session_hydration_decision_cases: Vec<LeanSessionHydrationDecisionCase>,
     #[serde(default)]
     pub(crate) session_hydration_progress_cases: Vec<LeanSessionHydrationProgressCase>,
+    #[serde(default)]
+    pub(crate) session_hydration_durable_cases: Vec<LeanSessionHydrationDurableCase>,
     pub(crate) frontend_client_shell_case_count: usize,
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) desktop_client_shell_case_count: usize,
@@ -458,6 +460,16 @@ pub(crate) struct LeanSessionHydrationProgressCase {
     pub(crate) expected_merged: usize,
     pub(crate) expected_retry_admit: bool,
     pub(crate) expected_complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationDurableCase {
+    pub(crate) name: String,
+    pub(crate) status: String,
+    pub(crate) merged: usize,
+    pub(crate) served: Option<usize>,
+    pub(crate) expected_phase: String,
+    pub(crate) expected_merged: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1158,6 +1170,10 @@ pub(crate) fn lean_session_hydration_decision_cases() -> &'static [LeanSessionHy
 pub(crate) fn lean_session_hydration_progress_cases() -> &'static [LeanSessionHydrationProgressCase]
 {
     &lean_contract_snapshot().session_hydration_progress_cases
+}
+
+pub(crate) fn lean_session_hydration_durable_cases() -> &'static [LeanSessionHydrationDurableCase] {
+    &lean_contract_snapshot().session_hydration_durable_cases
 }
 
 pub(crate) fn lean_trigger_dispatch_case_count() -> usize {

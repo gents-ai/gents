@@ -187,6 +187,12 @@ the numerator. Hydrated sessions persist on-device; no eviction in v1.
   hydration progress. Stalled (retry class + stuck_since) renders distinctly
   from syncing; quarantined/unauthorized work is a terminal error, not a spinner.
 
+Superseded by bridge contract 2.0: global sync health now owns only transport
+and configured-peer pairing/routes. Hydration is derived from the exact durable
+control row in each session snapshot, and `SessionHydrationRequest` changes wake
+that projection through the ordinary `store` event. There is no global
+hydration field or dedicated hydration event reason.
+
 ### Independent
 
 - **#1145** — widen `PairingFilters` to the transport's predicate model;

@@ -1072,6 +1072,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SessionHydrationProgressCases".to_string(),
         ));
     }
+    if !snapshot.session_hydration_durable_cases.is_empty() {
+        emitted.insert((
+            "session_hydration_durable_cases".to_string(),
+            "SessionHydrationDurableCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -1156,6 +1162,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "callback_cases",
         "session_hydration_cases",
         "session_hydration_progress_cases",
+        "session_hydration_durable_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();

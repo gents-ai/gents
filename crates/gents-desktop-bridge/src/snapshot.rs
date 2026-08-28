@@ -58,20 +58,6 @@ pub(crate) fn to_hydration_view(progress: &ClientHydrationProgress) -> SessionHy
     }
 }
 
-pub(crate) fn hydration_view_for_session(
-    progress: &ClientHydrationProgress,
-    session_id: &str,
-    agent_did: Option<&str>,
-) -> Option<SessionHydrationView> {
-    if progress.session_id != session_id {
-        return None;
-    }
-    if agent_did.is_some_and(|agent_did| progress.agent_did != agent_did) {
-        return None;
-    }
-    Some(to_hydration_view(progress))
-}
-
 pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
     SyncHealthView {
         state: health.state.as_str().to_string(),
@@ -83,7 +69,6 @@ pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
         pairing_retry_count: health.pairing_retry_count,
         route_retry_count: health.route_retry_count,
         connected_peer_count: health.connected_peer_count,
-        hydration: to_hydration_view(&health.hydration),
     }
 }
 
@@ -103,7 +88,6 @@ pub(crate) fn project_core_sync_health(core: &ClientCore) -> SyncHealthView {
     to_sync_health_view(&project_sync_health(
         &core.p2p_health(),
         &core.peer_statuses(),
-        &core.hydration_progress(),
     ))
 }
 

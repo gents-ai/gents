@@ -194,6 +194,19 @@ impl Default for ClientHydrationProgress {
     }
 }
 
+/// Durable request state for one exact `(session_id, agent_did)` target.
+///
+/// This is deliberately a query result rather than retained client state. A
+/// session snapshot derives progress from its own request row and locally
+/// merged documents, so observing one target cannot overwrite another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientHydrationRequestState {
+    Missing,
+    Pending,
+    Served(usize),
+    Rejected(Option<usize>),
+}
+
 /// Begin a new receiver attempt, clearing any terminal state and denominator
 /// retained by the previous request for this target.
 pub fn begin_hydration_request(session_id: &str, agent_did: &str) -> ClientHydrationProgress {
@@ -288,4 +301,47 @@ pub fn observe_hydration_progress(
         merged_count: merged,
         served_count: served,
     }
+}
+
+/// Project receiver progress from durable state for one exact target.
+///
+/// A pending row is the durable evidence that an attempt was started. A
+/// rejected row is terminal until the explicit retry command rewrites it to
+/// pending. No process-local progress survives or crosses target queries.
+pub fn project_durable_hydration_progress(
+    session_id: &str,
+    agent_did: &str,
+    merged_count: usize,
+    request: ClientHydrationRequestState,
+) -> ClientHydrationProgress {
+    let (base, served_count, failed) = match request {
+        ClientHydrationRequestState::Missing => (
+            ClientHydrationProgress {
+                session_id: session_id.to_string(),
+                agent_did: agent_did.to_string(),
+                ..ClientHydrationProgress::default()
+            },
+            None,
+            false,
+        ),
+        ClientHydrationRequestState::Pending => {
+            (begin_hydration_request(session_id, agent_did), None, false)
+        }
+        ClientHydrationRequestState::Served(count) => (
+            begin_hydration_request(session_id, agent_did),
+            Some(count),
+            false,
+        ),
+        ClientHydrationRequestState::Rejected(count) => {
+            (begin_hydration_request(session_id, agent_did), count, true)
+        }
+    };
+    observe_hydration_progress(
+        &base,
+        session_id,
+        agent_did,
+        merged_count,
+        served_count,
+        failed,
+    )
 }

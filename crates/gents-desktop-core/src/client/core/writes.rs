@@ -1508,27 +1508,24 @@ impl ClientCore {
         let agent_did = normalize_required("agent_did", agent_did)?;
         let _transition = self.hydration_transition.lock().await;
         let progress = self
-            .observe_session_hydration(&session_id, &agent_did)
+            .session_hydration_progress(&session_id, &agent_did)
             .await?;
         if !should_start_session_hydration_request(&progress, &session_id, &agent_did) {
             return Ok(());
         }
         self.request_session_hydration(&session_id, &agent_did)
-            .await?;
-        self.observe_session_hydration(&session_id, &agent_did)
             .await
-            .map(|_| ())
     }
 
-    /// Refresh receiver progress without starting or retrying an attempt.
-    async fn observe_session_hydration(
+    /// Derive receiver progress from durable rows for one exact target.
+    pub async fn session_hydration_progress(
         &self,
         session_id: &str,
         agent_did: &str,
     ) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress> {
-        let next = self.load_hydration_progress(session_id, agent_did).await?;
-        publish_hydration_progress(&self.hydration, next.clone());
-        Ok(next)
+        let session_id = normalize_required("session_id", session_id)?;
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        self.load_hydration_progress(&session_id, &agent_did).await
     }
 
     /// Explicitly restart a failed hydration attempt for one session.
@@ -1547,10 +1544,7 @@ impl ClientCore {
             bail!("session hydration retry requires a failed attempt for the selected session");
         }
         self.request_session_hydration(&session_id, &agent_did)
-            .await?;
-        self.observe_session_hydration(&session_id, &agent_did)
             .await
-            .map(|_| ())
     }
 
     async fn request_session_hydration(&self, session_id: &str, agent_did: &str) -> Result<()> {
@@ -1591,13 +1585,6 @@ impl ClientCore {
         if !response.errors.is_empty() {
             anyhow::bail!("upsert SessionHydrationRequest: {:?}", response.errors);
         }
-        publish_hydration_progress(
-            &self.hydration,
-            gents::agent::p2p_reconcile::session_hydration::begin_hydration_request(
-                &session_id,
-                &agent_did,
-            ),
-        );
         Ok(())
     }
 
@@ -1613,7 +1600,7 @@ impl ClientCore {
             agent_did,
         )
         .await?;
-        let (served, failed) = load_hydration_server_state(
+        let request = load_hydration_server_state(
             self.node.as_ref(),
             self.local_peer_id(),
             session_id,
@@ -1621,13 +1608,8 @@ impl ClientCore {
         )
         .await?;
         Ok(
-            gents::agent::p2p_reconcile::session_hydration::observe_hydration_progress(
-                &self.hydration_progress(),
-                session_id,
-                agent_did,
-                merged,
-                served,
-                failed,
+            gents::agent::p2p_reconcile::session_hydration::project_durable_hydration_progress(
+                session_id, agent_did, merged, request,
             ),
         )
     }
@@ -1653,22 +1635,6 @@ impl ClientCore {
 struct HydrationDocIdRow {
     #[serde(rename = "_docID")]
     doc_id: Option<String>,
-}
-
-fn publish_hydration_progress(
-    sender: &tokio::sync::watch::Sender<
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
-    >,
-    next: gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
-) -> bool {
-    sender.send_if_modified(|current| {
-        if *current == next {
-            false
-        } else {
-            *current = next;
-            true
-        }
-    })
 }
 
 fn should_start_session_hydration_request(
@@ -1739,7 +1705,8 @@ async fn load_hydration_server_state(
     peer_id: &str,
     session_id: &str,
     agent_did: &str,
-) -> Result<(Option<usize>, bool)> {
+) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState> {
+    use gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
     let request_key = gents::graphql::escape_graphql_string(&format!("{peer_id}:{session_id}"));
     let query = format!(
         r#"{{ SessionHydrationRequest(filter: {{ request_key: {{ _eq: "{request_key}" }} }}) {{
@@ -1747,19 +1714,20 @@ async fn load_hydration_server_state(
         }} }}"#
     );
     let response = node.execute(&query).await;
-    if !response.errors.is_empty() {
-        return Ok((None, false));
-    }
+    gents::graphql::ensure_no_errors(&response, "query session hydration request")?;
     let Some(data) = response.data else {
-        return Ok((None, false));
+        return Ok(ClientHydrationRequestState::Missing);
     };
     let rows = data
         .get("SessionHydrationRequest")
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
+    if rows.len() > 1 {
+        bail!("session hydration request key resolved to multiple rows");
+    }
     let Some(row) = rows.first() else {
-        return Ok((None, false));
+        return Ok(ClientHydrationRequestState::Missing);
     };
     if row.get("agent_did").and_then(|value| value.as_str()) != Some(agent_did) {
         bail!("session hydration request belongs to a different agent");
@@ -1771,11 +1739,16 @@ async fn load_hydration_server_state(
     let served = row
         .get("served_doc_count")
         .and_then(|value| value.as_i64())
-        .map(|value| value.max(0) as usize);
+        .map(usize::try_from)
+        .transpose()
+        .context("session hydration served_doc_count must be non-negative")?;
     match status {
-        "served" => Ok((served.or(Some(0)), false)),
-        "rejected" => Ok((served, true)),
-        _ => Ok((None, false)),
+        "pending" => Ok(ClientHydrationRequestState::Pending),
+        "served" => Ok(ClientHydrationRequestState::Served(served.context(
+            "served session hydration request is missing served_doc_count",
+        )?)),
+        "rejected" => Ok(ClientHydrationRequestState::Rejected(served)),
+        other => bail!("unknown session hydration request status {other:?}"),
     }
 }
 
@@ -1912,30 +1885,6 @@ mod delete_source_tests {
         }));
 
         assert_eq!(local_hydration_count_from_response(&response).unwrap(), 6);
-    }
-
-    #[test]
-    fn hydration_watch_notifies_only_when_progress_changes() {
-        use gents::agent::p2p_reconcile::session_hydration::{
-            ClientHydrationPhase, ClientHydrationProgress,
-        };
-
-        let serving = ClientHydrationProgress {
-            session_id: "session-1".into(),
-            agent_did: "did:agent".into(),
-            phase: ClientHydrationPhase::Serving,
-            merged_count: 3,
-            served_count: Some(8),
-        };
-        let (tx, mut rx) = tokio::sync::watch::channel(ClientHydrationProgress::default());
-        let _ = rx.borrow_and_update();
-
-        assert!(publish_hydration_progress(&tx, serving.clone()));
-        assert!(rx.has_changed().expect("hydration watch"));
-        let _ = rx.borrow_and_update();
-
-        assert!(!publish_hydration_progress(&tx, serving));
-        assert!(!rx.has_changed().expect("hydration watch"));
     }
 
     #[test]

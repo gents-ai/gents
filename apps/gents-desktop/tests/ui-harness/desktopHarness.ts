@@ -926,15 +926,9 @@ export function createDesktopUiHarness(
     },
     async repairP2P() {
       p2pStatus = "healthy";
-      const hydrationPhase = syncHealth.hydration?.phase;
       syncHealth = {
         ...syncHealth,
-        state:
-          hydrationPhase === "failed"
-            ? "failed"
-            : hydrationPhase === "requested" || hydrationPhase === "serving"
-              ? "syncing"
-              : "healthy",
+        state: "healthy",
         offlineSince: null,
         stalledSince: null,
         connectedPeerCount: 1,
@@ -995,14 +989,7 @@ export function createDesktopUiHarness(
         servedCount: null,
       };
       sessions.set(sessionId, { ...session, hydration });
-      syncHealth = {
-        ...syncHealth,
-        state: "syncing",
-        lastErrorClass: null,
-        lastError: null,
-        hydration,
-      };
-      notify("hydration");
+      notify("store");
     },
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
@@ -1753,7 +1740,7 @@ export function createDesktopUiHarness(
 
   const sessionSync: SessionSyncHarnessController = {
     observe() {
-      notify("hydration");
+      notify("store");
     },
     retryCount() {
       return hydrationRetryCalls;
@@ -1780,13 +1767,7 @@ export function createDesktopUiHarness(
         timelineItems,
         hydration: remoteHydration("serving", mergedCount, servedCount),
       });
-      syncHealth = {
-        ...syncHealth,
-        state: "syncing",
-        hydration: remoteHydration("serving", mergedCount, servedCount),
-      };
       syncConversations();
-      notify("hydration");
       notify("store");
     },
     complete() {
@@ -1796,8 +1777,7 @@ export function createDesktopUiHarness(
         session.hydration?.servedCount ?? Math.max(session.timelineItems.length, 2);
       const hydration = remoteHydration("complete", servedCount, servedCount);
       sessions.set("session-remote", { ...session, hydration });
-      syncHealth = { ...syncHealth, state: "healthy", hydration };
-      notify("hydration");
+      notify("store");
     },
     fail() {
       const session = sessions.get("session-remote");
@@ -1808,14 +1788,7 @@ export function createDesktopUiHarness(
         session.hydration?.servedCount ?? null,
       );
       sessions.set("session-remote", { ...session, hydration });
-      syncHealth = {
-        ...syncHealth,
-        state: "failed",
-        lastErrorClass: "RemoteUnauthorized",
-        lastError: "hydration rejected",
-        hydration,
-      };
-      notify("hydration");
+      notify("store");
     },
   };
 
@@ -2189,13 +2162,6 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
 }
 
 function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
-  const hydration = {
-    sessionId: scenario === "session-hydration" ? "session-remote" : "",
-    agentDid: AGENT_DID,
-    phase: scenario === "session-hydration" ? "requested" : "idle",
-    mergedCount: scenario === "session-hydration" ? 1 : 0,
-    servedCount: null as number | null,
-  };
   if (scenario === "sync-offline") {
     return {
       state: "offline",
@@ -2207,7 +2173,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       pairingRetryCount: 0,
       routeRetryCount: 0,
       connectedPeerCount: 0,
-      hydration,
     };
   }
   if (scenario === "sync-stalled") {
@@ -2221,7 +2186,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       pairingRetryCount: 6,
       routeRetryCount: 6,
       connectedPeerCount: 1,
-      hydration,
     };
   }
   if (scenario === "sync-failed") {
@@ -2235,12 +2199,11 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       pairingRetryCount: 1,
       routeRetryCount: 1,
       connectedPeerCount: 1,
-      hydration,
     };
   }
   if (scenario === "session-hydration") {
     return {
-      state: "syncing",
+      state: "healthy",
       since: STARTED_AT,
       offlineSince: null,
       stalledSince: null,
@@ -2249,7 +2212,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       pairingRetryCount: 0,
       routeRetryCount: 0,
       connectedPeerCount: 1,
-      hydration,
     };
   }
   return {
@@ -2262,7 +2224,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
     pairingRetryCount: 0,
     routeRetryCount: 0,
     connectedPeerCount: 1,
-    hydration,
   };
 }
 

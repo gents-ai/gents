@@ -211,8 +211,21 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
             store_version: projection_revision.store_version,
             reconcile_version: projection_revision.reconcile_version,
         });
-        snapshot.hydration =
-            super::hydration_view_for_session(&core.hydration_progress(), session_id, agent_did);
+        snapshot.hydration = match agent_did {
+            Some(agent_did) => match core.session_hydration_progress(session_id, agent_did).await {
+                Ok(progress) => Some(super::to_hydration_view(&progress)),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        session_id,
+                        agent_did,
+                        "loading session-keyed hydration progress failed"
+                    );
+                    None
+                }
+            },
+            None => None,
+        };
     }
     snapshot
 }

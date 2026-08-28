@@ -9,7 +9,8 @@ use gents::agent::p2p_reconcile::session_hydration::{
 };
 
 use crate::lean_vocab_test::{
-    lean_session_hydration_decision_cases, lean_session_hydration_progress_cases,
+    lean_session_hydration_decision_cases, lean_session_hydration_durable_cases,
+    lean_session_hydration_progress_cases,
 };
 
 fn request() -> HydrationRequest {
@@ -20,6 +21,39 @@ fn request() -> HydrationRequest {
         "session-1".into(),
     )
     .expect("valid hydration key")
+}
+
+#[test]
+fn generated_session_hydration_durable_cases_match_storage_projection() {
+    use gents::agent::p2p_reconcile::session_hydration::{
+        project_durable_hydration_progress, ClientHydrationRequestState,
+    };
+
+    let cases = lean_session_hydration_durable_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let request = match case.status.as_str() {
+            "pending" => ClientHydrationRequestState::Pending,
+            "served" => ClientHydrationRequestState::Served(case.served.unwrap_or(0)),
+            "rejected" => ClientHydrationRequestState::Rejected(case.served),
+            _ => ClientHydrationRequestState::Missing,
+        };
+        let progress = project_durable_hydration_progress(
+            "session-exact",
+            "agent-exact",
+            case.merged,
+            request,
+        );
+        assert_eq!(progress.session_id, "session-exact", "{}", case.name);
+        assert_eq!(progress.agent_did, "agent-exact", "{}", case.name);
+        assert_eq!(
+            progress.phase.as_str(),
+            case.expected_phase,
+            "{}",
+            case.name
+        );
+        assert_eq!(progress.merged_count, case.expected_merged, "{}", case.name);
+    }
 }
 
 fn document(id: &str, requester: &str, agent: &str, session: &str) -> HydrationDocument {

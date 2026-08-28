@@ -42,6 +42,7 @@ describe("desktop bridge compatibility", () => {
     ).not.toThrow();
 
     for (const version of [
+      "1.6",
       `${major}.${minor - 1}`,
       `${major - 1}.${minor}`,
       `${major + 1}.0`,

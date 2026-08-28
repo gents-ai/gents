@@ -47,6 +47,7 @@ fn doc_patch_support_excludes_pairing_control_collections() {
     assert!(supports_doc_patch_collection(TOOL_SERVICE_REGISTRY_NAME));
     assert!(!supports_doc_patch_collection("PeerPairingApplied"));
     assert!(!supports_doc_patch_collection("BearerPairingReady"));
+    assert!(!supports_doc_patch_collection("SessionHydrationRequest"));
 }
 
 #[tokio::test]

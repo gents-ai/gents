@@ -357,6 +357,55 @@ async fn transcript_create_and_delete_only_invalidate_the_projection() {
 }
 
 #[tokio::test]
+async fn hydration_control_updates_only_invalidate_the_session_projection() {
+    let (node, store, handle) = build_observer_fixture().await;
+    let mut changes = store.subscribe_changes();
+    let before = store.projection_revision();
+
+    let create = node
+        .execute(
+            r#"mutation {
+                create_SessionHydrationRequest(input: {
+                    request_key: "peer-1:session-1"
+                    requester_did: "did:test:requester"
+                    agent_did: "did:test:agent"
+                    session_id: "session-1"
+                    created_at: "2026-08-28T00:00:00Z"
+                    status: "pending"
+                    status_detail: ""
+                    served_doc_count: 0
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!create.has_errors(), "{:?}", create.errors);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let after_create = store.projection_revision();
+    assert!(after_create.reconcile_version > before.reconcile_version);
+    assert!(!changes.borrow_and_update().response_only);
+    assert_eq!(store.snapshot().row_count(), 0);
+
+    let update = node
+        .execute(
+            r#"mutation {
+                update_SessionHydrationRequest(
+                    filter: { request_key: { _eq: "peer-1:session-1" } }
+                    input: { status: "served", served_doc_count: 0 }
+                ) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!update.has_errors(), "{:?}", update.errors);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    assert!(store.projection_revision().reconcile_version > after_create.reconcile_version);
+    assert!(!changes.borrow_and_update().response_only);
+    assert_eq!(store.snapshot().row_count(), 0);
+    handle.shutdown().await;
+}
+
+#[tokio::test]
 async fn fetch_failures_increment_on_unknown_collection() {
     let (node, _store, handle) = build_observer_fixture().await;
 

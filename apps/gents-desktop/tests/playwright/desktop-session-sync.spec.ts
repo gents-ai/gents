@@ -14,7 +14,7 @@ test.describe("mobile session sync fixture", () => {
     await gotoHarness(page, "session-hydration");
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
-      "syncing",
+      "healthy",
     );
     await openChat(page);
     await openChatNavigation(page);
@@ -96,7 +96,7 @@ test.describe("mobile session sync fixture", () => {
     );
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
-      "failed",
+      "healthy",
     );
     await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.observe());
     await expect(page.getByTestId("session-hydration-status")).toHaveAttribute(
@@ -113,7 +113,7 @@ test.describe("mobile session sync fixture", () => {
     );
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
-      "syncing",
+      "healthy",
     );
     expect(await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.retryCount())).toBe(
       1,

@@ -90,10 +90,6 @@ export function useDesktopSessionProjection({
       projected?.sessionId === nextSessionId
         ? (projected.agentDid ?? selectedAgentDidRef.current)
         : null;
-    if (!api.retrySessionHydration) {
-      setError("Session hydration retry is unavailable in this desktop bridge");
-      return null;
-    }
     try {
       setError(null);
       await api.retrySessionHydration(nextSessionId, agentDid);

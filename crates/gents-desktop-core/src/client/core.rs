@@ -29,7 +29,6 @@ use super::query::{
     load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
 };
 use crate::remote_admin::PairingErrorClass;
-use gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress;
 
 pub use bearer_pairing::{BearerInvitePreview, BearerPairingResult};
 
@@ -309,7 +308,6 @@ pub struct ClientCore {
     peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     p2p_health: watch::Sender<P2PHealth>,
-    hydration: watch::Sender<ClientHydrationProgress>,
     hydration_transition: Mutex<()>,
     selected_agent_did: watch::Sender<Option<String>>,
     last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
@@ -382,14 +380,6 @@ impl ClientCore {
 
     pub fn p2p_health_updates(&self) -> watch::Receiver<P2PHealth> {
         self.p2p_health.subscribe()
-    }
-
-    pub fn hydration_progress(&self) -> ClientHydrationProgress {
-        self.hydration.borrow().clone()
-    }
-
-    pub fn hydration_progress_updates(&self) -> watch::Receiver<ClientHydrationProgress> {
-        self.hydration.subscribe()
     }
 
     async fn send_p2p_command(&self, command: P2PSupervisorCommand) -> Result<()> {

@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gents::agent::p2p_reconcile::session_hydration::{
-    observe_hydration_progress, ClientHydrationPhase, ClientHydrationProgress,
+    project_durable_hydration_progress, ClientHydrationPhase, ClientHydrationRequestState,
     HYDRATION_COLLECTIONS,
 };
 use gents::agent::p2p_reconcile::{
@@ -846,13 +846,11 @@ async fn live_session_hydration_replays_history_to_a_fresh_client() -> Result<()
     .await;
     assert_eq!(client_status, served);
 
-    let progress = observe_hydration_progress(
-        &ClientHydrationProgress::default(),
+    let progress = project_durable_hydration_progress(
         SESSION_ID,
         &agent_did,
         expected.len(),
-        Some(served),
-        false,
+        ClientHydrationRequestState::Served(served),
     );
     assert_eq!(progress.phase, ClientHydrationPhase::Complete);
     eprintln!(

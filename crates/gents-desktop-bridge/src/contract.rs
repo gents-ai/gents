@@ -8,6 +8,8 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 2.0: breaking — global sync health no longer embeds selected-session
+//       hydration; hydration wakes use the existing store reason.
 // 1.6: additive — explicit session hydration retry command.
 // 1.5: additive — session hydration / sync-health snapshot fields and
 //       `desktop://client-updated` reason `hydration`.
@@ -25,7 +27,7 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "1.6";
+pub const CONTRACT_VERSION: &str = "2.0";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -69,7 +71,7 @@ pub const MANAGED_SERVER_TRAY_STOP_EVENT: &str = "desktop://managed-server-tray-
 pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
 
 /// Coarse ping reasons on `desktop://client-updated`.
-pub const EVENT_REASONS: &[&str] = &["store", "health", "hydration", "lifecycle", "config"];
+pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
 /// Provisional command → permission-set map from the design table.
 /// Phase 3 finalizes assignment under the no-read/mutate-mixing rule.

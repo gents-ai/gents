@@ -24,6 +24,7 @@ pub use projection_store::{
 
 const OBSERVER_DEBOUNCE: Duration = Duration::from_millis(150);
 const FETCH_RETRY_LIMIT: u32 = 3;
+const SESSION_HYDRATION_REQUEST: &str = "SessionHydrationRequest";
 
 pub struct ObserverHandle {
     stop_tx: watch::Sender<bool>,
@@ -196,21 +197,29 @@ pub fn spawn_observer_with_selection(
                 .filter(|(name, _)| is_transcript_content_collection(name))
                 .map(|(_, doc_ids)| doc_ids.len())
                 .sum::<usize>();
-            if transcript_changed_docs > 0 {
+            let hydration_control_changed_docs = flushed
+                .get(SESSION_HYDRATION_REQUEST)
+                .map_or(0, HashSet::len);
+            if transcript_changed_docs > 0 || hydration_control_changed_docs > 0 {
                 let store_version = store.invalidate_projection();
-                metrics_for_task
-                    .transcript_invalidations
-                    .fetch_add(1, Ordering::Relaxed);
+                if transcript_changed_docs > 0 {
+                    metrics_for_task
+                        .transcript_invalidations
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 tracing::trace!(
                     changed_collections = transcript_collection_count,
-                    changed_docs = transcript_changed_docs,
+                    transcript_changed_docs,
+                    hydration_control_changed_docs,
                     store_version,
-                    "published coalesced transcript projection invalidation"
+                    "published coalesced session projection invalidation"
                 );
             }
 
             for (collection_name, doc_ids) in flushed {
-                if is_transcript_content_collection(collection_name) {
+                if is_transcript_content_collection(collection_name)
+                    || collection_name == SESSION_HYDRATION_REQUEST
+                {
                     continue;
                 }
                 let id_refs: Vec<&str> = doc_ids.iter().map(|s| s.as_str()).collect();
@@ -359,8 +368,10 @@ async fn accumulate_dirty(
     metrics: &ObserverMetrics,
 ) {
     match resolver.resolve(node, collection_id).await {
-        Ok(Some(name)) if supports_doc_patch_collection(name) => {
-            if !is_relay {
+        Ok(Some(name))
+            if supports_doc_patch_collection(name) || name == SESSION_HYDRATION_REQUEST =>
+        {
+            if !is_relay && supports_doc_patch_collection(name) {
                 metrics
                     .local_write_redundant_fetches
                     .fetch_add(1, Ordering::Relaxed);
