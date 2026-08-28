@@ -53,6 +53,87 @@ async fn client_core_starts_and_registers_schemas() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn focus_session_requests_hydration_when_local_transcript_rows_already_exist() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let paths = DesktopPaths::from_root(tempdir.path());
+    let core =
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+    let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
+    let agent_did = "did:test:amy";
+    let session_id = "session-with-local-failed-turn";
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"mutation {{
+                request: create_AgentRequest(input: {{
+                    request_id: "local-request"
+                    requester_did: "{requester_did}"
+                    agent_did: "{agent_did}"
+                    behavior_id: "default"
+                    session_id: "{session_id}"
+                    content: "hello"
+                    status: "error"
+                    lifecycle_state: "failed"
+                }}) {{ _docID }}
+                response: create_AgentResponse(input: {{
+                    response_key: "local-request:response"
+                    request_id: "local-request"
+                    requester_did: "{requester_did}"
+                    agent_did: "{agent_did}"
+                    behavior_id: "default"
+                    session_id: "{session_id}"
+                    status: "error"
+                    error_message: "backend unavailable"
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed local transcript rows: {:?}",
+        response.errors
+    );
+
+    core.focus_session(session_id, agent_did).await?;
+
+    let progress = core.hydration_progress();
+    assert_eq!(progress.phase.as_str(), "serving");
+    assert_eq!(progress.merged_count, 2);
+    assert_eq!(progress.served_count, None);
+    let request_key =
+        gents::graphql::escape_graphql_string(&format!("{}:{session_id}", core.local_peer_id()));
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"{{
+                SessionHydrationRequest(filter: {{ request_key: {{ _eq: "{request_key}" }} }}) {{
+                    request_key status served_doc_count
+                }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query hydration request: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("SessionHydrationRequest"))
+        .and_then(serde_json::Value::as_array)
+        .context("SessionHydrationRequest rows")?;
+    assert_eq!(rows.len(), 1, "focus must persist exactly one request");
+    assert_eq!(
+        rows[0].get("status").and_then(serde_json::Value::as_str),
+        Some("pending")
+    );
+
+    core.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_client_cores_connect_over_iroh() -> Result<()> {
     let tempdir_a = tempfile::tempdir()?;
     let tempdir_b = tempfile::tempdir()?;

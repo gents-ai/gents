@@ -129,7 +129,12 @@ def sessionHydrationProgressCases : List SessionHydrationProgressCase :=
     , prevSession := "session-1", prevAgent := "agent-1"
     , session := "session-1", agent := "agent-1"
     , prevPhase := "idle", prevMerged := 0, prevServed := none
-    , merged := 0, served := none, failed := false, beginRequest := false }
+    , merged := 0, served := none, failed := false, beginRequest := true }
+  , { name := "local_documents_do_not_imply_request"
+    , prevSession := "session-1", prevAgent := "agent-1"
+    , session := "session-1", agent := "agent-1"
+    , prevPhase := "idle", prevMerged := 0, prevServed := none
+    , merged := 2, served := none, failed := false, beginRequest := false }
   , { name := "serving_partial"
     , prevSession := "session-1", prevAgent := "agent-1"
     , session := "session-1", agent := "agent-1"
