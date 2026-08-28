@@ -66,6 +66,20 @@ fn web_deep_research_is_in_the_bundled_catalog() -> Result<()> {
                 .any(|entry| { entry.get("name").and_then(Value::as_str) == Some("research") })),
         "catalog package did not expose the research entry: {catalog}"
     );
+    let dependencies = packages[0]
+        .get("external_dependencies")
+        .and_then(Value::as_array)
+        .context("catalog package did not expose external dependencies")?;
+    anyhow::ensure!(
+        dependencies.len() == 1
+            && dependencies[0].get("service_id").and_then(Value::as_str)
+                == Some("web-research-mcp")
+            && dependencies[0]
+                .get("install_command")
+                .and_then(Value::as_str)
+                == Some("./scripts/stack install-mcp"),
+        "catalog package exposed the wrong external dependency: {catalog}"
+    );
     Ok(())
 }
 

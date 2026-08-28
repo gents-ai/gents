@@ -53,7 +53,7 @@ fn catalog(args: GraphCatalogArgs) -> Result<()> {
 }
 
 async fn install(args: GraphInstallArgs) -> Result<()> {
-    load_bundled_graph_package(&args.package)?;
+    let package = load_bundled_graph_package(&args.package)?;
     let (access, owner_did) = access_and_actor(&args.scope).await?;
     let bindings = if let Some(path) = args.bindings.as_deref() {
         let bindings: GraphPackageInstallBindings = serde_json::from_slice(
@@ -93,6 +93,7 @@ async fn install(args: GraphInstallArgs) -> Result<()> {
             "install": receipt,
             "activation": activation,
             "bindings": bindings,
+            "external_dependencies": package.manifest.external_dependencies,
         })),
         OutputFormat::Text => {
             let mut out = io::stdout().lock();
@@ -102,6 +103,12 @@ async fn install(args: GraphInstallArgs) -> Result<()> {
                 receipt.package_name, receipt.package_version
             )?;
             writeln!(out, "Backend: inherited from your default behavior")?;
+            for dependency in &package.manifest.external_dependencies {
+                writeln!(out, "Requires: {}", dependency.service_id)?;
+                writeln!(out, "  {}", dependency.description)?;
+                writeln!(out, "  Repository: {}", dependency.repository_url)?;
+                writeln!(out, "  After cloning: {}", dependency.install_command)?;
+            }
             writeln!(out, "Run: gents graph run {}", receipt.package_name)?;
             Ok(())
         }

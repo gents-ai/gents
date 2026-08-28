@@ -26,12 +26,23 @@ pub struct PackageRoleDeclaration {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PackageExternalDependency {
+    pub service_id: String,
+    pub description: String,
+    pub repository_url: String,
+    pub install_command: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GraphPackageManifest {
     pub manifest_version: u32,
     pub name: String,
     pub version: String,
     pub description: String,
     pub compiler_version: String,
+    #[serde(default)]
+    pub external_dependencies: Vec<PackageExternalDependency>,
     pub roles: Vec<PackageRoleDeclaration>,
     pub schemas: Vec<String>,
     pub intent: String,
@@ -63,6 +74,7 @@ pub struct GraphPackageCatalogEntry {
     pub description: String,
     pub package_digest: String,
     pub compiler_version: String,
+    pub external_dependencies: Vec<PackageExternalDependency>,
     pub roles: Vec<PackageRoleDeclaration>,
     pub entries: Vec<EntryBinding>,
     pub results: Vec<ResultContract>,
@@ -102,6 +114,7 @@ impl BundledGraphPackage {
             description: self.manifest.description.clone(),
             package_digest: self.package_digest.clone(),
             compiler_version: self.manifest.compiler_version.clone(),
+            external_dependencies: self.manifest.external_dependencies.clone(),
             roles: self.manifest.roles.clone(),
             entries: self.intent.entries.clone(),
             results: self.intent.results.clone(),
@@ -267,6 +280,10 @@ mod tests {
     fn web_deep_research_package_is_complete_and_compiler_valid() {
         let package = load_bundled_graph_package("web-deep-research").unwrap();
         assert!(package.package_digest.starts_with("sha256:"));
+        assert_eq!(package.manifest.external_dependencies.len(), 1);
+        let dependency = &package.manifest.external_dependencies[0];
+        assert_eq!(dependency.service_id, "web-research-mcp");
+        assert_eq!(dependency.install_command, "./scripts/stack install-mcp");
         for path in &package.asset_paths {
             assert!(!package.asset(path).unwrap().is_empty(), "{path}");
         }

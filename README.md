@@ -83,21 +83,14 @@ Firecrawl smoke checks before returning:
 ```bash
 git clone https://github.com/source-inc/web-research-mcp.git
 cd web-research-mcp
-./scripts/stack up
+./scripts/stack install-mcp
 ```
 
-Register the resulting `http://127.0.0.1:9213/mcp` endpoint once against the
-running local Gents node (the upsert is safe to repeat):
-
-```bash
-gents mcp register web-research-mcp \
-  --endpoint http://127.0.0.1:9213/mcp \
-  --display-name "Web Research MCP" \
-  --description "Local bounded web evidence gateway" \
-  --version 0.1.6 \
-  --send-agent-did
-gents mcp probe web-research-mcp --timeout 30s
-```
+`install-mcp` starts the released real stack, waits for both backend smoke
+checks, registers `http://127.0.0.1:9213/mcp` against the running local Gents
+node, and probes readiness. The graph package installs Gents documents and
+declares this external dependency; it deliberately does not silently allocate
+the roughly 12 GB Docker stack during `graph install`.
 
 Then install the graph and run it with live fan-out progress:
 
