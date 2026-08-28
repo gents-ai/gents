@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,6 +35,12 @@ pub(super) async fn run_control_watcher(
     let mut settle_deadline = None;
     let mut last_proposed_fingerprint = None::<String>;
     let mut phase_transition_pending = false;
+    let mut collection_id_to_name = HashMap::<String, String>::new();
+    let mut measured_mcp_availability =
+        crate::tool_surface::measured_available_mcp_service_ids(node.as_ref(), &agent_did)
+            .await?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
 
     loop {
         tokio::select! {
@@ -190,10 +197,37 @@ pub(super) async fn run_control_watcher(
                 let Some(update) = message.as_update() else {
                     continue;
                 };
+                let collection_name = resolve_collection_name(
+                    node.as_ref(),
+                    &mut collection_id_to_name,
+                    update.collection_id.as_str(),
+                );
+                if collection_name.as_deref() == Some("ToolServiceHealthState") {
+                    let current = match crate::tool_surface::measured_available_mcp_service_ids(
+                        node.as_ref(),
+                        &agent_did,
+                    )
+                    .await
+                    {
+                        Ok(service_ids) => service_ids.into_iter().collect::<BTreeSet<_>>(),
+                        Err(error) => {
+                            tracing::warn!(
+                                agent_did,
+                                %error,
+                                "could not measure MCP availability after health-state update"
+                            );
+                            continue;
+                        }
+                    };
+                    if current == measured_mcp_availability {
+                        continue;
+                    }
+                    measured_mcp_availability = current;
+                }
                 match document_view::apply_control_update(
                     node.as_ref(),
                     &agent_did,
-                    update.collection_id.as_str(),
+                    collection_name.as_deref().unwrap_or(update.collection_id.as_str()),
                     &update.doc_id,
                     &mut document_view,
                 )
@@ -267,4 +301,22 @@ pub(super) async fn run_control_watcher(
             }
         }
     }
+}
+
+fn resolve_collection_name(
+    node: &defra_node::EmbeddedNode,
+    cache: &mut HashMap<String, String>,
+    collection_id: &str,
+) -> Option<String> {
+    if let Some(name) = cache.get(collection_id) {
+        return Some(name.clone());
+    }
+    let names = node.list_collections().ok()?;
+    for name in names {
+        let Some(definition) = node.get_collection(&name).ok().flatten() else {
+            continue;
+        };
+        cache.insert(definition.collection_id.clone(), definition.name.clone());
+    }
+    cache.get(collection_id).cloned()
 }

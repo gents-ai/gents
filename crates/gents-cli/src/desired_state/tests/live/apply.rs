@@ -315,6 +315,7 @@ async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
                 cli_tool_names: Vec::new(),
                 enable_meta_tools: false,
                 allowed_mcp_service_ids: Vec::new(),
+                required_mcp_service_ids: Vec::new(),
                 delegate_to: Vec::new(),
                 backgroundable_tool_names: Vec::new(),
                 enable_memory: false,

@@ -968,11 +968,37 @@ pub(crate) enum BackgroundCommand {
 #[derive(Subcommand)]
 pub(crate) enum McpCommand {
     #[command(
+        name = "register",
+        about = "Create or update an MCP service registry entry",
+        after_help = MCP_AFTER_HELP
+    )]
+    Register(McpRegisterArgs),
+    #[command(
         name = "probe",
         about = "Run a one-shot health probe for registered MCP services",
         after_help = MCP_AFTER_HELP
     )]
     Probe(McpProbeArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct McpRegisterArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to update instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(value_name = "SERVICE")]
+    pub(crate) service: String,
+    #[arg(long, value_name = "URL", help = "Streamable HTTP MCP endpoint")]
+    pub(crate) endpoint: String,
+    #[arg(long, value_name = "NAME")]
+    pub(crate) display_name: Option<String>,
+    #[arg(long, value_name = "TEXT")]
+    pub(crate) description: Option<String>,
+    #[arg(long, value_name = "VERSION", default_value = "unversioned")]
+    pub(crate) version: String,
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub(crate) send_agent_did: bool,
 }
 
 #[derive(clap::Args)]

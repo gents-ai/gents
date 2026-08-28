@@ -23,6 +23,10 @@ type ToolSelection @branchable {
     cli_tool_names: [String]
     enable_meta_tools: Boolean
     allowed_mcp_service_ids: [String]
+    # MCP services that must be measured available before this selection's
+    # behavior is runnable. Unlike allowed_mcp_service_ids, this is a
+    # dependency contract rather than a permission allowlist.
+    required_mcp_service_ids: [String]
     # deprecated: delegate_to_agent removed; field retained for schema-compat, unused.
     delegate_to: [String]
     backgroundable_tool_names: [String]

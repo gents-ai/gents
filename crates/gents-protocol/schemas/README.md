@@ -224,6 +224,8 @@ Some boundaries are deliberate:
 - `ToolSelection.allowed_mcp_service_ids` optionally narrows meta-tools to a
   behavior-specific set of MCP service IDs. Missing or empty means all online
   `ToolServiceRegistry` services remain visible for backward compatibility.
+- `ToolSelection.required_mcp_service_ids` declares services that must be
+  measured available before a behavior using the selection is runnable.
 - `ToolCeiling` is not stored here; it is an operator safety cap applied at
   runtime.
 - Command execution policy lives on `ToolSelection`: `command_execution_policy`

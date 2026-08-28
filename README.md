@@ -90,9 +90,12 @@ Register the resulting `http://127.0.0.1:9213/mcp` endpoint once against the
 running local Gents node (the upsert is safe to repeat):
 
 ```bash
-curl --fail --silent --show-error http://127.0.0.1:9191/api/v0/graphql \
-  --header 'content-type: application/json' \
-  --data '{"query":"mutation { upsert_ToolServiceRegistry(filter: { service_id: { _eq: \"web-research-mcp\" } }, add: { service_id: \"web-research-mcp\", display_name: \"Web Research MCP\", description: \"Local bounded web evidence gateway\", hostname: null, tailscale_ip: null, lan_ip: \"127.0.0.1\", mcp_port: 9213, mcp_path: \"/mcp\", send_agent_did: true, status: \"online\", version: \"0.1.5\" }, update: { hostname: null, tailscale_ip: null, lan_ip: \"127.0.0.1\", mcp_port: 9213, mcp_path: \"/mcp\", send_agent_did: true, status: \"online\", version: \"0.1.5\" }) { _docID } }"}'
+gents mcp register web-research-mcp \
+  --endpoint http://127.0.0.1:9213/mcp \
+  --display-name "Web Research MCP" \
+  --description "Local bounded web evidence gateway" \
+  --version 0.1.5 \
+  --send-agent-did
 gents mcp probe web-research-mcp --timeout 30s
 ```
 

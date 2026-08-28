@@ -338,8 +338,13 @@ mod tests {
                 .get("allowed_mcp_service_ids")
                 .and_then(serde_json::Value::as_array)
                 .unwrap();
+            let required_mcp_services = selection
+                .get("required_mcp_service_ids")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             let (meta_tools, services, surface) = match capability.capability_id.as_str() {
-                "research-plan" => (false, vec![], "research-plan-writes"),
+                "research-plan" => (true, vec!["web-research-mcp"], "research-plan-writes"),
                 "research-investigate" => (
                     true,
                     vec!["web-research-mcp"],
@@ -360,6 +365,15 @@ mod tests {
                     .map(serde_json::Value::from)
                     .collect::<Vec<_>>()
             );
+            let expected_required = if matches!(
+                capability.capability_id.as_str(),
+                "research-plan" | "research-investigate"
+            ) {
+                vec![serde_json::Value::from("web-research-mcp")]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(required_mcp_services, expected_required);
             assert_eq!(
                 selection
                     .get("datastore_tool_surface_ids")

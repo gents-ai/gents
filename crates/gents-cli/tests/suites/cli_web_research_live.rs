@@ -243,7 +243,15 @@ fn expected_research_tool_surfaces() -> [(&'static str, &'static [&'static str])
     [
         (
             "Web research planner",
-            &["write_research_assignment", "write_research_plan"],
+            &[
+                "discover_tools",
+                "describe_tool",
+                "call_tool",
+                "get_goal",
+                "update_goal",
+                "write_research_assignment",
+                "write_research_plan",
+            ],
         ),
         (
             "Web evidence investigator",
@@ -564,9 +572,9 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
                     == Some("web_collect_evidence")
             })
             .count()
-            == 3
-            && completed_real_tool_count("web_collect_evidence") == 3,
-        "each investigator must make exactly one successful bounded collection, with no retry: {watch}"
+            == 4
+            && completed_real_tool_count("web_collect_evidence") == 4,
+        "the planner and each investigator must make exactly one successful bounded collection, with no retry: {watch}"
     );
     let gateway_metrics = reqwest::Client::new()
         .get("http://127.0.0.1:19213/metrics")

@@ -18,10 +18,16 @@ use super::{
 pub(crate) async fn apply_control_update(
     node: &EmbeddedNode,
     agent_did: &str,
-    _collection_id: &str,
+    collection_name: &str,
     doc_id: &str,
     view: &mut DocumentRuntimeView,
 ) -> Result<ControlUpdateOutcome> {
+    if matches!(
+        collection_name,
+        "ToolServiceRegistry" | "ToolServiceHealthState"
+    ) {
+        return Ok(ControlUpdateOutcome::FullReload);
+    }
     if load_graph_definition_by_doc_id(node, doc_id)
         .await?
         .is_some()

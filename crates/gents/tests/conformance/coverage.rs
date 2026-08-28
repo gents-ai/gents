@@ -117,7 +117,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
             .any(|hook| hook.contains("CommandPolicy")),
         "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
     );
-    assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 7);
+    assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 8);
     assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 10);

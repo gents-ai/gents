@@ -9,7 +9,7 @@ use gents::{
 };
 use serde::Serialize;
 
-use crate::cli::args::{McpCommand, McpProbeArgs};
+use crate::cli::args::{McpCommand, McpProbeArgs, McpRegisterArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::{
@@ -19,7 +19,97 @@ use crate::{
 
 pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
     match command {
+        McpCommand::Register(args) => mcp_register(args).await,
         McpCommand::Probe(args) => mcp_probe(args).await,
+    }
+}
+
+async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
+    let service_id = args.service.trim();
+    if service_id.is_empty() {
+        anyhow::bail!("SERVICE must be a non-empty service id");
+    }
+    let endpoint = url::Url::parse(args.endpoint.trim()).context("parsing --endpoint URL")?;
+    if endpoint.scheme() != "http" {
+        anyhow::bail!("--endpoint must use http; the MCP registry currently stores HTTP endpoints");
+    }
+    if !endpoint.username().is_empty() || endpoint.password().is_some() {
+        anyhow::bail!("--endpoint must not contain credentials");
+    }
+    if endpoint.query().is_some() || endpoint.fragment().is_some() {
+        anyhow::bail!("--endpoint must not contain a query string or fragment");
+    }
+    let host = endpoint
+        .host_str()
+        .filter(|host| !host.trim().is_empty())
+        .context("--endpoint must contain a host")?;
+    let port = endpoint
+        .port_or_known_default()
+        .context("--endpoint must contain a port")?;
+    let path = match endpoint.path().trim() {
+        "" | "/" => "/mcp",
+        path => path,
+    };
+    let (hostname, lan_ip) = if host.parse::<std::net::Ipv4Addr>().is_ok() {
+        (None, Some(host))
+    } else {
+        (Some(host), None)
+    };
+    let display_name = args.display_name.as_deref().unwrap_or(service_id);
+    let description = args.description.as_deref().unwrap_or("");
+    let hostname_add = nullable_graphql_string("hostname", hostname);
+    let lan_ip_add = nullable_graphql_string("lan_ip", lan_ip);
+    let mutation = format!(
+        r#"mutation {{
+  upsert_ToolServiceRegistry(
+    filter: {{ service_id: {{ _eq: "{service_id}" }} }}
+    add: {{
+      service_id: "{service_id}"
+      display_name: "{display_name}"
+      description: "{description}"
+      {hostname_add}
+      tailscale_ip: null
+      {lan_ip_add}
+      mcp_port: {port}
+      mcp_path: "{path}"
+      send_agent_did: {send_agent_did}
+      status: "online"
+      version: "{version}"
+    }}
+    update: {{
+      display_name: "{display_name}"
+      description: "{description}"
+      {hostname_add}
+      tailscale_ip: null
+      {lan_ip_add}
+      mcp_port: {port}
+      mcp_path: "{path}"
+      send_agent_did: {send_agent_did}
+      status: "online"
+      version: "{version}"
+    }}
+  ) {{ _docID service_id }}
+}}"#,
+        service_id = escape_graphql_string(service_id),
+        display_name = escape_graphql_string(display_name),
+        description = escape_graphql_string(description),
+        path = escape_graphql_string(path),
+        send_agent_did = args.send_agent_did,
+        version = escape_graphql_string(args.version.trim()),
+    );
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    access
+        .execute_committed(&mutation)
+        .await
+        .context("registering MCP service")?;
+    println!("registered {service_id} -> {}", args.endpoint.trim());
+    Ok(())
+}
+
+fn nullable_graphql_string(field: &str, value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!(r#"{field}: "{}""#, escape_graphql_string(value)),
+        None => format!("{field}: null"),
     }
 }
 

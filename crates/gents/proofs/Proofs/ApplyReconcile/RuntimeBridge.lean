@@ -20,7 +20,8 @@ noncomputable def LiveState.toResolvedSnapshot
       (Classical.decPred _) allBehaviors
   { defaultBehavior := defaultBehavior
   , runnable := runnable
-  , unavailable := allBehaviors \ runnable }
+  , unavailable := allBehaviors \ runnable
+  , dependenciesSatisfied := runnable }
 
 lemma LiveState.toResolvedSnapshot_coverage
     (L : LiveState) (defaultBehavior : BehaviorId)

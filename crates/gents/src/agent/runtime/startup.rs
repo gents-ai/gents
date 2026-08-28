@@ -123,6 +123,13 @@ pub(in crate::agent) async fn run_agent(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
+    // DefraDB's event bus is live-only. Subscribe before the MCP health
+    // checker's first cycle can persist a transition that makes a required
+    // service (and therefore its dependent behavior) runnable.
+    let control_subscription = agent
+        .document_runtime_context()
+        .is_some()
+        .then(|| agent.node.subscribe(&[defra_node::EventName::Update]));
     let _health_checker = spawn_health_checker(
         agent.node.clone(),
         agent.mcp_pool.clone(),
@@ -342,15 +349,6 @@ pub(in crate::agent) async fn run_agent(
             tracing::error!(%error, "callback engine exited");
         }
     });
-
-    // DefraDB's event bus is live-only: updates published before a subscriber
-    // exists cannot be replayed. Establish the control subscription before
-    // the readiness task can publish `Ready`, so callers that wait for Ready
-    // cannot race the watcher startup and lose their first config mutation.
-    let control_subscription = agent
-        .document_runtime_context()
-        .is_some()
-        .then(|| agent.node.subscribe(&[defra_node::EventName::Update]));
 
     let ready_cancel = cancel.child_token();
     let ready_startup_barrier = startup_barrier.clone();

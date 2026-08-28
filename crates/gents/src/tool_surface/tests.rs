@@ -22,6 +22,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -93,6 +94,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -147,6 +149,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -191,6 +194,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -234,6 +238,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -276,6 +281,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -318,6 +324,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -358,6 +365,7 @@ fn readonly_ceiling_clamps_unrestricted_bash_policy() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -396,6 +404,7 @@ fn selection_without_root_inherits_operator_root() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -447,6 +456,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             cli_tool_names: vec!["rg".to_string()],
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -495,6 +505,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -546,6 +557,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
                 "x-data".to_string(),
                 "observability-mcp".to_string(),
             ],
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -573,6 +585,79 @@ fn selection_mcp_service_allowlist_is_deduped() {
     );
 }
 
+#[tokio::test]
+async fn required_mcp_service_needs_agent_scoped_measured_availability() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let agent_did = "did:key:required-mcp-test";
+    let registry = r#"mutation {
+        create_ToolServiceRegistry(input: {
+            service_id: "research"
+            hostname: null
+            tailscale_ip: null
+            lan_ip: "127.0.0.1"
+            mcp_port: 9213
+            mcp_path: "/mcp"
+            status: "online"
+        }) { _docID }
+    }"#;
+    let response = node.execute(registry).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let config = BehaviorToolConfig::from_selection(
+        "investigator",
+        ToolSelection {
+            enable_meta_tools: true,
+            allowed_mcp_service_ids: vec!["research".to_string()],
+            required_mcp_service_ids: vec!["research".to_string()],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+    let active = std::collections::HashSet::from(["investigator".to_string()]);
+    let error = config
+        .resolve_with_available_subagent_targets(&node, agent_did, &active)
+        .await
+        .expect_err("missing health measurement must quarantine the behavior");
+    assert!(error.to_string().contains("not measured available"));
+
+    let health = format!(
+        r#"mutation {{
+            create_ToolServiceHealthState(input: {{
+                service_id: "research"
+                agent_did: "{agent_did}"
+                endpoint: "http://127.0.0.1:9213/mcp"
+                status: "healthy"
+                tool_count: 2
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&health).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let surface = config
+        .resolve_with_available_subagent_targets(&node, agent_did, &active)
+        .await
+        .expect("healthy required service makes the behavior resolvable");
+    assert!(surface.includes_meta_tools());
+    assert_eq!(surface.allowed_mcp_service_ids(), &["research".to_string()]);
+
+    let changed_endpoint = r#"mutation {
+        update_ToolServiceRegistry(
+            filter: { service_id: { _eq: "research" } }
+            input: { mcp_port: 9214 }
+        ) { _docID }
+    }"#;
+    let response = node.execute(changed_endpoint).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let error = config
+        .resolve_with_available_subagent_targets(&node, agent_did, &active)
+        .await
+        .expect_err("health for an old endpoint must not satisfy current registry config");
+    assert!(error.to_string().contains("not measured available"));
+}
+
 #[test]
 fn background_tool_allowlist_registers_r6_tools() {
     let config = BehaviorToolConfig::from_selection(
@@ -585,6 +670,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: vec!["bash".to_string(), "bash".to_string()],
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -624,6 +710,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: vec!["read_file".to_string()],
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -671,6 +758,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -1299,6 +1387,7 @@ fn init_like_tool_selection_document(
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(enable_meta_tools),
         allowed_mcp_service_ids: Some(Vec::new()),
+        required_mcp_service_ids: Some(Vec::new()),
         backgroundable_tool_names: Some(backgroundable_tool_names),
         approval_required_tools: None,
         subagent_targets: Some(Vec::new()),
@@ -1568,6 +1657,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
             "registry".to_string(),
             "observability".to_string(),
         ]),
+        required_mcp_service_ids: Some(Vec::new()),
         backgroundable_tool_names: Some(vec!["bash".to_string(), "bash".to_string()]),
         approval_required_tools: None,
         subagent_targets: Some(vec![
@@ -1800,6 +1890,7 @@ fn explain_mcp_empty_allowlist_reports_all_services_when_online() {
         ToolSelection {
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             enable_defra_query: false,
             ..Default::default()
         },

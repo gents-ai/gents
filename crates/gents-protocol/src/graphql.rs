@@ -709,6 +709,7 @@ pub fn graphql_string_list_literal(values: &[String]) -> String {
 /// DefraDB types a bare `[]` as `JsonArray([])`. This is incompatible with
 /// `NillableStringArray` (`[String]`) columns (used for `cli_tool_names`,
 /// `subagent_targets`, `tool_refs`, `skill_refs`, `models`, `allowed_mcp_service_ids`,
+/// `required_mcp_service_ids`,
 /// etc.). A create may appear to succeed while storing the wrong type; any
 /// subsequent update then fails re-validation.
 ///

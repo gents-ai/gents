@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -465,4 +465,131 @@ pub(super) async fn online_mcp_service_ids(node: &EmbeddedNode) -> Result<Vec<St
         .filter(|service_id| !service_id.is_empty())
         .map(str::to_string)
         .collect())
+}
+
+/// MCP services whose operator registry row is online and whose agent-scoped
+/// measured health permits calls. `degraded` remains callable (the normal
+/// health gate warns but proceeds); `evicted`, `reconnecting`, and missing
+/// measurements do not satisfy a required-service dependency.
+pub(crate) async fn measured_available_mcp_service_ids(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<Vec<String>> {
+    let registry_query = r#"{
+  ToolServiceRegistry(filter: { status: { _eq: "online" } }) {
+    service_id
+    hostname
+    tailscale_ip
+    lan_ip
+    mcp_port
+    mcp_path
+  }
+}"#;
+    let registry_response = node.execute(registry_query).await;
+    if registry_response.has_errors() {
+        bail!(
+            "query ToolServiceRegistry for measured MCP availability failed: {:?}",
+            registry_response.errors
+        );
+    }
+    let local_hostname = hostname::get()
+        .ok()
+        .and_then(|value| value.into_string().ok())
+        .unwrap_or_default();
+    let mut expected_endpoints = HashMap::<String, HashSet<String>>::new();
+    for row in registry_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ToolServiceRegistry"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(service_id) = row
+            .get("service_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(port) = row
+            .get("mcp_port")
+            .and_then(serde_json::Value::as_i64)
+            .filter(|port| (1..=u16::MAX as i64).contains(port))
+        else {
+            continue;
+        };
+        let raw_path = row
+            .get("mcp_path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let path = if raw_path.is_empty() {
+            "/mcp".to_string()
+        } else if raw_path.starts_with('/') {
+            raw_path.to_string()
+        } else {
+            format!("/{raw_path}")
+        };
+        let endpoints = expected_endpoints
+            .entry(service_id.to_string())
+            .or_default();
+        for field in ["tailscale_ip", "lan_ip", "hostname"] {
+            if let Some(host) = row
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                endpoints.insert(format!("http://{host}:{port}{path}"));
+                if field == "hostname" && host == local_hostname {
+                    endpoints.insert(format!("http://127.0.0.1:{port}{path}"));
+                }
+            }
+        }
+    }
+    if expected_endpoints.is_empty() {
+        return Ok(Vec::new());
+    }
+    let agent_did = crate::graphql::escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+  ToolServiceHealthState(
+    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+  ) {{
+    service_id
+    endpoint
+    status
+  }}
+}}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        bail!(
+            "query ToolServiceHealthState for required-service resolution failed: {:?}",
+            response.errors
+        );
+    }
+    let mut available = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ToolServiceHealthState"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let service_id = row.get("service_id")?.as_str()?.trim();
+            let endpoint = row.get("endpoint")?.as_str()?.trim();
+            let status = row.get("status")?.as_str()?.trim();
+            (matches!(status, "healthy" | "degraded")
+                && expected_endpoints
+                    .get(service_id)
+                    .is_some_and(|endpoints| endpoints.contains(endpoint)))
+            .then(|| service_id.to_string())
+        })
+        .collect::<Vec<_>>();
+    available.sort();
+    available.dedup();
+    Ok(available)
 }

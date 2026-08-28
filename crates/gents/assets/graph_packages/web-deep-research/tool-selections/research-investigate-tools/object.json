@@ -13,6 +13,7 @@
   "cli_tool_names": [],
   "enable_meta_tools": true,
   "allowed_mcp_service_ids": ["web-research-mcp"],
+  "required_mcp_service_ids": ["web-research-mcp"],
   "enable_memory": false,
   "enable_session_history_tool": false,
   "enable_context_budget": false,
