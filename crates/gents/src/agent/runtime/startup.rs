@@ -44,6 +44,7 @@ struct StartupSlotFailurePolicy {
     barrier: Arc<StartupBarrier>,
     demotions: Arc<crate::startup_readiness::StartupDemotions>,
     runtime_status: RuntimeStatusHandle,
+    observer: Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     budget: u32,
 }
 
@@ -51,6 +52,17 @@ struct StartupSlotFailurePolicy {
 impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
     fn build_failure_budget(&self) -> u32 {
         self.budget.max(1)
+    }
+
+    fn on_build_failure(&self, behavior_id: &str, failure_number: u32, error: &str) {
+        if let Some(observer) = &self.observer {
+            observer.on_build_failure(
+                behavior_id,
+                failure_number,
+                self.build_failure_budget(),
+                error,
+            );
+        }
     }
 
     async fn try_demote(&self, behavior_id: &str, error: &str) -> bool {
@@ -183,6 +195,7 @@ pub(in crate::agent) async fn run_agent(
             barrier: startup_barrier.clone(),
             demotions: startup_demotions.clone(),
             runtime_status: runtime_status.clone(),
+            observer: agent.startup_build_failure_observer.clone(),
             budget: agent.startup_readiness.build_failure_budget,
         });
     let generation_supervisor = GenerationSupervisor::bootstrap(

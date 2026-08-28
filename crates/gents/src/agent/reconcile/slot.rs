@@ -50,6 +50,7 @@ impl BehaviorSlot {
 #[async_trait::async_trait]
 pub(crate) trait SlotFailurePolicy: Send + Sync {
     fn build_failure_budget(&self) -> u32;
+    fn on_build_failure(&self, _behavior_id: &str, _failure_number: u32, _error: &str) {}
     async fn try_demote(&self, behavior_id: &str, error: &str) -> bool;
     async fn on_slot_retired(&self, behavior_id: &str, recreated: bool);
 }
@@ -71,26 +72,31 @@ async fn handle_slot_failure(
         Transitioned,
         StillPending,
     }
-    let verdict = match standing.lock() {
-        Err(_) => Verdict::Restart,
+    let (verdict, failure_number) = match standing.lock() {
+        Err(_) => (Verdict::Restart, None),
         Ok(mut standing) => {
             if standing.released() {
                 if *standing == BuildStanding::Demoted {
-                    Verdict::AlreadyDemoted
+                    (Verdict::AlreadyDemoted, None)
                 } else {
-                    Verdict::Restart
+                    (Verdict::Restart, None)
                 }
             } else {
                 let next = standing.step(policy.build_failure_budget(), BuildOutcome::Failed);
                 *standing = next;
                 if next == BuildStanding::Demoted {
-                    Verdict::Transitioned
+                    (Verdict::Transitioned, Some(policy.build_failure_budget()))
+                } else if let BuildStanding::Pending { failures } = next {
+                    (Verdict::StillPending, Some(failures))
                 } else {
-                    Verdict::StillPending
+                    (Verdict::Restart, None)
                 }
             }
         }
     };
+    if let Some(failure_number) = failure_number {
+        policy.on_build_failure(behavior_id, failure_number, error);
+    }
     match verdict {
         Verdict::Restart | Verdict::StillPending => return false,
         Verdict::AlreadyDemoted => {

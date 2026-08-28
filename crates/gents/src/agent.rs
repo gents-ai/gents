@@ -93,6 +93,9 @@ pub struct DocumentRuntimeOptions {
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+    #[doc(hidden)]
+    pub startup_build_failure_observer:
+        Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     pub startup_readiness: crate::startup_readiness::StartupReadinessOptions,
 }
 
@@ -121,6 +124,8 @@ pub struct Gents {
     backend_health: BackendHealthMap,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+    startup_build_failure_observer:
+        Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     startup_readiness: crate::startup_readiness::StartupReadinessOptions,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
@@ -209,6 +214,7 @@ impl Gents {
             backend_health,
             process_state_observer: options.process_state_observer,
             runtime_snapshot_observer: options.runtime_snapshot_observer,
+            startup_build_failure_observer: options.startup_build_failure_observer,
             startup_readiness: options.startup_readiness,
             // Capture is mandatory (#840): a provider call with no durable
             // rendered input is a log entry, not a fact record. The public

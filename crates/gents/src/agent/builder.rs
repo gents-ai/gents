@@ -239,6 +239,7 @@ impl GentsBuilder {
             backend_health: crate::backend_health::BackendHealthMap::new(),
             process_state_observer: self.process_state_observer,
             runtime_snapshot_observer: None,
+            startup_build_failure_observer: None,
             startup_readiness: Default::default(),
             // Same default as `Gents::from_default_behavior_documents`: every
             // provider request must pass through the durable DefraDB sink.
