@@ -2,6 +2,7 @@ import {
   adjacentDuplicateTranscriptRows,
   captureStableScreenshot,
   expect,
+  expectNoPageHorizontalOverflow,
   gotoHarness,
   openChat,
   openChatNavigation,
@@ -290,6 +291,7 @@ test.describe("desktop UI harness", () => {
       page.getByRole("dialog", { name: /interrupt parent request/i }),
     ).toBeVisible();
     await expect(page.getByText("Will be interrupted")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
     await page.getByTestId("cascade-interrupt-confirm").click();
     await expect(page.getByTestId("chat-toast")).toContainText("Interrupt requested");
   });

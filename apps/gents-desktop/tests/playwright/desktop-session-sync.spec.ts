@@ -147,9 +147,14 @@ test.describe("mobile session sync fixture", () => {
         left: rect.left,
         viewportHeight: window.innerHeight,
         viewportWidth: window.innerWidth,
+        computedMaxHeight: Number.parseFloat(getComputedStyle(element).maxHeight),
       };
     });
     if (bounds.viewportWidth <= 760) {
+      expect(bounds.computedMaxHeight).toBeCloseTo(
+        bounds.viewportHeight - 47 - 34 - 80,
+        0,
+      );
       expect(bounds.top).toBeGreaterThanOrEqual(47 + 64);
       expect(bounds.left).toBeGreaterThanOrEqual(11 + 8);
       expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth - 13 - 8);

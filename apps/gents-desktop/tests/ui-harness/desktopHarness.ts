@@ -119,22 +119,21 @@ export function createDesktopUiHarness(
   const scenario = normalizeScenario(options.scenario);
   let heldToolCalls: HeldToolCallView[] =
     scenario === "tool-hold"
-      ? [
-          {
-            toolCallDocId: "hold-doc-mobile",
-            toolCallId: "hold-mobile",
-            requestId: "request_01JZ6Q0Y5Q7V0MOBILE_APPROVAL_BOUNDARY_WITHOUT_BREAKS",
+      ? Array.from({ length: 6 }, (_, index) => {
+          const ordinal = index + 1;
+          return {
+            toolCallDocId: `hold-doc-mobile-${ordinal}`,
+            toolCallId: `hold-mobile-${ordinal}`,
+            requestId: `request_01JZ6Q0Y5Q7V0MOBILE_APPROVAL_BOUNDARY_WITHOUT_BREAKS_${ordinal}`,
             sessionId: "session-intro",
             agentDid: AGENT_DID,
-            toolName:
-              "mcp__workstation_diagnostics__inspect_namespaced_service_without_breaks",
+            toolName: `mcp__workstation_diagnostics__inspect_namespaced_service_without_breaks_${ordinal}`,
             args: JSON.stringify({
-              target:
-                "https://workstation.example/internal/service/with/a/very/long/unbroken/path",
+              target: `https://workstation.example/internal/service/with/a/very/long/unbroken/path/${ordinal}`,
             }),
             deadlineAt: "2099-08-28T23:59:59Z",
-          },
-        ]
+          };
+        })
       : [];
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
