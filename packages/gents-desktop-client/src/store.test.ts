@@ -1,11 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import { createDesktopClient } from "./client.js";
+import {
+  createDesktopClient,
+  MINIMUM_BRIDGE_CONTRACT_VERSION,
+  PACKAGE_VERSION,
+} from "./client.js";
 import { createDesktopStore } from "./store.js";
 import { createMemoryTransport } from "./testing.js";
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function compatibleBridgeContract() {
+  return {
+    contractVersion: MINIMUM_BRIDGE_CONTRACT_VERSION,
+    packageVersion: PACKAGE_VERSION,
+    events: [],
+    eventReasons: [],
+    errorCodes: [],
+    commands: [],
+    permissionSets: [],
+  };
 }
 
 describe("createDesktopStore", () => {
@@ -52,15 +68,7 @@ describe("createDesktopStore", () => {
           await wait(5);
           return {};
         },
-        desktop_bridge_contract: () => ({
-          contractVersion: "0.7",
-          packageVersion: "0.14.0",
-          events: [],
-          eventReasons: [],
-          errorCodes: [],
-          commands: [],
-          permissionSets: [],
-        }),
+        desktop_bridge_contract: compatibleBridgeContract,
         desktop_client_snapshot: () => ({ bootstrap: {}, client: null }),
         desktop_client_shutdown: () => ({}),
       },
@@ -82,15 +90,7 @@ describe("createDesktopStore", () => {
     const transport = createMemoryTransport({
       handlers: {
         desktop_client_start: () => ({}),
-        desktop_bridge_contract: () => ({
-          contractVersion: "0.7",
-          packageVersion: "0.14.0",
-          events: [],
-          eventReasons: [],
-          errorCodes: [],
-          commands: [],
-          permissionSets: [],
-        }),
+        desktop_bridge_contract: compatibleBridgeContract,
         desktop_client_snapshot: () => ({
           bootstrap: {},
           client: null,

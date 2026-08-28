@@ -16,22 +16,32 @@ import type {
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.14.0";
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "0.7";
+// The default adapter exposes explicit hydration retry without capability
+// gating, so 1.6 is the first bridge this client can honestly support.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "1.6";
+
+function parseBridgeContractVersion(version: string): [number, number] | null {
+  const match = /^(\d+)\.(\d+)$/.exec(version);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return Number.isSafeInteger(major) && Number.isSafeInteger(minor)
+    ? [major, minor]
+    : null;
+}
 
 export function assertCompatibleBridgeContract(
   contract: DesktopBridgeContract,
 ) {
-  const [requiredMajor, requiredMinor] =
-    MINIMUM_BRIDGE_CONTRACT_VERSION.split(".").map(Number);
-  const [actualMajor, actualMinor] = contract.contractVersion
-    .split(".")
-    .map(Number);
-  if (
-    !Number.isInteger(actualMajor) ||
-    !Number.isInteger(actualMinor) ||
-    actualMajor !== requiredMajor ||
-    actualMinor < requiredMinor
-  ) {
+  const required = parseBridgeContractVersion(MINIMUM_BRIDGE_CONTRACT_VERSION);
+  const actual = parseBridgeContractVersion(contract.contractVersion);
+  if (!required) {
+    throw new Error(
+      `Invalid desktop client bridge requirement ${MINIMUM_BRIDGE_CONTRACT_VERSION}`,
+    );
+  }
+  const [requiredMajor, requiredMinor] = required;
+  if (!actual || actual[0] !== requiredMajor || actual[1] < requiredMinor) {
     throw new Error(
       `Incompatible Gents desktop bridge contract ${contract.contractVersion}; ` +
         `client requires ${requiredMajor}.${requiredMinor} or a newer compatible minor`,
