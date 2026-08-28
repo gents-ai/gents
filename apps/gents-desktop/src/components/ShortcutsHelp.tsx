@@ -36,10 +36,15 @@ export function ShortcutsHelp({
     return null;
   }
   return (
-    <div className="dialog-backdrop open" role="presentation" onClick={onClose}>
+    <div
+      className="dialog-backdrop viewport-overlay open"
+      role="presentation"
+      onClick={onClose}
+    >
       <div
         aria-label="Keyboard shortcuts"
-        className="dialog shortcuts-help"
+        className="dialog shortcuts-help viewport-overlay-surface"
+        data-scroll-owner="dialog"
         data-testid="shortcuts-help"
         role="dialog"
         onClick={(event) => event.stopPropagation()}

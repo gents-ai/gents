@@ -184,11 +184,14 @@ export function QrScannerDialog({
     <div
       aria-label="Scan pairing invite"
       aria-modal="true"
-      className="fleet-qr-backdrop"
+      className="fleet-qr-backdrop viewport-overlay"
       data-testid="fleet-qr-scanner"
       role="dialog"
     >
-      <section className="fleet-qr-dialog panel">
+      <section
+        className="fleet-qr-dialog panel viewport-overlay-surface"
+        data-scroll-owner="dialog"
+      >
         <header>
           <div>
             <p className="eyebrow">Secure pairing</p>

@@ -384,11 +384,8 @@
     }
 
     .context-meter-popover {
-      position: fixed;
-      top: calc(var(--space-10) * 2);
-      right: var(--space-4);
-      left: var(--space-4);
-      width: auto;
+      --mobile-popover-top-clearance: calc(var(--space-10) * 2);
+      --mobile-popover-gutter: var(--space-4);
     }
 
     .chat-status .chip:last-child {

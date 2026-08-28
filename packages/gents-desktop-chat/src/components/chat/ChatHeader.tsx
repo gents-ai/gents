@@ -79,7 +79,10 @@ function ContextMeter({
       <summary className="chip" title={title}>
         Context ≈{formatTokens(used)} / {formatTokens(window)}
       </summary>
-      <div className="context-meter-popover">
+      <div
+        className="context-meter-popover mobile-viewport-popover"
+        data-scroll-owner="popover"
+      >
         <div className="context-meter-heading">
           <strong>
             {lastRequest ? "Last provider request" : "Conversation context"}

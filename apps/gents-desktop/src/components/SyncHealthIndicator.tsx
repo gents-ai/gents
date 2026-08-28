@@ -35,7 +35,8 @@ export function SyncHealthIndicator({
         <span>{label}</span>
       </summary>
       <div
-        className="sync-health-details"
+        className="sync-health-details mobile-viewport-popover"
+        data-scroll-owner="popover"
         data-testid="sync-health-details"
         role="region"
         aria-label="Sync diagnostics"
