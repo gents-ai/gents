@@ -94,7 +94,7 @@ pub fn spawn_client_update_task<R: Runtime>(
 ) -> JoinHandle<()> {
     spawn(async move {
         let mut store_updates = core.store_change_updates();
-        let mut health_updates = core.p2p_health_updates();
+        let mut sync_updates = core.sync_state_updates();
 
         loop {
             tokio::select! {
@@ -105,7 +105,7 @@ pub fn spawn_client_update_task<R: Runtime>(
                     let notice = *store_updates.borrow_and_update();
                     let _ = app.emit("desktop://client-updated", ClientUpdateEvent::store(notice));
                 }
-                changed = health_updates.changed() => {
+                changed = sync_updates.changed() => {
                     if changed.is_err() {
                         break;
                     }

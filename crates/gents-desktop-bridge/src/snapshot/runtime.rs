@@ -17,15 +17,26 @@ use super::runtime_tasks::{
 use super::to_health_view;
 
 pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
+    // Directory rows and transport status come from one watched revision.
+    // Reading `core.peer_records()` here would reintroduce a split sample where
+    // a readiness write wakes the bridge before the rebuilt view can see it.
+    let sync_state = core.sync_state();
     let store = core.store().snapshot();
-    let peer_records = core.peer_records().await;
-    let peer_statuses: HashMap<String, ClientPeerStatus> = core
-        .peer_statuses()
-        .into_iter()
+    // This preserves the existing deployment join until authenticated
+    // enrollment makes the directory identity unique and transport-bound.
+    // Duplicate or blank agent DIDs can still collide here; importantly, they
+    // grant no route or hydration authority; authenticated enrollment removes
+    // this legacy presentation seam.
+    let peer_statuses: HashMap<String, ClientPeerStatus> = sync_state
+        .peers
+        .iter()
+        .cloned()
         .map(|status| (status.agent_did.clone(), status))
         .collect();
 
-    let mut deployments = peer_records
+    let mut deployments = sync_state
+        .directory
+        .clone()
         .into_iter()
         .map(|peer| {
             let status = peer_statuses.get(&peer.agent_did);
@@ -517,7 +528,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 graphql: peer.graphql,
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
                 pairing_ready,
-                chat_safe: status.is_some_and(|status| status.chat_safe),
+                chat_safe: pairing_ready,
                 routes: status
                     .map(|status| {
                         status
@@ -578,14 +589,22 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
     DesktopRuntimeSnapshot {
         local_peer_id: core.local_peer_id().to_string(),
         listen_addresses: core.listen_addresses().to_vec(),
-        p2p_health: to_health_view(&core.p2p_health()),
-        sync_health: Some(super::project_core_sync_health(core)),
+        p2p_health: to_health_view(&sync_state.transport),
+        sync_health: Some(super::project_client_sync_health(&sync_state)),
         bootstrap_errors: core.bootstrap_errors().to_vec(),
         last_mutation_error: core.last_mutation_error(),
         focused_request_id: core.store().focused_request_id(),
-        configured_peer_count: core.configured_peer_count(),
-        dialed_peer_count: core.dialed_peer_count(),
-        peer_issue_count: core.peer_issue_count(),
+        configured_peer_count: sync_state.peers.len(),
+        dialed_peer_count: sync_state
+            .peers
+            .iter()
+            .filter(|status| status.dial_succeeded)
+            .count(),
+        peer_issue_count: sync_state
+            .peers
+            .iter()
+            .filter(|status| status.last_error.is_some())
+            .count(),
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),
         deployments,

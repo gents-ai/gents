@@ -13,8 +13,8 @@ mod sync_projection;
 pub use collection_resolver::CollectionResolver;
 pub use core::{
     BearerInvitePreview, BearerPairingResult, ClientCore, ClientCoreOptions, ClientPeerStatus,
-    ClientRouteStatus, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
-    STUCK_THRESHOLD_ATTEMPTS,
+    ClientRouteStatus, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
+    PairingCollectionStatus, STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
@@ -22,7 +22,10 @@ pub use observe::{
     StoreUpdateNotice,
 };
 pub use paths::DesktopPaths;
-pub use peer_directory::{PeerDirectory, PeerRecord};
+#[cfg(test)]
+pub(crate) use peer_directory::load_peer_directory_snapshot;
+pub use peer_directory::{initialize_local_standard_peer, load_peer_records, PeerRecord};
+pub(crate) use peer_directory::{initialize_status_endpoint_peer, PeerDirectory};
 pub use principal_identity::PrincipalIdentity;
 pub use query::{
     fetch_doc_patch, load_agent_scoped_snapshot, load_session_context_store,

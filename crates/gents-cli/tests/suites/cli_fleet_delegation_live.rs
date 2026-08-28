@@ -392,7 +392,7 @@ async fn diagnose_client_route_timeout(
     );
     eprintln!(
         "client route peer statuses {phase}: {:#?}",
-        phone.peer_statuses()
+        phone.sync_state().peers
     );
     dump_fleet_logs(fleet);
 }

@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 use events::Subscription;
-use tokio::sync::{watch, RwLock as AsyncRwLock};
+use tokio::sync::watch;
 
 use super::collection_resolver::CollectionResolver;
-use super::peer_directory::PeerDirectory;
+use super::core::sync_state::ClientSyncStateOwner;
 use super::query::{
     fetch_doc_patch, is_transcript_content_collection, isolate_legacy_bearer_rows,
     load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
@@ -46,7 +46,7 @@ impl ObserverHandle {
 pub fn spawn_observer_with_selection(
     node: Arc<EmbeddedNode>,
     store: Arc<ObservedStore>,
-    peer_directory: Arc<AsyncRwLock<PeerDirectory>>,
+    configured_peers: ClientSyncStateOwner,
     requester_did: String,
     subscription: Subscription,
     selected_agent_did_rx: watch::Receiver<Option<String>>,
@@ -127,7 +127,7 @@ pub fn spawn_observer_with_selection(
                 redundant_fetches_pending.clear();
 
                 let scope = selected_agent_did_rx.borrow().clone();
-                let peers = peer_directory.read().await.records().to_vec();
+                let peers = configured_peers.records();
                 let selected_is_legacy_remote = scope.as_deref().is_some_and(|did| {
                     peers.iter().any(|peer| {
                         peer.agent_did == did
@@ -231,7 +231,7 @@ pub fn spawn_observer_with_selection(
                             // evidence. Reload and replace the selected scope so
                             // the removed row cannot remain visible until restart.
                             let scope = selected_agent_did_rx.borrow().clone();
-                            let peers = peer_directory.read().await.records().to_vec();
+                            let peers = configured_peers.records();
                             let selected_is_legacy_remote = scope.as_deref().is_some_and(|did| {
                                 peers.iter().any(|peer| {
                                     peer.agent_did == did
@@ -291,7 +291,7 @@ pub fn spawn_observer_with_selection(
                             }
                         } else {
                             let mut rows = patch.to_rows();
-                            let peers = peer_directory.read().await.records().to_vec();
+                            let peers = configured_peers.records();
                             isolate_legacy_bearer_rows(&mut rows, &peers, &requester_did);
                             let response_only = collection_name == "AgentResponse";
                             let outcome = store.merge_observer_patch_with_outcome(

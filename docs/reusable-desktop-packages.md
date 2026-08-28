@@ -582,7 +582,7 @@ That two-node product journey remains downstream/Amygdala integration evidence.
 ### Ownership split
 
 The **bridge owns**: `DesktopAppState` (the `ClientCore` lifecycle), the update pump
-that turns `store_updates()`/`p2p_health_updates()` into `desktop://client-updated`
+that turns `store_change_updates()`/`sync_state_updates()` into `desktop://client-updated`
 events, all command implementations, view-model serialization, snapshot builders,
 and interrupt-cascade preview/execution.
 

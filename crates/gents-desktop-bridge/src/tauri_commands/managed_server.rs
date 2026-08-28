@@ -8,7 +8,7 @@ use gents_desktop_core::local_runtime::{init_standard_local_runtime, DesktopInit
 use crate::config::ManagedServerPolicy;
 use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
 use crate::error::{BridgeError, BridgeErrorCode};
-use crate::state::DesktopAppState;
+use crate::state::{current_core, DesktopAppState};
 use crate::types::{ManagedServerStartRequest, ManagedServerState, ManagedServerStatus};
 
 const MANAGED_SERVER_CONFIG: &str = "managed-server.json";
@@ -104,12 +104,18 @@ pub async fn desktop_managed_server_start<R: Runtime>(
         // Iroh shareable addresses include the process's ephemeral QUIC port.
         // Refresh the persisted local peer after every managed-server start so
         // desktop client startup never dials the previous process's endpoint.
-        init_standard_local_runtime(DesktopInitOptions {
-            agent_home,
-            desktop_paths: state.policy.desktop_paths.clone(),
-            label: agent_name.to_string(),
-        })
-        .await?;
+        let _client_lifecycle = state.client_lifecycle.lock().await;
+        if let Some(core) = current_core(&state) {
+            core.refresh_local_standard_peer(&agent_home, agent_name)
+                .await?;
+        } else {
+            init_standard_local_runtime(DesktopInitOptions {
+                agent_home,
+                desktop_paths: state.policy.desktop_paths.clone(),
+                label: agent_name.to_string(),
+            })
+            .await?;
+        }
 
         Ok(server)
     }

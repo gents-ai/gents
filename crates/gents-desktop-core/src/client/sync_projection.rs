@@ -1,7 +1,7 @@
 //! Honest mobile sync health derived from existing client signals.
 //!
-//! This module does not own state. Callers pass the latest transport health,
-//! and per-peer pairing/route diagnostics.
+//! This module does not own state. Callers pass one coherent watched snapshot
+//! containing transport health and per-peer pairing/route diagnostics.
 //! The returned [`SyncHealth::state`] is the only product-facing summary;
 //! raw counters and timestamps stay available for diagnostics.
 //!
@@ -16,10 +16,14 @@
 //! 4. [`SyncHealthState::Syncing`] — in-progress retries below the stuck
 //!    threshold, or a degraded but still connected transport.
 //! 5. [`SyncHealthState::Healthy`] — otherwise.
+//!
+//! This projection is observational UI state, never request admission. A
+//! transient revision may change its label, but send authorization continues
+//! to use the selected deployment's exact route/readiness checks.
 
 use std::time::SystemTime;
 
-use super::core::{ClientPeerStatus, P2PHealth, P2PHealthStatus, STUCK_THRESHOLD_ATTEMPTS};
+use super::core::{ClientSyncStateSnapshot, P2PHealthStatus, STUCK_THRESHOLD_ATTEMPTS};
 use crate::remote_admin::PairingErrorClass;
 
 /// Product-facing sync summary. See module docs for precedence.
@@ -44,7 +48,7 @@ impl SyncHealthState {
     }
 }
 
-/// Combined projection of global P2P and pairing/route retry state.
+/// Combined projection of one watched transport/configured-peer revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncHealth {
     pub state: SyncHealthState,
@@ -56,11 +60,15 @@ pub struct SyncHealth {
     pub last_error: Option<String>,
     pub pairing_retry_count: u32,
     pub route_retry_count: u32,
+    /// Configured peers currently observed as connected, excluding unrelated
+    /// transport connections.
     pub connected_peer_count: usize,
 }
 
 /// Derive sync health from the authoritative client signals.
-pub fn project_sync_health(health: &P2PHealth, peers: &[ClientPeerStatus]) -> SyncHealth {
+pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> SyncHealth {
+    let health = &sync.transport;
+    let peers = &sync.peers;
     let mut pairing_retry_count = 0;
     let mut route_retry_count = 0;
     let mut stalled_since = None;
@@ -69,7 +77,7 @@ pub fn project_sync_health(health: &P2PHealth, peers: &[ClientPeerStatus]) -> Sy
     let mut last_error = health.last_error.clone();
     let mut unauthorized = false;
     let mut unauthorized_since = None;
-    let any_configured_peer = !peers.is_empty();
+    let configured_connected_peer_count = peers.iter().filter(|peer| peer.dial_succeeded).count();
     let mut any_in_progress_retry = false;
     let mut latest_retry_at = None;
 
@@ -118,7 +126,11 @@ pub fn project_sync_health(health: &P2PHealth, peers: &[ClientPeerStatus]) -> Sy
         }
     }
 
-    let offline = is_offline(health, any_configured_peer);
+    let offline = is_offline(
+        health.status,
+        !peers.is_empty(),
+        configured_connected_peer_count,
+    );
     let offline_since = offline
         .then(|| health.last_failure_at.or(health.last_ok_at))
         .flatten();
@@ -152,15 +164,19 @@ pub fn project_sync_health(health: &P2PHealth, peers: &[ClientPeerStatus]) -> Sy
         last_error,
         pairing_retry_count,
         route_retry_count,
-        connected_peer_count: health.connected_peer_count,
+        connected_peer_count: configured_connected_peer_count,
     }
 }
 
-fn is_offline(health: &P2PHealth, any_configured_peer: bool) -> bool {
-    match health.status {
+fn is_offline(
+    transport_status: P2PHealthStatus,
+    any_configured_peer: bool,
+    configured_connected_peer_count: usize,
+) -> bool {
+    match transport_status {
         P2PHealthStatus::Wedged => true,
-        P2PHealthStatus::Degraded => health.connected_peer_count == 0,
-        P2PHealthStatus::Healthy => health.connected_peer_count == 0 && any_configured_peer,
+        P2PHealthStatus::Degraded => configured_connected_peer_count == 0,
+        P2PHealthStatus::Healthy => configured_connected_peer_count == 0 && any_configured_peer,
     }
 }
 
@@ -215,7 +231,8 @@ fn later(left: Option<SystemTime>, right: Option<SystemTime>) -> Option<SystemTi
 mod tests {
     use super::*;
     use crate::client::core::{
-        ClientRouteStatus, PairingCollectionStatus, STUCK_THRESHOLD_ATTEMPTS,
+        ClientPeerStatus, ClientRouteStatus, P2PHealth, PairingCollectionStatus,
+        STUCK_THRESHOLD_ATTEMPTS,
     };
     use std::time::Duration;
 
@@ -235,6 +252,14 @@ mod tests {
         }
     }
 
+    fn project_sync_health(health: &P2PHealth, peers: &[ClientPeerStatus]) -> SyncHealth {
+        super::project_sync_health(&ClientSyncStateSnapshot {
+            transport: health.clone(),
+            directory: Vec::new(),
+            peers: peers.to_vec(),
+        })
+    }
+
     fn peer(
         pairing: Vec<PairingCollectionStatus>,
         routes: Vec<ClientRouteStatus>,
@@ -249,7 +274,6 @@ mod tests {
             last_error: None,
             pairing,
             routes,
-            chat_safe: dial_succeeded,
         }
     }
 
@@ -299,7 +323,7 @@ mod tests {
         assert!(projected.stalled_since.is_none());
         assert_eq!(projected.pairing_retry_count, 0);
         assert_eq!(projected.route_retry_count, 0);
-        assert_eq!(projected.connected_peer_count, 1);
+        assert_eq!(projected.connected_peer_count, 0);
     }
 
     #[test]
@@ -410,6 +434,19 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_global_connection_does_not_mask_configured_peer_offline() {
+        let health = P2PHealth {
+            connected_peer_count: 7,
+            last_ok_at: Some(t(5)),
+            ..healthy_transport()
+        };
+        let projected = project_sync_health(&health, &[peer(vec![], vec![], false)]);
+
+        assert_eq!(projected.state, SyncHealthState::Offline);
+        assert_eq!(projected.connected_peer_count, 0);
+    }
+
+    #[test]
     fn degraded_zero_connections_is_offline_not_syncing() {
         let health = P2PHealth {
             status: P2PHealthStatus::Degraded,
@@ -496,7 +533,6 @@ mod tests {
             last_error: None,
             pairing: vec![high],
             routes: vec![route(5, Some(PairingErrorClass::RpcTimeout))],
-            chat_safe: true,
         };
         let projected = project_sync_health(
             &healthy_transport(),

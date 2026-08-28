@@ -1,9 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::client::{
-    ClientCore, ClientCoreOptions, DesktopPaths, PeerDirectory, PeerRecord, PrincipalIdentity,
-};
+use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PrincipalIdentity};
 use p2p::iroh::parse_public_peer_addr;
 use tokio::time::{sleep, Instant};
 
@@ -21,18 +19,29 @@ async fn identity_persistence_round_trip() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn peer_directory_round_trip() -> Result<()> {
+async fn live_core_persists_managed_server_peer_through_watched_owner() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let path = tempdir.path().join("peers.json");
-    let mut directory = PeerDirectory::load(&path).await?;
-    let record = PeerRecord::new("Workshop Bay", "iroh://alpha", "did:test:alpha");
-    let peer_id = record.peer_id.clone();
+    let paths = DesktopPaths::from_root(tempdir.path());
+    let core =
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+    let mut updates = core.sync_state_updates();
 
-    directory.upsert(record).await?;
-    directory.remove(&peer_id).await?;
+    let record = core
+        .persist_local_standard_peer(
+            "Managed local runtime",
+            "endpoint:managed",
+            "did:key:managed",
+            "http://127.0.0.1:9191/api/v0/graphql",
+        )
+        .await?;
 
-    let reloaded = PeerDirectory::load(&path).await?;
-    assert!(reloaded.is_empty());
+    updates.changed().await?;
+    let snapshot = updates.borrow_and_update().clone();
+    assert_eq!(snapshot.directory, vec![record.clone()]);
+    assert_eq!(snapshot.peers.len(), 1);
+    assert_eq!(snapshot.peers[0].peer_id, record.peer_id);
+    assert!(!snapshot.peers[0].dial_succeeded);
+    core.shutdown().await?;
     Ok(())
 }
 

@@ -59,11 +59,14 @@ impl ClientCore {
                 .context("starting embedded desktop node")?,
         );
 
-        let mut loaded_peer_directory = PeerDirectory::load(paths.peer_directory_path()).await?;
-        loaded_peer_directory
-            .clear_ephemeral_pairing_readiness()
-            .await?;
-        let peer_directory = Arc::new(tokio::sync::RwLock::new(loaded_peer_directory));
+        let loaded_peer_directory = PeerDirectory::open_writer(paths.peer_directory_path()).await?;
+        let sync_state = super::sync_state::ClientSyncStateOwner::new(
+            P2PHealth::default(),
+            loaded_peer_directory,
+            Vec::new(),
+        );
+        sync_state.clear_ephemeral_pairing_readiness().await?;
+        let records = sync_state.records();
         ensure_runtime_schemas(node.as_ref()).await?;
         ensure_desktop_schema_migrations(Arc::clone(&node)).await?;
         subscribe_all_collections(node.as_ref()).await?;
@@ -73,18 +76,9 @@ impl ClientCore {
         let (selected_agent_did, _) = watch::channel::<Option<String>>(None);
 
         let initial_snapshot = {
-            let records = peer_directory.read().await.records().to_vec();
             load_full_snapshot_with_peer_records(node.as_ref(), &records, principal.did()).await?
         };
         let (store, _store_updates) = ObservedStore::new(initial_snapshot);
-        let observer = spawn_observer_with_selection(
-            Arc::clone(&node),
-            Arc::clone(&store),
-            Arc::clone(&peer_directory),
-            principal.did().to_string(),
-            observer_subscription,
-            selected_agent_did.subscribe(),
-        );
 
         let p2p = node
             .p2p_arc()
@@ -102,20 +96,31 @@ impl ClientCore {
         ));
 
         let (peer_statuses, bootstrap_errors) = {
-            let records = peer_directory.read().await.records().to_vec();
             bootstrap_saved_peers(&node, &p2p, &records, &options, &principal, &route_manager).await
         };
-        let peer_statuses = Arc::new(std::sync::RwLock::new(peer_statuses));
-        let (p2p_health, _p2p_health_rx) = watch::channel(P2PHealth::default());
         let initial_health = super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
-        p2p_health.send_replace(initial_health);
+        for status in peer_statuses {
+            if let Some(expected) = records
+                .iter()
+                .find(|record| record.peer_id == status.peer_id)
+            {
+                sync_state.replace_peer(expected, status);
+            }
+        }
+        sync_state.replace_transport(initial_health);
+        let observer = spawn_observer_with_selection(
+            Arc::clone(&node),
+            Arc::clone(&store),
+            sync_state.clone(),
+            principal.did().to_string(),
+            observer_subscription,
+            selected_agent_did.subscribe(),
+        );
         let (p2p_control, p2p_control_rx) = mpsc::channel(8);
         let p2p_supervisor = spawn_p2p_supervisor_task(
             Arc::clone(&node),
             Arc::clone(&p2p),
-            Arc::clone(&peer_directory),
-            Arc::clone(&peer_statuses),
-            p2p_health.clone(),
+            sync_state.clone(),
             p2p_control_rx,
             Arc::new(principal.clone()),
             Arc::clone(&route_manager),
@@ -127,13 +132,11 @@ impl ClientCore {
             principal,
             node,
             p2p,
-            peer_directory,
             route_manager,
             store,
             observer: tokio::sync::Mutex::new(Some(observer)),
-            peer_statuses,
+            sync_state,
             p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
-            p2p_health,
             hydration_transition: tokio::sync::Mutex::new(()),
             selected_agent_did,
             last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
@@ -193,7 +196,6 @@ pub(super) async fn bootstrap_saved_peers(
             last_error: None,
             pairing: Vec::new(),
             routes: Vec::new(),
-            chat_safe: record.pairing_ready,
         };
 
         match connect_peer_with_retry(p2p, &record.addr, &record.label).await {

@@ -4,8 +4,8 @@ use gents::agent::p2p_reconcile::session_hydration::{
     ClientHydrationPhase, ClientHydrationProgress,
 };
 use gents_desktop_core::client::{
-    project_sync_health, ClientPeerStatus, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
-    SyncHealthState, STUCK_THRESHOLD_ATTEMPTS,
+    project_sync_health, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
+    PairingCollectionStatus, SyncHealthState, STUCK_THRESHOLD_ATTEMPTS,
 };
 use gents_desktop_core::remote_admin::PairingErrorClass;
 use serde_json::json;
@@ -38,7 +38,6 @@ fn connected_peer(pairing: Vec<PairingCollectionStatus>) -> ClientPeerStatus {
         last_error: None,
         pairing,
         routes: Vec::new(),
-        chat_safe: true,
     }
 }
 
@@ -56,8 +55,8 @@ fn hydration_view_copies_receiver_counts_exactly() {
 fn sync_health_view_keeps_failed_from_collapsing_into_syncing() {
     let mut pairing = PairingCollectionStatus::new("AgentSession");
     pairing.record_retry(PairingErrorClass::RemoteUnauthorized);
-    let health = project_sync_health(
-        &P2PHealth {
+    let health = project_sync_health(&ClientSyncStateSnapshot {
+        transport: P2PHealth {
             status: P2PHealthStatus::Healthy,
             consecutive_failures: 0,
             connected_peer_count: 1,
@@ -66,8 +65,9 @@ fn sync_health_view_keeps_failed_from_collapsing_into_syncing() {
             last_ok_at: Some(t(50)),
             last_failure_at: None,
         },
-        &[connected_peer(vec![pairing])],
-    );
+        directory: Vec::new(),
+        peers: vec![connected_peer(vec![pairing])],
+    });
     assert_eq!(health.state, SyncHealthState::Failed);
     let view = to_sync_health_view(&health);
     assert_eq!(view.state, "failed");

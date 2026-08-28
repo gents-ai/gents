@@ -25,7 +25,7 @@ use super::super::peer_directory::PeerRecord;
 use super::super::schema::subscribed_collection_names;
 use super::bootstrap::connect_peer_with_retry_until;
 use super::p2p_ops::p2p_remove_replicator;
-use super::{ClientCore, ClientPeerStatus, BOOTSTRAP_OPERATION_TIMEOUT, P2P_OPERATION_TIMEOUT};
+use super::{ClientCore, BOOTSTRAP_OPERATION_TIMEOUT, P2P_OPERATION_TIMEOUT};
 
 mod readiness;
 
@@ -102,9 +102,7 @@ impl ClientCore {
         let verified = verify_bearer_invite(&self.principal, raw_token, Utc::now()).await?;
         let token = &verified.token;
         let previous_addresses = self
-            .peer_directory
-            .read()
-            .await
+            .sync_state
             .records()
             .iter()
             .filter(|record| record.agent_did == token.issuer_did)
@@ -140,19 +138,17 @@ impl ClientCore {
         )
         .await?;
 
-        let record = {
-            let mut directory = self.peer_directory.write().await;
-            directory
-                .upsert_bearer_peer(
-                    &label,
-                    &token.ticket,
-                    &token.issuer_did,
-                    &token.network_id,
-                    &token.template,
-                    token.default_behavior_id.as_deref(),
-                )
-                .await?
-        };
+        let record = self
+            .sync_state
+            .upsert_bearer_peer(
+                &label,
+                &token.ticket,
+                &token.issuer_did,
+                &token.network_id,
+                &token.template,
+                token.default_behavior_id.as_deref(),
+            )
+            .await?;
         let mut replicator_addresses = previous_addresses;
         if !replicator_addresses.contains(&record.addr) {
             replicator_addresses.push(record.addr.clone());
@@ -178,24 +174,15 @@ impl ClientCore {
             BEARER_GRANT_TIMEOUT,
         )
         .await?;
-        let record = {
-            let mut directory = self.peer_directory.write().await;
-            directory
-                .set_bearer_pairing_ready(&record.peer_id, true)
-                .await?
-                .context("saved bearer peer disappeared before readiness could be persisted")?
-        };
-        self.update_peer_status(ClientPeerStatus {
-            peer_id: record.peer_id.clone(),
-            label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
-            addr: record.addr.clone(),
-            dial_succeeded: true,
-            last_error: None,
-            pairing: Vec::new(),
-            routes: Vec::new(),
-            chat_safe: false,
+        self.sync_state.update_peer(&record, |status| {
+            status.dial_succeeded = true;
+            status.last_error = None;
         });
+        let record = self
+            .sync_state
+            .set_bearer_pairing_ready(&record, true, None)
+            .await?
+            .context("saved bearer peer disappeared before readiness could be persisted")?;
         self.clear_mutation_error();
 
         tracing::info!(

@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::{
-    ClientCore, ClientCoreOptions, DesktopPaths, PeerDirectory, SubmitRequestOptions,
+    initialize_local_standard_peer, ClientCore, ClientCoreOptions, DesktopPaths,
+    SubmitRequestOptions,
 };
 use serde::Deserialize;
 use tokio::time::{sleep, Instant};
@@ -253,8 +254,16 @@ async fn add_and_remove_peer_persists_peer_directory() -> Result<()> {
     assert_eq!(added.label, "Workshop Bay");
     assert_eq!(added.addr, addr);
     assert!(added.connected);
-    assert_eq!(local.configured_peer_count(), 1);
-    assert_eq!(local.dialed_peer_count(), 1);
+    let sync_state = local.sync_state();
+    assert_eq!(sync_state.peers.len(), 1);
+    assert_eq!(
+        sync_state
+            .peers
+            .iter()
+            .filter(|status| status.dial_succeeded)
+            .count(),
+        1
+    );
     assert_eq!(local.peer_records().await.len(), 1);
     assert_eq!(
         peer_pairing_desired_count(local.node(), &added.peer_id).await?,
@@ -270,8 +279,8 @@ async fn add_and_remove_peer_persists_peer_directory() -> Result<()> {
         .as_deref()
         .is_some_and(|warning| warning.contains("route teardown is pending")));
     assert!(local.peer_records().await.is_empty());
-    assert_eq!(local.configured_peer_count(), 0);
-    assert_eq!(local.dialed_peer_count(), 0);
+    let sync_state = local.sync_state();
+    assert!(sync_state.peers.is_empty());
     assert!(local.p2p().connected_peers().await?.is_empty());
     assert!(local.p2p().get_replicators().await?.is_empty());
     assert_eq!(
@@ -323,15 +332,14 @@ async fn start_core_with_local_route(
     let runtime_addr = wait_for_connectable_iroh_addr(&runtime).await?;
 
     let client_paths = DesktopPaths::from_root(root.join("client"));
-    let mut directory = PeerDirectory::load(client_paths.peer_directory_path()).await?;
-    directory
-        .upsert_local_standard_peer(
-            "Test Local Runtime",
-            &runtime_addr,
-            agent_did,
-            "http://127.0.0.1:1/api/v0/graphql",
-        )
-        .await?;
+    initialize_local_standard_peer(
+        &client_paths.peer_directory_path(),
+        "Test Local Runtime",
+        &runtime_addr,
+        agent_did,
+        "http://127.0.0.1:1/api/v0/graphql",
+    )
+    .await?;
     let client =
         ClientCore::start_with_paths_and_options(client_paths, ClientCoreOptions::local_only())
             .await?;

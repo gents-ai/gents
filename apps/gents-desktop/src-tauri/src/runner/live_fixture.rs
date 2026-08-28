@@ -221,7 +221,7 @@ impl LiveBridgeFixture {
             let update_version = Arc::clone(&update_version);
             runtime.spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
-                let mut health_updates = desktop_core.p2p_health_updates();
+                let mut sync_updates = desktop_core.sync_state_updates();
                 loop {
                     tokio::select! {
                         changed = store_updates.changed() => {
@@ -230,7 +230,7 @@ impl LiveBridgeFixture {
                             }
                             update_version.fetch_add(1, Ordering::SeqCst);
                         }
-                        changed = health_updates.changed() => {
+                        changed = sync_updates.changed() => {
                             if changed.is_err() {
                                 break;
                             }
@@ -310,7 +310,7 @@ impl LiveBridgeFixture {
             let update_version = Arc::clone(&update_version);
             runtime.spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
-                let mut health_updates = desktop_core.p2p_health_updates();
+                let mut sync_updates = desktop_core.sync_state_updates();
                 loop {
                     tokio::select! {
                         changed = store_updates.changed() => {
@@ -319,7 +319,7 @@ impl LiveBridgeFixture {
                             }
                             update_version.fetch_add(1, Ordering::SeqCst);
                         }
-                        changed = health_updates.changed() => {
+                        changed = sync_updates.changed() => {
                             if changed.is_err() {
                                 break;
                             }

@@ -11,7 +11,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::client::{DesktopPaths, PeerDirectory};
+use crate::client::{
+    initialize_local_standard_peer, initialize_status_endpoint_peer, DesktopPaths,
+};
 
 use self::http::{http_get_json, p2p_api_base, read_json};
 use self::identity::{normalize_optional_string, resolve_p2p_peer_id};
@@ -27,6 +29,15 @@ pub struct DesktopInitOptions {
     pub agent_home: PathBuf,
     pub desktop_paths: DesktopPaths,
     pub label: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StandardRuntimeDiscovery {
+    pub agent_name: String,
+    pub agent_did: String,
+    pub graphql: String,
+    pub p2p_peer_id: String,
+    pub p2p_listen_address: String,
 }
 
 #[derive(Debug, Clone)]
@@ -267,15 +278,55 @@ pub async fn init_standard_local_runtime(
     options: DesktopInitOptions,
 ) -> Result<DesktopInitSummary> {
     options.desktop_paths.ensure_root_dirs().await?;
-    let init = read_json::<StoredInitConfig>(&options.agent_home.join(INIT_CONFIG_FILE_NAME))?;
-    let runtime =
-        read_json::<StoredRuntimeState>(&options.agent_home.join(RUNTIME_STATE_FILE_NAME))
-            .with_context(|| {
-                format!(
-                    "no running local Gents runtime found at {}; run `gents server` first",
-                    options.agent_home.join(RUNTIME_STATE_FILE_NAME).display()
-                )
-            })?;
+    let discovery = discover_standard_runtime(&options.agent_home).await?;
+
+    let peer = initialize_local_standard_peer(
+        &options.desktop_paths.peer_directory_path(),
+        &options.label,
+        &discovery.p2p_listen_address,
+        &discovery.agent_did,
+        &discovery.graphql,
+    )
+    .await?;
+
+    Ok(DesktopInitSummary {
+        status: "initialized",
+        source: LOCAL_STANDARD_SOURCE,
+        status_endpoint: None,
+        agent_home: options.agent_home.display().to_string(),
+        desktop_home: options.desktop_paths.root().display().to_string(),
+        peer_directory: options
+            .desktop_paths
+            .peer_directory_path()
+            .display()
+            .to_string(),
+        label: peer.label,
+        agent_name: discovery.agent_name,
+        agent_did: discovery.agent_did,
+        graphql: discovery.graphql,
+        p2p_transport: "iroh".to_string(),
+        p2p_peer_id: discovery.p2p_peer_id,
+        p2p_listen_address: discovery.p2p_listen_address,
+        peer_record_id: peer.peer_id,
+        next_steps: vec![
+            "Run `gents-desktop` and leave the desktop app open.".to_string(),
+            "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
+            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
+        ],
+    })
+}
+
+pub(crate) async fn discover_standard_runtime(
+    agent_home: &Path,
+) -> Result<StandardRuntimeDiscovery> {
+    let init = read_json::<StoredInitConfig>(&agent_home.join(INIT_CONFIG_FILE_NAME))?;
+    let runtime = read_json::<StoredRuntimeState>(&agent_home.join(RUNTIME_STATE_FILE_NAME))
+        .with_context(|| {
+            format!(
+                "no running local Gents runtime found at {}; run `gents server` first",
+                agent_home.join(RUNTIME_STATE_FILE_NAME).display()
+            )
+        })?;
 
     validate_runtime_identity(&runtime, &init)?;
 
@@ -301,41 +352,12 @@ pub async fn init_standard_local_runtime(
     )
     .context("local runtime is reachable but did not report a usable P2P peer id")?;
 
-    let mut peer_directory =
-        PeerDirectory::load(options.desktop_paths.peer_directory_path()).await?;
-    let peer = peer_directory
-        .upsert_local_standard_peer(
-            &options.label,
-            &p2p_listen_address,
-            &runtime.agent_did,
-            &runtime.graphql,
-        )
-        .await?;
-
-    Ok(DesktopInitSummary {
-        status: "initialized",
-        source: LOCAL_STANDARD_SOURCE,
-        status_endpoint: None,
-        agent_home: options.agent_home.display().to_string(),
-        desktop_home: options.desktop_paths.root().display().to_string(),
-        peer_directory: options
-            .desktop_paths
-            .peer_directory_path()
-            .display()
-            .to_string(),
-        label: peer.label,
+    Ok(StandardRuntimeDiscovery {
         agent_name: runtime.agent_name,
         agent_did: runtime.agent_did,
         graphql: runtime.graphql,
-        p2p_transport: "iroh".to_string(),
         p2p_peer_id,
         p2p_listen_address,
-        peer_record_id: peer.peer_id,
-        next_steps: vec![
-            "Run `gents-desktop` and leave the desktop app open.".to_string(),
-            "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
-        ],
     })
 }
 
@@ -354,17 +376,15 @@ pub async fn init_status_endpoint_runtime(
     let connection =
         extract_status_endpoint_connection(&payload, &discovery_url, options.label.as_deref())?;
 
-    let mut peer_directory =
-        PeerDirectory::load(options.desktop_paths.peer_directory_path()).await?;
-    let peer = peer_directory
-        .upsert_saved_peer_with_graphql(
-            &connection.label,
-            &connection.p2p_listen_address,
-            &connection.agent_did,
-            Some(&connection.graphql),
-            connection.default_behavior_id.as_deref(),
-        )
-        .await?;
+    let peer = initialize_status_endpoint_peer(
+        &options.desktop_paths.peer_directory_path(),
+        &connection.label,
+        &connection.p2p_listen_address,
+        &connection.agent_did,
+        &connection.graphql,
+        connection.default_behavior_id.as_deref(),
+    )
+    .await?;
 
     Ok(DesktopInitSummary {
         status: "initialized",

@@ -1,5 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::sync::RwLock as StdRwLock;
 
 use anyhow::{bail, Context, Result};
@@ -17,7 +18,9 @@ use super::super::query::load_chat_patch;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
-use super::{ClientCore, ClientPeerStatus};
+use super::ClientCore;
+#[cfg(test)]
+use super::ClientPeerStatus;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
@@ -118,6 +121,38 @@ fn peer_record_owning_agent(records: &[PeerRecord], agent_did: &str) -> Option<P
 }
 
 impl ClientCore {
+    pub async fn refresh_local_standard_peer(
+        &self,
+        agent_home: &Path,
+        label: &str,
+    ) -> Result<PeerRecord> {
+        let discovery = crate::local_runtime::discover_standard_runtime(agent_home).await?;
+        self.persist_local_standard_peer(
+            label,
+            &discovery.p2p_listen_address,
+            &discovery.agent_did,
+            &discovery.graphql,
+        )
+        .await
+    }
+
+    pub async fn persist_local_standard_peer(
+        &self,
+        label: &str,
+        addr: &str,
+        agent_did: &str,
+        graphql: &str,
+    ) -> Result<PeerRecord> {
+        self.sync_state
+            .upsert_local_standard_peer(
+                normalize_required("label", label)?,
+                normalize_required("addr", addr)?,
+                normalize_required("agent_did", agent_did)?,
+                normalize_required("graphql", graphql)?,
+            )
+            .await
+    }
+
     /// Dismiss an open mailbox item as the authenticated local principal.
     pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
         let result =
@@ -302,7 +337,7 @@ impl ClientCore {
         let listen_addresses = p2p_ops::p2p_listen_addresses(&self.p2p).await;
         let connected_peers = p2p_ops::p2p_connected_peers(&self.p2p).await;
         let replicators = p2p_ops::p2p_get_replicators(&self.p2p).await;
-        let saved_peers = self.peer_directory.read().await.records().to_vec();
+        let saved_peers = self.sync_state.records();
 
         NetworkStatus {
             local_peer_id: local_peer_id.map_err(|error| error.to_string()),
@@ -330,8 +365,7 @@ impl ClientCore {
         if agent_did.is_empty() {
             return None;
         }
-        let peer_directory = self.peer_directory.read().await;
-        peer_record_owning_agent(peer_directory.records(), agent_did)
+        peer_record_owning_agent(&self.sync_state.records(), agent_did)
     }
 
     pub async fn refresh_local_request(
@@ -1125,18 +1159,33 @@ impl ClientCore {
     pub async fn rename_peer(&self, peer_id: &str, label: &str) -> Result<()> {
         let peer_id = normalize_required("peer_id", peer_id)?;
         let label = normalize_required("label", label)?;
-        let mut peer_directory = self.peer_directory.write().await;
-        let record = peer_directory
+        let record = self
+            .sync_state
             .records()
             .iter()
             .find(|record| record.peer_id == peer_id)
             .cloned()
             .with_context(|| format!("peer {peer_id} not found"))?;
-        let mut record = record;
-        record.label = label.to_string();
-        peer_directory.upsert(record).await?;
+        let mut renamed = record.clone();
+        renamed.label = label.to_string();
+        self.sync_state
+            .replace_record(&record, renamed)
+            .await?
+            .with_context(|| format!("peer {peer_id} changed while it was being renamed"))?;
         self.clear_mutation_error();
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn update_peer_status(&self, status: ClientPeerStatus) {
+        if let Some(expected) = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.peer_id == status.peer_id)
+        {
+            self.sync_state.replace_peer(&expected, status);
+        }
     }
 
     pub async fn add_peer(
@@ -1158,7 +1207,7 @@ impl ClientCore {
         let activation = self
             .route_manager
             .activate_peer(
-                &self.peer_directory,
+                &self.sync_state,
                 label,
                 addr,
                 agent_did,
@@ -1169,30 +1218,18 @@ impl ClientCore {
         let record = activation.record;
         let connected = activation.connected;
         let mut warning = activation.warning;
+        let activation_warning = warning.clone();
         if let Err(error) = self.refresh_agent(&record.agent_did).await {
             append_warning(
                 &mut warning,
                 format!("deployment saved but local replica refresh failed: {error}"),
             );
+            self.sync_state.compare_and_set_last_error(
+                &record,
+                &activation_warning,
+                warning.clone(),
+            );
         }
-
-        self.route_manager
-            .publish_status_if_current(
-                &self.peer_directory,
-                &self.peer_statuses,
-                ClientPeerStatus {
-                    peer_id: record.peer_id.clone(),
-                    label: record.label.clone(),
-                    agent_did: record.agent_did.clone(),
-                    addr: record.addr.clone(),
-                    dial_succeeded: connected,
-                    last_error: warning.clone(),
-                    pairing: Vec::new(),
-                    routes: Vec::new(),
-                    chat_safe: record.pairing_ready,
-                },
-            )
-            .await;
         self.clear_mutation_error();
         if let Some(warning) = warning.as_deref() {
             tracing::warn!(
@@ -1224,7 +1261,7 @@ impl ClientCore {
         let peer_id = normalize_required("peer_id", peer_id)?;
         let removal = self
             .route_manager
-            .remove_peer(&self.peer_directory, &self.peer_statuses, peer_id)
+            .remove_peer(&self.sync_state, peer_id)
             .await?;
         let removed = removal.record;
         let warning = match removal.cleanup_error {
@@ -1471,27 +1508,6 @@ impl ClientCore {
                 Ok(doc_id)
             }
             Err(error) => Err(self.record_mutation_error("fire schedule now", error)),
-        }
-    }
-
-    pub(super) fn update_peer_status(&self, status: ClientPeerStatus) {
-        let mut statuses = self
-            .peer_statuses
-            .write()
-            .expect("peer status lock poisoned");
-        if let Some(existing) = statuses
-            .iter_mut()
-            .find(|existing| existing.peer_id == status.peer_id)
-        {
-            *existing = status;
-        } else {
-            statuses.push(status);
-            statuses.sort_by(|left, right| {
-                left.label
-                    .to_lowercase()
-                    .cmp(&right.label.to_lowercase())
-                    .then_with(|| left.peer_id.cmp(&right.peer_id))
-            });
         }
     }
 

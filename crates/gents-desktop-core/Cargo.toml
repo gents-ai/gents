@@ -25,11 +25,11 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tempfile = "3"
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 gents-lean-contract.workspace = true
-tempfile = "3"
 wiremock = "0.6"
