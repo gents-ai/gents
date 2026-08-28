@@ -162,7 +162,8 @@ impl BackgroundExecutionRegistry {
         self.remove_now(tool_call_id);
     }
 
-    pub(crate) async fn contains(&self, tool_call_id: &str) -> bool {
+    /// Returns whether this process still owns a live background execution.
+    pub async fn contains(&self, tool_call_id: &str) -> bool {
         self.lock_executions().contains_key(tool_call_id)
     }
 

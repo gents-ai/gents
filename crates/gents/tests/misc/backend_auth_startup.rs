@@ -1,32 +1,18 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{
-    ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver,
-    ProcessLifecycleState, ToolCeiling,
+    ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleState,
+    ToolCeiling,
 };
 use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_behavior, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::waits::wait_for_runtime_process_state;
-
-#[derive(Default)]
-struct RecordingObserver {
-    states: Mutex<Vec<ProcessLifecycleState>>,
-}
-
-impl ProcessLifecycleObserver for RecordingObserver {
-    fn on_process_state_change(&self, state: ProcessLifecycleState) {
-        self.states
-            .lock()
-            .expect("recording observer mutex poisoned")
-            .push(state);
-    }
-}
+use crate::support::waits::RecordingProcessObserver;
 
 #[tokio::test]
 async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> Result<()> {
@@ -99,7 +85,7 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
 
     let mut env = TestEnvGuard::new(&["GENTS_TEST_RUNTIME_BACKEND_KEY"]);
     env.set("GENTS_TEST_RUNTIME_BACKEND_KEY", "backend-key");
-    let observer = Arc::new(RecordingObserver::default());
+    let observer = Arc::new(RecordingProcessObserver::default());
     let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
@@ -113,15 +99,11 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
-    wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
+    observer.wait_for(ProcessLifecycleState::Ready).await;
     let _ = shutdown_tx.send(true);
     run_task.await??;
 
-    let observed = observer
-        .states
-        .lock()
-        .expect("recording observer mutex poisoned")
-        .clone();
+    let observed = observer.states();
     assert_eq!(
         observed,
         vec![
