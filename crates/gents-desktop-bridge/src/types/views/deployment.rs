@@ -21,16 +21,6 @@ pub struct P2PHealthView {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionHydrationView {
-    pub session_id: String,
-    pub agent_did: String,
-    pub phase: String,
-    pub merged_count: usize,
-    pub served_count: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct SyncHealthView {
     pub state: String,
     pub since: Option<String>,

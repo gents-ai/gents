@@ -14,7 +14,6 @@ export type { NetworkSavedPeerView } from "../generated/NetworkSavedPeerView.js"
 export type { NetworkStatusView } from "../generated/NetworkStatusView.js";
 export type { PairingCollectionStatusView } from "../generated/PairingCollectionStatusView.js";
 export type { RuntimeView } from "../generated/RuntimeView.js";
-export type { SessionHydrationView } from "../generated/SessionHydrationView.js";
 export type { SyncHealthView } from "../generated/SyncHealthView.js";
 export type { ScheduleView } from "../generated/ScheduleView.js";
 export type { SkillView } from "../generated/SkillView.js";

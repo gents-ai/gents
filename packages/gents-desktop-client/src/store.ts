@@ -1,7 +1,4 @@
-import {
-  assertCompatibleBridgeContract,
-  type DesktopClient,
-} from "./client.js";
+import type { DesktopClient } from "./client.js";
 import type { ClientUpdateEvent, Unlisten } from "./transport.js";
 import type { DesktopClientSnapshot } from "./types.js";
 
@@ -122,7 +119,6 @@ export function createDesktopStore(
         if (state.started) {
           return;
         }
-        assertCompatibleBridgeContract(await client.bridgeContract());
         await client.clientStart();
         unlisten = await client.transport.listenClientUpdated((event) => {
           scheduleRefresh(event);
@@ -143,8 +139,7 @@ export function createDesktopStore(
         }
         try {
           await client.clientShutdown();
-        } catch {
-        }
+        } catch {}
         setState({ started: false });
       });
     },

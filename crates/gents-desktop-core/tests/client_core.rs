@@ -141,6 +141,54 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn durable_served_hydration_row_drives_exact_session_progress() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
+    let agent_did = "did:test:amy";
+    let session_id = "session-served-empty";
+    let request_key =
+        gents::graphql::escape_graphql_string(&format!("{}:{session_id}", core.local_peer_id()));
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"mutation {{
+                create_SessionHydrationRequest(input: {{
+                    request_key: "{request_key}"
+                    requester_did: "{requester_did}"
+                    agent_did: "{agent_did}"
+                    session_id: "{session_id}"
+                    created_at: "2026-08-28T00:00:00Z"
+                    status: "served"
+                    status_detail: "served 0 documents"
+                    served_doc_count: 0
+                    processed_at: "2026-08-28T00:00:01Z"
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed served hydration request: {:?}",
+        response.errors
+    );
+
+    let progress = core
+        .session_hydration_progress(session_id, agent_did)
+        .await?;
+    assert_eq!(progress.phase.as_str(), "complete");
+    assert_eq!(progress.merged_count, 0);
+    assert_eq!(progress.served_count, Some(0));
+
+    core.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn passive_hydration_observation_preserves_rejection_until_explicit_retry() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());

@@ -80,7 +80,7 @@ export type DesktopClient = {
 export function createDesktopClient(
   transport: DesktopTransport = tauriTransport(),
 ): DesktopClient {
-  const api = createDesktopApiAdapter(transport);
+  const rawApi = createDesktopApiAdapter(transport);
 
   async function invoke<T>(command: string, args?: unknown): Promise<T> {
     try {
@@ -90,11 +90,23 @@ export function createDesktopClient(
     }
   }
 
+  async function clientStart(): Promise<DesktopClientSnapshot> {
+    assertCompatibleBridgeContract(
+      await invoke<DesktopBridgeContract>("desktop_bridge_contract"),
+    );
+    return invoke("desktop_client_start");
+  }
+
+  const api: DesktopApiAdapter = {
+    ...rawApi,
+    startDesktopClient: clientStart,
+  };
+
   return {
     transport,
     api,
     invoke,
-    clientStart: () => invoke("desktop_client_start"),
+    clientStart,
     clientShutdown: () => invoke("desktop_client_shutdown"),
     clientSnapshot: () => invoke("desktop_client_snapshot"),
     bridgeContract: () => invoke("desktop_bridge_contract"),

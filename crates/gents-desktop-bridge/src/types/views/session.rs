@@ -411,6 +411,16 @@ pub struct SessionLiveDeltaView {
     pub reasoning: Option<SessionLiveTextPatchView>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionHydrationView {
+    pub session_id: String,
+    pub agent_did: String,
+    pub phase: String,
+    pub merged_count: usize,
+    pub served_count: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
@@ -431,7 +441,7 @@ pub struct DesktopSessionSnapshot {
     pub timeline_items: Vec<RenderedTimelineItem>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
-    pub hydration: Option<super::SessionHydrationView>,
+    pub hydration: Option<SessionHydrationView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub timeline_page: Option<SessionTimelinePageView>,

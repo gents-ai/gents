@@ -4,10 +4,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertCompatibleBridgeContract,
+  createDesktopClient,
   MINIMUM_BRIDGE_CONTRACT_VERSION,
   PACKAGE_VERSION,
   type DesktopBridgeContract,
 } from "./client.js";
+import { createMemoryTransport } from "./testing.js";
 
 function versionParts(version: string): [number, number] {
   const match = /^(\d+)\.(\d+)$/.exec(version);
@@ -74,5 +76,26 @@ describe("desktop bridge compatibility", () => {
     ) as DesktopBridgeContract;
 
     expect(() => assertCompatibleBridgeContract(fingerprint)).not.toThrow();
+  });
+
+  it("rejects an old bridge on the default app API before starting", async () => {
+    let starts = 0;
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_bridge_contract: () => contract("1.6"),
+        desktop_client_start: () => {
+          starts += 1;
+          return {};
+        },
+      },
+    });
+
+    await expect(
+      createDesktopClient(transport).api.startDesktopClient(),
+    ).rejects.toThrow("Incompatible Gents desktop bridge contract 1.6");
+    expect(starts).toBe(0);
+    expect(transport.calls.map(({ command }) => command)).toEqual([
+      "desktop_bridge_contract",
+    ]);
   });
 });
