@@ -169,12 +169,14 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     setWorkspaceView("config");
   }
 
+  const routeOwnsPageScroll =
+    shell.startupPhase !== "ready" ||
+    workspaceView === "fleet" ||
+    workspaceView === "config";
+
   return (
     <main className={`app-shell app-view-${workspaceView}`}>
       <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
-      {shell.error && shell.startupPhase === "ready" ? (
-        <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
-      ) : null}
       <ShortcutsHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <ConfirmDialog
         cancelLabel="Keep editing"
@@ -187,203 +189,223 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
         title="Discard unsaved changes?"
       />
 
-      {shell.startupPhase !== "ready" ? (
-        <StartupScreen
-          error={shell.error}
-          onRetry={shell.onRetryStartup}
-          phase={shell.startupPhase}
-        />
-      ) : workspaceView === "fleet" ? (
-        <FleetHostDashboard
-          api={bridge.api}
-          addingPeer={shell.addingPeer}
-          bootstrap={shell.snapshot?.bootstrap ?? null}
-          deployments={shell.deployments}
-          loading={shell.loading}
-          p2pHealth={shell.runtimeHealth}
-          syncHealth={shell.snapshot?.client?.syncHealth ?? null}
-          repairingP2P={shell.repairingP2P}
-          starting={shell.starting}
-          onAddPeer={shell.onAddPeer}
-          onPairBearer={shell.onPairBearer}
-          onProbePeerAddress={shell.onProbePeerAddress}
-          onInitLocalRuntime={shell.onInitLocalRuntime}
-          onStartManagedServer={
-            bridge.api.startManagedServer
-              ? (agentName) => bridge.api.startManagedServer!(agentName)
-              : undefined
-          }
-          onCommitManagedServerAutoStart={
-            bridge.api.commitManagedServerAutoStart
-              ? (agentName) => bridge.api.commitManagedServerAutoStart!(agentName)
-              : undefined
-          }
-          onOpenChat={openChat}
-          onOpenConfig={openConfig}
-          onRemovePeer={shell.onRemovePeer}
-          onRenamePeer={shell.onRenamePeer}
-          onRepairP2P={shell.onRepairP2P}
-          onSaveBackendConfig={shell.onSaveBackendConfig}
-          onSaveBehaviorConfig={shell.onSaveBehaviorConfig}
-          onProbeInferenceEndpoint={shell.onProbeInferenceEndpoint}
-          onCodexLogin={shell.onCodexLogin}
-          onCancelCodexLogin={shell.onCancelCodexLogin}
-          onGrokLogin={shell.onGrokLogin}
-          onCancelGrokLogin={shell.onCancelGrokLogin}
-        />
-      ) : workspaceView === "chat" ? (
-        <section
-          className={`workspace mobile-chat-pane-${mobileChatPane}`}
-          data-mobile-chat-pane={mobileChatPane}
-        >
-          <Sidebar
-            conversations={shell.selectedDeployment?.conversations ?? []}
-            mailboxItems={shell.selectedDeployment?.mailboxItems ?? []}
-            deployments={shell.deployments}
-            onConfigureDeployment={(agentDid) => openConfig(agentDid)}
-            onOpenFleet={() => {
-              shell.clearPendingMailboxCause();
-              setWorkspaceView("fleet");
-            }}
-            onSelectBehavior={shell.setSelectedBehaviorId}
-            onSelectAgent={(agentDid) => {
-              shell.clearPendingMailboxCause();
-              shell.setSelectedAgentDid(agentDid);
-              shell.setSelectedSessionId(null);
-            }}
-            onSelectSession={shell.onSelectSession}
-            onOpenSession={(sessionId) => {
-              shell.onSelectSession(sessionId);
-              setMobileChatPane("conversation");
-            }}
-            onRepairP2P={shell.onRepairP2P}
-            repairingP2P={shell.repairingP2P}
-            syncHealth={shell.snapshot?.client?.syncHealth ?? null}
-            onStartNewConversation={(behaviorId) => {
-              shell.onStartNewConversation(behaviorId);
-              setMobileChatPane("conversation");
-            }}
-            onOpenMailboxItem={(itemId) => {
-              void shell
-                .onOpenMailboxItem(itemId)
-                .then(() => {
-                  setWorkspaceView("chat");
-                  setMobileChatPane("conversation");
-                  requestAnimationFrame(() => {
-                    document
-                      .querySelector<HTMLTextAreaElement>(
-                        '[data-testid="composer-input"]',
-                      )
-                      ?.focus();
-                  });
-                })
-                .catch(() => {});
-            }}
-            onDismissMailboxItem={(itemId) => {
-              void shell.onDismissMailboxItem(itemId).catch(() => {});
-            }}
-            selectedAgentDid={shell.selectedAgentDid}
-            selectedBehaviorId={shell.selectedBehaviorId}
-            selectedSessionId={shell.selectedSessionId}
-          />
+      <section className="app-notice-slot" data-testid="app-notice-slot">
+        {shell.error && shell.startupPhase === "ready" ? (
+          <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
+        ) : null}
+      </section>
 
-          <section className="chat-column">
-            {shell.pendingMailboxCauseId ? (
-              <div
-                className="mailbox-compose-banner"
-                data-testid="mailbox-compose-banner"
-              >
-                This reply is linked to a mailbox item.
-                <button onClick={shell.clearPendingMailboxCause} type="button">
-                  Cancel link
-                </button>
-              </div>
-            ) : null}
-            <ChatWorkspace
-              api={bridge.api}
-              activeRequestId={
-                shell.activeRequestId ?? shell.session?.latestRequestId ?? null
-              }
-              approxSerializedBytes={shell.snapshot?.client?.approxSerializedBytes ?? 0}
-              canSend={shell.canSendMessage}
-              configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
-              dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
-              draft={shell.draft}
-              interruptVisible={shell.interruptVisible}
-              onDraftChange={shell.setDraft}
-              onRenameConversationTitle={shell.onRenameConversationTitle}
-              onSend={shell.onSendMessage}
-              onRetryMessage={shell.onRetryMessage}
-              onRetryHydration={() => shell.refreshSession(shell.selectedSessionId)}
-              onLoadOlderTimeline={shell.loadOlderSessionTimeline}
-              rowCount={shell.snapshot?.client?.rowCount ?? 0}
-              runtimeHealth={shell.runtimeHealth}
-              sendHint={
-                shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
-              }
-              retryUnavailableHint={
-                shell.sendStatus.kind === "disabled" &&
-                shell.sendStatus.reason === "behaviorUnavailable"
-                  ? shell.sendStatus.hint
-                  : null
-              }
-              selectedBehaviorId={shell.selectedBehaviorId}
-              selectedConversationTitle={
-                shell.session
-                  ? (shell.session.title ?? null)
-                  : (shell.selectedConversation?.title ?? null)
-              }
-              selectedDeployment={shell.selectedDeployment}
-              selectedSessionId={shell.selectedSessionId}
-              sending={shell.sending}
-              session={shell.session}
-              optimisticPendingTurn={shell.optimisticPendingTurn}
-              turnState={shell.turnState ?? shell.session?.turnState ?? null}
-              onOpenMobileNavigation={() => setMobileChatPane("navigation")}
-              onInterruptAccepted={async () => {
-                await shell.refreshSession(shell.selectedSessionId);
-              }}
-            />
-          </section>
-        </section>
-      ) : (
-        <section className="config-page">
-          <ConfigWorkspace
+      <section
+        className={
+          routeOwnsPageScroll
+            ? "app-route-slot app-route-slot-scroll"
+            : "app-route-slot"
+        }
+        data-scroll-owner={routeOwnsPageScroll ? "route" : undefined}
+        data-testid="app-route-slot"
+      >
+        {shell.startupPhase !== "ready" ? (
+          <StartupScreen
+            error={shell.error}
+            onRetry={shell.onRetryStartup}
+            phase={shell.startupPhase}
+          />
+        ) : workspaceView === "fleet" ? (
+          <FleetHostDashboard
             api={bridge.api}
-            backLabel={configReturnView === "fleet" ? "Back to Fleet" : "Back to Chat"}
+            addingPeer={shell.addingPeer}
             bootstrap={shell.snapshot?.bootstrap ?? null}
-            onBack={navigateBack}
-            onDirtyChange={configNavigation.reportDirty}
-            onDeleteSkillConfig={shell.onDeleteSkillConfig}
-            onDeleteTaskConfig={shell.onDeleteTaskConfig}
-            onDeleteScheduleConfig={shell.onDeleteScheduleConfig}
-            onDeleteEventTriggerConfig={shell.onDeleteEventTriggerConfig}
-            onDeleteBackendConfig={shell.onDeleteBackendConfig}
-            onDeleteInferenceProfileConfig={shell.onDeleteInferenceProfileConfig}
-            onDeleteToolSelectionConfig={shell.onDeleteToolSelectionConfig}
-            onDeleteToolServiceConfig={shell.onDeleteToolServiceConfig}
-            onDeleteBehaviorConfig={shell.onDeleteBehaviorConfig}
-            onSaveAgentConfig={shell.onSaveAgentConfig}
-            onRunTask={shell.onRunTask}
+            deployments={shell.deployments}
+            loading={shell.loading}
+            p2pHealth={shell.runtimeHealth}
+            syncHealth={shell.snapshot?.client?.syncHealth ?? null}
+            repairingP2P={shell.repairingP2P}
+            starting={shell.starting}
+            onAddPeer={shell.onAddPeer}
+            onPairBearer={shell.onPairBearer}
+            onProbePeerAddress={shell.onProbePeerAddress}
+            onInitLocalRuntime={shell.onInitLocalRuntime}
+            onStartManagedServer={
+              bridge.api.startManagedServer
+                ? (agentName) => bridge.api.startManagedServer!(agentName)
+                : undefined
+            }
+            onCommitManagedServerAutoStart={
+              bridge.api.commitManagedServerAutoStart
+                ? (agentName) => bridge.api.commitManagedServerAutoStart!(agentName)
+                : undefined
+            }
+            onOpenChat={openChat}
+            onOpenConfig={openConfig}
+            onRemovePeer={shell.onRemovePeer}
+            onRenamePeer={shell.onRenamePeer}
+            onRepairP2P={shell.onRepairP2P}
             onSaveBackendConfig={shell.onSaveBackendConfig}
             onSaveBehaviorConfig={shell.onSaveBehaviorConfig}
-            onSaveEventTriggerConfig={shell.onSaveEventTriggerConfig}
-            onSaveInferenceProfileConfig={shell.onSaveInferenceProfileConfig}
-            onSaveScheduleConfig={shell.onSaveScheduleConfig}
-            onSaveSkillConfig={shell.onSaveSkillConfig}
-            onSaveTaskConfig={shell.onSaveTaskConfig}
-            onSaveToolSelectionConfig={shell.onSaveToolSelectionConfig}
-            onSaveToolServiceConfig={shell.onSaveToolServiceConfig}
-            onTestToolService={shell.onTestToolService}
-            requestNavigation={requestConfigNavigation}
-            onRunSchedule={shell.onRunSchedule}
-            runningTask={shell.runningTask}
-            saving={shell.savingConfig}
-            selectedBehaviorId={shell.selectedBehaviorId}
-            selectedDeployment={shell.selectedDeployment}
+            onProbeInferenceEndpoint={shell.onProbeInferenceEndpoint}
+            onCodexLogin={shell.onCodexLogin}
+            onCancelCodexLogin={shell.onCancelCodexLogin}
+            onGrokLogin={shell.onGrokLogin}
+            onCancelGrokLogin={shell.onCancelGrokLogin}
           />
-        </section>
-      )}
+        ) : workspaceView === "chat" ? (
+          <section
+            className={`workspace mobile-chat-pane-${mobileChatPane}`}
+            data-mobile-chat-pane={mobileChatPane}
+          >
+            <Sidebar
+              conversations={shell.selectedDeployment?.conversations ?? []}
+              mailboxItems={shell.selectedDeployment?.mailboxItems ?? []}
+              deployments={shell.deployments}
+              onConfigureDeployment={(agentDid) => openConfig(agentDid)}
+              onOpenFleet={() => {
+                shell.clearPendingMailboxCause();
+                setWorkspaceView("fleet");
+              }}
+              onSelectBehavior={shell.setSelectedBehaviorId}
+              onSelectAgent={(agentDid) => {
+                shell.clearPendingMailboxCause();
+                shell.setSelectedAgentDid(agentDid);
+                shell.setSelectedSessionId(null);
+              }}
+              onSelectSession={shell.onSelectSession}
+              onOpenSession={(sessionId) => {
+                shell.onSelectSession(sessionId);
+                setMobileChatPane("conversation");
+              }}
+              onRepairP2P={shell.onRepairP2P}
+              repairingP2P={shell.repairingP2P}
+              syncHealth={shell.snapshot?.client?.syncHealth ?? null}
+              onStartNewConversation={(behaviorId) => {
+                shell.onStartNewConversation(behaviorId);
+                setMobileChatPane("conversation");
+              }}
+              onOpenMailboxItem={(itemId) => {
+                void shell
+                  .onOpenMailboxItem(itemId)
+                  .then(() => {
+                    setWorkspaceView("chat");
+                    setMobileChatPane("conversation");
+                    requestAnimationFrame(() => {
+                      document
+                        .querySelector<HTMLTextAreaElement>(
+                          '[data-testid="composer-input"]',
+                        )
+                        ?.focus();
+                    });
+                  })
+                  .catch(() => {});
+              }}
+              onDismissMailboxItem={(itemId) => {
+                void shell.onDismissMailboxItem(itemId).catch(() => {});
+              }}
+              selectedAgentDid={shell.selectedAgentDid}
+              selectedBehaviorId={shell.selectedBehaviorId}
+              selectedSessionId={shell.selectedSessionId}
+            />
+
+            <section className="chat-column">
+              {shell.pendingMailboxCauseId ? (
+                <div
+                  className="mailbox-compose-banner"
+                  data-testid="mailbox-compose-banner"
+                >
+                  This reply is linked to a mailbox item.
+                  <button onClick={shell.clearPendingMailboxCause} type="button">
+                    Cancel link
+                  </button>
+                </div>
+              ) : null}
+              <ChatWorkspace
+                api={bridge.api}
+                activeRequestId={
+                  shell.activeRequestId ?? shell.session?.latestRequestId ?? null
+                }
+                approxSerializedBytes={
+                  shell.snapshot?.client?.approxSerializedBytes ?? 0
+                }
+                canSend={shell.canSendMessage}
+                configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
+                dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
+                draft={shell.draft}
+                interruptVisible={shell.interruptVisible}
+                onDraftChange={shell.setDraft}
+                onRenameConversationTitle={shell.onRenameConversationTitle}
+                onSend={shell.onSendMessage}
+                onRetryMessage={shell.onRetryMessage}
+                onRetryHydration={() => shell.refreshSession(shell.selectedSessionId)}
+                onLoadOlderTimeline={shell.loadOlderSessionTimeline}
+                rowCount={shell.snapshot?.client?.rowCount ?? 0}
+                runtimeHealth={shell.runtimeHealth}
+                sendHint={
+                  shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
+                }
+                retryUnavailableHint={
+                  shell.sendStatus.kind === "disabled" &&
+                  shell.sendStatus.reason === "behaviorUnavailable"
+                    ? shell.sendStatus.hint
+                    : null
+                }
+                selectedBehaviorId={shell.selectedBehaviorId}
+                selectedConversationTitle={
+                  shell.session
+                    ? (shell.session.title ?? null)
+                    : (shell.selectedConversation?.title ?? null)
+                }
+                selectedDeployment={shell.selectedDeployment}
+                selectedSessionId={shell.selectedSessionId}
+                sending={shell.sending}
+                session={shell.session}
+                optimisticPendingTurn={shell.optimisticPendingTurn}
+                turnState={shell.turnState ?? shell.session?.turnState ?? null}
+                onOpenMobileNavigation={() => setMobileChatPane("navigation")}
+                onInterruptAccepted={async () => {
+                  await shell.refreshSession(shell.selectedSessionId);
+                }}
+              />
+            </section>
+          </section>
+        ) : (
+          <section className="config-page">
+            <ConfigWorkspace
+              api={bridge.api}
+              backLabel={
+                configReturnView === "fleet" ? "Back to Fleet" : "Back to Chat"
+              }
+              bootstrap={shell.snapshot?.bootstrap ?? null}
+              onBack={navigateBack}
+              onDirtyChange={configNavigation.reportDirty}
+              onDeleteSkillConfig={shell.onDeleteSkillConfig}
+              onDeleteTaskConfig={shell.onDeleteTaskConfig}
+              onDeleteScheduleConfig={shell.onDeleteScheduleConfig}
+              onDeleteEventTriggerConfig={shell.onDeleteEventTriggerConfig}
+              onDeleteBackendConfig={shell.onDeleteBackendConfig}
+              onDeleteInferenceProfileConfig={shell.onDeleteInferenceProfileConfig}
+              onDeleteToolSelectionConfig={shell.onDeleteToolSelectionConfig}
+              onDeleteToolServiceConfig={shell.onDeleteToolServiceConfig}
+              onDeleteBehaviorConfig={shell.onDeleteBehaviorConfig}
+              onSaveAgentConfig={shell.onSaveAgentConfig}
+              onRunTask={shell.onRunTask}
+              onSaveBackendConfig={shell.onSaveBackendConfig}
+              onSaveBehaviorConfig={shell.onSaveBehaviorConfig}
+              onSaveEventTriggerConfig={shell.onSaveEventTriggerConfig}
+              onSaveInferenceProfileConfig={shell.onSaveInferenceProfileConfig}
+              onSaveScheduleConfig={shell.onSaveScheduleConfig}
+              onSaveSkillConfig={shell.onSaveSkillConfig}
+              onSaveTaskConfig={shell.onSaveTaskConfig}
+              onSaveToolSelectionConfig={shell.onSaveToolSelectionConfig}
+              onSaveToolServiceConfig={shell.onSaveToolServiceConfig}
+              onTestToolService={shell.onTestToolService}
+              requestNavigation={requestConfigNavigation}
+              onRunSchedule={shell.onRunSchedule}
+              runningTask={shell.runningTask}
+              saving={shell.savingConfig}
+              selectedBehaviorId={shell.selectedBehaviorId}
+              selectedDeployment={shell.selectedDeployment}
+            />
+          </section>
+        )}
+      </section>
     </main>
   );
 }

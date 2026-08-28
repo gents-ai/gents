@@ -162,13 +162,14 @@ export function CascadeCancelDialog(
   return (
     <div
       ref={backdropRef}
-      className="dialog-backdrop open"
+      className="dialog-backdrop viewport-overlay open"
       role="presentation"
       onClick={onBackdropClick}
     >
       <div
         ref={dialogRef}
-        className="dialog"
+        className="dialog viewport-overlay-surface"
+        data-scroll-owner="dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="cascade-cancel-title"
@@ -194,7 +195,6 @@ export function CascadeCancelDialog(
               </span>
             ) : null}
           </div>
-          { }
           <div
             role="status"
             aria-live="polite"

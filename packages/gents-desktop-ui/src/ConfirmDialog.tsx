@@ -61,12 +61,13 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="dialog-backdrop open"
+      className="dialog-backdrop viewport-overlay open"
       role="presentation"
       onClick={onCancel}
     >
       <div
-        className="dialog confirm-dialog"
+        className="dialog confirm-dialog viewport-overlay-surface"
+        data-scroll-owner="dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"

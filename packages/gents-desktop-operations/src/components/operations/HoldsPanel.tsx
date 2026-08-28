@@ -123,7 +123,7 @@ export function HoldsPanel({
           No tool calls awaiting approval.
         </p>
       ) : null}
-      <ul className="holds-panel-list">
+      <ul className="holds-panel-list" data-scroll-owner="holds">
         {(holds ?? []).map((hold) => {
           const fullArgs = normalizedArgs(hold.args);
           const preview = fullArgs ? argsPreview(fullArgs) : null;

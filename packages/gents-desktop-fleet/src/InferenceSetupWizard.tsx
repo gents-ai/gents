@@ -11,12 +11,13 @@ export function InferenceSetupWizard(props: InferenceSetupWizardProps) {
 
   return (
     <div
-      className="dialog-backdrop open"
+      className="dialog-backdrop viewport-overlay open"
       role="presentation"
       onClick={setup.cancelAndClose}
     >
       <div
-        className="dialog inference-wizard"
+        className="dialog inference-wizard viewport-overlay-surface"
+        data-scroll-owner="dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="inference-wizard-title"

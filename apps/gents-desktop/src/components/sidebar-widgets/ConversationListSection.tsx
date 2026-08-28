@@ -96,7 +96,11 @@ export function ConversationListSection({
       ) : !filteredConversations.length ? (
         <p className="muted">No sessions match the search.</p>
       ) : (
-        <div className="conversation-list" data-testid="session-list">
+        <div
+          className="conversation-list"
+          data-scroll-owner="section-list"
+          data-testid="session-list"
+        >
           <SessionGroupList
             conversations={grouped.attention}
             environmentById={environmentById}
@@ -141,7 +145,7 @@ function SessionGroupList({
   return (
     <section className="session-group">
       <h3>{label}</h3>
-      <div className="list session-group-list">
+      <div className="session-group-list">
         {conversations.map((conversation) => {
           const when = conversation.updatedAt ?? conversation.createdAt;
           const environment = conversation.behaviorId

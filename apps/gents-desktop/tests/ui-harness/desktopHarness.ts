@@ -238,6 +238,22 @@ export function createDesktopUiHarness(
     },
     pendingTurn: null,
     activeResponseOverlay: null,
+    context:
+      scenario === "long-content"
+        ? {
+            estimatedDurableTokens: 142_031,
+            estimatedConversationTokens: 142_031,
+            contextWindow: 480_000,
+            compactionThreshold: 0.75,
+            compactionThresholdTokens: 360_000,
+            compactionStrategy: "StripThenSummarize",
+            durableMessageCount: 8,
+            providerMessageCount: 8,
+            totalCompactedMessages: 0,
+            compactions: [],
+            lastRequest: null,
+          }
+        : undefined,
     timelineItems: [
       {
         kind: "assistantMessage",
