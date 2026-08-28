@@ -7,7 +7,7 @@
     {
       "tool_name": "write_research_source",
       "collection": "WebResearchSource",
-      "description": "Record one fetched source with stable service provenance.",
+      "description": "Record one fetched source with stable service provenance; primary_source is a required true/false string and relevance is a required short assignment-specific explanation. Only published_at is optional.",
       "output_obligation": {"scope": "trigger", "minimum_writes": 2},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
@@ -22,6 +22,13 @@
         {"name": "fetched_at", "required": true},
         {"name": "fetch_id", "required": true},
         {"name": "content_hash", "required": true},
+        {"name": "matched_query", "required": true},
+        {"name": "retrieval_queries", "required": true},
+        {"name": "search_engines", "required": true},
+        {"name": "candidate_relevance_score", "required": true},
+        {"name": "content_relevance_score", "required": true},
+        {"name": "extraction_method", "required": true},
+        {"name": "content_integrity_verified", "required": true},
         {"name": "verified_quote", "required": true},
         {"name": "quote_verified", "required": true},
         {"name": "relevance", "required": true}
@@ -55,7 +62,6 @@
         {"name": "relationship", "required": true},
         {"name": "locator", "required": true},
         {"name": "supporting_excerpt", "required": true},
-        {"name": "verified_quote_used", "required": true},
         {"name": "notes", "required": true}
       ]
     },
@@ -68,9 +74,13 @@
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "assignment_id", "required": false, "fill": {"source_field": "assignment_id"}},
         {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}},
-        {"name": "source_count", "required": true},
-        {"name": "claim_count", "required": true},
-        {"name": "evidence_count", "required": true},
+        {"name": "requested_source_count", "required": true},
+        {"name": "candidate_count", "required": true},
+        {"name": "scrape_attempt_count", "required": true},
+        {"name": "evidence_shortfall", "required": true},
+        {"name": "accepted_search_engines", "required": true},
+        {"name": "search_degradation", "required": true},
+        {"name": "retrieval_failures", "required": true},
         {"name": "status", "required": true},
         {"name": "summary", "required": true},
         {"name": "gaps", "required": true}

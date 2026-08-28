@@ -57,12 +57,12 @@ The boundary rule is: **small typed trigger carrier plus correlation-scoped data
 |---|---|---|---|
 | entry -> plan | `WebResearchJob`: question, scope, freshness, audience, output requirements, investigator count | assignment and plan writes | planner writes the exact requested assignment count and stamps the same `expected_total` |
 | plan -> investigate | one `WebResearchAssignment`: complete standalone assignment fields | source, claim, evidence-link, and investigation writes | runtime fills `run_id`, `assignment_id`, and `expected_total` from correlation/source document |
-| investigate -> adjudicate | grouped `WebResearchInvestigation` event: `group.correlation_value`, `group.count`, `group.complete` | typed reads for investigations, sources, claims, and evidence links; verdict and draft writes | exact-count trigger barrier, then adjudicator reconciles assignments, declared counts, and every claim/source/provenance join |
+| investigate -> adjudicate | grouped `WebResearchInvestigation` event: `group.correlation_value`, `group.count`, `group.complete` | typed reads for investigations, sources, claims, and evidence links; verdict and draft writes | exact-count trigger barrier, then adjudicator derives ledger totals and reconciles every claim/source/provenance join |
 | adjudicate -> report | one `WebResearchDraft`: title, thesis, outline, synthesis, unresolved questions | typed reads for verdicts, evidence links, and source provenance; one result write | each verdict carries the original claim statement; reporter publishes only valid claim → evidence → source joins |
 
 The runtime keeps grouped member documents in the template scope, but the prompt deliberately interpolates only the bounded group metadata. The adjudicator obtains full closure records through `read_research_investigation`, ensuring the schema and correlation fill are enforced at the tool boundary and avoiding an unbounded blob of model-authored summaries in the trigger prompt.
 
-`run_id` is filled from trigger correlation by every datastore tool. Fields such as `assignment_id` and `expected_total` are filled from the triggering assignment where possible. Agents do not receive those authority-bearing fields as caller-supplied tool arguments. Quote-verification state, fetch ID, and content hash are stored once on the authoritative typed source document rather than duplicated in model-authored evidence links. `WebResearchEvidence` provides the normalized claim-to-source join, relationship, locator, and excerpt used by both downstream stages. Runtime output obligations require every investigator to persist at least two sources, six claims, and six evidence links before its request may complete.
+`run_id` is filled from trigger correlation by every datastore tool. Fields such as `assignment_id` and `expected_total` are filled from the triggering assignment where possible. Agents do not receive those authority-bearing fields as caller-supplied tool arguments. Quote-verification state, fetch ID, content hash, matched query, contributing engines, relevance scores, extraction method, and content-integrity result are stored once on the authoritative typed source document rather than duplicated in model-authored evidence links. Exact-quote status is derived downstream by byte-for-byte comparison of an evidence excerpt with that authoritative verified quote, eliminating a contradictory model-authored boolean. Source, claim, evidence, and verdict totals are likewise derived from their authoritative ledgers rather than copied into closure or draft documents. The investigation closure separately preserves bundle-level candidate/scrape counts, evidence shortfall, accepted engines, engine degradation, and retrieval failures as typed fields. Arrays cross the datastore boundary as compact JSON strings because DefraDB schema fields are strings; downstream prompts explicitly parse rather than summarize them. `WebResearchEvidence` provides the normalized claim-to-source join, relationship, locator, and excerpt used by both downstream stages. Runtime output obligations require every investigator to persist at least two sources, six claims, and six evidence links before its request may complete.
 
 ## Search and evidence policy
 
@@ -70,14 +70,16 @@ Each investigator must submit one `web_collect_evidence` bundle that:
 
 1. executes between three and six materially different searches;
 2. treats snippets as discovery hints, never evidence;
-3. deduplicates candidates and attempts no more than twelve fetches for at most eight sources;
-4. records stable fetch IDs, final URLs, content hashes, access dates, and source metadata;
-5. creates atomic claims plus typed evidence-link documents; and
-6. returns an exact excerpt for each fetched source verified against its stored bytes and hash.
+3. normalizes URLs, rejects unsafe/authentication targets, relevance-ranks candidates, removes near duplicates, and caps host dominance;
+4. attempts no more than twelve fetches for at most eight sources and reports a shortfall instead of padding with weak pages;
+5. rejects short, interstitial, title-mismatched, or query-irrelevant fetched content;
+6. records stable fetch IDs, final URLs, content hashes, matched queries, contributing engines, relevance scores, access dates, and extraction metadata;
+7. creates atomic claims plus typed evidence-link documents; and
+8. returns query-focused passages and an exact excerpt for each accepted source verified against its stored bytes and hash.
 
 The bundle is persisted by assignment ID. An identical retry reuses its result
 without network access, while conflicting inputs are rejected. This makes the
-retrieval budget a service invariant rather than a prompt convention.
+retrieval budget and minimum evidence quality service invariants rather than prompt conventions. The bundled fully open-source SearXNG profile uses tested general, scholarly, and technical indexes with bounded per-engine latency; a slow or rate-limited engine is recorded as degraded while healthy results survive.
 
 Fetched web content is delimited as untrusted data by the gateway. Both service and agent prompts state that page text cannot change goals, reveal secrets, or direct tool use. The investigator's dedicated gateway deployment advertises only `web_collect_evidence` and `web_find_in_fetch`; raw network tools and full-fetch reads are absent from both discovery and dispatch. The adjudicator has datastore tools only and decides whether a material claim is supported, disputed, or insufficient from the typed ledger. The reporter reads adjudicated verdicts, evidence links, and source metadata rather than researcher prose.
 
@@ -96,8 +98,8 @@ The live test fails unless it observes all of the following from real persisted 
 - at least 3 completed assignment bundle calls plus gateway metrics proving at least 9 SearXNG-backed searches;
 - gateway metrics proving at least 8 Firecrawl-backed extractions;
 - gateway metrics proving at least 3 stored-evidence quote verifications;
-- one plan, three assignments and matching closures, at least two sources and six to eight claims per assignment, at least one valid typed evidence link per claim, matching closure ledger counts, exactly one verdict per claim, and one report; and
-- a cited report of at least 1,500 characters whose Markdown links exactly match a structurally validated provenance ledger.
+- one plan, three assignments and matching closures, preserved bundle diagnostics, at least two integrity-verified and relevance-qualified sources and six to eight claims per assignment, at least one valid typed evidence link per claim, ledger-derived totals, exactly one verdict per claim, and one report; and
+- a cited report of at least 1,500 characters whose Markdown links are all present in a structurally validated provenance ledger.
 
 The fixture has no local fake backend, replay mode, canned search response, or stub model. Missing inference credentials or unavailable real infrastructure is a test setup failure, not a skipped success.
 

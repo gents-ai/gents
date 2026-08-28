@@ -583,8 +583,17 @@ mod tests {
             "source_id",
             "fetch_id",
             "content_hash",
+            "matched_query",
+            "retrieval_queries",
+            "search_engines",
+            "candidate_relevance_score",
+            "content_relevance_score",
+            "extraction_method",
+            "content_integrity_verified",
+            "evidence_shortfall",
+            "search_degradation",
+            "retrieval_failures",
             "relationship",
-            "evidence_count",
             "evidence_summary",
         ] {
             assert!(all_assets.contains(typed_field), "missing {typed_field}");

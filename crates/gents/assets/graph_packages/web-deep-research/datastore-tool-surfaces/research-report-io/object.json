@@ -9,7 +9,7 @@
       "tool_name": "read_report_research_source",
       "collection": "WebResearchSource",
       "description": "Load source metadata and provenance for report citations.",
-      "fields": ["source_id", "url", "title", "publisher", "source_kind", "published_at", "fetched_at", "fetch_id", "content_hash", "verified_quote", "quote_verified", "relevance"],
+      "fields": ["source_id", "url", "title", "publisher", "source_kind", "published_at", "fetched_at", "fetch_id", "content_hash", "matched_query", "retrieval_queries", "search_engines", "candidate_relevance_score", "content_relevance_score", "extraction_method", "content_integrity_verified", "verified_quote", "quote_verified", "relevance"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -17,7 +17,7 @@
       "tool_name": "read_report_research_evidence",
       "collection": "WebResearchEvidence",
       "description": "Load normalized claim-to-source joins for citation placement.",
-      "fields": ["evidence_id", "claim_id", "source_id", "relationship", "locator", "supporting_excerpt", "verified_quote_used", "notes"],
+      "fields": ["evidence_id", "claim_id", "source_id", "relationship", "locator", "supporting_excerpt", "notes"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

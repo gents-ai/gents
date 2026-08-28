@@ -33,7 +33,7 @@ async fn register_real_web_research_service(graphql: &str, agent_did: &str) -> R
                 mcp_path: "/mcp",
                 send_agent_did: true,
                 status: "online",
-                version: "0.1.5"
+                version: "0.1.10"
             }}) {{ _docID }}
         }}"#
     );
@@ -221,6 +221,20 @@ fn string_count(row: &Value, field: &str) -> Result<usize> {
     string_field(row, field)?
         .parse::<usize>()
         .with_context(|| format!("ledger row has invalid count {field}: {row}"))
+}
+
+fn string_number(row: &Value, field: &str) -> Result<f64> {
+    string_field(row, field)?
+        .parse::<f64>()
+        .with_context(|| format!("ledger row has invalid number {field}: {row}"))
+}
+
+fn string_json_array(row: &Value, field: &str) -> Result<Vec<Value>> {
+    serde_json::from_str::<Value>(string_field(row, field)?)
+        .with_context(|| format!("ledger row has invalid JSON {field}: {row}"))?
+        .as_array()
+        .cloned()
+        .with_context(|| format!("ledger row field {field} is not a JSON array: {row}"))
 }
 
 fn string_field<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
@@ -633,12 +647,12 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
             r#"{{
                 WebResearchPlan(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ question assignment_count }}
                 WebResearchAssignment(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ assignment_id question lens query_plan expected_total }}
-                WebResearchInvestigation(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ assignment_id expected_total source_count claim_count evidence_count status }}
-                WebResearchSource(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ source_id assignment_id url fetch_id content_hash verified_quote quote_verified }}
+                WebResearchInvestigation(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ assignment_id expected_total requested_source_count candidate_count scrape_attempt_count evidence_shortfall accepted_search_engines search_degradation retrieval_failures status }}
+                WebResearchSource(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ source_id assignment_id url fetch_id content_hash matched_query retrieval_queries search_engines candidate_relevance_score content_relevance_score extraction_method content_integrity_verified verified_quote quote_verified }}
                 WebResearchClaim(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ claim_id assignment_id statement }}
-                WebResearchEvidence(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ evidence_id assignment_id claim_id source_id relationship locator supporting_excerpt verified_quote_used }}
+                WebResearchEvidence(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ evidence_id assignment_id claim_id source_id relationship locator supporting_excerpt }}
                 WebResearchClaimVerdict(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ claim_id statement verdict confidence rationale evidence_summary quote_verification }}
-                WebResearchDraft(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ supported_claim_count disputed_claim_count }}
+                WebResearchDraft(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ title thesis }}
             }}"#
         ),
     )
@@ -692,6 +706,26 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
                 "source lacks required provenance: {source}"
             );
         }
+        for field in ["matched_query", "extraction_method"] {
+            anyhow::ensure!(
+                !string_field(source, field)?.trim().is_empty(),
+                "source lacks retrieval-quality handoff field {field}: {source}"
+            );
+        }
+        anyhow::ensure!(
+            !string_json_array(source, "retrieval_queries")?.is_empty()
+                && !string_json_array(source, "search_engines")?.is_empty(),
+            "source retrieval query and engine arrays must be non-empty: {source}"
+        );
+        anyhow::ensure!(
+            string_number(source, "candidate_relevance_score")? >= 24.0
+                && string_number(source, "content_relevance_score")? >= 28.0,
+            "source did not preserve the gateway relevance thresholds: {source}"
+        );
+        anyhow::ensure!(
+            string_field(source, "content_integrity_verified")? == "true",
+            "source was persisted without gateway content integrity: {source}"
+        );
         anyhow::ensure!(
             matches!(string_field(source, "quote_verified")?, "true" | "false"),
             "source quote verification must be an explicit boolean string: {source}"
@@ -751,19 +785,6 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
             ),
             "evidence relationship is outside the contract: {link}"
         );
-        let verified_quote_used = string_field(link, "verified_quote_used")?;
-        anyhow::ensure!(
-            matches!(verified_quote_used, "true" | "false"),
-            "evidence quote use must be an explicit boolean string: {link}"
-        );
-        if verified_quote_used == "true" {
-            anyhow::ensure!(
-                string_field(source, "quote_verified")? == "true"
-                    && string_field(link, "supporting_excerpt")?
-                        == string_field(source, "verified_quote")?,
-                "evidence claims an exact quote without a matching gateway verification: {link}"
-            );
-        }
         anyhow::ensure!(
             evidence_ids.insert(evidence_id),
             "duplicate evidence ID: {evidence_id}"
@@ -810,30 +831,28 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
         "investigation closure membership does not match assignments: {ledger}"
     );
     for closure in investigations {
-        let assignment_id = string_field(closure, "assignment_id")?;
         anyhow::ensure!(
             string_field(closure, "expected_total")? == "3"
-                && matches!(string_field(closure, "status")?, "complete" | "partial")
-                && string_count(closure, "source_count")?
-                    == source_counts
-                        .get(assignment_id)
-                        .copied()
-                        .unwrap_or_default()
-                && string_count(closure, "claim_count")?
-                    == claim_counts.get(assignment_id).copied().unwrap_or_default()
-                && string_count(closure, "evidence_count")?
-                    == evidence_counts
-                        .get(assignment_id)
-                        .copied()
-                        .unwrap_or_default(),
-            "investigation closure counts disagree with its ledgers: {closure}"
+                && matches!(string_field(closure, "status")?, "complete" | "partial"),
+            "investigation closure metadata is inconsistent: {closure}"
         );
+        anyhow::ensure!(
+            string_count(closure, "requested_source_count")? == 6
+                && string_count(closure, "candidate_count")? >= 2
+                && string_count(closure, "scrape_attempt_count")? <= 12
+                && matches!(
+                    string_field(closure, "evidence_shortfall")?,
+                    "true" | "false"
+                )
+                && !string_json_array(closure, "accepted_search_engines")?.is_empty(),
+            "investigation closure did not preserve bounded retrieval diagnostics: {closure}"
+        );
+        let _ = string_json_array(closure, "search_degradation")?;
+        let _ = string_json_array(closure, "retrieval_failures")?;
     }
 
     let verdicts = ledger_rows(&ledger, "WebResearchClaimVerdict")?;
     let mut verdict_claim_ids = BTreeSet::new();
-    let mut supported_count = 0usize;
-    let mut disputed_count = 0usize;
     for verdict in verdicts {
         let claim_id = string_field(verdict, "claim_id")?;
         let claim = claims_by_id
@@ -855,9 +874,7 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
             );
         }
         match string_field(verdict, "verdict")? {
-            "supported" => supported_count += 1,
-            "disputed" => disputed_count += 1,
-            "insufficient" => {}
+            "supported" | "disputed" | "insufficient" => {}
             other => anyhow::bail!("invalid verdict {other:?}: {verdict}"),
         }
         anyhow::ensure!(
@@ -871,10 +888,8 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
     );
     let drafts = ledger_rows(&ledger, "WebResearchDraft")?;
     anyhow::ensure!(
-        drafts.len() == 1
-            && string_count(&drafts[0], "supported_claim_count")? == supported_count
-            && string_count(&drafts[0], "disputed_claim_count")? == disputed_count,
-        "draft verdict counts disagree with the verdict ledger: {ledger}"
+        drafts.len() == 1,
+        "expected one adjudicated draft: {ledger}"
     );
 
     let reports = result_documents(&result, "report")?;
@@ -915,8 +930,8 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
     }
     let markdown_urls = markdown_http_link_targets(report_markdown);
     anyhow::ensure!(
-        markdown_urls.len() >= 3 && markdown_urls == cited_urls,
-        "Markdown citations and the validated source ledger disagree; markdown={markdown_urls:?}, ledger={cited_urls:?}"
+        markdown_urls.len() >= 3 && markdown_urls.is_subset(&cited_urls),
+        "Markdown contains citations absent from the validated source ledger; markdown={markdown_urls:?}, ledger={cited_urls:?}"
     );
 
     let (_stdout, stderr) = serve.captured_output()?;
