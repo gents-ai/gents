@@ -481,7 +481,7 @@ fn provider_invocations_are_confined_to_the_owned_loop_seam() {
 fn owned_loop_entry_points_are_registered() {
     let expected = BTreeSet::from([
         // Text and typed helpers wrap `run_loop_stream`.
-        "crates/gents/src/agent/loop_stream.rs".to_string(),
+        "crates/gents/src/agent/loop_stream/one_shot.rs".to_string(),
         // Daemon request execution — the main path.
         "crates/gents/src/agent/daemon/inference.rs".to_string(),
         // Conversation title generation.

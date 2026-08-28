@@ -1,26 +1,9 @@
-//! Owned multi-turn completion→tool loop (issue #400, decision D6).
+//! Owned multi-turn completion and tool-execution loop.
 //!
-//! This replaces rig's `Agent::stream_prompt` *producer* with our own stream
-//! generator, while keeping rig as the provider/streaming *client*
-//! (`CompletionModel::stream`, the `Message` family, and the streaming decode
-//! types). The generator mirrors rig's `agent::prompt_request::streaming::send`:
-//! build a request from the running message history, stream one completion,
-//! accumulate assistant content, and — when the turn produced tool calls —
-//! execute them, thread their results back into the history, and loop. When a
-//! turn produces no tool calls, it yields a terminal `FinalResponse`.
-//!
-//! The generator yields a native `LoopStreamItem` envelope around rig's
-//! `MultiTurnStreamItem`, keeping provider payloads at the rig boundary while
-//! giving the runtime a place to carry retry-control events.
-//!
-//! Tool side-effects (lifecycle tracking, truncation/spill, persistence) are
-//! NOT reimplemented here: the generator calls the existing
-//! `DefraSessionHook::on_tool_call` / `on_tool_result` methods directly (the
-//! former `PromptHook` callbacks). The generator owns only the orchestration:
-//! request construction, turn iteration, deadline/cancellation-aware dispatch,
-//! native result bounding, and message threading. Because the bounded result is
-//! threaded into the conversation by construction, the in-loop truncation gap
-//! (#401) is closed natively without the recorder shim.
+//! This module owns provider-request assembly, retry and retract decisions,
+//! streamed-turn accumulation, tool dispatch, and message threading. Durable
+//! lifecycle effects remain hook-owned; rig remains the provider client and
+//! streaming decoder at the boundary.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -63,6 +46,30 @@ use crate::tool_call_lifecycle::runtime::{
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
 mod aggregate_budget;
+mod contract;
+mod one_shot;
+mod provider_input;
+mod tool_dispatch;
+mod turn_threading;
+
+#[allow(unused_imports)]
+pub(crate) use contract::TurnCompactor;
+pub(crate) use contract::{
+    LoopConfig, LoopStreamItem, RenderedRequestSink, StructuredOutputConfig, TurnCompactionOutcome,
+    TurnCompactionRequest,
+};
+pub(crate) use one_shot::{run_loop_to_text, run_loop_to_typed};
+pub(crate) use provider_input::{
+    assemble_new_messages, is_request_context_message, repair_provider_input,
+};
+pub(crate) use tool_dispatch::dispatch_tool;
+
+use provider_input::{
+    build_budgeted_request, clamp_request_output_budget, completion_request_input_components,
+    context_accounting_for_request,
+};
+use tool_dispatch::value_to_json_string;
+use turn_threading::{add_usage_saturating, close_streaming_turn};
 #[cfg(test)]
 mod tests;
 
@@ -76,191 +83,6 @@ pub(crate) use aggregate_budget::{
     aggregate_token_budget_exhaustion_message, AggregateTokenBudget,
     AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX,
 };
-
-/// `(turn_index, attempt, request, assembly_trace)`.
-///
-/// The trace rides alongside the request because the assembled
-/// `CompletionRequest` is the *output* of prompt assembly and cannot explain
-/// its own inputs: the provider-assigned assistant message ids, the exact
-/// threaded tool-result content, the post-compaction message list, and which
-/// builder produced it are all in-memory facts that die with the loop. See
-/// `crate::rendered_request::AssemblyTrace`.
-pub(crate) type RenderedRequestSink = Arc<
-    dyn Fn(
-            usize,
-            u32,
-            CompletionRequest,
-            AssemblyTrace,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
-        + Send
-        + Sync,
->;
-
-#[derive(Clone, Debug)]
-pub(crate) struct TurnCompactionRequest {
-    pub(crate) messages: Vec<Message>,
-    pub(crate) keep_recent_target: usize,
-    pub(crate) turn_index: usize,
-    pub(crate) prior_reduction_keys: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TurnCompactionOutcome {
-    pub(crate) messages: Vec<Message>,
-    pub(crate) reduction_key: String,
-}
-
-pub(crate) type TurnCompactor = Arc<
-    dyn Fn(
-            TurnCompactionRequest,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<TurnCompactionOutcome>> + Send>>
-        + Send
-        + Sync,
->;
-
-/// A typed-output contract carried through the owned completion loop.
-///
-/// Rig owns the provider schema transport. Gents keeps ownership of the loop
-/// so schema validation participates in its deadline-aware, formally modelled
-/// retract-and-resample lifecycle instead of bypassing persistence and hooks
-/// through `rig::Agent::prompt_typed`.
-#[derive(Clone)]
-pub(crate) struct StructuredOutputConfig {
-    schema: schemars::Schema,
-    validate: Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>,
-}
-
-impl StructuredOutputConfig {
-    fn for_type<T>() -> Self
-    where
-        T: DeserializeOwned + schemars::JsonSchema + 'static,
-    {
-        Self {
-            schema: schemars::schema_for!(T),
-            validate: Arc::new(|raw| {
-                serde_json::from_str::<T>(raw)
-                    .map(|_| ())
-                    .map_err(|error| {
-                        format!(
-                            "{error}; raw_output_preview={}; finish_metadata=unavailable_at_rig_streaming_boundary",
-                            bounded_structured_output_preview(raw)
-                        )
-                    })
-            }),
-        }
-    }
-}
-
-fn bounded_structured_output_preview(raw: &str) -> String {
-    const MAX_PREVIEW_BYTES: usize = 192;
-    let mut cut = raw.len().min(MAX_PREVIEW_BYTES);
-    while !raw.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    let suffix = if cut < raw.len() { "…" } else { "" };
-    serde_json::to_string(&format!("{}{suffix}", &raw[..cut]))
-        .unwrap_or_else(|_| "\"<unavailable>\"".to_string())
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub(crate) enum LoopStreamItem<R> {
-    Item(MultiTurnStreamItem<R>),
-    TurnRetracted {
-        turn: usize,
-        attempt: u32,
-        /// Backoff the generator sleeps before the resample. Carried so the
-        /// daemon can extend the next poll's liveness budget by it, exactly as
-        /// for `AttemptFailed` — otherwise a retract backoff longer than the
-        /// liveness timeout is misread as a dead stream (#648).
-        backoff: std::time::Duration,
-    },
-    AttemptFailed {
-        turn: usize,
-        attempt: u32,
-        error: InferenceError,
-        will_retry: bool,
-        backoff: std::time::Duration,
-    },
-    OutputObligationPending {
-        reminder: Message,
-    },
-}
-
-#[derive(Clone)]
-pub(crate) struct LoopConfig {
-    pub(crate) preamble: Option<String>,
-    pub(crate) context_message: Option<Message>,
-    pub(crate) temperature: Option<f64>,
-    pub(crate) max_tokens: Option<u64>,
-    /// One request-scoped ledger shared by the owned inference loop and every
-    /// nested provider call it admits (notably compaction). `None` preserves
-    /// the unbounded interactive behavior.
-    pub(crate) aggregate_token_budget: Option<AggregateTokenBudget>,
-    pub(crate) additional_params: Option<serde_json::Value>,
-    pub(crate) structured_output: Option<StructuredOutputConfig>,
-    pub(crate) tool_choice: Option<ToolChoice>,
-    pub(crate) on_rendered_request: Option<RenderedRequestSink>,
-    /// Provider-view compaction used between completion turns. The callback
-    /// must durably create or verify its reduction fact before returning.
-    pub(crate) turn_compactor: Option<TurnCompactor>,
-    /// The one newest reduction fact that shapes the sticky provider
-    /// projection. Empty on a fresh request.
-    pub(crate) active_reduction_keys: Vec<String>,
-    /// Every durable reduction for this request, including consumed facts that
-    /// order the next identity but no longer shape the active provider view.
-    pub(crate) reduction_chain_keys: Vec<String>,
-    /// Turn index to resume at an unconsumed durable checkpoint.
-    pub(crate) initial_turn_index: usize,
-    pub(crate) context_window: usize,
-    pub(crate) compaction_threshold: f64,
-    pub(crate) retry_policy: CompletionRetryPolicy,
-    pub(crate) deadline: Option<DateTime<Utc>>,
-    pub(crate) max_turns: usize,
-    pub(crate) output_obligation_gate: Option<OutputObligationGate>,
-}
-
-fn add_usage_saturating(aggregate: &mut Usage, usage: Usage) {
-    aggregate.input_tokens = aggregate.input_tokens.saturating_add(usage.input_tokens);
-    aggregate.output_tokens = aggregate.output_tokens.saturating_add(usage.output_tokens);
-    aggregate.total_tokens = aggregate.total_tokens.saturating_add(usage.total_tokens);
-    aggregate.cached_input_tokens = aggregate
-        .cached_input_tokens
-        .saturating_add(usage.cached_input_tokens);
-    aggregate.cache_creation_input_tokens = aggregate
-        .cache_creation_input_tokens
-        .saturating_add(usage.cache_creation_input_tokens);
-}
-
-/// Assemble the per-request message tail: the optional `<context>` message rides
-/// immediately before the prompt, which is always last (rig prompt semantics).
-///
-/// This mirrors Lean `PromptAssembly.Template.assembleWithContext`, whose
-/// `assembleWithContext_tail` theorem fixes the order as `... contextPreamble,
-/// prompt`. Fenced by `tests` (`assembles_context_immediately_before_prompt`);
-/// reordering here breaks that test and contradicts the proof.
-pub(crate) fn assemble_new_messages(
-    context_message: Option<Message>,
-    prompt: Message,
-) -> Vec<Message> {
-    let mut new_messages: Vec<Message> = Vec::with_capacity(2);
-    if let Some(context_message) = context_message {
-        new_messages.push(context_message);
-    }
-    new_messages.push(prompt);
-    new_messages
-}
-
-pub(crate) fn is_request_context_message(message: &Message) -> bool {
-    let Message::User { content } = message else {
-        return false;
-    };
-    let [UserContent::Text(text)] = content.as_slice() else {
-        return false;
-    };
-    let trimmed = text.text.trim();
-    trimmed.starts_with("<context>") && trimmed.ends_with("</context>")
-}
 
 pub(crate) fn run_loop_stream<M>(
     model: M,
@@ -289,15 +111,9 @@ where
             ))
         })?;
         let history = entry_projection;
-        // #497: prior requests' per-request `<context>` messages are durably
-        // persisted (training capture), but must NOT be replayed to the provider:
-        // they carry stale `ctx.now` / collection summaries and would accumulate
-        // unboundedly across a multi-request session, inflating tokens and
-        // presenting stale context as current. Strip them from the provider-bound
-        // history; the CURRENT request's context rides in `new_messages` below.
-        // Persistence is untouched (it already happened upstream).
-        // `mut` because the completion-retry Repair directive rewrites the
-        // assembled input in place — loaded history included (#652).
+        // Prior requests' per-request context rows must not re-enter provider
+        // history. The current context is assembled into `new_messages`.
+        // Repair may rewrite both vectors in place after provider rejection.
         let mut history: Vec<Message> = history
             .into_iter()
             .filter(|message| !is_request_context_message(message))
@@ -313,16 +129,9 @@ where
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
-        // Three request-local transforms can enter these vectors: the rendered
-        // request context, a durably fenced per-turn checkpoint, and a repair
-        // rewrite. Once any lands, this and every later turn retains the full
-        // native list as the rendered-request reconstruction oracle.
-        //
-        // The request context *is* persisted (`prompt_hook.rs:28-30`), so the
-        // reason to retain it is not absence — it is that persistence runs under
-        // a configurable `FailurePolicy::FailOpen`, so that row may legitimately
-        // be missing while the request still ships. Capture must not depend on a
-        // subsystem whose failure mode is tolerant.
+        // Retain the effective native message list whenever request-local
+        // context, reduction, or repair can make transcript reconstruction
+        // differ from the provider input.
         let mut retain_effective_messages_oracle =
             config.context_message.is_some() || !config.active_reduction_keys.is_empty();
         let mut active_reduction_keys = config.active_reduction_keys.clone();
@@ -396,10 +205,9 @@ where
             }
 
             let mut attempt = 0_u32;
-            // Which builder produced the `request` currently in hand. Flipped
-            // by the Repair directive below, which calls `build_request`
-            // directly and therefore never applies the output clamp. This is
-            // not recoverable from the transcript, so it rides in the trace.
+            // Repair bypasses budgeted construction, although both dispatch
+            // clamps are reapplied below. The build path is not recoverable
+            // from the transcript, so it rides in the trace.
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
                 let mut stream = loop {
@@ -496,9 +304,8 @@ where
                                         .cloned()
                                         .expect("new_messages remains non-empty after repair");
                                     let repaired_prior = &new_messages[..new_messages.len() - 1];
-                                    // `build_request`, not `build_budgeted_request`:
-                                    // no output clamp is applied to a repaired
-                                    // attempt.
+                                    // Repair bypasses compaction; dispatch
+                                    // reapplies both budget clamps.
                                     request = build_request(
                                         &model,
                                         repaired_prompt,
@@ -617,9 +424,8 @@ where
                                         "new_messages remains non-empty after repair",
                                     );
                                     let repaired_prior = &new_messages[..new_messages.len() - 1];
-                                    // `build_request`, not `build_budgeted_request`:
-                                    // no output clamp is applied to a repaired
-                                    // attempt.
+                                    // Repair bypasses compaction; dispatch
+                                    // reapplies both budget clamps.
                                     request = build_request(
                                         &model,
                                         repaired_prompt,
@@ -632,9 +438,8 @@ where
                                     context_input_components =
                                         completion_request_input_components(&request);
                                     build_path = AssemblyBuildPath::Repair;
-                                    // See the sibling repair arm above: repair mutates the
-                                    // request-scoped message vectors, so the effective list stays
-                                    // ephemeral for every later turn of this request.
+                                    // Repair mutates the request-scoped vectors,
+                                    // so retain the effective list for later turns.
                                     retain_effective_messages_oracle = true;
                                     attempt += 1;
                                     continue 'attempts;
@@ -991,17 +796,9 @@ where
             }
 
             if pending_results.is_empty() && turn_text.trim().is_empty() {
-                // A provider can finish a turn after emitting only reasoning.
-                // Known DeepSeek V4 Flash failure shapes include stopping
-                // without closing the reasoning block and exhausting the
-                // output-token allowance. Rig does not currently retain the
-                // provider finish reason, so classify only the invariant we
-                // can observe here: this is not a usable terminal answer, and
-                // no tool effect has run. Model it as the existing no-effect
-                // mid-stream failure: retract the streamed reasoning and
-                // resample the same provider request, bounded by the configured
-                // transport retry ladder. This is exactly
-                // CompletionRetry.retract, so no durable side effect is replayed.
+                // A reasoning-only or empty terminal response is unusable.
+                // With no tool effect to replay, use the proven no-effect
+                // retract transition and resample the same request.
                 match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
                     MidStreamDirective::RetractAndResample { delay } => {
                         yield LoopStreamItem::TurnRetracted {
@@ -1117,56 +914,6 @@ where
     }
 }
 
-fn close_streaming_turn<R>(
-    new_messages: &mut Vec<Message>,
-    accumulator: &mut AssistantTurnAccumulator,
-    message_id: Option<String>,
-    pending_results: Vec<(ToolCall, String, String)>,
-) -> Vec<LoopStreamItem<R>> {
-    // Thread the assistant turn (text + reasoning + tool calls) ahead of its
-    // tool results, matching rig's history ordering. Carry the provider
-    // message id (captured into `stream.message_id` from the stream's
-    // `MessageId` event) onto the threaded message — rig threads this same id,
-    // and OpenAI Responses / ChatGPT Codex follow-up requests reference prior
-    // `msg_` ids, so dropping it breaks them.
-    if let Some(mut assistant_message) = accumulator.take_message() {
-        if let Message::Assistant { id, .. } = &mut assistant_message {
-            *id = message_id;
-        }
-        new_messages.push(assistant_message);
-    }
-
-    pending_results
-        .into_iter()
-        .map(|(tool_call, internal_call_id, bounded_result)| {
-            let content = ToolResultContent::from_tool_output(bounded_result);
-            let user_content = match tool_call.call_id.clone() {
-                Some(call_id) => UserContent::tool_result_with_call_id(
-                    tool_call.id.clone(),
-                    call_id,
-                    content.clone(),
-                ),
-                None => UserContent::tool_result(tool_call.id.clone(), content.clone()),
-            };
-            new_messages.push(Message::User {
-                content: vec![user_content],
-            });
-
-            let tool_result = ToolResult {
-                id: tool_call.id.clone(),
-                call_id: tool_call.call_id.clone(),
-                content,
-            };
-            LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-                StreamedUserContent::ToolResult {
-                    tool_result: rig_compat::to_rig_tool_result(&tool_result),
-                    internal_call_id,
-                },
-            ))
-        })
-        .collect()
-}
-
 fn terminal_pre_stream_retry_reason(
     classified: &InferenceError,
     attempt: u32,
@@ -1180,231 +927,6 @@ fn terminal_pre_stream_retry_reason(
             attempt + 1
         )
     }
-}
-
-/// Repair the ASSEMBLED provider input — loaded history and run-threaded
-/// messages alike (#652).
-///
-/// This runs only after the provider has already REJECTED the request (the
-/// completion-retry `Repair` directive). It is deliberately more aggressive
-/// than the egress normalizer: on top of the shape coercion it runs a LOSSY
-/// leaf sanitizer over every JSON string in a tool call's arguments. That
-/// lossiness is exactly why it cannot live at egress — it would corrupt
-/// legitimate multi-line tool arguments on every request.
-///
-/// It used to rewrite only `new_messages`. But the motivating failure (the vLLM
-/// parse-signature 400) originates from tool-call arguments in the INPUT
-/// TRANSCRIPT — i.e. the loaded history it skipped — so repair re-issued the
-/// same poisoned input and failed identically. The fence described a transform
-/// that did not exist.
-///
-/// Widening it to history is licensed by `PromptAssembly.repair_is_payload_only`
-/// (repair rewrites argument payloads only — never rows, roles, call ids, or
-/// ordering, so the row-granular assembly theorems T1–T5 hold verbatim) and by
-/// `PromptAssembly.repair_idempotent` (a second pass is a no-op, so re-entering
-/// the path cannot keep re-escaping its own escapes).
-pub(crate) fn repair_provider_input(history: &mut Vec<Message>, new_messages: &mut Vec<Message>) {
-    repair_messages(history);
-    repair_messages(new_messages);
-    *history = crate::compaction::sanitize_history_for_provider(std::mem::take(history));
-    *new_messages = crate::compaction::sanitize_history_for_provider(std::mem::take(new_messages));
-}
-
-fn repair_messages(messages: &mut [Message]) {
-    for message in messages.iter_mut() {
-        let Message::Assistant { content, .. } = message else {
-            continue;
-        };
-        for item in content {
-            let AssistantContent::ToolCall(tool_call) = item else {
-                continue;
-            };
-            let mut repaired = crate::llm::tool::normalize_tool_call_arguments(
-                "repair",
-                &tool_call.function.name,
-                &tool_call.function.arguments,
-            );
-            sanitize_json_string_leaves(&mut repaired);
-            tool_call.function.arguments = repaired;
-        }
-    }
-}
-
-fn sanitize_json_string_leaves(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Array(values) => {
-            for value in values {
-                sanitize_json_string_leaves(value);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for value in map.values_mut() {
-                sanitize_json_string_leaves(value);
-            }
-        }
-        serde_json::Value::String(text) => {
-            *text = sanitize_provider_arg_string(text);
-        }
-        _ => {}
-    }
-}
-
-fn sanitize_provider_arg_string(text: &str) -> String {
-    let mut sanitized = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '\n' => sanitized.push_str("\\n"),
-            '\t' => sanitized.push_str("\\t"),
-            ch if ch.is_control() => {}
-            ch => sanitized.push(ch),
-        }
-    }
-    sanitized
-}
-
-pub(crate) async fn run_loop_to_text<M>(
-    model: M,
-    hook: Option<DefraSessionHook>,
-    prompt: Message,
-    history: Vec<Message>,
-    tools: Arc<Vec<Box<dyn ToolDyn>>>,
-    config: LoopConfig,
-) -> anyhow::Result<String>
-where
-    M: CompletionModel + 'static,
-    M::StreamingResponse: 'static,
-{
-    let stream = run_loop_stream(model, hook.clone(), prompt, history, tools, config);
-    futures::pin_mut!(stream);
-    let mut accumulator = AssistantTurnAccumulator::default();
-    let mut final_text = String::new();
-    let mut last_attempt_error: Option<InferenceError> = None;
-
-    while let Some(item) = stream.next().await {
-        let item = item.map_err(|error| {
-            let error = anyhow::Error::new(error);
-            match last_attempt_error.as_ref() {
-                Some(last_error) => error.context(format!(
-                    "one-shot loop stream error after retry failure ({last_error})"
-                )),
-                None => error.context("one-shot loop stream error"),
-            }
-        })?;
-        match item {
-            LoopStreamItem::TurnRetracted { .. } => {
-                accumulator = AssistantTurnAccumulator::default();
-                continue;
-            }
-            LoopStreamItem::OutputObligationPending { reminder } => {
-                if let Some(hook) = hook.as_ref() {
-                    if let Some(message) = accumulator.take_message() {
-                        hook.apply_persistence_policy(
-                            hook.persist_message(&message).await.map(|_| ()),
-                            "persist one-shot assistant output-obligation proposal",
-                        )?;
-                    }
-                    hook.apply_persistence_policy(
-                        hook.persist_message(&reminder).await.map(|_| ()),
-                        "persist one-shot output-obligation reminder",
-                    )?;
-                }
-                accumulator = AssistantTurnAccumulator::default();
-                continue;
-            }
-            LoopStreamItem::AttemptFailed { error, .. } => {
-                last_attempt_error = Some(error);
-                continue;
-            }
-            LoopStreamItem::Item(item) => match item {
-                MultiTurnStreamItem::StreamAssistantItem(content) => match content {
-                    StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
-                    StreamedAssistantContent::Reasoning(reasoning) => {
-                        accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning))
-                    }
-                    StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
-                        accumulator.push_reasoning_delta(id, &reasoning)
-                    }
-                    StreamedAssistantContent::ToolCall {
-                        tool_call,
-                        internal_call_id,
-                    } => {
-                        if let Some(hook) = hook.as_ref() {
-                            hook.register_stream_tool_call_identity(
-                                &internal_call_id,
-                                &tool_call.id,
-                                tool_call.call_id.as_deref(),
-                            )
-                            .await;
-                        }
-                        accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
-                    }
-                    _ => {}
-                },
-                MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
-                    tool_result,
-                    internal_call_id,
-                }) => {
-                    if let Some(hook) = hook.as_ref() {
-                        if let Some(message) = accumulator.take_message() {
-                            hook.apply_persistence_policy(
-                                hook.persist_message(&message).await.map(|_| ()),
-                                "persist one-shot assistant turn",
-                            )?;
-                        }
-                        hook.apply_persistence_policy(
-                            hook.persist_stream_tool_result_message(
-                                &rig_compat::from_rig_tool_result(&tool_result),
-                                &internal_call_id,
-                            )
-                            .await,
-                            "persist one-shot tool result",
-                        )?;
-                    }
-                }
-                MultiTurnStreamItem::FinalResponse(final_response) => {
-                    accumulator.reconcile_text(final_response.response());
-                    if let Some(hook) = hook.as_ref() {
-                        if let Some(message) = accumulator.take_message() {
-                            hook.apply_persistence_policy(
-                                hook.persist_message(&message).await.map(|_| ()),
-                                "persist one-shot final assistant turn",
-                            )?;
-                        }
-                    }
-                    final_text = final_response.response().to_string();
-                }
-                _ => {}
-            },
-        }
-    }
-    Ok(final_text)
-}
-
-/// Runs a typed completion without surrendering the runtime's owned-loop
-/// chokepoint to Rig's `Agent` orchestration. Rig's schema is attached to every
-/// provider request, while the owned loop validates before accepting a final
-/// turn and applies its normal bounded recovery policy on malformed output.
-pub(crate) async fn run_loop_to_typed<M, T>(
-    model: M,
-    hook: Option<DefraSessionHook>,
-    prompt: Message,
-    history: Vec<Message>,
-    tools: Arc<Vec<Box<dyn ToolDyn>>>,
-    mut config: LoopConfig,
-) -> anyhow::Result<T>
-where
-    M: CompletionModel + 'static,
-    M::StreamingResponse: 'static,
-    T: DeserializeOwned + schemars::JsonSchema + 'static,
-{
-    config.structured_output = Some(StructuredOutputConfig::for_type::<T>());
-    let raw = run_loop_to_text(model, hook, prompt, history, tools, config).await?;
-    serde_json::from_str(&raw).map_err(|error| {
-        anyhow::anyhow!(
-            "decoding validated structured output as {} failed: {error}",
-            std::any::type_name::<T>()
-        )
-    })
 }
 
 fn error_chat_history(history: &[Message], new_messages: &[Message]) -> Vec<Message> {
@@ -1423,204 +945,6 @@ fn current_rag_text(prompt: &Message, history: &[Message], prior: &[Message]) ->
         .unwrap_or_default()
 }
 
-fn value_to_json_string(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(string) => string.clone(),
-        other => other.to_string(),
-    }
-}
-
-pub(crate) async fn dispatch_tool(
-    tools: &[Box<dyn ToolDyn>],
-    name: &str,
-    args: String,
-    live_output: Option<crate::background_tools::LiveToolOutputWriter>,
-    session_id: Option<String>,
-) -> ToolOutcome {
-    let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
-        // An unresolved tool name is a dispatch FAILURE, not tool output.
-        // Models hallucinate tool names and stale surfaces outlive their
-        // tools, so this is a routine path, not an exotic one; classifying it
-        // `Completed` would reproduce the durability bug the typed channel
-        // exists to close (#400/D6). The detail text is unchanged so the model
-        // sees what it always saw.
-        return ToolOutcome::from_tool_call_error(&format!("error: unknown tool '{name}'"));
-    };
-
-    let Some(scope) = current_tool_runtime_context() else {
-        return ToolOutcome::from_dispatch(name, tool.call(args).await);
-    };
-
-    if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
-        return ToolOutcome::TimedOut {
-            deadline_at: scope.deadline_at,
-        };
-    }
-
-    let deadline_at = scope.deadline_at;
-    let mut deadline = Box::pin(async move {
-        match deadline_remaining(deadline_at) {
-            Some(remaining) => tokio::time::sleep(remaining).await,
-            None => std::future::pending::<()>().await,
-        }
-    });
-
-    let call = scope_request_tool_execution_with_session(
-        scope.deadline_at,
-        scope.cancellation_token.clone(),
-        scope.workspace_cwd.clone(),
-        live_output,
-        session_id.or(scope.session_id.clone()),
-        tool.call(args),
-    );
-    tokio::select! {
-        biased;
-        _ = scope.cancellation_token.cancelled() => ToolOutcome::Cancelled,
-        _ = &mut deadline => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
-        result = call => ToolOutcome::from_dispatch(name, result),
-    }
-}
-
-fn serialized_token_estimate<T: serde::Serialize + ?Sized>(value: &T) -> usize {
-    serde_json::to_string(value)
-        .map(|json| crate::compaction::estimate_tokens(&json))
-        .unwrap_or_default()
-}
-
-/// Estimate the complete provider input represented by Rig's rendered request,
-/// including static tool schemas. The production profile deliberately leaves
-/// tokenizer headroom because this estimator is approximate; its job here is to
-/// apply that conservative profile to every turn's assembled request, in
-/// `build_budgeted_request`. Both mid-turn `Repair` rebuild paths recompute these
-/// components before dispatch so the clamp and persisted accounting always
-/// describe the repaired request rather than the rejected one.
-fn completion_request_input_components(request: &CompletionRequest) -> ContextInputComponents {
-    ContextInputComponents {
-        messages: serialized_token_estimate(&request.chat_history),
-        documents: serialized_token_estimate(&request.documents),
-        tool_schemas: serialized_token_estimate(&request.tools),
-        additional_parameters: serialized_token_estimate(&request.additional_params),
-        output_schema: serialized_token_estimate(&request.output_schema),
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct TurnContextDecision {
-    reason: ContextCompactionReason,
-    pre_compaction_input_tokens: Option<usize>,
-    components: ContextInputComponents,
-}
-
-fn context_accounting_for_request(
-    request: &CompletionRequest,
-    config: &LoopConfig,
-    components: &ContextInputComponents,
-    turn_index: usize,
-    attempt: u32,
-    compaction_reason: ContextCompactionReason,
-    pre_compaction_input_tokens: Option<usize>,
-) -> ContextAccounting {
-    let estimated_input_tokens = components.estimated_input_tokens();
-    ContextAccounting {
-        accounting_version: CONTEXT_ACCOUNTING_VERSION,
-        turn_index,
-        attempt,
-        estimator: "serialized_json_bytes_div_4_v1".to_string(),
-        components: components.clone(),
-        estimated_input_tokens,
-        context_window: config.context_window,
-        compaction_threshold_basis_points: crate::compaction::threshold_basis_points(
-            config.compaction_threshold,
-        ),
-        compaction_threshold_tokens: crate::compaction::threshold_budget(
-            config.context_window,
-            config.compaction_threshold,
-        ),
-        configured_max_output_tokens: config.max_tokens,
-        effective_max_output_tokens: request.max_tokens,
-        compaction_reason,
-        pre_compaction_input_tokens,
-    }
-}
-
-/// Treat the configured output value as a ceiling and fit each completion to
-/// the context remaining after its fully assembled provider input. Compaction
-/// protects the configured input threshold; this clamp independently preserves
-/// `input + output <= context` on every dispatch.
-fn clamp_request_output_budget(
-    request: &mut CompletionRequest,
-    config: &LoopConfig,
-    input_tokens: usize,
-) {
-    let Some(configured_max) = request.max_tokens else {
-        return;
-    };
-    let configured_max = usize::try_from(configured_max).unwrap_or(usize::MAX);
-    let effective_max = crate::compaction::effective_output_budget(
-        input_tokens,
-        config.context_window,
-        configured_max,
-    );
-    if effective_max < configured_max {
-        tracing::debug!(
-            input_tokens,
-            context_window = config.context_window,
-            configured_max_output_tokens = configured_max,
-            effective_max_output_tokens = effective_max,
-            "clamped completion output to remaining provider context"
-        );
-    }
-    request.max_tokens = u64::try_from(effective_max).ok();
-}
-
-fn compactable_message_estimate(messages: &[Message]) -> usize {
-    let rig_messages = messages
-        .iter()
-        .map(rig_compat::to_rig_message)
-        .collect::<Vec<_>>();
-    serialized_token_estimate(&rig_messages)
-}
-
-/// Keep enough room for both the non-compactable request layers (preamble,
-/// tool schemas, provider parameters) and the summary inserted by the
-/// compactor. The post-compaction dispatch guard remains authoritative if a
-/// pathological summary or a single oversized current prompt still does not
-/// fit.
-fn turn_keep_recent_target(
-    total_input: usize,
-    provider_messages: &[Message],
-    config: &LoopConfig,
-) -> usize {
-    let effective_budget = crate::compaction::effective_input_budget(
-        config.context_window,
-        config
-            .max_tokens
-            .and_then(|tokens| usize::try_from(tokens).ok())
-            .unwrap_or_default(),
-        config.compaction_threshold,
-    );
-    let compactable_input = compactable_message_estimate(provider_messages);
-    let static_input = total_input.saturating_sub(compactable_input);
-    let message_budget = effective_budget.saturating_sub(static_input);
-
-    // Summaries vary with the model and history. Reserve one quarter of the
-    // compactable-message budget for the summary and serialization drift.
-    message_budget.saturating_mul(3) / 4
-}
-
-fn completion_request_exceeds_budget(input_tokens: usize, config: &LoopConfig) -> bool {
-    let max_output_tokens = config
-        .max_tokens
-        .and_then(|tokens| usize::try_from(tokens).ok())
-        .unwrap_or_default();
-    crate::compaction::input_exceeds_budget(
-        input_tokens,
-        config.context_window,
-        max_output_tokens,
-        config.compaction_threshold,
-    )
-}
-
 fn ensure_rendered_request_was_captured(
     turn_index: usize,
     attempt: u32,
@@ -1635,123 +959,6 @@ fn ensure_rendered_request_was_captured(
         )));
     }
     Ok(())
-}
-
-async fn build_budgeted_request<M: CompletionModel>(
-    model: &M,
-    history: &mut Vec<Message>,
-    new_messages: &mut Vec<Message>,
-    tools: &[Box<dyn ToolDyn>],
-    config: &LoopConfig,
-    turn_index: usize,
-    reduction_chain_keys: &mut Vec<String>,
-    active_reduction_keys: &mut Vec<String>,
-) -> Result<(CompletionRequest, TurnContextDecision), StreamingError> {
-    let current_prompt = new_messages
-        .last()
-        .cloned()
-        .expect("new_messages always retains at least the initial prompt");
-    let prior = &new_messages[..new_messages.len() - 1];
-    let mut request = build_request(model, current_prompt, history, prior, tools, config).await?;
-    let components = completion_request_input_components(&request);
-    let before_tokens = components.estimated_input_tokens();
-    clamp_request_output_budget(&mut request, config, before_tokens);
-
-    let Some(compactor) = config.turn_compactor.as_ref() else {
-        return Ok((
-            request,
-            TurnContextDecision {
-                reason: ContextCompactionReason::CompactorUnavailable,
-                pre_compaction_input_tokens: None,
-                components,
-            },
-        ));
-    };
-    if !completion_request_exceeds_budget(before_tokens, config) {
-        return Ok((
-            request,
-            TurnContextDecision {
-                reason: ContextCompactionReason::BelowThreshold,
-                pre_compaction_input_tokens: None,
-                components,
-            },
-        ));
-    }
-
-    let provider_messages = history
-        .iter()
-        .chain(new_messages.iter())
-        .cloned()
-        .collect::<Vec<_>>();
-    let keep_recent_target = turn_keep_recent_target(before_tokens, &provider_messages, config);
-    let outcome = compactor(TurnCompactionRequest {
-        messages: provider_messages,
-        keep_recent_target,
-        turn_index,
-        prior_reduction_keys: reduction_chain_keys.clone(),
-    })
-    .await
-    .map_err(|error| {
-        aggregate_token_budget_exhaustion_message(&error).map_or_else(
-            || {
-                StreamingError::Completion(CompletionError::ProviderError(format!(
-                    "per-turn provider-input compaction failed: {error:#}"
-                )))
-            },
-            |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),
-        )
-    })?;
-    let mut compacted = outcome.messages;
-    let compacted_prompt = compacted.pop().ok_or_else(|| {
-        StreamingError::Completion(CompletionError::ProviderError(
-            "per-turn provider-input compaction returned no prompt".to_string(),
-        ))
-    })?;
-    *history = compacted;
-    *new_messages = vec![compacted_prompt.clone()];
-    reduction_chain_keys.push(outcome.reduction_key.clone());
-    active_reduction_keys.clear();
-    active_reduction_keys.push(outcome.reduction_key);
-
-    let mut rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
-    let rebuilt_components = completion_request_input_components(&rebuilt);
-    let after_tokens = rebuilt_components.estimated_input_tokens();
-    clamp_request_output_budget(&mut rebuilt, config, after_tokens);
-    tracing::info!(
-        turn = turn_index,
-        before_tokens,
-        after_tokens,
-        keep_recent_target,
-        context_window = config.context_window,
-        max_output_tokens = config.max_tokens.unwrap_or_default(),
-        "compacted provider input before completion dispatch"
-    );
-
-    if completion_request_exceeds_budget(after_tokens, config) {
-        let effective_budget = crate::compaction::effective_input_budget(
-            config.context_window,
-            config
-                .max_tokens
-                .and_then(|tokens| usize::try_from(tokens).ok())
-                .unwrap_or_default(),
-            config.compaction_threshold,
-        );
-        return Err(StreamingError::Completion(CompletionError::ProviderError(
-            format!(
-                "per-turn provider input remains over budget after compaction: \
-                 estimated_input_tokens={after_tokens}, effective_input_budget={effective_budget}"
-            ),
-        )));
-    }
-
-    Ok((
-        rebuilt,
-        TurnContextDecision {
-            reason: ContextCompactionReason::Compacted,
-            pre_compaction_input_tokens: Some(before_tokens),
-            components: rebuilt_components,
-        },
-    ))
 }
 
 async fn build_request<M: CompletionModel>(
