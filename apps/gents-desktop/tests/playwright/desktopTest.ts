@@ -7,6 +7,7 @@ export type HarnessScenario =
   | "bridge-unavailable"
   | "save-error"
   | "backend-health-error"
+  | "backend-unavailable"
   | "long-content"
   | "active-turn"
   | "cascade-turn"
@@ -206,9 +207,24 @@ export async function expectNoPageHorizontalOverflow(page: Page) {
             ".fleet-dashboard",
             ".fleet-empty",
             ".operations-rail",
+            ".chat-header",
+            ".chat-title-block",
+            ".chat-status",
+            ".session-hydration-status",
+            ".composer-panel",
+            ".fleet-header",
+            ".fleet-add-form",
+            ".config-header",
+            ".config-editor",
+            ".config-actions",
+            ".confirm-dialog",
+            ".fleet-qr-dialog",
+            ".context-meter-popover",
+            ".sync-health-details",
           ].join(", "),
         ),
       )
+        .filter((element) => !element.closest("details:not([open])"))
         .map((element) => {
           const htmlElement = element as HTMLElement;
           const style = window.getComputedStyle(htmlElement);
@@ -220,11 +236,15 @@ export async function expectNoPageHorizontalOverflow(page: Page) {
             clientWidth: htmlElement.clientWidth,
             scrollWidth: htmlElement.scrollWidth,
             overflowX: style.overflowX,
+            bounds: htmlElement.getBoundingClientRect().toJSON(),
           };
         })
         .filter((entry) => {
           const scrollDelta = entry.scrollWidth - entry.clientWidth;
-          return scrollDelta > 2 && entry.overflowX === "visible";
+          const escapesViewport =
+            entry.bounds.width > 0 &&
+            (entry.bounds.left < -2 || entry.bounds.right > window.innerWidth + 2);
+          return escapesViewport || (scrollDelta > 2 && entry.overflowX === "visible");
         }),
     };
   });

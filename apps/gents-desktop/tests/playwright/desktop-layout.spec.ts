@@ -10,15 +10,39 @@ import {
   test,
 } from "./desktopTest";
 
-const scenarios = ["default", "empty-fleet", "loading", "long-content"] as const;
+const chatScenarios = [
+  "default",
+  "long-content",
+  "active-turn",
+  "cascade-turn",
+  "coding",
+  "session-hydration",
+  "backend-unavailable",
+] as const;
+
+const shellScenarios = [
+  "empty-fleet",
+  "loading",
+  "bridge-unavailable",
+  "save-error",
+  "backend-health-error",
+  "sync-offline",
+  "sync-stalled",
+  "sync-failed",
+] as const;
 
 test.describe("desktop responsive layout guardrails", () => {
-  for (const scenario of scenarios) {
+  for (const scenario of chatScenarios) {
     test(`${scenario} has no page-level horizontal overflow`, async ({ page }) => {
       await gotoHarness(page, scenario);
-      if (scenario !== "empty-fleet" && scenario !== "loading") {
-        await openChat(page);
-      }
+      await openChat(page);
+      await expectNoPageHorizontalOverflow(page);
+    });
+  }
+
+  for (const scenario of shellScenarios) {
+    test(`${scenario} has no page-level horizontal overflow`, async ({ page }) => {
+      await gotoHarness(page, scenario);
       await expectNoPageHorizontalOverflow(page);
     });
   }
@@ -59,6 +83,26 @@ test.describe("desktop responsive layout guardrails", () => {
     await expect(page.locator(".sidebar")).toBeVisible();
     await expect(page.locator(".chat-column")).toBeHidden();
 
+    for (const tab of ["sessions", "mailbox", "behaviors"]) {
+      await page.getByTestId(`agent-tab-${tab}`).click();
+      const geometry = await page.evaluate(() => {
+        const sidebar = document.querySelector<HTMLElement>(".sidebar");
+        const tabs = document.querySelector<HTMLElement>(".agent-section-tabs");
+        const section = sidebar?.lastElementChild as HTMLElement | null;
+        if (!sidebar || !tabs || !section) throw new Error("sidebar geometry missing");
+        return {
+          sidebar: sidebar.getBoundingClientRect().toJSON(),
+          tabs: tabs.getBoundingClientRect().toJSON(),
+          section: section.getBoundingClientRect().toJSON(),
+        };
+      });
+      expect(geometry.tabs.height).toBeLessThanOrEqual(56);
+      expect(geometry.section.top).toBeGreaterThanOrEqual(geometry.tabs.bottom);
+      expect(geometry.section.bottom).toBeLessThanOrEqual(geometry.sidebar.bottom);
+      await expectNoPageHorizontalOverflow(page);
+    }
+
+    await page.getByTestId("agent-tab-sessions").click();
     await page.getByTestId("conversation-session-intro").click();
     await expect(page.locator(".chat-column")).toBeVisible();
     await expect(page.locator(".sidebar")).toBeHidden();

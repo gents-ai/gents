@@ -49,6 +49,7 @@ export type TurnState =
 export type ChatBlockedReason =
   | "clientOffline"
   | "agentNotSelected"
+  | "behaviorUnavailable"
   | "composerEmpty"
   | "submittingRequest"
   | "waitingForRequestObservation"
@@ -91,6 +92,7 @@ type ProjectionInput = {
   session: DesktopSessionSnapshot | null;
   selectedConversation: ConversationSummary | null;
   localWorkflow: ChatWorkflowState;
+  behaviorUnavailableHint?: string | null;
 };
 
 export type ChatShellProjection = {
@@ -181,6 +183,8 @@ function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
       return "Client offline";
     case "agentNotSelected":
       return "Select an agent before sending";
+    case "behaviorUnavailable":
+      return "The selected behavior is unavailable";
     case "composerEmpty":
       return "Type a message to send";
     case "submittingRequest":
@@ -324,6 +328,13 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         kind: "disabled",
         reason: "agentNotSelected",
         hint: hintFor("agentNotSelected"),
+      };
+    }
+    if (input.behaviorUnavailableHint) {
+      return {
+        kind: "disabled",
+        reason: "behaviorUnavailable",
+        hint: input.behaviorUnavailableHint,
       };
     }
     if (composerEmpty) {

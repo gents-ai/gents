@@ -12,6 +12,7 @@ import type {
   DeploymentView,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
+import { selectedBehaviorUnavailableHint } from "../lib/behaviorAvailability";
 import { trackedRequestIdForSession } from "./desktopShellRuntime";
 
 type ChatProjectionStateOptions = {
@@ -68,29 +69,34 @@ export function useDesktopChatProjectionState({
     },
     [draftContextKey],
   );
-  const shellProjection = useMemo(
-    () =>
-      projectChatShell({
-        clientAvailable,
-        selectedAgentDid,
-        selectedSessionId,
-        draft,
-        sending,
-        session,
-        selectedConversation,
-        localWorkflow,
-      }),
-    [
+  const shellProjection = useMemo(() => {
+    const behaviorUnavailableHint = selectedBehaviorUnavailableHint(
+      selectedDeployment,
+      selectedBehaviorId,
+    );
+    return projectChatShell({
       clientAvailable,
-      draft,
-      localWorkflow,
       selectedAgentDid,
-      selectedConversation,
       selectedSessionId,
+      draft,
       sending,
       session,
-    ],
-  );
+      selectedConversation,
+      localWorkflow,
+      behaviorUnavailableHint,
+    });
+  }, [
+    clientAvailable,
+    draft,
+    localWorkflow,
+    selectedAgentDid,
+    selectedBehaviorId,
+    selectedConversation,
+    selectedDeployment,
+    selectedSessionId,
+    sending,
+    session,
+  ]);
 
   useEffect(() => {
     setLocalWorkflow((current) =>

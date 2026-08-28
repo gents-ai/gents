@@ -13,6 +13,19 @@ import {
 } from "./desktopTest";
 
 test.describe("desktop UI harness", () => {
+  test("chat blocks requests until the selected behavior backend is ready", async ({
+    page,
+  }) => {
+    await gotoHarness(page, "backend-unavailable");
+    await openChat(page);
+
+    await expect(page.getByTestId("composer-status")).toHaveText(
+      "Backend “OpenAI Harness” is still checking readiness",
+    );
+    await expect(page.getByTestId("composer-input")).toBeEditable();
+    await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
   test("mobile conversation pins the title and composer to the viewport", async ({
     page,
   }) => {

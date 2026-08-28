@@ -40,6 +40,7 @@ export type DesktopUiHarnessScenario =
   | "bridge-unavailable"
   | "save-error"
   | "backend-health-error"
+  | "backend-unavailable"
   | "long-content"
   | "active-turn"
   | "cascade-turn"
@@ -130,6 +131,22 @@ export function createDesktopUiHarness(
   let sessionSeq = 1;
   let rowCount = 42;
   let deployment = createDeployment();
+  if (scenario === "backend-unavailable") {
+    deployment = {
+      ...deployment,
+      runtime: deployment.runtime
+        ? {
+            ...deployment.runtime,
+            runnableBehaviorCount: 0,
+            unavailableBehaviorCount: deployment.behaviors.length,
+          }
+        : null,
+      inferenceBackends: deployment.inferenceBackends.map((backend) => ({
+        ...backend,
+        probeStatus: "unknown",
+      })),
+    };
+  }
   let removed = false;
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
@@ -2184,6 +2201,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "bridge-unavailable":
     case "save-error":
     case "backend-health-error":
+    case "backend-unavailable":
     case "long-content":
     case "active-turn":
     case "cascade-turn":

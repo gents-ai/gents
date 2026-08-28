@@ -38,6 +38,7 @@ export type ChatWorkspaceProps = {
   configuredPeerCount: number;
   canSend: boolean;
   sendHint: string | null;
+  retryUnavailableHint?: string | null;
   draft: string;
   interruptVisible: boolean;
   sending: boolean;
@@ -91,6 +92,7 @@ export function ActiveChatWorkspace({
   configuredPeerCount,
   canSend,
   sendHint,
+  retryUnavailableHint,
   draft,
   interruptVisible,
   sending,
@@ -201,6 +203,7 @@ export function ActiveChatWorkspace({
             session={session}
             optimisticPendingTurn={optimisticPendingTurn}
             onRetryMessage={onRetryMessage}
+            retryUnavailableHint={retryUnavailableHint}
             onLoadOlder={onLoadOlderTimeline}
           />
 

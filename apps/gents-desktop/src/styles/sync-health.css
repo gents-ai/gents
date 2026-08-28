@@ -118,9 +118,13 @@
 
   @media (max-width: 760px) {
     .sync-health-details {
-      left: auto;
-      right: 0;
-      width: min(100vw - 1rem, 22rem);
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 0px) + 4rem);
+      right: 0.5rem;
+      left: 0.5rem;
+      width: auto;
+      max-height: calc(100dvh - 5rem);
+      overflow: auto;
     }
   }
 }
