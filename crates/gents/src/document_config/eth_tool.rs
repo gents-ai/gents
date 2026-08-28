@@ -65,6 +65,15 @@ pub(crate) async fn list_eth_tool_records(
     Ok(rows_with_doc_id(resp.data.as_ref(), "EthTool"))
 }
 
+pub fn eth_tool_by_id_query(tool_id: &str) -> String {
+    let escaped = escape_graphql_string(tool_id);
+    format!(
+        r#"{{
+            EthTool(filter: {{ tool_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{{TOOL_FIELDS}}}
+        }}"#
+    )
+}
+
 pub(crate) async fn load_eth_tool_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,

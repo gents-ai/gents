@@ -856,6 +856,30 @@ fn chain_key_commands_parse() {
     }
 }
 
+#[test]
+fn chain_query_command_parses() {
+    let parsed = Cli::try_parse_from([
+        "gents",
+        "chain",
+        "query",
+        "--tool-id",
+        "base-read",
+        "eth_blockNumber",
+        "[]",
+    ])
+    .expect("query");
+    match parsed.command {
+        Command::Chain {
+            command: ChainCommand::Query(args),
+        } => {
+            assert_eq!(args.tool_id, "base-read");
+            assert_eq!(args.method, "eth_blockNumber");
+            assert_eq!(args.params.as_deref(), Some("[]"));
+        }
+        _ => panic!("expected chain query"),
+    }
+}
+
 fn deprecated_path_required_args(path: &[&str]) -> Vec<String> {
     match path {
         ["config", "task"] => vec!["list".to_string()],

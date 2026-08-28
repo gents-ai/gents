@@ -118,7 +118,8 @@ pub use callback::reject_secret_bearing_callback_fields;
 pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 pub use eth::{
     address_from_secret, attestation_payload, binding_storage_key, encode_attestation,
-    generate_secp256k1_secret, ChainKeyMaterialStore, KeyringChainKeyStore, KEYRING_SERVICE,
+    generate_secp256k1_secret, method_permitted, validate_query_methods, ChainKeyMaterialStore,
+    HttpEthRpc, KeyringChainKeyStore, BUILTIN_QUERY_METHODS, ETH_USER_AGENT, KEYRING_SERVICE,
     KEY_BACKEND_KEYRING,
 };
 
@@ -169,16 +170,17 @@ pub use document_config::{
     chain_key_binding_by_id_query, create_chain_key_binding_mutation,
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, delete_chain_key_binding_mutation,
-    deserialize_dual_shape, ensure_agent_principal, is_reserved_builtin_tool_name,
-    list_agent_behaviors, list_chain_key_bindings_query, list_datastore_tool_surfaces,
-    list_inference_profile_records, load_agent_behavior, load_agent_principal,
-    load_inference_profile, load_tool_selection, merge_datastore_tool_surfaces,
-    subagent_target_entry, upsert_agent_behavior, upsert_agent_principal, upsert_chain_key_binding,
-    upsert_chain_key_binding_mutation, upsert_inference_profile, upsert_tool_selection,
-    wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
-    AgentBehavior as AgentBehaviorDocument, ChainKeyBindingDocument, DatastoreToolSurfaceDocument,
-    InferenceProfile, MergedSurfaceTools, PrincipalBootstrap, QueryToolDecl, SubagentTarget,
-    SurfaceToolDecl, ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    deserialize_dual_shape, ensure_agent_principal, eth_tool_by_id_query,
+    is_reserved_builtin_tool_name, list_agent_behaviors, list_chain_key_bindings_query,
+    list_datastore_tool_surfaces, list_inference_profile_records, load_agent_behavior,
+    load_agent_principal, load_inference_profile, load_tool_selection,
+    merge_datastore_tool_surfaces, subagent_target_entry, upsert_agent_behavior,
+    upsert_agent_principal, upsert_chain_key_binding, upsert_chain_key_binding_mutation,
+    upsert_inference_profile, upsert_tool_selection, wide_open_tool_selection_document,
+    wide_open_tool_selection_id_for_agent, AgentBehavior as AgentBehaviorDocument,
+    ChainKeyBindingDocument, DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile,
+    MergedSurfaceTools, PrincipalBootstrap, QueryToolDecl, SubagentTarget, SurfaceToolDecl,
+    ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
     WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{

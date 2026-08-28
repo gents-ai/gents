@@ -3353,6 +3353,23 @@ pub(crate) enum ChainCommand {
         #[command(subcommand)]
         command: ChainKeyCommand,
     },
+    #[command(about = "Run an allowlisted eth_* JSON-RPC read against an EthTool endpoint")]
+    Query(ChainQueryArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ChainQueryArgs {
+    #[arg(long, help = "EthTool.tool_id")]
+    pub(crate) tool_id: String,
+    #[arg(help = "JSON-RPC method, e.g. eth_blockNumber")]
+    pub(crate) method: String,
+    #[arg(
+        value_name = "PARAMS_JSON",
+        help = "JSON array of RPC params. Default: []"
+    )]
+    pub(crate) params: Option<String>,
+    #[command(flatten)]
+    pub(crate) access: ChainKeyAccessArgs,
 }
 
 #[derive(Subcommand)]
