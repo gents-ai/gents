@@ -3,19 +3,14 @@ use std::sync::Arc;
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::{
-    ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleState,
-    ToolCeiling,
-};
+use gents::{ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde_json::Value;
-use tokio::sync::watch;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_behavior, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::waits::RecordingProcessObserver;
 
 #[tokio::test]
-async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> Result<()> {
+async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> {
     use std::ffi::OsString;
     use std::sync::LazyLock;
 
@@ -85,34 +80,22 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
 
     let mut env = TestEnvGuard::new(&["GENTS_TEST_RUNTIME_BACKEND_KEY"]);
     env.set("GENTS_TEST_RUNTIME_BACKEND_KEY", "backend-key");
-    let observer = Arc::new(RecordingProcessObserver::default());
     let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
             tool_ceiling: ToolCeiling::meta_only(),
-            process_state_observer: Some(observer.clone()),
             ..Default::default()
         },
     )
     .await?;
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let run_task = tokio::spawn(agent.run(shutdown_rx));
 
-    observer.wait_for(ProcessLifecycleState::Ready).await;
-    let _ = shutdown_tx.send(true);
-    run_task.await??;
-
-    let observed = observer.states();
-    assert_eq!(
-        observed,
-        vec![
-            ProcessLifecycleState::Recovering,
-            ProcessLifecycleState::Ready,
-            ProcessLifecycleState::ShuttingDown,
-            ProcessLifecycleState::Shutdown,
-        ]
-    );
+    let default_behavior = agent
+        .behaviors()
+        .iter()
+        .find(|behavior| behavior.behavior_id == agent.default_behavior_id())
+        .expect("document runtime should load the default behavior");
+    assert_eq!(default_behavior.completion_client_api_key()?, "backend-key");
 
     Ok(())
 }
