@@ -162,7 +162,7 @@ export function createDesktopUiHarness(
         : null,
       inferenceBackends: deployment.inferenceBackends.map((backend) => ({
         ...backend,
-        probeStatus: "unknown",
+        enabled: false,
       })),
     };
   }

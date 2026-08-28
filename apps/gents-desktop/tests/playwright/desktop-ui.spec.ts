@@ -14,14 +14,14 @@ import {
 } from "./desktopTest";
 
 test.describe("desktop UI harness", () => {
-  test("chat blocks requests until the selected behavior backend is ready", async ({
+  test("chat blocks requests when the selected behavior backend is disabled", async ({
     page,
   }) => {
     await gotoHarness(page, "backend-unavailable");
     await openChat(page);
 
     await expect(page.getByTestId("composer-status")).toHaveText(
-      "Backend “OpenAI Harness” is still checking readiness",
+      "Backend “OpenAI Harness” is disabled",
     );
     await expect(page.getByTestId("composer-input")).toBeEditable();
     await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { selectedBehaviorUnavailableHint } from "../src/lib/behaviorAvailability";
 
-function deployment(probeStatus: string | null): DeploymentView {
+function deployment(probeStatus: string | null, enabled = true): DeploymentView {
   return {
     defaultBehaviorId: "default",
     behaviors: [
@@ -19,7 +19,7 @@ function deployment(probeStatus: string | null): DeploymentView {
       {
         backendId: "workstation-2",
         name: "Workstation 2",
-        enabled: true,
+        enabled,
         probeStatus,
       },
     ],
@@ -27,13 +27,12 @@ function deployment(probeStatus: string | null): DeploymentView {
 }
 
 describe("selectedBehaviorUnavailableHint", () => {
-  it("admits only a healthy selected behavior backend", () => {
+  it("treats persisted probe status as advisory and blocks disabled config", () => {
     expect(selectedBehaviorUnavailableHint(deployment("healthy"), null)).toBeNull();
-    expect(selectedBehaviorUnavailableHint(deployment("unknown"), null)).toBe(
-      "Backend “Workstation 2” is still checking readiness",
-    );
-    expect(selectedBehaviorUnavailableHint(deployment("unhealthy"), null)).toBe(
-      "Backend “Workstation 2” is unavailable (unhealthy)",
+    expect(selectedBehaviorUnavailableHint(deployment("unknown"), null)).toBeNull();
+    expect(selectedBehaviorUnavailableHint(deployment("unhealthy"), null)).toBeNull();
+    expect(selectedBehaviorUnavailableHint(deployment("unknown", false), null)).toBe(
+      "Backend “Workstation 2” is disabled",
     );
   });
 });

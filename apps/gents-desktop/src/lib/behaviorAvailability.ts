@@ -31,9 +31,10 @@ export function selectedBehaviorUnavailableHint(
 
   const displayName = backendName(backend.name, backend.backendId);
   if (backend.enabled !== true) return `Backend “${displayName}” is disabled`;
-  if (backend.probeStatus === "healthy") return null;
-  if (!backend.probeStatus || backend.probeStatus === "unknown") {
-    return `Backend “${displayName}” is still checking readiness`;
-  }
-  return `Backend “${displayName}” is unavailable (${backend.probeStatus.replace(/_/g, " ")})`;
+
+  // Persisted probe status is diagnostic history, not the runtime admission
+  // decision. It can remain unknown after the runtime has measured a backend
+  // healthy (and for provider kinds the prober intentionally skips), so using
+  // it as a client-side gate can disagree with the authoritative runtime.
+  return null;
 }
