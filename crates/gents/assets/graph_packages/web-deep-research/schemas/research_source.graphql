@@ -11,5 +11,7 @@ type WebResearchSource {
   fetched_at: String
   fetch_id: String @index
   content_hash: String
+  verified_quote: String
+  quote_verified: String
   relevance: String
 }

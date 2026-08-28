@@ -1045,6 +1045,31 @@ mod tests {
                 .count(),
             4
         );
+        assert_eq!(
+            active_view
+                .datastore_tool_surfaces
+                .keys()
+                .filter(|id| id.starts_with("pkg-"))
+                .count(),
+            4,
+            "active package datastore tool surfaces must be visible"
+        );
+        for selection in active_view
+            .tool_selections
+            .values()
+            .filter(|record| record.value.selection_id.starts_with("pkg-"))
+        {
+            assert!(
+                !selection
+                    .value
+                    .datastore_tool_surface_ids
+                    .as_deref()
+                    .unwrap_or_default()
+                    .is_empty(),
+                "package ToolSelection {} must retain its surface links",
+                selection.value.selection_id
+            );
+        }
         let run = start_graph_run(
             &node,
             None,

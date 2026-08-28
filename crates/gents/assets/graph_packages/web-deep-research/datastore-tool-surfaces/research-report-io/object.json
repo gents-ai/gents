@@ -9,7 +9,15 @@
       "tool_name": "read_report_research_source",
       "collection": "WebResearchSource",
       "description": "Load source metadata and provenance for report citations.",
-      "fields": ["source_id", "url", "title", "publisher", "source_kind", "published_at", "fetched_at", "fetch_id", "content_hash", "relevance"],
+      "fields": ["source_id", "url", "title", "publisher", "source_kind", "published_at", "fetched_at", "fetch_id", "content_hash", "verified_quote", "quote_verified", "relevance"],
+      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_report_research_evidence",
+      "collection": "WebResearchEvidence",
+      "description": "Load typed claim-to-source joins for citation placement and provenance checks.",
+      "fields": ["evidence_id", "claim_id", "source_id", "fetch_id", "content_hash", "relationship", "locator", "supporting_excerpt", "verified_quote_used", "notes"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -17,7 +25,7 @@
       "tool_name": "read_report_claim_verdict",
       "collection": "WebResearchClaimVerdict",
       "description": "Load the complete adjudicated claim ledger.",
-      "fields": ["claim_id", "verdict", "confidence", "rationale", "evidence_json", "quote_verification"],
+      "fields": ["claim_id", "statement", "verdict", "confidence", "rationale", "evidence_summary", "quote_verification"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

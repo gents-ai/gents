@@ -15,6 +15,7 @@
     "schemas/research_investigation.graphql",
     "schemas/research_source.graphql",
     "schemas/research_claim.graphql",
+    "schemas/research_evidence.graphql",
     "schemas/research_claim_verdict.graphql",
     "schemas/research_draft.graphql",
     "schemas/research_result.graphql"

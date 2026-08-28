@@ -5,14 +5,122 @@
 //! entries have no `kind` and stay [`SurfaceToolDecl::Create`]. Query entries
 //! set `"kind": "query"`.
 
-use anyhow::Result;
+use std::collections::{HashMap, HashSet};
+
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
+use super::datastore_tool_surface::DatastoreToolSurfaceDocument;
 use super::serde_helpers;
 use super::tool_selection::{
-    reject_tool_name_surface_collisions, validate_write_tool_declarations, WriteToolDecl,
-    WriteToolField, WriteToolFieldFill,
+    reject_tool_name_surface_collisions, validate_write_tool_declarations, ToolSelectionDocument,
+    WriteToolDecl, WriteToolField, WriteToolFieldFill,
 };
+
+/// Create and query tools after expanding linked [`DatastoreToolSurfaceDocument`]s.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MergedSurfaceTools {
+    pub write_tools: Vec<WriteToolDecl>,
+    pub query_tools: Vec<QueryToolDecl>,
+}
+
+/// Merge inline write declarations with a selection's linked datastore surfaces.
+///
+/// The operation fails closed when a selected surface is missing, disabled,
+/// foreign-owned, malformed, duplicated, or introduces a tool-name collision.
+pub fn merge_datastore_tool_surfaces<'a>(
+    selection: &ToolSelectionDocument,
+    surfaces: impl IntoIterator<Item = &'a DatastoreToolSurfaceDocument>,
+) -> Result<MergedSurfaceTools> {
+    let mut surface_by_id = HashMap::new();
+    for surface in surfaces {
+        let surface_id = surface.surface_id.trim();
+        if surface_id.is_empty() {
+            continue;
+        }
+        if surface_by_id.insert(surface_id, surface).is_some() {
+            bail!("duplicate DatastoreToolSurface {surface_id}");
+        }
+    }
+
+    let mut write_tools = selection.write_tools.clone().unwrap_or_default();
+    let mut query_tools = Vec::new();
+    let mut seen = HashSet::new();
+    for decl in &write_tools {
+        if !seen.insert(decl.tool_name.clone()) {
+            bail!(
+                "ToolSelection {} has duplicate write_tools tool_name {:?}",
+                selection.selection_id,
+                decl.tool_name
+            );
+        }
+    }
+
+    let surface_ids = selection
+        .datastore_tool_surface_ids
+        .as_deref()
+        .unwrap_or(&[]);
+    let mut linked_ids = HashSet::new();
+    for surface_id in surface_ids {
+        let surface_id = surface_id.trim();
+        if surface_id.is_empty() {
+            bail!(
+                "ToolSelection {} has an empty datastore_tool_surface_ids entry",
+                selection.selection_id
+            );
+        }
+        if !linked_ids.insert(surface_id) {
+            bail!(
+                "ToolSelection {} lists DatastoreToolSurface {} more than once",
+                selection.selection_id,
+                surface_id
+            );
+        }
+        let surface = surface_by_id.get(surface_id).copied().ok_or_else(|| {
+            anyhow!(
+                "ToolSelection {} references missing DatastoreToolSurface {}",
+                selection.selection_id,
+                surface_id
+            )
+        })?;
+        if surface.agent_did.trim() != selection.agent_did.trim() {
+            bail!(
+                "ToolSelection {} references DatastoreToolSurface {} owned by a different agent",
+                selection.selection_id,
+                surface_id
+            );
+        }
+        if !surface.enabled {
+            bail!(
+                "ToolSelection {} references disabled DatastoreToolSurface {}",
+                selection.selection_id,
+                surface_id
+            );
+        }
+        for entry in surface.entries.as_deref().unwrap_or(&[]) {
+            entry.validate().map_err(|error| {
+                anyhow!("DatastoreToolSurface {surface_id} has a malformed entry: {error}")
+            })?;
+            if !seen.insert(entry.tool_name().to_string()) {
+                bail!(
+                    "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for ToolSelection {}",
+                    entry.tool_name(),
+                    surface_id,
+                    selection.selection_id
+                );
+            }
+            match entry {
+                SurfaceToolDecl::Create(decl) => write_tools.push(decl.clone()),
+                SurfaceToolDecl::Query(decl) => query_tools.push(decl.clone()),
+            }
+        }
+    }
+
+    Ok(MergedSurfaceTools {
+        write_tools,
+        query_tools,
+    })
+}
 
 /// One bound read tool: one collection, a fixed projection, optional filter
 /// fills. The model never names the collection.

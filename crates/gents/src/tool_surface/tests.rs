@@ -912,6 +912,57 @@ async fn query_tool_is_advertised_and_registered() {
 }
 
 #[test]
+fn document_tool_config_expands_linked_datastore_surfaces() {
+    use crate::document_config::{
+        DatastoreToolSurfaceDocument, QueryToolDecl, SurfaceToolDecl, ToolSelectionDocument,
+    };
+
+    let agent_did = "did:key:zToolExplainSurface";
+    let selection = ToolSelectionDocument {
+        selection_id: "selection".to_string(),
+        agent_did: agent_did.to_string(),
+        tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
+        datastore_tool_surface_ids: Some(vec!["research-reads".to_string()]),
+        ..Default::default()
+    };
+    let surfaces = vec![DatastoreToolSurfaceDocument {
+        surface_id: "research-reads".to_string(),
+        agent_did: agent_did.to_string(),
+        display_name: None,
+        enabled: true,
+        entries: Some(vec![SurfaceToolDecl::Query(QueryToolDecl {
+            tool_name: "read_research_source".to_string(),
+            collection: "WebResearchSource".to_string(),
+            description: "Read sources for this run".to_string(),
+            fields: vec!["source_id".to_string()],
+            filter_fields: Vec::new(),
+        })]),
+        created_at: None,
+    }];
+
+    let missing = BehaviorToolConfig::from_tool_selection_document(
+        "reporter",
+        &selection,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap_err();
+    assert!(missing.to_string().contains("missing DatastoreToolSurface"));
+
+    let config = BehaviorToolConfig::from_tool_selection_document_with_surfaces(
+        "reporter",
+        &selection,
+        &surfaces,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+    let explanation =
+        config.explain_with_runtime(false, agent_did, &std::collections::HashSet::new());
+    assert_eq!(explanation.tool_names, vec!["read_research_source"]);
+}
+
+#[test]
 fn malformed_write_tool_is_rejected_during_configuration() {
     use crate::document_config::WriteToolDecl;
 

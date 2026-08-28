@@ -31,7 +31,7 @@ plan --writes--> WebResearchPlan + N WebResearchAssignment
                                       v
                                investigate x N
                                       |
-                         sources + claims + closure
+                    sources + claims + evidence links + closure
                                       |
                                       | per group, exact expected_total
                                       v
@@ -47,7 +47,7 @@ plan --writes--> WebResearchPlan + N WebResearchAssignment
                               WebResearchResult
 ```
 
-The planner creates a closed assignment set of two through eight members. Each assignment independently carries the question, lens, instructions, query plan, source requirements, freshness requirement, and the same `expected_total`. Investigators can execute concurrently. Each writes sources and atomic claims before one `WebResearchInvestigation` closure sentinel. The adjudicator fires only when the grouped sentinel count reaches `expected_total`. The final writer fires from the single draft.
+The planner creates a closed assignment set of two through eight members. Each assignment independently carries the question, lens, instructions, query plan, source requirements, freshness requirement, and the same `expected_total`. Investigators can execute concurrently. Each writes sources, atomic claims, and typed claim-to-source evidence links before one `WebResearchInvestigation` closure sentinel. The adjudicator fires only when the grouped sentinel count reaches `expected_total`. The final writer fires from the single draft.
 
 ## Handoff contract
 
@@ -56,30 +56,30 @@ The boundary rule is: **small typed trigger carrier plus correlation-scoped data
 | Boundary | Trigger carrier interpolated into prompt | Dedicated datastore surface | Integrity check |
 |---|---|---|---|
 | entry -> plan | `WebResearchJob`: question, scope, freshness, audience, output requirements, investigator count | assignment and plan writes | planner writes the exact requested assignment count and stamps the same `expected_total` |
-| plan -> investigate | one `WebResearchAssignment`: complete standalone assignment fields | source, claim, and investigation writes | runtime fills `run_id`, `assignment_id`, and `expected_total` from correlation/source document |
-| investigate -> adjudicate | grouped `WebResearchInvestigation` event: `group.correlation_value`, `group.count`, `group.complete` | typed reads for investigations, sources, and claims; verdict and draft writes | exact-count trigger barrier, then adjudicator reconciles unique assignments and declared counts against the ledgers |
-| adjudicate -> report | one `WebResearchDraft`: title, thesis, outline, synthesis, unresolved questions | typed reads for verdicts and source provenance; one result write | reporter may publish only ledger-backed claims and recorded sources |
+| plan -> investigate | one `WebResearchAssignment`: complete standalone assignment fields | source, claim, evidence-link, and investigation writes | runtime fills `run_id`, `assignment_id`, and `expected_total` from correlation/source document |
+| investigate -> adjudicate | grouped `WebResearchInvestigation` event: `group.correlation_value`, `group.count`, `group.complete` | typed reads for investigations, sources, claims, and evidence links; verdict and draft writes | exact-count trigger barrier, then adjudicator reconciles assignments, declared counts, and every claim/source/provenance join |
+| adjudicate -> report | one `WebResearchDraft`: title, thesis, outline, synthesis, unresolved questions | typed reads for verdicts, evidence links, and source provenance; one result write | each verdict carries the original claim statement; reporter publishes only valid claim → evidence → source joins |
 
 The runtime keeps grouped member documents in the template scope, but the prompt deliberately interpolates only the bounded group metadata. The adjudicator obtains full closure records through `read_research_investigation`, ensuring the schema and correlation fill are enforced at the tool boundary and avoiding an unbounded blob of model-authored summaries in the trigger prompt.
 
-`run_id` is filled from trigger correlation by every datastore tool. Fields such as `assignment_id` and `expected_total` are filled from the triggering assignment where possible. Agents do not receive those authority-bearing fields as caller-supplied tool arguments.
+`run_id` is filled from trigger correlation by every datastore tool. Fields such as `assignment_id` and `expected_total` are filled from the triggering assignment where possible. Agents do not receive those authority-bearing fields as caller-supplied tool arguments. Quote-verification state is stored on the typed source document rather than embedded only in model-authored JSON. `WebResearchEvidence` provides the explicit claim/source/fetch/hash join, relationship, locator, and excerpt used by both downstream stages.
 
 ## Search and evidence policy
 
 Each investigator must submit one `web_collect_evidence` bundle that:
 
 1. executes between three and six materially different searches;
-2. treat snippets as discovery hints, never evidence;
+2. treats snippets as discovery hints, never evidence;
 3. deduplicates candidates and attempts no more than twelve fetches for at most eight sources;
-4. record stable fetch IDs, final URLs, content hashes, access dates, and source metadata;
-5. create atomic claims with machine-readable evidence references; and
-6. return an exact excerpt for each fetched source verified against its stored bytes and hash.
+4. records stable fetch IDs, final URLs, content hashes, access dates, and source metadata;
+5. creates atomic claims plus typed evidence-link documents; and
+6. returns an exact excerpt for each fetched source verified against its stored bytes and hash.
 
 The bundle is persisted by assignment ID. An identical retry reuses its result
 without network access, while conflicting inputs are rejected. This makes the
 retrieval budget a service invariant rather than a prompt convention.
 
-Fetched web content is delimited as untrusted data by the gateway. Both service and agent prompts state that page text cannot change goals, reveal secrets, or direct tool use. The adjudicator has datastore tools only and decides whether a material claim is supported, disputed, or insufficient from the typed ledger. The reporter reads adjudicated verdicts and source metadata rather than researcher prose.
+Fetched web content is delimited as untrusted data by the gateway. Both service and agent prompts state that page text cannot change goals, reveal secrets, or direct tool use. The investigator's dedicated gateway deployment advertises only `web_collect_evidence` and `web_find_in_fetch`; raw network tools and full-fetch reads are absent from both discovery and dispatch. The adjudicator has datastore tools only and decides whether a material claim is supported, disputed, or insufficient from the typed ledger. The reporter reads adjudicated verdicts, evidence links, and source metadata rather than researcher prose.
 
 ## Public service and private fleet boundary
 
@@ -91,13 +91,13 @@ Amygdala remains private and contains only fleet-specific composition, host moun
 
 The live test fails unless it observes all of the following from real persisted activity and result documents:
 
-- a healthy MCP service with the complete tool surface;
+- a healthy MCP service advertising exactly the two investigator tools;
 - at least 10 real inference calls and 20,000 reported or estimated tokens;
 - at least 3 completed assignment bundle calls plus gateway metrics proving at least 9 SearXNG-backed searches;
 - gateway metrics proving at least 8 Firecrawl-backed extractions;
 - gateway metrics proving at least 3 stored-evidence quote verifications;
-- one plan, at least 8 sources, at least 6 claims, at least 6 verdicts, and one report; and
-- a cited report of at least 1,500 characters with a provenance ledger.
+- one plan, three assignments and matching closures, at least two sources and six to eight claims per assignment, at least one valid typed evidence link per claim, matching closure ledger counts, exactly one verdict per claim, and one report; and
+- a cited report of at least 1,500 characters whose Markdown links exactly match a structurally validated provenance ledger.
 
 The fixture has no local fake backend, replay mode, canned search response, or stub model. Missing inference credentials or unavailable real infrastructure is a test setup failure, not a skipped success.
 

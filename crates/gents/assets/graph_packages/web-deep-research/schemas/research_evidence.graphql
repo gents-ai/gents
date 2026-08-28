@@ -1,0 +1,14 @@
+type WebResearchEvidence {
+  run_id: String @index @immutable
+  evidence_id: String @index(unique: true) @immutable
+  assignment_id: String @index
+  claim_id: String @index
+  source_id: String @index
+  fetch_id: String @index
+  content_hash: String
+  relationship: String
+  locator: String
+  supporting_excerpt: String
+  verified_quote_used: String
+  notes: String
+}

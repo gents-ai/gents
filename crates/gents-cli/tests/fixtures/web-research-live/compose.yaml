@@ -17,7 +17,7 @@ x-firecrawl-env: &firecrawl-env
 
 services:
   gateway:
-    image: ${WEB_RESEARCH_MCP_IMAGE:-ghcr.io/source-inc/web-research-mcp:0.1.4@sha256:e94350a9b03dd5a520a09462c9e1716c7e888cce50d93091e7ef8a47d5ae0a20}
+    image: ${WEB_RESEARCH_MCP_IMAGE:-ghcr.io/source-inc/web-research-mcp:0.1.5@sha256:4615c987def9809c33dce876f5797528e6d8d11e596731f7d53605d7f2b0143e}
     environment:
       WEB_RESEARCH_MCP_HTTP_BIND_ADDR: 0.0.0.0
       WEB_RESEARCH_MCP_HTTP_PORT: "9213"
@@ -26,6 +26,7 @@ services:
       WEB_RESEARCH_MCP_ENABLE_EXTRACT: "true"
       WEB_RESEARCH_MCP_ENABLE_CRAWL: "false"
       WEB_RESEARCH_MCP_ENABLE_BROWSER: "false"
+      WEB_RESEARCH_MCP_EXPOSED_TOOLS: web_collect_evidence,web_find_in_fetch
       SEARXNG_ENDPOINT: http://searxng:8080
       FIRECRAWL_ENDPOINT: http://firecrawl-api:3002
     ports:

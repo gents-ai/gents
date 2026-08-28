@@ -162,14 +162,15 @@ pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, deserialize_dual_shape, ensure_agent_principal,
-    is_reserved_builtin_tool_name, list_agent_behaviors, list_inference_profile_records,
-    load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
+    is_reserved_builtin_tool_name, list_agent_behaviors, list_datastore_tool_surfaces,
+    list_inference_profile_records, load_agent_behavior, load_agent_principal,
+    load_inference_profile, load_tool_selection, merge_datastore_tool_surfaces,
     subagent_target_entry, upsert_agent_behavior, upsert_agent_principal, upsert_inference_profile,
     upsert_tool_selection, wide_open_tool_selection_document,
     wide_open_tool_selection_id_for_agent, AgentBehavior as AgentBehaviorDocument,
-    InferenceProfile, PrincipalBootstrap, QueryToolDecl, SubagentTarget, SurfaceToolDecl,
-    ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
-    WriteToolOutputObligation, WriteToolOutputObligationScope,
+    DatastoreToolSurfaceDocument, InferenceProfile, MergedSurfaceTools, PrincipalBootstrap,
+    QueryToolDecl, SubagentTarget, SurfaceToolDecl, ToolSelectionDocument, WriteToolDecl,
+    WriteToolField, WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,

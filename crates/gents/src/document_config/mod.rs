@@ -41,7 +41,9 @@ pub(crate) use surface_tool::{
     deserialize_optional_surface_tools, validate_query_tool_declarations,
     validate_surface_tool_names,
 };
-pub use surface_tool::{QueryToolDecl, SurfaceToolDecl};
+pub use surface_tool::{
+    merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
+};
 pub use tool_selection::default_tool_selection_id_for_behavior;
 pub use tool_selection::{
     is_reserved_builtin_tool_name, load_tool_selection, upsert_tool_selection,
@@ -59,8 +61,8 @@ pub use subagent_target::{subagent_target_entry, SubagentTarget};
 
 pub(crate) use datastore_tool_surface::{
     list_datastore_tool_surface_records, load_datastore_tool_surface_by_doc_id,
-    DatastoreToolSurfaceDocument,
 };
+pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
 #[allow(unused_imports)]
 pub(crate) use skill::{list_skill_records, load_skill_by_doc_id, SkillDocument};
 

@@ -12,8 +12,7 @@ use crate::backend_registry::InferenceBackend;
 use crate::chatgpt_codex::OAuthCredential;
 use crate::document_config::{
     AgentBehavior, AgentPrincipal, DatastoreToolSurfaceDocument, EventTrigger, GraphDefinition,
-    GraphRunPin, InferenceProfile, QueryToolDecl, Schedule, SkillDocument, SurfaceToolDecl, Task,
-    ToolSelectionDocument, WriteToolDecl,
+    GraphRunPin, InferenceProfile, Schedule, SkillDocument, Task, ToolSelectionDocument,
 };
 
 #[derive(Debug, Clone)]
@@ -327,102 +326,16 @@ fn validate_subagent_targets_resolve(
 #[cfg(test)]
 mod tests;
 
-/// Create and query tools after expanding linked `DatastoreToolSurface` docs.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct MergedSurfaceTools {
-    pub write_tools: Vec<WriteToolDecl>,
-    pub query_tools: Vec<QueryToolDecl>,
-}
-
 /// Merge inline `write_tools` with entries from linked `DatastoreToolSurface`
 /// docs. Fail-closed on missing/disabled/foreign surfaces and name collisions.
 pub(crate) fn merge_surface_tools(
     selection: &ToolSelectionDocument,
     view: &DocumentRuntimeView,
-) -> anyhow::Result<MergedSurfaceTools> {
-    use anyhow::{anyhow, bail};
-    use std::collections::HashSet;
-
-    let mut write_tools = selection.write_tools.clone().unwrap_or_default();
-    let mut query_tools = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for decl in &write_tools {
-        if !seen.insert(decl.tool_name.clone()) {
-            bail!(
-                "ToolSelection {} has duplicate write_tools tool_name {:?}",
-                selection.selection_id,
-                decl.tool_name
-            );
-        }
-    }
-
-    let surface_ids = selection
-        .datastore_tool_surface_ids
-        .as_deref()
-        .unwrap_or(&[]);
-    let mut linked_ids: HashSet<&str> = HashSet::new();
-    for surface_id in surface_ids {
-        let surface_id = surface_id.trim();
-        if surface_id.is_empty() {
-            bail!(
-                "ToolSelection {} has an empty datastore_tool_surface_ids entry",
-                selection.selection_id
-            );
-        }
-        if !linked_ids.insert(surface_id) {
-            // Expanding twice would trip the tool_name collision check below
-            // and blame the wrong thing.
-            bail!(
-                "ToolSelection {} lists DatastoreToolSurface {} more than once",
-                selection.selection_id,
-                surface_id
-            );
-        }
-        let record = view
-            .datastore_tool_surfaces
-            .get(surface_id)
-            .ok_or_else(|| {
-                anyhow!(
-                    "ToolSelection {} references missing DatastoreToolSurface {}",
-                    selection.selection_id,
-                    surface_id
-                )
-            })?;
-        let surface = &record.value;
-        if surface.agent_did.trim() != selection.agent_did.trim() {
-            bail!(
-                "ToolSelection {} references DatastoreToolSurface {} owned by a different agent",
-                selection.selection_id,
-                surface_id
-            );
-        }
-        if !surface.enabled {
-            bail!(
-                "ToolSelection {} references disabled DatastoreToolSurface {}",
-                selection.selection_id,
-                surface_id
-            );
-        }
-        for entry in surface.entries.as_deref().unwrap_or(&[]) {
-            entry.validate().map_err(|error| {
-                anyhow::anyhow!("DatastoreToolSurface {surface_id} has a malformed entry: {error}")
-            })?;
-            if !seen.insert(entry.tool_name().to_string()) {
-                bail!(
-                    "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for ToolSelection {}",
-                    entry.tool_name(),
-                    surface_id,
-                    selection.selection_id
-                );
-            }
-            match entry {
-                SurfaceToolDecl::Create(decl) => write_tools.push(decl.clone()),
-                SurfaceToolDecl::Query(decl) => query_tools.push(decl.clone()),
-            }
-        }
-    }
-    Ok(MergedSurfaceTools {
-        write_tools,
-        query_tools,
-    })
+) -> anyhow::Result<crate::document_config::MergedSurfaceTools> {
+    crate::document_config::merge_datastore_tool_surfaces(
+        selection,
+        view.datastore_tool_surfaces
+            .values()
+            .map(|record| &record.value),
+    )
 }

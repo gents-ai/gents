@@ -8,6 +8,18 @@ compose=(docker compose --project-directory "${fixture_dir}" -f "${fixture_dir}/
 : "${GENTS_CLI_E2E_MODEL_ENDPOINT:?set GENTS_CLI_E2E_MODEL_ENDPOINT to a real OpenAI-compatible endpoint}"
 : "${GENTS_CLI_E2E_MODEL_NAME:?set GENTS_CLI_E2E_MODEL_NAME to the real model name}"
 
+model_catalog_url="${GENTS_CLI_E2E_MODEL_ENDPOINT%/}/models"
+model_catalog_args=(--fail --silent --show-error --max-time 15)
+if [[ -n "${GENTS_CLI_E2E_API_KEY:-}" ]]; then
+  model_catalog_args+=(--header "Authorization: Bearer ${GENTS_CLI_E2E_API_KEY}")
+fi
+if ! curl "${model_catalog_args[@]}" "${model_catalog_url}" \
+  | jq --exit-status --arg model "${GENTS_CLI_E2E_MODEL_NAME}" \
+    'any(.data[]?; .id == $model)' >/dev/null; then
+  echo "real model ${GENTS_CLI_E2E_MODEL_NAME} is unavailable from ${model_catalog_url}" >&2
+  exit 1
+fi
+
 cleanup() {
   exit_code=$?
   trap - EXIT INT TERM

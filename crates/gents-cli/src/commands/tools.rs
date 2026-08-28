@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use gents::{
-    AgentBehaviorDocument, BehaviorToolConfig, ToolCeiling, ToolPolicyVersion, ToolSelection,
-    ToolSelectionDocument,
+    AgentBehaviorDocument, BehaviorToolConfig, DatastoreToolSurfaceDocument, ToolCeiling,
+    ToolPolicyVersion, ToolSelection, ToolSelectionDocument,
 };
 use serde_json::{json, Value};
 
@@ -119,6 +119,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     let active_behavior_ids = active_behavior_ids(&bundle);
     let active_behavior_id_set = active_behavior_ids.iter().cloned().collect::<HashSet<_>>();
     let selection_rows = tool_selection_rows(&bundle)?;
+    let surface_rows = datastore_tool_surface_rows(&bundle)?;
     let mut unavailable_behaviors =
         crate::commands::status::collect_unavailable_behaviors_from_bundle(&bundle);
     let mut behaviors = Vec::new();
@@ -148,9 +149,10 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             Some(selection_id) => match selection_rows.get(selection_id) {
                 Some(selection) => (
                     "document".to_string(),
-                    BehaviorToolConfig::from_tool_selection_document(
+                    BehaviorToolConfig::from_tool_selection_document_with_surfaces(
                         &behavior.behavior_id,
                         selection,
+                        &surface_rows,
                         &tool_ceiling,
                         Vec::new(),
                     )
@@ -305,4 +307,18 @@ fn tool_selection_rows(
         rows.insert(selection.selection_id.clone(), selection);
     }
     Ok(rows)
+}
+
+fn datastore_tool_surface_rows(
+    bundle: &ConfigExportBundle,
+) -> Result<Vec<DatastoreToolSurfaceDocument>> {
+    bundle
+        .datastore_tool_surfaces
+        .iter()
+        .cloned()
+        .map(|row| {
+            serde_json::from_value(row)
+                .context("decoding DatastoreToolSurface row for tool-surface explanation")
+        })
+        .collect()
 }

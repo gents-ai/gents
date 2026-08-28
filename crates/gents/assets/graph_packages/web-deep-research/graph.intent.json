@@ -39,6 +39,7 @@
     {"name": "plan", "from": {"node_id": "plan", "port": "plan"}, "cardinality": {"kind": "exactly", "count": 1}, "terminal": true},
     {"name": "sources", "from": {"node_id": "investigate", "port": "sources"}, "cardinality": {"kind": "at_most", "count": 128}, "terminal": true},
     {"name": "claims", "from": {"node_id": "investigate", "port": "claims"}, "cardinality": {"kind": "at_most", "count": 128}, "terminal": true},
+    {"name": "evidence", "from": {"node_id": "investigate", "port": "evidence"}, "cardinality": {"kind": "at_most", "count": 256}, "terminal": true},
     {"name": "verdicts", "from": {"node_id": "adjudicate", "port": "verdicts"}, "cardinality": {"kind": "at_most", "count": 128}, "terminal": true},
     {"name": "report", "from": {"node_id": "report", "port": "result"}, "cardinality": {"kind": "exactly", "count": 1}, "terminal": true}
   ],

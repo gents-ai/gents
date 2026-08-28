@@ -3,7 +3,6 @@ type WebResearchClaim {
   claim_id: String @index(unique: true) @immutable
   assignment_id: String @index
   statement: String
-  evidence_json: String
   confidence: String
   caveats: String
 }

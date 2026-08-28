@@ -6,4 +6,4 @@ Outline: {{ doc.outline }}
 Synthesis: {{ doc.synthesis }}
 Unresolved questions: {{ doc.unresolved_questions }}
 
-Read all supported/disputed verdicts and their sources. Produce a direct, well-structured Markdown report with claim-local citations, counterevidence, and limitations. Call `write_research_result` exactly once. Do not supply runtime-filled `run_id`.
+Read all supported/disputed verdicts, join them to typed evidence links and matching sources, and omit any broken join. Produce a direct, well-structured Markdown report with claim-local citations, counterevidence, and limitations. Its Markdown links and `sources_json` array must contain the same cited URLs, with each ledger object copying `source_id`, `url`, `fetch_id`, and `content_hash`. Call `write_research_result` exactly once. Do not supply runtime-filled `run_id`.

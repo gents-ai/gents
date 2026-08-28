@@ -30,7 +30,8 @@
     "output_ports": [
       {"name": "investigations", "collection": "WebResearchInvestigation", "schema": "WebResearchInvestigation/v1", "correlation_field": "run_id", "cardinality": "one", "required": false},
       {"name": "sources", "collection": "WebResearchSource", "schema": "WebResearchSource/v1", "correlation_field": "run_id", "cardinality": "many", "required": false},
-      {"name": "claims", "collection": "WebResearchClaim", "schema": "WebResearchClaim/v1", "correlation_field": "run_id", "cardinality": "many", "required": false}
+      {"name": "claims", "collection": "WebResearchClaim", "schema": "WebResearchClaim/v1", "correlation_field": "run_id", "cardinality": "many", "required": false},
+      {"name": "evidence", "collection": "WebResearchEvidence", "schema": "WebResearchEvidence/v1", "correlation_field": "run_id", "cardinality": "many", "required": false}
     ],
     "workspace_authority": "none"
   },

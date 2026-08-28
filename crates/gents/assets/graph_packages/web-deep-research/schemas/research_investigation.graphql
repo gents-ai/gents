@@ -4,6 +4,7 @@ type WebResearchInvestigation {
   expected_total: String @immutable
   source_count: String
   claim_count: String
+  evidence_count: String
   status: String
   summary: String
   gaps: String

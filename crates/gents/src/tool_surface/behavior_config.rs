@@ -98,9 +98,29 @@ impl BehaviorToolConfig {
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
+        Self::from_tool_selection_document_with_surfaces(
+            behavior_name,
+            selection,
+            &[],
+            ceiling,
+            custom_tools,
+        )
+    }
+
+    pub fn from_tool_selection_document_with_surfaces(
+        behavior_name: &str,
+        selection: &crate::document_config::ToolSelectionDocument,
+        surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
+        ceiling: &ToolCeiling,
+        custom_tools: Vec<CustomToolFactory>,
+    ) -> Result<Self> {
+        let merged = crate::document_config::merge_datastore_tool_surfaces(selection, surfaces)?;
+        let mut resolved = ToolSelection::from_document(selection)?;
+        resolved.write_tools = merged.write_tools;
+        resolved.query_tools = merged.query_tools;
         Self::from_selection_with_subagent_tools(
             behavior_name,
-            ToolSelection::from_document(selection)?,
+            resolved,
             ceiling,
             SubagentToolConfig::from_document(selection),
             custom_tools,

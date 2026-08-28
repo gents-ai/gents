@@ -290,7 +290,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.nodes.len(), 4);
-        assert_eq!(plan.results.len(), 5);
+        assert_eq!(plan.results.len(), 6);
         assert_eq!(plan.entries[0].name, "research");
         for capability in &package.capabilities {
             let selection: serde_json::Value = serde_json::from_str(
@@ -304,6 +304,31 @@ mod tests {
                 Some(&serde_json::json!(false))
             );
             assert_eq!(
+                selection.get("tool_policy_version"),
+                Some(&serde_json::json!(crate::tool_surface::TOOL_POLICY_V1)),
+                "{} must use secure-default tool policy decoding",
+                capability.tool_selection_asset
+            );
+            for disabled in [
+                "enable_file_tools",
+                "enable_memory",
+                "enable_session_history_tool",
+                "enable_context_budget",
+                "enable_defra_query",
+                "subagent_spawn_enabled",
+                "subagent_steering_enabled",
+                "subagent_background_enabled",
+                "enable_self_config",
+                "enable_lsp",
+            ] {
+                assert_eq!(
+                    selection.get(disabled),
+                    Some(&serde_json::json!(false)),
+                    "{} unexpectedly enables {disabled}",
+                    capability.tool_selection_asset
+                );
+            }
+            assert_eq!(
                 selection.get("command_execution_policy"),
                 Some(&serde_json::Value::Null),
                 "{} must not invent a command-policy enum when bash is disabled",
@@ -313,14 +338,38 @@ mod tests {
                 .get("allowed_mcp_service_ids")
                 .and_then(serde_json::Value::as_array)
                 .unwrap();
-            if !allowed_mcp_services.is_empty() {
-                assert_eq!(
-                    selection.get("enable_meta_tools"),
-                    Some(&serde_json::json!(true)),
-                    "{} must enable the MCP meta-tool boundary when it allows MCP services",
-                    capability.tool_selection_asset
-                );
-            }
+            let (meta_tools, services, surface) = match capability.capability_id.as_str() {
+                "research-plan" => (false, vec![], "research-plan-writes"),
+                "research-investigate" => (
+                    true,
+                    vec!["web-research-mcp"],
+                    "research-investigate-writes",
+                ),
+                "research-adjudicate" => (false, vec![], "research-adjudicate-io"),
+                "research-report" => (false, vec![], "research-report-io"),
+                other => panic!("unexpected capability {other}"),
+            };
+            assert_eq!(
+                selection.get("enable_meta_tools"),
+                Some(&serde_json::json!(meta_tools))
+            );
+            assert_eq!(
+                allowed_mcp_services,
+                &services
+                    .into_iter()
+                    .map(serde_json::Value::from)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                selection
+                    .get("datastore_tool_surface_ids")
+                    .and_then(serde_json::Value::as_array),
+                Some(&vec![serde_json::Value::from(surface)])
+            );
+            assert_eq!(
+                capability.workspace_authority,
+                WorkspaceAuthorityCeiling::None
+            );
         }
     }
 
@@ -377,31 +426,92 @@ mod tests {
         assert!(adjudicate_prompt.contains("{{ group.count }}"));
         assert!(!adjudicate_prompt.contains("event.group_size"));
 
-        let surface: BundledToolSurface = serde_json::from_str(
-            package
-                .asset_text("datastore-tool-surfaces/research-adjudicate-io/object.json")
-                .unwrap(),
-        )
-        .unwrap();
-        for (tool_name, collection) in [
-            ("read_research_investigation", "WebResearchInvestigation"),
-            ("read_research_source", "WebResearchSource"),
-            ("read_research_claim", "WebResearchClaim"),
+        let expected_surface_tools = [
+            (
+                "datastore-tool-surfaces/research-plan-writes/object.json",
+                vec!["write_research_assignment", "write_research_plan"],
+            ),
+            (
+                "datastore-tool-surfaces/research-investigate-writes/object.json",
+                vec![
+                    "write_research_source",
+                    "write_research_claim",
+                    "write_research_evidence",
+                    "write_research_investigation",
+                ],
+            ),
+            (
+                "datastore-tool-surfaces/research-adjudicate-io/object.json",
+                vec![
+                    "read_research_investigation",
+                    "read_research_source",
+                    "read_research_claim",
+                    "read_research_evidence",
+                    "write_research_claim_verdict",
+                    "write_research_draft",
+                ],
+            ),
+            (
+                "datastore-tool-surfaces/research-report-io/object.json",
+                vec![
+                    "read_report_research_source",
+                    "read_report_research_evidence",
+                    "read_report_claim_verdict",
+                    "write_research_result",
+                ],
+            ),
+        ];
+        for (asset, expected_tools) in expected_surface_tools {
+            let surface: BundledToolSurface =
+                serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
+            assert_eq!(
+                surface
+                    .entries
+                    .iter()
+                    .map(SurfaceToolDecl::tool_name)
+                    .collect::<Vec<_>>(),
+                expected_tools,
+                "unexpected authority in {asset}"
+            );
+            for entry in &surface.entries {
+                let fields = match entry {
+                    SurfaceToolDecl::Create(entry) => &entry.fields,
+                    SurfaceToolDecl::Query(entry) => &entry.filter_fields,
+                };
+                let run_id = fields
+                    .iter()
+                    .find(|field| field.name == "run_id")
+                    .unwrap_or_else(|| {
+                        panic!("{} has no correlation filter/fill", entry.tool_name())
+                    });
+                assert!(!run_id.required, "{}", entry.tool_name());
+                assert_eq!(
+                    run_id.fill,
+                    Some(WriteToolFieldFill::Correlation),
+                    "{}",
+                    entry.tool_name()
+                );
+            }
+        }
+
+        let all_assets = package
+            .asset_paths
+            .iter()
+            .map(|path| package.asset_text(path).unwrap())
+            .collect::<String>();
+        assert!(!all_assets.contains("evidence_json"));
+        for typed_field in [
+            "verified_quote",
+            "quote_verified",
+            "evidence_id",
+            "source_id",
+            "fetch_id",
+            "content_hash",
+            "relationship",
+            "evidence_count",
+            "evidence_summary",
         ] {
-            let entry = surface
-                .entries
-                .iter()
-                .find(|entry| entry.tool_name() == tool_name)
-                .unwrap_or_else(|| panic!("missing {tool_name}"));
-            let SurfaceToolDecl::Query(entry) = entry else {
-                panic!("{tool_name} must be a read tool");
-            };
-            assert_eq!(entry.collection, collection);
-            assert_eq!(entry.filter_fields.len(), 1);
-            let run_id = &entry.filter_fields[0];
-            assert_eq!(run_id.name, "run_id");
-            assert!(!run_id.required);
-            assert_eq!(run_id.fill, Some(WriteToolFieldFill::Correlation));
+            assert!(all_assets.contains(typed_field), "missing {typed_field}");
         }
     }
 

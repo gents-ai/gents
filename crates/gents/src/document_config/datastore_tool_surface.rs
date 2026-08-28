@@ -55,6 +55,17 @@ pub(crate) async fn list_datastore_tool_surface_records(
     Ok(rows_with_doc_id(resp.data.as_ref(), "DatastoreToolSurface"))
 }
 
+pub async fn list_datastore_tool_surfaces(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<Vec<DatastoreToolSurfaceDocument>> {
+    Ok(list_datastore_tool_surface_records(node, agent_did)
+        .await?
+        .into_iter()
+        .map(|(_, surface)| surface)
+        .collect())
+}
+
 /// Load one surface by DefraDB `_docID` (control-watcher hot-reload).
 pub(crate) async fn load_datastore_tool_surface_by_doc_id(
     node: &EmbeddedNode,
