@@ -17,7 +17,7 @@ x-firecrawl-env: &firecrawl-env
 
 services:
   gateway:
-    image: ${WEB_RESEARCH_MCP_IMAGE:-ghcr.io/source-inc/web-research-mcp:0.1.5@sha256:4615c987def9809c33dce876f5797528e6d8d11e596731f7d53605d7f2b0143e}
+    image: ${WEB_RESEARCH_MCP_IMAGE:-ghcr.io/source-inc/web-research-mcp:0.1.10@sha256:7600085842b84754d3ee5b95945fdcada02286311f6b757fca33a7d32fa126da}
     environment:
       WEB_RESEARCH_MCP_HTTP_BIND_ADDR: 0.0.0.0
       WEB_RESEARCH_MCP_HTTP_PORT: "9213"
@@ -32,8 +32,10 @@ services:
     ports:
       - "127.0.0.1:19213:9213"
     depends_on:
-      - searxng
-      - firecrawl-api
+      searxng:
+        condition: service_healthy
+      firecrawl-api:
+        condition: service_healthy
     networks:
       - research
     restart: unless-stopped
@@ -46,6 +48,12 @@ services:
       - ./searxng:/etc/searxng:ro
     networks:
       - research
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz | grep -q '^OK$'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     restart: unless-stopped
 
   firecrawl-api:
@@ -63,11 +71,11 @@ services:
       ENV: local
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       playwright-service:
-        condition: service_started
+        condition: service_healthy
       nuq-postgres:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     networks:
@@ -76,6 +84,12 @@ services:
       - host.docker.internal:host-gateway
     cpus: 4.0
     mem_limit: 8g
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
     ulimits:
       nofile:
         soft: 65535
@@ -93,6 +107,12 @@ services:
     mem_limit: 4g
     tmpfs:
       - /tmp/.cache:noexec,nosuid,size=1g
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     restart: unless-stopped
 
   redis:
@@ -100,6 +120,11 @@ services:
     command: redis-server --bind 0.0.0.0
     networks:
       - research
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
   rabbitmq:
@@ -121,6 +146,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     networks:
       - research
     restart: unless-stopped

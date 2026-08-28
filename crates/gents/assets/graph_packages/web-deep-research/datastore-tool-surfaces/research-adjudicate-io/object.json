@@ -8,8 +8,8 @@
       "kind": "read",
       "tool_name": "read_research_investigation",
       "collection": "WebResearchInvestigation",
-      "description": "Load every typed investigation closure for the run and reconcile its declared counts and gaps with the evidence ledger.",
-      "fields": ["assignment_id", "expected_total", "source_count", "claim_count", "evidence_count", "status", "summary", "gaps"],
+      "description": "Load every typed investigation closure for the run and reconcile its retrieval diagnostics and gaps with the authoritative ledgers.",
+      "fields": ["assignment_id", "expected_total", "requested_source_count", "candidate_count", "scrape_attempt_count", "evidence_shortfall", "accepted_search_engines", "search_degradation", "retrieval_failures", "status", "summary", "gaps"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -17,7 +17,7 @@
       "tool_name": "read_research_source",
       "collection": "WebResearchSource",
       "description": "Load every fetched source for the run.",
-      "fields": ["source_id", "assignment_id", "url", "title", "publisher", "source_kind", "primary_source", "published_at", "fetched_at", "fetch_id", "content_hash", "verified_quote", "quote_verified", "relevance"],
+      "fields": ["source_id", "assignment_id", "url", "title", "publisher", "source_kind", "primary_source", "published_at", "fetched_at", "fetch_id", "content_hash", "matched_query", "retrieval_queries", "search_engines", "candidate_relevance_score", "content_relevance_score", "extraction_method", "content_integrity_verified", "verified_quote", "quote_verified", "relevance"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -33,7 +33,7 @@
       "tool_name": "read_research_evidence",
       "collection": "WebResearchEvidence",
       "description": "Load typed claim-to-source links and join each source ID to the authoritative source provenance record.",
-      "fields": ["evidence_id", "assignment_id", "claim_id", "source_id", "relationship", "locator", "supporting_excerpt", "verified_quote_used", "notes"],
+      "fields": ["evidence_id", "assignment_id", "claim_id", "source_id", "relationship", "locator", "supporting_excerpt", "notes"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -62,9 +62,7 @@
         {"name": "thesis", "required": true},
         {"name": "outline", "required": true},
         {"name": "synthesis", "required": true},
-        {"name": "unresolved_questions", "required": true},
-        {"name": "supported_claim_count", "required": true},
-        {"name": "disputed_claim_count", "required": true}
+        {"name": "unresolved_questions", "required": true}
       ]
     }
   ]

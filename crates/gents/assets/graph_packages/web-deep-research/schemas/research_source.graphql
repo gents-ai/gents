@@ -11,6 +11,13 @@ type WebResearchSource {
   fetched_at: String
   fetch_id: String @index
   content_hash: String
+  matched_query: String
+  retrieval_queries: String
+  search_engines: String
+  candidate_relevance_score: String
+  content_relevance_score: String
+  extraction_method: String
+  content_integrity_verified: String
   verified_quote: String
   quote_verified: String
   relevance: String

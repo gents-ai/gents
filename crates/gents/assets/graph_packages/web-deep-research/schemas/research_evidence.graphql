@@ -7,6 +7,5 @@ type WebResearchEvidence {
   relationship: String
   locator: String
   supporting_excerpt: String
-  verified_quote_used: String
   notes: String
 }
