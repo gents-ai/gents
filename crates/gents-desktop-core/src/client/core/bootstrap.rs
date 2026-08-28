@@ -138,6 +138,7 @@ impl ClientCore {
             p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
             p2p_health,
             hydration,
+            hydration_transition: tokio::sync::Mutex::new(()),
             selected_agent_did,
             last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),

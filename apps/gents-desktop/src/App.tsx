@@ -333,7 +333,9 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 onRenameConversationTitle={shell.onRenameConversationTitle}
                 onSend={shell.onSendMessage}
                 onRetryMessage={shell.onRetryMessage}
-                onRetryHydration={() => shell.refreshSession(shell.selectedSessionId)}
+                onRetryHydration={() =>
+                  shell.retrySessionHydration(shell.selectedSessionId)
+                }
                 onLoadOlderTimeline={shell.loadOlderSessionTimeline}
                 rowCount={shell.snapshot?.client?.rowCount ?? 0}
                 runtimeHealth={shell.runtimeHealth}

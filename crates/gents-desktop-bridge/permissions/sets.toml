@@ -32,6 +32,11 @@ permissions = [
 ]
 
 [[set]]
+identifier = "session-control"
+description = "Explicit selected-session hydration retry"
+permissions = ["allow-desktop-session-hydration-retry"]
+
+[[set]]
 identifier = "trace-read"
 description = "Request timeline read"
 permissions = ["allow-desktop-request-timeline"]
@@ -196,6 +201,7 @@ permissions = [
   "default",
   "runtime-admin",
   "session-read",
+  "session-control",
   "trace-read",
   "tool-surface-read",
   "chat-write",

@@ -22,6 +22,7 @@ const COMMANDS: &[&str] = &[
     "desktop_set_selected_agent",
     "desktop_observer_metrics",
     "desktop_session_snapshot",
+    "desktop_session_hydration_retry",
     "desktop_session_live_delta",
     "desktop_request_timeline",
     "desktop_tool_surface_explain",

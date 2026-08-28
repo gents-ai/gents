@@ -44,6 +44,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::lifecycle::desktop_set_selected_agent,
             tauri_commands::lifecycle::desktop_observer_metrics,
             tauri_commands::chat::desktop_session_snapshot,
+            tauri_commands::chat::desktop_session_hydration_retry,
             tauri_commands::chat::desktop_session_live_delta,
             tauri_commands::chat::desktop_request_timeline,
             tauri_commands::tools_explain::desktop_tool_surface_explain,

@@ -967,6 +967,18 @@
           "markdownDescription": "Denies the desktop_schedule_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_session_hydration_retry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-hydration-retry",
+          "markdownDescription": "Enables the desktop_session_hydration_retry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_hydration_retry command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-hydration-retry",
+          "markdownDescription": "Denies the desktop_session_hydration_retry command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_session_live_delta command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-session-live-delta",
@@ -1171,6 +1183,12 @@
           "markdownDescription": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`"
         },
         {
+          "description": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`",
+          "type": "string",
+          "const": "session-control",
+          "markdownDescription": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`"
+        },
+        {
           "description": "Request timeline read\n#### This permission set includes:\n\n- `allow-desktop-request-timeline`",
           "type": "string",
           "const": "trace-read",
@@ -1285,10 +1303,10 @@
           "markdownDescription": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`"
         },
         {
-          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`",
+          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`",
           "type": "string",
           "const": "full",
-          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`"
+          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`"
         }
       ]
     }

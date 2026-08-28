@@ -1480,6 +1480,32 @@ Denies the desktop_schedule_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-session-hydration-retry`
+
+</td>
+<td>
+
+Enables the desktop_session_hydration_retry command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-hydration-retry`
+
+</td>
+<td>
+
+Denies the desktop_session_hydration_retry command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-session-live-delta`
 
 </td>
@@ -1902,6 +1928,19 @@ Client start/shutdown and selected-agent
 <td>
 
 Session/conversation snapshot and live-delta reads
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:session-control`
+
+</td>
+<td>
+
+Explicit selected-session hydration retry
 
 </td>
 </tr>

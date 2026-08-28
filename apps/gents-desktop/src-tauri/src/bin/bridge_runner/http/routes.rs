@@ -275,6 +275,29 @@ pub(super) fn handle_request(
             ));
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
+        ("POST", "/desktop/session/hydration/retry") => {
+            let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
+                .context("decoding session hydration retry request")?;
+            let agent_did = request.agent_did.or_else(|| {
+                fixture
+                    .desktop_core()
+                    .store()
+                    .snapshot()
+                    .conversations
+                    .iter()
+                    .find(|conversation| conversation.session_id == request.session_id)
+                    .and_then(|conversation| conversation.agent_did.clone())
+            });
+            let agent_did = agent_did
+                .as_deref()
+                .ok_or_else(|| anyhow!("session hydration retry requires an agent"))?;
+            runtime.block_on(
+                fixture
+                    .desktop_core()
+                    .retry_session_hydration(&request.session_id, agent_did),
+            )?;
+            Ok(HttpResponse::json_ok("null".to_string()))
+        }
         ("POST", "/desktop/request/diagnostics") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
                 .context("decoding request diagnostics request")?;

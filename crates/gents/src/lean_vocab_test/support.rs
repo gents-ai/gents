@@ -456,6 +456,7 @@ pub(crate) struct LeanSessionHydrationProgressCase {
     pub(crate) begin_request: bool,
     pub(crate) expected_phase: String,
     pub(crate) expected_merged: usize,
+    pub(crate) expected_retry_admit: bool,
     pub(crate) expected_complete: bool,
 }
 

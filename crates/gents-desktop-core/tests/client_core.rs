@@ -53,7 +53,7 @@ async fn client_core_starts_and_registers_schemas() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn focus_session_requests_hydration_when_local_transcript_rows_already_exist() -> Result<()> {
+async fn initial_session_hydration_starts_when_local_transcript_rows_already_exist() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core =
@@ -94,7 +94,8 @@ async fn focus_session_requests_hydration_when_local_transcript_rows_already_exi
         response.errors
     );
 
-    core.focus_session(session_id, agent_did).await?;
+    core.ensure_session_hydration_started(session_id, agent_did)
+        .await?;
 
     let progress = core.hydration_progress();
     assert_eq!(progress.phase.as_str(), "serving");
@@ -123,7 +124,11 @@ async fn focus_session_requests_hydration_when_local_transcript_rows_already_exi
         .and_then(|data| data.get("SessionHydrationRequest"))
         .and_then(serde_json::Value::as_array)
         .context("SessionHydrationRequest rows")?;
-    assert_eq!(rows.len(), 1, "focus must persist exactly one request");
+    assert_eq!(
+        rows.len(),
+        1,
+        "initial start must persist exactly one request"
+    );
     assert_eq!(
         rows[0].get("status").and_then(serde_json::Value::as_str),
         Some("pending")
@@ -131,6 +136,114 @@ async fn focus_session_requests_hydration_when_local_transcript_rows_already_exi
 
     core.shutdown().await?;
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn passive_hydration_observation_preserves_rejection_until_explicit_retry() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let paths = DesktopPaths::from_root(tempdir.path());
+    let core =
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+    let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
+    let agent_did = "did:test:amy";
+    let session_id = "session-rejected";
+    let request_key =
+        gents::graphql::escape_graphql_string(&format!("{}:{session_id}", core.local_peer_id()));
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"mutation {{
+                create_SessionHydrationRequest(input: {{
+                    request_key: "{request_key}"
+                    requester_did: "{requester_did}"
+                    agent_did: "{agent_did}"
+                    session_id: "{session_id}"
+                    created_at: "2026-08-28T00:00:00Z"
+                    status: "rejected"
+                    status_detail: "membership missing"
+                    served_doc_count: 0
+                    processed_at: "2026-08-28T00:00:01Z"
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed rejected hydration request: {:?}",
+        response.errors
+    );
+
+    core.ensure_session_hydration_started(session_id, agent_did)
+        .await?;
+    core.ensure_session_hydration_started(session_id, agent_did)
+        .await?;
+    assert_eq!(core.hydration_progress().phase.as_str(), "failed");
+    assert_eq!(
+        hydration_request_status(&core, &request_key).await?,
+        Some("rejected".to_string()),
+        "passive focus must not rewrite a terminal request"
+    );
+
+    let failed_progress = core.hydration_progress();
+    assert!(core
+        .ensure_session_hydration_started(session_id, "did:test:wrong-agent")
+        .await
+        .is_err());
+    assert_eq!(
+        core.hydration_progress(),
+        failed_progress,
+        "a mismatched passive start must not retarget published progress"
+    );
+    assert!(core
+        .retry_session_hydration(session_id, "did:test:wrong-agent")
+        .await
+        .is_err());
+    assert_eq!(
+        core.hydration_progress(),
+        failed_progress,
+        "a rejected retry must not retarget published progress"
+    );
+    assert_eq!(
+        hydration_request_status(&core, &request_key).await?,
+        Some("rejected".to_string()),
+        "a rejected retry must not rewrite the terminal request"
+    );
+
+    core.retry_session_hydration(session_id, agent_did).await?;
+    assert_eq!(core.hydration_progress().phase.as_str(), "requested");
+    assert_eq!(
+        hydration_request_status(&core, &request_key).await?,
+        Some("pending".to_string()),
+        "explicit retry owns the terminal reset"
+    );
+
+    core.shutdown().await?;
+    Ok(())
+}
+
+async fn hydration_request_status(core: &ClientCore, request_key: &str) -> Result<Option<String>> {
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"{{ SessionHydrationRequest(filter: {{ request_key: {{ _eq: "{request_key}" }} }}) {{
+                status
+            }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query hydration request status: {:?}",
+        response.errors
+    );
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("SessionHydrationRequest"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

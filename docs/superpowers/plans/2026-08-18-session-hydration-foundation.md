@@ -44,4 +44,4 @@ GENTS_LIVE_SESSION_HYDRATION=1 cargo test -p gents --features live-e2e \
   -- --ignored --nocapture
 ```
 
-The test defaults to `http://100.87.27.25:8000/v1` and `GLM-5.2`; `GENTS_LIVE_SESSION_HYDRATION_ENDPOINT` and `GENTS_LIVE_SESSION_HYDRATION_MODEL` override those defaults. This gate covers the protocol/runtime boundary and shared receiver state machine. Desktop `ClientCore::focus_session` orchestration remains covered by the desktop-core test suite rather than this integration target, avoiding a dependency cycle from `gents` back to `gents-desktop-core`.
+The test defaults to `http://100.87.27.25:8000/v1` and `GLM-5.2`; `GENTS_LIVE_SESSION_HYDRATION_ENDPOINT` and `GENTS_LIVE_SESSION_HYDRATION_MODEL` override those defaults. This gate covers the protocol/runtime boundary and shared receiver state machine. Desktop start/observe/retry orchestration remains covered by the desktop-core test suite rather than this integration target, avoiding a dependency cycle from `gents` back to `gents-desktop-core`.

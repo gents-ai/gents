@@ -46,6 +46,15 @@ def progressFor (prev : ClientProgress) (session agent : String) : ClientProgres
 def beginRequest (session agent : String) : ClientProgress :=
   { session, agent, phase := .requested }
 
+/-- An explicit retry is legal only for the same failed target. -/
+def canRetry (prev : ClientProgress) (session agent : String) : Bool :=
+  decide (prev.session = session ∧ prev.agent = agent ∧ prev.phase = .failed)
+
+theorem canRetry_iff (prev : ClientProgress) (session agent : String) :
+    canRetry prev session agent = true ↔
+      prev.session = session ∧ prev.agent = agent ∧ prev.phase = .failed := by
+  simp [canRetry]
+
 def observeCore (prev : ClientProgress) (merged : Nat) (served : Option Nat)
     (failed : Bool) : ClientProgress :=
   if failed || decide (prev.phase = .failed) then
@@ -122,6 +131,15 @@ theorem observe_idle_without_server_stays_idle (prev : ClientProgress)
     (observe prev mergedCount none false session agent).phase = .idle := by
   unfold observe observeCore
   simp [hidle, hserved, mergeServed, canComplete]
+
+/-- A failed receiver is terminal under passive observation. Restarting the
+same target requires the explicit `beginRequest` transition. -/
+theorem observe_failed_without_begin_stays_failed (prev : ClientProgress)
+    (mergedCount : Nat) (servedCount : Option Nat) (session agent : String)
+    (hfailed : (progressFor prev session agent).phase = .failed) :
+    (observe prev mergedCount servedCount false session agent).phase = .failed := by
+  unfold observe observeCore
+  simp [hfailed]
 
 /-- Focusing a different session/agent starts from an idle, zero-count receiver state. -/
 theorem progressFor_other_target_resets (prev : ClientProgress) (session agent : String)

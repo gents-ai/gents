@@ -9,6 +9,24 @@ function wait(ms: number) {
 }
 
 describe("createDesktopStore", () => {
+  it("routes hydration retry through its explicit mutation command", async () => {
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_session_hydration_retry: () => undefined,
+      },
+    });
+    const client = createDesktopClient(transport);
+
+    await client.api.retrySessionHydration?.("session-1");
+
+    expect(transport.calls).toEqual([
+      {
+        command: "desktop_session_hydration_retry",
+        args: { sessionId: "session-1", agentDid: null },
+      },
+    ]);
+  });
+
   it("binds the full domain API to the injected transport", async () => {
     const transport = createMemoryTransport({
       handlers: {

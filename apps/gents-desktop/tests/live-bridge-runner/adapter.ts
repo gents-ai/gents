@@ -74,6 +74,12 @@ export function createBridgeHttpAdapter(
         timelineLimit: timelinePage?.limit,
         timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
+    retrySessionHydration: async (sessionId, agentDid) => {
+      await client.postJson("/desktop/session/hydration/retry", {
+        sessionId,
+        agentDid,
+      });
+    },
     sendChatMessage: async (request) => {
       const normalized: TauriDriverChatRequest = {
         agentDid: request.agentDid,

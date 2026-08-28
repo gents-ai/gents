@@ -152,6 +152,11 @@ export function createDesktopApiAdapter(
         timelineLimit: timelinePage?.limit,
         timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
+    retrySessionHydration: (sessionId, agentDid) =>
+      invokeDesktop<void>("desktop_session_hydration_retry", {
+        sessionId,
+        agentDid: agentDid ?? null,
+      }),
     fetchSessionLiveDelta: (request) =>
       invokeDesktop<SessionLiveDeltaView | null>("desktop_session_live_delta", {
         sessionId: request.sessionId,
@@ -165,8 +170,7 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop<ChatSendResult>("desktop_chat_send", { request }),
-    listMailbox: () =>
-      invokeDesktop<MailboxItemView[]>("desktop_mailbox_list"),
+    listMailbox: () => invokeDesktop<MailboxItemView[]>("desktop_mailbox_list"),
     startMailboxRequest: (itemId) =>
       invokeDesktop<MailboxItemView>("desktop_mailbox_start_request", {
         request: { itemId },

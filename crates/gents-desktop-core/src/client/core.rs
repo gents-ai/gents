@@ -310,6 +310,7 @@ pub struct ClientCore {
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     p2p_health: watch::Sender<P2PHealth>,
     hydration: watch::Sender<ClientHydrationProgress>,
+    hydration_transition: Mutex<()>,
     selected_agent_did: watch::Sender<Option<String>>,
     last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,

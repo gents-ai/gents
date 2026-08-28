@@ -53,6 +53,10 @@
       "permissionSet": "session-read"
     },
     {
+      "name": "desktop_session_hydration_retry",
+      "permissionSet": "session-control"
+    },
+    {
       "name": "desktop_request_timeline",
       "permissionSet": "trace-read"
     },
@@ -285,7 +289,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "1.5",
+  "contractVersion": "1.6",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -335,6 +339,10 @@
     {
       "kind": "read",
       "name": "session-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "session-control"
     },
     {
       "kind": "read",

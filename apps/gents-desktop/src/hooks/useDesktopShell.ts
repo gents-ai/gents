@@ -38,6 +38,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     session,
     setSession,
     refreshSession,
+    retrySessionHydration,
     refreshSessionLiveDelta,
     loadOlderSessionTimeline,
   } = useDesktopSessionProjection({
@@ -333,6 +334,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     onSelectSession,
     onStartNewConversation,
     refreshSession,
+    retrySessionHydration,
     loadOlderSessionTimeline,
     refreshSnapshot,
     onAddPeer,

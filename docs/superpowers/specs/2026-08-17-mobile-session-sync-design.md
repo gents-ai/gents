@@ -10,7 +10,7 @@ Index cards (`AgentConversation` + `AgentSession`) sync eagerly. Transcript hist
 Productization on top of merged PR #1154:
 
 - A pure desktop-core projection derives `healthy | syncing | stalled | offline | failed` from `P2PHealth`, pairing/route retry, and `ClientHydrationProgress`. Terminal/quarantined failure and stalled never collapse into syncing; offline never pretends progress is active.
-- The bridge projects pairing collection status, hydration, and that derived summary on existing snapshots. `desktop://client-updated` gains `reason = "hydration"`. There is no second request lifecycle, polling loop, or `desktop_session_hydrate` / `desktop_sync_status` command. Retry is `desktop_session_snapshot` → `ClientCore::focus_session`. In-flight re-focus refreshes receiver progress instead of resetting the server row to pending.
+- The bridge projects pairing collection status, hydration, and that derived summary on existing snapshots. `desktop://client-updated` gains `reason = "hydration"`. There is no second request lifecycle, polling loop, or `desktop_sync_status` command. Passive snapshots only start an idle target; failed targets remain terminal until `desktop_session_hydration_retry` explicitly restarts them.
 - Selected-session UI renders already-local transcript immediately and shows requested / serving N-of-M / complete / failed, with retry on failed. Hydration wakes refresh the selected session and the runtime snapshot (global `syncHealth` lives on the snapshot). Unchanged receiver progress does not re-emit. Delayed snapshots cannot replace another session.
 - A self-contained global indicator on the current fleet and chat surfaces distinguishes the five states and opens pairing/route/error-class/stuck-since/hydration diagnostics. It does not depend on PR #1153 navigation work.
 - CI acceptance uses the existing desktop UI harness (`session-hydration`, `sync-offline`, `sync-stalled`, `sync-failed`). The ignored live two-node test remains the protocol/runtime qualification:
@@ -24,7 +24,7 @@ GENTS_LIVE_SESSION_HYDRATION=1 cargo test -p gents --features live-e2e \
 ### Reductions from the original issue text
 
 - No `P2PSupervisorCommand::{Foregrounded, NetworkChanged}`. Suspend/resume recovery stays on the existing route repair / `desktop_p2p_repair` path.
-- No dedicated hydration or sync-status Tauri commands. The snapshot and focus path is the single control plane.
+- No dedicated hydration-start or sync-status Tauri commands. Initial focus stays snapshot-owned; terminal retry is an explicit session-control command.
 - Per-session replicator filters remain rejected (`session_id` is not `@immutable`).
 - Upstream defradb.rs#1504 FFI `p2p_sync_status` is still not required. Quarantined/permanent rejection is `PairingErrorClass::RemoteUnauthorized` plus hydration `failed`.
 
@@ -167,11 +167,11 @@ Failures write `rejected` + detail; retry is the client's decision.
 Plus CoverageLedger entry, `Executable.lean` contract, Rust conformance file,
 proofs README update. Zero `sorry`s.
 
-Client half (#1143): `ClientCore::request_session_hydration` (the first
-client-authored control-request write path — establishes the pattern). The
-desktop bridge calls it only from `focus_session` on `desktop_session_snapshot`.
-It reuses the existing request observation and P2P repair paths rather than
-adding focus/network commands or a second progress channel. Progress is
+Client half (#1143): the hydration request writer is the first client-authored
+control-request write path. The desktop bridge reaches it from an idle
+`desktop_session_snapshot` or an explicit failed-state retry. Both reuse the
+existing request observation and P2P repair paths rather than adding
+focus/network commands or a second progress channel. Progress is
 receiver-side: `served_doc_count` is the denominator, locally merged docIDs
 the numerator. Hydrated sessions persist on-device; no eviction in v1.
 

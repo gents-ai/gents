@@ -124,6 +124,9 @@ def progressPrev (w : SessionHydrationProgressCase) : SessionHydration.ClientPro
   , mergedCount := w.prevMerged
   , servedCount := w.prevServed }
 
+def progressObserved (w : SessionHydrationProgressCase) : SessionHydration.ClientProgress :=
+  SessionHydration.observe (progressPrev w) w.merged w.served w.failed w.session w.agent
+
 def sessionHydrationProgressCases : List SessionHydrationProgressCase :=
   [ { name := "open_requests"
     , prevSession := "session-1", prevAgent := "agent-1"
@@ -170,6 +173,16 @@ def sessionHydrationProgressCases : List SessionHydrationProgressCase :=
     , session := "session-1", agent := "agent-1"
     , prevPhase := "failed", prevMerged := 3, prevServed := some 3
     , merged := 3, served := some 3, failed := false, beginRequest := true }
+  , { name := "retry_rejects_other_agent"
+    , prevSession := "session-1", prevAgent := "agent-1"
+    , session := "session-1", agent := "agent-2"
+    , prevPhase := "failed", prevMerged := 3, prevServed := some 3
+    , merged := 3, served := some 3, failed := false, beginRequest := false }
+  , { name := "retry_rejects_other_session"
+    , prevSession := "session-1", prevAgent := "agent-1"
+    , session := "session-2", agent := "agent-1"
+    , prevPhase := "failed", prevMerged := 3, prevServed := some 3
+    , merged := 0, served := none, failed := false, beginRequest := false }
   , { name := "switch_session_resets_progress"
     , prevSession := "session-1", prevAgent := "agent-1"
     , session := "session-2", agent := "agent-1"
@@ -206,6 +219,8 @@ def sessionHydrationProgressCaseJson (w : SessionHydrationProgressCase) : String
     ++ "\"begin_request\":" ++ boolString w.beginRequest ++ ","
     ++ "\"expected_phase\":" ++ jsonString (phaseString next.phase) ++ ","
     ++ "\"expected_merged\":" ++ toString next.mergedCount ++ ","
+    ++ "\"expected_retry_admit\":" ++
+      boolString (SessionHydration.canRetry (progressObserved w) w.session w.agent) ++ ","
     ++ "\"expected_complete\":" ++
       boolString (decide (next.phase = SessionHydration.ClientPhase.complete))
     ++ "}"

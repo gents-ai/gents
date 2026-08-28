@@ -84,9 +84,7 @@ test.describe("mobile session sync fixture", () => {
     );
   });
 
-  test("failed hydration retries through the existing session snapshot path", async ({
-    page,
-  }) => {
+  test("failed hydration remains sticky until explicit retry", async ({ page }) => {
     await gotoHarness(page, "session-hydration");
     await openChat(page);
     await openChatNavigation(page);
@@ -100,6 +98,14 @@ test.describe("mobile session sync fixture", () => {
       "data-sync-state",
       "failed",
     );
+    await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.observe());
+    await expect(page.getByTestId("session-hydration-status")).toHaveAttribute(
+      "data-hydration-phase",
+      "failed",
+    );
+    expect(await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.retryCount())).toBe(
+      0,
+    );
     await page.getByTestId("session-hydration-retry").click();
     await expect(page.getByTestId("session-hydration-status")).toHaveAttribute(
       "data-hydration-phase",
@@ -108,6 +114,9 @@ test.describe("mobile session sync fixture", () => {
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
       "syncing",
+    );
+    expect(await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.retryCount())).toBe(
+      1,
     );
   });
 

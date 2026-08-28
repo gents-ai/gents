@@ -8,6 +8,7 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 1.6: additive — explicit session hydration retry command.
 // 1.5: additive — session hydration / sync-health snapshot fields and
 //       `desktop://client-updated` reason `hydration`.
 // 1.4: additive — owner-scoped mailbox read/start/dismiss commands.
@@ -24,7 +25,7 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "1.5";
+pub const CONTRACT_VERSION: &str = "1.6";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -91,6 +92,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
+        // session-control
+        ("desktop_session_hydration_retry", "session-control"),
         // trace-read
         ("desktop_request_timeline", "trace-read"),
         // tool-surface-read
@@ -185,6 +188,7 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("client-lifecycle", "mutate"),
         ("runtime-admin", "mutate"),
         ("session-read", "read"),
+        ("session-control", "mutate"),
         ("trace-read", "read"),
         ("tool-surface-read", "read"),
         ("chat-write", "mutate"),
@@ -524,6 +528,7 @@ mod tests {
             ("desktop_managed_server_stop", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_session_live_delta", "read"),
+            ("desktop_session_hydration_retry", "mutate"),
             ("desktop_request_timeline", "read"),
             ("desktop_tool_surface_explain", "read"),
             ("desktop_chat_send", "mutate"),

@@ -1495,22 +1495,65 @@ impl ClientCore {
         }
     }
 
-    pub async fn focus_session(&self, session_id: &str, agent_did: &str) -> Result<()> {
+    /// Observe hydration for a selected session and start its first request.
+    ///
+    /// A rejected request is terminal here. Retrying it is an explicit user
+    /// action owned by [`Self::retry_session_hydration`].
+    pub async fn ensure_session_hydration_started(
+        &self,
+        session_id: &str,
+        agent_did: &str,
+    ) -> Result<()> {
         let session_id = normalize_required("session_id", session_id)?;
         let agent_did = normalize_required("agent_did", agent_did)?;
-        self.refresh_hydration_progress(&session_id, &agent_did)
+        let _transition = self.hydration_transition.lock().await;
+        let progress = self
+            .observe_session_hydration(&session_id, &agent_did)
             .await?;
-        let progress = self.hydration_progress();
-        if !should_write_session_hydration_request(&progress, &session_id, &agent_did) {
+        if !should_start_session_hydration_request(&progress, &session_id, &agent_did) {
             return Ok(());
         }
         self.request_session_hydration(&session_id, &agent_did)
             .await?;
-        self.refresh_hydration_progress(&session_id, &agent_did)
+        self.observe_session_hydration(&session_id, &agent_did)
             .await
+            .map(|_| ())
     }
 
-    pub async fn request_session_hydration(&self, session_id: &str, agent_did: &str) -> Result<()> {
+    /// Refresh receiver progress without starting or retrying an attempt.
+    async fn observe_session_hydration(
+        &self,
+        session_id: &str,
+        agent_did: &str,
+    ) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress> {
+        let next = self.load_hydration_progress(session_id, agent_did).await?;
+        publish_hydration_progress(&self.hydration, next.clone());
+        Ok(next)
+    }
+
+    /// Explicitly restart a failed hydration attempt for one session.
+    pub async fn retry_session_hydration(&self, session_id: &str, agent_did: &str) -> Result<()> {
+        let session_id = normalize_required("session_id", session_id)?;
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let _transition = self.hydration_transition.lock().await;
+        let progress = self
+            .load_hydration_progress(&session_id, &agent_did)
+            .await?;
+        if !gents::agent::p2p_reconcile::session_hydration::can_retry_hydration(
+            &progress,
+            &session_id,
+            &agent_did,
+        ) {
+            bail!("session hydration retry requires a failed attempt for the selected session");
+        }
+        self.request_session_hydration(&session_id, &agent_did)
+            .await?;
+        self.observe_session_hydration(&session_id, &agent_did)
+            .await
+            .map(|_| ())
+    }
+
+    async fn request_session_hydration(&self, session_id: &str, agent_did: &str) -> Result<()> {
         let session_id = normalize_required("session_id", session_id)?;
         let agent_did = normalize_required("agent_did", agent_did)?;
         let request_key = format!("{}:{session_id}", self.local_peer_id());
@@ -1558,11 +1601,11 @@ impl ClientCore {
         Ok(())
     }
 
-    pub async fn refresh_hydration_progress(
+    async fn load_hydration_progress(
         &self,
         session_id: &str,
         agent_did: &str,
-    ) -> Result<()> {
+    ) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress> {
         let merged = load_local_hydration_count(
             self.node.as_ref(),
             self.principal.did(),
@@ -1570,11 +1613,14 @@ impl ClientCore {
             agent_did,
         )
         .await?;
-        let (served, failed) =
-            load_hydration_server_state(self.node.as_ref(), self.local_peer_id(), session_id)
-                .await?;
-        publish_hydration_progress(
-            &self.hydration,
+        let (served, failed) = load_hydration_server_state(
+            self.node.as_ref(),
+            self.local_peer_id(),
+            session_id,
+            agent_did,
+        )
+        .await?;
+        Ok(
             gents::agent::p2p_reconcile::session_hydration::observe_hydration_progress(
                 &self.hydration_progress(),
                 session_id,
@@ -1583,8 +1629,7 @@ impl ClientCore {
                 served,
                 failed,
             ),
-        );
-        Ok(())
+        )
     }
 
     pub(super) fn clear_mutation_error(&self) {
@@ -1626,19 +1671,15 @@ fn publish_hydration_progress(
     })
 }
 
-fn should_write_session_hydration_request(
+fn should_start_session_hydration_request(
     progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
     session_id: &str,
     agent_did: &str,
 ) -> bool {
     use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
-    if progress.session_id != session_id || progress.agent_did != agent_did {
-        return true;
-    }
-    matches!(
-        progress.phase,
-        ClientHydrationPhase::Idle | ClientHydrationPhase::Failed
-    )
+    progress.session_id == session_id
+        && progress.agent_did == agent_did
+        && progress.phase == ClientHydrationPhase::Idle
 }
 
 async fn load_local_hydration_count(
@@ -1697,11 +1738,12 @@ async fn load_hydration_server_state(
     node: &EmbeddedNode,
     peer_id: &str,
     session_id: &str,
+    agent_did: &str,
 ) -> Result<(Option<usize>, bool)> {
     let request_key = gents::graphql::escape_graphql_string(&format!("{peer_id}:{session_id}"));
     let query = format!(
         r#"{{ SessionHydrationRequest(filter: {{ request_key: {{ _eq: "{request_key}" }} }}) {{
-            status served_doc_count
+            agent_did status served_doc_count
         }} }}"#
     );
     let response = node.execute(&query).await;
@@ -1719,6 +1761,9 @@ async fn load_hydration_server_state(
     let Some(row) = rows.first() else {
         return Ok((None, false));
     };
+    if row.get("agent_did").and_then(|value| value.as_str()) != Some(agent_did) {
+        bail!("session hydration request belongs to a different agent");
+    }
     let status = row
         .get("status")
         .and_then(|value| value.as_str())
@@ -1894,7 +1939,7 @@ mod delete_source_tests {
     }
 
     #[test]
-    fn hydration_request_is_written_only_for_idle_failed_or_session_change() {
+    fn initial_hydration_request_is_written_only_for_observed_idle_target() {
         use gents::agent::p2p_reconcile::session_hydration::{
             ClientHydrationPhase, ClientHydrationProgress,
         };
@@ -1906,12 +1951,12 @@ mod delete_source_tests {
             merged_count: 3,
             served_count: Some(8),
         };
-        assert!(!should_write_session_hydration_request(
+        assert!(!should_start_session_hydration_request(
             &serving,
             "session-1",
             "did:agent",
         ));
-        assert!(should_write_session_hydration_request(
+        assert!(!should_start_session_hydration_request(
             &serving,
             "session-2",
             "did:agent",
@@ -1921,7 +1966,7 @@ mod delete_source_tests {
             phase: ClientHydrationPhase::Failed,
             ..serving.clone()
         };
-        assert!(should_write_session_hydration_request(
+        assert!(!should_start_session_hydration_request(
             &failed,
             "session-1",
             "did:agent",
@@ -1933,13 +1978,18 @@ mod delete_source_tests {
             served_count: Some(8),
             ..serving
         };
-        assert!(!should_write_session_hydration_request(
+        assert!(!should_start_session_hydration_request(
             &complete,
             "session-1",
             "did:agent",
         ));
-        assert!(should_write_session_hydration_request(
-            &ClientHydrationProgress::default(),
+        let idle = ClientHydrationProgress {
+            session_id: "session-1".into(),
+            agent_did: "did:agent".into(),
+            ..ClientHydrationProgress::default()
+        };
+        assert!(should_start_session_hydration_request(
+            &idle,
             "session-1",
             "did:agent",
         ));

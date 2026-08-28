@@ -93,6 +93,8 @@ export type SessionSyncHarnessController = {
   progress(mergedCount: number, servedCount: number): void;
   complete(): void;
   fail(): void;
+  observe(): void;
+  retryCount(): number;
 };
 
 type DesktopUiHarness = {
@@ -203,11 +205,11 @@ export function createDesktopUiHarness(
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
+  let hydrationRetryCalls = 0;
   let updateEvents = 0;
   let storeVersion = 1;
   let reconcileVersion = 1;
   let streamSequence = 0;
-  let hydrationRedrive = false;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
   let commits: MobilePerformanceCommit[] = [];
 
@@ -443,19 +445,6 @@ export function createDesktopUiHarness(
       MOBILE_PERFORMANCE_FIXTURE.shortSessionTimelineItems;
   }
   syncConversations();
-
-  if (typeof window !== "undefined") {
-    window.addEventListener(
-      "click",
-      (event) => {
-        const target = event.target as HTMLElement | null;
-        if (target?.closest("[data-testid='session-hydration-retry']")) {
-          hydrationRedrive = true;
-        }
-      },
-      true,
-    );
-  }
 
   function notify(reason: string, responseOnly = false) {
     updateEvents += 1;
@@ -959,24 +948,6 @@ export function createDesktopUiHarness(
       if (!session) return null;
       const snapshot = clone(session);
       snapshot.projectionRevision = { storeVersion, reconcileVersion };
-      if (snapshot.hydration?.phase === "failed" && hydrationRedrive) {
-        hydrationRedrive = false;
-        snapshot.hydration = {
-          ...snapshot.hydration,
-          phase: "requested",
-          mergedCount: snapshot.timelineItems.length,
-          servedCount: null,
-        };
-        sessions.set(sessionId, clone(snapshot));
-        syncHealth = {
-          ...syncHealth,
-          state: "syncing",
-          lastErrorClass: null,
-          lastError: null,
-          hydration: snapshot.hydration,
-        };
-        notify("hydration");
-      }
       if (!timelinePage) return snapshot;
 
       const totalItems = snapshot.timelineItems.length;
@@ -1003,6 +974,35 @@ export function createDesktopUiHarness(
           snapshot.timelineItems[snapshot.timelineItems.length - 1]?.itemKey ?? null,
       };
       return snapshot;
+    },
+    async retrySessionHydration(sessionId, agentDid) {
+      hydrationRetryCalls += 1;
+      const session = sessions.get(sessionId);
+      const resolvedAgentDid = agentDid ?? session?.agentDid;
+      if (
+        !session ||
+        session.agentDid !== resolvedAgentDid ||
+        session.hydration?.phase !== "failed"
+      ) {
+        throw new Error(
+          "session hydration retry requires a failed attempt for the selected session",
+        );
+      }
+      const hydration = {
+        ...session.hydration,
+        phase: "requested" as const,
+        mergedCount: session.timelineItems.length,
+        servedCount: null,
+      };
+      sessions.set(sessionId, { ...session, hydration });
+      syncHealth = {
+        ...syncHealth,
+        state: "syncing",
+        lastErrorClass: null,
+        lastError: null,
+        hydration,
+      };
+      notify("hydration");
     },
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
@@ -1752,6 +1752,12 @@ export function createDesktopUiHarness(
   }
 
   const sessionSync: SessionSyncHarnessController = {
+    observe() {
+      notify("hydration");
+    },
+    retryCount() {
+      return hydrationRetryCalls;
+    },
     progress(mergedCount, servedCount) {
       const session = sessions.get("session-remote");
       if (!session) return;

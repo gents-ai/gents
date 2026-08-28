@@ -3,9 +3,9 @@
 use std::collections::BTreeSet;
 
 use gents::agent::p2p_reconcile::session_hydration::{
-    begin_hydration_request, decide_hydration, observe_hydration_progress, AppliedPairingRoute,
-    ClientHydrationPhase, ClientHydrationProgress, HydrationCatalog, HydrationDocument,
-    HydrationRequest, HydrationVerdict, SessionOwner, VerifiedActiveMembership,
+    begin_hydration_request, can_retry_hydration, decide_hydration, observe_hydration_progress,
+    AppliedPairingRoute, ClientHydrationPhase, ClientHydrationProgress, HydrationCatalog,
+    HydrationDocument, HydrationRequest, HydrationVerdict, SessionOwner, VerifiedActiveMembership,
 };
 
 use crate::lean_vocab_test::{
@@ -182,6 +182,12 @@ fn request_key_binds_peer_and_session() {
 fn generated_session_hydration_progress_cases_match_observe() {
     let cases = lean_session_hydration_progress_cases();
     assert!(!cases.is_empty());
+    assert!(
+        cases
+            .iter()
+            .any(|case| case.name == "failed_stays_failed_without_retry"),
+        "Lean contract must include the passive-observation terminality witness"
+    );
     for case in cases {
         let prev = ClientHydrationProgress {
             session_id: case.prev_session.clone(),
@@ -190,17 +196,24 @@ fn generated_session_hydration_progress_cases_match_observe() {
             merged_count: case.prev_merged,
             served_count: case.prev_served,
         };
+        let observed = observe_hydration_progress(
+            &prev,
+            &case.session,
+            &case.agent,
+            case.merged,
+            case.served,
+            case.failed,
+        );
+        assert_eq!(
+            can_retry_hydration(&observed, &case.session, &case.agent),
+            case.expected_retry_admit,
+            "{} retry admission after observation",
+            case.name
+        );
         let next = if case.begin_request {
             begin_hydration_request(&case.session, &case.agent)
         } else {
-            observe_hydration_progress(
-                &prev,
-                &case.session,
-                &case.agent,
-                case.merged,
-                case.served,
-                case.failed,
-            )
+            observed
         };
         assert_eq!(next.phase.as_str(), case.expected_phase, "{}", case.name);
         assert_eq!(next.merged_count, case.expected_merged, "{}", case.name);

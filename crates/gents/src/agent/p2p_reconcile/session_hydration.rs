@@ -206,6 +206,17 @@ pub fn begin_hydration_request(session_id: &str, agent_did: &str) -> ClientHydra
     }
 }
 
+/// Retry admission is target-specific and terminal-state-specific.
+pub fn can_retry_hydration(
+    prev: &ClientHydrationProgress,
+    session_id: &str,
+    agent_did: &str,
+) -> bool {
+    prev.session_id == session_id
+        && prev.agent_did == agent_did
+        && prev.phase == ClientHydrationPhase::Failed
+}
+
 fn merge_served(prev: Option<usize>, next: Option<usize>) -> Option<usize> {
     next.or(prev)
 }
