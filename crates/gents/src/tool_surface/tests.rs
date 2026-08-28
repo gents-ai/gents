@@ -38,6 +38,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -110,6 +111,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -165,6 +167,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ceiling,
         Vec::new(),
@@ -210,6 +213,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ceiling,
         Vec::new(),
@@ -254,6 +258,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -297,6 +302,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readonly_at(operator_root),
         Vec::new(),
@@ -340,6 +346,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -381,6 +388,7 @@ fn readonly_ceiling_clamps_unrestricted_bash_policy() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -420,6 +428,7 @@ fn selection_without_root_inherits_operator_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -472,6 +481,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -521,6 +531,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ceiling,
         Vec::new(),
@@ -573,6 +584,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -686,6 +698,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -726,6 +739,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -774,6 +788,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -2058,4 +2073,33 @@ async fn agent_config_alias_expands_to_config_scope() {
             "{denied} must stay outside the agent-config preset"
         );
     }
+}
+
+#[test]
+fn eth_query_tools_advertise_when_selection_has_resolved_queries() {
+    let query = crate::eth::ResolvedEthQuery {
+        tool_id: "base-read".to_string(),
+        chain_id: 8453,
+        rpc_url: "https://mainnet.base.org".to_string(),
+        methods: vec!["eth_chainId".to_string(), "eth_blockNumber".to_string()],
+    };
+    let config = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            eth_queries: vec![query],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(config
+        .static_policy()
+        .eth_query_methods
+        .permits(&"eth_chainId".to_string()));
+    assert!(!config
+        .static_policy()
+        .eth_query_methods
+        .permits(&"eth_sendRawTransaction".to_string()));
+    assert!(config.static_policy().eth_call_tools.is_deny_all());
 }

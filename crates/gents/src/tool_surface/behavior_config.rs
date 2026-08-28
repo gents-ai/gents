@@ -34,6 +34,7 @@ pub struct BehaviorToolConfig {
     defra_query_collections: Vec<String>,
     write_tools: Vec<WriteToolDecl>,
     query_tools: Vec<QueryToolDecl>,
+    eth_queries: Vec<crate::eth::ResolvedEthQuery>,
     self_config: super::SelfConfigToolConfig,
     behavior_policy: ToolPolicySurface,
     ceiling_policy: ToolPolicySurface,
@@ -68,6 +69,7 @@ impl BehaviorToolConfig {
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
+            eth_queries: Vec::new(),
             self_config: super::SelfConfigToolConfig::default(),
             behavior_policy: behavior_policy.clone(),
             ceiling_policy: ToolPolicySurface::legacy_non_host_wide(
@@ -181,6 +183,7 @@ impl BehaviorToolConfig {
             self_config_dry_run,
             enable_lsp: _,
             lsp_config,
+            eth_queries,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, static_policy.file);
@@ -265,6 +268,7 @@ impl BehaviorToolConfig {
             defra_query_collections: static_policy.defra_query_collections_for_runtime(),
             write_tools: static_policy.write_decls_for_runtime(&write_tools),
             query_tools: static_policy.query_decls_for_runtime(&query_tools),
+            eth_queries,
             // `behavior_name` is the behavior_id on the document path
             // (agent.rs `behavior_config_from_documents`): the identity anchor
             // for "my config". Programmatic builder surfaces that enable
@@ -405,6 +409,20 @@ impl BehaviorToolConfig {
             defra_query_scope: effective_policy.defra_query_collection_scope(),
             write_tools: effective_policy.write_decls_for_runtime(&self.write_tools),
             query_tools: effective_policy.query_decls_for_runtime(&self.query_tools),
+            eth_queries: if effective_policy.eth_query_methods.is_deny_all() {
+                Vec::new()
+            } else {
+                self.eth_queries
+                    .iter()
+                    .cloned()
+                    .filter_map(|mut query| {
+                        query
+                            .methods
+                            .retain(|method| effective_policy.eth_query_methods.permits(method));
+                        (!query.methods.is_empty()).then_some(query)
+                    })
+                    .collect()
+            },
             enable_skills: effective_policy.skills,
             self_config: super::SelfConfigToolConfig {
                 enabled: effective_policy.include_self_config(),

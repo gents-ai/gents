@@ -72,7 +72,6 @@ pub(crate) use datastore_tool_surface::{
 };
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
 pub use eth_tool::{eth_tool_by_id_query, EthToolDocument};
-#[allow(dead_code, unused_imports)]
 pub(crate) use eth_tool::{list_eth_tool_records, load_eth_tool_by_doc_id};
 #[allow(unused_imports)]
 pub(crate) use skill::{list_skill_records, load_skill_by_doc_id, SkillDocument};

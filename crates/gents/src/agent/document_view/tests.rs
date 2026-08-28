@@ -1761,6 +1761,7 @@ fn empty_runtime_view(agent_did: &str) -> DocumentRuntimeView {
         behaviors: Default::default(),
         skills: Default::default(),
         datastore_tool_surfaces: Default::default(),
+        eth_tools: Default::default(),
         tool_selections: Default::default(),
         inference_profiles: Default::default(),
         backends: Default::default(),
@@ -2192,4 +2193,94 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
         view.datastore_tool_surfaces.is_empty(),
         "surface must be evicted once it is owned by another principal"
     );
+}
+
+fn sample_eth_tool(
+    agent_did: &str,
+    tool_id: &str,
+    enabled: bool,
+    methods: &[&str],
+) -> crate::document_config::EthToolDocument {
+    crate::document_config::EthToolDocument {
+        tool_id: tool_id.to_string(),
+        agent_did: agent_did.to_string(),
+        display_name: Some(tool_id.to_string()),
+        enabled,
+        chain_id: Some(8453),
+        rpc_url: Some("https://mainnet.base.org".to_string()),
+        query_methods: Some(methods.iter().map(|m| m.to_string()).collect()),
+        calls: None,
+        key_binding_id: None,
+        created_at: None,
+    }
+}
+
+#[test]
+fn expand_eth_tools_skips_disabled_and_empty_methods() {
+    let agent_did = "did:key:zEth";
+    let selection = ToolSelectionDocument {
+        selection_id: "sel".to_string(),
+        agent_did: agent_did.to_string(),
+        eth_tool_ids: Some(vec![
+            "base-read".to_string(),
+            "disabled".to_string(),
+            "no-methods".to_string(),
+        ]),
+        ..Default::default()
+    };
+    let mut view = empty_runtime_view(agent_did);
+    view.eth_tools.insert(
+        "base-read".to_string(),
+        DocumentRecord {
+            doc_id: "e1".to_string(),
+            value: sample_eth_tool(agent_did, "base-read", true, &["eth_chainId"]),
+        },
+    );
+    view.eth_tools.insert(
+        "disabled".to_string(),
+        DocumentRecord {
+            doc_id: "e2".to_string(),
+            value: sample_eth_tool(agent_did, "disabled", false, &["eth_chainId"]),
+        },
+    );
+    view.eth_tools.insert(
+        "no-methods".to_string(),
+        DocumentRecord {
+            doc_id: "e3".to_string(),
+            value: sample_eth_tool(agent_did, "no-methods", true, &[]),
+        },
+    );
+    let expanded = expand_eth_tools(&selection, &view).expect("expand");
+    assert_eq!(expanded.len(), 1);
+    assert_eq!(expanded[0].tool_name(), "base-read_query");
+}
+
+#[test]
+fn expand_eth_tools_fails_closed_on_missing_and_foreign() {
+    let agent_did = "did:key:zEth";
+    let missing = ToolSelectionDocument {
+        selection_id: "sel".to_string(),
+        agent_did: agent_did.to_string(),
+        eth_tool_ids: Some(vec!["nope".to_string()]),
+        ..Default::default()
+    };
+    let err = expand_eth_tools(&missing, &empty_runtime_view(agent_did)).unwrap_err();
+    assert!(err.to_string().contains("missing"));
+
+    let foreign = ToolSelectionDocument {
+        selection_id: "sel".to_string(),
+        agent_did: agent_did.to_string(),
+        eth_tool_ids: Some(vec!["other".to_string()]),
+        ..Default::default()
+    };
+    let mut view = empty_runtime_view(agent_did);
+    view.eth_tools.insert(
+        "other".to_string(),
+        DocumentRecord {
+            doc_id: "e1".to_string(),
+            value: sample_eth_tool("did:key:zOther", "other", true, &["eth_chainId"]),
+        },
+    );
+    let err = expand_eth_tools(&foreign, &view).unwrap_err();
+    assert!(err.to_string().contains("different agent"));
 }

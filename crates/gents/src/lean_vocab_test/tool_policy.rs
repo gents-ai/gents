@@ -60,6 +60,14 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) query_grants: Vec<LeanToolPolicyWriteGrant>,
     #[serde(default)]
     pub(crate) query_fields: Vec<String>,
+    #[serde(default)]
+    pub(crate) eth_query_methods_kind: String,
+    #[serde(default)]
+    pub(crate) eth_query_methods_keys: Vec<String>,
+    #[serde(default)]
+    pub(crate) eth_call_tools_kind: String,
+    #[serde(default)]
+    pub(crate) eth_call_tools_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

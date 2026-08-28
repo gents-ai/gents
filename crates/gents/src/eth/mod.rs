@@ -2,6 +2,7 @@
 
 pub mod keys;
 pub mod methods;
+pub(crate) mod query;
 pub(crate) mod rpc;
 
 pub use keys::{
@@ -12,4 +13,5 @@ pub use keys::{
 pub use methods::{
     method_permitted, normalize_method, validate_query_methods, BUILTIN_QUERY_METHODS,
 };
+pub(crate) use query::{EthQueryTool, ResolvedEthQuery};
 pub use rpc::{HttpEthRpc, ETH_USER_AGENT};

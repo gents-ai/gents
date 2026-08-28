@@ -11,8 +11,9 @@ use std::collections::{BTreeSet, HashMap};
 use crate::backend_registry::InferenceBackend;
 use crate::chatgpt_codex::OAuthCredential;
 use crate::document_config::{
-    AgentBehavior, AgentPrincipal, DatastoreToolSurfaceDocument, EventTrigger, GraphDefinition,
-    GraphRunPin, InferenceProfile, Schedule, SkillDocument, Task, ToolSelectionDocument,
+    AgentBehavior, AgentPrincipal, DatastoreToolSurfaceDocument, EthToolDocument, EventTrigger,
+    GraphDefinition, GraphRunPin, InferenceProfile, Schedule, SkillDocument, Task,
+    ToolSelectionDocument,
 };
 
 #[derive(Debug, Clone)]
@@ -28,6 +29,7 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) skills: HashMap<String, DocumentRecord<SkillDocument>>,
     pub(crate) datastore_tool_surfaces:
         HashMap<String, DocumentRecord<DatastoreToolSurfaceDocument>>,
+    pub(crate) eth_tools: HashMap<String, DocumentRecord<EthToolDocument>>,
     pub(crate) tool_selections: HashMap<String, DocumentRecord<ToolSelectionDocument>>,
     pub(crate) inference_profiles: HashMap<String, DocumentRecord<InferenceProfile>>,
     pub(crate) backends: HashMap<String, DocumentRecord<InferenceBackend>>,
@@ -87,6 +89,12 @@ impl DocumentRuntimeView {
 
     fn has_datastore_tool_surface_doc_id(&self, doc_id: &str) -> bool {
         self.datastore_tool_surfaces
+            .values()
+            .any(|record| record.doc_id == doc_id)
+    }
+
+    fn has_eth_tool_doc_id(&self, doc_id: &str) -> bool {
+        self.eth_tools
             .values()
             .any(|record| record.doc_id == doc_id)
     }
@@ -161,6 +169,14 @@ impl DocumentRuntimeView {
                 (record.doc_id == doc_id).then_some(surface_id.clone())
             });
         key.is_some_and(|surface_id| self.datastore_tool_surfaces.remove(&surface_id).is_some())
+    }
+
+    fn remove_eth_tool_by_doc_id(&mut self, doc_id: &str) -> bool {
+        let key = self
+            .eth_tools
+            .iter()
+            .find_map(|(tool_id, record)| (record.doc_id == doc_id).then_some(tool_id.clone()));
+        key.is_some_and(|tool_id| self.eth_tools.remove(&tool_id).is_some())
     }
 
     fn remove_inference_profile_by_doc_id(&mut self, doc_id: &str) -> bool {
@@ -338,4 +354,62 @@ pub(crate) fn merge_surface_tools(
             .values()
             .map(|record| &record.value),
     )
+}
+
+/// Expand `eth_tool_ids` into query tools. Missing / foreign ids fail closed.
+/// Disabled EthTools and empty `query_methods` are skipped (no advertise).
+pub(crate) fn expand_eth_tools(
+    selection: &ToolSelectionDocument,
+    view: &DocumentRuntimeView,
+) -> anyhow::Result<Vec<crate::eth::ResolvedEthQuery>> {
+    use anyhow::{anyhow, bail};
+    use std::collections::HashSet;
+
+    let mut out = Vec::new();
+    let mut linked_ids: HashSet<&str> = HashSet::new();
+    let mut tool_names: HashSet<String> = HashSet::new();
+    for tool_id in selection.eth_tool_ids.as_deref().unwrap_or(&[]) {
+        let tool_id = tool_id.trim();
+        if tool_id.is_empty() {
+            bail!(
+                "ToolSelection {} has an empty eth_tool_ids entry",
+                selection.selection_id
+            );
+        }
+        if !linked_ids.insert(tool_id) {
+            bail!(
+                "ToolSelection {} lists EthTool {} more than once",
+                selection.selection_id,
+                tool_id
+            );
+        }
+        let record = view.eth_tools.get(tool_id).ok_or_else(|| {
+            anyhow!(
+                "ToolSelection {} references missing EthTool {}",
+                selection.selection_id,
+                tool_id
+            )
+        })?;
+        let doc = &record.value;
+        if doc.agent_did.trim() != selection.agent_did.trim() {
+            bail!(
+                "ToolSelection {} references EthTool {} owned by a different agent",
+                selection.selection_id,
+                tool_id
+            );
+        }
+        let Some(resolved) = crate::eth::ResolvedEthQuery::from_document(doc)? else {
+            continue;
+        };
+        if !tool_names.insert(resolved.tool_name()) {
+            bail!(
+                "duplicate eth tool name {:?} after expanding EthTool {} for ToolSelection {}",
+                resolved.tool_name(),
+                tool_id,
+                selection.selection_id
+            );
+        }
+        out.push(resolved);
+    }
+    Ok(out)
 }

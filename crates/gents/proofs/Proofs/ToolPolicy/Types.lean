@@ -66,6 +66,8 @@ structure Surface where
   backgroundTools : EndpointScope ToolId Unit
   writeTools : EndpointScope (String × String) (Finset String)
   queryTools : EndpointScope (String × String) (Finset String)
+  ethQueryMethods : EndpointScope String Unit
+  ethCallTools : EndpointScope ToolId Unit
 
 abbrev Avail := Surface
 

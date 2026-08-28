@@ -180,6 +180,8 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         validate_subagent_targets_resolve(&selection, view)?;
                         let mut tool_selection = tool_selection_from_document(&selection)?;
                         tool_selection.query_tools = merged.query_tools;
+                        tool_selection.eth_queries =
+                            crate::agent::document_view::expand_eth_tools(&record.value, view)?;
                         (
                             tool_selection,
                             subagent_tool_config_from_document(&selection),
