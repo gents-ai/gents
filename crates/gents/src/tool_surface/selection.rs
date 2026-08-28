@@ -123,6 +123,7 @@ pub struct ToolSelection {
     pub enable_lsp: bool,
     pub lsp_config: Option<String>,
     pub eth_queries: Vec<crate::eth::ResolvedEthQuery>,
+    pub eth_calls: Vec<crate::eth::ResolvedEthCall>,
 }
 
 impl Default for ToolSelection {
@@ -152,6 +153,7 @@ impl Default for ToolSelection {
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         }
     }
 }
@@ -223,6 +225,7 @@ impl ToolSelection {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
             eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         })
     }
 }

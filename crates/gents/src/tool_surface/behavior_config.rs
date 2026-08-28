@@ -35,6 +35,7 @@ pub struct BehaviorToolConfig {
     write_tools: Vec<WriteToolDecl>,
     query_tools: Vec<QueryToolDecl>,
     eth_queries: Vec<crate::eth::ResolvedEthQuery>,
+    eth_calls: Vec<crate::eth::ResolvedEthCall>,
     self_config: super::SelfConfigToolConfig,
     behavior_policy: ToolPolicySurface,
     ceiling_policy: ToolPolicySurface,
@@ -70,6 +71,7 @@ impl BehaviorToolConfig {
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
             self_config: super::SelfConfigToolConfig::default(),
             behavior_policy: behavior_policy.clone(),
             ceiling_policy: ToolPolicySurface::legacy_non_host_wide(
@@ -184,6 +186,7 @@ impl BehaviorToolConfig {
             enable_lsp: _,
             lsp_config,
             eth_queries,
+            eth_calls,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, static_policy.file);
@@ -269,6 +272,7 @@ impl BehaviorToolConfig {
             write_tools: static_policy.write_decls_for_runtime(&write_tools),
             query_tools: static_policy.query_decls_for_runtime(&query_tools),
             eth_queries,
+            eth_calls,
             // `behavior_name` is the behavior_id on the document path
             // (agent.rs `behavior_config_from_documents`): the identity anchor
             // for "my config". Programmatic builder surfaces that enable
@@ -421,6 +425,15 @@ impl BehaviorToolConfig {
                             .retain(|method| effective_policy.eth_query_methods.permits(method));
                         (!query.methods.is_empty()).then_some(query)
                     })
+                    .collect()
+            },
+            eth_calls: if effective_policy.eth_call_tools.is_deny_all() {
+                Vec::new()
+            } else {
+                self.eth_calls
+                    .iter()
+                    .cloned()
+                    .filter(|call| effective_policy.eth_call_tools.permits(&call.tool_name))
                     .collect()
             },
             enable_skills: effective_policy.skills,

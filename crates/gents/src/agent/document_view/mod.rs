@@ -356,16 +356,22 @@ pub(crate) fn merge_surface_tools(
     )
 }
 
-/// Expand `eth_tool_ids` into query tools. Missing / foreign ids fail closed.
-/// Disabled EthTools and empty `query_methods` are skipped (no advertise).
+#[derive(Debug, Default)]
+pub(crate) struct ExpandedEthTools {
+    pub queries: Vec<crate::eth::ResolvedEthQuery>,
+    pub calls: Vec<crate::eth::ResolvedEthCall>,
+}
+
+/// Expand `eth_tool_ids` into query and call tools. Missing / foreign ids fail closed.
+/// Disabled EthTools are skipped. Empty `query_methods` / `calls` advertise nothing.
 pub(crate) fn expand_eth_tools(
     selection: &ToolSelectionDocument,
     view: &DocumentRuntimeView,
-) -> anyhow::Result<Vec<crate::eth::ResolvedEthQuery>> {
+) -> anyhow::Result<ExpandedEthTools> {
     use anyhow::{anyhow, bail};
     use std::collections::HashSet;
 
-    let mut out = Vec::new();
+    let mut out = ExpandedEthTools::default();
     let mut linked_ids: HashSet<&str> = HashSet::new();
     let mut tool_names: HashSet<String> = HashSet::new();
     for tool_id in selection.eth_tool_ids.as_deref().unwrap_or(&[]) {
@@ -398,18 +404,44 @@ pub(crate) fn expand_eth_tools(
                 tool_id
             );
         }
-        let Some(resolved) = crate::eth::ResolvedEthQuery::from_document(doc)? else {
+        if !doc.enabled {
             continue;
-        };
-        if !tool_names.insert(resolved.tool_name()) {
+        }
+        if let Some(resolved) = crate::eth::ResolvedEthQuery::from_document(doc)? {
+            if !tool_names.insert(resolved.tool_name()) {
+                bail!(
+                    "duplicate eth tool name {:?} after expanding EthTool {} for ToolSelection {}",
+                    resolved.tool_name(),
+                    tool_id,
+                    selection.selection_id
+                );
+            }
+            out.queries.push(resolved);
+        }
+        let decls = crate::eth::parse_call_decls(doc.calls.as_deref())?;
+        crate::eth::validate_call_decls(&decls)?;
+        let rpc_url = doc.rpc_url.as_deref().unwrap_or("");
+        let chain_id = doc.chain_id.unwrap_or(0).max(0) as u64;
+        if !rpc_url.trim().is_empty() && chain_id > 0 {
+            let calls =
+                crate::eth::ResolvedEthCall::from_decls(&doc.tool_id, chain_id, rpc_url, &decls)?;
+            for call in calls {
+                if !tool_names.insert(call.tool_name.clone()) {
+                    bail!(
+                        "duplicate eth tool name {:?} after expanding EthTool {} for ToolSelection {}",
+                        call.tool_name,
+                        tool_id,
+                        selection.selection_id
+                    );
+                }
+                out.calls.push(call);
+            }
+        } else if !decls.is_empty() {
             bail!(
-                "duplicate eth tool name {:?} after expanding EthTool {} for ToolSelection {}",
-                resolved.tool_name(),
-                tool_id,
-                selection.selection_id
+                "EthTool {} has call tools but missing rpc_url or chain_id",
+                tool_id
             );
         }
-        out.push(resolved);
     }
     Ok(out)
 }

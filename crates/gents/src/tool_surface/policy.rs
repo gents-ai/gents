@@ -444,7 +444,7 @@ impl ToolPolicySurface {
             write_tools: write_scope_from_decls(&selection.write_tools),
             query_tools: query_scope_from_decls(&selection.query_tools),
             eth_query_methods: eth_query_scope_from_resolved(&selection.eth_queries),
-            eth_call_tools: eth_call_scope_from_resolved(&selection.eth_queries),
+            eth_call_tools: eth_call_scope_from_resolved(&selection.eth_calls),
         }
     }
 
@@ -724,9 +724,14 @@ fn eth_query_scope_from_resolved(queries: &[ResolvedEthQuery]) -> EndpointScope<
     }
 }
 
-fn eth_call_scope_from_resolved(_queries: &[ResolvedEthQuery]) -> EndpointScope<String, ()> {
-    // Call tools are generated in a later PR. Empty is deny-all.
-    EndpointScope::none()
+fn eth_call_scope_from_resolved(
+    calls: &[crate::eth::ResolvedEthCall],
+) -> EndpointScope<String, ()> {
+    if calls.is_empty() {
+        EndpointScope::none()
+    } else {
+        EndpointScope::<String, ()>::only_units(calls.iter().map(|call| call.tool_name.clone()))
+    }
 }
 
 fn query_scope_from_decls(

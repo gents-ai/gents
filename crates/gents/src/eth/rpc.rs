@@ -135,6 +135,17 @@ impl<T: JsonRpcTransport> EthRpcClient<T> {
         self.rpc(&method, params).await
     }
 
+    /// Internal `eth_call` for generated read tools. Bypasses `query_methods`.
+    pub async fn eth_call(&self, to: &str, data: &str, block: Option<&str>) -> Result<Value> {
+        self.ensure_chain_id().await?;
+        let block = block
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("latest");
+        self.rpc("eth_call", json!([{ "to": to, "data": data }, block]))
+            .await
+    }
+
     async fn ensure_chain_id(&self) -> Result<()> {
         if let Some(cached) = *self
             .cached_chain_id

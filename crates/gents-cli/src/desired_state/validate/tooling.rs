@@ -115,6 +115,18 @@ pub(super) fn validate_eth_tools(
                 tool.tool_id
             ));
         }
+        if let Err(error) = gents::validate_query_methods(&tool.query_methods) {
+            errors.push(format!(
+                "EthTool {} has invalid query_methods: {error}",
+                tool.tool_id
+            ));
+        }
+        if let Err(error) = gents::validate_eth_call_declarations(&tool.calls) {
+            errors.push(format!(
+                "EthTool {} has invalid calls: {error}",
+                tool.tool_id
+            ));
+        }
         if let Some(binding_id) = tool.key_binding_id.as_deref().map(str::trim) {
             if binding_id.is_empty() {
                 errors.push(format!(

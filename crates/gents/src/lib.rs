@@ -118,9 +118,9 @@ pub use callback::reject_secret_bearing_callback_fields;
 pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 pub use eth::{
     address_from_secret, attestation_payload, binding_storage_key, encode_attestation,
-    generate_secp256k1_secret, method_permitted, validate_query_methods, ChainKeyMaterialStore,
-    HttpEthRpc, KeyringChainKeyStore, BUILTIN_QUERY_METHODS, ETH_USER_AGENT, KEYRING_SERVICE,
-    KEY_BACKEND_KEYRING,
+    generate_secp256k1_secret, method_permitted, validate_eth_call_declarations,
+    validate_query_methods, ChainKeyMaterialStore, HttpEthRpc, KeyringChainKeyStore,
+    BUILTIN_QUERY_METHODS, ETH_USER_AGENT, KEYRING_SERVICE, KEY_BACKEND_KEYRING,
 };
 
 pub use adapter_projection::{

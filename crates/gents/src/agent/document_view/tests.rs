@@ -2251,8 +2251,8 @@ fn expand_eth_tools_skips_disabled_and_empty_methods() {
         },
     );
     let expanded = expand_eth_tools(&selection, &view).expect("expand");
-    assert_eq!(expanded.len(), 1);
-    assert_eq!(expanded[0].tool_name(), "base-read_query");
+    assert_eq!(expanded.queries.len(), 1);
+    assert_eq!(expanded.queries[0].tool_name(), "base-read_query");
 }
 
 #[test]

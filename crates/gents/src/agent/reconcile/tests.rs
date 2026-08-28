@@ -1068,6 +1068,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
                 enable_lsp: false,
                 lsp_config: None,
                 eth_queries: Vec::new(),
+                eth_calls: Vec::new(),
             },
             &ToolCeiling::readonly(),
             Vec::new(),
