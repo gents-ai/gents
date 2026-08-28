@@ -87,7 +87,12 @@ export function useManualPeerDiscovery({
 
   async function submitManual() {
     if (!manualPeerReady) return;
-    await onSubmit(withGraphqlFallback(peerForm, serverAddress));
+    try {
+      await onSubmit(withGraphqlFallback(peerForm, serverAddress));
+    } catch {
+      // The desktop shell owns and renders mutation errors; contain its rejection
+      // because this submit is launched from a React event handler.
+    }
   }
 
   return {

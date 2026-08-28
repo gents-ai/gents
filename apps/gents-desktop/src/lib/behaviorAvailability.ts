@@ -19,18 +19,20 @@ export function selectedBehaviorUnavailableHint(
   const behavior = deployment.behaviors.find(
     (candidate) => candidate.behaviorId === behaviorId,
   );
-  if (!behavior) return "The selected behavior is unavailable";
-  if (!behavior.enabled) return `Behavior “${behavior.displayName}” is disabled`;
+  if (!behavior) return null;
+  if (behavior.enabled === false) {
+    return `Behavior “${behavior.displayName}” is disabled`;
+  }
 
   const backendId = behavior.backendId?.trim();
-  if (!backendId) return `Behavior “${behavior.displayName}” has no backend`;
+  if (!backendId) return null;
   const backend = deployment.inferenceBackends.find(
     (candidate) => candidate.backendId === backendId,
   );
-  if (!backend) return `Backend “${backendId}” is unavailable`;
+  if (!backend) return null;
 
   const displayName = backendName(backend.name, backend.backendId);
-  if (backend.enabled !== true) return `Backend “${displayName}” is disabled`;
+  if (backend.enabled === false) return `Backend “${displayName}” is disabled`;
 
   // Persisted probe status is diagnostic history, not the runtime admission
   // decision. It can remain unknown after the runtime has measured a backend

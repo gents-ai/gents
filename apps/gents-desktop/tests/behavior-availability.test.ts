@@ -35,4 +35,33 @@ describe("selectedBehaviorUnavailableHint", () => {
       "Backend “Workstation 2” is disabled",
     );
   });
+
+  it("treats absent or redacted backend data as unknown", () => {
+    const clientRouteDeployment = {
+      ...deployment("unknown"),
+      inferenceBackends: [],
+    };
+    expect(selectedBehaviorUnavailableHint(clientRouteDeployment, null)).toBeNull();
+
+    const redactedDeployment = {
+      ...clientRouteDeployment,
+      behaviors: clientRouteDeployment.behaviors.map((behavior) => ({
+        ...behavior,
+        backendId: null,
+      })),
+    };
+    expect(selectedBehaviorUnavailableHint(redactedDeployment, null)).toBeNull();
+  });
+
+  it("blocks only explicit disabled evidence", () => {
+    const disabledBehavior = deployment("healthy");
+    disabledBehavior.behaviors[0].enabled = false;
+    expect(selectedBehaviorUnavailableHint(disabledBehavior, null)).toBe(
+      "Behavior “Default” is disabled",
+    );
+
+    expect(
+      selectedBehaviorUnavailableHint(deployment("healthy"), "missing"),
+    ).toBeNull();
+  });
 });

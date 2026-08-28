@@ -103,6 +103,17 @@ describe("AddPeerForm", () => {
     expect(props.onProbePeerAddress).not.toHaveBeenCalled();
   });
 
+  it("contains a rejected manual peer submission after the shell records it", async () => {
+    const onSubmit = vi.fn(async () => {
+      throw new Error("peer rejected");
+    });
+    renderForm({ onSubmit });
+    fireEvent.click(screen.getByText("Enter connection details manually"));
+    fireEvent.click(screen.getByTestId("fleet-add-submit"));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+  });
+
   it("fetches /status and submits the discovered peer in one action", async () => {
     const discovered = {
       agent_name: "discovered-worker",
