@@ -1,7 +1,7 @@
 {
   "name": "@source-inc/gents-desktop-app",
   "private": true,
-  "version": "0.13.0",
+  "version": "0.14.0",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
@@ -54,14 +54,14 @@
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
-    "@source-inc/gents-desktop-client": "0.13.0",
-    "@source-inc/gents-desktop-chat": "0.13.0",
-    "@source-inc/gents-desktop-fleet": "0.13.0",
-    "@source-inc/gents-desktop-tokens": "0.13.0",
-    "@source-inc/gents-desktop-ui": "0.13.0"
+    "@source-inc/gents-desktop-client": "0.14.0",
+    "@source-inc/gents-desktop-chat": "0.14.0",
+    "@source-inc/gents-desktop-fleet": "0.14.0",
+    "@source-inc/gents-desktop-tokens": "0.14.0",
+    "@source-inc/gents-desktop-ui": "0.14.0"
   },
   "devDependencies": {
-    "@source-inc/gents-desktop-operations": "0.13.0",
+    "@source-inc/gents-desktop-operations": "0.14.0",
     "@antithesishq/bombadil": "^0.6.0",
     "@playwright/test": "^1.61.0",
     "@tauri-apps/cli": "2.10.1",

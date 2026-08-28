@@ -15,7 +15,7 @@ import type {
 
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
-export const PACKAGE_VERSION = "0.13.0";
+export const PACKAGE_VERSION = "0.14.0";
 export const MINIMUM_BRIDGE_CONTRACT_VERSION = "0.7";
 
 export function assertCompatibleBridgeContract(
