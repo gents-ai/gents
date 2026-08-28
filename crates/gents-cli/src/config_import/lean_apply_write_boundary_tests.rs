@@ -927,8 +927,8 @@ fn desired_chain_key_binding(
         principal_did: agent_did.to_string(),
         address: "0x0000000000000000000000000000000000000001".to_string(),
         key_backend: "keyring".to_string(),
-        attestation: None,
-        created_at: None,
+        attestation: Some("0x00".to_string()),
+        created_at: Some("2026-08-28T00:00:00Z".to_string()),
         revoked_at: None,
     }
 }

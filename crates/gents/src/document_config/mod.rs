@@ -61,9 +61,11 @@ pub(crate) use tool_selection::{
 
 pub use subagent_target::{subagent_target_entry, SubagentTarget};
 
-#[allow(dead_code, unused_imports)]
-pub(crate) use chain_key_binding::{
-    list_chain_key_binding_records, load_chain_key_binding_by_doc_id, ChainKeyBindingDocument,
+pub use chain_key_binding::{
+    chain_key_binding_by_id_query, create_chain_key_binding_mutation,
+    delete_chain_key_binding_mutation, list_chain_key_binding_records,
+    list_chain_key_bindings_query, load_chain_key_binding_by_doc_id, upsert_chain_key_binding,
+    upsert_chain_key_binding_mutation, ChainKeyBindingDocument,
 };
 pub(crate) use datastore_tool_surface::{
     list_datastore_tool_surface_records, load_datastore_tool_surface_by_doc_id,

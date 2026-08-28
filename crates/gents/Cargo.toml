@@ -51,6 +51,9 @@ events.workspace = true
 futures = "0.3"
 hostname.workspace = true
 identity.workspace = true
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+keyring = "3"
+sha3 = "0.10"
 libc = "0.2"
 minijinja.workspace = true
 opentelemetry.workspace = true

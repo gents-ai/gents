@@ -838,6 +838,17 @@ pub(crate) fn sanitize_import_document(
         "ToolSelection" => {
             desired_state::strip_retired_tool_selection_fields(&mut object);
         }
+        "ChainKeyBinding" if for_update => {
+            // Revocation is a tombstone. An active desired-state document may
+            // update its public metadata, but it must never clear a live
+            // revocation by writing null back over it.
+            if object
+                .get("revoked_at")
+                .is_none_or(|value| value.is_null() || value.as_str().is_some_and(str::is_empty))
+            {
+                object.remove("revoked_at");
+            }
+        }
         "Task" => {
             for field in ["created_at", "updated_at"] {
                 object.remove(field);
@@ -1008,6 +1019,25 @@ mod tests {
         .unwrap();
         assert_eq!(updated.get("skill_refs"), Some(&Value::Null));
         assert_eq!(updated.get("skill_excludes"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn active_chain_key_import_does_not_clear_revocation() {
+        let updated = sanitize_import_document(
+            "ChainKeyBinding",
+            &json!({ "binding_id": "bind-1", "revoked_at": null }),
+            true,
+        )
+        .unwrap();
+        assert!(updated.get("revoked_at").is_none());
+
+        let revoked = sanitize_import_document(
+            "ChainKeyBinding",
+            &json!({ "binding_id": "bind-1", "revoked_at": "2026-08-28T00:00:00Z" }),
+            true,
+        )
+        .unwrap();
+        assert_eq!(revoked["revoked_at"], "2026-08-28T00:00:00Z");
     }
 
     #[test]

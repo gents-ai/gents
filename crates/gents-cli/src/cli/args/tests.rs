@@ -811,6 +811,51 @@ fn deprecated_path_still_parses(path: &[&str]) -> bool {
     !matches!(path, ["p2p", "pair"] | ["p2p", "unpair"])
 }
 
+#[test]
+fn chain_key_commands_parse() {
+    let list = Cli::try_parse_from(["gents", "chain", "key", "list"]).expect("list");
+    assert!(matches!(
+        list.command,
+        Command::Chain {
+            command: ChainCommand::Key {
+                command: ChainKeyCommand::List(_),
+            },
+        }
+    ));
+    let generate = Cli::try_parse_from(["gents", "chain", "key", "generate", "--name", "hot"])
+        .expect("generate");
+    match generate.command {
+        Command::Chain {
+            command:
+                ChainCommand::Key {
+                    command: ChainKeyCommand::Generate(args),
+                },
+        } => assert_eq!(args.name.as_deref(), Some("hot")),
+        _ => panic!("expected chain key generate"),
+    }
+    let show = Cli::try_parse_from(["gents", "chain", "key", "show", "bind-1"]).expect("show");
+    match show.command {
+        Command::Chain {
+            command:
+                ChainCommand::Key {
+                    command: ChainKeyCommand::Show(args),
+                },
+        } => assert_eq!(args.binding_id, "bind-1"),
+        _ => panic!("expected chain key show"),
+    }
+    let revoke =
+        Cli::try_parse_from(["gents", "chain", "key", "revoke", "bind-1"]).expect("revoke");
+    match revoke.command {
+        Command::Chain {
+            command:
+                ChainCommand::Key {
+                    command: ChainKeyCommand::Revoke(args),
+                },
+        } => assert_eq!(args.binding_id, "bind-1"),
+        _ => panic!("expected chain key revoke"),
+    }
+}
+
 fn deprecated_path_required_args(path: &[&str]) -> Vec<String> {
     match path {
         ["config", "task"] => vec!["list".to_string()],

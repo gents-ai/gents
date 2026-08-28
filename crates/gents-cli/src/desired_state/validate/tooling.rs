@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use gents::{
     is_reserved_builtin_tool_name, CommandExecutionMode, CommandNetworkMode, SubagentTarget,
-    SurfaceToolDecl, WriteToolDecl,
+    SurfaceToolDecl, WriteToolDecl, KEY_BACKEND_KEYRING,
 };
 
 use super::super::{
@@ -58,15 +58,35 @@ pub(super) fn validate_eth_tools(
                 binding.binding_id
             ));
         }
-        if binding.address.trim().is_empty() {
+        if !is_eth_address(&binding.address) {
             errors.push(format!(
-                "ChainKeyBinding {} has empty address",
+                "ChainKeyBinding {} has an invalid Ethereum address",
                 binding.binding_id
             ));
         }
-        if binding.key_backend.trim().is_empty() {
+        if binding.key_backend.trim() != KEY_BACKEND_KEYRING {
             errors.push(format!(
-                "ChainKeyBinding {} has empty key_backend",
+                "ChainKeyBinding {} has unsupported key_backend {:?}",
+                binding.binding_id, binding.key_backend
+            ));
+        }
+        if binding
+            .attestation
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            errors.push(format!(
+                "ChainKeyBinding {} has no principal attestation",
+                binding.binding_id
+            ));
+        }
+        if binding
+            .created_at
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            errors.push(format!(
+                "ChainKeyBinding {} has no created_at timestamp",
                 binding.binding_id
             ));
         }
@@ -95,12 +115,14 @@ pub(super) fn validate_eth_tools(
                 tool.tool_id
             ));
         }
-        if let Some(binding_id) = tool
-            .key_binding_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(binding_id) = tool.key_binding_id.as_deref().map(str::trim) {
+            if binding_id.is_empty() {
+                errors.push(format!(
+                    "EthTool {} has an empty key_binding_id",
+                    tool.tool_id
+                ));
+                continue;
+            }
             if !binding_ids.contains(binding_id) {
                 errors.push(format!(
                     "EthTool {} references missing ChainKeyBinding {}",
@@ -109,6 +131,13 @@ pub(super) fn validate_eth_tools(
             }
         }
     }
+}
+
+fn is_eth_address(value: &str) -> bool {
+    let value = value.trim();
+    value.len() == 42
+        && value.starts_with("0x")
+        && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 pub(super) fn validate_tool_selections(

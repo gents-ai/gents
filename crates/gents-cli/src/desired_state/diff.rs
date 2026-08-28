@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::{
-    DesiredAgentPrincipal, DesiredPeerPairing, DesiredStateCollectionDiff,
+    DesiredAgentPrincipal, DesiredChainKeyBinding, DesiredPeerPairing, DesiredStateCollectionDiff,
     DesiredStateDiffCollections, DesiredStateDiffReport, DesiredStateManifest, HasUniqueId,
 };
 
@@ -27,7 +27,7 @@ pub(crate) fn diff_manifests(
             &desired.datastore_tool_surfaces,
             &live.datastore_tool_surfaces,
         ),
-        chain_key_bindings: diff_manifest_collection(
+        chain_key_bindings: diff_chain_key_bindings(
             &desired.chain_key_bindings,
             &live.chain_key_bindings,
         ),
@@ -83,6 +83,22 @@ pub(crate) fn diff_manifests(
         counts,
         collections,
     }
+}
+
+fn diff_chain_key_bindings(
+    desired: &[DesiredChainKeyBinding],
+    live: &[DesiredChainKeyBinding],
+) -> DesiredStateCollectionDiff {
+    let mut comparable_live = live.to_vec();
+    for live_binding in &mut comparable_live {
+        if desired.iter().any(|desired_binding| {
+            desired_binding.binding_id == live_binding.binding_id
+                && desired_binding.revoked_at.is_none()
+        }) {
+            live_binding.revoked_at = None;
+        }
+    }
+    diff_manifest_collection(desired, &comparable_live)
 }
 
 fn diff_peer_pairings(
