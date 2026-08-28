@@ -23,6 +23,8 @@ fn manifest_with_subagent_targets(targets: Vec<SubagentTarget>) -> DesiredStateM
         agent_behaviors: Vec::new(),
         skills: Vec::new(),
         datastore_tool_surfaces: Vec::new(),
+        chain_key_bindings: Vec::new(),
+        eth_tools: Vec::new(),
         tool_selections: vec![DesiredToolSelection {
             selection_id: "live-test-sel".to_string(),
             agent_did: "did:key:test-live-validate".to_string(),
@@ -58,6 +60,7 @@ fn manifest_with_subagent_targets(targets: Vec<SubagentTarget>) -> DesiredStateM
             cross_deployment_spawn_timeout_seconds: None,
             write_tools: Vec::new(),
             datastore_tool_surface_ids: Vec::new(),
+            eth_tool_ids: Vec::new(),
             enable_self_config: false,
             self_config_categories: Vec::new(),
             self_config_no_lockout: false,

@@ -287,6 +287,11 @@ const TOOL_SELECTION_ADD_REQUIRED_MCP_SERVICES_PATCH: &str = r#"[
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
+const TOOL_SELECTION_ADD_ETH_TOOL_IDS_PATCH: &str = r#"[
+  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"eth_tool_ids","Kind":"[String]"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
 const CALLBACK_RESULT_BASELINE_SDL: &str = include_str!("baseline/callback_result.graphql");
 
 const CALLBACK_RESULT_ADD_BINDING_ID_PATCH: &str = r#"[
@@ -370,6 +375,16 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::DATASTORE_TOOL_SURFACE_NAME,
         gents_protocol::schemas::DATASTORE_TOOL_SURFACE,
         "bafyreib5unizcyuuwsfcabepagjvuac23xpnqrt3wl7fkhfp5lwlfas6oi"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::CHAIN_KEY_BINDING_NAME,
+        gents_protocol::schemas::CHAIN_KEY_BINDING,
+        "bafyreieafeztdrlxxvivunowfjltmdm5ks6tjjdfuxkcpjgdidowydzure"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::ETH_TOOL_NAME,
+        gents_protocol::schemas::ETH_TOOL,
+        "bafyreifog5znpi3loloky4xeprsoqksy2ylr6e4cpcs2loulcmxxxqa4dy"
     ),
     baseline_entry!(
         gents_protocol::schemas::WORKSPACE_ROOT_NAME,
@@ -686,6 +701,20 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
             "enable_lsp",
             "lsp_config",
             "required_mcp_service_ids",
+        ]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "tool-selection-add-eth-tool-ids",
+        collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
+        patch: TOOL_SELECTION_ADD_ETH_TOOL_IDS_PATCH,
+        lens: None,
+        expected_version: Some("bafyreiam46672yl2mse4lbuqukdb56wg5dfkaxm4deozti7zud4qecperm"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&[
+            "enable_lsp",
+            "lsp_config",
+            "required_mcp_service_ids",
+            "eth_tool_ids",
         ]),
     },
     MigrationStep::PatchVersioned {

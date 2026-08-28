@@ -15,6 +15,8 @@ pub enum Collection {
     AgentBehavior,
     Skill,
     DatastoreToolSurface,
+    ChainKeyBinding,
+    EthTool,
     WorkspaceRoot,
     ToolSelection,
     InferenceBackend,
@@ -31,11 +33,13 @@ pub enum Collection {
 /// a subset, but must preserve this order. Deletes intentionally have no
 /// equivalent runtime API: pruning is an operator CLI concern, never a package
 /// installation primitive.
-pub const DESIRED_STATE_APPLY_ORDER: [Collection; 13] = [
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 15] = [
     Collection::PeerPairingDesired,
     Collection::InferenceBackend,
     Collection::InferenceProfile,
     Collection::ToolServiceRegistry,
+    Collection::ChainKeyBinding,
+    Collection::EthTool,
     Collection::DatastoreToolSurface,
     Collection::ToolSelection,
     Collection::Skill,
@@ -55,11 +59,13 @@ impl Collection {
     // variant still exists on the enum (with real graphql_type/unique_field/
     // apply_order/dir_name) so exhaustive matches over `Collection` account
     // for it; it's just excluded from the CRUD-driving `ALL` set for now.
-    pub const ALL: [Collection; 13] = [
+    pub const ALL: [Collection; 15] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
         Collection::Skill,
         Collection::DatastoreToolSurface,
+        Collection::ChainKeyBinding,
+        Collection::EthTool,
         Collection::ToolSelection,
         Collection::InferenceBackend,
         Collection::InferenceProfile,
@@ -84,6 +90,8 @@ impl Collection {
             Collection::AgentBehavior => Some("agent-behaviors"),
             Collection::Skill => Some("skills"),
             Collection::DatastoreToolSurface => Some("datastore-tool-surfaces"),
+            Collection::ChainKeyBinding => Some("chain-key-bindings"),
+            Collection::EthTool => Some("eth-tools"),
             Collection::WorkspaceRoot => Some("workspace-roots"),
             Collection::ToolSelection => Some("tool-selections"),
             Collection::InferenceBackend => Some("inference-backends"),
@@ -103,6 +111,8 @@ impl Collection {
             Collection::AgentBehavior => "AgentBehavior",
             Collection::Skill => "Skill",
             Collection::DatastoreToolSurface => "DatastoreToolSurface",
+            Collection::ChainKeyBinding => "ChainKeyBinding",
+            Collection::EthTool => "EthTool",
             Collection::WorkspaceRoot => "WorkspaceRoot",
             Collection::ToolSelection => "ToolSelection",
             Collection::InferenceBackend => "InferenceBackend",
@@ -122,6 +132,8 @@ impl Collection {
             Collection::AgentBehavior => "behavior_id",
             Collection::Skill => "skill_id",
             Collection::DatastoreToolSurface => "surface_id",
+            Collection::ChainKeyBinding => "binding_id",
+            Collection::EthTool => "tool_id",
             Collection::WorkspaceRoot => "root_path",
             Collection::ToolSelection => "selection_id",
             Collection::InferenceBackend => "backend_id",
@@ -146,6 +158,8 @@ impl Collection {
             | Collection::ToolServiceRegistry
             | Collection::Skill
             | Collection::DatastoreToolSurface
+            | Collection::ChainKeyBinding
+            | Collection::EthTool
             | Collection::WorkspaceRoot
             | Collection::PeerPairingDesired => 0,
             Collection::AgentBehavior => 1,
@@ -169,6 +183,8 @@ impl fmt::Display for Collection {
             Collection::AgentBehavior => "agent_behaviors",
             Collection::Skill => "skills",
             Collection::DatastoreToolSurface => "datastore_tool_surfaces",
+            Collection::ChainKeyBinding => "chain_key_bindings",
+            Collection::EthTool => "eth_tools",
             Collection::WorkspaceRoot => "workspace_roots",
             Collection::ToolSelection => "tool_selections",
             Collection::InferenceBackend => "inference_backends",
@@ -243,6 +259,8 @@ mod tests {
             (Collection::AgentBehavior, 1, "AgentBehavior"),
             (Collection::Skill, 0, "Skill"),
             (Collection::DatastoreToolSurface, 0, "DatastoreToolSurface"),
+            (Collection::ChainKeyBinding, 0, "ChainKeyBinding"),
+            (Collection::EthTool, 0, "EthTool"),
             (Collection::ToolSelection, 0, "ToolSelection"),
             (Collection::InferenceBackend, 0, "InferenceBackend"),
             (Collection::InferenceProfile, 0, "InferenceProfile"),

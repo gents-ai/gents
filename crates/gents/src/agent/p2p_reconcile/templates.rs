@@ -258,6 +258,8 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
+    "ChainKeyBinding",
+    "EthTool",
 ];
 
 const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
@@ -298,6 +300,8 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
+    "ChainKeyBinding",
+    "EthTool",
     "Task",
     "Schedule",
     "EventTrigger",
@@ -420,6 +424,8 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
+    "ChainKeyBinding",
+    "EthTool",
     "PersonaConfigRequest",
     "SessionHydrationRequest",
     AGENT_DIRECTORY_COLLECTION,
@@ -503,6 +509,8 @@ const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
+    "ChainKeyBinding",
+    "EthTool",
 ];
 
 /// Discovery (network control-plane) collections: the membership documents a
@@ -521,6 +529,8 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
+    "ChainKeyBinding",
+    "EthTool",
 ];
 
 /// Narrow network-control collections: the signed network-membership substrate
@@ -750,10 +760,12 @@ mod tests {
         let t = resolve_template("conversation").unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(t.collections.len(), 16);
+        assert_eq!(t.collections.len(), 18);
         assert!(t.collections.contains(&"AgentRequest"));
         assert!(t.collections.contains(&"BearerPairingReady"));
         assert!(t.collections.contains(&"AgentBehavior"));
+        assert!(t.collections.contains(&"ChainKeyBinding"));
+        assert!(t.collections.contains(&"EthTool"));
     }
 
     #[test]

@@ -75,6 +75,9 @@ fn live_state_from_manifest(m: &DesiredStateManifest) -> LiveState {
         for sid in &ts.datastore_tool_surface_ids {
             refs.push(doc(Collection::DatastoreToolSurface, sid));
         }
+        for tool_id in &ts.eth_tool_ids {
+            refs.push(doc(Collection::EthTool, tool_id));
+        }
         desired.insert(
             doc(Collection::ToolSelection, &ts.selection_id),
             DesiredFields::with_refs("", refs),
@@ -103,6 +106,23 @@ fn live_state_from_manifest(m: &DesiredStateManifest) -> LiveState {
         desired.insert(
             doc(Collection::DatastoreToolSurface, &s.surface_id),
             DesiredFields::opaque(""),
+        );
+    }
+    for binding in &m.chain_key_bindings {
+        desired.insert(
+            doc(Collection::ChainKeyBinding, &binding.binding_id),
+            DesiredFields::opaque(""),
+        );
+    }
+    for tool in &m.eth_tools {
+        let refs = tool
+            .key_binding_id
+            .as_deref()
+            .map(|binding_id| vec![doc(Collection::ChainKeyBinding, binding_id)])
+            .unwrap_or_default();
+        desired.insert(
+            doc(Collection::EthTool, &tool.tool_id),
+            DesiredFields::with_refs("", refs),
         );
     }
     for b in &m.inference_backends {
@@ -151,6 +171,18 @@ fn manifest_from_desired(m: &DesiredStateManifest) -> Manifest {
     for s in &m.datastore_tool_surfaces {
         docs.insert(
             doc(Collection::DatastoreToolSurface, &s.surface_id),
+            DesiredFields::opaque(""),
+        );
+    }
+    for binding in &m.chain_key_bindings {
+        docs.insert(
+            doc(Collection::ChainKeyBinding, &binding.binding_id),
+            DesiredFields::opaque(""),
+        );
+    }
+    for tool in &m.eth_tools {
+        docs.insert(
+            doc(Collection::EthTool, &tool.tool_id),
             DesiredFields::opaque(""),
         );
     }

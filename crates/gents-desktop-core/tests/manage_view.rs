@@ -83,6 +83,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         write_tools: vec![
             r#"{"tool_name":"upsert_note","collection":"Note","fields":[]}"#.to_string(),
         ],
+        datastore_tool_surface_ids: Vec::new(),
+        eth_tool_ids: Vec::new(),
         enable_self_config: None,
         self_config_categories: Vec::new(),
         self_config_no_lockout: None,

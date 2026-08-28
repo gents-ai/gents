@@ -1,5 +1,7 @@
 mod behavior;
+mod chain_key_binding;
 mod datastore_tool_surface;
+mod eth_tool;
 mod event_trigger;
 mod graph_definition;
 mod graph_run;
@@ -59,10 +61,16 @@ pub(crate) use tool_selection::{
 
 pub use subagent_target::{subagent_target_entry, SubagentTarget};
 
+#[allow(dead_code, unused_imports)]
+pub(crate) use chain_key_binding::{
+    list_chain_key_binding_records, load_chain_key_binding_by_doc_id, ChainKeyBindingDocument,
+};
 pub(crate) use datastore_tool_surface::{
     list_datastore_tool_surface_records, load_datastore_tool_surface_by_doc_id,
 };
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
+#[allow(dead_code, unused_imports)]
+pub(crate) use eth_tool::{list_eth_tool_records, load_eth_tool_by_doc_id, EthToolDocument};
 #[allow(unused_imports)]
 pub(crate) use skill::{list_skill_records, load_skill_by_doc_id, SkillDocument};
 

@@ -52,6 +52,9 @@ type ToolSelection @branchable {
     # Bare surface_id refs to DatastoreToolSurface (same agent). Expanded
     # into WriteToolDecl create tools at snapshot build; fail-closed.
     datastore_tool_surface_ids: [String]
+    # Bare tool_id refs to EthTool (same agent). Expanded at snapshot build;
+    # fail-closed. Empty/absent = no eth tools. Never backfill.
+    eth_tool_ids: [String]
     # Self-configuration gate (#654): opt-in, never backfilled true.
     enable_self_config: Boolean
     # Category allowlist: behavior, tools, profile, backend, mcp_service,

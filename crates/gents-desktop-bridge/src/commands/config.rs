@@ -376,6 +376,8 @@ pub async fn save_tool_selection_config(
             tool_policy_version: None,
             subagent_default_await_mode: None,
             write_tools: Vec::new(),
+            datastore_tool_surface_ids: Vec::new(),
+            eth_tool_ids: Vec::new(),
             enable_self_config: None,
             self_config_categories: Vec::new(),
             self_config_no_lockout: None,

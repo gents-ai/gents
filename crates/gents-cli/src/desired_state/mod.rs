@@ -233,6 +233,8 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) datastore_tool_surface_ids: Vec<String>,
     #[serde(default)]
+    pub(crate) eth_tool_ids: Vec<String>,
+    #[serde(default)]
     pub(crate) subagent_spawn_enabled: bool,
     #[serde(default)]
     pub(crate) subagent_steering_enabled: bool,
@@ -312,6 +314,39 @@ pub(crate) struct DesiredSkill {
     #[serde(default)]
     pub(crate) interface_json: Option<String>,
     pub(crate) enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesiredChainKeyBinding {
+    pub(crate) binding_id: String,
+    pub(crate) principal_did: String,
+    pub(crate) address: String,
+    pub(crate) key_backend: String,
+    #[serde(default)]
+    pub(crate) attestation: Option<String>,
+    #[serde(default)]
+    pub(crate) created_at: Option<String>,
+    #[serde(default)]
+    pub(crate) revoked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesiredEthTool {
+    pub(crate) tool_id: String,
+    pub(crate) agent_did: String,
+    #[serde(default)]
+    pub(crate) display_name: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) chain_id: i64,
+    pub(crate) rpc_url: String,
+    #[serde(default)]
+    pub(crate) query_methods: Vec<String>,
+    #[serde(default)]
+    pub(crate) calls: Vec<String>,
+    #[serde(default)]
+    pub(crate) key_binding_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -555,6 +590,8 @@ pub(crate) struct DesiredStateManifest {
     pub(crate) agent_behaviors: Vec<DesiredAgentBehavior>,
     pub(crate) skills: Vec<DesiredSkill>,
     pub(crate) datastore_tool_surfaces: Vec<DesiredDatastoreToolSurface>,
+    pub(crate) chain_key_bindings: Vec<DesiredChainKeyBinding>,
+    pub(crate) eth_tools: Vec<DesiredEthTool>,
     pub(crate) tool_selections: Vec<DesiredToolSelection>,
     pub(crate) inference_backends: Vec<DesiredInferenceBackend>,
     pub(crate) inference_profiles: Vec<DesiredInferenceProfile>,
@@ -604,6 +641,8 @@ pub(crate) struct DesiredStateDiffCollections {
     pub(crate) agent_behaviors: DesiredStateCollectionDiff,
     pub(crate) skills: DesiredStateCollectionDiff,
     pub(crate) datastore_tool_surfaces: DesiredStateCollectionDiff,
+    pub(crate) chain_key_bindings: DesiredStateCollectionDiff,
+    pub(crate) eth_tools: DesiredStateCollectionDiff,
     // WorkspaceRoot has no desired-state file/GraphQL wiring yet (not part
     // of Collection::ALL) — always empty until that CRUD surface lands.
     pub(crate) workspace_roots: DesiredStateCollectionDiff,
@@ -625,6 +664,8 @@ impl DesiredStateDiffCollections {
             Collection::AgentBehavior => &self.agent_behaviors,
             Collection::Skill => &self.skills,
             Collection::DatastoreToolSurface => &self.datastore_tool_surfaces,
+            Collection::ChainKeyBinding => &self.chain_key_bindings,
+            Collection::EthTool => &self.eth_tools,
             Collection::WorkspaceRoot => &self.workspace_roots,
             Collection::ToolSelection => &self.tool_selections,
             Collection::InferenceBackend => &self.inference_backends,
@@ -644,6 +685,8 @@ impl DesiredStateDiffCollections {
             Collection::AgentBehavior => &mut self.agent_behaviors,
             Collection::Skill => &mut self.skills,
             Collection::DatastoreToolSurface => &mut self.datastore_tool_surfaces,
+            Collection::ChainKeyBinding => &mut self.chain_key_bindings,
+            Collection::EthTool => &mut self.eth_tools,
             Collection::WorkspaceRoot => &mut self.workspace_roots,
             Collection::ToolSelection => &mut self.tool_selections,
             Collection::InferenceBackend => &mut self.inference_backends,
@@ -673,6 +716,8 @@ impl DesiredStateDiffCollections {
             agent_behaviors: self.agent_behaviors.counts(),
             skills: self.skills.counts(),
             datastore_tool_surfaces: self.datastore_tool_surfaces.counts(),
+            chain_key_bindings: self.chain_key_bindings.counts(),
+            eth_tools: self.eth_tools.counts(),
             workspace_roots: self.workspace_roots.counts(),
             tool_selections: self.tool_selections.counts(),
             inference_backends: self.inference_backends.counts(),
@@ -693,6 +738,8 @@ pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) agent_behaviors: DesiredStateDiffCounts,
     pub(crate) skills: DesiredStateDiffCounts,
     pub(crate) datastore_tool_surfaces: DesiredStateDiffCounts,
+    pub(crate) chain_key_bindings: DesiredStateDiffCounts,
+    pub(crate) eth_tools: DesiredStateDiffCounts,
     pub(crate) workspace_roots: DesiredStateDiffCounts,
     pub(crate) tool_selections: DesiredStateDiffCounts,
     pub(crate) inference_backends: DesiredStateDiffCounts,
@@ -719,6 +766,8 @@ impl DesiredStateDiffCollectionsCounts {
             Collection::AgentBehavior => &self.agent_behaviors,
             Collection::Skill => &self.skills,
             Collection::DatastoreToolSurface => &self.datastore_tool_surfaces,
+            Collection::ChainKeyBinding => &self.chain_key_bindings,
+            Collection::EthTool => &self.eth_tools,
             Collection::WorkspaceRoot => &self.workspace_roots,
             Collection::ToolSelection => &self.tool_selections,
             Collection::InferenceBackend => &self.inference_backends,
@@ -763,6 +812,8 @@ pub(crate) struct DesiredStateCounts {
     pub(crate) agent_behaviors: usize,
     pub(crate) skills: usize,
     pub(crate) datastore_tool_surfaces: usize,
+    pub(crate) chain_key_bindings: usize,
+    pub(crate) eth_tools: usize,
     pub(crate) tool_selections: usize,
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
@@ -783,6 +834,8 @@ impl DesiredStateCounts {
             agent_behaviors: 0,
             skills: 0,
             datastore_tool_surfaces: 0,
+            chain_key_bindings: 0,
+            eth_tools: 0,
             tool_selections: 0,
             inference_backends: 0,
             inference_profiles: 0,
@@ -905,6 +958,16 @@ impl HasUniqueId for DesiredSkill {
 impl HasUniqueId for DesiredDatastoreToolSurface {
     fn unique_id(&self) -> &str {
         &self.surface_id
+    }
+}
+impl HasUniqueId for DesiredChainKeyBinding {
+    fn unique_id(&self) -> &str {
+        &self.binding_id
+    }
+}
+impl HasUniqueId for DesiredEthTool {
+    fn unique_id(&self) -> &str {
+        &self.tool_id
     }
 }
 impl HasUniqueId for DesiredInferenceBackend {

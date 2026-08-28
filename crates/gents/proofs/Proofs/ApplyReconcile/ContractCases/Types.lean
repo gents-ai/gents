@@ -87,6 +87,8 @@ def collectionName : Collection → String
   | .agentBehavior => "AgentBehavior"
   | .skill => "Skill"
   | .datastoreToolSurface => "DatastoreToolSurface"
+  | .chainKeyBinding => "ChainKeyBinding"
+  | .ethTool => "EthTool"
   | .toolSelection => "ToolSelection"
   | .inferenceBackend => "InferenceBackend"
   | .inferenceProfile => "InferenceProfile"
@@ -102,6 +104,8 @@ def collectionUniqueField : Collection → String
   | .agentBehavior => "behavior_id"
   | .skill => "skill_id"
   | .datastoreToolSurface => "surface_id"
+  | .chainKeyBinding => "binding_id"
+  | .ethTool => "tool_id"
   | .toolSelection => "selection_id"
   | .inferenceBackend => "backend_id"
   | .inferenceProfile => "profile_id"
@@ -119,6 +123,8 @@ def productionWriteOrder : List Collection :=
   , .inferenceProfile
   , .toolServiceRegistry
   , .datastoreToolSurface
+  , .chainKeyBinding
+  , .ethTool
   , .toolSelection
   , .skill
   , .agentBehavior

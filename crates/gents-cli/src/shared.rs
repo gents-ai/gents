@@ -268,6 +268,10 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) skills: Vec<Value>,
     #[serde(default)]
     pub(crate) datastore_tool_surfaces: Vec<Value>,
+    #[serde(default)]
+    pub(crate) chain_key_bindings: Vec<Value>,
+    #[serde(default)]
+    pub(crate) eth_tools: Vec<Value>,
     // WorkspaceRoot is registered (schema layer, #714-adjacent persona
     // catalog work) but not yet part of the desired-state CRUD surface
     // (CONFIG_APPLY_ORDER/DesiredStateManifest); this stays empty until a
@@ -301,6 +305,8 @@ impl ConfigExportBundle {
             Collection::AgentBehavior => Some(&self.agent_behaviors),
             Collection::Skill => Some(&self.skills),
             Collection::DatastoreToolSurface => Some(&self.datastore_tool_surfaces),
+            Collection::ChainKeyBinding => Some(&self.chain_key_bindings),
+            Collection::EthTool => Some(&self.eth_tools),
             Collection::WorkspaceRoot => Some(&self.workspace_roots),
             Collection::ToolSelection => Some(&self.tool_selections),
             Collection::InferenceBackend => Some(&self.inference_backends),
@@ -321,6 +327,8 @@ pub(crate) struct ConfigApplyCounts {
     pub(crate) agent_behaviors: usize,
     pub(crate) skills: usize,
     pub(crate) datastore_tool_surfaces: usize,
+    pub(crate) chain_key_bindings: usize,
+    pub(crate) eth_tools: usize,
     pub(crate) workspace_roots: usize,
     pub(crate) tool_selections: usize,
     pub(crate) inference_backends: usize,
@@ -340,6 +348,8 @@ impl ConfigApplyCounts {
             Collection::AgentBehavior => self.agent_behaviors,
             Collection::Skill => self.skills,
             Collection::DatastoreToolSurface => self.datastore_tool_surfaces,
+            Collection::ChainKeyBinding => self.chain_key_bindings,
+            Collection::EthTool => self.eth_tools,
             Collection::WorkspaceRoot => self.workspace_roots,
             Collection::ToolSelection => self.tool_selections,
             Collection::InferenceBackend => self.inference_backends,
@@ -359,6 +369,8 @@ impl ConfigApplyCounts {
             Collection::AgentBehavior => self.agent_behaviors = count,
             Collection::Skill => self.skills = count,
             Collection::DatastoreToolSurface => self.datastore_tool_surfaces = count,
+            Collection::ChainKeyBinding => self.chain_key_bindings = count,
+            Collection::EthTool => self.eth_tools = count,
             Collection::WorkspaceRoot => self.workspace_roots = count,
             Collection::ToolSelection => self.tool_selections = count,
             Collection::InferenceBackend => self.inference_backends = count,
@@ -378,6 +390,8 @@ impl ConfigApplyCounts {
             Collection::AgentBehavior => self.agent_behaviors += count,
             Collection::Skill => self.skills += count,
             Collection::DatastoreToolSurface => self.datastore_tool_surfaces += count,
+            Collection::ChainKeyBinding => self.chain_key_bindings += count,
+            Collection::EthTool => self.eth_tools += count,
             Collection::WorkspaceRoot => self.workspace_roots += count,
             Collection::ToolSelection => self.tool_selections += count,
             Collection::InferenceBackend => self.inference_backends += count,

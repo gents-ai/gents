@@ -1,11 +1,13 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use gents::{
     is_reserved_builtin_tool_name, CommandExecutionMode, CommandNetworkMode, SubagentTarget,
     SurfaceToolDecl, WriteToolDecl,
 };
 
-use super::super::{DesiredDatastoreToolSurface, DesiredStateManifest, DesiredToolSelection};
+use super::super::{
+    DesiredDatastoreToolSurface, DesiredEthTool, DesiredStateManifest, DesiredToolSelection,
+};
 use super::storage::non_empty;
 
 pub(super) fn validate_surfaces(
@@ -34,6 +36,78 @@ pub(super) fn validate_surfaces(
             &surface.entries,
             errors,
         );
+    }
+}
+
+pub(super) fn validate_eth_tools(
+    manifest: &DesiredStateManifest,
+    principal_agent_did: &str,
+    errors: &mut Vec<String>,
+) {
+    let mut binding_ids = BTreeSet::new();
+    for binding in &manifest.chain_key_bindings {
+        let binding_id = binding.binding_id.trim();
+        if binding_id.is_empty() {
+            errors.push("ChainKeyBinding has empty binding_id".to_string());
+        } else if !binding_ids.insert(binding_id.to_string()) {
+            errors.push(format!("duplicate ChainKeyBinding binding_id {binding_id}"));
+        }
+        if !principal_agent_did.is_empty() && binding.principal_did.trim() != principal_agent_did {
+            errors.push(format!(
+                "ChainKeyBinding {} principal_did does not match principal",
+                binding.binding_id
+            ));
+        }
+        if binding.address.trim().is_empty() {
+            errors.push(format!(
+                "ChainKeyBinding {} has empty address",
+                binding.binding_id
+            ));
+        }
+        if binding.key_backend.trim().is_empty() {
+            errors.push(format!(
+                "ChainKeyBinding {} has empty key_backend",
+                binding.binding_id
+            ));
+        }
+    }
+
+    let mut tool_ids = BTreeSet::new();
+    for tool in &manifest.eth_tools {
+        let tool_id = tool.tool_id.trim();
+        if tool_id.is_empty() {
+            errors.push("EthTool has empty tool_id".to_string());
+        } else if !tool_ids.insert(tool_id.to_string()) {
+            errors.push(format!("duplicate EthTool tool_id {tool_id}"));
+        }
+        if !principal_agent_did.is_empty() && tool.agent_did.trim() != principal_agent_did {
+            errors.push(format!(
+                "EthTool {} agent_did does not match principal",
+                tool.tool_id
+            ));
+        }
+        if tool.rpc_url.trim().is_empty() {
+            errors.push(format!("EthTool {} has empty rpc_url", tool.tool_id));
+        }
+        if tool.chain_id <= 0 {
+            errors.push(format!(
+                "EthTool {} must have a positive chain_id",
+                tool.tool_id
+            ));
+        }
+        if let Some(binding_id) = tool
+            .key_binding_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if !binding_ids.contains(binding_id) {
+                errors.push(format!(
+                    "EthTool {} references missing ChainKeyBinding {}",
+                    tool.tool_id, binding_id
+                ));
+            }
+        }
     }
 }
 
@@ -167,6 +241,7 @@ pub(super) fn validate_tool_selections(
         // over the merged inline ∪ surface list (which equals the inline list
         // when no surfaces are linked).
         validate_tool_selection_surface_links(manifest, selection, errors);
+        validate_eth_tool_links(manifest, selection, errors);
         if selection.subagent_spawn_enabled {
             if selection.subagent_targets.is_empty() {
                 errors.push(format!(
@@ -177,6 +252,54 @@ pub(super) fn validate_tool_selections(
         }
     }
     tool_selection_ids
+}
+
+fn validate_eth_tool_links(
+    manifest: &DesiredStateManifest,
+    selection: &DesiredToolSelection,
+    errors: &mut Vec<String>,
+) {
+    let tools: BTreeMap<&str, &DesiredEthTool> = manifest
+        .eth_tools
+        .iter()
+        .map(|tool| (tool.tool_id.trim(), tool))
+        .collect();
+    let mut linked_ids = BTreeSet::new();
+    for tool_id in &selection.eth_tool_ids {
+        let tool_id = tool_id.trim();
+        if tool_id.is_empty() {
+            errors.push(format!(
+                "tool selection {} has an empty eth_tool_ids entry",
+                selection.selection_id
+            ));
+            continue;
+        }
+        if !linked_ids.insert(tool_id) {
+            errors.push(format!(
+                "tool selection {} lists EthTool {} more than once",
+                selection.selection_id, tool_id
+            ));
+            continue;
+        }
+        let Some(tool) = tools.get(tool_id) else {
+            errors.push(format!(
+                "tool selection {} references missing EthTool {}",
+                selection.selection_id, tool_id
+            ));
+            continue;
+        };
+        if tool.agent_did.trim() != selection.agent_did.trim() {
+            errors.push(format!(
+                "tool selection {} references EthTool {} owned by a different agent",
+                selection.selection_id, tool_id
+            ));
+        } else if !tool.enabled {
+            errors.push(format!(
+                "tool selection {} references disabled EthTool {}",
+                selection.selection_id, tool_id
+            ));
+        }
+    }
 }
 
 pub(super) fn validate_tool_service_registries(

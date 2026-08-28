@@ -27,6 +27,11 @@ pub(crate) fn diff_manifests(
             &desired.datastore_tool_surfaces,
             &live.datastore_tool_surfaces,
         ),
+        chain_key_bindings: diff_manifest_collection(
+            &desired.chain_key_bindings,
+            &live.chain_key_bindings,
+        ),
+        eth_tools: diff_manifest_collection(&desired.eth_tools, &live.eth_tools),
         // WorkspaceRoot isn't tracked in DesiredStateManifest yet (see the
         // field doc on DesiredStateDiffCollections::workspace_roots) — an
         // empty diff until that CRUD surface lands.

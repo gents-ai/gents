@@ -1871,6 +1871,7 @@ fn merge_surface_entries_match_inline_write_tools() {
         agent_did: agent_did.to_string(),
         write_tools: Some(vec![decl.clone()]),
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         ..Default::default()
     };
     let surface_selection = ToolSelectionDocument {
