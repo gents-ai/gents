@@ -1,0 +1,27 @@
+use_default_settings: true
+
+server:
+  secret_key: "gents-live-web-research-not-for-production"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+
+# Public engines rate-limit shared container egress independently. Keep a
+# diverse real-engine pool so a CAPTCHA or temporary suspension from one
+# provider does not silently turn a successful SearXNG response into an empty
+# research bundle.
+engines:
+  - name: bing
+    disabled: false
+  - name: google
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: yahoo
+    disabled: false

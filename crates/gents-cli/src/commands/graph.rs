@@ -156,34 +156,21 @@ fn resolve_repository(
 }
 
 async fn run(args: GraphRunArgs) -> Result<()> {
-    if args.package != "code-review" {
-        anyhow::bail!(
-            "graph run currently supports the local code-review quickstart; package-specific entry bindings are not available for {:?}",
-            args.package
-        );
-    }
     let (access, actor) = access_and_actor(&args.scope).await?;
     let ConfigAccess::Graphql(endpoint) = &access else {
         anyhow::bail!(
             "graph run requires the local Gents server to be running so workspace and request recovery remain active"
         );
     };
-    let endpoint_url = url::Url::parse(endpoint).context("parsing graph GraphQL endpoint")?;
-    let local_endpoint = endpoint_url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
-    });
-    if !local_endpoint {
-        anyhow::bail!(
-            "the local-repository quickstart requires a loopback GraphQL endpoint; remote repository placement is not inferred from a client path"
-        );
-    }
     let graph_id = bundled_graph_id(&args.package, &actor)?;
     let plan = load_active_graph_plan_with_access(&access, &actor, &graph_id)
         .await?
-        .context("graph is not installed; run `gents graph install code-review` first")?;
+        .with_context(|| {
+            format!(
+                "graph is not installed; run `gents graph install {}` first",
+                args.package
+            )
+        })?;
     if plan.package.as_ref().map(|package| package.name.as_str()) != Some(args.package.as_str()) {
         anyhow::bail!(
             "active revision does not belong to bundled package {:?}",
@@ -191,49 +178,89 @@ async fn run(args: GraphRunArgs) -> Result<()> {
         );
     }
     let digest = plan.digest.clone();
-    let deployments = plan
-        .package
-        .as_ref()
-        .context("active revision has no package attribution")?
-        .roles
-        .values()
-        .map(|role| role.deployment_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    if deployments.len() != 1 {
-        anyhow::bail!("the local code-review quickstart requires all roles on one deployment");
-    }
-    let deployment_id = deployments.into_iter().next().expect("one deployment");
-    let (repository_path, base_ref, head_ref) =
-        resolve_repository(&args.repo, &args.base, &args.head)?;
-    let workspace = gents::workspace::provision_read_only_workspace(
-        &access,
-        &repository_path,
-        &head_ref,
-        deployment_id,
-        &actor,
-    )
-    .await?;
-    let receipt = start_graph_run_with_access(
-        &access,
-        &actor,
-        &graph_id,
-        Some(&digest),
-        "review",
-        json!({
-            "repository_path": ".",
-            "base_ref": base_ref,
-            "head_ref": head_ref,
-            "workspace_id": workspace.workspace.workspace_id,
-            "workspace_authority": "readOnly",
-            "workspace_owner_deployment_id": workspace.workspace.owner_deployment_id,
-            "lens_count": "4",
-            "lens_min": "4",
-            "lens_max": "4",
-            "pr_number": "",
-            "focus": args.focus.unwrap_or_else(|| "Review the diff for material correctness, safety, durability, and maintainability defects.".to_owned()),
-        }),
-    )
-    .await?;
+    let (entry, input) = match args.package.as_str() {
+        "code-review" => {
+            let endpoint_url =
+                url::Url::parse(endpoint).context("parsing graph GraphQL endpoint")?;
+            let local_endpoint = endpoint_url.host_str().is_some_and(|host| {
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|address| address.is_loopback())
+            });
+            if !local_endpoint {
+                anyhow::bail!(
+                    "the local-repository quickstart requires a loopback GraphQL endpoint; remote repository placement is not inferred from a client path"
+                );
+            }
+            let deployments = plan
+                .package
+                .as_ref()
+                .context("active revision has no package attribution")?
+                .roles
+                .values()
+                .map(|role| role.deployment_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            if deployments.len() != 1 {
+                anyhow::bail!(
+                    "the local code-review quickstart requires all roles on one deployment"
+                );
+            }
+            let deployment_id = deployments.into_iter().next().expect("one deployment");
+            let (repository_path, base_ref, head_ref) =
+                resolve_repository(&args.repo, &args.base, &args.head)?;
+            let workspace = gents::workspace::provision_read_only_workspace(
+                &access,
+                &repository_path,
+                &head_ref,
+                deployment_id,
+                &actor,
+            )
+            .await?;
+            (
+                "review",
+                json!({
+                    "repository_path": ".",
+                    "base_ref": base_ref,
+                    "head_ref": head_ref,
+                    "workspace_id": workspace.workspace.workspace_id,
+                    "workspace_authority": "readOnly",
+                    "workspace_owner_deployment_id": workspace.workspace.owner_deployment_id,
+                    "lens_count": "4",
+                    "lens_min": "4",
+                    "lens_max": "4",
+                    "pr_number": "",
+                    "focus": args.focus.unwrap_or_else(|| "Review the diff for material correctness, safety, durability, and maintainability defects.".to_owned()),
+                }),
+            )
+        }
+        "web-deep-research" => {
+            if !(2..=8).contains(&args.investigator_count) {
+                anyhow::bail!("--investigator-count must be between 2 and 8");
+            }
+            let question = args
+                .question
+                .as_deref()
+                .map(str::trim)
+                .filter(|question| !question.is_empty())
+                .context("web-deep-research requires --question")?;
+            (
+                "research",
+                json!({
+                    "question": question,
+                    "scope": args.research_scope,
+                    "freshness": args.freshness,
+                    "audience": args.audience,
+                    "output_requirements": args.output_requirements,
+                    "investigator_count": args.investigator_count.to_string(),
+                }),
+            )
+        }
+        package => anyhow::bail!("graph run has no entry adapter for package {package:?}"),
+    };
+    let receipt =
+        start_graph_run_with_access(&access, &actor, &graph_id, Some(&digest), entry, input)
+            .await?;
     if args.watch {
         watch_run(
             &access,

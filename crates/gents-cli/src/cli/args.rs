@@ -257,6 +257,27 @@ pub(crate) struct GraphRunArgs {
     pub(crate) head: String,
     #[arg(long)]
     pub(crate) focus: Option<String>,
+    #[arg(long, help = "Research question (required by web-deep-research)")]
+    pub(crate) question: Option<String>,
+    #[arg(
+        long = "research-scope",
+        default_value = "Answer the question directly; include material context, counterevidence, and uncertainty."
+    )]
+    pub(crate) research_scope: String,
+    #[arg(
+        long,
+        default_value = "Prefer current sources and record publication dates; retain older primary sources when historically necessary."
+    )]
+    pub(crate) freshness: String,
+    #[arg(long, default_value = "A technically literate reader")]
+    pub(crate) audience: String,
+    #[arg(
+        long,
+        default_value = "A concise Markdown report with claim-local links, counterevidence, a source ledger, and explicit limitations."
+    )]
+    pub(crate) output_requirements: String,
+    #[arg(long, default_value_t = 4)]
+    pub(crate) investigator_count: u8,
     #[arg(long, default_value_t = false)]
     pub(crate) watch: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]

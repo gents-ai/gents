@@ -1,0 +1,49 @@
+name: Web Research Live Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      inference_endpoint:
+        description: Real OpenAI-compatible base URL, including /v1
+        required: true
+      model_name:
+        description: Real model name served by the endpoint
+        required: true
+
+env:
+  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_TARGET_ROOT: ${{ vars.CARGO_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target' }}
+  RUSTC_WRAPPER: sccache
+  RUST_BACKTRACE: "1"
+  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
+  SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
+  SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
+  GENTS_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
+  GENTS_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}
+  GENTS_CLI_E2E_API_KEY: ${{ secrets.GENTS_API_KEY }}
+
+jobs:
+  real-web-research:
+    runs-on: [self-hosted, macOS, ARM64, studio]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Install protobuf compiler
+        run: .github/scripts/setup-protoc.sh
+
+      - name: Prepare disk-backed Rust build cache
+        run: .github/scripts/setup-rust-build-cache.sh
+
+      - name: Run real full-stack deep research acceptance
+        run: scripts/web-research-live-e2e.sh
+
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh

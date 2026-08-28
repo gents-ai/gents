@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn bundled_catalog_is_read_only_complete_and_compiler_valid() {
         let package = load_bundled_graph_package("code-review").unwrap();
-        assert_eq!(graph_package_catalog().unwrap().len(), 1);
+        assert_eq!(graph_package_catalog().unwrap().len(), 2);
         assert!(package.package_digest.starts_with("sha256:"));
         for path in &package.asset_paths {
             assert!(!package.asset(path).unwrap().is_empty(), "{path}");
@@ -261,6 +261,148 @@ mod tests {
         assert_eq!(plan.nodes.len(), 4);
         assert_eq!(plan.results.len(), 2);
         assert_eq!(plan.entries[0].name, "review");
+    }
+
+    #[test]
+    fn web_deep_research_package_is_complete_and_compiler_valid() {
+        let package = load_bundled_graph_package("web-deep-research").unwrap();
+        assert!(package.package_digest.starts_with("sha256:"));
+        for path in &package.asset_paths {
+            assert!(!package.asset(path).unwrap().is_empty(), "{path}");
+        }
+        let capabilities = package
+            .capabilities
+            .iter()
+            .map(|template| StageCapability {
+                capability_id: template.capability_id.clone(),
+                revision: template.revision.clone(),
+                task_id: format!("fixture-task-{}", template.capability_id),
+                input_ports: template.input_ports.clone(),
+                output_ports: template.output_ports.clone(),
+                allowed_callers: vec!["did:key:fixture".to_owned()],
+            })
+            .collect::<Vec<_>>();
+        let plan = compile_graph(
+            &package.intent,
+            &capabilities,
+            "did:key:fixture",
+            &CompilerPolicy::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.nodes.len(), 4);
+        assert_eq!(plan.results.len(), 5);
+        assert_eq!(plan.entries[0].name, "research");
+        for capability in &package.capabilities {
+            let selection: serde_json::Value = serde_json::from_str(
+                package
+                    .asset_text(&capability.tool_selection_asset)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                selection.get("enable_bash"),
+                Some(&serde_json::json!(false))
+            );
+            assert_eq!(
+                selection.get("command_execution_policy"),
+                Some(&serde_json::Value::Null),
+                "{} must not invent a command-policy enum when bash is disabled",
+                capability.tool_selection_asset
+            );
+            let allowed_mcp_services = selection
+                .get("allowed_mcp_service_ids")
+                .and_then(serde_json::Value::as_array)
+                .unwrap();
+            if !allowed_mcp_services.is_empty() {
+                assert_eq!(
+                    selection.get("enable_meta_tools"),
+                    Some(&serde_json::json!(true)),
+                    "{} must enable the MCP meta-tool boundary when it allows MCP services",
+                    capability.tool_selection_asset
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn web_deep_research_handoffs_are_typed_and_correlation_scoped() {
+        let package = load_bundled_graph_package("web-deep-research").unwrap();
+        for (asset, fields) in [
+            (
+                "tasks/research-plan-task/prompt.md",
+                &[
+                    "question",
+                    "scope",
+                    "freshness",
+                    "audience",
+                    "output_requirements",
+                    "investigator_count",
+                ][..],
+            ),
+            (
+                "tasks/research-investigate-task/prompt.md",
+                &[
+                    "assignment_id",
+                    "question",
+                    "lens",
+                    "instructions",
+                    "query_plan",
+                    "source_requirements",
+                    "freshness",
+                ][..],
+            ),
+            (
+                "tasks/research-report-task/prompt.md",
+                &[
+                    "title",
+                    "thesis",
+                    "outline",
+                    "synthesis",
+                    "unresolved_questions",
+                ][..],
+            ),
+        ] {
+            let prompt = package.asset_text(asset).unwrap();
+            for field in fields {
+                assert!(
+                    prompt.contains(&format!("{{{{ doc.{field} }}}}")),
+                    "{asset} does not interpolate typed carrier field {field}"
+                );
+            }
+        }
+        let adjudicate_prompt = package
+            .asset_text("tasks/research-adjudicate-task/prompt.md")
+            .unwrap();
+        assert!(adjudicate_prompt.contains("{{ group.correlation_value }}"));
+        assert!(adjudicate_prompt.contains("{{ group.count }}"));
+        assert!(!adjudicate_prompt.contains("event.group_size"));
+
+        let surface: BundledToolSurface = serde_json::from_str(
+            package
+                .asset_text("datastore-tool-surfaces/research-adjudicate-io/object.json")
+                .unwrap(),
+        )
+        .unwrap();
+        for (tool_name, collection) in [
+            ("read_research_investigation", "WebResearchInvestigation"),
+            ("read_research_source", "WebResearchSource"),
+            ("read_research_claim", "WebResearchClaim"),
+        ] {
+            let entry = surface
+                .entries
+                .iter()
+                .find(|entry| entry.tool_name() == tool_name)
+                .unwrap_or_else(|| panic!("missing {tool_name}"));
+            let SurfaceToolDecl::Query(entry) = entry else {
+                panic!("{tool_name} must be a read tool");
+            };
+            assert_eq!(entry.collection, collection);
+            assert_eq!(entry.filter_fields.len(), 1);
+            let run_id = &entry.filter_fields[0];
+            assert_eq!(run_id.name, "run_id");
+            assert!(!run_id.required);
+            assert_eq!(run_id.fill, Some(WriteToolFieldFill::Correlation));
+        }
     }
 
     #[test]

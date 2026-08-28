@@ -76,6 +76,31 @@ code-review graph accepts any local Git work tree and uses the existing
 principal, deployment, tool-surface, workspace, request, trigger, and graph-run
 machinery; bundling it grants no tools or execution authority.
 
+The catalog also includes a web deep-research graph. Register a healthy
+`web-research-mcp` service from the public
+[`source-inc/web-research-mcp`](https://github.com/source-inc/web-research-mcp)
+release, then run:
+
+```bash
+gents graph install web-deep-research
+gents graph run web-deep-research \
+  --question "What changed in the MCP security guidance, and what should operators do?" \
+  --investigator-count 4
+gents graph watch <run-id>
+gents graph result <run-id>
+```
+
+The graph plans a closed assignment set, fans out investigators, waits for the
+complete evidence barrier, adjudicates claims, and writes a cited report from
+the verdict ledger. Each investigator submits one idempotent bounded evidence
+bundle: several planned searches become a capped, deduplicated set of fetched
+sources with stable IDs, hashes, and gateway-verified excerpts. Plan,
+adjudication, and report stages have no web authority; only investigators can
+reach the named research service. The paid
+acceptance gate is `scripts/web-research-live-e2e.sh`: it starts real SearXNG
+and Firecrawl infrastructure and runs the complete graph against a real model.
+It contains no mock backend path.
+
 ## Why this exists
 
 Agent frameworks bolt persistence, identity, and coordination onto a loop. Gents inverts that: the loop is thin and formally specified, and the hard properties come from the substrate.

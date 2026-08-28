@@ -1,0 +1,38 @@
+{
+  "surface_id": "research-report-io",
+  "agent_did": "did:key:zWebResearchAgentPlaceholder000000000000000000000000",
+  "display_name": "Adjudicated evidence reads and final result write",
+  "enabled": true,
+  "entries": [
+    {
+      "kind": "read",
+      "tool_name": "read_report_research_source",
+      "collection": "WebResearchSource",
+      "description": "Load source metadata and provenance for report citations.",
+      "fields": ["source_id", "url", "title", "publisher", "source_kind", "published_at", "fetched_at", "fetch_id", "content_hash", "relevance"],
+      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_report_claim_verdict",
+      "collection": "WebResearchClaimVerdict",
+      "description": "Load the complete adjudicated claim ledger.",
+      "fields": ["claim_id", "verdict", "confidence", "rationale", "evidence_json", "quote_verification"],
+      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
+    },
+    {
+      "tool_name": "write_research_result",
+      "collection": "WebResearchResult",
+      "description": "Publish one cited research report and provenance ledger.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "title", "required": true},
+        {"name": "report_markdown", "required": true},
+        {"name": "sources_json", "required": true},
+        {"name": "limitations", "required": true},
+        {"name": "completed_at", "required": true}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+type WebResearchPlan {
+  run_id: String @index(unique: true) @immutable
+  question: String
+  strategy: String
+  source_hierarchy: String
+  coverage_requirements: String
+  assignment_count: String
+}

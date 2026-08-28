@@ -1,0 +1,9 @@
+type WebResearchClaimVerdict {
+  run_id: String @index @immutable
+  claim_id: String @index(unique: true) @immutable
+  verdict: String
+  confidence: String
+  rationale: String
+  evidence_json: String
+  quote_verification: String
+}

@@ -1,0 +1,10 @@
+type WebResearchInvestigation {
+  run_id: String @index @immutable
+  assignment_id: String @index(unique: true) @immutable
+  expected_total: String @immutable
+  source_count: String
+  claim_count: String
+  status: String
+  summary: String
+  gaps: String
+}

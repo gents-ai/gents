@@ -1,0 +1,9 @@
+type WebResearchJob {
+  run_id: String @index(unique: true) @immutable
+  question: String
+  scope: String
+  freshness: String
+  audience: String
+  output_requirements: String
+  investigator_count: String
+}

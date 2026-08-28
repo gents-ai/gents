@@ -1,0 +1,11 @@
+type WebResearchAssignment {
+  run_id: String @index @immutable
+  assignment_id: String @index(unique: true) @immutable
+  question: String
+  lens: String
+  instructions: String
+  query_plan: String
+  source_requirements: String
+  freshness: String
+  expected_total: String @immutable
+}

@@ -1,0 +1,39 @@
+{
+  "surface_id": "research-plan-writes",
+  "agent_did": "did:key:zWebResearchAgentPlaceholder000000000000000000000000",
+  "display_name": "Research plan and closed assignment writes",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_research_assignment",
+      "collection": "WebResearchAssignment",
+      "description": "Create one member of the closed parallel investigation set.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1, "expected_count_field": "expected_total"},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "assignment_id", "required": true},
+        {"name": "question", "required": true},
+        {"name": "lens", "required": true},
+        {"name": "instructions", "required": true},
+        {"name": "query_plan", "required": true},
+        {"name": "source_requirements", "required": true},
+        {"name": "freshness", "required": true},
+        {"name": "expected_total", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_research_plan",
+      "collection": "WebResearchPlan",
+      "description": "Persist the bounded research strategy after the assignment ledger is complete.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "question", "required": true},
+        {"name": "strategy", "required": true},
+        {"name": "source_hierarchy", "required": true},
+        {"name": "coverage_requirements", "required": true},
+        {"name": "assignment_count", "required": true}
+      ]
+    }
+  ]
+}

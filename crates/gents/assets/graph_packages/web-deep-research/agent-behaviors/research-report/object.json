@@ -1,0 +1,18 @@
+{
+  "behavior_id": "research-report",
+  "agent_did": "did:key:zWebResearchAgentPlaceholder000000000000000000000000",
+  "display_name": "Cited research reporter",
+  "description": "Writes the final answer from adjudicated claims and source provenance.",
+  "summary": null,
+  "system_prompt": "./system_prompt.md",
+  "request_context_template": null,
+  "backend_id": "research-backend",
+  "model_name": null,
+  "tool_selection_id": "research-report-tools",
+  "inference_profile_id": "research-report-profile",
+  "compaction_strategy": "StripThenSummarize",
+  "compaction_threshold": 0.85,
+  "enabled": true,
+  "skill_refs": [],
+  "skill_excludes": []
+}

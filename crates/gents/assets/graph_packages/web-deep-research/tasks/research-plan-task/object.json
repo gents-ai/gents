@@ -1,0 +1,9 @@
+{
+  "task_id": "research-plan-task",
+  "name": "Plan bounded web research",
+  "description": null,
+  "behavior_id": "research-plan",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

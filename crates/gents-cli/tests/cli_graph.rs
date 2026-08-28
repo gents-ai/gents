@@ -45,6 +45,31 @@ fn bundled_catalog_is_read_only_outside_a_source_checkout() -> Result<()> {
 }
 
 #[test]
+fn web_deep_research_is_in_the_bundled_catalog() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating graph catalog tempdir")?;
+    let catalog = run_cli_json(tempdir.path(), &["graph", "catalog", "web-deep-research"])?;
+    let packages = catalog
+        .get("packages")
+        .and_then(Value::as_array)
+        .context("catalog output is missing packages")?;
+    anyhow::ensure!(packages.len() == 1, "unexpected catalog output: {catalog}");
+    anyhow::ensure!(
+        packages[0].get("name").and_then(Value::as_str) == Some("web-deep-research"),
+        "catalog did not return web-deep-research: {catalog}"
+    );
+    anyhow::ensure!(
+        packages[0]
+            .get("entries")
+            .and_then(Value::as_array)
+            .is_some_and(|entries| entries
+                .iter()
+                .any(|entry| { entry.get("name").and_then(Value::as_str) == Some("research") })),
+        "catalog package did not expose the research entry: {catalog}"
+    );
+    Ok(())
+}
+
+#[test]
 fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph install tempdir")?;
     let home = tempdir.path().join("agent-home");
