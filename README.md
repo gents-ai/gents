@@ -94,7 +94,7 @@ gents mcp register web-research-mcp \
   --endpoint http://127.0.0.1:9213/mcp \
   --display-name "Web Research MCP" \
   --description "Local bounded web evidence gateway" \
-  --version 0.1.5 \
+  --version 0.1.6 \
   --send-agent-did
 gents mcp probe web-research-mcp --timeout 30s
 ```
