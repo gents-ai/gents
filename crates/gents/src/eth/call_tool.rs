@@ -18,8 +18,8 @@ use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use crate::tool_call_lifecycle::FailureClass;
 
 use super::calls::{
-    compile_params, native_transfer_function, parse_abi_function, parse_u128, require_address,
-    CallDecl, CompiledParam,
+    compile_params, compile_typed_params, native_transfer_function, parse_abi_function, parse_u128,
+    require_address, CallDecl, CompiledParam,
 };
 use super::keys::{
     address_from_secret, attestation_payload, binding_storage_key, decode_attestation,
@@ -45,7 +45,10 @@ pub struct ResolvedEthCall {
 
 impl ResolvedEthCall {
     pub(crate) fn is_signing(&self) -> bool {
-        matches!(self.kind, ResolvedCallKind::Write { .. })
+        matches!(
+            self.kind,
+            ResolvedCallKind::Write { .. } | ResolvedCallKind::SignTypedData { .. }
+        )
     }
 }
 
@@ -60,6 +63,12 @@ pub(crate) enum ResolvedCallKind {
     Write {
         to: Option<String>,
         function: Option<Function>,
+        params: Vec<CompiledParam>,
+    },
+    SignTypedData {
+        domain: Value,
+        types: Value,
+        primary_type: String,
         params: Vec<CompiledParam>,
     },
 }
@@ -180,6 +189,46 @@ impl ResolvedEthCall {
                         caps: gas_caps(*max_gas, max_fee_per_gas.as_deref())?,
                     });
                 }
+                CallDecl::SignTypedData {
+                    tool_name,
+                    domain,
+                    types,
+                    primary_type,
+                    params,
+                    description,
+                } => {
+                    let Some(binding_id) = binding_id.clone() else {
+                        bail!("sign_typed_data {tool_name} requires a chain key binding");
+                    };
+                    match typed_domain_chain_id(domain)? {
+                        Some(domain_chain_id) if domain_chain_id == chain_id => {}
+                        Some(_) => bail!(
+                            "sign_typed_data {tool_name} domain chainId does not match EthTool chain_id {chain_id}"
+                        ),
+                        None => bail!(
+                            "sign_typed_data {tool_name} domain requires chainId matching EthTool chain_id {chain_id}"
+                        ),
+                    }
+                    let params = compile_typed_params(types, primary_type, params, true)?;
+                    out.push(Self {
+                        eth_tool_id: tool_id.to_string(),
+                        tool_name: tool_name.clone(),
+                        chain_id,
+                        rpc_url: rpc_url.to_string(),
+                        description: description.clone().unwrap_or_else(|| {
+                            format!("sign EIP-712 {primary_type}; nothing is submitted")
+                        }),
+                        kind: ResolvedCallKind::SignTypedData {
+                            domain: domain.clone(),
+                            types: types.clone(),
+                            primary_type: primary_type.clone(),
+                            params,
+                        },
+                        principal_did: principal_did.to_string(),
+                        binding_id: Some(binding_id),
+                        caps: GasCaps::default(),
+                    });
+                }
             }
         }
         Ok(out)
@@ -244,9 +293,9 @@ fn call_parameters(kind: &ResolvedCallKind) -> Value {
             "required": ["to", "signature"],
             "additionalProperties": false
         }),
-        ResolvedCallKind::Declared { params, .. } | ResolvedCallKind::Write { params, .. } => {
-            declared_schema(params)
-        }
+        ResolvedCallKind::Declared { params, .. }
+        | ResolvedCallKind::Write { params, .. }
+        | ResolvedCallKind::SignTypedData { params, .. } => declared_schema(params),
     }
 }
 
@@ -342,7 +391,71 @@ async fn execute_call(
             )
             .await
         }
+        ResolvedCallKind::SignTypedData {
+            domain,
+            types,
+            primary_type,
+            params,
+        } => {
+            execute_sign_typed_data(node, resolved, domain, types, primary_type, params, args).await
+        }
     }
+}
+
+async fn execute_sign_typed_data(
+    node: &EmbeddedNode,
+    resolved: &ResolvedEthCall,
+    domain: &Value,
+    types: &Value,
+    primary_type: &str,
+    params: &[CompiledParam],
+    args: &str,
+) -> Result<String, ToolError> {
+    require_runtime_principal(resolved)?;
+    let parsed: BTreeMap<String, Value> = crate::llm::tool::parse_tool_args(args)?;
+    let secret = Zeroizing::new(
+        load_signing_key(node, resolved)
+            .await
+            .map_err(|error| reported(FailureClass::PolicyDenied, error.to_string()))?,
+    );
+    let from = address_from_secret(&secret)
+        .map_err(|error| reported(FailureClass::PolicyDenied, error.to_string()))?;
+    let bound = bind_params(params, &parsed, Some(&from))
+        .map_err(|error| reported(FailureClass::PolicyDenied, error.to_string()))?;
+    let mut message = serde_json::Map::new();
+    for (index, param) in params.iter().enumerate() {
+        if let Some(value) = bound.get(index) {
+            message.insert(param.name.clone(), value.clone());
+        }
+    }
+    let typed = json!({
+        "types": types,
+        "primaryType": primary_type,
+        "domain": domain,
+        "message": message,
+    });
+    let typed: alloy_dyn_abi::TypedData = serde_json::from_value(typed)
+        .map_err(|error| reported(FailureClass::ArgumentInvalid, error.to_string()))?;
+    let hash = typed
+        .eip712_signing_hash()
+        .map_err(|error| reported(FailureClass::ArgumentInvalid, error.to_string()))?;
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(hash.as_slice());
+    let (r, s, y_parity) = crate::eth::sign_prehash_recoverable(&secret, &digest)
+        .map_err(|error| reported(FailureClass::PolicyDenied, error.to_string()))?;
+    let v = if y_parity { 28u8 } else { 27 };
+    let mut sig = Vec::with_capacity(65);
+    sig.extend_from_slice(&r);
+    sig.extend_from_slice(&s);
+    sig.push(v);
+    serde_json::to_string(&json!({
+        "address": from,
+        "primary_type": primary_type,
+        "digest": format!("0x{}", hex_encode(&digest)),
+        "signature": format!("0x{}", hex_encode(&sig)),
+        "submitted": false,
+    }))
+    .map_err(ToolError::JsonError)
 }
 
 async fn execute_write(
@@ -354,19 +467,7 @@ async fn execute_write(
     params: &[CompiledParam],
     args: &str,
 ) -> Result<String, ToolError> {
-    let runtime =
-        crate::tool_call_lifecycle::runtime::current_tool_runtime_context().ok_or_else(|| {
-            reported(
-                FailureClass::PolicyDenied,
-                "eth write has no runtime identity".to_string(),
-            )
-        })?;
-    if runtime.agent_did.as_deref() != Some(resolved.principal_did.as_str()) {
-        return Err(reported(
-            FailureClass::PolicyDenied,
-            "eth write runtime principal does not own its key binding".to_string(),
-        ));
-    }
+    require_runtime_principal(resolved)?;
     let parsed: BTreeMap<String, Value> = crate::llm::tool::parse_tool_args(args)?;
     let secret = Zeroizing::new(
         load_signing_key(node, resolved)
@@ -404,6 +505,8 @@ async fn execute_write(
             })?;
         (Some(destination.to_string()), Vec::new(), value)
     };
+    let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        .expect("runtime principal was checked before signing");
     let request_id = runtime
         .request_id
         .filter(|value| !value.trim().is_empty())
@@ -479,6 +582,23 @@ fn write_idempotency_key(
         "data": format!("0x{}", hex_encode(data)),
     }))?;
     Ok(format!("{}:{:#x}", request_id, keccak256(semantic_action)))
+}
+
+fn require_runtime_principal(resolved: &ResolvedEthCall) -> Result<(), ToolError> {
+    let runtime =
+        crate::tool_call_lifecycle::runtime::current_tool_runtime_context().ok_or_else(|| {
+            reported(
+                FailureClass::PolicyDenied,
+                "Ethereum signing has no runtime identity".to_string(),
+            )
+        })?;
+    if runtime.agent_did.as_deref() != Some(resolved.principal_did.as_str()) {
+        return Err(reported(
+            FailureClass::PolicyDenied,
+            "Ethereum signing runtime principal does not own its key binding".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 async fn load_signing_key(node: &EmbeddedNode, resolved: &ResolvedEthCall) -> Result<[u8; 32]> {
@@ -672,6 +792,29 @@ fn gas_caps(max_gas: Option<u64>, max_fee_per_gas: Option<&str>) -> Result<GasCa
         max_gas,
         max_fee_per_gas,
     })
+}
+
+fn typed_domain_chain_id(domain: &Value) -> Result<Option<u64>> {
+    let Some(value) = domain.get("chainId") else {
+        return Ok(None);
+    };
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| anyhow!("EIP-712 domain chainId is not a positive integer")),
+        Value::String(text) => {
+            let parsed = if let Some(hex) = text.strip_prefix("0x") {
+                u64::from_str_radix(hex, 16)
+            } else {
+                text.parse()
+            };
+            parsed
+                .map(Some)
+                .map_err(|error| anyhow!("invalid EIP-712 domain chainId {text:?}: {error}"))
+        }
+        other => bail!("EIP-712 domain chainId must be a string or integer, got {other}"),
+    }
 }
 
 fn encode_function(function: &Function, args: &[Value]) -> Result<String> {
@@ -906,6 +1049,60 @@ mod tests {
         let parameters = call_parameters(&resolved[0].kind);
         assert!(parameters["properties"].get("data").is_none());
         assert!(parameters["properties"].get("amount").is_some());
+    }
+
+    #[test]
+    fn sign_typed_data_is_generated_and_does_not_submit() {
+        let decls = crate::eth::parse_call_decls(Some(&[r#"{"kind":"sign_typed_data","tool_name":"permit","primary_type":"Permit","domain":{"name":"Token","version":"1","chainId":1},"types":{"EIP712Domain":[{"name":"name","type":"string"},{"name":"version","type":"string"},{"name":"chainId","type":"uint256"}],"Permit":[{"name":"spender","type":"address"},{"name":"value","type":"uint256"}]},"params":{"spender":{"source":"model","address_allowlist":["0x1111111111111111111111111111111111111111"]},"value":{"source":"model","max":"1000"}}}"#.to_string()])).unwrap();
+        crate::eth::validate_call_decls(&decls).unwrap();
+        let resolved = ResolvedEthCall::from_decls(
+            "base",
+            1,
+            "http://127.0.0.1",
+            &decls,
+            "did:key:zAlice",
+            Some("bind-1"),
+        )
+        .unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved[0].is_signing());
+        assert!(matches!(
+            resolved[0].kind,
+            ResolvedCallKind::SignTypedData { .. }
+        ));
+        let parameters = call_parameters(&resolved[0].kind);
+        assert!(parameters["properties"].get("data").is_none());
+        assert!(parameters["properties"].get("spender").is_some());
+    }
+
+    #[test]
+    fn sign_typed_data_rejects_a_different_domain_chain() {
+        let decls = crate::eth::parse_call_decls(Some(&[r#"{"kind":"sign_typed_data","tool_name":"permit","primary_type":"Mail","domain":{"chainId":"0x1"},"types":{"EIP712Domain":[{"name":"chainId","type":"uint256"}],"Mail":[{"name":"message","type":"string"}]},"params":{"message":{"source":"model"}}}"#.to_string()])).unwrap();
+        let error = ResolvedEthCall::from_decls(
+            "base",
+            8453,
+            "http://127.0.0.1",
+            &decls,
+            "did:key:zAlice",
+            Some("bind-1"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn sign_typed_data_requires_a_domain_chain() {
+        let decls = crate::eth::parse_call_decls(Some(&[r#"{"kind":"sign_typed_data","tool_name":"permit","primary_type":"Mail","domain":{"name":"Mail"},"types":{"EIP712Domain":[{"name":"name","type":"string"}],"Mail":[{"name":"message","type":"string"}]},"params":{"message":{"source":"model"}}}"#.to_string()])).unwrap();
+        let error = ResolvedEthCall::from_decls(
+            "base",
+            8453,
+            "http://127.0.0.1",
+            &decls,
+            "did:key:zAlice",
+            Some("bind-1"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("requires chainId"));
     }
 
     #[test]

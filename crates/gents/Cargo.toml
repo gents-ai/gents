@@ -55,7 +55,7 @@ k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 keyring = "3"
 sha3 = "0.10"
 alloy-primitives = "1.0"
-alloy-dyn-abi = "1.0"
+alloy-dyn-abi = { version = "1.0", features = ["eip712"] }
 alloy-json-abi = "1.0"
 libc = "0.2"
 minijinja.workspace = true

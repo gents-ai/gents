@@ -47,11 +47,25 @@ pub enum CallDecl {
         #[serde(default)]
         max_fee_per_gas: Option<String>,
     },
+    SignTypedData {
+        tool_name: String,
+        domain: Value,
+        types: Value,
+        #[serde(alias = "primaryType")]
+        primary_type: String,
+        #[serde(default)]
+        params: BTreeMap<String, ParamDecl>,
+        #[serde(default)]
+        description: Option<String>,
+    },
 }
 
 impl CallDecl {
     pub(crate) fn requires_key_binding(&self) -> bool {
-        matches!(self, Self::Write { .. } | Self::NativeTransfer { .. })
+        matches!(
+            self,
+            Self::Write { .. } | Self::NativeTransfer { .. } | Self::SignTypedData { .. }
+        )
     }
 }
 
@@ -161,6 +175,26 @@ pub fn validate_call_decls(decls: &[CallDecl]) -> Result<()> {
                 validate_gas_caps(tool_name, *max_gas, max_fee_per_gas.as_deref())?;
                 let function = native_transfer_function()?;
                 compile_params(&function, params, true)?;
+            }
+            CallDecl::SignTypedData {
+                tool_name,
+                domain,
+                types,
+                primary_type,
+                params,
+                ..
+            } => {
+                require_tool_name(tool_name, &mut names)?;
+                if primary_type.trim().is_empty() {
+                    bail!("sign_typed_data.primary_type is empty");
+                }
+                if !domain.is_object() {
+                    bail!("sign_typed_data.domain must be an object");
+                }
+                if !types.is_object() {
+                    bail!("sign_typed_data.types must be an object");
+                }
+                compile_typed_params(types, primary_type, params, true)?;
             }
         }
     }
@@ -418,6 +452,54 @@ pub(crate) fn native_transfer_function() -> Result<Function> {
     parse_abi_function("nativeTransfer(address to,uint256 value)")
 }
 
+pub(crate) fn compile_typed_params(
+    types: &Value,
+    primary_type: &str,
+    params: &BTreeMap<String, ParamDecl>,
+    require_write_limits: bool,
+) -> Result<Vec<CompiledParam>> {
+    let fields = types
+        .get(primary_type)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("sign_typed_data.types has no {primary_type:?} field list"))?;
+    if fields.len() != params.len() {
+        bail!(
+            "EIP-712 {primary_type} has {} fields but {} parameter declarations",
+            fields.len(),
+            params.len()
+        );
+    }
+    let mut seen = BTreeSet::new();
+    let mut compiled = Vec::with_capacity(fields.len());
+    for field in fields {
+        let name = field
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("EIP-712 {primary_type} field has no name"))?;
+        let solidity_type = field
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("EIP-712 {primary_type}.{name} has no type"))?;
+        if !seen.insert(name.to_string()) {
+            bail!("EIP-712 {primary_type} has duplicate field {name:?}");
+        }
+        let decl = params
+            .get(name)
+            .ok_or_else(|| anyhow!("EIP-712 field {name:?} has no parameter declaration"))?;
+        validate_param(name, solidity_type, decl, require_write_limits)?;
+        compiled.push(CompiledParam {
+            name: name.to_string(),
+            solidity_type: solidity_type.to_string(),
+            decl: decl.clone(),
+        });
+    }
+    Ok(compiled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,5 +573,81 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("max_gas"));
+    }
+
+    #[test]
+    fn typed_params_follow_eip712_field_order() {
+        let types = serde_json::json!({
+            "Mail": [
+                { "name": "sender", "type": "address" },
+                { "name": "amount", "type": "uint256" }
+            ]
+        });
+        let params = BTreeMap::from([
+            ("amount".to_string(), ParamDecl::default()),
+            ("sender".to_string(), ParamDecl::default()),
+        ]);
+        let compiled = compile_typed_params(&types, "Mail", &params, false).unwrap();
+        assert_eq!(
+            compiled
+                .iter()
+                .map(|param| param.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sender", "amount"]
+        );
+    }
+
+    #[test]
+    fn typed_params_reject_nested_structs() {
+        let types = serde_json::json!({
+            "Mail": [{ "name": "sender", "type": "Person" }],
+            "Person": [{ "name": "wallet", "type": "address" }]
+        });
+        let params = BTreeMap::from([("sender".to_string(), ParamDecl::default())]);
+        assert!(compile_typed_params(&types, "Mail", &params, false)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported Solidity type"));
+    }
+
+    #[test]
+    fn typed_signatures_require_write_grade_limits() {
+        let types = serde_json::json!({
+            "Permit": [
+                { "name": "spender", "type": "address" },
+                { "name": "value", "type": "uint256" }
+            ]
+        });
+        let params = BTreeMap::from([
+            ("spender".to_string(), ParamDecl::default()),
+            ("value".to_string(), ParamDecl::default()),
+        ]);
+        assert!(compile_typed_params(&types, "Permit", &params, true)
+            .unwrap_err()
+            .to_string()
+            .contains("no allowlist"));
+    }
+
+    #[test]
+    fn writes_require_allowlisted_string_and_bytes_values() {
+        for solidity_type in ["string", "bytes", "bytes32"] {
+            let params = BTreeMap::from([("payload".to_string(), ParamDecl::default())]);
+            let function =
+                parse_abi_function(&format!("execute({solidity_type} payload)")).unwrap();
+            assert!(compile_params(&function, &params, true)
+                .unwrap_err()
+                .to_string()
+                .contains("no enum"));
+        }
+    }
+
+    #[test]
+    fn integer_types_are_exact() {
+        for valid in ["uint", "uint8", "uint256", "int", "int8", "int256"] {
+            assert!(integer_kind(valid).is_some(), "{valid}");
+        }
+        for invalid in ["uint0", "uint7", "uint264", "uint256[]", "Interval"] {
+            assert!(integer_kind(invalid).is_none(), "{invalid}");
+        }
     }
 }
