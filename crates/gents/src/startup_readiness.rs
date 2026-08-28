@@ -21,6 +21,15 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
+/// Observes failed startup behavior-build attempts.
+///
+/// This is diagnostic plumbing for embedders and deterministic test fixtures;
+/// it does not participate in the build-failure verdict.
+#[doc(hidden)]
+pub trait StartupBuildFailureObserver: Send + Sync {
+    fn on_build_failure(&self, behavior_id: &str, failure_number: u32, budget: u32, error: &str);
+}
+
 #[derive(Debug, Clone)]
 pub struct StartupReadinessOptions {
     pub build_failure_budget: u32,

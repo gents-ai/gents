@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use events::EventName;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::startup_readiness::StartupReadinessOptions;
@@ -15,6 +16,118 @@ use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::fixtures::test_identity;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
+
+#[derive(Clone, Debug)]
+struct BuildFailure {
+    behavior_id: String,
+    failure_number: u32,
+    budget: u32,
+    error: String,
+}
+
+struct RecordingBuildFailureObserver {
+    failures: Mutex<Vec<BuildFailure>>,
+    failure_count_tx: watch::Sender<usize>,
+}
+
+impl Default for RecordingBuildFailureObserver {
+    fn default() -> Self {
+        let (failure_count_tx, _) = watch::channel(0);
+        Self {
+            failures: Mutex::new(Vec::new()),
+            failure_count_tx,
+        }
+    }
+}
+
+impl RecordingBuildFailureObserver {
+    fn failures(&self) -> Vec<BuildFailure> {
+        self.failures
+            .lock()
+            .expect("build failure observer mutex poisoned")
+            .clone()
+    }
+
+    async fn wait_for_failure_count(&self, expected: usize) {
+        let mut failure_count_rx = self.failure_count_tx.subscribe();
+        loop {
+            if self
+                .failures
+                .lock()
+                .expect("build failure observer mutex poisoned")
+                .len()
+                >= expected
+            {
+                return;
+            }
+            failure_count_rx
+                .changed()
+                .await
+                .expect("build failure observer closed");
+        }
+    }
+}
+
+impl gents::startup_readiness::StartupBuildFailureObserver for RecordingBuildFailureObserver {
+    fn on_build_failure(&self, behavior_id: &str, failure_number: u32, budget: u32, error: &str) {
+        let count = {
+            let mut failures = self
+                .failures
+                .lock()
+                .expect("build failure observer mutex poisoned");
+            failures.push(BuildFailure {
+                behavior_id: behavior_id.to_string(),
+                failure_number,
+                budget,
+                error: error.to_string(),
+            });
+            failures.len()
+        };
+        self.failure_count_tx.send_replace(count);
+    }
+}
+
+async fn wait_for_runtime_counts(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    runnable: i64,
+    unavailable: i64,
+) -> Value {
+    let escaped_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
+                runnable_behavior_count
+                unavailable_behavior_count
+            }}
+        }}"#
+    );
+    let mut updates = node.subscribe(&[EventName::Update]);
+    loop {
+        let response = node.execute(&query).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        if let Some(row) = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRuntime"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .cloned()
+        {
+            let observed_runnable = row.get("runnable_behavior_count").and_then(Value::as_i64);
+            let observed_unavailable = row
+                .get("unavailable_behavior_count")
+                .and_then(Value::as_i64);
+            if observed_runnable == Some(runnable) && observed_unavailable == Some(unavailable) {
+                return row;
+            }
+        }
+        updates
+            .recv()
+            .await
+            .expect("runtime status update subscription closed");
+    }
+}
 
 #[tokio::test]
 async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<()> {
@@ -52,12 +165,14 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     );
 
     let observer = Arc::new(RecordingProcessObserver::default());
+    let build_failure_observer = Arc::new(RecordingBuildFailureObserver::default());
     let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
         DocumentRuntimeOptions {
             tool_ceiling: ToolCeiling::meta_only(),
             process_state_observer: Some(observer.clone()),
+            startup_build_failure_observer: Some(build_failure_observer.clone()),
             retry_policy: gents::retry::RetryPolicy {
                 max_retries: 3,
                 base_delay_ms: 1,
@@ -71,30 +186,25 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
         },
     )
     .await?;
+    let default_behavior_id = agent.default_behavior_id().to_string();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
     observer.wait_for(ProcessLifecycleState::Ready).await;
 
-    let escaped_did = escape_graphql_string(identity.did());
-    let query = format!(
-        r#"{{
-            AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
-                runnable_behavior_count
-                unavailable_behavior_count
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRuntime"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("AgentRuntime row");
+    let failures = build_failure_observer.failures();
+    assert_eq!(failures.len(), 2, "the configured budget must be exhausted");
+    assert_eq!(failures[0].failure_number, 1);
+    assert_eq!(failures[1].failure_number, 2);
+    assert!(failures
+        .iter()
+        .all(|failure| failure.behavior_id == default_behavior_id));
+    assert!(failures.iter().all(|failure| failure.budget == 2));
+    assert!(failures
+        .iter()
+        .all(|failure| failure.error.contains("GENTS_TEST_559_UNSET_KEY")));
+
+    let row = wait_for_runtime_counts(node.as_ref(), identity.did(), 0, 1).await;
     assert_eq!(
         row.get("runnable_behavior_count").and_then(Value::as_i64),
         Some(0),
@@ -174,6 +284,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     assert!(!response.has_errors(), "{:?}", response.errors);
 
     let observer = Arc::new(RecordingProcessObserver::default());
+    let build_failure_observer = Arc::new(RecordingBuildFailureObserver::default());
     let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
@@ -189,39 +300,34 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
                 ..Default::default()
             },
             process_state_observer: Some(observer.clone()),
+            startup_build_failure_observer: Some(build_failure_observer.clone()),
             ..Default::default()
         },
     )
     .await?;
+    let default_behavior_id = agent.default_behavior_id().to_string();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
-    tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+    build_failure_observer.wait_for_failure_count(1).await;
     unsafe {
         std::env::set_var(VAR, "late-key");
     }
 
     observer.wait_for(ProcessLifecycleState::Ready).await;
 
-    let escaped_did = escape_graphql_string(identity.did());
-    let query = format!(
-        r#"{{
-            AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
-                runnable_behavior_count
-                unavailable_behavior_count
-            }}
-        }}"#
+    let failures = build_failure_observer.failures();
+    assert!(
+        !failures.is_empty(),
+        "the key must be installed only after an observed failed build"
     );
-    let response = node.execute(&query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRuntime"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("AgentRuntime row");
+    assert!(failures.iter().all(|failure| failure.budget == 10));
+    assert!(failures
+        .iter()
+        .all(|failure| failure.behavior_id == default_behavior_id));
+    assert!(failures.iter().all(|failure| failure.error.contains(VAR)));
+
+    let row = wait_for_runtime_counts(node.as_ref(), identity.did(), 1, 0).await;
     assert_eq!(
         row.get("runnable_behavior_count").and_then(Value::as_i64),
         Some(1),

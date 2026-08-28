@@ -1,10 +1,6 @@
-use std::sync::Mutex;
-use std::time::Duration;
-
 use gents::{ProcessLifecycleObserver, ProcessLifecycleState};
+use std::sync::Mutex;
 use tokio::sync::watch;
-
-const PROCESS_STATE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct RecordingProcessObserver {
     states: Mutex<Vec<ProcessLifecycleState>>,
@@ -31,24 +27,17 @@ impl RecordingProcessObserver {
 
     pub async fn wait_for(&self, expected: ProcessLifecycleState) {
         let mut process_state_rx = self.process_state_tx.subscribe();
-        let wait = async {
-            loop {
-                if *process_state_rx.borrow_and_update() == expected {
-                    return Ok::<(), watch::error::RecvError>(());
-                }
-                process_state_rx.changed().await?;
+        loop {
+            if self.states().contains(&expected) {
+                return;
             }
-        };
-        match tokio::time::timeout(PROCESS_STATE_WAIT_TIMEOUT, wait).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                panic!("process lifecycle observer closed while waiting for {expected:?}: {error}")
-            }
-            Err(error) => panic!(
-                "timed out after {PROCESS_STATE_WAIT_TIMEOUT:?} waiting for observed process state \
-                 {expected:?}; observed states: {:?}: {error}",
-                self.states()
-            ),
+            process_state_rx.changed().await.unwrap_or_else(|error| {
+                panic!(
+                    "process lifecycle observer closed while waiting for {expected:?}; \
+                     observed states: {:?}: {error}",
+                    self.states()
+                )
+            });
         }
     }
 }
