@@ -7,7 +7,7 @@ use crate::llm::tool::ToolDyn;
 use crate::llm::{HookAction, ToolCallHookAction};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::LiveToolOutputRegistry;
@@ -87,6 +87,7 @@ impl BackgroundToolRegistry {
 #[derive(Clone)]
 struct BackgroundExecution {
     cancellation_token: CancellationToken,
+    completion_tx: watch::Sender<bool>,
 }
 
 #[derive(Clone, Default)]
@@ -147,9 +148,13 @@ impl BackgroundExecutionRegistry {
         tool_call_id: String,
         cancellation_token: CancellationToken,
     ) -> BackgroundExecutionReservation {
+        let (completion_tx, _) = watch::channel(false);
         self.lock_executions().insert(
             tool_call_id.clone(),
-            BackgroundExecution { cancellation_token },
+            BackgroundExecution {
+                cancellation_token,
+                completion_tx,
+            },
         );
         BackgroundExecutionReservation {
             registry: self.clone(),
@@ -158,17 +163,45 @@ impl BackgroundExecutionRegistry {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn remove(&self, tool_call_id: &str) {
         self.remove_now(tool_call_id);
     }
 
     /// Returns whether this process still owns a live background execution.
-    pub async fn contains(&self, tool_call_id: &str) -> bool {
+    pub(crate) async fn contains(&self, tool_call_id: &str) -> bool {
         self.lock_executions().contains_key(tool_call_id)
     }
 
+    /// Waits until this process releases ownership of a background execution.
+    ///
+    /// Normal worker completion releases ownership after durable terminal
+    /// persistence, completion projection, and live-output cleanup. An
+    /// unexpected task panic or abort drops the same ownership guard earlier,
+    /// allowing recovery to observe the abandoned durable execution.
+    ///
+    /// Subscribing while holding the registry lock makes the boundary
+    /// missed-event-safe: an execution removed before this call returns
+    /// immediately, while an execution removed afterward signals this waiter.
+    pub async fn wait_for_completion(&self, tool_call_id: &str) {
+        let mut completion_rx = {
+            let executions = self.lock_executions();
+            let Some(execution) = executions.get(tool_call_id) else {
+                return;
+            };
+            execution.completion_tx.subscribe()
+        };
+        while !*completion_rx.borrow_and_update() {
+            if completion_rx.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+
     fn remove_now(&self, tool_call_id: &str) {
-        self.lock_executions().remove(tool_call_id);
+        if let Some(execution) = self.lock_executions().remove(tool_call_id) {
+            execution.completion_tx.send_replace(true);
+        }
     }
 
     fn lock_executions(&self) -> std::sync::MutexGuard<'_, HashMap<String, BackgroundExecution>> {
@@ -188,6 +221,7 @@ pub(crate) struct BackgroundExecutionReservation {
 }
 
 impl BackgroundExecutionReservation {
+    #[cfg(test)]
     pub(crate) fn disarm(mut self) {
         self.armed = false;
     }

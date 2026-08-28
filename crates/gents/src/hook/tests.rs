@@ -2810,6 +2810,54 @@ async fn background_execution_reservation_drop_releases_ownership() {
 }
 
 #[tokio::test]
+async fn background_execution_completion_wait_is_missed_event_safe() {
+    let registry = BackgroundExecutionRegistry::default();
+    let reservation = registry.reserve("tool-waited".to_string(), CancellationToken::new());
+    reservation.disarm();
+
+    let waiter_registry = registry.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_registry.wait_for_completion("tool-waited").await;
+    });
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished());
+
+    registry.remove("tool-waited").await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+        .await
+        .expect("completion waiter should observe registry removal")
+        .expect("completion waiter task should not panic");
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        registry.wait_for_completion("tool-waited"),
+    )
+    .await
+    .expect("waiting after registry removal should return immediately");
+}
+
+#[tokio::test]
+async fn background_execution_completion_wait_observes_task_abort_guard_drop() {
+    let registry = BackgroundExecutionRegistry::default();
+    let reservation = registry.reserve("tool-aborted".to_string(), CancellationToken::new());
+    let task = tokio::spawn(async move {
+        let _reservation = reservation;
+        std::future::pending::<()>().await;
+    });
+    tokio::task::yield_now().await;
+
+    task.abort();
+    let error = task.await.expect_err("aborted task should not complete");
+    assert!(error.is_cancelled());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        registry.wait_for_completion("tool-aborted"),
+    )
+    .await
+    .expect("task-owned reservation should release on abort");
+}
+
+#[tokio::test]
 async fn flushed_sequence_commit_cannot_resurrect_removed_live_output() {
     let state = BackgroundLiveOutputState::default();
     state.record_flushed_seq_if_live("removed-tool", 7).await;

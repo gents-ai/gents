@@ -336,25 +336,6 @@ async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &st
     first_row(&node.execute(&query).await, "AgentToolCall")
 }
 
-async fn wait_for_background_execution_completion(
-    executions: &BackgroundExecutionRegistry,
-    tool_call_id: &str,
-) {
-    let wait = async {
-        while executions.contains(tool_call_id).await {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(5), wait)
-        .await
-        .unwrap_or_else(|error| {
-            panic!(
-                "background execution {tool_call_id} did not leave the live registry after 5s: \
-                 {error}"
-            )
-        });
-}
-
 #[tokio::test]
 async fn background_diagnostic_snapshot_is_bounded_and_explicit() {
     let ready = bounded_diagnostic(Duration::from_secs(1), async { "ready" }).await;
@@ -804,9 +785,9 @@ async fn panicking_background_tool_terminalizes_and_notifies() {
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
     // Registry ownership ends only after terminal persistence and completion
-    // projection finish. Waiting on that in-process boundary avoids competing
-    // Defra reads while the background worker is trying to write under load.
-    wait_for_background_execution_completion(&executions, &tool_call_id).await;
+    // projection finish. Await that owned task boundary directly instead of
+    // imposing a wall-clock deadline on Defra writes under suite load.
+    executions.wait_for_completion(&tool_call_id).await;
 
     let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("failed"));
