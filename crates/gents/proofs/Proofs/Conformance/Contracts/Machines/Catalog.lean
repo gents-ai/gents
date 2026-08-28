@@ -11,6 +11,7 @@ import Proofs.Conformance.Contracts.Machines.ManagedExec
 import Proofs.Conformance.Contracts.Machines.Subagent
 import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.Conformance.Contracts.Machines.Mailbox
+import Proofs.Conformance.Contracts.Machines.EthSubmission
 import Proofs.CompletionRetry.Contracts
 
 namespace Conformance.Contracts
@@ -78,6 +79,7 @@ def stateMachines : List StateMachineContract :=
   , childTerminalMachine
   , goalMachine
   , mailboxMachine
+  , ethSubmissionMachine
   ]
 
 end Conformance.Contracts

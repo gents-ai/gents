@@ -1,0 +1,16 @@
+# Local durable journal for simulate-before-sign Ethereum submissions.
+# raw_transaction is retained so recovery always rebroadcasts identical bytes.
+type EthSubmission {
+    submission_key: String @index(unique: true)
+    principal_did: String @index @immutable
+    chain_id: Int @index @immutable
+    request_hash: String @immutable
+    from_address: String @index @immutable
+    nonce: Int @immutable
+    raw_transaction: String @immutable
+    tx_hash: String @index @immutable
+    status: String @index
+    receipt_json: String
+    created_at: DateTime @immutable
+    updated_at: DateTime @index(direction: DESC)
+}

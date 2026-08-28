@@ -146,6 +146,50 @@ impl<T: JsonRpcTransport> EthRpcClient<T> {
             .await
     }
 
+    #[allow(dead_code)] // Wired into generated write tools in the next stack commit.
+    pub(crate) async fn simulate_transaction(&self, transaction: Value) -> Result<Value> {
+        self.ensure_chain_id().await?;
+        self.rpc("eth_call", json!([transaction, "latest"])).await
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn pending_nonce(&self, address: &str) -> Result<Value> {
+        self.ensure_chain_id().await?;
+        self.rpc("eth_getTransactionCount", json!([address, "pending"]))
+            .await
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn estimate_gas(&self, transaction: Value) -> Result<Value> {
+        self.ensure_chain_id().await?;
+        self.rpc("eth_estimateGas", json!([transaction])).await
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn max_priority_fee_per_gas(&self) -> Result<Value> {
+        self.ensure_chain_id().await?;
+        self.rpc("eth_maxPriorityFeePerGas", json!([])).await
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn gas_price(&self) -> Result<Value> {
+        self.ensure_chain_id().await?;
+        self.rpc("eth_gasPrice", json!([])).await
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn send_raw_transaction(&self, raw: &str) -> Result<Value> {
+        self.ensure_chain_id().await?;
+        self.rpc("eth_sendRawTransaction", json!([raw])).await
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn transaction_receipt(&self, tx_hash: &str) -> Result<Value> {
+        self.ensure_chain_id().await?;
+        self.rpc("eth_getTransactionReceipt", json!([tx_hash]))
+            .await
+    }
+
     async fn ensure_chain_id(&self) -> Result<()> {
         if let Some(cached) = *self
             .cached_chain_id
@@ -205,12 +249,45 @@ fn decode_rpc_result(response: Value) -> Result<Value> {
         if is_pruned_history_message(&message) {
             bail!("eth pruned-history error (not retried): {message}");
         }
+        if let Some(reason) = revert_reason_from_error(error) {
+            bail!("eth call reverted: {reason}");
+        }
         bail!("eth JSON-RPC error {code}: {message}");
     }
     response
         .get("result")
         .cloned()
         .ok_or_else(|| anyhow!("eth JSON-RPC response missing result: {response}"))
+}
+
+pub fn revert_reason_from_error(error: &Value) -> Option<String> {
+    let data = error.get("data")?;
+    let hex = match data {
+        Value::String(text) => text.as_str(),
+        Value::Object(obj) => obj.get("data").and_then(Value::as_str)?,
+        _ => return None,
+    };
+    decode_revert_data(hex)
+}
+
+/// `Error(string)` selector `0x08c379a0`.
+pub fn decode_revert_data(hex: &str) -> Option<String> {
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    if hex.len() < 8 + 64 + 64 || !hex.to_ascii_lowercase().starts_with("08c379a0") {
+        return None;
+    }
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect::<Vec<_>>();
+    if bytes.len() < 4 + 32 + 32 {
+        return None;
+    }
+    let str_len = u32::from_be_bytes(bytes[4 + 32 + 28..4 + 32 + 32].try_into().ok()?) as usize;
+    let start: usize = 4 + 64;
+    let end = start.checked_add(str_len)?;
+    let slice = bytes.get(start..end)?;
+    String::from_utf8(slice.to_vec()).ok()
 }
 
 pub fn is_pruned_history_message(message: &str) -> bool {

@@ -112,6 +112,8 @@ mod config_replication;
 mod coverage;
 #[path = "conformance/directory_projection.rs"]
 mod directory_projection;
+#[path = "conformance/eth_submission.rs"]
+mod eth_submission;
 #[path = "conformance/event_delivery.rs"]
 mod event_delivery;
 #[path = "conformance/fleet.rs"]

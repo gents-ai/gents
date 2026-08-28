@@ -60,3 +60,4 @@ import Proofs.EditMatch
 import Proofs.EventDelivery
 import Proofs.Conformance.EventDelivery
 import Proofs.GraphPipeline
+import Proofs.EthSubmission

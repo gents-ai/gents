@@ -387,6 +387,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreifog5znpi3loloky4xeprsoqksy2ylr6e4cpcs2loulcmxxxqa4dy"
     ),
     baseline_entry!(
+        gents_protocol::schemas::ETH_SUBMISSION_NAME,
+        gents_protocol::schemas::ETH_SUBMISSION,
+        "bafyreifm54mjrhhy6wnebzgbwoimpy27ifcfrfcdq3ig4edulvgr3cm4jy"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::WORKSPACE_ROOT_NAME,
         gents_protocol::schemas::WORKSPACE_ROOT,
         "bafyreibw7kuk4xise6epukrca2inza3j44bgsxfbkse3tkbk6enqzsr6ui"

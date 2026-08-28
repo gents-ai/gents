@@ -168,6 +168,23 @@ pub fn encode_attestation(signature: &[u8]) -> String {
     format!("0x{}", lowercase_hex(signature))
 }
 
+/// Recoverable secp256k1 signature over a 32-byte digest (Ethereum prehash).
+pub fn sign_prehash_recoverable(
+    secret: &[u8; 32],
+    hash: &[u8; 32],
+) -> Result<([u8; 32], [u8; 32], bool)> {
+    let signing_key = SigningKey::from_bytes(secret.into()).context("loading secp256k1 secret")?;
+    let (signature, recid) = signing_key
+        .sign_prehash_recoverable(hash)
+        .context("signing ethereum digest")?;
+    let bytes = signature.to_bytes();
+    let mut r = [0u8; 32];
+    let mut s = [0u8; 32];
+    r.copy_from_slice(&bytes[..32]);
+    s.copy_from_slice(&bytes[32..]);
+    Ok((r, s, recid.to_byte() & 1 == 1))
+}
+
 fn parse_secret_hex(value: &str) -> Result<[u8; 32]> {
     let hex = value.strip_prefix("0x").unwrap_or(value).trim();
     if hex.len() != 64 {

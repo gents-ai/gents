@@ -270,6 +270,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := allSurfaces
     , deferred := []
     }
+  , { feature := "eth-submission"
+    , required := [Surface.agentFacing, Surface.runtimeInternal]
+    , deferred := []
+    }
   ]
 
 def vocabularyCoverage : List CoverageEntry :=
@@ -460,6 +464,11 @@ def stateMachineCoverage : List CoverageEntry :=
       "ManagedExec"
       "managed_exec::tests::managed_exec_state_machine_contract_is_complete")
       "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "state_machine"
+      "EthSubmission"
+      "eth::submit::tests::transition_table_matches_lean_contract")
+      "eth-submission" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "state_machine"
       "AwaitMode"
