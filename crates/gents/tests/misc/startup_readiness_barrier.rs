@@ -1,12 +1,12 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::startup_readiness::StartupReadinessOptions;
 use gents::{
-    ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver,
-    ProcessLifecycleState, ToolCeiling,
+    ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleState,
+    ToolCeiling,
 };
 use serde_json::Value;
 use tokio::sync::watch;
@@ -14,21 +14,7 @@ use tokio::sync::watch;
 use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::fixtures::test_identity;
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::waits::wait_for_runtime_process_state;
-
-#[derive(Default)]
-struct RecordingObserver {
-    states: Mutex<Vec<ProcessLifecycleState>>,
-}
-
-impl ProcessLifecycleObserver for RecordingObserver {
-    fn on_process_state_change(&self, state: ProcessLifecycleState) {
-        self.states
-            .lock()
-            .expect("recording observer mutex poisoned")
-            .push(state);
-    }
-}
+use crate::support::waits::RecordingProcessObserver;
 
 #[tokio::test]
 async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<()> {
@@ -65,7 +51,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
         "the poison env var must not be set for this test to be honest"
     );
 
-    let observer = Arc::new(RecordingObserver::default());
+    let observer = Arc::new(RecordingProcessObserver::default());
     let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
@@ -88,7 +74,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
-    wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
+    observer.wait_for(ProcessLifecycleState::Ready).await;
 
     let escaped_did = escape_graphql_string(identity.did());
     let query = format!(
@@ -124,11 +110,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let _ = shutdown_tx.send(true);
     run_task.await??;
 
-    let observed = observer
-        .states
-        .lock()
-        .expect("recording observer mutex poisoned")
-        .clone();
+    let observed = observer.states();
     assert!(
         observed.contains(&ProcessLifecycleState::Ready),
         "process must reach Ready despite the un-buildable behavior; observed {observed:?}"
@@ -191,6 +173,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
+    let observer = Arc::new(RecordingProcessObserver::default());
     let agent = Gents::from_default_behavior_documents(
         node.clone(),
         identity.clone(),
@@ -205,6 +188,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
                 build_failure_budget: 10,
                 ..Default::default()
             },
+            process_state_observer: Some(observer.clone()),
             ..Default::default()
         },
     )
@@ -217,7 +201,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         std::env::set_var(VAR, "late-key");
     }
 
-    wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
+    observer.wait_for(ProcessLifecycleState::Ready).await;
 
     let escaped_did = escape_graphql_string(identity.did());
     let query = format!(

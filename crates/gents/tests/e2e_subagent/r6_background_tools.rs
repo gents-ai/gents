@@ -336,46 +336,23 @@ async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &st
     first_row(&node.execute(&query).await, "AgentToolCall")
 }
 
-async fn wait_for_tool_terminal_state(
-    node: &EmbeddedNode,
-    session_id: &str,
+async fn wait_for_background_execution_completion(
+    executions: &BackgroundExecutionRegistry,
     tool_call_id: &str,
-) -> ToolCallRow {
-    let mut updates = node.subscribe(&[EventName::Update]);
+) {
     let wait = async {
-        loop {
-            let row = load_tool_call(node, session_id, tool_call_id).await;
-            if row.lifecycle_state.as_deref() != Some("running") {
-                return row;
-            }
-            updates
-                .recv()
-                .await
-                .expect("embedded-node update subscription closed");
+        while executions.contains(tool_call_id).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     };
-    match tokio::time::timeout(std::time::Duration::from_secs(5), wait).await {
-        Ok(row) => row,
-        Err(_) => {
-            let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
-            let (last_row, completion) = tokio::join!(
-                bounded_diagnostic(
-                    Duration::from_secs(1),
-                    load_tool_call(node, session_id, tool_call_id),
-                ),
-                bounded_diagnostic(Duration::from_secs(1), async {
-                    fetch_messages(node, session_id)
-                        .await
-                        .into_iter()
-                        .find(|message| message.content.contains(&marker))
-                }),
-            );
+    tokio::time::timeout(Duration::from_secs(5), wait)
+        .await
+        .unwrap_or_else(|error| {
             panic!(
-                "background tool did not terminalize after its durable update; \
-                 last_tool_call={last_row}; completion_marker={completion}"
-            );
-        }
-    }
+                "background execution {tool_call_id} did not leave the live registry after 5s: \
+                 {error}"
+            )
+        });
 }
 
 #[tokio::test]
@@ -813,6 +790,8 @@ async fn panicking_background_tool_terminalizes_and_notifies() {
     )
     .await;
 
+    let executions = BackgroundExecutionRegistry::default();
+    let hook = hook.with_background_execution_registry(executions.clone());
     let receipt = skip_reason_json(
         hook.on_tool_call(
             "spawn_process",
@@ -824,18 +803,24 @@ async fn panicking_background_tool_terminalizes_and_notifies() {
     );
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
-    let row = wait_for_tool_terminal_state(db.node.as_ref(), &session_id, &tool_call_id).await;
+    // Registry ownership ends only after terminal persistence and completion
+    // projection finish. Waiting on that in-process boundary avoids competing
+    // Defra reads while the background worker is trying to write under load.
+    wait_for_background_execution_completion(&executions, &tool_call_id).await;
+
+    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("failed"));
     assert!(row
         .result
         .as_deref()
         .is_some_and(|result| { result.contains("intentional background tool panic") }));
 
-    // The notification append is a separate mutation after the terminal row
-    // write (the row carries `completionPending:tool_panicked` until the side
-    // effects land), so await it rather than reading messages once.
-    let notification =
-        wait_for_tool_completion_message(db.node.as_ref(), &session_id, &tool_call_id).await;
+    let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
+    let notification = fetch_messages(db.node.as_ref(), &session_id)
+        .await
+        .into_iter()
+        .find(|message| message.content.contains(&marker))
+        .expect("registry release must follow the completion notification append");
     assert!(notification.content.contains(r#"status="failed""#));
     assert!(notification
         .content
