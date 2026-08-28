@@ -223,6 +223,81 @@ test.describe("desktop responsive layout guardrails", () => {
     await expectNoPageHorizontalOverflow(page);
   });
 
+  test("keyboard viewport resize reveals the focused pairing address", async ({
+    page,
+  }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+    await page.addInitScript(() => {
+      const viewport = new EventTarget() as EventTarget & {
+        height: number;
+        width: number;
+        offsetTop: number;
+        offsetLeft: number;
+      };
+      Object.assign(viewport, {
+        height: window.innerHeight,
+        width: window.innerWidth,
+        offsetTop: 0,
+        offsetLeft: 0,
+      });
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        value: viewport,
+      });
+      Object.assign(window, {
+        __focusedControlRevealCount: 0,
+        __setTestVisualViewport(height: number) {
+          viewport.height = height;
+          viewport.dispatchEvent(new Event("resize"));
+        },
+      });
+      Element.prototype.scrollIntoView = function (options) {
+        if (this === document.activeElement) {
+          (
+            window as typeof window & { __focusedControlRevealCount: number }
+          ).__focusedControlRevealCount += 1;
+        }
+        return originalScrollIntoView.call(this, options);
+      };
+    });
+
+    await gotoHarness(page, "empty-fleet");
+    await page
+      .getByTestId("fleet-remote-disclosure")
+      .locator(":scope > summary")
+      .click();
+    const address = page.getByTestId("fleet-add-server-address");
+    await address.focus();
+    await page.evaluate(() => {
+      (
+        window as typeof window & {
+          __setTestVisualViewport: (height: number) => void;
+        }
+      ).__setTestVisualViewport(360);
+    });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { __focusedControlRevealCount: number })
+              .__focusedControlRevealCount,
+        ),
+      )
+      .toBeGreaterThan(0);
+    await expect(page.locator(".app-shell")).toHaveCSS("height", "360px");
+    const addressRect = await address.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { bottom: rect.bottom, top: rect.top };
+    });
+    expect(addressRect.top).toBeGreaterThanOrEqual(0);
+    expect(addressRect.bottom).toBeLessThanOrEqual(360);
+  });
+
   test("populated-fleet status discovery stays reachable on mobile", async ({
     page,
   }) => {
