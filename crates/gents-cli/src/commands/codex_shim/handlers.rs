@@ -8,6 +8,8 @@ use super::{trace, ConnectionState, ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_I
 mod background;
 mod basic;
 mod host;
+mod models;
+mod skills;
 mod thread;
 mod turns;
 
@@ -101,7 +103,7 @@ pub(super) async fn handle_request(
 
         codex::ClientRequest::SkillsConfigWrite {
             request_id, params, ..
-        } => basic::handle_skills_config_write(outbound, state, request_id, params).await,
+        } => skills::handle_skills_config_write(outbound, state, request_id, params).await,
 
         unsupported => send_planned_stub(outbound, state, unsupported).await,
     };

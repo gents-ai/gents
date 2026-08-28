@@ -12,10 +12,9 @@ use serde_json::{json, Value};
 use super::progress::response_field_is_blank;
 use crate::materialized_message_query;
 
-/// All shim reads and auto-committed writes go through the runtime's bounded
-/// DefraDB conflict retry (#440): right after startup the runtime's own
-/// reconciliation writes are still in flight, and an unretried auto-commit
-/// surfaces a raw `transaction conflict` to the Codex client (#933).
+/// Route shim reads and auto-committed writes through the runtime's bounded
+/// DefraDB conflict retry so overlapping reconciliation stays transparent to
+/// Codex clients.
 pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
     let response = graphql_with_transaction_retry(node, query, "codex shim store").await?;
     Ok(json!({
@@ -23,15 +22,9 @@ pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<
     }))
 }
 
-/// Run a write mutation inside a transaction and commit it. A bare
-/// auto-committed single mutation (`node.execute`) does NOT emit the DefraDB
-/// `Update` event the runtime control watcher reconciles on, but a transaction
-/// COMMIT does. Routing skill enable/disable writes through here lets a running
-/// agent pick up Codex-driven toggles without a restart — matching the
-/// `config skill` CLI path (#340). Mirrors the Local arm of
-/// [`ConfigApplyTxn`], plus a bounded conflict retry that the config client does
-/// not have (#933): a conflicted cycle commits nothing, so a successful call
-/// still emits exactly one Update event.
+/// Commit a mutation transactionally so DefraDB emits the `Update` event the
+/// runtime control watcher consumes. A conflicted cycle commits nothing; the
+/// bounded retry therefore preserves exactly one update for a successful call.
 pub(super) async fn execute_committed(node: &EmbeddedNode, mutation: &str) -> Result<Value> {
     let mut retry_index = 0;
     loop {
