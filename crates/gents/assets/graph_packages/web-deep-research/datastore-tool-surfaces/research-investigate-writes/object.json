@@ -8,6 +8,7 @@
       "tool_name": "write_research_source",
       "collection": "WebResearchSource",
       "description": "Record one fetched source with stable service provenance.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 2},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "source_id", "required": true},
@@ -30,6 +31,7 @@
       "tool_name": "write_research_claim",
       "collection": "WebResearchClaim",
       "description": "Record one atomic claim; link it to sources through write_research_evidence.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 6},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "claim_id", "required": true},
@@ -42,15 +44,14 @@
     {
       "tool_name": "write_research_evidence",
       "collection": "WebResearchEvidence",
-      "description": "Link one claim to one fetched source with exact provenance and an explicit support relationship.",
+      "description": "Link one claim to one authoritative source record with an explicit support relationship.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 6},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "evidence_id", "required": true},
         {"name": "assignment_id", "required": false, "fill": {"source_field": "assignment_id"}},
         {"name": "claim_id", "required": true},
         {"name": "source_id", "required": true},
-        {"name": "fetch_id", "required": true},
-        {"name": "content_hash", "required": true},
         {"name": "relationship", "required": true},
         {"name": "locator", "required": true},
         {"name": "supporting_excerpt", "required": true},

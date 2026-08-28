@@ -628,7 +628,7 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
                 WebResearchInvestigation(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ assignment_id expected_total source_count claim_count evidence_count status }}
                 WebResearchSource(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ source_id assignment_id url fetch_id content_hash verified_quote quote_verified }}
                 WebResearchClaim(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ claim_id assignment_id statement }}
-                WebResearchEvidence(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ evidence_id assignment_id claim_id source_id fetch_id content_hash relationship locator supporting_excerpt verified_quote_used }}
+                WebResearchEvidence(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ evidence_id assignment_id claim_id source_id relationship locator supporting_excerpt verified_quote_used }}
                 WebResearchClaimVerdict(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ claim_id statement verdict confidence rationale evidence_summary quote_verification }}
                 WebResearchDraft(filter: {{ run_id: {{ _eq: "{correlation}" }} }}) {{ supported_claim_count disputed_claim_count }}
             }}"#
@@ -735,11 +735,6 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
             string_field(claim, "assignment_id")? == assignment_id
                 && string_field(source, "assignment_id")? == assignment_id,
             "cross-assignment evidence link: {link}"
-        );
-        anyhow::ensure!(
-            string_field(link, "fetch_id")? == string_field(source, "fetch_id")?
-                && string_field(link, "content_hash")? == string_field(source, "content_hash")?,
-            "evidence provenance does not match its source: {link}"
         );
         anyhow::ensure!(
             matches!(

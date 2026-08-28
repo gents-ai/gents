@@ -16,8 +16,8 @@
       "kind": "read",
       "tool_name": "read_report_research_evidence",
       "collection": "WebResearchEvidence",
-      "description": "Load typed claim-to-source joins for citation placement and provenance checks.",
-      "fields": ["evidence_id", "claim_id", "source_id", "fetch_id", "content_hash", "relationship", "locator", "supporting_excerpt", "verified_quote_used", "notes"],
+      "description": "Load normalized claim-to-source joins for citation placement.",
+      "fields": ["evidence_id", "claim_id", "source_id", "relationship", "locator", "supporting_excerpt", "verified_quote_used", "notes"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

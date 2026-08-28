@@ -62,7 +62,7 @@ The boundary rule is: **small typed trigger carrier plus correlation-scoped data
 
 The runtime keeps grouped member documents in the template scope, but the prompt deliberately interpolates only the bounded group metadata. The adjudicator obtains full closure records through `read_research_investigation`, ensuring the schema and correlation fill are enforced at the tool boundary and avoiding an unbounded blob of model-authored summaries in the trigger prompt.
 
-`run_id` is filled from trigger correlation by every datastore tool. Fields such as `assignment_id` and `expected_total` are filled from the triggering assignment where possible. Agents do not receive those authority-bearing fields as caller-supplied tool arguments. Quote-verification state is stored on the typed source document rather than embedded only in model-authored JSON. `WebResearchEvidence` provides the explicit claim/source/fetch/hash join, relationship, locator, and excerpt used by both downstream stages.
+`run_id` is filled from trigger correlation by every datastore tool. Fields such as `assignment_id` and `expected_total` are filled from the triggering assignment where possible. Agents do not receive those authority-bearing fields as caller-supplied tool arguments. Quote-verification state, fetch ID, and content hash are stored once on the authoritative typed source document rather than duplicated in model-authored evidence links. `WebResearchEvidence` provides the normalized claim-to-source join, relationship, locator, and excerpt used by both downstream stages. Runtime output obligations require every investigator to persist at least two sources, six claims, and six evidence links before its request may complete.
 
 ## Search and evidence policy
 

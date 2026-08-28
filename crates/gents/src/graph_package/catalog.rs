@@ -494,6 +494,51 @@ mod tests {
             }
         }
 
+        let investigator: BundledToolSurface = serde_json::from_str(
+            package
+                .asset_text("datastore-tool-surfaces/research-investigate-writes/object.json")
+                .unwrap(),
+        )
+        .unwrap();
+        for (tool_name, minimum_writes) in [
+            ("write_research_source", 2),
+            ("write_research_claim", 6),
+            ("write_research_evidence", 6),
+        ] {
+            let SurfaceToolDecl::Create(decl) = investigator
+                .entries
+                .iter()
+                .find(|entry| entry.tool_name() == tool_name)
+                .unwrap_or_else(|| panic!("missing {tool_name}"))
+            else {
+                panic!("{tool_name} must be a create tool");
+            };
+            assert_eq!(
+                decl.output_obligation
+                    .as_ref()
+                    .map(|obligation| obligation.minimum_writes),
+                Some(minimum_writes),
+                "{tool_name} must enforce its investigator minimum"
+            );
+        }
+        let SurfaceToolDecl::Create(evidence_write) = investigator
+            .entries
+            .iter()
+            .find(|entry| entry.tool_name() == "write_research_evidence")
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        assert!(evidence_write
+            .fields
+            .iter()
+            .all(|field| !matches!(field.name.as_str(), "fetch_id" | "content_hash")));
+        let evidence_schema = package
+            .asset_text("schemas/research_evidence.graphql")
+            .unwrap();
+        assert!(!evidence_schema.contains("fetch_id"));
+        assert!(!evidence_schema.contains("content_hash"));
+
         let all_assets = package
             .asset_paths
             .iter()

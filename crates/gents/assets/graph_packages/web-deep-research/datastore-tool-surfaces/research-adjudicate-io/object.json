@@ -32,8 +32,8 @@
       "kind": "read",
       "tool_name": "read_research_evidence",
       "collection": "WebResearchEvidence",
-      "description": "Load typed claim-to-source links and reconcile every provenance tuple against the source ledger.",
-      "fields": ["evidence_id", "assignment_id", "claim_id", "source_id", "fetch_id", "content_hash", "relationship", "locator", "supporting_excerpt", "verified_quote_used", "notes"],
+      "description": "Load typed claim-to-source links and join each source ID to the authoritative source provenance record.",
+      "fields": ["evidence_id", "assignment_id", "claim_id", "source_id", "relationship", "locator", "supporting_excerpt", "verified_quote_used", "notes"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
