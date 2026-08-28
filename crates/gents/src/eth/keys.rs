@@ -168,6 +168,20 @@ pub fn encode_attestation(signature: &[u8]) -> String {
     format!("0x{}", lowercase_hex(signature))
 }
 
+pub(crate) fn decode_attestation(value: &str) -> Result<Vec<u8>> {
+    let hex = value.strip_prefix("0x").unwrap_or(value).trim();
+    if hex.len() % 2 != 0 {
+        bail!("chain key attestation has odd-length hex");
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&hex[index..index + 2], 16)
+                .context("chain key attestation is invalid hex")
+        })
+        .collect()
+}
+
 /// Recoverable secp256k1 signature over a 32-byte digest (Ethereum prehash).
 pub fn sign_prehash_recoverable(
     secret: &[u8; 32],
@@ -273,6 +287,17 @@ mod tests {
             "2026-08-28T00:00:00Z",
         );
         assert_ne!(text.as_bytes(), other);
+    }
+
+    #[test]
+    fn attestation_encoding_round_trips_and_rejects_bad_hex() {
+        let signature = [0x12, 0xab, 0xcd];
+        assert_eq!(
+            decode_attestation(&encode_attestation(&signature)).unwrap(),
+            signature
+        );
+        assert!(decode_attestation("0xabc").is_err());
+        assert!(decode_attestation("0xzz").is_err());
     }
 
     #[test]

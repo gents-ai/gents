@@ -5,7 +5,7 @@
 //! nonce and repeating the action.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use alloy_primitives::{keccak256, Address, U256};
@@ -100,6 +100,11 @@ impl NonceGate {
 pub(crate) struct SubmitOptions {
     pub(crate) receipt_attempts: u32,
     pub(crate) receipt_interval: Duration,
+}
+
+pub(crate) fn global_nonce_gate() -> &'static NonceGate {
+    static GATE: OnceLock<NonceGate> = OnceLock::new();
+    GATE.get_or_init(NonceGate::default)
 }
 
 impl Default for SubmitOptions {

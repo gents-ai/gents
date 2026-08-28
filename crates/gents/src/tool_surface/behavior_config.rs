@@ -262,7 +262,16 @@ impl BehaviorToolConfig {
             },
             // A hold requirement narrows the surface (dispatch waits on an
             // operator verdict), so no ceiling filtering applies.
-            approval_required_tools: dedupe_strings(approval_required_tools),
+            approval_required_tools: {
+                let mut names = approval_required_tools;
+                names.extend(
+                    eth_calls
+                        .iter()
+                        .filter(|call| call.is_signing())
+                        .map(|call| call.tool_name.clone()),
+                );
+                dedupe_strings(names)
+            },
             custom_tools,
             enable_memory: static_policy.memory && enable_memory,
             enable_context_budget_tool: static_policy.context_budget && enable_context_budget,

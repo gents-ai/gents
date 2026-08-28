@@ -23,9 +23,39 @@ pub enum CallDecl {
         #[serde(default)]
         description: Option<String>,
     },
+    Write {
+        tool_name: String,
+        to: String,
+        signature: String,
+        #[serde(default)]
+        params: BTreeMap<String, ParamDecl>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        max_gas: Option<u64>,
+        #[serde(default)]
+        max_fee_per_gas: Option<String>,
+    },
+    NativeTransfer {
+        tool_name: String,
+        #[serde(default)]
+        params: BTreeMap<String, ParamDecl>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        max_gas: Option<u64>,
+        #[serde(default)]
+        max_fee_per_gas: Option<String>,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+impl CallDecl {
+    pub(crate) fn requires_key_binding(&self) -> bool {
+        matches!(self, Self::Write { .. } | Self::NativeTransfer { .. })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParamDecl {
     #[serde(default = "default_model_source")]
@@ -40,6 +70,22 @@ pub struct ParamDecl {
     pub max: Option<String>,
     #[serde(rename = "enum", default)]
     pub enum_values: Option<Vec<String>>,
+    #[serde(default)]
+    pub runtime: Option<String>,
+}
+
+impl Default for ParamDecl {
+    fn default() -> Self {
+        Self {
+            source: default_model_source(),
+            value: None,
+            address_allowlist: None,
+            min: None,
+            max: None,
+            enum_values: None,
+            runtime: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,9 +135,61 @@ pub fn validate_call_decls(decls: &[CallDecl]) -> Result<()> {
                 let function = parse_abi_function(signature)?;
                 compile_params(&function, params, false)?;
             }
+            CallDecl::Write {
+                tool_name,
+                to,
+                signature,
+                params,
+                max_gas,
+                max_fee_per_gas,
+                ..
+            } => {
+                require_tool_name(tool_name, &mut names)?;
+                require_address(to, "write.to")?;
+                validate_gas_caps(tool_name, *max_gas, max_fee_per_gas.as_deref())?;
+                let function = parse_abi_function(signature)?;
+                compile_params(&function, params, true)?;
+            }
+            CallDecl::NativeTransfer {
+                tool_name,
+                params,
+                max_gas,
+                max_fee_per_gas,
+                ..
+            } => {
+                require_tool_name(tool_name, &mut names)?;
+                validate_gas_caps(tool_name, *max_gas, max_fee_per_gas.as_deref())?;
+                let function = native_transfer_function()?;
+                compile_params(&function, params, true)?;
+            }
         }
     }
     Ok(())
+}
+
+fn validate_gas_caps(
+    tool_name: &str,
+    max_gas: Option<u64>,
+    max_fee_per_gas: Option<&str>,
+) -> Result<()> {
+    if max_gas.is_none_or(|value| value == 0) {
+        bail!("write tool {tool_name} requires a positive max_gas");
+    }
+    let fee = max_fee_per_gas
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("write tool {tool_name} requires max_fee_per_gas"))?;
+    if parse_u128(fee).with_context(|| format!("write tool {tool_name} max_fee_per_gas"))? == 0 {
+        bail!("write tool {tool_name} max_fee_per_gas must be positive");
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_u128(value: &str) -> Result<u128> {
+    value
+        .parse::<u128>()
+        .or_else(|_| u128::from_str_radix(value.trim_start_matches("0x"), 16))
+        .map_err(Into::into)
 }
 
 pub(crate) fn compile_params(
@@ -144,11 +242,14 @@ fn validate_param(
     require_write_limits: bool,
 ) -> Result<()> {
     let source = param.source.trim();
-    if !matches!(source, "model" | "fixed") {
+    if !matches!(source, "model" | "fixed" | "runtime") {
         bail!("call param {name} has unsupported source {source:?}");
     }
     if source == "fixed" && param.value.is_none() {
         bail!("call param {name} source=fixed requires value");
+    }
+    if source == "runtime" && param.runtime.as_deref() != Some("self_address") {
+        bail!("call param {name} runtime source must be self_address");
     }
     if !supported_primitive_type(solidity_type) {
         bail!("call param {name} uses unsupported Solidity type {solidity_type}");
@@ -156,6 +257,10 @@ fn validate_param(
 
     let is_address = solidity_type == "address";
     let is_integer = integer_kind(solidity_type).is_some();
+    let is_unbounded_data = solidity_type == "string" || solidity_type.starts_with("bytes");
+    if source == "runtime" && !is_address {
+        bail!("call param {name} runtime self_address requires address type");
+    }
     if let Some(allowlist) = &param.address_allowlist {
         if !is_address {
             bail!("call param {name} has address_allowlist but type is {solidity_type}");
@@ -191,6 +296,14 @@ fn validate_param(
         }
         if is_integer && param.max.is_none() {
             bail!("write param {name} integer has no max (deny-by-default)");
+        }
+        if is_unbounded_data
+            && param
+                .enum_values
+                .as_ref()
+                .is_none_or(|values| values.is_empty())
+        {
+            bail!("write param {name} {solidity_type} has no enum (deny-by-default)");
         }
     }
     Ok(())
@@ -301,6 +414,10 @@ pub(crate) fn parse_abi_function(signature: &str) -> Result<Function> {
         .map_err(|error| anyhow!("invalid ABI signature {signature:?}: {error}"))
 }
 
+pub(crate) fn native_transfer_function() -> Result<Function> {
+    parse_abi_function("nativeTransfer(address to,uint256 value)")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,11 +478,18 @@ mod tests {
     }
 
     #[test]
-    fn unknown_future_call_kinds_are_rejected() {
-        let error = parse_call_decls(Some(
-            &[r#"{"kind":"write","tool_name":"send"}"#.to_string()],
-        ))
-        .unwrap_err();
-        assert!(error.to_string().contains("EthTool.calls"));
+    fn native_transfer_has_explicit_parameter_contract() {
+        let native = r#"{"kind":"native_transfer","tool_name":"send_eth","params":{"to":{"source":"model","address_allowlist":["0x1111111111111111111111111111111111111111"]},"value":{"source":"model","max":"1000"}},"max_gas":21000,"max_fee_per_gas":"2000000000"}"#;
+        let decls = parse_call_decls(Some(&[native.to_string()])).unwrap();
+        validate_call_decls(&decls).unwrap();
+    }
+    #[test]
+    fn writes_require_operator_gas_and_fee_caps() {
+        let write = r#"{"kind":"write","tool_name":"mint","to":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","signature":"mint(uint256 amount)","params":{"amount":{"source":"model","max":"1000"}}}"#;
+        let decls = parse_call_decls(Some(&[write.to_string()])).unwrap();
+        assert!(validate_call_decls(&decls)
+            .unwrap_err()
+            .to_string()
+            .contains("max_gas"));
     }
 }

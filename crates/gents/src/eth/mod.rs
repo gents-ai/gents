@@ -6,7 +6,6 @@ pub mod keys;
 pub mod methods;
 pub(crate) mod query;
 pub(crate) mod rpc;
-#[allow(dead_code)] // Wired into generated write tools in the next stack commit.
 pub(crate) mod submit;
 
 pub(crate) use call_tool::{EthCallTool, ResolvedEthCall};
@@ -21,7 +20,16 @@ pub use methods::{
 };
 pub(crate) use query::{EthQueryTool, ResolvedEthQuery};
 pub use rpc::{HttpEthRpc, ETH_USER_AGENT};
-pub fn validate_eth_call_declarations(calls: &[String]) -> anyhow::Result<()> {
+pub fn validate_eth_call_declarations(
+    calls: &[String],
+    key_binding_id: Option<&str>,
+) -> anyhow::Result<()> {
     let declarations = parse_call_decls(Some(calls))?;
-    validate_call_decls(&declarations)
+    validate_call_decls(&declarations)?;
+    if declarations.iter().any(|decl| decl.requires_key_binding())
+        && key_binding_id.is_none_or(|binding_id| binding_id.trim().is_empty())
+    {
+        anyhow::bail!("signing call declarations require key_binding_id");
+    }
+    Ok(())
 }

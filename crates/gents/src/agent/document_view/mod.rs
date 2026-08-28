@@ -423,8 +423,14 @@ pub(crate) fn expand_eth_tools(
         let rpc_url = doc.rpc_url.as_deref().unwrap_or("");
         let chain_id = doc.chain_id.unwrap_or(0).max(0) as u64;
         if !rpc_url.trim().is_empty() && chain_id > 0 {
-            let calls =
-                crate::eth::ResolvedEthCall::from_decls(&doc.tool_id, chain_id, rpc_url, &decls)?;
+            let calls = crate::eth::ResolvedEthCall::from_decls(
+                &doc.tool_id,
+                chain_id,
+                rpc_url,
+                &decls,
+                &doc.agent_did,
+                doc.key_binding_id.as_deref(),
+            )?;
             for call in calls {
                 if !tool_names.insert(call.tool_name.clone()) {
                     bail!(

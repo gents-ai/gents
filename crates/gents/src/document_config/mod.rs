@@ -16,6 +16,7 @@ mod surface_tool;
 mod task;
 mod tool_selection;
 
+pub(crate) use chain_key_binding::load_chain_key_binding;
 pub use principal::{load_agent_principal, upsert_agent_principal, AgentPrincipal};
 pub(crate) use principal::{load_agent_principal_by_doc_id, load_agent_principal_record};
 
@@ -72,7 +73,7 @@ pub(crate) use datastore_tool_surface::{
 };
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
 pub use eth_tool::{eth_tool_by_id_query, EthToolDocument};
-pub(crate) use eth_tool::{list_eth_tool_records, load_eth_tool_by_doc_id};
+pub(crate) use eth_tool::{list_eth_tool_records, load_eth_tool, load_eth_tool_by_doc_id};
 #[allow(unused_imports)]
 pub(crate) use skill::{list_skill_records, load_skill_by_doc_id, SkillDocument};
 

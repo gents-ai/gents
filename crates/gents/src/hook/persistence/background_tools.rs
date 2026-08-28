@@ -187,6 +187,7 @@ impl DefraSessionHook {
                     requester_did,
                     request_agent_did,
                     request_behavior_id,
+                    Some(execution_request_id.clone()),
                     async {
                         crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
                             Some(background_deadline_at),
@@ -197,13 +198,10 @@ impl DefraSessionHook {
                             correlation,
                             source_fields,
                             true,
-                            async {
-                                crate::tool_call_lifecycle::runtime::call_tool_managed(
-                                    target_tool.as_ref(),
-                                    target_args,
-                                )
-                                .await
-                            },
+                            crate::tool_call_lifecycle::runtime::call_tool_managed(
+                                target_tool.as_ref(),
+                                target_args,
+                            ),
                         )
                         .await
                     },

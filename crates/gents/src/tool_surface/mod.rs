@@ -332,7 +332,7 @@ impl ToolSurface {
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for call in &self.eth_calls {
-            let tool = crate::eth::EthCallTool::new(call.clone());
+            let tool = crate::eth::EthCallTool::new(call.clone(), runtime.node.clone());
             if !registered_names.insert(tool.name()) {
                 anyhow::bail!(
                     "eth call tool `{}` reached registration with a duplicate tool name",

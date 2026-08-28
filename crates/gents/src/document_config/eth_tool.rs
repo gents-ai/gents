@@ -1,6 +1,4 @@
 //! Apply-owned `EthTool` documents.
-#![allow(dead_code)]
-
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
@@ -72,6 +70,18 @@ pub fn eth_tool_by_id_query(tool_id: &str) -> String {
             EthTool(filter: {{ tool_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{{TOOL_FIELDS}}}
         }}"#
     )
+}
+
+pub(crate) async fn load_eth_tool(
+    node: &EmbeddedNode,
+    tool_id: &str,
+) -> Result<Option<EthToolDocument>> {
+    let query = eth_tool_by_id_query(tool_id);
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!("query EthTool by tool_id failed: {:?}", response.errors);
+    }
+    Ok(first_row_with_doc_id(response.data.as_ref(), "EthTool").map(|(_, tool)| tool))
 }
 
 pub(crate) async fn load_eth_tool_by_doc_id(

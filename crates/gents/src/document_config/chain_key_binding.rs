@@ -71,6 +71,29 @@ pub async fn load_chain_key_binding_by_doc_id(
     Ok(first_row_with_doc_id(resp.data.as_ref(), "ChainKeyBinding"))
 }
 
+pub(crate) async fn load_chain_key_binding(
+    node: &EmbeddedNode,
+    binding_id: &str,
+) -> Result<Option<ChainKeyBindingDocument>> {
+    let escaped = escape_graphql_string(binding_id);
+    let query = format!(
+        r#"{{
+            ChainKeyBinding(filter: {{ binding_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{{BINDING_FIELDS}}}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query ChainKeyBinding by binding_id failed: {:?}",
+            response.errors
+        );
+    }
+    Ok(
+        first_row_with_doc_id(response.data.as_ref(), "ChainKeyBinding")
+            .map(|(_, binding)| binding),
+    )
+}
+
 pub fn list_chain_key_bindings_query(principal_did: &str) -> String {
     let escaped_did = escape_graphql_string(principal_did);
     format!(

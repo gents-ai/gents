@@ -197,6 +197,7 @@ struct ToolRuntimeScope {
     requester_did: Option<String>,
     agent_did: Option<String>,
     behavior_id: Option<String>,
+    request_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -214,6 +215,7 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) requester_did: Option<String>,
     pub(crate) agent_did: Option<String>,
     pub(crate) behavior_id: Option<String>,
+    pub(crate) request_id: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -221,6 +223,7 @@ struct ToolRequestIdentityScope {
     requester_did: Option<String>,
     agent_did: Option<String>,
     behavior_id: Option<String>,
+    request_id: Option<String>,
 }
 
 tokio::task_local! {
@@ -246,6 +249,7 @@ fn current_request_identity() -> ToolRequestIdentityScope {
                     requester_did: scope.requester_did.clone(),
                     agent_did: scope.agent_did.clone(),
                     behavior_id: scope.behavior_id.clone(),
+                    request_id: scope.request_id.clone(),
                 })
                 .ok()
         })
@@ -256,6 +260,7 @@ pub(crate) async fn scope_tool_request_identity<F, T>(
     requester_did: Option<String>,
     agent_did: Option<String>,
     behavior_id: Option<String>,
+    request_id: Option<String>,
     future: F,
 ) -> T
 where
@@ -267,6 +272,7 @@ where
                 requester_did: normalized_identity(requester_did),
                 agent_did: normalized_identity(agent_did),
                 behavior_id: normalized_identity(behavior_id),
+                request_id: normalized_identity(request_id),
             },
             future,
         )
@@ -344,6 +350,7 @@ where
                 requester_did: identity.requester_did,
                 agent_did: identity.agent_did,
                 behavior_id: identity.behavior_id,
+                request_id: identity.request_id,
             },
             future,
         )
@@ -385,6 +392,7 @@ where
                 requester_did: identity.requester_did,
                 agent_did: identity.agent_did,
                 behavior_id: identity.behavior_id,
+                request_id: identity.request_id,
             },
             future,
         )
@@ -426,6 +434,7 @@ where
                     requester_did: identity.requester_did,
                     agent_did: identity.agent_did,
                     behavior_id: identity.behavior_id,
+                    request_id: identity.request_id,
                 },
                 future,
             ),
@@ -489,6 +498,7 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             requester_did: scope.requester_did,
             agent_did: scope.agent_did,
             behavior_id: scope.behavior_id,
+            request_id: scope.request_id,
         }
     })
 }
