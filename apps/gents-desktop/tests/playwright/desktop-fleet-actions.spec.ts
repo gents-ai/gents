@@ -1,16 +1,17 @@
 import { expect, gotoHarness, PEER_ID, test } from "./desktopTest";
 
 test.describe("fleet deployment navigation", () => {
-  test("signed bearer invite is the primary remote pairing flow", async ({ page }) => {
+  test("server status is the primary remote pairing flow", async ({ page }) => {
     await gotoHarness(page, "default");
     await page.getByRole("button", { name: "Add Agent", exact: true }).click();
 
-    await page.getByTestId("fleet-pair-label").fill("Amy");
-    await page.getByTestId("fleet-pair-token").fill("dabear1-harness-signed-token");
-    await page.getByTestId("fleet-pair-submit").click();
+    await page.getByTestId("fleet-add-server-address").fill("http://amy:9191");
+    await page.getByTestId("fleet-fetch-status").click();
 
-    await expect(page.getByTestId(`fleet-row-${PEER_ID}`)).toContainText("Amy");
-    await expect(page.getByTestId("fleet-pair-token")).toHaveCount(0);
+    await expect(page.getByTestId(`fleet-row-${PEER_ID}`)).toContainText(
+      "Bombadil UI Agent",
+    );
+    await expect(page.getByTestId("fleet-add-server-address")).toHaveCount(0);
   });
 
   test("deployment row opens the chat workspace", async ({ page }) => {

@@ -326,6 +326,28 @@ function compactWorkflow(workflow: ChatWorkflowState) {
 }
 
 describe("projectChatShell", () => {
+  it("blocks empty-draft and retry sends when the behavior backend is unavailable", () => {
+    const projection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:key:agent",
+      selectedSessionId: null,
+      draft: "",
+      sending: false,
+      session: null,
+      selectedConversation: null,
+      localWorkflow: { kind: "ready" },
+      behaviorUnavailableHint:
+        "Backend “Workstation 2” is still checking readiness",
+    });
+
+    expect(projection.sendStatus).toEqual({
+      kind: "disabled",
+      reason: "behaviorUnavailable",
+      hint: "Backend “Workstation 2” is still checking readiness",
+    });
+    expect(projection.nonEmptyContentSendStatus).toEqual(projection.sendStatus);
+  });
+
   test(
     "matches generated Lean ClientShell projection contracts",
     () => {

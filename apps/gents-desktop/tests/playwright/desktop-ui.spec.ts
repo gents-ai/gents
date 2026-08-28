@@ -2,6 +2,7 @@ import {
   adjacentDuplicateTranscriptRows,
   captureStableScreenshot,
   expect,
+  expectNoPageHorizontalOverflow,
   gotoHarness,
   openChat,
   openChatNavigation,
@@ -13,6 +14,19 @@ import {
 } from "./desktopTest";
 
 test.describe("desktop UI harness", () => {
+  test("chat blocks requests when the selected behavior backend is disabled", async ({
+    page,
+  }) => {
+    await gotoHarness(page, "backend-unavailable");
+    await openChat(page);
+
+    await expect(page.getByTestId("composer-status")).toHaveText(
+      "Backend “OpenAI Harness” is disabled",
+    );
+    await expect(page.getByTestId("composer-input")).toBeEditable();
+    await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
   test("mobile conversation pins the title and composer to the viewport", async ({
     page,
   }) => {
@@ -277,6 +291,7 @@ test.describe("desktop UI harness", () => {
       page.getByRole("dialog", { name: /interrupt parent request/i }),
     ).toBeVisible();
     await expect(page.getByText("Will be interrupted")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
     await page.getByTestId("cascade-interrupt-confirm").click();
     await expect(page.getByTestId("chat-toast")).toContainText("Interrupt requested");
   });

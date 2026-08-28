@@ -3,6 +3,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    min-height: 0;
     padding: var(--space-5);
   }
 
@@ -30,12 +31,15 @@
   }
 
   .holds-panel-list {
+    flex: 1 1 auto;
+    min-height: 0;
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
+    overflow-y: auto;
   }
 
   .holds-panel-row {
@@ -56,8 +60,12 @@
   }
 
   .holds-panel-tool {
+    min-width: 0;
+    overflow: hidden;
     font-weight: 600;
     color: var(--color-text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .holds-panel-args {
@@ -79,6 +87,7 @@
   .holds-panel-row-meta {
     font-size: var(--text-xs);
     color: var(--color-text-muted);
+    overflow-wrap: anywhere;
   }
 
   .holds-panel-args-details {
@@ -122,5 +131,13 @@
     border-radius: var(--radius-md);
     background: var(--color-surface);
     color: var(--color-text);
+  }
+
+  @media (max-width: 760px) {
+    .holds-panel {
+      flex: 0 1 min(40dvh, 20rem);
+      max-height: min(40dvh, 20rem);
+      overflow: hidden;
+    }
   }
 }

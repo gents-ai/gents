@@ -118,9 +118,27 @@
 
   @media (max-width: 760px) {
     .sync-health-details {
-      left: auto;
-      right: 0;
-      width: min(100vw - 1rem, 22rem);
+      position: fixed;
+      top: calc(
+        var(--mobile-visual-viewport-top, 0px) +
+          var(--mobile-safe-area-top, env(safe-area-inset-top, 0px)) + 4rem
+      );
+      right: auto;
+      left: calc(
+        var(--mobile-visual-viewport-left, 0px) +
+          var(--mobile-safe-area-left, env(safe-area-inset-left, 0px)) + 0.5rem
+      );
+      width: calc(
+        var(--mobile-visual-viewport-width, 100dvw) -
+          var(--mobile-safe-area-left, env(safe-area-inset-left, 0px)) -
+          var(--mobile-safe-area-right, env(safe-area-inset-right, 0px)) - 1rem
+      );
+      max-height: calc(
+        var(--mobile-visual-viewport-height, 100dvh) -
+          var(--mobile-safe-area-top, env(safe-area-inset-top, 0px)) -
+          var(--mobile-safe-area-bottom, env(safe-area-inset-bottom, 0px)) - 5rem
+      );
+      overflow: auto;
     }
   }
 }

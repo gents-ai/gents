@@ -138,6 +138,43 @@ describe("error card retry", () => {
     expect(onRetryMessage).toHaveBeenCalledWith("req-failed");
   });
 
+  it("surfaces an actionable backend-readiness failure", () => {
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={{
+          ...session,
+          latestResponse: {
+            status: "failed",
+            errorMessage:
+              "behavior default backend workstation-2 is unavailable (enabled=true probe_status=unknown)",
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("response-error-card")).toHaveTextContent(
+      "Backend “workstation-2” is not ready yet",
+    );
+  });
+
+  it("disables retry while the selected behavior backend is unavailable", () => {
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={session}
+        onRetryMessage={vi.fn()}
+        retryUnavailableHint="Backend “Workstation 2” is still checking readiness"
+      />,
+    );
+
+    expect(screen.getByTestId("retry-turn")).toBeDisabled();
+    expect(screen.getByTestId("retry-turn")).toHaveAttribute(
+      "title",
+      "Backend “Workstation 2” is still checking readiness",
+    );
+  });
+
   it("omits Retry when no handler is wired", () => {
     render(<ChatTranscriptPanel selectedSessionId="s1" session={session} />);
     expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();

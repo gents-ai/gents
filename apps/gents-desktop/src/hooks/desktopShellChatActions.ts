@@ -122,6 +122,10 @@ export function createDesktopShellChatActions({
     if (!selectedDeployment) {
       return;
     }
+    if (shellProjection.nonEmptyContentSendStatus.kind !== "ready") {
+      setError(shellProjection.nonEmptyContentSendStatus.hint);
+      return;
+    }
     setLocalWorkflow({
       kind: "submittingRequest",
       agentDid: selectedDeployment.agentDid,

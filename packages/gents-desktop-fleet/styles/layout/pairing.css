@@ -15,6 +15,15 @@
     background: rgb(var(--color-accent-rgb) / 0.06);
   }
 
+  .fleet-status-form {
+    display: grid;
+    gap: var(--space-5);
+    padding: var(--space-5);
+    border: 1px solid rgb(var(--color-accent-rgb) / 0.3);
+    border-radius: var(--radius-lg);
+    background: rgb(var(--color-accent-rgb) / 0.06);
+  }
+
   .fleet-pairing-copy {
     grid-column: 1 / -1;
     display: grid;
@@ -49,18 +58,21 @@
     font-size: var(--text-sm);
   }
 
-  .fleet-manual-disclosure {
+  .fleet-manual-disclosure,
+  .fleet-alternative-disclosure {
     border-top: 1px solid var(--border-subtle);
     padding-top: var(--space-4);
   }
 
-  .fleet-manual-disclosure > summary {
+  .fleet-manual-disclosure > summary,
+  .fleet-alternative-disclosure > summary {
     width: fit-content;
     cursor: pointer;
     color: var(--color-text-muted);
   }
 
-  .fleet-manual-disclosure > p {
+  .fleet-manual-disclosure > p,
+  .fleet-alternative-disclosure > .fleet-bearer-form {
     margin: var(--space-3) 0 var(--space-5);
   }
 

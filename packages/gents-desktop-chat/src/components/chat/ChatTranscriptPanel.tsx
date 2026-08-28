@@ -15,11 +15,23 @@ export type ChatTranscriptPanelProps = {
   session: DesktopSessionSnapshot | null;
   optimisticPendingTurn?: OptimisticPendingTurn | null;
   onRetryMessage?: (requestId: string) => void | Promise<void>;
+  retryUnavailableHint?: string | null;
   onLoadOlder?: () => Promise<boolean>;
 };
 
 export const TRANSCRIPT_PAGE_SIZE = 40;
 const TRANSCRIPT_RETAINED_ITEMS = TRANSCRIPT_PAGE_SIZE * 2;
+
+export function responseErrorSummary(error: string): string {
+  const unavailable = error.match(
+    /^behavior\s+\S+\s+backend\s+(.+?)\s+is unavailable\s+\(enabled=(?:true|false)\s+probe_status=([^\s)]+)\)$/i,
+  );
+  if (!unavailable) return "The assistant couldn't complete this turn.";
+  const [, backendId, probeStatus] = unavailable;
+  return probeStatus === "unknown"
+    ? `Backend “${backendId}” is not ready yet. Check its connection or choose another behavior.`
+    : `Backend “${backendId}” is unavailable (${probeStatus.replace(/_/g, " ")}).`;
+}
 
 function timelineChangeSignal(items: RenderedTimelineItem[]) {
   return JSON.stringify(
@@ -73,6 +85,7 @@ export function ChatTranscriptPanel({
   session,
   optimisticPendingTurn,
   onRetryMessage,
+  retryUnavailableHint,
   onLoadOlder,
 }: ChatTranscriptPanelProps) {
   const transcriptPanelRef = useRef<HTMLElement | null>(null);
@@ -414,7 +427,7 @@ export function ChatTranscriptPanel({
               >
                 <div className="message-role">assistant error</div>
                 <div className="message-content">
-                  The assistant couldn&apos;t complete this turn.
+                  {responseErrorSummary(responseError)}
                 </div>
                 <details className="response-error-details">
                   <summary>Error details</summary>
@@ -426,7 +439,11 @@ export function ChatTranscriptPanel({
                       className="ghost-button"
                       data-testid="retry-turn"
                       type="button"
-                      disabled={retryingRequestId === retryRequestId}
+                      disabled={
+                        retryingRequestId === retryRequestId ||
+                        Boolean(retryUnavailableHint)
+                      }
+                      title={retryUnavailableHint ?? undefined}
                       onClick={() => void handleRetry(retryRequestId)}
                     >
                       {retryingRequestId === retryRequestId

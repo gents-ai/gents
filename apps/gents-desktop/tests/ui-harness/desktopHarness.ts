@@ -40,6 +40,9 @@ export type DesktopUiHarnessScenario =
   | "bridge-unavailable"
   | "save-error"
   | "backend-health-error"
+  | "backend-unavailable"
+  | "tool-hold"
+  | "mailbox-overflow"
   | "long-content"
   | "active-turn"
   | "cascade-turn"
@@ -114,7 +117,24 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
-  let heldToolCalls: HeldToolCallView[] = [];
+  let heldToolCalls: HeldToolCallView[] =
+    scenario === "tool-hold"
+      ? Array.from({ length: 6 }, (_, index) => {
+          const ordinal = index + 1;
+          return {
+            toolCallDocId: `hold-doc-mobile-${ordinal}`,
+            toolCallId: `hold-mobile-${ordinal}`,
+            requestId: `request_01JZ6Q0Y5Q7V0MOBILE_APPROVAL_BOUNDARY_WITHOUT_BREAKS_${ordinal}`,
+            sessionId: "session-intro",
+            agentDid: AGENT_DID,
+            toolName: `mcp__workstation_diagnostics__inspect_namespaced_service_without_breaks_${ordinal}`,
+            args: JSON.stringify({
+              target: `https://workstation.example/internal/service/with/a/very/long/unbroken/path/${ordinal}`,
+            }),
+            deadlineAt: "2099-08-28T23:59:59Z",
+          };
+        })
+      : [];
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
   const sessionLineage = new Map<
@@ -130,6 +150,55 @@ export function createDesktopUiHarness(
   let sessionSeq = 1;
   let rowCount = 42;
   let deployment = createDeployment();
+  if (scenario === "backend-unavailable") {
+    deployment = {
+      ...deployment,
+      runtime: deployment.runtime
+        ? {
+            ...deployment.runtime,
+            runnableBehaviorCount: 0,
+            unavailableBehaviorCount: deployment.behaviors.length,
+          }
+        : null,
+      inferenceBackends: deployment.inferenceBackends.map((backend) => ({
+        ...backend,
+        enabled: false,
+      })),
+    };
+  }
+  if (scenario === "mailbox-overflow") {
+    deployment = {
+      ...deployment,
+      mailboxItems: [
+        {
+          itemId: "mailbox-mobile",
+          itemKey: "mailbox-mobile-key",
+          requesterDid: "did:key:z6MkRequesterWithAnUnbrokenIdentifierForMobile",
+          agentDid: AGENT_DID,
+          status: "pending",
+          kind: "notification",
+          action: "ack",
+          title:
+            "LongUnbrokenMailboxTitleThatMustWrapInsideTheMobileSidebarInsteadOfClippingActions",
+          summary: "A mailbox item with adversarial mobile-width content.",
+          payload:
+            "https://example.invalid/a/very/long/unbroken/payload/path/that/must/stay/inside/the/sidebar",
+          sourceKind: "AgentRequest",
+          sourceId: "request_01JZ6Q0Y5Q7V0MOBILE_SOURCE_IDENTIFIER_WITHOUT_BREAKS",
+          sessionId: "session-intro",
+          requestId: "request-intro",
+          graphRunId: null,
+          causeDocId: null,
+          targetAgentDid: AGENT_DID,
+          targetBehaviorId: DEFAULT_BEHAVIOR_ID,
+          expectedCollection: "AgentResponse",
+          parentItemId: null,
+          deadlineAt: null,
+          createdAt: STARTED_AT,
+        },
+      ],
+    };
+  }
   let removed = false;
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
@@ -1495,13 +1564,15 @@ export function createDesktopUiHarness(
         scenario === "cascade-turn"
           ? [
               {
-                requestId: "request-child-1",
-                sessionId: "session-child-1",
+                requestId: "request_01JZ6Q0Y5Q7V0MOBILE_CASCADE_CHILD_WITHOUT_BREAKS",
+                sessionId: "session_01JZ6Q0Y5Q7V0MOBILE_CASCADE_CHILD_WITHOUT_BREAKS",
                 behaviorId: "ops",
                 lifecycleState: "processing",
                 parentRequestId: request.requestId,
-                parentToolCallId: "tool-call-child-1",
-                toolName: "delegate",
+                parentToolCallId:
+                  "tool_call_01JZ6Q0Y5Q7V0MOBILE_CASCADE_PARENT_WITHOUT_BREAKS",
+                toolName:
+                  "mcp__subagent_coordinator__delegate_to_remote_behavior_without_breaks",
                 awaitMode: "foreground",
                 cancelPolicy: "cascade",
               },
@@ -2184,6 +2255,9 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "bridge-unavailable":
     case "save-error":
     case "backend-health-error":
+    case "backend-unavailable":
+    case "tool-hold":
+    case "mailbox-overflow":
     case "long-content":
     case "active-turn":
     case "cascade-turn":

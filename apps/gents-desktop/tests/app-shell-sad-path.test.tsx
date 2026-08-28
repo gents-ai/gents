@@ -11,7 +11,7 @@ import type {
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import { renderTauriAppDriverWithBridge, type TauriDriverBridge } from "./tauri-driver";
 
-function desktopSnapshot(): DesktopClientSnapshot {
+function desktopSnapshot(selectedDeployment = deployment): DesktopClientSnapshot {
   return {
     bootstrap,
     client: {
@@ -29,13 +29,16 @@ function desktopSnapshot(): DesktopClientSnapshot {
       peerIssueCount: 0,
       rowCount: 42,
       approxSerializedBytes: 2048,
-      deployments: [deployment],
+      deployments: [selectedDeployment],
     },
   };
 }
 
-function makeBridge(overrides: Partial<DesktopApiAdapter>): TauriDriverBridge {
-  const snapshot = desktopSnapshot();
+function makeBridge(
+  overrides: Partial<DesktopApiAdapter>,
+  selectedDeployment = deployment,
+): TauriDriverBridge {
+  const snapshot = desktopSnapshot(selectedDeployment);
   const listenerFactory: DesktopClientUpdatedListenerFactory = async () => () => {};
   const defaults: Partial<DesktopApiAdapter> = {
     fetchDesktopSnapshot: vi.fn(async () => snapshot),
@@ -73,6 +76,43 @@ function makeBridge(overrides: Partial<DesktopApiAdapter>): TauriDriverBridge {
 }
 
 describe("App shell command sad paths", () => {
+  it("keeps the real composer usable when client-route backend data is absent", async () => {
+    const remoteDeployment = {
+      ...deployment,
+      source: "bearer",
+      inferenceBackends: [],
+    };
+    const sendChatMessage = vi.fn(async () => ({
+      agentDid: remoteDeployment.agentDid,
+      sessionId: "remote-session",
+      requestId: "remote-request",
+    }));
+    const driver = renderTauriAppDriverWithBridge(
+      makeBridge({ sendChatMessage }, remoteDeployment),
+      remoteDeployment.peerId,
+    );
+
+    try {
+      await driver.ready();
+      await driver.openChat();
+      await driver.typeComposer("check the fleet");
+
+      expect(driver.sendButton()).toBeEnabled();
+      await driver.clickSend();
+      await waitFor(() => {
+        expect(sendChatMessage).toHaveBeenCalledWith({
+          agentDid: remoteDeployment.agentDid,
+          behaviorId: remoteDeployment.defaultBehaviorId,
+          sessionId: null,
+          content: "check the fleet",
+          causedBySourceDocId: null,
+        });
+      });
+    } finally {
+      await driver.dispose();
+    }
+  });
+
   it("opens the agent navigation pane when Fleet selects a deployment", async () => {
     const driver = renderTauriAppDriverWithBridge(makeBridge({}), deployment.peerId);
 

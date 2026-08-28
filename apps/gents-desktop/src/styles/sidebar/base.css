@@ -1,7 +1,7 @@
 @layer sidebar {
   .sidebar {
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     gap: var(--space-4);
     min-height: 0;
     min-width: 0;
@@ -25,7 +25,7 @@
 
   .agent-section-tabs {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     min-height: 42px;
     border: 1px solid var(--border-default);
     background: var(--color-surface-muted);

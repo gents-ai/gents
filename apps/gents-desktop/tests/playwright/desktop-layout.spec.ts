@@ -10,15 +10,40 @@ import {
   test,
 } from "./desktopTest";
 
-const scenarios = ["default", "empty-fleet", "loading", "long-content"] as const;
+const chatScenarios = [
+  "default",
+  "long-content",
+  "active-turn",
+  "cascade-turn",
+  "coding",
+  "session-hydration",
+  "backend-unavailable",
+  "tool-hold",
+] as const;
+
+const shellScenarios = [
+  "empty-fleet",
+  "loading",
+  "bridge-unavailable",
+  "save-error",
+  "backend-health-error",
+  "sync-offline",
+  "sync-stalled",
+  "sync-failed",
+] as const;
 
 test.describe("desktop responsive layout guardrails", () => {
-  for (const scenario of scenarios) {
+  for (const scenario of chatScenarios) {
     test(`${scenario} has no page-level horizontal overflow`, async ({ page }) => {
       await gotoHarness(page, scenario);
-      if (scenario !== "empty-fleet" && scenario !== "loading") {
-        await openChat(page);
-      }
+      await openChat(page);
+      await expectNoPageHorizontalOverflow(page);
+    });
+  }
+
+  for (const scenario of shellScenarios) {
+    test(`${scenario} has no page-level horizontal overflow`, async ({ page }) => {
+      await gotoHarness(page, scenario);
       await expectNoPageHorizontalOverflow(page);
     });
   }
@@ -44,6 +69,53 @@ test.describe("desktop responsive layout guardrails", () => {
     }
   });
 
+  test("adversarial mailbox content stays inside the phone sidebar", async ({
+    page,
+  }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+    await gotoHarness(page, "mailbox-overflow");
+    await openChat(page);
+    await openChatNavigation(page);
+    await page.getByTestId("agent-tab-mailbox").click();
+    await expect(page.locator(".mailbox-item")).toBeVisible();
+    await expectNoPageHorizontalOverflow(page);
+  });
+
+  test("multiple approval holds preserve the composer and final actions", async ({
+    page,
+  }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+    await gotoHarness(page, "tool-hold");
+    await openChat(page);
+    const finalAction = page.getByTestId("hold-approve-hold-mobile-6");
+    await finalAction.scrollIntoViewIfNeeded();
+    await expect(finalAction).toBeVisible();
+    const contained = await page.evaluate(() => {
+      const chat = document.querySelector<HTMLElement>(".chat-main");
+      const composer = document.querySelector<HTMLElement>(".composer-panel");
+      const finalAction = document.querySelector<HTMLElement>(
+        '[data-testid="hold-approve-hold-mobile-6"]',
+      );
+      if (!chat || !composer || !finalAction) throw new Error("holds geometry missing");
+      const chatRect = chat.getBoundingClientRect();
+      const composerRect = composer.getBoundingClientRect();
+      const actionRect = finalAction.getBoundingClientRect();
+      return {
+        composer:
+          composerRect.top >= chatRect.top && composerRect.bottom <= chatRect.bottom,
+        finalAction:
+          actionRect.top >= chatRect.top && actionRect.bottom <= chatRect.bottom,
+      };
+    });
+    expect(contained).toEqual({ composer: true, finalAction: true });
+  });
+
   test("phone chat uses one full-screen pane at a time", async ({ page }) => {
     test.skip(
       (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
@@ -59,6 +131,26 @@ test.describe("desktop responsive layout guardrails", () => {
     await expect(page.locator(".sidebar")).toBeVisible();
     await expect(page.locator(".chat-column")).toBeHidden();
 
+    for (const tab of ["sessions", "mailbox", "behaviors"]) {
+      await page.getByTestId(`agent-tab-${tab}`).click();
+      const geometry = await page.evaluate(() => {
+        const sidebar = document.querySelector<HTMLElement>(".sidebar");
+        const tabs = document.querySelector<HTMLElement>(".agent-section-tabs");
+        const section = sidebar?.lastElementChild as HTMLElement | null;
+        if (!sidebar || !tabs || !section) throw new Error("sidebar geometry missing");
+        return {
+          sidebar: sidebar.getBoundingClientRect().toJSON(),
+          tabs: tabs.getBoundingClientRect().toJSON(),
+          section: section.getBoundingClientRect().toJSON(),
+        };
+      });
+      expect(geometry.tabs.height).toBeLessThanOrEqual(56);
+      expect(geometry.section.top).toBeGreaterThanOrEqual(geometry.tabs.bottom);
+      expect(geometry.section.bottom).toBeLessThanOrEqual(geometry.sidebar.bottom);
+      await expectNoPageHorizontalOverflow(page);
+    }
+
+    await page.getByTestId("agent-tab-sessions").click();
     await page.getByTestId("conversation-session-intro").click();
     await expect(page.locator(".chat-column")).toBeVisible();
     await expect(page.locator(".sidebar")).toBeHidden();
@@ -94,20 +186,116 @@ test.describe("desktop responsive layout guardrails", () => {
       .getByTestId("fleet-remote-disclosure")
       .locator(":scope > summary")
       .click();
-    await page.getByText("Advanced manual discovery", { exact: true }).click();
+
+    const statusForm = page.getByTestId("fleet-status-form");
+    const manualAlternative = page.locator(".fleet-manual-disclosure");
+    const signedAlternative = page.locator(".fleet-alternative-disclosure");
+    await expect(statusForm).toBeVisible();
+    await expect(manualAlternative).not.toHaveAttribute("open", "");
+    await expect(signedAlternative).not.toHaveAttribute("open", "");
+
+    const pairingOrder = await Promise.all(
+      [statusForm, manualAlternative, signedAlternative].map((locator) =>
+        locator.evaluate((element) => element.getBoundingClientRect().top),
+      ),
+    );
+    expect(pairingOrder[0]).toBeLessThan(pairingOrder[1]);
+    expect(pairingOrder[1]).toBeLessThan(pairingOrder[2]);
+
     await page.getByTestId("fleet-add-server-address").fill("http://studio-1:9191");
 
-    const submit = page.getByTestId("fleet-add-submit");
+    const submit = page.getByTestId("fleet-fetch-status");
     await expect(submit).toBeAttached();
     await submit.scrollIntoViewIfNeeded();
     await expect(submit).toBeVisible();
     await submit.click({ trial: true });
 
-    const shellScrollTop = await page
-      .locator(".app-shell")
-      .evaluate((element) => element.scrollTop);
-    expect(shellScrollTop).toBeGreaterThan(0);
+    const submitRect = await submit.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { bottom: rect.bottom, left: rect.left, right: rect.right, top: rect.top };
+    });
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    expect(submitRect.top).toBeGreaterThanOrEqual(0);
+    expect(submitRect.left).toBeGreaterThanOrEqual(0);
+    expect(submitRect.right).toBeLessThanOrEqual(viewport!.width);
+    expect(submitRect.bottom).toBeLessThanOrEqual(viewport!.height);
     await expectNoPageHorizontalOverflow(page);
+  });
+
+  test("keyboard viewport resize reveals the focused pairing address", async ({
+    page,
+  }) => {
+    test.skip(
+      (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) > 760,
+      "mobile viewport guardrail",
+    );
+    await page.addInitScript(() => {
+      const viewport = new EventTarget() as EventTarget & {
+        height: number;
+        width: number;
+        offsetTop: number;
+        offsetLeft: number;
+      };
+      Object.assign(viewport, {
+        height: window.innerHeight,
+        width: window.innerWidth,
+        offsetTop: 0,
+        offsetLeft: 0,
+      });
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        value: viewport,
+      });
+      Object.assign(window, {
+        __focusedControlRevealCount: 0,
+        __setTestVisualViewport(height: number) {
+          viewport.height = height;
+          viewport.dispatchEvent(new Event("resize"));
+        },
+      });
+      Element.prototype.scrollIntoView = function (options) {
+        if (this === document.activeElement) {
+          (
+            window as typeof window & { __focusedControlRevealCount: number }
+          ).__focusedControlRevealCount += 1;
+        }
+        return originalScrollIntoView.call(this, options);
+      };
+    });
+
+    await gotoHarness(page, "empty-fleet");
+    await page
+      .getByTestId("fleet-remote-disclosure")
+      .locator(":scope > summary")
+      .click();
+    const address = page.getByTestId("fleet-add-server-address");
+    await address.focus();
+    await page.evaluate(() => {
+      (
+        window as typeof window & {
+          __setTestVisualViewport: (height: number) => void;
+        }
+      ).__setTestVisualViewport(360);
+    });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { __focusedControlRevealCount: number })
+              .__focusedControlRevealCount,
+        ),
+      )
+      .toBeGreaterThan(0);
+    await expect(page.locator(".app-shell")).toHaveCSS("height", "360px");
+    const addressRect = await address.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { bottom: rect.bottom, top: rect.top };
+    });
+    expect(addressRect.top).toBeGreaterThanOrEqual(0);
+    expect(addressRect.bottom).toBeLessThanOrEqual(360);
   });
 
   test("populated-fleet status discovery stays reachable on mobile", async ({
@@ -120,7 +308,6 @@ test.describe("desktop responsive layout guardrails", () => {
 
     await gotoHarness(page);
     await page.getByRole("button", { name: "Add Agent", exact: true }).click();
-    await page.getByText("Advanced manual discovery", { exact: true }).click();
 
     const address = page.getByTestId("fleet-add-server-address");
     const fetchStatus = page.getByTestId("fleet-fetch-status");
@@ -132,17 +319,16 @@ test.describe("desktop responsive layout guardrails", () => {
     await expect(fetchStatus).toBeVisible();
     await fetchStatus.click({ trial: true });
 
-    const dashboardScroll = await page
-      .getByTestId("fleet-dashboard")
-      .evaluate((element) => ({
-        clientHeight: element.clientHeight,
-        overflowY: getComputedStyle(element).overflowY,
-        scrollHeight: element.scrollHeight,
-        scrollTop: element.scrollTop,
-      }));
-    expect(dashboardScroll.overflowY).toBe("auto");
-    expect(dashboardScroll.scrollHeight).toBeGreaterThan(dashboardScroll.clientHeight);
-    expect(dashboardScroll.scrollTop).toBeGreaterThan(0);
+    const fetchStatusRect = await fetchStatus.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { bottom: rect.bottom, left: rect.left, right: rect.right, top: rect.top };
+    });
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    expect(fetchStatusRect.top).toBeGreaterThanOrEqual(0);
+    expect(fetchStatusRect.left).toBeGreaterThanOrEqual(0);
+    expect(fetchStatusRect.right).toBeLessThanOrEqual(viewport!.width);
+    expect(fetchStatusRect.bottom).toBeLessThanOrEqual(viewport!.height);
     await expectNoPageHorizontalOverflow(page);
   });
 });

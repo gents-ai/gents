@@ -48,8 +48,29 @@ function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
 }
 
 describe("AddPeerForm", () => {
+  it("shows server status connection before collapsed alternatives", () => {
+    renderForm();
+
+    const statusForm = screen.getByTestId("fleet-status-form");
+    const manual = screen
+      .getByText("Enter connection details manually")
+      .closest("details");
+    const signed = screen.getByText("Use a signed pairing invite").closest("details");
+
+    expect(statusForm).toHaveTextContent("Recommended");
+    expect(manual).not.toHaveAttribute("open");
+    expect(signed).not.toHaveAttribute("open");
+    expect(
+      statusForm.compareDocumentPosition(manual!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      statusForm.compareDocumentPosition(signed!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("pairs from a signed bearer invite", async () => {
     const props = renderForm();
+    fireEvent.click(screen.getByText("Use a signed pairing invite"));
     fireEvent.change(screen.getByTestId("fleet-pair-label"), {
       target: { value: "Amy" },
     });
@@ -69,6 +90,7 @@ describe("AddPeerForm", () => {
 
   it("submits a complete manual peer via onSubmit without fetching /status", async () => {
     const props = renderForm();
+    fireEvent.click(screen.getByText("Enter connection details manually"));
     fireEvent.click(screen.getByTestId("fleet-add-submit"));
     await waitFor(() => {
       expect(props.onSubmit).toHaveBeenCalledWith({
@@ -81,7 +103,18 @@ describe("AddPeerForm", () => {
     expect(props.onProbePeerAddress).not.toHaveBeenCalled();
   });
 
-  it("fetches /status then submits the discovered peer when the manual triple is incomplete", async () => {
+  it("contains a rejected manual peer submission after the shell records it", async () => {
+    const onSubmit = vi.fn(async () => {
+      throw new Error("peer rejected");
+    });
+    renderForm({ onSubmit });
+    fireEvent.click(screen.getByText("Enter connection details manually"));
+    fireEvent.click(screen.getByTestId("fleet-add-submit"));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+  });
+
+  it("fetches /status and submits the discovered peer in one action", async () => {
     const discovered = {
       agent_name: "discovered-worker",
       agent_did: "did:key:z6MkDiscovered",
@@ -94,7 +127,7 @@ describe("AddPeerForm", () => {
     fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
       target: { value: "http://127.0.0.1:9181" },
     });
-    fireEvent.click(screen.getByTestId("fleet-add-submit"));
+    fireEvent.click(screen.getByTestId("fleet-fetch-status"));
 
     await waitFor(() => {
       expect(props.onProbePeerAddress).toHaveBeenCalledWith("http://127.0.0.1:9181");

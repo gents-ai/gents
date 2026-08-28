@@ -5,7 +5,7 @@ import { withLiveDesktop } from "./tauri-driver-live/harness";
 import { describeLive, logTurn } from "./tauri-driver-live/helpers";
 
 describeLive("Tauri app live fleet add flow", () => {
-  it("previews a live runner /status payload before adding the connection", async () => {
+  it("adds a live runner directly from its /status address", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment: firstDeployment }) => {
       await driver.ready();
       logTurn(`fleet driver ready statusUrl=${runner.baseUrl}/status`);
@@ -13,18 +13,6 @@ describeLive("Tauri app live fleet add flow", () => {
       await driver.user.click(screen.getByRole("button", { name: "Add Agent" }));
       await driver.replaceInput("fleet-add-server-address", runner.baseUrl);
       await driver.user.click(screen.getByTestId("fleet-fetch-status"));
-
-      await waitFor(
-        () => {
-          expect(driver.input("fleet-add-label")).toHaveValue(firstDeployment.label);
-          expect(driver.input("fleet-add-agent-did")).toHaveValue(runner.agentDid);
-          expect(driver.input("fleet-add-addr")).toHaveValue(firstDeployment.addr);
-          expect(screen.getByText("Fetched /status")).toBeInTheDocument();
-        },
-        { timeout: 30_000 },
-      );
-
-      await driver.user.click(screen.getByTestId("fleet-add-submit"));
 
       await waitFor(
         async () => {
@@ -68,8 +56,9 @@ describeLive("Tauri app live fleet add flow", () => {
         { timeout: 30_000 },
       );
       expect(driver.input("fleet-add-server-address")).toBeEnabled();
-      expect(screen.getByTestId("fleet-add-submit")).toBeEnabled();
+      expect(screen.getByTestId("fleet-fetch-status")).toBeEnabled();
 
+      await driver.user.click(screen.getByText("Enter connection details manually"));
       await driver.replaceInput("fleet-add-label", "Invalid Peer");
       await driver.replaceInput("fleet-add-agent-did", "   ");
       await driver.replaceInput("fleet-add-addr", "iroh://invalid-peer");

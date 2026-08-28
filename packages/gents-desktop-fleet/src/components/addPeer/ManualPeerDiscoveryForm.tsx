@@ -21,22 +21,26 @@ export function ManualPeerDiscoveryForm({
   onPeerFormChange,
 }: ManualPeerDiscoveryFormProps) {
   return (
-    <details className="fleet-manual-disclosure">
-      <summary>Advanced manual discovery</summary>
-      <p className="muted">
-        Diagnostic fallback only. Manual <code>/status</code> imports do not
-        exchange signed membership claims.
-      </p>
+    <>
       <form
-        className="fleet-add-form"
+        className="fleet-status-form"
+        data-testid="fleet-status-form"
         onSubmit={(event) => {
           event.preventDefault();
-          void discovery.submit();
+          void discovery.connectFromStatus();
         }}
       >
+        <div className="fleet-pairing-copy">
+          <p className="eyebrow">Recommended</p>
+          <h3>Connect by server address</h3>
+          <p className="muted">
+            Enter an agent&apos;s IP address, hostname, or URL. Gents reads its
+            <code> /status</code> endpoint and adds the connection.
+          </p>
+        </div>
         <div className="fleet-discovery-row">
           <label className="field">
-            <span>Server address</span>
+            <span>Agent server</span>
             <input
               className="mono"
               data-testid="fleet-add-server-address"
@@ -44,18 +48,23 @@ export function ManualPeerDiscoveryForm({
               onChange={(event) =>
                 discovery.updateServerAddress(event.currentTarget.value)
               }
-              placeholder="http://127.0.0.1:9181/api/v0/graphql"
+              placeholder="100.69.4.79:9191"
               value={discovery.serverAddress}
             />
           </label>
           <button
-            className="ghost-button"
+            className="primary-button"
             data-testid="fleet-fetch-status"
             disabled={busy || !discovery.serverAddressReady}
-            onClick={() => void discovery.fetchStatus()}
-            type="button"
+            type="submit"
           >
-            {discovery.fetchingStatus ? "Fetching..." : "Fetch /status"}
+            {discovery.fetchingStatus
+              ? "Connecting..."
+              : addingPeer
+                ? "Adding..."
+                : disabled
+                  ? "Preparing..."
+                  : "Connect from /status"}
           </button>
         </div>
         {discovery.importStatus ? (
@@ -67,78 +76,92 @@ export function ManualPeerDiscoveryForm({
             {discovery.importStatus}
           </p>
         ) : null}
-        <label className="field fleet-import-field">
-          <span>Connection JSON</span>
-          <textarea
-            className="mono"
-            data-testid="fleet-add-connection-json"
-            disabled={busy}
-            onChange={(event) =>
-              discovery.updateConnectionJson(event.currentTarget.value)
-            }
-            placeholder='{"label":"api-gateway","agentDid":"did:key:z6Mk...","addr":"/ip4/100.73.235.38/tcp/9161/p2p/12D3Koo..."}'
-            value={discovery.connectionJson}
-          />
-        </label>
-        <PeerField
-          label="Agent label"
-          testId="fleet-add-label"
-          value={peerForm.label}
-          placeholder="api-gateway"
-          disabled={busy}
-          onChange={(label) => onPeerFormChange({ ...peerForm, label })}
-        />
-        <PeerField
-          mono
-          label="Agent DID"
-          testId="fleet-add-agent-did"
-          value={peerForm.agentDid}
-          placeholder="did:key:z6Mk..."
-          disabled={busy}
-          onChange={(agentDid) => onPeerFormChange({ ...peerForm, agentDid })}
-        />
-        <PeerField
-          mono
-          label="P2P address"
-          testId="fleet-add-addr"
-          value={peerForm.addr}
-          placeholder="/ip4/100.73.235.38/tcp/9161/p2p/12D3Koo..."
-          disabled={busy}
-          onChange={(addr) => onPeerFormChange({ ...peerForm, addr })}
-        />
-        <PeerField
-          mono
-          label="GraphQL endpoint"
-          testId="fleet-add-graphql"
-          value={peerForm.graphql ?? ""}
-          placeholder="http://127.0.0.1:9181/api/v0/graphql"
-          disabled={busy}
-          onChange={(graphql) => onPeerFormChange({ ...peerForm, graphql })}
-        />
         {localError ? <p className="fleet-inline-error">{localError}</p> : null}
-        <div className="fleet-add-actions">
-          <button
-            className="primary-button"
-            data-testid="fleet-add-submit"
-            disabled={
-              disabled ||
-              addingPeer ||
-              discovery.fetchingStatus ||
-              (!discovery.manualPeerReady && !discovery.serverAddressReady)
-            }
-            type="submit"
-          >
-            {discovery.fetchingStatus
-              ? "Fetching..."
-              : addingPeer
+      </form>
+
+      <details className="fleet-manual-disclosure">
+        <summary>Enter connection details manually</summary>
+        <p className="muted">
+          Diagnostic fallback for importing connection JSON or entering peer
+          identity and transport fields directly.
+        </p>
+        <form
+          className="fleet-add-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void discovery.submitManual();
+          }}
+        >
+          <label className="field fleet-import-field">
+            <span>Connection JSON</span>
+            <textarea
+              className="mono"
+              data-testid="fleet-add-connection-json"
+              disabled={busy}
+              onChange={(event) =>
+                discovery.updateConnectionJson(event.currentTarget.value)
+              }
+              placeholder='{"label":"api-gateway","agentDid":"did:key:z6Mk...","addr":"/ip4/100.73.235.38/tcp/9161/p2p/12D3Koo..."}'
+              value={discovery.connectionJson}
+            />
+          </label>
+          <PeerField
+            label="Agent label"
+            testId="fleet-add-label"
+            value={peerForm.label}
+            placeholder="api-gateway"
+            disabled={busy}
+            onChange={(label) => onPeerFormChange({ ...peerForm, label })}
+          />
+          <PeerField
+            mono
+            label="Agent DID"
+            testId="fleet-add-agent-did"
+            value={peerForm.agentDid}
+            placeholder="did:key:z6Mk..."
+            disabled={busy}
+            onChange={(agentDid) => onPeerFormChange({ ...peerForm, agentDid })}
+          />
+          <PeerField
+            mono
+            label="P2P address"
+            testId="fleet-add-addr"
+            value={peerForm.addr}
+            placeholder="/ip4/100.73.235.38/tcp/9161/p2p/12D3Koo..."
+            disabled={busy}
+            onChange={(addr) => onPeerFormChange({ ...peerForm, addr })}
+          />
+          <PeerField
+            mono
+            label="GraphQL endpoint"
+            testId="fleet-add-graphql"
+            value={peerForm.graphql ?? ""}
+            placeholder="http://127.0.0.1:9181/api/v0/graphql"
+            disabled={busy}
+            onChange={(graphql) => onPeerFormChange({ ...peerForm, graphql })}
+          />
+          <div className="fleet-add-actions">
+            <button
+              className="primary-button"
+              data-testid="fleet-add-submit"
+              disabled={
+                disabled ||
+                addingPeer ||
+                discovery.fetchingStatus ||
+                !discovery.manualPeerReady
+              }
+              type="submit"
+            >
+              {addingPeer
                 ? "Adding..."
                 : disabled
                   ? "Preparing..."
-                  : "Add Agent Connection"}
-          </button>
-        </div>
-      </form>
-    </details>
+                  : "Add Manual Connection"}
+            </button>
+          </div>
+        </form>
+      </details>
+    </>
   );
 }
 

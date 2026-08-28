@@ -1,11 +1,19 @@
 @layer sidebar {
   .mailbox-item {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.4rem;
+    min-width: 0;
   }
 
   .mailbox-item p {
     margin: 0;
+  }
+
+  .mailbox-item .list-item-title,
+  .mailbox-item .list-item-meta,
+  .mailbox-payload {
+    overflow-wrap: anywhere;
   }
 
   .mailbox-actions {

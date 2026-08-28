@@ -321,6 +321,12 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               sendHint={
                 shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
               }
+              retryUnavailableHint={
+                shell.sendStatus.kind === "disabled" &&
+                shell.sendStatus.reason === "behaviorUnavailable"
+                  ? shell.sendStatus.hint
+                  : null
+              }
               selectedBehaviorId={shell.selectedBehaviorId}
               selectedConversationTitle={
                 shell.session
