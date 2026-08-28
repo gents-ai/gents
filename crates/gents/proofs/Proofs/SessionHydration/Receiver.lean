@@ -52,10 +52,13 @@ def observeCore (prev : ClientProgress) (merged : Nat) (served : Option Nat)
     { phase := .failed, mergedCount := merged, servedCount := served }
   else if canComplete merged served then
     { phase := .complete, mergedCount := merged, servedCount := served }
-  else if served.isSome || decide (merged > 0) || decide (prev.phase = .serving) then
+  else if served.isSome || decide (prev.phase = .serving) ||
+      (decide (prev.phase = .requested) && decide (merged > 0)) then
     { phase := .serving, mergedCount := merged, servedCount := served }
-  else
+  else if decide (prev.phase = .requested) then
     { phase := .requested, mergedCount := merged, servedCount := served }
+  else
+    { phase := .idle, mergedCount := merged, servedCount := served }
 
 def observe (prev : ClientProgress) (mergedCount : Nat) (servedCount : Option Nat)
     (failed : Bool) (session agent : String) : ClientProgress :=
@@ -108,6 +111,17 @@ theorem observe_cannot_complete_without_server (prev : ClientProgress)
     (observe_complete_iff prev mergedCount none session agent hprev).mp hcomplete
   unfold canComplete at hiff
   simp [hserved] at hiff
+
+/-- Locally present transcript rows are not evidence that a hydration request
+was started. Only `beginRequest` may move an idle receiver into an in-flight
+phase when the server has not supplied a denominator. -/
+theorem observe_idle_without_server_stays_idle (prev : ClientProgress)
+    (mergedCount : Nat) (session agent : String)
+    (hidle : (progressFor prev session agent).phase = .idle)
+    (hserved : (progressFor prev session agent).servedCount = none) :
+    (observe prev mergedCount none false session agent).phase = .idle := by
+  unfold observe observeCore
+  simp [hidle, hserved, mergeServed, canComplete]
 
 /-- Focusing a different session/agent starts from an idle, zero-count receiver state. -/
 theorem progressFor_other_target_resets (prev : ClientProgress) (session agent : String)

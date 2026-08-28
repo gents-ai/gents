@@ -254,7 +254,10 @@ pub fn observe_hydration_progress(
             served_count: served,
         };
     }
-    if served.is_some() || merged > 0 || base.phase == ClientHydrationPhase::Serving {
+    if served.is_some()
+        || base.phase == ClientHydrationPhase::Serving
+        || (base.phase == ClientHydrationPhase::Requested && merged > 0)
+    {
         return ClientHydrationProgress {
             session_id: session_id.to_string(),
             agent_did: agent_did.to_string(),
@@ -266,7 +269,11 @@ pub fn observe_hydration_progress(
     ClientHydrationProgress {
         session_id: session_id.to_string(),
         agent_did: agent_did.to_string(),
-        phase: ClientHydrationPhase::Requested,
+        phase: if base.phase == ClientHydrationPhase::Requested {
+            ClientHydrationPhase::Requested
+        } else {
+            ClientHydrationPhase::Idle
+        },
         merged_count: merged,
         served_count: served,
     }
