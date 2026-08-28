@@ -122,7 +122,7 @@ export function Sidebar({
           {mailboxItems.length === 0 ? (
             <p className="empty-state">Nothing needs your attention.</p>
           ) : (
-            <div className="list">
+            <div className="list" data-scroll-owner="section-list">
               {mailboxItems.map((item) => (
                 <article className="list-item mailbox-item" key={item.itemId}>
                   <div className="list-item-title">{item.title}</div>

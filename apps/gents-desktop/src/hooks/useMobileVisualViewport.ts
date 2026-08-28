@@ -7,6 +7,7 @@ const LEFT = "--mobile-visual-viewport-left";
 const MIN_USEFUL_DIMENSION = 64;
 const FOCUSED_CONTROL_SELECTOR =
   'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled]), [contenteditable="true"]';
+const SCROLL_OWNER_SELECTOR = "[data-scroll-owner]";
 const FOCUSED_CONTROL_MARGIN = 16;
 const KEYBOARD_SETTLE_DELAY_MS = 350;
 
@@ -22,14 +23,21 @@ function revealFocusedControl(viewport: VisualViewport) {
   if (!(control instanceof HTMLElement) || !control.matches(FOCUSED_CONTROL_SELECTOR)) {
     return;
   }
+  const owner = control.closest<HTMLElement>(SCROLL_OWNER_SELECTOR);
+  if (!owner) return;
 
   const rect = control.getBoundingClientRect();
-  const visibleTop = Math.max(0, viewport.offsetTop) + FOCUSED_CONTROL_MARGIN;
+  const ownerRect = owner.getBoundingClientRect();
+  const viewportTop = Math.max(0, viewport.offsetTop);
+  const viewportBottom = viewportTop + viewport.height;
+  const visibleTop = Math.max(viewportTop, ownerRect.top) + FOCUSED_CONTROL_MARGIN;
   const visibleBottom =
-    Math.max(0, viewport.offsetTop) + viewport.height - FOCUSED_CONTROL_MARGIN;
+    Math.min(viewportBottom, ownerRect.bottom) - FOCUSED_CONTROL_MARGIN;
+  if (visibleBottom <= visibleTop) return;
   if (rect.top >= visibleTop && rect.bottom <= visibleBottom) return;
 
-  control.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
+  owner.scrollTop +=
+    rect.top < visibleTop ? rect.top - visibleTop : rect.bottom - visibleBottom;
 }
 
 /**

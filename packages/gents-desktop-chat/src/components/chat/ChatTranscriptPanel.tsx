@@ -356,6 +356,7 @@ export function ChatTranscriptPanel({
   return (
     <section
       className="panel transcript-panel"
+      data-scroll-owner="transcript"
       data-testid="transcript-panel"
       onScroll={handleTranscriptScroll}
       ref={transcriptPanelRef}

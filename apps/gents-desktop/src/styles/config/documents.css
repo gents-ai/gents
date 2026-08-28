@@ -50,4 +50,11 @@
     align-content: start;
     overflow: auto;
   }
+
+  @media (max-width: 760px) {
+    .config-document-list-body,
+    .config-editor {
+      overflow: visible;
+    }
+  }
 }

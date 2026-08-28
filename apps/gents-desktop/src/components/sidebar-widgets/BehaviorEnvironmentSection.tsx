@@ -31,7 +31,7 @@ export function BehaviorEnvironmentSection({
         Each behavior is an environment with its own model, workspace, and tool
         boundary.
       </p>
-      <div className="behavior-environment-list">
+      <div className="behavior-environment-list" data-scroll-owner="section-list">
         {environments.map((environment) => (
           <article
             className={

@@ -23,7 +23,6 @@
   .list {
     align-content: start;
     min-height: 0;
-    overflow: auto;
   }
 
   .list-item {

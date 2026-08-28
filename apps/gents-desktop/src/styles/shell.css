@@ -69,8 +69,10 @@
     height: 100vh;
     padding: var(--space-8);
     display: grid;
-    gap: var(--space-6);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 0;
     overflow: hidden;
+    overflow: clip;
     background:
       linear-gradient(
         180deg,
@@ -111,6 +113,23 @@
   .app-shell > * {
     position: relative;
     z-index: 1;
+  }
+
+  .app-notice-slot {
+    grid-row: 1;
+    min-width: 0;
+  }
+
+  .app-notice-slot:not(:empty) {
+    padding-bottom: var(--space-6);
+  }
+
+  .app-route-slot {
+    grid-row: 2;
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .startup-screen {
@@ -390,15 +409,35 @@
       width: var(--mobile-visual-viewport-width, 100dvw);
       height: var(--mobile-visual-viewport-height, 100dvh);
       min-height: 0;
-      padding: calc(var(--space-5) + env(safe-area-inset-top))
-        calc(var(--space-5) + env(safe-area-inset-right))
-        calc(var(--space-5) + env(safe-area-inset-bottom))
-        calc(var(--space-5) + env(safe-area-inset-left));
-      gap: var(--space-5);
+      padding: calc(
+          var(--space-5) + var(--mobile-safe-area-top, env(safe-area-inset-top, 0rem))
+        )
+        calc(
+          var(--space-5) +
+            var(--mobile-safe-area-right, env(safe-area-inset-right, 0rem))
+        )
+        calc(
+          var(--space-5) +
+            var(--mobile-safe-area-bottom, env(safe-area-inset-bottom, 0rem))
+        )
+        calc(
+          var(--space-5) + var(--mobile-safe-area-left, env(safe-area-inset-left, 0rem))
+        );
+    }
+
+    .app-notice-slot:not(:empty) {
+      padding-bottom: var(--space-5);
+    }
+
+    .app-route-slot-scroll {
       overflow-x: hidden;
       overflow-y: auto;
       overscroll-behavior-y: contain;
       -webkit-overflow-scrolling: touch;
+    }
+
+    .app-route-slot-locked {
+      overflow: hidden;
     }
 
     .workspace {
@@ -423,11 +462,20 @@
     }
 
     .app-shell.app-view-chat {
-      padding: calc(var(--space-3) + env(safe-area-inset-top))
-        calc(var(--space-3) + env(safe-area-inset-right))
-        calc(var(--space-3) + env(safe-area-inset-bottom))
-        calc(var(--space-3) + env(safe-area-inset-left));
-      overflow: hidden;
+      padding: calc(
+          var(--space-3) + var(--mobile-safe-area-top, env(safe-area-inset-top, 0rem))
+        )
+        calc(
+          var(--space-3) +
+            var(--mobile-safe-area-right, env(safe-area-inset-right, 0rem))
+        )
+        calc(
+          var(--space-3) +
+            var(--mobile-safe-area-bottom, env(safe-area-inset-bottom, 0rem))
+        )
+        calc(
+          var(--space-3) + var(--mobile-safe-area-left, env(safe-area-inset-left, 0rem))
+        );
     }
 
     .workspace-tabs {

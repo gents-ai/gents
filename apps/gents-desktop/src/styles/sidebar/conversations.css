@@ -61,6 +61,9 @@
 
   .session-group-list {
     display: grid;
+    gap: var(--space-4);
+    align-content: start;
+    min-height: 0;
   }
 
   .session-list-item {

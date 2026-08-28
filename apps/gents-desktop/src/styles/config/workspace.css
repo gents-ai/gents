@@ -204,7 +204,8 @@
     display: flex;
     align-items: center;
     gap: 0;
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
     min-height: 36px;
     border: 1px solid var(--border-default);
     background: var(--color-surface-row);
@@ -293,9 +294,26 @@
   }
 
   @media (max-width: 760px) {
+    .config-page,
+    .config-workspace,
+    .config-workspace-full,
+    .config-tab-panel,
+    .config-layout,
+    .config-single-layout,
+    .config-list {
+      height: auto;
+      min-height: 0;
+      overflow: visible;
+    }
+
     .config-workspace,
     .config-workspace-full {
       gap: var(--space-5);
+      grid-template-rows: auto;
+    }
+
+    .config-layout {
+      grid-template-rows: auto;
     }
 
     .config-header,
