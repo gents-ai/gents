@@ -1,0 +1,71 @@
+{
+  "surface_id": "research-adjudicate-io",
+  "agent_did": "did:key:zWebResearchAgentPlaceholder000000000000000000000000",
+  "display_name": "Evidence ledger reads and adjudication writes",
+  "enabled": true,
+  "entries": [
+    {
+      "kind": "read",
+      "tool_name": "read_research_investigation",
+      "collection": "WebResearchInvestigation",
+      "description": "Load every typed investigation closure for the run and reconcile its declared counts and gaps with the evidence ledger.",
+      "fields": ["assignment_id", "expected_total", "source_count", "claim_count", "evidence_count", "status", "summary", "gaps"],
+      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_research_source",
+      "collection": "WebResearchSource",
+      "description": "Load every fetched source for the run.",
+      "fields": ["source_id", "assignment_id", "url", "title", "publisher", "source_kind", "primary_source", "published_at", "fetched_at", "fetch_id", "content_hash", "verified_quote", "quote_verified", "relevance"],
+      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_research_claim",
+      "collection": "WebResearchClaim",
+      "description": "Load every atomic investigator claim for the run.",
+      "fields": ["claim_id", "assignment_id", "statement", "confidence", "caveats"],
+      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_research_evidence",
+      "collection": "WebResearchEvidence",
+      "description": "Load typed claim-to-source links and join each source ID to the authoritative source provenance record.",
+      "fields": ["evidence_id", "assignment_id", "claim_id", "source_id", "relationship", "locator", "supporting_excerpt", "verified_quote_used", "notes"],
+      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
+    },
+    {
+      "tool_name": "write_research_claim_verdict",
+      "collection": "WebResearchClaimVerdict",
+      "description": "Persist one supported, disputed, or insufficient verdict.",
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "claim_id", "required": true},
+        {"name": "statement", "required": true},
+        {"name": "verdict", "required": true},
+        {"name": "confidence", "required": true},
+        {"name": "rationale", "required": true},
+        {"name": "evidence_summary", "required": true},
+        {"name": "quote_verification", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_research_draft",
+      "collection": "WebResearchDraft",
+      "description": "Close adjudication with a bounded, evidence-aware report plan.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "title", "required": true},
+        {"name": "thesis", "required": true},
+        {"name": "outline", "required": true},
+        {"name": "synthesis", "required": true},
+        {"name": "unresolved_questions", "required": true},
+        {"name": "supported_claim_count", "required": true},
+        {"name": "disputed_claim_count", "required": true}
+      ]
+    }
+  ]
+}

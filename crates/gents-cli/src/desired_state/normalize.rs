@@ -68,6 +68,8 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
         selection.cli_tool_names.dedup();
         selection.allowed_mcp_service_ids.sort();
         selection.allowed_mcp_service_ids.dedup();
+        selection.required_mcp_service_ids.sort();
+        selection.required_mcp_service_ids.dedup();
         selection.backgroundable_tool_names.sort();
         selection.backgroundable_tool_names.dedup();
         selection.subagent_targets.sort();

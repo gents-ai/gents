@@ -1,0 +1,17 @@
+type WebResearchSource {
+  run_id: String @index @immutable
+  source_id: String @index(unique: true) @immutable
+  assignment_id: String @index
+  url: String
+  title: String
+  publisher: String
+  source_kind: String
+  primary_source: String
+  published_at: String
+  fetched_at: String
+  fetch_id: String @index
+  content_hash: String
+  verified_quote: String
+  quote_verified: String
+  relevance: String
+}

@@ -1,0 +1,25 @@
+{
+  "manifest_version": 1,
+  "name": "web-deep-research",
+  "version": "1.0.0",
+  "description": "Bounded four-stage web research: plan, parallel investigation, evidence adjudication, and cited report.",
+  "compiler_version": "graph-intent-v3",
+  "roles": [
+    {"name": "coordinator", "description": "Plans the research, adjudicates evidence, and writes the report."},
+    {"name": "researcher", "description": "Searches and extracts web evidence for one bounded research lens."}
+  ],
+  "schemas": [
+    "schemas/research_job.graphql",
+    "schemas/research_plan.graphql",
+    "schemas/research_assignment.graphql",
+    "schemas/research_investigation.graphql",
+    "schemas/research_source.graphql",
+    "schemas/research_claim.graphql",
+    "schemas/research_evidence.graphql",
+    "schemas/research_claim_verdict.graphql",
+    "schemas/research_draft.graphql",
+    "schemas/research_result.graphql"
+  ],
+  "intent": "graph.intent.json",
+  "capabilities": "capabilities.json"
+}

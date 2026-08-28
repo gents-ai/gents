@@ -1,0 +1,8 @@
+type WebResearchClaim {
+  run_id: String @index @immutable
+  claim_id: String @index(unique: true) @immutable
+  assignment_id: String @index
+  statement: String
+  confidence: String
+  caveats: String
+}

@@ -1,0 +1,8 @@
+type WebResearchResult {
+  run_id: String @index(unique: true) @immutable
+  title: String
+  report_markdown: String
+  sources_json: String
+  limitations: String
+  completed_at: String
+}

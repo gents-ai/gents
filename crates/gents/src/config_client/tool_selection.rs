@@ -394,6 +394,10 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .as_ref()
                 .and_then(|values| string_list_field("allowed_mcp_service_ids", values)),
             selection
+                .required_mcp_service_ids
+                .as_ref()
+                .and_then(|values| string_list_field("required_mcp_service_ids", values)),
+            selection
                 .backgroundable_tool_names
                 .as_ref()
                 .and_then(|values| string_list_field("backgroundable_tool_names", values)),

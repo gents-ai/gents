@@ -588,6 +588,13 @@ pub struct ToolSelectionDocument {
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
     pub allowed_mcp_service_ids: Option<Vec<String>>,
+    /// MCP services that must be measured available for any behavior using
+    /// this selection to enter the runnable runtime snapshot.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    pub required_mcp_service_ids: Option<Vec<String>>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
@@ -749,6 +756,29 @@ impl ToolSelectionDocument {
                 }
             }
         }
+        if let Some(service_ids) = &self.required_mcp_service_ids {
+            if !service_ids.is_empty() && !self.enable_meta_tools.unwrap_or(false) {
+                anyhow::bail!(
+                    "required_mcp_service_ids needs enable_meta_tools=true so the required services are callable"
+                );
+            }
+            let allowed = self.allowed_mcp_service_ids.as_deref().unwrap_or_default();
+            for (i, service_id) in service_ids.iter().enumerate() {
+                let service_id = service_id.trim();
+                if service_id.is_empty() {
+                    anyhow::bail!(
+                        "required_mcp_service_ids[{i}] is empty; service ids must be non-empty strings"
+                    );
+                }
+                if !allowed.is_empty()
+                    && !allowed.iter().any(|allowed| allowed.trim() == service_id)
+                {
+                    anyhow::bail!(
+                        "required MCP service {service_id:?} is not permitted by allowed_mcp_service_ids"
+                    );
+                }
+            }
+        }
         if let Some(tool_names) = &self.approval_required_tools {
             for (i, tool_name) in tool_names.iter().enumerate() {
                 if tool_name.is_empty() {
@@ -844,6 +874,7 @@ pub(crate) async fn load_tool_selection_record(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
+                required_mcp_service_ids
                 backgroundable_tool_names
                 approval_required_tools
                 subagent_targets
@@ -910,6 +941,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
+                required_mcp_service_ids
                 backgroundable_tool_names
                 approval_required_tools
                 subagent_targets
@@ -976,6 +1008,7 @@ pub(crate) async fn list_tool_selection_records(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
+                required_mcp_service_ids
                 backgroundable_tool_names
                 approval_required_tools
                 subagent_targets
@@ -1036,6 +1069,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 cli_tool_names
                 enable_meta_tools
                 allowed_mcp_service_ids
+                required_mcp_service_ids
                 backgroundable_tool_names
                 approval_required_tools
                 subagent_targets
@@ -1130,6 +1164,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_string_list_field(
             "allowed_mcp_service_ids",
             selection.allowed_mcp_service_ids.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "required_mcp_service_ids",
+            selection.required_mcp_service_ids.as_deref(),
         ),
         graphql_fields::graphql_string_list_field(
             "backgroundable_tool_names",
@@ -1270,6 +1308,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_string_list_field(
             "allowed_mcp_service_ids",
             selection.allowed_mcp_service_ids.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "required_mcp_service_ids",
+            selection.required_mcp_service_ids.as_deref(),
         ),
         graphql_fields::graphql_string_list_field(
             "backgroundable_tool_names",

@@ -138,6 +138,7 @@ async fn seed_demo_documents(
             cli_tool_names: Some(Vec::new()),
             enable_meta_tools: Some(true),
             allowed_mcp_service_ids: Some(Vec::new()),
+            required_mcp_service_ids: Some(Vec::new()),
             backgroundable_tool_names: Some(Vec::new()),
             approval_required_tools: None,
             subagent_targets: Some(Vec::new()),

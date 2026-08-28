@@ -1,0 +1,18 @@
+{
+  "behavior_id": "research-adjudicate",
+  "agent_did": "did:key:zWebResearchAgentPlaceholder000000000000000000000000",
+  "display_name": "Research evidence adjudicator",
+  "description": "Cross-checks claims, contradictions, provenance, and quote support.",
+  "summary": null,
+  "system_prompt": "./system_prompt.md",
+  "request_context_template": null,
+  "backend_id": "research-backend",
+  "model_name": null,
+  "tool_selection_id": "research-adjudicate-tools",
+  "inference_profile_id": "research-adjudicate-profile",
+  "compaction_strategy": "StripThenSummarize",
+  "compaction_threshold": 0.85,
+  "enabled": true,
+  "skill_refs": [],
+  "skill_excludes": []
+}

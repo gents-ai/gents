@@ -7,6 +7,59 @@ use serde_json::Value;
 use uuid::Uuid;
 
 #[tokio::test]
+async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let agent_home = tempdir.path().join("agent-home");
+    let service_id = format!("registered-mcp-{}", Uuid::new_v4().simple());
+    {
+        let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-register-test").await?;
+        ensure_runtime_schemas(&node).await?;
+    }
+    let agent_home_text = agent_home.to_str().context("agent home utf8")?;
+    let output = run_cli_text(
+        tempdir.path(),
+        &[
+            "mcp",
+            "register",
+            "--home",
+            agent_home_text,
+            "--endpoint",
+            "http://127.0.0.1:9213/mcp",
+            "--display-name",
+            "Research Gateway",
+            "--send-agent-did",
+            &service_id,
+        ],
+    )?;
+    assert!(output.contains(&service_id));
+
+    let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-register-read").await?;
+    let query = format!(
+        r#"{{ ToolServiceRegistry(filter: {{ service_id: {{ _eq: "{service_id}" }} }}) {{
+            service_id display_name hostname lan_ip mcp_port mcp_path send_agent_did status
+        }} }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ToolServiceRegistry"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .context("registered row")?;
+    assert_eq!(row.get("lan_ip").and_then(Value::as_str), Some("127.0.0.1"));
+    assert_eq!(row.get("mcp_port").and_then(Value::as_i64), Some(9213));
+    assert_eq!(row.get("mcp_path").and_then(Value::as_str), Some("/mcp"));
+    assert_eq!(
+        row.get("send_agent_did").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(row.get("status").and_then(Value::as_str), Some("online"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");

@@ -102,6 +102,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
         enable_meta_tools: Some(true),
         allowed_mcp_service_ids: Vec::new(),
+        required_mcp_service_ids: Vec::new(),
         delegate_to: Vec::new(),
         backgroundable_tool_names: vec!["read_file".to_string()],
         enable_memory: Some(false),

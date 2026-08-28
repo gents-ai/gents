@@ -1,0 +1,54 @@
+{
+  "graph_id": "web-deep-research",
+  "nodes": [
+    {"node_id": "plan", "capability_id": "research-plan", "capability_revision": "v1"},
+    {"node_id": "investigate", "capability_id": "research-investigate", "capability_revision": "v1"},
+    {"node_id": "adjudicate", "capability_id": "research-adjudicate", "capability_revision": "v1"},
+    {"node_id": "report", "capability_id": "research-report", "capability_revision": "v1"}
+  ],
+  "edges": [
+    {
+      "from": {"node_id": "plan", "port": "assignments"},
+      "to": {"node_id": "investigate", "port": "assignment"},
+      "delivery": {"kind": "per_document"},
+      "concurrency": "parallel"
+    },
+    {
+      "from": {"node_id": "investigate", "port": "investigations"},
+      "to": {"node_id": "adjudicate", "port": "investigations"},
+      "delivery": {"kind": "per_group", "expected": {"kind": "source_field", "field": "expected_total"}},
+      "concurrency": "serial"
+    },
+    {
+      "from": {"node_id": "adjudicate", "port": "draft"},
+      "to": {"node_id": "report", "port": "draft"},
+      "delivery": {"kind": "per_document"},
+      "concurrency": "serial"
+    }
+  ],
+  "entries": [
+    {
+      "name": "research",
+      "collection": "WebResearchJob",
+      "schema": "WebResearchJob/v1",
+      "input_contract": "web-research-input/v1",
+      "to": {"node_id": "plan", "port": "job"}
+    }
+  ],
+  "results": [
+    {"name": "plan", "from": {"node_id": "plan", "port": "plan"}, "cardinality": {"kind": "exactly", "count": 1}, "terminal": true},
+    {"name": "sources", "from": {"node_id": "investigate", "port": "sources"}, "cardinality": {"kind": "at_most", "count": 128}, "terminal": true},
+    {"name": "claims", "from": {"node_id": "investigate", "port": "claims"}, "cardinality": {"kind": "at_most", "count": 128}, "terminal": true},
+    {"name": "evidence", "from": {"node_id": "investigate", "port": "evidence"}, "cardinality": {"kind": "at_most", "count": 256}, "terminal": true},
+    {"name": "verdicts", "from": {"node_id": "adjudicate", "port": "verdicts"}, "cardinality": {"kind": "at_most", "count": 128}, "terminal": true},
+    {"name": "report", "from": {"node_id": "report", "port": "result"}, "cardinality": {"kind": "exactly", "count": 1}, "terminal": true}
+  ],
+  "limits": {
+    "max_nodes": 8,
+    "max_edges": 16,
+    "max_depth": 8,
+    "max_fan_out": 8,
+    "max_total_invocations": 32,
+    "max_runtime_secs": 7200
+  }
+}

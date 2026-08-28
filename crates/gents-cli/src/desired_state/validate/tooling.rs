@@ -134,6 +134,28 @@ pub(super) fn validate_tool_selections(
             &selection.allowed_mcp_service_ids,
             errors,
         );
+        validate_tool_selection_non_empty_entries(
+            &selection.selection_id,
+            "required_mcp_service_ids",
+            &selection.required_mcp_service_ids,
+            errors,
+        );
+        if !selection.required_mcp_service_ids.is_empty() && !selection.enable_meta_tools {
+            errors.push(format!(
+                "tool selection {} requires MCP services but enable_meta_tools is false",
+                selection.selection_id
+            ));
+        }
+        if !selection.allowed_mcp_service_ids.is_empty() {
+            for service_id in &selection.required_mcp_service_ids {
+                if !selection.allowed_mcp_service_ids.contains(service_id) {
+                    errors.push(format!(
+                        "tool selection {} requires MCP service {} outside allowed_mcp_service_ids",
+                        selection.selection_id, service_id
+                    ));
+                }
+            }
+        }
         validate_subagent_targets(
             &selection.selection_id,
             selection.agent_did.trim(),

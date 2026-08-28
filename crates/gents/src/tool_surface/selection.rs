@@ -106,6 +106,7 @@ pub struct ToolSelection {
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: bool,
     pub allowed_mcp_service_ids: Vec<String>,
+    pub required_mcp_service_ids: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
     pub approval_required_tools: Vec<String>,
     pub enable_memory: bool,
@@ -133,6 +134,7 @@ impl Default for ToolSelection {
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             approval_required_tools: Vec::new(),
             enable_memory: false,
@@ -181,6 +183,10 @@ impl ToolSelection {
                 .unwrap_or(policy_version.default_enabled(true)),
             allowed_mcp_service_ids: selection
                 .allowed_mcp_service_ids
+                .clone()
+                .unwrap_or_default(),
+            required_mcp_service_ids: selection
+                .required_mcp_service_ids
                 .clone()
                 .unwrap_or_default(),
             backgroundable_tool_names: selection

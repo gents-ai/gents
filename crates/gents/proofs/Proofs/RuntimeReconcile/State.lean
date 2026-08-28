@@ -39,18 +39,23 @@ structure ResolvedSnapshot where
   defaultBehavior : BehaviorId
   runnable : Finset BehaviorId
   unavailable : Finset BehaviorId
+  /-- Behaviors whose declared runtime dependencies were present while the
+  snapshot was resolved. A behavior may be dependency-ready but unavailable
+  for another reason; the converse is forbidden. -/
+  dependenciesSatisfied : Finset BehaviorId
   deriving DecidableEq
 
 instance : Repr ResolvedSnapshot where
   reprPrec s _ :=
     "{ defaultBehavior := " ++ repr s.defaultBehavior ++
       ", runnableCard := " ++ repr s.runnable.card ++
-      ", unavailableCard := " ++ repr s.unavailable.card ++ " }"
+      ", unavailableCard := " ++ repr s.unavailable.card ++
+      ", dependenciesSatisfiedCard := " ++ repr s.dependenciesSatisfied.card ++ " }"
 
 namespace ResolvedSnapshot
 
 def wellFormed (s : ResolvedSnapshot) : Prop :=
-  Disjoint s.runnable s.unavailable
+  Disjoint s.runnable s.unavailable ∧ s.runnable ⊆ s.dependenciesSatisfied
 
 instance (s : ResolvedSnapshot) : Decidable s.wellFormed := by
   unfold wellFormed
@@ -63,6 +68,7 @@ structure ActiveRuntimeSnapshot where
   defaultBehavior : BehaviorId
   runnable : Finset BehaviorId
   unavailable : Finset BehaviorId
+  dependenciesSatisfied : Finset BehaviorId
   dispatchers : Finset BehaviorId
   deriving DecidableEq
 
@@ -72,6 +78,7 @@ instance : Repr ActiveRuntimeSnapshot where
       ", defaultBehavior := " ++ repr s.defaultBehavior ++
       ", runnableCard := " ++ repr s.runnable.card ++
       ", unavailableCard := " ++ repr s.unavailable.card ++
+      ", dependenciesSatisfiedCard := " ++ repr s.dependenciesSatisfied.card ++
       ", dispatchersCard := " ++ repr s.dispatchers.card ++ " }"
 
 namespace ActiveRuntimeSnapshot
@@ -79,7 +86,8 @@ namespace ActiveRuntimeSnapshot
 def wellFormed (s : ActiveRuntimeSnapshot) : Prop :=
   0 < s.generation ∧
     s.dispatchers = s.runnable ∧
-    Disjoint s.runnable s.unavailable
+    Disjoint s.runnable s.unavailable ∧
+    s.runnable ⊆ s.dependenciesSatisfied
 
 instance (s : ActiveRuntimeSnapshot) : Decidable s.wellFormed := by
   unfold wellFormed
@@ -95,6 +103,7 @@ def ResolvedSnapshot.activate
   , defaultBehavior := resolved.defaultBehavior
   , runnable := resolved.runnable
   , unavailable := resolved.unavailable
+  , dependenciesSatisfied := resolved.dependenciesSatisfied
   , dispatchers := resolved.runnable
   }
 

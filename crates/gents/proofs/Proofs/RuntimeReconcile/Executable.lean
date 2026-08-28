@@ -269,6 +269,22 @@ theorem publish_step_resolved_wellFormed
   simp [step?] at h_step
   exact (h_pending resolved h_step.1.2.1).2
 
+/-- A behavior can only be published into the runnable dispatcher set after
+all dependencies declared during resolution were satisfied. -/
+theorem publish_step_runnable_dependencies_satisfied
+    {pre post : RuntimeState}
+    {resolved : ResolvedSnapshot}
+    {behaviorId : BehaviorId}
+    (h_coherent : pre.coherent)
+    (h_step : step? pre (.publish resolved) = some post)
+    (h_runnable : behaviorId ∈ post.active.runnable) :
+    behaviorId ∈ post.active.dependenciesSatisfied := by
+  have h_wellFormed := publish_step_resolved_wellFormed h_coherent h_step
+  simp [step?] at h_step
+  rcases h_step with ⟨_, h_post⟩
+  cases h_post
+  exact h_wellFormed.2 h_runnable
+
 theorem accept_step_router_observed_ready_live
     {pre post : RuntimeState}
     {sessionId : SessionId}

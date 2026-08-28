@@ -225,6 +225,8 @@ pub struct ToolSelectionSaveRequest {
     pub enable_meta_tools: Option<bool>,
     #[serde(default)]
     pub allowed_mcp_service_ids: Vec<String>,
+    #[serde(default)]
+    pub required_mcp_service_ids: Vec<String>,
     pub delegate_to: Vec<String>,
     #[serde(default)]
     pub backgroundable_tool_names: Vec<String>,

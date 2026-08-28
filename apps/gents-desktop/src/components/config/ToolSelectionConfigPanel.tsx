@@ -268,6 +268,7 @@ export function ToolSelectionConfigEditor({
         defraQueryCollections: linesToArray(defraQueryCollections),
         enableMetaTools,
         allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
+        requiredMcpServiceIds: toolSelection?.requiredMcpServiceIds ?? [],
         delegateTo: linesToArray(delegateTo),
         backgroundableToolNames: linesToArray(backgroundableToolNames),
         subagentTargets: linesToArray(subagentTargets),

@@ -939,6 +939,7 @@ fn desired_tool_selection(
             })
             .map(|reference| reference.id.clone())
             .collect(),
+        required_mcp_service_ids: Vec::new(),
         delegate_to: Vec::new(),
         backgroundable_tool_names: Vec::new(),
         enable_memory: false,

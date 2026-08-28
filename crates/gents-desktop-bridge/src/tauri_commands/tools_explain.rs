@@ -40,6 +40,13 @@ pub async fn desktop_tool_surface_explain(
         .filter(|row| row.agent_did.as_deref() == Some(&agent_did) && row.enabled.unwrap_or(true))
         .map(|row| row.behavior_id.clone())
         .collect::<HashSet<_>>();
+    let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(core.node(), &agent_did)
+        .await
+        .map_err(|error| {
+            BridgeError::from_legacy_message(format!(
+                "loading DatastoreToolSurface documents for {agent_did}: {error}"
+            ))
+        })?;
 
     let tool_selection_id = behavior
         .tool_selection_id
@@ -61,9 +68,10 @@ pub async fn desktop_tool_surface_explain(
                         "decoding ToolSelection {selection_id}: {error}"
                     ))
                 })?;
-            let config = BehaviorToolConfig::from_tool_selection_document(
+            let config = BehaviorToolConfig::from_tool_selection_document_with_surfaces(
                 &behavior.behavior_id,
                 &document,
+                &datastore_tool_surfaces,
                 &ceiling,
                 Vec::new(),
             )

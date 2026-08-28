@@ -257,6 +257,27 @@ pub(crate) struct GraphRunArgs {
     pub(crate) head: String,
     #[arg(long)]
     pub(crate) focus: Option<String>,
+    #[arg(long, help = "Research question (required by web-deep-research)")]
+    pub(crate) question: Option<String>,
+    #[arg(
+        long = "research-scope",
+        default_value = "Answer the question directly; include material context, counterevidence, and uncertainty."
+    )]
+    pub(crate) research_scope: String,
+    #[arg(
+        long,
+        default_value = "Prefer current sources and record publication dates; retain older primary sources when historically necessary."
+    )]
+    pub(crate) freshness: String,
+    #[arg(long, default_value = "A technically literate reader")]
+    pub(crate) audience: String,
+    #[arg(
+        long,
+        default_value = "A concise Markdown report with claim-local links, counterevidence, a source ledger, and explicit limitations."
+    )]
+    pub(crate) output_requirements: String,
+    #[arg(long, default_value_t = 4)]
+    pub(crate) investigator_count: u8,
     #[arg(long, default_value_t = false)]
     pub(crate) watch: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -947,11 +968,37 @@ pub(crate) enum BackgroundCommand {
 #[derive(Subcommand)]
 pub(crate) enum McpCommand {
     #[command(
+        name = "register",
+        about = "Create or update an MCP service registry entry",
+        after_help = MCP_AFTER_HELP
+    )]
+    Register(McpRegisterArgs),
+    #[command(
         name = "probe",
         about = "Run a one-shot health probe for registered MCP services",
         after_help = MCP_AFTER_HELP
     )]
     Probe(McpProbeArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct McpRegisterArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint to update instead of local home state")]
+    pub(crate) graphql: Option<String>,
+    #[arg(value_name = "SERVICE")]
+    pub(crate) service: String,
+    #[arg(long, value_name = "URL", help = "Streamable HTTP MCP endpoint")]
+    pub(crate) endpoint: String,
+    #[arg(long, value_name = "NAME")]
+    pub(crate) display_name: Option<String>,
+    #[arg(long, value_name = "TEXT")]
+    pub(crate) description: Option<String>,
+    #[arg(long, value_name = "VERSION", default_value = "unversioned")]
+    pub(crate) version: String,
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub(crate) send_agent_did: bool,
 }
 
 #[derive(clap::Args)]

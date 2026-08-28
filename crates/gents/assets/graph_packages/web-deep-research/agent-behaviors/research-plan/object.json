@@ -1,0 +1,18 @@
+{
+  "behavior_id": "research-plan",
+  "agent_did": "did:key:zWebResearchAgentPlaceholder000000000000000000000000",
+  "display_name": "Web research planner",
+  "description": "Turns one research question into a bounded, closed assignment set.",
+  "summary": null,
+  "system_prompt": "./system_prompt.md",
+  "request_context_template": null,
+  "backend_id": "research-backend",
+  "model_name": null,
+  "tool_selection_id": "research-plan-tools",
+  "inference_profile_id": "research-plan-profile",
+  "compaction_strategy": "StripThenSummarize",
+  "compaction_threshold": 0.85,
+  "enabled": true,
+  "skill_refs": [],
+  "skill_excludes": []
+}

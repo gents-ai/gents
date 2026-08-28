@@ -1,0 +1,80 @@
+{
+  "surface_id": "research-investigate-writes",
+  "agent_did": "did:key:zWebResearchAgentPlaceholder000000000000000000000000",
+  "display_name": "Fetched sources, atomic claims, typed evidence links, and investigation closure",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_research_source",
+      "collection": "WebResearchSource",
+      "description": "Record one fetched source with stable service provenance.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 2},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "source_id", "required": true},
+        {"name": "assignment_id", "required": false, "fill": {"source_field": "assignment_id"}},
+        {"name": "url", "required": true},
+        {"name": "title", "required": true},
+        {"name": "publisher", "required": true},
+        {"name": "source_kind", "required": true},
+        {"name": "primary_source", "required": true},
+        {"name": "published_at", "required": false},
+        {"name": "fetched_at", "required": true},
+        {"name": "fetch_id", "required": true},
+        {"name": "content_hash", "required": true},
+        {"name": "verified_quote", "required": true},
+        {"name": "quote_verified", "required": true},
+        {"name": "relevance", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_research_claim",
+      "collection": "WebResearchClaim",
+      "description": "Record one atomic claim; link it to sources through write_research_evidence.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 6},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "claim_id", "required": true},
+        {"name": "assignment_id", "required": false, "fill": {"source_field": "assignment_id"}},
+        {"name": "statement", "required": true},
+        {"name": "confidence", "required": true},
+        {"name": "caveats", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_research_evidence",
+      "collection": "WebResearchEvidence",
+      "description": "Link one claim to one authoritative source record with an explicit support relationship.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 6},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "evidence_id", "required": true},
+        {"name": "assignment_id", "required": false, "fill": {"source_field": "assignment_id"}},
+        {"name": "claim_id", "required": true},
+        {"name": "source_id", "required": true},
+        {"name": "relationship", "required": true},
+        {"name": "locator", "required": true},
+        {"name": "supporting_excerpt", "required": true},
+        {"name": "verified_quote_used", "required": true},
+        {"name": "notes", "required": true}
+      ]
+    },
+    {
+      "tool_name": "write_research_investigation",
+      "collection": "WebResearchInvestigation",
+      "description": "Close one assignment after all source, claim, and evidence-link writes.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "assignment_id", "required": false, "fill": {"source_field": "assignment_id"}},
+        {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}},
+        {"name": "source_count", "required": true},
+        {"name": "claim_count", "required": true},
+        {"name": "evidence_count", "required": true},
+        {"name": "status", "required": true},
+        {"name": "summary", "required": true},
+        {"name": "gaps", "required": true}
+      ]
+    }
+  ]
+}

@@ -1051,6 +1051,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
                 cli_tool_names: Vec::new(),
                 enable_meta_tools: false,
                 allowed_mcp_service_ids: Vec::new(),
+                required_mcp_service_ids: Vec::new(),
                 backgroundable_tool_names: Vec::new(),
                 approval_required_tools: Vec::new(),
                 enable_memory: false,

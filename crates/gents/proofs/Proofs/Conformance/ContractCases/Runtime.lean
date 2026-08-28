@@ -4,10 +4,16 @@ import Proofs.Conformance.ContractCases.Types
 namespace Conformance.ContractCases
 
 def runtimeResolvedA : ResolvedSnapshot :=
-  { defaultBehavior := 10, runnable := {10}, unavailable := ∅ }
+  { defaultBehavior := 10, runnable := {10}, unavailable := ∅
+  , dependenciesSatisfied := {10} }
 
 def runtimeResolvedB : ResolvedSnapshot :=
-  { defaultBehavior := 20, runnable := {20}, unavailable := {10} }
+  { defaultBehavior := 20, runnable := {20}, unavailable := {10}
+  , dependenciesSatisfied := {20} }
+
+def runtimeResolvedMissingDependency : ResolvedSnapshot :=
+  { defaultBehavior := 20, runnable := {20}, unavailable := {10}
+  , dependenciesSatisfied := ∅ }
 
 def runtimeBoot : RuntimeState :=
   RuntimeState.bootState runtimeResolvedA
@@ -136,6 +142,14 @@ def runtimeReconcileCases : List RuntimeReconcileCase :=
       "applyFailed"
       runtimeApplyingChanged
       .applyFailed
+  , runtimeCaseFromStep
+      "missing_dependency_snapshot_is_not_resolved"
+      "resolveVisible"
+      { runtimeBoot with
+        phase := .resolving
+      , observedResolved := some runtimeResolvedMissingDependency
+      }
+      (.resolveVisible runtimeResolvedMissingDependency)
   ]
 
 end Conformance.ContractCases

@@ -1,0 +1,9 @@
+{
+  "task_id": "research-adjudicate-task",
+  "name": "Adjudicate the complete evidence ledger",
+  "description": null,
+  "behavior_id": "research-adjudicate",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

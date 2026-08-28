@@ -7,7 +7,7 @@ use crate::toolset::ToolSet;
 
 use super::build::{
     build_host_tools, dedupe_strings, dedupe_subagent_targets, downgrade_bash,
-    downgrade_file_tools, online_mcp_service_ids,
+    downgrade_file_tools, measured_available_mcp_service_ids, online_mcp_service_ids,
 };
 use super::modes::ToolCeiling;
 use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
@@ -22,6 +22,7 @@ pub struct BehaviorToolConfig {
     host_tools: ToolSet,
     enable_meta_tools: bool,
     allowed_mcp_service_ids: Vec<String>,
+    required_mcp_service_ids: Vec<String>,
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
     approval_required_tools: Vec<String>,
@@ -55,6 +56,7 @@ impl BehaviorToolConfig {
             host_tools: ToolSet::meta_only(),
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
             subagent_tools: SubagentToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
             approval_required_tools: Vec::new(),
@@ -98,9 +100,29 @@ impl BehaviorToolConfig {
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
+        Self::from_tool_selection_document_with_surfaces(
+            behavior_name,
+            selection,
+            &[],
+            ceiling,
+            custom_tools,
+        )
+    }
+
+    pub fn from_tool_selection_document_with_surfaces(
+        behavior_name: &str,
+        selection: &crate::document_config::ToolSelectionDocument,
+        surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
+        ceiling: &ToolCeiling,
+        custom_tools: Vec<CustomToolFactory>,
+    ) -> Result<Self> {
+        let merged = crate::document_config::merge_datastore_tool_surfaces(selection, surfaces)?;
+        let mut resolved = ToolSelection::from_document(selection)?;
+        resolved.write_tools = merged.write_tools;
+        resolved.query_tools = merged.query_tools;
         Self::from_selection_with_subagent_tools(
             behavior_name,
-            ToolSelection::from_document(selection)?,
+            resolved,
             ceiling,
             SubagentToolConfig::from_document(selection),
             custom_tools,
@@ -143,6 +165,7 @@ impl BehaviorToolConfig {
             cli_tool_names,
             enable_meta_tools: _,
             allowed_mcp_service_ids,
+            required_mcp_service_ids,
             backgroundable_tool_names,
             approval_required_tools,
             enable_memory,
@@ -176,6 +199,26 @@ impl BehaviorToolConfig {
 
         let effective_allowed_mcp_service_ids =
             effective_string_allowlist(allowed_mcp_service_ids, &static_policy.mcp_services);
+        let required_mcp_service_ids = dedupe_strings(required_mcp_service_ids);
+        if !required_mcp_service_ids.is_empty() && !static_policy.meta {
+            anyhow::bail!(
+                "behavior {behavior_name} requires MCP services but meta tools are disabled by policy"
+            );
+        }
+        for service_id in &required_mcp_service_ids {
+            if !static_policy.mcp_services.permits(service_id) {
+                anyhow::bail!(
+                    "behavior {behavior_name} requires MCP service {service_id:?}, but the effective tool policy denies it"
+                );
+            }
+            if !effective_allowed_mcp_service_ids.is_empty()
+                && !effective_allowed_mcp_service_ids.contains(service_id)
+            {
+                anyhow::bail!(
+                    "behavior {behavior_name} requires MCP service {service_id:?}, but its MCP allowlist does not permit it"
+                );
+            }
+        }
 
         let background_allowlist =
             dedupe_strings(static_policy.filter_background_tools(backgroundable_tool_names));
@@ -199,6 +242,7 @@ impl BehaviorToolConfig {
             host_tools,
             enable_meta_tools: static_policy.meta,
             allowed_mcp_service_ids: effective_allowed_mcp_service_ids,
+            required_mcp_service_ids,
             subagent_tools: SubagentToolConfig {
                 targets: effective_subagent_targets,
                 spawn_enabled: static_policy.spawn,
@@ -268,6 +312,10 @@ impl BehaviorToolConfig {
         &self.allowed_mcp_service_ids
     }
 
+    pub fn required_mcp_service_ids(&self) -> &[String] {
+        &self.required_mcp_service_ids
+    }
+
     #[allow(dead_code)]
     pub(crate) fn subagent_tools(&self) -> &SubagentToolConfig {
         &self.subagent_tools
@@ -299,8 +347,21 @@ impl BehaviorToolConfig {
         node: &EmbeddedNode,
         subagent_tools: SubagentToolConfig,
     ) -> Result<ToolSurface> {
-        let availability =
-            RuntimeToolAvailability::from_online_mcp_services(online_mcp_service_ids(node).await?);
+        let available_service_ids = online_mcp_service_ids(node).await?;
+        let available = available_service_ids.iter().collect::<HashSet<_>>();
+        let missing = self
+            .required_mcp_service_ids
+            .iter()
+            .filter(|service_id| !available.contains(service_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            anyhow::bail!(
+                "required MCP services are unavailable: {}",
+                missing.join(", ")
+            );
+        }
+        let availability = RuntimeToolAvailability::from_online_mcp_services(available_service_ids);
         Ok(self.resolve_with_subagent_tools_for_runtime_availability(availability, subagent_tools))
     }
 
@@ -412,6 +473,23 @@ impl BehaviorToolConfig {
         own_agent_did: &str,
         active_behavior_ids: &HashSet<String>,
     ) -> Result<ToolSurface> {
+        if !self.required_mcp_service_ids.is_empty() {
+            let measured_available =
+                measured_available_mcp_service_ids(node, own_agent_did).await?;
+            let measured_available = measured_available.iter().collect::<HashSet<_>>();
+            let missing = self
+                .required_mcp_service_ids
+                .iter()
+                .filter(|service_id| !measured_available.contains(service_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                anyhow::bail!(
+                    "required MCP services are not measured available: {}",
+                    missing.join(", ")
+                );
+            }
+        }
         let mut subagent_tools = self.subagent_tools.clone();
         let allow_cross_deployment = subagent_tools.allow_cross_deployment;
         subagent_tools.targets.retain(|target| {
@@ -489,6 +567,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("host_tools", &self.host_tools)
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
+            .field("required_mcp_service_ids", &self.required_mcp_service_ids)
             .field("subagent_tools", &self.subagent_tools)
             .field("background_tools", &self.background_tools)
             .field(

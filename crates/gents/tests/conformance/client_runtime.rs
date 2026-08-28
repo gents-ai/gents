@@ -167,6 +167,11 @@ fn generated_runtime_reconcile_cases_pin_generation_and_admission_contract() {
         apply_failed.post_active_generation
     );
 
+    let missing_dependency =
+        lean_runtime_reconcile_case("missing_dependency_snapshot_is_not_resolved");
+    assert!(!missing_dependency.legal);
+    assert_eq!(missing_dependency.action.as_str(), "resolveVisible");
+
     let covered = [
         "publish_changed_snapshot",
         "router_observe_published_generation",
@@ -175,6 +180,7 @@ fn generated_runtime_reconcile_cases_pin_generation_and_admission_contract() {
         "retire_unobserved_generation",
         "finish_request_releases_generation",
         "apply_failed_clears_pending",
+        "missing_dependency_snapshot_is_not_resolved",
     ]
     .into_iter()
     .collect::<std::collections::BTreeSet<_>>();

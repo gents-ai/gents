@@ -81,6 +81,32 @@ fn tool_selection_document_accepts_string_array_values() {
 }
 
 #[test]
+fn required_mcp_services_are_explicit_callable_dependencies() {
+    let mut selection = ToolSelectionDocument {
+        selection_id: "required-mcp".to_string(),
+        agent_did: "did:key:test".to_string(),
+        enable_meta_tools: Some(false),
+        allowed_mcp_service_ids: Some(vec!["research".to_string()]),
+        required_mcp_service_ids: Some(vec!["research".to_string()]),
+        ..Default::default()
+    };
+    assert!(selection
+        .validate()
+        .unwrap_err()
+        .to_string()
+        .contains("enable_meta_tools=true"));
+    selection.enable_meta_tools = Some(true);
+    selection.allowed_mcp_service_ids = Some(vec!["other".to_string()]);
+    assert!(selection
+        .validate()
+        .unwrap_err()
+        .to_string()
+        .contains("not permitted"));
+    selection.allowed_mcp_service_ids = Some(vec!["research".to_string()]);
+    selection.validate().unwrap();
+}
+
+#[test]
 fn validate_rejects_empty_string_in_subagent_targets() {
     let doc = ToolSelectionDocument {
         selection_id: "test-tools".to_string(),

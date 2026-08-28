@@ -1,0 +1,130 @@
+name: gents-web-research-live
+
+x-firecrawl-env: &firecrawl-env
+  REDIS_URL: redis://redis:6379
+  REDIS_RATE_LIMIT_URL: redis://redis:6379
+  PLAYWRIGHT_MICROSERVICE_URL: http://playwright-service:3000/scrape
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: postgres
+  POSTGRES_HOST: nuq-postgres
+  POSTGRES_PORT: 5432
+  USE_DB_AUTHENTICATION: "false"
+  NUM_WORKERS_PER_QUEUE: "4"
+  CRAWL_CONCURRENT_REQUESTS: "5"
+  MAX_CONCURRENT_JOBS: "3"
+  BROWSER_POOL_SIZE: "3"
+
+services:
+  gateway:
+    image: ${WEB_RESEARCH_MCP_IMAGE:-ghcr.io/source-inc/web-research-mcp:0.1.5@sha256:4615c987def9809c33dce876f5797528e6d8d11e596731f7d53605d7f2b0143e}
+    environment:
+      WEB_RESEARCH_MCP_HTTP_BIND_ADDR: 0.0.0.0
+      WEB_RESEARCH_MCP_HTTP_PORT: "9213"
+      WEB_RESEARCH_MCP_DATA_DIR: /tmp/web-research-mcp
+      WEB_RESEARCH_MCP_ENABLE_SEARCH: "true"
+      WEB_RESEARCH_MCP_ENABLE_EXTRACT: "true"
+      WEB_RESEARCH_MCP_ENABLE_CRAWL: "false"
+      WEB_RESEARCH_MCP_ENABLE_BROWSER: "false"
+      WEB_RESEARCH_MCP_EXPOSED_TOOLS: web_collect_evidence,web_find_in_fetch
+      SEARXNG_ENDPOINT: http://searxng:8080
+      FIRECRAWL_ENDPOINT: http://firecrawl-api:3002
+    ports:
+      - "127.0.0.1:19213:9213"
+    depends_on:
+      - searxng
+      - firecrawl-api
+    networks:
+      - research
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng@sha256:11a9b34cdc0b1ec2b991470a2762ecb5a1a531898289fb51dcd015260450729e
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      - ./searxng:/etc/searxng:ro
+    networks:
+      - research
+    restart: unless-stopped
+
+  firecrawl-api:
+    image: ghcr.io/firecrawl/firecrawl@sha256:6f3d6269ac282c4684ec17f977e4a429ce95e9d54bf303b9858b579b4ce8cc63
+    command: node dist/src/harness.js --start-docker
+    environment:
+      <<: *firecrawl-env
+      HOST: 0.0.0.0
+      PORT: "3002"
+      INTERNAL_PORT: "3002"
+      WORKER_PORT: "3005"
+      EXTRACT_WORKER_PORT: "3004"
+      NUQ_RABBITMQ_URL: amqp://rabbitmq:5672
+      HARNESS_STARTUP_TIMEOUT_MS: "120000"
+      ENV: local
+    depends_on:
+      redis:
+        condition: service_started
+      playwright-service:
+        condition: service_started
+      nuq-postgres:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - research
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    cpus: 4.0
+    mem_limit: 8g
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    restart: unless-stopped
+
+  playwright-service:
+    image: ghcr.io/firecrawl/playwright-service@sha256:468009bae00911d40d7120d58489a1d529362c22c45585cb9076094fe61b0025
+    environment:
+      PORT: "3000"
+      MAX_CONCURRENT_PAGES: "5"
+    networks:
+      - research
+    cpus: 2.0
+    mem_limit: 4g
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=1g
+    restart: unless-stopped
+
+  redis:
+    image: redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    command: redis-server --bind 0.0.0.0
+    networks:
+      - research
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq@sha256:e582c0bc7766f3342496d8485efb5a1df782b5ce3886ad017e2eaae442311f69
+    command: rabbitmq-server
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - research
+    restart: unless-stopped
+
+  nuq-postgres:
+    image: ghcr.io/firecrawl/nuq-postgres@sha256:aed86f62858f29bd971abddcdeb301c12888098d2cf5d33c1ba42b053bc460f6
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    networks:
+      - research
+    restart: unless-stopped
+
+networks:
+  research:
+    driver: bridge

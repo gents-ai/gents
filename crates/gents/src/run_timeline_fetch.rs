@@ -116,7 +116,8 @@ pub async fn load_run_activity_rows(
                     order: {{ started_at: ASC }}, limit: {limit}
                 ) {{
                     request_id session_id message_sequence tool_name tool_call_id status
-                    lifecycle_state started_at completed_at tool_failure_class latency_ms
+                    lifecycle_state started_at completed_at selected_service_id
+                    selected_tool_name tool_failure_class latency_ms
                 }}
             }}"#
         ))
@@ -510,6 +511,8 @@ mod tests {
                         tool_call_id: "activity-tool"
                         status: "completed"
                         lifecycle_state: "completed"
+                        selected_service_id: "activity-service"
+                        selected_tool_name: "activity-selected-tool"
                     }) { _docID }
                 }"#,
             )
@@ -534,6 +537,14 @@ mod tests {
             Some(r#"{"estimated_input_tokens":144}"#)
         );
         assert_eq!(rows.tool_calls[0].tool_name, "read_file");
+        assert_eq!(
+            rows.tool_calls[0].selected_service_id.as_deref(),
+            Some("activity-service")
+        );
+        assert_eq!(
+            rows.tool_calls[0].selected_tool_name.as_deref(),
+            Some("activity-selected-tool")
+        );
         assert!(rows.tool_calls[0].args.is_empty());
         assert!(rows.tool_calls[0].result.is_empty());
         node.shutdown().await;

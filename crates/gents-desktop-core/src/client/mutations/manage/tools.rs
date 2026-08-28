@@ -79,6 +79,10 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             &row.allowed_mcp_service_ids,
         )),
         Some(graphql_string_list_field(
+            "required_mcp_service_ids",
+            &row.required_mcp_service_ids,
+        )),
+        Some(graphql_string_list_field(
             "backgroundable_tool_names",
             &row.backgroundable_tool_names,
         )),
@@ -209,6 +213,10 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         Some(graphql_string_list_field(
             "allowed_mcp_service_ids",
             &row.allowed_mcp_service_ids,
+        )),
+        Some(graphql_string_list_field(
+            "required_mcp_service_ids",
+            &row.required_mcp_service_ids,
         )),
         Some(graphql_string_list_field(
             "backgroundable_tool_names",

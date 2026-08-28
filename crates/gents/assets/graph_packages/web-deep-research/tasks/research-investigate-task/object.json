@@ -1,0 +1,9 @@
+{
+  "task_id": "research-investigate-task",
+  "name": "Investigate one web research lens",
+  "description": null,
+  "behavior_id": "research-investigate",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

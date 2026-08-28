@@ -282,6 +282,11 @@ const TOOL_SELECTION_ADD_LSP_FIELDS_PATCH: &str = r#"[
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
+const TOOL_SELECTION_ADD_REQUIRED_MCP_SERVICES_PATCH: &str = r#"[
+  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"required_mcp_service_ids","Kind":21}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
 const CALLBACK_RESULT_BASELINE_SDL: &str = include_str!("baseline/callback_result.graphql");
 
 const CALLBACK_RESULT_ADD_BINDING_ID_PATCH: &str = r#"[
@@ -668,6 +673,20 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         expected_version: Some("bafyreibzvuogmrsg7z5mz2mlnmb2f5avdas54a35fpoghu2bbwyt4fiame"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["enable_lsp", "lsp_config"]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "tool-selection-add-required-mcp-services",
+        collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
+        patch: TOOL_SELECTION_ADD_REQUIRED_MCP_SERVICES_PATCH,
+        lens: None,
+        // Pin is authored by applying this inactive patch after the LSP step.
+        expected_version: Some("bafyreihwtdnzzstrwzbdr2gfiebsqtdvujhwtilcjf2xkk47tm4dr3pcpq"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&[
+            "enable_lsp",
+            "lsp_config",
+            "required_mcp_service_ids",
+        ]),
     },
     MigrationStep::PatchVersioned {
         id: "callback-result-add-binding-id",

@@ -8,3 +8,5 @@ mod support;
 mod cli_fleet_delegation_live;
 #[path = "suites/cli_live.rs"]
 mod cli_live;
+#[path = "suites/cli_web_research_live.rs"]
+mod cli_web_research_live;
