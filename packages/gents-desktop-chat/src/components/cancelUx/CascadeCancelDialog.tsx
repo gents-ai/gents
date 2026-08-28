@@ -195,7 +195,6 @@ export function CascadeCancelDialog(
               </span>
             ) : null}
           </div>
-          {}
           <div
             role="status"
             aria-live="polite"

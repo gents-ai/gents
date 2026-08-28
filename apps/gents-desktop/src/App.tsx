@@ -196,9 +196,11 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
       </section>
 
       <section
-        className={`app-route-slot ${
-          routeOwnsPageScroll ? "app-route-slot-scroll" : "app-route-slot-locked"
-        }`}
+        className={
+          routeOwnsPageScroll
+            ? "app-route-slot app-route-slot-scroll"
+            : "app-route-slot"
+        }
         data-scroll-owner={routeOwnsPageScroll ? "route" : undefined}
         data-testid="app-route-slot"
       >

@@ -436,10 +436,6 @@
       -webkit-overflow-scrolling: touch;
     }
 
-    .app-route-slot-locked {
-      overflow: hidden;
-    }
-
     .workspace {
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: minmax(0, 1fr);

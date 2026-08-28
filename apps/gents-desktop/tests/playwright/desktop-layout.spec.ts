@@ -206,7 +206,9 @@ test.describe("desktop responsive layout guardrails", () => {
 
     const submit = page.getByTestId("fleet-fetch-status");
     await expect(submit).toBeAttached();
-    await submit.scrollIntoViewIfNeeded();
+    await page.getByTestId("app-route-slot").evaluate((owner) => {
+      owner.scrollTop = owner.scrollHeight;
+    });
     await expect(submit).toBeVisible();
     await submit.click({ trial: true });
 
@@ -243,26 +245,17 @@ test.describe("desktop responsive layout guardrails", () => {
         offsetTop: 0,
         offsetLeft: 0,
       });
-      const originalScrollIntoView = Element.prototype.scrollIntoView;
       Object.defineProperty(window, "visualViewport", {
         configurable: true,
         value: viewport,
       });
       Object.assign(window, {
-        __focusedControlRevealCount: 0,
-        __setTestVisualViewport(height: number) {
+        __setTestVisualViewport(height: number, offsetTop: number) {
           viewport.height = height;
+          viewport.offsetTop = offsetTop;
           viewport.dispatchEvent(new Event("resize"));
         },
       });
-      Element.prototype.scrollIntoView = function (options) {
-        if (this === document.activeElement) {
-          (
-            window as typeof window & { __focusedControlRevealCount: number }
-          ).__focusedControlRevealCount += 1;
-        }
-        return originalScrollIntoView.call(this, options);
-      };
     });
 
     await gotoHarness(page, "empty-fleet");
@@ -272,30 +265,34 @@ test.describe("desktop responsive layout guardrails", () => {
       .click();
     const address = page.getByTestId("fleet-add-server-address");
     await address.focus();
+    const route = page.getByTestId("app-route-slot");
+    await route.evaluate((owner) => {
+      owner.scrollTop = 0;
+    });
     await page.evaluate(() => {
       (
         window as typeof window & {
-          __setTestVisualViewport: (height: number) => void;
+          __setTestVisualViewport: (height: number, offsetTop: number) => void;
         }
-      ).__setTestVisualViewport(360);
+      ).__setTestVisualViewport(360, 24);
     });
 
     await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
-            (window as typeof window & { __focusedControlRevealCount: number })
-              .__focusedControlRevealCount,
-        ),
-      )
+      .poll(() => route.evaluate((owner) => owner.scrollTop))
       .toBeGreaterThan(0);
     await expect(page.locator(".app-shell")).toHaveCSS("height", "360px");
     const addressRect = await address.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return { bottom: rect.bottom, top: rect.top };
     });
-    expect(addressRect.top).toBeGreaterThanOrEqual(0);
-    expect(addressRect.bottom).toBeLessThanOrEqual(360);
+    expect(addressRect.top).toBeGreaterThanOrEqual(24);
+    expect(addressRect.bottom).toBeLessThanOrEqual(384);
+    expect(await page.locator(".app-shell").evaluate((shell) => shell.scrollTop)).toBe(
+      0,
+    );
+    expect(
+      await page.getByTestId("fleet-empty").evaluate((fleet) => fleet.scrollTop),
+    ).toBe(0);
   });
 
   test("populated-fleet status discovery stays reachable on mobile", async ({
@@ -311,11 +308,16 @@ test.describe("desktop responsive layout guardrails", () => {
 
     const address = page.getByTestId("fleet-add-server-address");
     const fetchStatus = page.getByTestId("fleet-fetch-status");
-    await address.scrollIntoViewIfNeeded();
+    const route = page.getByTestId("app-route-slot");
+    await route.evaluate((owner) => {
+      owner.scrollTop = owner.scrollHeight;
+    });
     await expect(address).toBeVisible();
     await address.fill("http://studio-1:9191");
 
-    await fetchStatus.scrollIntoViewIfNeeded();
+    await route.evaluate((owner) => {
+      owner.scrollTop = owner.scrollHeight;
+    });
     await expect(fetchStatus).toBeVisible();
     await fetchStatus.click({ trial: true });
 
