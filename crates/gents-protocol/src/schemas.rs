@@ -207,7 +207,7 @@ mod tests {
     fn all_contains_every_schema() {
         assert_eq!(
             ALL.len(),
-            61,
+            62,
             "ALL should enumerate every non-runtime schema"
         );
     }
