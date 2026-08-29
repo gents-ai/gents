@@ -648,6 +648,26 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreib5ufwrdzy77qvfziodcdgevd44pqoix4jcrriir3arpyyjwhdjym"
     ),
     baseline_entry!(
+        gents_protocol::schemas::NETWORK_ADMIN_PIN_NAME,
+        gents_protocol::schemas::NETWORK_ADMIN_PIN,
+        "bafyreihqlke25nkquhgf3jiokj26dz2gc4do62o3odhw3iwcfbsofy5iki"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST_NAME,
+        gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST,
+        "bafyreih7u36s37itjkab6z33vayo6ig2sybwq2sn2bdvw3cnbjtjxks6aa"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION_NAME,
+        gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION,
+        "bafyreienabsaov6kn3lfc56zpucodwxtqdwhzvygx56rvb3dygh42yitpe"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
+        gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION,
+        "bafyreibwkzail6uajvjiecvxgxgg65lf2zm7e2ic4tmm22od64rlb4lom4"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
         gents_protocol::schemas::PERSONA_CONFIG_REQUEST,
         "bafyreihvhau2vf2wxh6jfbyfbwdndyfsrfamfvpceghflx4m7vdaangb5q"

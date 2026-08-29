@@ -1,0 +1,22 @@
+# Candidate-authored immutable request bound to one signed status offer and one
+# authenticated transport identity. The request itself grants nothing.
+type NetworkEnrollmentRequest @branchable {
+    protocol_version: Int @immutable
+    request_id: String @index(unique: true) @immutable
+    request_digest: String @index @immutable
+    offer_id: String @index @immutable
+    offer_token: String @immutable
+    challenge: String @index(unique: true) @immutable
+    network_id: String @index @immutable
+    admin_did: String @index @immutable
+    server_peer: String @immutable
+    candidate_did: String @index @immutable
+    candidate_peer: String @index @immutable
+    candidate_ticket: String @immutable
+    owner_agent: String @index @immutable
+    profile: String @immutable
+    client_nonce: String @immutable
+    issued_at: DateTime @immutable
+    expires_at: DateTime @immutable
+    candidate_sig: String @immutable
+}

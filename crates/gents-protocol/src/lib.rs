@@ -1,6 +1,7 @@
 pub mod bearer_token;
 pub mod behavior_readiness;
 pub mod client_protocol;
+pub mod enrollment;
 pub mod graphql;
 pub mod message;
 pub mod network_token;

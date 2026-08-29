@@ -11,8 +11,10 @@ use super::session_hydration::{
     SessionOwner, VerifiedActiveMembership,
 };
 
-pub const ENROLLMENT_DIGEST_DOMAIN: &str = "gents-enrollment-request-v1";
-pub const ENROLLMENT_DIGEST_PREFIX: &str = "utf8hex-v1:";
+pub use gents_protocol::enrollment::{
+    canonical_enrollment_digest, canonical_enrollment_payload, frame_enrollment_field,
+    ENROLLMENT_DIGEST_DOMAIN, ENROLLMENT_DIGEST_PREFIX,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EnrollmentOffer {
@@ -190,46 +192,6 @@ pub enum EnrollmentAction {
     MaterializeRoutes(EnrollmentRequest, EnrollmentDecision),
     Revoke(EnrollmentRequest, AuthorizationRevision),
     MergeAuthorization(AuthorizationRevision),
-}
-
-pub fn frame_enrollment_field(value: &str) -> Vec<u8> {
-    let mut encoded = encode_wire_length(value.len());
-    encoded.extend_from_slice(value.as_bytes());
-    encoded
-}
-
-pub fn canonical_enrollment_payload<'a>(fields: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
-    let fields = std::iter::once(ENROLLMENT_DIGEST_DOMAIN)
-        .chain(fields)
-        .collect::<Vec<_>>();
-    let mut encoded = encode_wire_length(fields.len());
-    for field in fields {
-        encoded.extend(frame_enrollment_field(field));
-    }
-    encoded
-}
-
-pub fn canonical_enrollment_digest<'a>(fields: impl IntoIterator<Item = &'a str>) -> String {
-    format!(
-        "{ENROLLMENT_DIGEST_PREFIX}{}",
-        lower_hex(&canonical_enrollment_payload(fields))
-    )
-}
-
-fn lower_hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut rendered = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        rendered.push(DIGITS[(byte >> 4) as usize] as char);
-        rendered.push(DIGITS[(byte & 0x0f) as usize] as char);
-    }
-    rendered
-}
-
-fn encode_wire_length(length: usize) -> Vec<u8> {
-    let mut encoded = vec![0; length];
-    encoded.push(0xff);
-    encoded
 }
 
 impl EnrollmentState {

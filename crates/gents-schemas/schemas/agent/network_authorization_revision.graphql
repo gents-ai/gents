@@ -1,0 +1,19 @@
+# Append-only admin authority for enrollment membership. The unique maximal
+# sequence is authoritative; equal-sequence conflicts fail closed. Revocation
+# is an authenticated tombstone and history is never deleted.
+type NetworkAuthorizationRevision @branchable {
+    protocol_version: Int @immutable
+    revision_id: String @index(unique: true) @immutable
+    request_id: String @index @immutable
+    request_digest: String @index @immutable
+    network_id: String @index @immutable
+    admin_did: String @index @immutable
+    member_did: String @index @immutable
+    member_peer: String @index @immutable
+    owner_agent: String @index @immutable
+    sequence: Int @index @immutable
+    kind: String @index @immutable
+    issued_at: DateTime @immutable
+    signer_did: String @index @immutable
+    admin_sig: String @immutable
+}

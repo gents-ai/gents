@@ -131,6 +131,17 @@ pub const PEER_ENDPOINT: &str = include_str!("../schemas/agent/peer_endpoint.gra
 pub const NETWORK_JOIN_REQUEST_NAME: &str = "NetworkJoinRequest";
 pub const NETWORK_JOIN_REQUEST: &str =
     include_str!("../schemas/agent/network_join_request.graphql");
+pub const NETWORK_ADMIN_PIN_NAME: &str = "NetworkAdminPin";
+pub const NETWORK_ADMIN_PIN: &str = include_str!("../schemas/agent/network_admin_pin.graphql");
+pub const NETWORK_ENROLLMENT_REQUEST_NAME: &str = "NetworkEnrollmentRequest";
+pub const NETWORK_ENROLLMENT_REQUEST: &str =
+    include_str!("../schemas/agent/network_enrollment_request.graphql");
+pub const NETWORK_ENROLLMENT_DECISION_NAME: &str = "NetworkEnrollmentDecision";
+pub const NETWORK_ENROLLMENT_DECISION: &str =
+    include_str!("../schemas/agent/network_enrollment_decision.graphql");
+pub const NETWORK_AUTHORIZATION_REVISION_NAME: &str = "NetworkAuthorizationRevision";
+pub const NETWORK_AUTHORIZATION_REVISION: &str =
+    include_str!("../schemas/agent/network_authorization_revision.graphql");
 pub const PERSONA_CONFIG_REQUEST_NAME: &str = "PersonaConfigRequest";
 pub const PERSONA_CONFIG_REQUEST: &str =
     include_str!("../schemas/agent/persona_config_request.graphql");
@@ -196,6 +207,10 @@ pub const ALL: &[&str] = &[
     NETWORK_MEMBERSHIP,
     PEER_ENDPOINT,
     NETWORK_JOIN_REQUEST,
+    NETWORK_ADMIN_PIN,
+    NETWORK_ENROLLMENT_REQUEST,
+    NETWORK_ENROLLMENT_DECISION,
+    NETWORK_AUTHORIZATION_REVISION,
     PERSONA_CONFIG_REQUEST,
     SESSION_HYDRATION_REQUEST,
 ];
@@ -258,6 +273,10 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_MEMBERSHIP_NAME,
     PEER_ENDPOINT_NAME,
     NETWORK_JOIN_REQUEST_NAME,
+    NETWORK_ADMIN_PIN_NAME,
+    NETWORK_ENROLLMENT_REQUEST_NAME,
+    NETWORK_ENROLLMENT_DECISION_NAME,
+    NETWORK_AUTHORIZATION_REVISION_NAME,
     PERSONA_CONFIG_REQUEST_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
 ];
@@ -307,8 +326,15 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
     ETH_SUBMISSION_NAME,
 ];
 
+/// Local trust state that must never be subscribed or learned from peers.
+pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[NETWORK_ADMIN_PIN_NAME];
+
 pub fn is_local_audit_collection(name: &str) -> bool {
     LOCAL_AUDIT_COLLECTION_NAMES.contains(&name)
+}
+
+pub fn is_local_only_collection(name: &str) -> bool {
+    LOCAL_ONLY_COLLECTION_NAMES.contains(&name)
 }
 
 #[cfg(test)]
@@ -384,6 +410,14 @@ mod tests {
     #[test]
     fn prompt_bearing_audit_facts_are_classified_and_not_bulk_synced() {
         for name in LOCAL_AUDIT_COLLECTION_NAMES {
+            assert!(ALL_COLLECTION_NAMES.contains(name));
+            assert!(!BRANCHABLE_COLLECTION_NAMES.contains(name));
+        }
+    }
+
+    #[test]
+    fn local_trust_facts_are_registered_but_never_branchable() {
+        for name in LOCAL_ONLY_COLLECTION_NAMES {
             assert!(ALL_COLLECTION_NAMES.contains(name));
             assert!(!BRANCHABLE_COLLECTION_NAMES.contains(name));
         }
