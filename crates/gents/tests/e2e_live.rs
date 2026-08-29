@@ -4,6 +4,8 @@ mod support;
 mod backend_auth_live;
 #[path = "e2e_live/edit_file_live.rs"]
 mod edit_file_live;
+#[path = "e2e_live/eth_tool_live.rs"]
+mod eth_tool_live;
 #[path = "e2e_live/goal_continuation_live.rs"]
 mod goal_continuation_live;
 #[path = "e2e_live/interrupt_live.rs"]

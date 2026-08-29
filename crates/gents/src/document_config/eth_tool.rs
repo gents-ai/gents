@@ -42,6 +42,14 @@ const TOOL_FIELDS: &str = r#"
                 created_at
 "#;
 
+pub async fn list_eth_tools(node: &EmbeddedNode, agent_did: &str) -> Result<Vec<EthToolDocument>> {
+    Ok(list_eth_tool_records(node, agent_did)
+        .await?
+        .into_iter()
+        .map(|(_, tool)| tool)
+        .collect())
+}
+
 pub(crate) async fn list_eth_tool_records(
     node: &EmbeddedNode,
     agent_did: &str,

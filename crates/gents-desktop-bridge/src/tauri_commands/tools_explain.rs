@@ -47,6 +47,13 @@ pub async fn desktop_tool_surface_explain(
                 "loading DatastoreToolSurface documents for {agent_did}: {error}"
             ))
         })?;
+    let eth_tools = gents::list_eth_tools(core.node(), &agent_did)
+        .await
+        .map_err(|error| {
+            BridgeError::from_legacy_message(format!(
+                "loading EthTool documents for {agent_did}: {error}"
+            ))
+        })?;
 
     let tool_selection_id = behavior
         .tool_selection_id
@@ -72,6 +79,7 @@ pub async fn desktop_tool_surface_explain(
                 &behavior.behavior_id,
                 &document,
                 &datastore_tool_surfaces,
+                &eth_tools,
                 &ceiling,
                 Vec::new(),
             )

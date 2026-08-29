@@ -108,6 +108,7 @@ impl BehaviorToolConfig {
             behavior_name,
             selection,
             &[],
+            &[],
             ceiling,
             custom_tools,
         )
@@ -117,13 +118,18 @@ impl BehaviorToolConfig {
         behavior_name: &str,
         selection: &crate::document_config::ToolSelectionDocument,
         surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
+        eth_tools: &[crate::document_config::EthToolDocument],
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
         let merged = crate::document_config::merge_datastore_tool_surfaces(selection, surfaces)?;
+        let expanded =
+            crate::agent::document_view::expand_eth_tools_from_docs(selection, eth_tools)?;
         let mut resolved = ToolSelection::from_document(selection)?;
         resolved.write_tools = merged.write_tools;
         resolved.query_tools = merged.query_tools;
+        resolved.eth_queries = expanded.queries;
+        resolved.eth_calls = expanded.calls;
         Self::from_selection_with_subagent_tools(
             behavior_name,
             resolved,

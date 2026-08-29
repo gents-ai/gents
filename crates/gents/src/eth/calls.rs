@@ -126,7 +126,7 @@ pub fn parse_call_decls(raw: Option<&[String]>) -> Result<Vec<CallDecl>> {
         .map_err(|error| anyhow!("EthTool.calls: {error}"))
 }
 
-pub fn validate_call_decls(decls: &[CallDecl]) -> Result<()> {
+pub fn validate_call_decls(decls: &[CallDecl], chain_id: Option<u64>) -> Result<()> {
     let mut names = BTreeSet::new();
     let mut any_read = false;
     for decl in decls {
@@ -195,10 +195,44 @@ pub fn validate_call_decls(decls: &[CallDecl]) -> Result<()> {
                     bail!("sign_typed_data.types must be an object");
                 }
                 compile_typed_params(types, primary_type, params, true)?;
+                match typed_domain_chain_id(domain)? {
+                    Some(domain_chain_id)
+                        if chain_id.is_none_or(|expected| expected == domain_chain_id) => {}
+                    Some(domain_chain_id) => bail!(
+                        "sign_typed_data {tool_name} domain chainId {domain_chain_id} does not match EthTool chain_id {}",
+                        chain_id.unwrap()
+                    ),
+                    None => bail!(
+                        "sign_typed_data {tool_name} domain requires chainId matching EthTool chain_id"
+                    ),
+                }
             }
         }
     }
     Ok(())
+}
+
+pub(crate) fn typed_domain_chain_id(domain: &Value) -> Result<Option<u64>> {
+    let Some(value) = domain.get("chainId") else {
+        return Ok(None);
+    };
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| anyhow!("EIP-712 domain chainId is not a positive integer")),
+        Value::String(text) => {
+            let parsed = if let Some(hex) = text.strip_prefix("0x") {
+                u64::from_str_radix(hex, 16)
+            } else {
+                text.parse()
+            };
+            parsed
+                .map(Some)
+                .map_err(|error| anyhow!("invalid EIP-712 domain chainId {text:?}: {error}"))
+        }
+        other => bail!("EIP-712 domain chainId must be a string or integer, got {other}"),
+    }
 }
 
 fn validate_gas_caps(
@@ -390,7 +424,7 @@ fn integer_kind(solidity_type: &str) -> Option<IntegerKind> {
     ((8..=256).contains(&bits) && bits % 8 == 0).then_some(kind)
 }
 
-fn supported_primitive_type(solidity_type: &str) -> bool {
+pub(crate) fn supported_primitive_type(solidity_type: &str) -> bool {
     solidity_type == "address"
         || solidity_type == "bool"
         || solidity_type == "string"
@@ -514,7 +548,7 @@ mod tests {
     fn declared_read_requires_named_abi_inputs() {
         let read = r#"{"kind":"read","tool_name":"balance","to":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","signature":"balanceOf(address)","params":{"account":{"source":"model"}}}"#;
         let decls = parse_call_decls(Some(&[read.to_string()])).unwrap();
-        assert!(validate_call_decls(&decls)
+        assert!(validate_call_decls(&decls, None)
             .unwrap_err()
             .to_string()
             .contains("unnamed"));
@@ -563,16 +597,31 @@ mod tests {
     fn native_transfer_has_explicit_parameter_contract() {
         let native = r#"{"kind":"native_transfer","tool_name":"send_eth","params":{"to":{"source":"model","address_allowlist":["0x1111111111111111111111111111111111111111"]},"value":{"source":"model","max":"1000"}},"max_gas":21000,"max_fee_per_gas":"2000000000"}"#;
         let decls = parse_call_decls(Some(&[native.to_string()])).unwrap();
-        validate_call_decls(&decls).unwrap();
+        validate_call_decls(&decls, None).unwrap();
     }
     #[test]
     fn writes_require_operator_gas_and_fee_caps() {
         let write = r#"{"kind":"write","tool_name":"mint","to":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","signature":"mint(uint256 amount)","params":{"amount":{"source":"model","max":"1000"}}}"#;
         let decls = parse_call_decls(Some(&[write.to_string()])).unwrap();
-        assert!(validate_call_decls(&decls)
+        assert!(validate_call_decls(&decls, None)
             .unwrap_err()
             .to_string()
             .contains("max_gas"));
+    }
+
+    #[test]
+    fn typed_data_domain_chain_id_must_match_tool() {
+        let decl = r#"{"kind":"sign_typed_data","tool_name":"permit","primary_type":"Mail","domain":{"name":"Mail","chainId":1},"types":{"EIP712Domain":[{"name":"name","type":"string"},{"name":"chainId","type":"uint256"}],"Mail":[{"name":"message","type":"string"}]},"params":{"message":{"source":"model","enum":["hi"]}}}"#;
+        let decls = parse_call_decls(Some(&[decl.to_string()])).unwrap();
+        let error = validate_call_decls(&decls, Some(8453)).unwrap_err();
+        assert!(error.to_string().contains("does not match"), "{error:#}");
+        validate_call_decls(&decls, Some(1)).unwrap();
+        let missing = r#"{"kind":"sign_typed_data","tool_name":"permit","primary_type":"Mail","domain":{"name":"Mail"},"types":{"EIP712Domain":[{"name":"name","type":"string"}],"Mail":[{"name":"message","type":"string"}]},"params":{"message":{"source":"model","enum":["hi"]}}}"#;
+        let decls = parse_call_decls(Some(&[missing.to_string()])).unwrap();
+        assert!(validate_call_decls(&decls, Some(8453))
+            .unwrap_err()
+            .to_string()
+            .contains("requires chainId"));
     }
 
     #[test]

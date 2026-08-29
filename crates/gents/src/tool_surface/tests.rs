@@ -1071,6 +1071,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
         "reporter",
         &selection,
         &surfaces,
+        &[],
         &ToolCeiling::meta_only(),
         Vec::new(),
     )
@@ -2117,4 +2118,58 @@ fn eth_query_tools_advertise_when_selection_has_resolved_queries() {
         .eth_query_methods
         .permits(&"eth_sendRawTransaction".to_string()));
     assert!(config.static_policy().eth_call_tools.is_deny_all());
+}
+
+#[test]
+fn explain_expands_eth_tool_ids_from_documents() {
+    let agent_did = "did:key:zExplainEth";
+    let selection = crate::document_config::ToolSelectionDocument {
+        selection_id: "sel".to_string(),
+        agent_did: agent_did.to_string(),
+        eth_tool_ids: Some(vec!["base-read".to_string()]),
+        ..Default::default()
+    };
+    let eth_tools = vec![crate::document_config::EthToolDocument {
+        tool_id: "base-read".to_string(),
+        agent_did: agent_did.to_string(),
+        display_name: Some("base".to_string()),
+        enabled: true,
+        chain_id: Some(8453),
+        rpc_url: Some("https://mainnet.base.org".to_string()),
+        query_methods: Some(vec![
+            "eth_blockNumber".to_string(),
+            "eth_chainId".to_string(),
+        ]),
+        calls: None,
+        key_binding_id: None,
+        created_at: None,
+    }];
+    let missing = BehaviorToolConfig::from_tool_selection_document(
+        "ops",
+        &selection,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap_err();
+    assert!(missing.to_string().contains("missing EthTool"));
+
+    let config = BehaviorToolConfig::from_tool_selection_document_with_surfaces(
+        "ops",
+        &selection,
+        &[],
+        &eth_tools,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+    let explanation =
+        config.explain_with_runtime(false, agent_did, &std::collections::HashSet::new());
+    assert!(
+        explanation
+            .tool_names
+            .iter()
+            .any(|name| name == "base-read_query"),
+        "explain must advertise expanded eth tools: {:?}",
+        explanation.tool_names
+    );
 }

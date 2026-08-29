@@ -121,9 +121,11 @@ pub(super) fn validate_eth_tools(
                 tool.tool_id
             ));
         }
-        if let Err(error) =
-            gents::validate_eth_call_declarations(&tool.calls, tool.key_binding_id.as_deref())
-        {
+        if let Err(error) = gents::validate_eth_call_declarations(
+            &tool.calls,
+            tool.key_binding_id.as_deref(),
+            (tool.chain_id > 0).then_some(tool.chain_id as u64),
+        ) {
             errors.push(format!(
                 "EthTool {} has invalid calls: {error}",
                 tool.tool_id

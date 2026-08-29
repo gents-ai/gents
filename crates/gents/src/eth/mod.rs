@@ -23,9 +23,10 @@ pub use rpc::{HttpEthRpc, ETH_USER_AGENT};
 pub fn validate_eth_call_declarations(
     calls: &[String],
     key_binding_id: Option<&str>,
+    chain_id: Option<u64>,
 ) -> anyhow::Result<()> {
     let declarations = parse_call_decls(Some(calls))?;
-    validate_call_decls(&declarations)?;
+    validate_call_decls(&declarations, chain_id)?;
     if declarations.iter().any(|decl| decl.requires_key_binding())
         && key_binding_id.is_none_or(|binding_id| binding_id.trim().is_empty())
     {

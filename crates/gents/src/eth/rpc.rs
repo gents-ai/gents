@@ -149,7 +149,7 @@ impl<T: JsonRpcTransport> EthRpcClient<T> {
     #[allow(dead_code)] // Wired into generated write tools in the next stack commit.
     pub(crate) async fn simulate_transaction(&self, transaction: Value) -> Result<Value> {
         self.ensure_chain_id().await?;
-        self.rpc("eth_call", json!([transaction, "latest"])).await
+        self.rpc("eth_call", json!([transaction, "pending"])).await
     }
 
     #[allow(dead_code)]
@@ -175,6 +175,23 @@ impl<T: JsonRpcTransport> EthRpcClient<T> {
     pub(crate) async fn gas_price(&self) -> Result<Value> {
         self.ensure_chain_id().await?;
         self.rpc("eth_gasPrice", json!([])).await
+    }
+
+    pub(crate) async fn latest_base_fee(&self) -> Result<u128> {
+        self.ensure_chain_id().await?;
+        let block = self
+            .rpc("eth_getBlockByNumber", json!(["latest", false]))
+            .await
+            .context("eth_getBlockByNumber latest")?;
+        let fee = block
+            .get("baseFeePerGas")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("latest block missing baseFeePerGas: {block}"))?;
+        let hex = fee
+            .strip_prefix("0x")
+            .or_else(|| fee.strip_prefix("0X"))
+            .ok_or_else(|| anyhow!("baseFeePerGas is not hex: {fee}"))?;
+        u128::from_str_radix(hex, 16).with_context(|| format!("decoding baseFeePerGas {fee}"))
     }
 
     #[allow(dead_code)]
@@ -276,10 +293,13 @@ pub fn decode_revert_data(hex: &str) -> Option<String> {
     if hex.len() < 8 + 64 + 64 || !hex.to_ascii_lowercase().starts_with("08c379a0") {
         return None;
     }
+    if hex.len() % 2 != 0 {
+        return None;
+    }
     let bytes = (0..hex.len())
         .step_by(2)
-        .filter_map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
-        .collect::<Vec<_>>();
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect::<Option<Vec<_>>>()?;
     if bytes.len() < 4 + 32 + 32 {
         return None;
     }

@@ -1,5 +1,4 @@
-//! Generated read and `any_read` tools. ABI declarations are compiled once
-//! when the runtime snapshot is built, then reused for schema and execution.
+//! Generated EthTool call tools: reads, writes, native transfer, and EIP-712.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -19,7 +18,7 @@ use crate::tool_call_lifecycle::FailureClass;
 
 use super::calls::{
     compile_params, compile_typed_params, native_transfer_function, parse_abi_function, parse_u128,
-    require_address, CallDecl, CompiledParam,
+    require_address, typed_domain_chain_id, CallDecl, CompiledParam,
 };
 use super::keys::{
     address_from_secret, attestation_payload, binding_storage_key, decode_attestation,
@@ -351,6 +350,14 @@ async fn execute_call(
             };
             let function = parse_abi_function(&parsed.signature)
                 .map_err(|error| reported(FailureClass::ArgumentInvalid, error.to_string()))?;
+            for input in &function.inputs {
+                if !super::calls::supported_primitive_type(&input.ty) {
+                    return Err(reported(
+                        FailureClass::ArgumentInvalid,
+                        format!("any_read signature uses unsupported type {}", input.ty),
+                    ));
+                }
+            }
             let data = encode_function(&function, &arg_values)
                 .map_err(|error| reported(FailureClass::ArgumentInvalid, error.to_string()))?;
             let result = client
@@ -545,7 +552,15 @@ async fn execute_write(
         },
     )
     .await;
-    let receipt = receipt.map_err(|error| reported(FailureClass::External, error.to_string()))?;
+    let receipt = receipt.map_err(|error| {
+        let message = error.to_string();
+        let class = if super::submit::is_gas_or_fee_cap_error(&message) {
+            FailureClass::PolicyDenied
+        } else {
+            FailureClass::External
+        };
+        reported(class, message)
+    })?;
     if receipt.status == SubmitStatus::ConfirmedReverted {
         return Err(reported(
             FailureClass::External,
@@ -794,29 +809,6 @@ fn gas_caps(max_gas: Option<u64>, max_fee_per_gas: Option<&str>) -> Result<GasCa
     })
 }
 
-fn typed_domain_chain_id(domain: &Value) -> Result<Option<u64>> {
-    let Some(value) = domain.get("chainId") else {
-        return Ok(None);
-    };
-    match value {
-        Value::Number(number) => number
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| anyhow!("EIP-712 domain chainId is not a positive integer")),
-        Value::String(text) => {
-            let parsed = if let Some(hex) = text.strip_prefix("0x") {
-                u64::from_str_radix(hex, 16)
-            } else {
-                text.parse()
-            };
-            parsed
-                .map(Some)
-                .map_err(|error| anyhow!("invalid EIP-712 domain chainId {text:?}: {error}"))
-        }
-        other => bail!("EIP-712 domain chainId must be a string or integer, got {other}"),
-    }
-}
-
 fn encode_function(function: &Function, args: &[Value]) -> Result<String> {
     if function.inputs.len() != args.len() {
         bail!(
@@ -904,13 +896,22 @@ fn json_to_dyn(ty: &str, value: &Value) -> Result<DynSolValue> {
             .ok_or_else(|| anyhow!("bytes must be a hex string"))?;
         return Ok(DynSolValue::Bytes(decode_hex(text)?));
     }
-    if ty.starts_with("uint") {
-        let bits = ty.trim_start_matches("uint").parse().unwrap_or(256);
-        return Ok(DynSolValue::Uint(parse_uint(value)?, bits));
+    if let Some(bits) = integer_bit_width(ty, false) {
+        let n = parse_uint(value)?;
+        if bits < 256 && n >= (U256::from(1u8) << bits) {
+            bail!("{ty} value {n} exceeds {bits} bits");
+        }
+        return Ok(DynSolValue::Uint(n, bits));
     }
-    if ty.starts_with("int") {
-        let bits = ty.trim_start_matches("int").parse().unwrap_or(256);
-        return Ok(DynSolValue::Int(parse_int(value)?, bits));
+    if let Some(bits) = integer_bit_width(ty, true) {
+        let n = parse_int(value)?;
+        if bits < 256 {
+            let limit = I256::try_from(1u8).expect("one") << (bits - 1);
+            if n >= limit || n < -limit {
+                bail!("{ty} value {n} exceeds {bits} bits");
+            }
+        }
+        return Ok(DynSolValue::Int(n, bits));
     }
     bail!("unsupported Solidity type {ty}");
 }
@@ -932,6 +933,19 @@ fn dyn_to_json(value: &DynSolValue) -> Value {
         DynSolValue::Tuple(items) => Value::Array(items.iter().map(dyn_to_json).collect()),
         other => json!(format!("{other:?}")),
     }
+}
+
+fn integer_bit_width(ty: &str, signed: bool) -> Option<usize> {
+    let prefix = if signed { "int" } else { "uint" };
+    let suffix = ty.strip_prefix(prefix)?;
+    if signed && ty.starts_with("uint") {
+        return None;
+    }
+    if suffix.is_empty() {
+        return Some(256);
+    }
+    let bits = suffix.parse::<usize>().ok()?;
+    ((8..=256).contains(&bits) && bits % 8 == 0).then_some(bits)
 }
 
 fn parse_uint(value: &Value) -> Result<U256> {
@@ -1033,7 +1047,7 @@ mod tests {
             r#"{"kind":"write","tool_name":"usdc_transfer","to":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","signature":"transfer(address to,uint256 amount)","params":{"to":{"source":"model","address_allowlist":["0x1111111111111111111111111111111111111111"]},"amount":{"source":"model","max":"1000000"}},"max_gas":100000,"max_fee_per_gas":"2000000000"}"#.to_string(),
         ]))
         .unwrap();
-        crate::eth::validate_call_decls(&decls).unwrap();
+        crate::eth::validate_call_decls(&decls, Some(8453)).unwrap();
         let resolved = ResolvedEthCall::from_decls(
             "base",
             8453,
@@ -1054,7 +1068,7 @@ mod tests {
     #[test]
     fn sign_typed_data_is_generated_and_does_not_submit() {
         let decls = crate::eth::parse_call_decls(Some(&[r#"{"kind":"sign_typed_data","tool_name":"permit","primary_type":"Permit","domain":{"name":"Token","version":"1","chainId":1},"types":{"EIP712Domain":[{"name":"name","type":"string"},{"name":"version","type":"string"},{"name":"chainId","type":"uint256"}],"Permit":[{"name":"spender","type":"address"},{"name":"value","type":"uint256"}]},"params":{"spender":{"source":"model","address_allowlist":["0x1111111111111111111111111111111111111111"]},"value":{"source":"model","max":"1000"}}}"#.to_string()])).unwrap();
-        crate::eth::validate_call_decls(&decls).unwrap();
+        crate::eth::validate_call_decls(&decls, Some(1)).unwrap();
         let resolved = ResolvedEthCall::from_decls(
             "base",
             1,
@@ -1103,6 +1117,15 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("requires chainId"));
+    }
+
+    #[test]
+    fn uint8_overflow_is_rejected() {
+        let function = parse_abi_function("set(uint8 value)").unwrap();
+        match encode_function(&function, &[json!("1000")]) {
+            Ok(encoded) => panic!("expected uint8 overflow, encoded {encoded}"),
+            Err(error) => assert!(format!("{error:#}").contains("exceeds"), "{error:#}"),
+        }
     }
 
     #[test]

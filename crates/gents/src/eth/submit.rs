@@ -17,8 +17,8 @@ use sha3::{Digest, Keccak256};
 
 use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 
-use super::keys::sign_prehash_recoverable;
-use super::rpc::{parse_hex_u64, EthRpcClient, JsonRpcTransport};
+use super::keys::{address_from_secret, sign_prehash_recoverable};
+use super::rpc::{decode_revert_data, parse_hex_u64, EthRpcClient, JsonRpcTransport};
 
 const STATUS_PREPARED: &str = "prepared";
 const STATUS_SUBMITTED_UNKNOWN: &str = "submitted_unknown";
@@ -141,6 +141,13 @@ pub(crate) async fn submit_transaction<T: JsonRpcTransport>(
     options: SubmitOptions,
 ) -> Result<SubmitReceipt> {
     validate_request(&request)?;
+    let derived = address_from_secret(secret).context("deriving submit signer address")?;
+    if !derived.eq_ignore_ascii_case(&request.from) {
+        bail!(
+            "signing key address {derived} does not match from address {}",
+            request.from
+        );
+    }
     let submission_key = submission_key(&request);
     let request_hash = request_hash(&request)?;
     let nonce_slot = nonces.slot(&request.from, request.chain_id);
@@ -150,9 +157,17 @@ pub(crate) async fn submit_transaction<T: JsonRpcTransport>(
         return resume_submission(node, client, existing, options).await;
     }
 
-    simulate(client, &request).await?;
-    let nonce = transaction_count(client, &request.from).await?;
+    let nonce = next_nonce(node, client, &request.from, request.chain_id).await?;
     let (gas_limit, max_fee_per_gas, max_priority_fee_per_gas) = gas_fees(client, &request).await?;
+    simulate(
+        client,
+        &request,
+        nonce,
+        gas_limit,
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+    )
+    .await?;
     let raw_transaction = sign_eip1559(
         secret,
         request.chain_id,
@@ -168,7 +183,7 @@ pub(crate) async fn submit_transaction<T: JsonRpcTransport>(
     let prepared = SubmissionRecord {
         doc_id: String::new(),
         submission_key: submission_key.clone(),
-        principal_did: request.principal_did.clone(),
+        principal_did: request.principal_did.trim().to_string(),
         chain_id: i64::try_from(request.chain_id).context("chain_id exceeds DefraDB Int")?,
         request_hash,
         from_address: request.from.to_ascii_lowercase(),
@@ -389,12 +404,92 @@ async fn persist_receipt(
 async fn simulate<T: JsonRpcTransport>(
     client: &EthRpcClient<T>,
     request: &SubmitRequest,
+    nonce: u64,
+    gas_limit: u64,
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
 ) -> Result<()> {
-    client
-        .simulate_transaction(transaction_object(request))
+    let mut tx = transaction_object(request);
+    if let Value::Object(map) = &mut tx {
+        map.insert("nonce".to_string(), json!(format!("0x{nonce:x}")));
+        map.insert("gas".to_string(), json!(format!("0x{gas_limit:x}")));
+        map.insert(
+            "maxFeePerGas".to_string(),
+            json!(format!("0x{max_fee_per_gas:x}")),
+        );
+        map.insert(
+            "maxPriorityFeePerGas".to_string(),
+            json!(format!("0x{max_priority_fee_per_gas:x}")),
+        );
+        map.insert("type".to_string(), json!("0x2"));
+    }
+    let result = client
+        .simulate_transaction(tx)
         .await
         .context("simulating eth transaction")?;
+    if let Some(hex) = result.as_str() {
+        if let Some(reason) = decode_revert_data(hex) {
+            bail!("simulation reverted: {reason}");
+        }
+    }
     Ok(())
+}
+
+async fn next_nonce<T: JsonRpcTransport>(
+    node: &EmbeddedNode,
+    client: &EthRpcClient<T>,
+    from: &str,
+    chain_id: u64,
+) -> Result<u64> {
+    let pending = transaction_count(client, from).await?;
+    let journaled = max_in_flight_nonce(node, from, chain_id).await?;
+    Ok(match journaled {
+        Some(nonce) => pending.max(nonce.saturating_add(1)),
+        None => pending,
+    })
+}
+
+async fn max_in_flight_nonce(
+    node: &EmbeddedNode,
+    from: &str,
+    chain_id: u64,
+) -> Result<Option<u64>> {
+    let from = escape_graphql_string(&from.to_ascii_lowercase());
+    let query = format!(
+        r#"{{
+            EthSubmission(filter: {{
+                from_address: {{ _eq: "{from}" }},
+                chain_id: {{ _eq: {chain_id} }}
+            }}) {{ nonce status }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        bail!(
+            "load in-flight EthSubmission nonces failed: {:?}",
+            response.errors
+        );
+    }
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("EthSubmission"))
+        .cloned()
+        .unwrap_or(Value::Array(Vec::new()));
+    if rows.is_null() {
+        return Ok(None);
+    }
+    #[derive(Deserialize)]
+    struct Row {
+        nonce: i64,
+        status: String,
+    }
+    let rows: Vec<Row> = serde_json::from_value(rows)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.status == STATUS_PREPARED || row.status == STATUS_SUBMITTED_UNKNOWN)
+        .filter_map(|row| u64::try_from(row.nonce).ok())
+        .max())
 }
 
 async fn transaction_count<T: JsonRpcTransport>(
@@ -436,12 +531,13 @@ async fn gas_fees<T: JsonRpcTransport>(
             .context("eth_maxPriorityFeePerGas")?,
         "eth_maxPriorityFeePerGas",
     )?;
-    let base = rpc_u128(
-        client.gas_price().await.context("eth_gasPrice")?,
-        "eth_gasPrice",
-    )?;
+    let base = client
+        .latest_base_fee()
+        .await
+        .context("eth_getBlockByNumber latest baseFeePerGas")?;
     let max_fee = base
-        .checked_add(tip)
+        .checked_mul(2)
+        .and_then(|buffered| buffered.checked_add(tip))
         .ok_or_else(|| anyhow!("max fee per gas overflow"))?;
     if let Some(cap) = request.caps.max_fee_per_gas {
         if max_fee > cap {
@@ -699,6 +795,10 @@ fn decode_hex(value: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
+pub(crate) fn is_gas_or_fee_cap_error(message: &str) -> bool {
+    message.contains("exceeds max_gas") || message.contains("exceeds cap")
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -786,7 +886,7 @@ mod tests {
             data: vec![0x70, 0xa0, 0x82, 0x31],
             caps: GasCaps {
                 max_gas: Some(100_000),
-                max_fee_per_gas: Some(2_000_000_000),
+                max_fee_per_gas: Some(5_000_000_000),
             },
             idempotency_key: key.to_string(),
         }
@@ -795,11 +895,11 @@ mod tests {
     fn submission_script(receipt_status: &str) -> Vec<Value> {
         vec![
             ok(json!("0x2105")),
-            ok(json!("0x")),
             ok(json!("0x0")),
             ok(json!("0x5208")),
             ok(json!("0x1")),
-            ok(json!("0x3b9aca00")),
+            ok(json!({"baseFeePerGas": "0x3b9aca00"})),
+            ok(json!("0x")),
             ok(Value::Null),
             ok(Value::Null),
             ok(json!({"status":receipt_status})),
@@ -930,5 +1030,137 @@ mod tests {
         .await
         .expect("mined revert");
         assert_eq!(receipt.status, SubmitStatus::ConfirmedReverted);
+    }
+
+    #[tokio::test]
+    async fn signing_key_must_match_from_address() {
+        let (_temp, node) = node().await;
+        let transport = Scripted::new(vec![ok(json!("0x2105"))]);
+        let client = EthRpcClient::new("http://127.0.0.1:1", 8453, &[], transport).unwrap();
+        let other = [0x11u8; 32];
+        let error = submit_transaction(
+            &node,
+            &client,
+            &other,
+            request("mismatch"),
+            &NonceGate::default(),
+            SubmitOptions {
+                receipt_attempts: 1,
+                receipt_interval: Duration::ZERO,
+            },
+        )
+        .await
+        .expect_err("mismatched signer");
+        assert!(error.to_string().contains("does not match"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn in_flight_journal_nonce_is_not_reused() {
+        let (_temp, node) = node().await;
+        let from = address_from_secret(&ANVIL0).expect("from");
+        let prepared = SubmissionRecord {
+            doc_id: String::new(),
+            submission_key: "did:key:zAlice:8453:held".to_string(),
+            principal_did: "did:key:zAlice".to_string(),
+            chain_id: 8453,
+            request_hash: "0xabc".to_string(),
+            from_address: from.to_ascii_lowercase(),
+            nonce: 0,
+            raw_transaction: "0x02dead".to_string(),
+            tx_hash: "0x1111".to_string(),
+            status: STATUS_PREPARED.to_string(),
+            receipt_json: None,
+        };
+        create_submission(&node, &prepared)
+            .await
+            .expect("persist in-flight nonce 0");
+
+        let transport = Scripted::new(submission_script("0x1"));
+        let client = EthRpcClient::new("http://127.0.0.1:1", 8453, &[], transport).unwrap();
+        submit_transaction(
+            &node,
+            &client,
+            &ANVIL0,
+            request("second-key"),
+            &NonceGate::default(),
+            SubmitOptions {
+                receipt_attempts: 1,
+                receipt_interval: Duration::ZERO,
+            },
+        )
+        .await
+        .expect("second key");
+
+        let loaded = load_submission(&node, "did:key:zAlice:8453:second-key")
+            .await
+            .expect("load")
+            .expect("second submission");
+        assert_eq!(
+            loaded.nonce, 1,
+            "in-flight prepared nonce 0 must bump the next key to 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn eip1559_fees_are_twice_base_fee_plus_tip() {
+        let transport = Scripted::new(vec![
+            ok(json!("0x2105")),
+            ok(json!("0x5208")),
+            ok(json!("0x1")),
+            ok(json!({"baseFeePerGas": "0x64"})),
+        ]);
+        let client = EthRpcClient::new("http://127.0.0.1:1", 8453, &[], transport).unwrap();
+        let (gas_limit, max_fee, tip) = gas_fees(&client, &request("fees")).await.expect("fees");
+        assert_eq!(gas_limit, 0x5208);
+        assert_eq!(tip, 1);
+        assert_eq!(max_fee, 2 * 0x64 + 1);
+    }
+
+    #[tokio::test]
+    async fn simulate_call_includes_estimated_gas() {
+        let (_temp, node) = node().await;
+        let transport = Scripted::new(submission_script("0x1"));
+        let calls = Arc::clone(&transport.calls);
+        let client = EthRpcClient::new("http://127.0.0.1:1", 8453, &[], transport).unwrap();
+        submit_transaction(
+            &node,
+            &client,
+            &ANVIL0,
+            request("sim-gas"),
+            &NonceGate::default(),
+            SubmitOptions {
+                receipt_attempts: 1,
+                receipt_interval: Duration::ZERO,
+            },
+        )
+        .await
+        .expect("submit");
+        let simulate = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|body| body["method"] == "eth_call")
+            .cloned()
+            .expect("eth_call");
+        let tx = &simulate["params"][0];
+        assert!(
+            tx.get("gas").and_then(Value::as_str).is_some(),
+            "simulate must pass estimated gas: {tx}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fee_cap_is_fail_closed() {
+        let transport = Scripted::new(vec![
+            ok(json!("0x2105")),
+            ok(json!("0x5208")),
+            ok(json!("0x1")),
+            ok(json!({"baseFeePerGas": "0x3b9aca00"})),
+        ]);
+        let client = EthRpcClient::new("http://127.0.0.1:1", 8453, &[], transport).unwrap();
+        let mut capped = request("capped");
+        capped.caps.max_fee_per_gas = Some(100);
+        let error = gas_fees(&client, &capped).await.expect_err("cap");
+        assert!(error.to_string().contains("exceeds cap"), "{error:#}");
     }
 }

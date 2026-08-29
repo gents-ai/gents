@@ -368,6 +368,24 @@ pub(crate) fn expand_eth_tools(
     selection: &ToolSelectionDocument,
     view: &DocumentRuntimeView,
 ) -> anyhow::Result<ExpandedEthTools> {
+    expand_eth_tools_with(selection, |tool_id| {
+        view.eth_tools.get(tool_id).map(|record| &record.value)
+    })
+}
+
+pub(crate) fn expand_eth_tools_from_docs(
+    selection: &ToolSelectionDocument,
+    docs: &[crate::document_config::EthToolDocument],
+) -> anyhow::Result<ExpandedEthTools> {
+    expand_eth_tools_with(selection, |tool_id| {
+        docs.iter().find(|doc| doc.tool_id == tool_id)
+    })
+}
+
+fn expand_eth_tools_with<'a>(
+    selection: &ToolSelectionDocument,
+    lookup: impl Fn(&str) -> Option<&'a crate::document_config::EthToolDocument>,
+) -> anyhow::Result<ExpandedEthTools> {
     use anyhow::{anyhow, bail};
     use std::collections::HashSet;
 
@@ -389,14 +407,13 @@ pub(crate) fn expand_eth_tools(
                 tool_id
             );
         }
-        let record = view.eth_tools.get(tool_id).ok_or_else(|| {
+        let doc = lookup(tool_id).ok_or_else(|| {
             anyhow!(
                 "ToolSelection {} references missing EthTool {}",
                 selection.selection_id,
                 tool_id
             )
         })?;
-        let doc = &record.value;
         if doc.agent_did.trim() != selection.agent_did.trim() {
             bail!(
                 "ToolSelection {} references EthTool {} owned by a different agent",
@@ -419,9 +436,9 @@ pub(crate) fn expand_eth_tools(
             out.queries.push(resolved);
         }
         let decls = crate::eth::parse_call_decls(doc.calls.as_deref())?;
-        crate::eth::validate_call_decls(&decls)?;
         let rpc_url = doc.rpc_url.as_deref().unwrap_or("");
         let chain_id = doc.chain_id.unwrap_or(0).max(0) as u64;
+        crate::eth::validate_call_decls(&decls, (chain_id > 0).then_some(chain_id))?;
         if !rpc_url.trim().is_empty() && chain_id > 0 {
             let calls = crate::eth::ResolvedEthCall::from_decls(
                 &doc.tool_id,

@@ -27,7 +27,7 @@ mod builder;
 pub mod completion_retry;
 mod daemon;
 pub mod directory_projection;
-mod document_view;
+pub(crate) mod document_view;
 pub(crate) mod loop_stream;
 pub(crate) mod output_obligation;
 pub mod p2p_reconcile;

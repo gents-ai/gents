@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use gents::{
-    AgentBehaviorDocument, BehaviorToolConfig, DatastoreToolSurfaceDocument, ToolCeiling,
-    ToolPolicyVersion, ToolSelection, ToolSelectionDocument,
+    AgentBehaviorDocument, BehaviorToolConfig, DatastoreToolSurfaceDocument, EthToolDocument,
+    ToolCeiling, ToolPolicyVersion, ToolSelection, ToolSelectionDocument,
 };
 use serde_json::{json, Value};
 
@@ -120,6 +120,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     let active_behavior_id_set = active_behavior_ids.iter().cloned().collect::<HashSet<_>>();
     let selection_rows = tool_selection_rows(&bundle)?;
     let surface_rows = datastore_tool_surface_rows(&bundle)?;
+    let eth_tool_rows = eth_tool_rows(&bundle)?;
     let mut unavailable_behaviors =
         crate::commands::status::collect_unavailable_behaviors_from_bundle(&bundle);
     let mut behaviors = Vec::new();
@@ -153,6 +154,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                         &behavior.behavior_id,
                         selection,
                         &surface_rows,
+                        &eth_tool_rows,
                         &tool_ceiling,
                         Vec::new(),
                     )
@@ -319,6 +321,17 @@ fn datastore_tool_surface_rows(
         .map(|row| {
             serde_json::from_value(row)
                 .context("decoding DatastoreToolSurface row for tool-surface explanation")
+        })
+        .collect()
+}
+
+fn eth_tool_rows(bundle: &ConfigExportBundle) -> Result<Vec<EthToolDocument>> {
+    bundle
+        .eth_tools
+        .iter()
+        .cloned()
+        .map(|row| {
+            serde_json::from_value(row).context("decoding EthTool row for tool-surface explanation")
         })
         .collect()
 }
