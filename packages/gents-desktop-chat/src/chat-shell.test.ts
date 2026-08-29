@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "vitest";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,11 +108,11 @@ function session(
   };
 }
 
-function loadLeanContractSnapshot(): LeanContractSnapshot {
+async function loadLeanContractSnapshot(): Promise<LeanContractSnapshot> {
   if (!leanContractSnapshot) {
     const proofsDir = join(repoRoot(), "crates/gents/proofs");
-    runLeanCommand(proofsDir, ["build", "Proofs.Conformance.Contracts"]);
-    const stdout = runLeanCommand(proofsDir, [
+    await runLeanCommand(proofsDir, ["build", "Proofs.Conformance.Contracts"]);
+    const stdout = await runLeanCommand(proofsDir, [
       "env",
       "lean",
       "--run",
@@ -141,30 +141,49 @@ function loadLeanContractSnapshot(): LeanContractSnapshot {
   return leanContractSnapshot;
 }
 
-function loadLeanClientShellCases() {
-  return loadLeanContractSnapshot().frontend_client_shell_cases;
+async function loadLeanClientShellCases() {
+  return (await loadLeanContractSnapshot()).frontend_client_shell_cases;
 }
 
-function runLeanCommand(proofsDir: string, args: string[]) {
+function runLeanCommand(proofsDir: string, args: string[]): Promise<string> {
   const command = `lake ${args.join(" ")}`;
-  const result = spawnSync("lake", args, {
-    cwd: proofsDir,
-    encoding: "utf8",
-    timeout: GENERATED_CONTRACT_COMMAND_TIMEOUT_MS,
+  return new Promise((resolve, reject) => {
+    // spawnSync blocked the Vitest worker for ~2 minutes, which trips the
+    // default 60s RPC timeout (`Timeout calling "onTaskUpdate"`) even when
+    // the Lean tests themselves pass.
+    const child = spawn("lake", args, {
+      cwd: proofsDir,
+      timeout: GENERATED_CONTRACT_COMMAND_TIMEOUT_MS,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      reject(
+        new Error(
+          `failed to run ${command} in ${proofsDir}: ${error.message}`,
+        ),
+      );
+    });
+    child.on("close", (status) => {
+      if (status !== 0) {
+        reject(
+          new Error(
+            `${command} failed in ${proofsDir}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+          ),
+        );
+        return;
+      }
+      resolve(stdout);
+    });
   });
-
-  if (result.error) {
-    throw new Error(
-      `failed to run ${command} in ${proofsDir}: ${result.error.message}`,
-    );
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      `${command} failed in ${proofsDir}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-    );
-  }
-
-  return result.stdout.toString();
 }
 
 function uniqueMarkerPosition(stdout: string, marker: string) {
@@ -350,8 +369,8 @@ describe("projectChatShell", () => {
 
   test(
     "matches generated Lean ClientShell projection contracts",
-    () => {
-      const contractCases = loadLeanClientShellCases();
+    async () => {
+      const contractCases = await loadLeanClientShellCases();
       expect(contractCases).toHaveLength(17);
 
       for (const contractCase of contractCases) {
@@ -654,8 +673,8 @@ describe("projectChatShell", () => {
 describe("requestProgressPresentation", () => {
   test(
     "matches every generated Lean request lifecycle projection",
-    () => {
-      const cases = loadLeanContractSnapshot().request_progress_cases;
+    async () => {
+      const cases = (await loadLeanContractSnapshot()).request_progress_cases;
       expect(cases).toHaveLength(9);
       for (const contractCase of cases) {
         expect(
