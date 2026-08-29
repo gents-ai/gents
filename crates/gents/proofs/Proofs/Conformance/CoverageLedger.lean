@@ -139,6 +139,15 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal]
     , deferred := [(Surface.operatorUi, "client hydration/progress is #1143")]
     }
+  , { feature := "authenticated-enrollment"
+    , required := [Surface.runtimeInternal]
+    , deferred :=
+        [ (Surface.operatorCli, "operator approval wiring is completed later in #1293")
+        , (Surface.operatorUi, "status-first enrollment UI is completed later in #1293")
+        , (Surface.api, "status offer and enrollment status APIs are completed later in #1293")
+        , (Surface.agentFacing, "enrollment authorizes transport; it is not agent-facing")
+        ]
+    }
   , { feature := "runtime-reconcile"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -547,6 +556,21 @@ def caseCoverage : List CoverageEntry :=
       "SessionHydrationDurableCases"
       "conformance::session_hydration::generated_session_hydration_durable_cases_match_storage_projection")
       "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "enrollment_cases"
+      "EnrollmentCases"
+      "conformance::enrollment::generated_enrollment_cases_match_production_transition_core")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "enrollment_encoding_cases"
+      "EnrollmentEncodingCases"
+      "conformance::enrollment::generated_enrollment_encoding_vectors_match_wire_codec")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "enrollment_digest_cases"
+      "EnrollmentDigestCases"
+      "conformance::enrollment::generated_enrollment_digest_vectors_match_wire_codec")
+      "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_decision_cases"
       "GoalDecisionCases"

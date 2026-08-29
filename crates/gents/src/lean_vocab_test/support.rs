@@ -50,6 +50,12 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) session_hydration_progress_cases: Vec<LeanSessionHydrationProgressCase>,
     #[serde(default)]
     pub(crate) session_hydration_durable_cases: Vec<LeanSessionHydrationDurableCase>,
+    #[serde(default)]
+    pub(crate) enrollment_cases: Vec<LeanEnrollmentCase>,
+    #[serde(default)]
+    pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
+    #[serde(default)]
+    pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub(crate) frontend_client_shell_case_count: usize,
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) desktop_client_shell_case_count: usize,
@@ -471,6 +477,116 @@ pub(crate) struct LeanSessionHydrationDurableCase {
     pub(crate) served: Option<usize>,
     pub(crate) expected_phase: String,
     pub(crate) expected_merged: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanEnrollmentCase {
+    pub(crate) name: String,
+    pub(crate) steps: Vec<LeanEnrollmentTraceStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanEnrollmentTraceStep {
+    pub(crate) action: String,
+    pub(crate) offer_id: String,
+    pub(crate) offer_challenge: String,
+    pub(crate) offer_network_id: String,
+    pub(crate) offer_admin_did: String,
+    pub(crate) offer_server_peer: String,
+    pub(crate) offer_owner_agent: String,
+    pub(crate) offer_profile: String,
+    pub(crate) challenge: String,
+    pub(crate) request_id: String,
+    pub(crate) request_digest: String,
+    pub(crate) request_offer_id: String,
+    pub(crate) network_id: String,
+    pub(crate) admin_did: String,
+    pub(crate) server_peer: String,
+    pub(crate) server_ticket_peer: String,
+    pub(crate) resolved_server_did: String,
+    pub(crate) profile: String,
+    pub(crate) schema_compatible: bool,
+    pub(crate) offer_admin_signed: bool,
+    pub(crate) offer_fresh: bool,
+    pub(crate) candidate_did: String,
+    pub(crate) candidate_peer: String,
+    pub(crate) observed_candidate_peer: String,
+    pub(crate) resolved_candidate_did: String,
+    pub(crate) candidate_ticket_peer: String,
+    pub(crate) owner_agent: String,
+    pub(crate) client_nonce: String,
+    pub(crate) issued_at: String,
+    pub(crate) expires_at: String,
+    pub(crate) candidate_signed: bool,
+    pub(crate) request_fresh: bool,
+    pub(crate) decision_authorization_sequence: usize,
+    pub(crate) decision_signer_did: String,
+    pub(crate) decision_kind: String,
+    pub(crate) decision_request_id: String,
+    pub(crate) decision_request_digest: String,
+    pub(crate) decision_network_id: String,
+    pub(crate) decision_admin_did: String,
+    pub(crate) decision_candidate_did: String,
+    pub(crate) decision_candidate_peer: String,
+    pub(crate) decision_owner_agent: String,
+    pub(crate) decision_admin_signed: bool,
+    pub(crate) decision_fresh: bool,
+    pub(crate) revision_kind: String,
+    pub(crate) revision_sequence: usize,
+    pub(crate) revision_signer_did: String,
+    pub(crate) revision_request_id: String,
+    pub(crate) revision_request_digest: String,
+    pub(crate) revision_network_id: String,
+    pub(crate) revision_admin_did: String,
+    pub(crate) revision_member_did: String,
+    pub(crate) revision_member_peer: String,
+    pub(crate) revision_owner_agent: String,
+    pub(crate) revision_admin_signed: bool,
+    pub(crate) observed_offer_count: usize,
+    pub(crate) admin_pin_count: usize,
+    pub(crate) challenge_binding_count: usize,
+    pub(crate) request_binding_count: usize,
+    pub(crate) request_count: usize,
+    pub(crate) decision_count: usize,
+    pub(crate) authorization_count: usize,
+    pub(crate) membership_count: usize,
+    pub(crate) route_count: usize,
+    pub(crate) request_accepted: bool,
+    pub(crate) decision_recorded: bool,
+    pub(crate) authorization_recorded: bool,
+    pub(crate) revision_recorded: bool,
+    pub(crate) membership_present: bool,
+    pub(crate) client_route_present: bool,
+    pub(crate) server_route_present: bool,
+    pub(crate) admin_pin_present: bool,
+    pub(crate) admin_pin_conflict: bool,
+    pub(crate) challenge_binding_conflict: bool,
+    pub(crate) request_binding_conflict: bool,
+    pub(crate) current_approval: bool,
+    pub(crate) ready: bool,
+    pub(crate) client_hydration_admits: bool,
+    pub(crate) server_hydration_admits: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanEnrollmentEncodingCase {
+    pub(crate) name: String,
+    pub(crate) value: String,
+    pub(crate) expected_frame: String,
+    pub(crate) actual_frame: String,
+    pub(crate) frame_matches: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanEnrollmentDigestCase {
+    pub(crate) name: String,
+    pub(crate) fields: Vec<String>,
+    pub(crate) expected_payload: String,
+    pub(crate) actual_payload: String,
+    pub(crate) expected_digest: String,
+    pub(crate) actual_digest: String,
+    pub(crate) payload_matches: bool,
+    pub(crate) digest_matches: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1179,6 +1295,18 @@ pub(crate) fn lean_session_hydration_progress_cases() -> &'static [LeanSessionHy
 
 pub(crate) fn lean_session_hydration_durable_cases() -> &'static [LeanSessionHydrationDurableCase] {
     &lean_contract_snapshot().session_hydration_durable_cases
+}
+
+pub(crate) fn lean_enrollment_cases() -> &'static [LeanEnrollmentCase] {
+    &lean_contract_snapshot().enrollment_cases
+}
+
+pub(crate) fn lean_enrollment_encoding_cases() -> &'static [LeanEnrollmentEncodingCase] {
+    &lean_contract_snapshot().enrollment_encoding_cases
+}
+
+pub(crate) fn lean_enrollment_digest_cases() -> &'static [LeanEnrollmentDigestCase] {
+    &lean_contract_snapshot().enrollment_digest_cases
 }
 
 pub(crate) fn lean_trigger_dispatch_case_count() -> usize {

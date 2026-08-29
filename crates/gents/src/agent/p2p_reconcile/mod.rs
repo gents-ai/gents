@@ -6,6 +6,7 @@ pub mod discovery;
 pub mod embedded_impl;
 pub mod endpoint;
 pub mod engine;
+pub mod enrollment;
 pub mod error_class;
 mod graphql_helpers;
 pub mod intervals;

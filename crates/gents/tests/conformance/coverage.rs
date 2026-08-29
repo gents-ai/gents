@@ -1078,6 +1078,24 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SessionHydrationDurableCases".to_string(),
         ));
     }
+    if !snapshot.enrollment_cases.is_empty() {
+        emitted.insert((
+            "enrollment_cases".to_string(),
+            "EnrollmentCases".to_string(),
+        ));
+    }
+    if !snapshot.enrollment_encoding_cases.is_empty() {
+        emitted.insert((
+            "enrollment_encoding_cases".to_string(),
+            "EnrollmentEncodingCases".to_string(),
+        ));
+    }
+    if !snapshot.enrollment_digest_cases.is_empty() {
+        emitted.insert((
+            "enrollment_digest_cases".to_string(),
+            "EnrollmentDigestCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -1163,6 +1181,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "session_hydration_cases",
         "session_hydration_progress_cases",
         "session_hydration_durable_cases",
+        "enrollment_cases",
+        "enrollment_encoding_cases",
+        "enrollment_digest_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();
