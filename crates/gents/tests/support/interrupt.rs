@@ -70,11 +70,17 @@ pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
     let mut sleep = Duration::from_millis(50);
     loop {
         let snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        let readiness = super::snapshots::fetch_behavior_readiness_snapshot(node, agent_did).await;
         if let Some(snapshot) = &snapshot {
             if snapshot.process_state == "ready"
                 && snapshot.reconcile_phase == "idle"
                 && snapshot.active_generation >= 1
-                && snapshot.runnable_behavior_count >= 1
+                && readiness.as_ref().is_some_and(|readiness| {
+                    readiness.process_state.accepts_work()
+                        && readiness.behaviors.iter().any(|behavior| {
+                            behavior.state == gents_protocol::row::BehaviorReadinessState::Ready
+                        })
+                })
             {
                 return;
             }
@@ -82,7 +88,7 @@ pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "agent did not reach ready state within {TEST_RUNTIME_READY_TIMEOUT:?}; \
-             last runtime snapshot: {snapshot:?}"
+             last runtime snapshot: {snapshot:?}; readiness: {readiness:?}"
         );
         tokio::time::sleep(sleep).await;
         sleep = (sleep * 2).min(Duration::from_millis(250));

@@ -14,6 +14,10 @@ pub(super) use crate::identity::AgentIdentity;
 pub(super) use crate::runtime_status::RuntimeStatusHandle;
 pub(super) use crate::tool_surface::ToolCeiling;
 pub(super) use crate::watcher::AgentRequest;
+pub(super) use gents_protocol::row::{
+    BehaviorReadinessProcessState, BehaviorReadinessSnapshot, BehaviorReadinessState,
+    BehaviorReadinessUnavailableReason,
+};
 pub(super) use serde_json::Value;
 
 pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
@@ -73,8 +77,6 @@ pub(super) struct RuntimeStatusRow {
     pub(super) process_state: String,
     pub(super) reconcile_phase: String,
     pub(super) active_generation: i64,
-    pub(super) runnable_behavior_count: i64,
-    pub(super) unavailable_behavior_count: i64,
     pub(super) last_reconcile_result: String,
     pub(super) last_reconcile_error: String,
     pub(super) updated_at: String,
@@ -91,8 +93,6 @@ pub(super) async fn fetch_runtime_status(
                 process_state
                 reconcile_phase
                 active_generation
-                runnable_behavior_count
-                unavailable_behavior_count
                 last_reconcile_result
                 last_reconcile_error
                 updated_at
@@ -130,8 +130,6 @@ pub(super) async fn wait_for_runtime_reconcile_phase(
                     process_state
                     reconcile_phase
                     active_generation
-                    runnable_behavior_count
-                    unavailable_behavior_count
                     last_reconcile_result
                     last_reconcile_error
                     updated_at
@@ -168,6 +166,39 @@ pub(super) async fn wait_for_runtime_reconcile_phase(
             tokio::task::yield_now().await;
         }
     }
+}
+
+pub(super) async fn fetch_behavior_readiness(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+) -> BehaviorReadinessSnapshot {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentBehaviorReadiness(
+                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                limit: 1
+            ) {{
+                snapshot_json
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "AgentBehaviorReadiness query failed: {:?}",
+        response.errors
+    );
+    let snapshot_json = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentBehaviorReadiness"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("snapshot_json"))
+        .and_then(Value::as_str)
+        .expect("AgentBehaviorReadiness row");
+    serde_json::from_str(snapshot_json).expect("decode behavior readiness snapshot")
 }
 
 pub(super) async fn wait_for_runtime_process_state(

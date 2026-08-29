@@ -12,7 +12,7 @@ import type {
   DeploymentView,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { selectedBehaviorUnavailableHint } from "../lib/behaviorAvailability";
+import { selectedBehaviorReadinessDecision } from "../lib/behaviorReadiness";
 import { trackedRequestIdForSession } from "./desktopShellRuntime";
 
 type ChatProjectionStateOptions = {
@@ -43,14 +43,22 @@ export function useDesktopChatProjectionState({
   const [optimisticPendingTurn, setOptimisticPendingTurn] =
     useState<OptimisticPendingTurn | null>(null);
   const [draftsByContext, setDraftsByContext] = useState<Record<string, string>>({});
+  const behaviorReadiness = useMemo(
+    () => selectedBehaviorReadinessDecision(selectedDeployment, selectedBehaviorId),
+    [selectedBehaviorId, selectedDeployment],
+  );
+  const retryBehaviorReadiness = useMemo(
+    () =>
+      selectedBehaviorReadinessDecision(
+        selectedDeployment,
+        session?.behaviorId ?? null,
+      ),
+    [selectedDeployment, session?.behaviorId],
+  );
   const draftContextKey = JSON.stringify(
     selectedSessionId
       ? ["session", selectedAgentDid, selectedSessionId]
-      : [
-          "new",
-          selectedAgentDid,
-          selectedBehaviorId ?? selectedDeployment?.defaultBehaviorId ?? null,
-        ],
+      : ["new", selectedAgentDid, behaviorReadiness.behaviorId],
   );
   const draft = draftsByContext[draftContextKey] ?? "";
   const setDraft = useCallback(
@@ -70,10 +78,6 @@ export function useDesktopChatProjectionState({
     [draftContextKey],
   );
   const shellProjection = useMemo(() => {
-    const behaviorUnavailableHint = selectedBehaviorUnavailableHint(
-      selectedDeployment,
-      selectedBehaviorId,
-    );
     return projectChatShell({
       clientAvailable,
       selectedAgentDid,
@@ -83,14 +87,39 @@ export function useDesktopChatProjectionState({
       session,
       selectedConversation,
       localWorkflow,
-      behaviorUnavailableHint,
+      chatSafe: selectedDeployment?.chatSafe ?? false,
+      behaviorReadiness,
     });
   }, [
+    behaviorReadiness,
     clientAvailable,
     draft,
     localWorkflow,
     selectedAgentDid,
-    selectedBehaviorId,
+    selectedConversation,
+    selectedDeployment,
+    selectedSessionId,
+    sending,
+    session,
+  ]);
+  const retryShellProjection = useMemo(() => {
+    return projectChatShell({
+      clientAvailable,
+      selectedAgentDid,
+      selectedSessionId,
+      draft: "",
+      sending,
+      session,
+      selectedConversation,
+      localWorkflow,
+      chatSafe: selectedDeployment?.chatSafe ?? false,
+      behaviorReadiness: retryBehaviorReadiness,
+    });
+  }, [
+    clientAvailable,
+    localWorkflow,
+    retryBehaviorReadiness,
+    selectedAgentDid,
     selectedConversation,
     selectedDeployment,
     selectedSessionId,
@@ -129,7 +158,9 @@ export function useDesktopChatProjectionState({
     setLocalWorkflow,
     optimisticPendingTurn,
     setOptimisticPendingTurn,
+    behaviorReadiness,
     shellProjection,
+    retryShellProjection,
     selectedTrackedRequestId,
   };
 }

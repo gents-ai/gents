@@ -529,8 +529,6 @@ mod tests {
             reconcile_phase: "idle".to_string(),
             active_generation: 1,
             router_generation: 1,
-            runnable_behavior_count: 1,
-            unavailable_behavior_count: 0,
             last_reconcile_result: "applied".to_string(),
             last_reconcile_completed_at: "2026-06-04T00:00:00Z".to_string(),
         }

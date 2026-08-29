@@ -1087,10 +1087,17 @@ async fn wait_for_runtime_ready_realtime(node: &EmbeddedNode, agent_did: &str) {
     let started = std::time::Instant::now();
     loop {
         let snapshot = support::snapshots::fetch_runtime_snapshot(node, agent_did).await;
+        let readiness =
+            support::snapshots::fetch_behavior_readiness_snapshot(node, agent_did).await;
         if let Some(snapshot) = &snapshot {
             if snapshot.process_state == "ready"
                 && snapshot.reconcile_phase == "idle"
-                && snapshot.runnable_behavior_count >= 1
+                && readiness.as_ref().is_some_and(|readiness| {
+                    readiness.process_state.accepts_work()
+                        && readiness.behaviors.iter().any(|behavior| {
+                            behavior.state == gents_protocol::row::BehaviorReadinessState::Ready
+                        })
+                })
             {
                 return;
             }
@@ -1098,7 +1105,7 @@ async fn wait_for_runtime_ready_realtime(node: &EmbeddedNode, agent_did: &str) {
         assert!(
             started.elapsed() < TEST_RUNTIME_READY_TIMEOUT,
             "agent did not reach ready state within {TEST_RUNTIME_READY_TIMEOUT:?}; \
-             last runtime snapshot: {snapshot:?}"
+             last runtime snapshot: {snapshot:?}; readiness: {readiness:?}"
         );
         tokio::task::yield_now().await;
     }

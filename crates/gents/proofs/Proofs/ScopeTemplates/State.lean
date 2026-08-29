@@ -92,12 +92,16 @@ def clientControlPlaneCollections : List String :=
    "Skill", "DatastoreToolSurface", "ChainKeyBinding", "EthTool", "Task",
    "Schedule", "EventTrigger"]
 
+def clientOwnerProjectionCollections : List String :=
+  ["AgentBehaviorReadiness"]
+
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
     ["BearerPairingReady", "PeerEndpoint", "SessionHydrationRequest"]
 
 def clientCollections : List String :=
-  clientToRuntimeCollections ++ clientControlPlaneCollections
+  clientToRuntimeCollections ++ clientControlPlaneCollections ++
+    clientOwnerProjectionCollections
 
 def clientRouteCollections : RouteDirection → List String
   | .clientToRuntime => clientToRuntimeCollections

@@ -2,4 +2,4 @@
 import type { CommandContract } from "./CommandContract.js";
 import type { PermissionSetContract } from "./PermissionSetContract.js";
 
-export type BridgeContract = { contractVersion: string, packageVersion: string, events: Array<string>, eventReasons: Array<string>, errorCodes: Array<string>, commands: Array<CommandContract>, permissionSets: Array<PermissionSetContract>, };
+export type BridgeContract = { contractVersion: string, packageVersion: string, wireSchemaHash: string, events: Array<string>, eventReasons: Array<string>, errorCodes: Array<string>, commands: Array<CommandContract>, permissionSets: Array<PermissionSetContract>, };

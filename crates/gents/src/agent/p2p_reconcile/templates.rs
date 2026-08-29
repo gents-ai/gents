@@ -305,6 +305,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "Task",
     "Schedule",
     "EventTrigger",
+    "AgentBehaviorReadiness",
 ];
 
 /// Client-authored rows that may travel toward a runtime. Runtime-owned

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use tokio::sync::{mpsc, watch, Mutex, Notify};
+use tokio::sync::{mpsc, watch, Mutex, Notify, Semaphore};
 
 use super::*;
 use crate::admission::BackendAdmissionConfig;
@@ -420,6 +420,7 @@ async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
         move |_behavior: Arc<AgentBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let starts = starts.clone();
             let starts_tx = starts_tx.clone();
@@ -495,6 +496,7 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
         move |_behavior: Arc<AgentBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let started_tx = started_tx.clone();
             let release = release.clone();
@@ -526,6 +528,7 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let slots = spawn_slots(
         &snapshot,
+        1,
         crate::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -613,6 +616,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let runner = move |_behavior: Arc<AgentBehavior>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _generation: u64,
                        mut shutdown: watch::Receiver<bool>| async move {
         loop {
             tokio::select! {
@@ -643,6 +647,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
         shutdown_rx.clone(),
         None,
     )
+    .await
     .unwrap();
     let active_snapshot = supervisor.current_snapshot();
     let initial_dispatcher = active_snapshot
@@ -757,6 +762,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
         move |behavior: Arc<AgentBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let starts = starts.clone();
             async move {
@@ -796,6 +802,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
         shutdown_rx.clone(),
         None,
     )
+    .await
     .unwrap();
     let active_snapshot = supervisor.current_snapshot();
     assert_eq!(
@@ -899,6 +906,20 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(initial_behavior)]).await;
     let valid_updated_snapshot =
         snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(updated_behavior)]).await;
+    let mut extra_tool_surface_snapshot = valid_updated_snapshot.clone();
+    extra_tool_surface_snapshot.tool_surfaces.insert(
+        "extra".to_string(),
+        extra_tool_surface_snapshot
+            .tool_surfaces
+            .get("general")
+            .expect("general tool surface")
+            .clone(),
+    );
+    assert!(extra_tool_surface_snapshot
+        .validate_behavior_readiness_source()
+        .expect_err("extra tool surface must violate exact keyset parity")
+        .to_string()
+        .contains("keysets differ"));
     let invalid_snapshot = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         valid_updated_snapshot.behaviors.values().cloned().collect(),
@@ -910,6 +931,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let runner = move |_behavior: Arc<AgentBehavior>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _generation: u64,
                        mut shutdown: watch::Receiver<bool>| async move {
         loop {
             tokio::select! {
@@ -940,6 +962,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         shutdown_rx.clone(),
         None,
     )
+    .await
     .unwrap();
     let initial_active = supervisor.current_snapshot();
     let (active_tx, mut active_rx) = watch::channel(initial_active.clone());
@@ -981,6 +1004,324 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         .expect("supervisor should stop on shutdown")
         .unwrap()
         .unwrap();
+}
+
+struct FailGenerationSourceWriter {
+    fatal_attempted: Arc<Notify>,
+    fatal_release: Arc<Semaphore>,
+}
+
+#[async_trait::async_trait]
+impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for FailGenerationSourceWriter {
+    async fn upsert(
+        &self,
+        _agent_did: &str,
+        snapshot: &gents_protocol::row::BehaviorReadinessSnapshot,
+        _updated_at: &str,
+    ) -> Result<()> {
+        if snapshot.active_generation == 2 {
+            self.fatal_attempted.notify_one();
+            self.fatal_release.acquire().await.unwrap().forget();
+            return Err(crate::behavior_readiness_publisher::FatalBehaviorReadinessWrite.into());
+        }
+        Ok(())
+    }
+}
+
+struct PublisherBackedSlotFailurePolicy {
+    runtime_status: RuntimeStatusHandle,
+}
+
+#[async_trait::async_trait]
+impl SlotFailurePolicy for PublisherBackedSlotFailurePolicy {
+    fn build_failure_budget(&self) -> u32 {
+        1
+    }
+
+    async fn on_slot_created(&self, behavior_id: &str, generation: u64) {
+        self.runtime_status
+            .readiness()
+            .register_slot(behavior_id, generation)
+            .await
+            .expect("register test slot standing");
+    }
+
+    async fn try_demote(&self, behavior_id: &str, generation: u64, error: &str) -> bool {
+        self.runtime_status
+            .readiness()
+            .demote_slot(behavior_id, generation, error.to_string())
+            .await
+            .expect("demote test slot")
+    }
+
+    async fn on_slot_retired(&self, behavior_id: &str, generation: u64, _recreated: bool) {
+        self.runtime_status
+            .readiness()
+            .retire_slot(behavior_id, generation)
+            .await
+            .expect("retire test slot");
+    }
+}
+
+#[tokio::test]
+async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let initial = Arc::new(
+        PendingAgentBehavior::new("general")
+            .build_with_identity_for_test(test_identity("source-failure-initial")),
+    );
+    let mut replacement = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("source-failure-replacement"));
+    replacement.system_prompt = "replacement".to_string();
+    let initial_snapshot = snapshot_for_behaviors(node.as_ref(), "general", vec![initial]).await;
+    let replacement_snapshot =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(replacement)]).await;
+
+    let fatal_attempted = Arc::new(Notify::new());
+    let fatal_release = Arc::new(Semaphore::new(0));
+    let generation_one_exit = Arc::new(Semaphore::new(0));
+    let generation_two_exit = Arc::new(Semaphore::new(0));
+    let generation_two_waiting_exit = Arc::new(Notify::new());
+    let writer = Arc::new(FailGenerationSourceWriter {
+        fatal_attempted: fatal_attempted.clone(),
+        fatal_release: fatal_release.clone(),
+    });
+    let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        "did:test:source-failure-rollback",
+        writer,
+        Duration::from_millis(1),
+    );
+    runtime_status.initialize_startup("general").await.unwrap();
+    let slot_failure_policy = Arc::new(PublisherBackedSlotFailurePolicy {
+        runtime_status: runtime_status.clone(),
+    });
+    let runner = {
+        let generation_one_exit = generation_one_exit.clone();
+        let generation_two_exit = generation_two_exit.clone();
+        let generation_two_waiting_exit = generation_two_waiting_exit.clone();
+        move |_behavior: Arc<AgentBehavior>,
+              _tool_surface: Arc<ToolSurface>,
+              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              generation: u64,
+              mut shutdown: watch::Receiver<bool>| {
+            let generation_one_exit = generation_one_exit.clone();
+            let generation_two_exit = generation_two_exit.clone();
+            let generation_two_waiting_exit = generation_two_waiting_exit.clone();
+            async move {
+                tokio::select! {
+                    _ = shutdown.changed() => {}
+                    _ = async {
+                        let mut receiver = request_rx.lock().await;
+                        while receiver.recv().await.is_some() {}
+                    } => {}
+                }
+                if generation == 2 {
+                    generation_two_waiting_exit.notify_one();
+                }
+                let permit = if generation == 1 {
+                    generation_one_exit.acquire().await.unwrap()
+                } else {
+                    generation_two_exit.acquire().await.unwrap()
+                };
+                permit.forget();
+                Ok(())
+            }
+        }
+    };
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let supervisor = GenerationSupervisor::bootstrap(
+        initial_snapshot,
+        crate::admission::AdmissionRegistry::new(node),
+        crate::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 2,
+        },
+        runner,
+        runtime_status.clone(),
+        shutdown_rx.clone(),
+        Some(slot_failure_policy),
+    )
+    .await
+    .unwrap();
+    runtime_status
+        .readiness()
+        .publish_snapshot(supervisor.current_snapshot().as_ref())
+        .await
+        .unwrap();
+    assert!(runtime_status
+        .readiness()
+        .demote_slot("general", 1, "generation one demoted".to_string())
+        .await
+        .unwrap());
+    assert_eq!(
+        runtime_status
+            .readiness()
+            .observation()
+            .demotion_reason("general"),
+        Some("generation one demoted")
+    );
+    let (active_tx, _active_rx) = watch::channel(supervisor.current_snapshot());
+    let apply = tokio::spawn(async move {
+        let mut supervisor = supervisor;
+        let result = supervisor
+            .apply_snapshot(replacement_snapshot, 2, &active_tx, shutdown_rx)
+            .await;
+        (supervisor, result)
+    });
+
+    fatal_attempted.notified().await;
+    fatal_release.add_permits(1);
+    generation_two_waiting_exit.notified().await;
+    assert!(
+        !apply.is_finished(),
+        "failed source publication detached the staged generation"
+    );
+    generation_two_exit.add_permits(1);
+    let (supervisor, result) = apply.await.unwrap();
+    let error = result.expect_err("injected source publication must fail apply");
+    assert!(error.to_string().contains("behavior readiness"));
+    assert_eq!(supervisor.current_snapshot.generation, 1);
+    assert_eq!(supervisor.active_slots["general"].generation, 1);
+    let rolled_back = runtime_status.readiness().observation();
+    assert_eq!(rolled_back.source_generation(), 1);
+    assert_eq!(
+        rolled_back.demotion_reason("general"),
+        Some("generation one demoted"),
+        "failed source publication must preserve the old slot's demotion"
+    );
+    assert!(
+        runtime_status
+            .readiness()
+            .mark_slot_ready("general", 1)
+            .await
+            .unwrap(),
+        "retiring the staged generation must preserve old generation CAS standing"
+    );
+
+    shutdown_tx.send_replace(true);
+    let mut shutdown = tokio::spawn(async move { supervisor.shutdown_slots().await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut shutdown)
+            .await
+            .is_err(),
+        "old active generation was detached during staged rollback"
+    );
+    generation_one_exit.add_permits(1);
+    shutdown.await.unwrap();
+    runtime_status_owner.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let (runtime_status_owner, runtime_status) =
+        RuntimeStatusHandle::start(node.clone(), "did:test:closed-active-watch");
+    let initial = Arc::new(
+        PendingAgentBehavior::new("general")
+            .build_with_identity_for_test(test_identity("closed-watch-initial")),
+    );
+    let mut replacement = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("closed-watch-replacement"));
+    replacement.system_prompt = "replacement".to_string();
+    let initial_snapshot = snapshot_for_behaviors(node.as_ref(), "general", vec![initial]).await;
+    let replacement_snapshot =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(replacement)]).await;
+    let exited = Arc::new(AtomicUsize::new(0));
+    let generation_one_exit = Arc::new(Semaphore::new(0));
+    let generation_two_exit = Arc::new(Semaphore::new(0));
+    let runner = {
+        let exited = exited.clone();
+        let generation_one_exit = generation_one_exit.clone();
+        let generation_two_exit = generation_two_exit.clone();
+        move |_behavior: Arc<AgentBehavior>,
+              _tool_surface: Arc<ToolSurface>,
+              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              generation: u64,
+              mut shutdown: watch::Receiver<bool>| {
+            let exited = exited.clone();
+            let generation_one_exit = generation_one_exit.clone();
+            let generation_two_exit = generation_two_exit.clone();
+            async move {
+                loop {
+                    let should_exit = tokio::select! {
+                        _ = shutdown.changed() => true,
+                        message = async {
+                            let mut receiver = request_rx.lock().await;
+                            receiver.recv().await
+                        } => message.is_none(),
+                    };
+                    if should_exit {
+                        let permit = if generation == 1 {
+                            generation_one_exit.acquire().await.unwrap()
+                        } else {
+                            generation_two_exit.acquire().await.unwrap()
+                        };
+                        permit.forget();
+                        exited.fetch_add(1, Ordering::SeqCst);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    };
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut supervisor = GenerationSupervisor::bootstrap(
+        initial_snapshot,
+        crate::admission::AdmissionRegistry::new(node),
+        crate::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 2,
+        },
+        runner,
+        runtime_status,
+        shutdown_rx.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    let (active_tx, active_rx) = watch::channel(supervisor.current_snapshot());
+    drop(active_rx);
+
+    let error = supervisor
+        .apply_snapshot(replacement_snapshot, 2, &active_tx, shutdown_rx)
+        .await
+        .expect_err("closed active snapshot receiver must reject publication");
+    assert!(error.to_string().contains("receiver closed"));
+    shutdown_tx.send_replace(true);
+    let mut shutdown_task = tokio::spawn(async move { supervisor.shutdown_slots().await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut shutdown_task)
+            .await
+            .is_err(),
+        "shutdown detached the blocked slot owners"
+    );
+    generation_two_exit.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while exited.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("replacement generation should consume its exit permit");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut shutdown_task)
+            .await
+            .is_err(),
+        "shutdown completed before joining the retired generation-one slot"
+    );
+    generation_one_exit.add_permits(1);
+    shutdown_task.await.unwrap();
+    runtime_status_owner.close().await.unwrap();
+    assert_eq!(
+        exited.load(Ordering::SeqCst),
+        2,
+        "both the retired generation and replacement generation must be joined"
+    );
 }
 
 #[tokio::test]
@@ -1096,6 +1437,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         move |_behavior: Arc<AgentBehavior>,
               tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let observed_tool_names = observed_tool_names.clone();
             async move {
@@ -1134,6 +1476,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         shutdown_rx.clone(),
         None,
     )
+    .await
     .unwrap();
     let active_snapshot = supervisor.current_snapshot();
     let (active_tx, mut active_rx) = watch::channel(active_snapshot);
@@ -1189,11 +1532,13 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         fn build_failure_budget(&self) -> u32 {
             3
         }
-        async fn try_demote(&self, _behavior_id: &str, _error: &str) -> bool {
+        async fn on_slot_created(&self, _behavior_id: &str, _generation: u64) {}
+
+        async fn try_demote(&self, _behavior_id: &str, _generation: u64, _error: &str) -> bool {
             self.demote_calls.fetch_add(1, Ordering::SeqCst);
             false
         }
-        async fn on_slot_retired(&self, behavior_id: &str, recreated: bool) {
+        async fn on_slot_retired(&self, behavior_id: &str, _generation: u64, recreated: bool) {
             self.retired
                 .lock()
                 .expect("retired mutex")
@@ -1216,6 +1561,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let runner = |_behavior: Arc<AgentBehavior>,
                   _tool_surface: Arc<ToolSurface>,
                   _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                  _generation: u64,
                   mut shutdown: watch::Receiver<bool>| async move {
         let _ = shutdown.changed().await;
         Ok(())
@@ -1239,20 +1585,27 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         shutdown_rx.clone(),
         Some(policy.clone() as Arc<dyn slot::SlotFailurePolicy>),
     )
+    .await
     .unwrap();
     let (active_tx, mut active_rx) = watch::channel(supervisor.current_snapshot());
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
     let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
 
-    // A generation without the behavior: its slot is retired outright.
-    let empty_snapshot = snapshot_for_behaviors(node.as_ref(), "general", vec![]).await;
-    proposal_tx.send(empty_snapshot).await.unwrap();
+    // A valid generation that replaces the default behavior retires the old
+    // slot outright without manufacturing an unassigned default snapshot.
+    let replacement = Arc::new(
+        PendingAgentBehavior::new("replacement")
+            .build_with_identity_for_test(test_identity("policy-replacement-559")),
+    );
+    let replacement_snapshot =
+        snapshot_for_behaviors(node.as_ref(), "replacement", vec![replacement]).await;
+    proposal_tx.send(replacement_snapshot).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), active_rx.changed())
         .await
         .expect("removal generation should publish")
         .unwrap();
 
-    // The retirement hook runs on a spawned task; give it a beat.
+    // The retirement callback is part of the ordered generation apply.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
     loop {
         if policy

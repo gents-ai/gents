@@ -60,8 +60,6 @@ fn store_indexes_conversations_and_runtimes() {
             active_generation: None,
             router_generation: None,
             default_behavior_id: None,
-            runnable_behavior_count: Some(1),
-            unavailable_behavior_count: Some(0),
             behavior_executor_capacity: None,
             behavior_executor_queue_depth: None,
             behavior_executor_status_json: None,

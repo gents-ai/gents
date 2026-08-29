@@ -5,6 +5,7 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         agent_principals: load_agent_principals(node).await?,
         behaviors: load_agent_behaviors(node).await?,
         runtimes: load_agent_runtimes(node).await?,
+        behavior_readiness: load_agent_behavior_readiness(node).await?,
         conversations: load_agent_conversations(node).await?,
         requests: load_agent_requests(node).await?,
         mailbox_items: load_mailbox_items(node).await?,
@@ -202,6 +203,19 @@ pub async fn load_agent_runtimes(node: &EmbeddedNode) -> Result<Vec<AgentRuntime
         node,
         AGENT_RUNTIME_NAME,
         &format!("query {{ {AGENT_RUNTIME_NAME} {{ {AGENT_RUNTIME_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_agent_behavior_readiness(
+    node: &EmbeddedNode,
+) -> Result<Vec<AgentBehaviorReadinessRow>> {
+    load_rows(
+        node,
+        AGENT_BEHAVIOR_READINESS_NAME,
+        &format!(
+            "query {{ {AGENT_BEHAVIOR_READINESS_NAME} {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"
+        ),
     )
     .await
 }

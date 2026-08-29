@@ -10,6 +10,9 @@ pub const AGENT_BEHAVIOR_NAME: &str = "AgentBehavior";
 pub const AGENT_BEHAVIOR: &str = include_str!("../schemas/agent/agent_behavior.graphql");
 pub const AGENT_RUNTIME_NAME: &str = "AgentRuntime";
 pub const AGENT_RUNTIME: &str = include_str!("../schemas/agent/agent_runtime.graphql");
+pub const AGENT_BEHAVIOR_READINESS_NAME: &str = "AgentBehaviorReadiness";
+pub const AGENT_BEHAVIOR_READINESS: &str =
+    include_str!("../schemas/agent/agent_behavior_readiness.graphql");
 pub const AGENT_DIRECTORY_ENTRY_NAME: &str = "AgentDirectoryEntry";
 pub const AGENT_DIRECTORY_ENTRY: &str =
     include_str!("../schemas/agent/agent_directory_entry.graphql");
@@ -140,6 +143,7 @@ pub const ALL: &[&str] = &[
     AGENT_PRINCIPAL,
     AGENT_BEHAVIOR,
     AGENT_RUNTIME,
+    AGENT_BEHAVIOR_READINESS,
     AGENT_DIRECTORY_ENTRY,
     AGENT_MEMORY,
     TOOL_SELECTION,
@@ -201,6 +205,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_PRINCIPAL_NAME,
     AGENT_BEHAVIOR_NAME,
     AGENT_RUNTIME_NAME,
+    AGENT_BEHAVIOR_READINESS_NAME,
     AGENT_DIRECTORY_ENTRY_NAME,
     AGENT_MEMORY_NAME,
     TOOL_SELECTION_NAME,

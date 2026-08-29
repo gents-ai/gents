@@ -3,7 +3,7 @@ use super::*;
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
 
 #[tokio::test]
-async fn router_dispatches_first_request_after_snapshot_change_to_latest_generation() {
+async fn router_holds_request_during_generation_handoff_and_dispatches_after_alignment() {
     let accept = lean_runtime_reconcile_case("accept_request_after_router_observe");
     assert!(accept.legal);
 
@@ -52,7 +52,6 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
     let mut watcher = ScriptedWatcher { rx: watcher_rx };
     let mut active_snapshot = active_rx.borrow().clone();
 
-    active_tx.send(updated_snapshot).unwrap();
     watcher_tx
         .send(Ok(AgentRequest {
             doc_id: "doc-router".to_string(),
@@ -89,18 +88,38 @@ async fn router_dispatches_first_request_after_snapshot_change_to_latest_generat
         }))
         .await
         .unwrap();
-    let request = wait_for_next_request_with_latest_snapshot(
-        agent_did,
-        &mut watcher,
-        &mut active_snapshot,
-        &mut active_rx,
-        &mut shutdown_rx,
-    )
-    .await
-    .expect("router wait should succeed")
-    .expect("request should be returned");
+    let (_admission_tx, mut admission_rx) = watch::channel(true);
+    let (_readiness_tx, mut readiness_rx) = watch::channel(
+        crate::behavior_readiness_publisher::BehaviorAdmissionObservation::for_test(2, []),
+    );
+    let (request, routed_snapshot, routed_observation) = {
+        let wait = wait_for_next_request_with_latest_snapshot(
+            agent_did,
+            &mut watcher,
+            &mut active_snapshot,
+            &mut active_rx,
+            &mut shutdown_rx,
+            &mut admission_rx,
+            &mut readiness_rx,
+            None,
+        );
+        tokio::pin!(wait);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut wait)
+                .await
+                .is_err(),
+            "router returned a request while the source was ahead of the active generation"
+        );
+        active_tx.send(updated_snapshot).unwrap();
+        wait.await
+            .expect("router wait should succeed")
+            .expect("request should be returned")
+    };
 
     assert_eq!(request.request_id, "req-router");
+    assert_eq!(routed_observation.source_generation(), 2);
+    assert_eq!(routed_snapshot.generation, 2);
+    assert_eq!(routed_snapshot.default_behavior_id, "code");
     assert_eq!(
         active_snapshot.generation,
         accept.post_router_generation as u64
@@ -125,7 +144,13 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_behaviors: HashMap::from([(
+            "general".to_string(),
+            crate::runtime_snapshot::UnavailableBehavior::new(
+                gents_protocol::row::BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                "test fixture has no executor",
+            ),
+        )]),
         active_schedules: HashMap::new(),
         unavailable_schedules: std::collections::HashSet::new(),
         active_event_triggers: HashMap::new(),
@@ -144,7 +169,13 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_behaviors: HashMap::from([(
+            "general".to_string(),
+            crate::runtime_snapshot::UnavailableBehavior::new(
+                gents_protocol::row::BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                "test fixture has no executor",
+            ),
+        )]),
         active_schedules: HashMap::new(),
         unavailable_schedules: std::collections::HashSet::new(),
         active_event_triggers: HashMap::new(),
@@ -154,20 +185,41 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         behavior_executor_capacities: HashMap::new(),
         behavior_executor_queue_capacities: HashMap::new(),
     });
-    let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did.to_string());
+    let (active_tx, mut active_rx) = watch::channel(initial_snapshot.clone());
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let (runtime_status_owner, runtime_status) =
+        RuntimeStatusHandle::start(node.clone(), agent_did.to_string());
+    runtime_status.initialize_startup("general").await.unwrap();
     runtime_status
         .publish_startup_snapshot(initial_snapshot.as_ref())
         .await;
 
-    let observer_task = tokio::spawn(run_router_generation_observer(
-        active_rx,
-        runtime_status.clone(),
-        shutdown_rx,
-    ));
+    let (_request_tx, request_rx) = mpsc::channel(1);
+    let mut watcher = ScriptedWatcher { rx: request_rx };
+    let mut active_snapshot = active_rx.borrow().clone();
+    let runtime_status_for_router = runtime_status.clone();
+    let mut readiness_rx = runtime_status.readiness().subscribe_observation();
+    let (_admission_tx, mut admission_rx) = watch::channel(true);
+    let router_task = tokio::spawn(async move {
+        wait_for_next_request_with_latest_snapshot(
+            agent_did,
+            &mut watcher,
+            &mut active_snapshot,
+            &mut active_rx,
+            &mut shutdown_rx,
+            &mut admission_rx,
+            &mut readiness_rx,
+            Some(&runtime_status_for_router),
+        )
+        .await
+    });
 
     tokio::task::yield_now().await;
+    runtime_status
+        .readiness()
+        .publish_snapshot(updated_snapshot.as_ref())
+        .await
+        .unwrap();
     active_tx.send(updated_snapshot).unwrap();
     tokio::task::yield_now().await;
 
@@ -213,5 +265,6 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     }
 
     let _ = shutdown_tx.send(true);
-    observer_task.await.unwrap().unwrap();
+    assert!(router_task.await.unwrap().unwrap().is_none());
+    runtime_status_owner.close().await.unwrap();
 }

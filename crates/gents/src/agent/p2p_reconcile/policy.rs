@@ -254,6 +254,12 @@ fn client_route_filters(
             equality_filter("agent_did", owner_agent_did),
         ),
     );
+    if direction == PairingDirection::RuntimeToClient {
+        filters.insert(
+            "AgentBehaviorReadiness".to_string(),
+            equality_filter("agent_did", owner_agent_did),
+        );
+    }
     // Runtime-owned configuration is unfiltered only on the return leg. Each
     // replicator has one runtime source, while its mutable owner fields cannot
     // legally participate in DefraDB replication filters.

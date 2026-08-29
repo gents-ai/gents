@@ -9,13 +9,32 @@ import type {
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import {
-  projectChatShell,
+  projectChatShell as projectChatShellWithReadiness,
   reconcileProjectedWorkflow,
   requestProgressPresentation,
   type ChatBlockedReason,
   type ChatWorkflowState,
   type TurnState,
 } from "./chat-shell.js";
+
+const readyBehaviorReadiness = {
+  kind: "ready",
+  behaviorId: "general",
+  behaviorLabel: "General",
+} as const;
+
+function projectChatShell(
+  input: Omit<
+    Parameters<typeof projectChatShellWithReadiness>[0],
+    "chatSafe" | "behaviorReadiness"
+  >,
+) {
+  return projectChatShellWithReadiness({
+    ...input,
+    chatSafe: true,
+    behaviorReadiness: readyBehaviorReadiness,
+  });
+}
 
 const CONTRACT_JSON_BEGIN = "---BEGIN GENTS LEAN CONTRACT JSON---";
 const CONTRACT_JSON_END = "---END GENTS LEAN CONTRACT JSON---";
@@ -345,8 +364,8 @@ function compactWorkflow(workflow: ChatWorkflowState) {
 }
 
 describe("projectChatShell", () => {
-  it("blocks empty-draft and retry sends when the behavior backend is unavailable", () => {
-    const projection = projectChatShell({
+  it("blocks empty-draft and retry sends from a typed unavailable verdict", () => {
+    const projection = projectChatShellWithReadiness({
       clientAvailable: true,
       selectedAgentDid: "did:key:agent",
       selectedSessionId: null,
@@ -355,16 +374,42 @@ describe("projectChatShell", () => {
       session: null,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
-      behaviorUnavailableHint:
-        "Backend “Workstation 2” is still checking readiness",
+      chatSafe: true,
+      behaviorReadiness: {
+        kind: "unavailable",
+        behaviorId: "general",
+        behaviorLabel: "General",
+        reason: "backend_temporarily_unavailable",
+      },
     });
 
     expect(projection.sendStatus).toEqual({
       kind: "disabled",
       reason: "behaviorUnavailable",
-      hint: "Backend “Workstation 2” is still checking readiness",
+      hint: "Behavior “General” is temporarily unavailable",
     });
     expect(projection.nonEmptyContentSendStatus).toEqual(projection.sendStatus);
+  });
+
+  it("keeps route admission separate from runtime readiness", () => {
+    const projection = projectChatShellWithReadiness({
+      clientAvailable: true,
+      selectedAgentDid: "did:key:agent",
+      selectedSessionId: null,
+      draft: "hello",
+      sending: false,
+      session: null,
+      selectedConversation: null,
+      localWorkflow: { kind: "ready" },
+      chatSafe: false,
+      behaviorReadiness: readyBehaviorReadiness,
+    });
+
+    expect(projection.sendStatus).toEqual({
+      kind: "disabled",
+      reason: "routeNotReady",
+      hint: "Agent route is not ready",
+    });
   });
 
   test(

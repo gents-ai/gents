@@ -15,6 +15,11 @@ impl ClientStore {
             row.agent_did.clone()
         });
         upsert_rows_by_key(
+            &mut rows.behavior_readiness,
+            incoming.behavior_readiness,
+            |row| row.agent_did.clone(),
+        );
+        upsert_rows_by_key(
             &mut rows.conversations,
             incoming.conversations,
             conversation_merge_key,
@@ -158,6 +163,8 @@ impl ClientStore {
         rows.behaviors
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.runtimes.retain(|row| row.agent_did != agent_did);
+        rows.behavior_readiness
+            .retain(|row| row.agent_did != agent_did);
         rows.conversations
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.requests
@@ -327,6 +334,7 @@ impl ClientStore {
             agent_principals: self.agent_principals.clone(),
             behaviors: self.behaviors.clone(),
             runtimes: self.runtimes.clone(),
+            behavior_readiness: self.behavior_readiness.clone(),
             conversations: self.conversations.clone(),
             requests: self.requests.clone(),
             mailbox_items: self.mailbox_items.clone(),

@@ -14,8 +14,70 @@ use crate::identity::AgentPrincipal;
 use crate::schedule_cron::{next_cron_run_after, CronMissedRunPolicy};
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
+use gents_protocol::row::BehaviorReadinessUnavailableReason;
+use gents_protocol::row::{
+    effective_behavior_readiness_admission, EffectiveBehaviorReadinessAdmission,
+};
 
 pub type DispatcherMap = HashMap<String, mpsc::Sender<AgentRequest>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnavailableBehavior {
+    pub public_reason: BehaviorReadinessUnavailableReason,
+    pub diagnostic: String,
+}
+
+impl UnavailableBehavior {
+    pub fn new(
+        public_reason: BehaviorReadinessUnavailableReason,
+        diagnostic: impl Into<String>,
+    ) -> Self {
+        Self {
+            public_reason,
+            diagnostic: diagnostic.into(),
+        }
+    }
+
+    pub fn public_message(&self) -> &'static str {
+        self.public_reason.public_message()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffectiveBehaviorAdmission<'a> {
+    Ready,
+    Unavailable {
+        public_reason: BehaviorReadinessUnavailableReason,
+        diagnostic: &'a str,
+    },
+    Unassigned,
+}
+
+/// Single behavior-admission decision shared by routing and readiness
+/// publication. Explicit unavailability and startup demotion always veto an
+/// installed dispatcher.
+pub(crate) fn effective_behavior_admission<'a>(
+    dispatcher_present: bool,
+    unavailable: Option<&'a UnavailableBehavior>,
+    startup_diagnostic: Option<&'a str>,
+) -> EffectiveBehaviorAdmission<'a> {
+    match effective_behavior_readiness_admission(
+        dispatcher_present,
+        unavailable.map(|unavailable| unavailable.public_reason),
+        startup_diagnostic.is_some(),
+    ) {
+        EffectiveBehaviorReadinessAdmission::Ready => EffectiveBehaviorAdmission::Ready,
+        EffectiveBehaviorReadinessAdmission::Unavailable(public_reason) => {
+            EffectiveBehaviorAdmission::Unavailable {
+                public_reason,
+                diagnostic: startup_diagnostic
+                    .or_else(|| unavailable.map(|unavailable| unavailable.diagnostic.as_str()))
+                    .expect("unavailable admission has a diagnostic source"),
+            }
+        }
+        EffectiveBehaviorReadinessAdmission::Unassigned => EffectiveBehaviorAdmission::Unassigned,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ResolvedTask {
@@ -159,7 +221,7 @@ pub(crate) struct ResolvedRuntimeSnapshot {
     pub(crate) behaviors: HashMap<String, Arc<AgentBehavior>>,
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-    pub(crate) unavailable_behaviors: HashMap<String, String>,
+    pub(crate) unavailable_behaviors: HashMap<String, UnavailableBehavior>,
     pub(crate) active_schedules: HashMap<String, ResolvedSchedule>,
     pub(crate) unavailable_schedules: HashSet<String>,
     pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
@@ -168,12 +230,58 @@ pub(crate) struct ResolvedRuntimeSnapshot {
 }
 
 impl ResolvedRuntimeSnapshot {
+    /// Validates the runtime-authored identity set before any executor slot is
+    /// started or an active generation is installed.
+    pub(crate) fn validate_behavior_readiness_source(&self) -> Result<()> {
+        let canonical = |value: &str| !value.is_empty() && value == value.trim();
+        if !canonical(&self.default_behavior_id) {
+            anyhow::bail!(
+                "default behavior {:?} is not a canonical behavior identifier",
+                self.default_behavior_id
+            );
+        }
+        if self
+            .behaviors
+            .keys()
+            .chain(self.unavailable_behaviors.keys())
+            .any(|behavior_id| !canonical(behavior_id))
+        {
+            anyhow::bail!("runtime behavior identifiers must be non-empty and trimmed");
+        }
+        let runnable_behavior_ids = self.behaviors.keys().collect::<BTreeSet<_>>();
+        let tool_surface_behavior_ids = self.tool_surfaces.keys().collect::<BTreeSet<_>>();
+        if runnable_behavior_ids != tool_surface_behavior_ids {
+            let missing = runnable_behavior_ids
+                .difference(&tool_surface_behavior_ids)
+                .map(|behavior_id| behavior_id.as_str())
+                .collect::<Vec<_>>();
+            let extra = tool_surface_behavior_ids
+                .difference(&runnable_behavior_ids)
+                .map(|behavior_id| behavior_id.as_str())
+                .collect::<Vec<_>>();
+            anyhow::bail!(
+                "runnable behavior/tool-surface keysets differ (missing={missing:?}, extra={extra:?})"
+            );
+        }
+        if !self.behaviors.contains_key(&self.default_behavior_id)
+            && !self
+                .unavailable_behaviors
+                .contains_key(&self.default_behavior_id)
+        {
+            anyhow::bail!(
+                "default behavior {:?} is not assigned to the resolved runtime",
+                self.default_behavior_id
+            );
+        }
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub(crate) fn from_parts(
         default_behavior_id: String,
         behaviors: Vec<Arc<AgentBehavior>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
-        unavailable_behaviors: HashMap<String, String>,
+        unavailable_behaviors: HashMap<String, UnavailableBehavior>,
     ) -> Self {
         Self::from_parts_with_admission_configs(
             default_behavior_id,
@@ -189,7 +297,7 @@ impl ResolvedRuntimeSnapshot {
         behaviors: Vec<Arc<AgentBehavior>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
         backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-        unavailable_behaviors: HashMap<String, String>,
+        unavailable_behaviors: HashMap<String, UnavailableBehavior>,
     ) -> Self {
         Self {
             principal: None,
@@ -335,7 +443,7 @@ pub struct ActiveRuntimeSnapshot {
     pub behaviors: HashMap<String, Arc<AgentBehavior>>,
     pub tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-    pub unavailable_behaviors: HashMap<String, String>,
+    pub unavailable_behaviors: HashMap<String, UnavailableBehavior>,
     pub active_schedules: HashMap<String, ResolvedSchedule>,
     pub unavailable_schedules: HashSet<String>,
     pub active_event_triggers: HashMap<String, ResolvedEventTrigger>,
@@ -374,10 +482,17 @@ impl ActiveRuntimeSnapshot {
         self.tool_surfaces.get(behavior_id)
     }
 
-    pub(crate) fn unavailable_reason(&self, behavior_id: &str) -> Option<&str> {
+    #[cfg(test)]
+    pub(crate) fn unavailable_diagnostic(&self, behavior_id: &str) -> Option<&str> {
         self.unavailable_behaviors
             .get(behavior_id)
-            .map(String::as_str)
+            .map(|unavailable| unavailable.diagnostic.as_str())
+    }
+
+    pub(crate) fn unavailable_public_message(&self, behavior_id: &str) -> Option<&'static str> {
+        self.unavailable_behaviors
+            .get(behavior_id)
+            .map(UnavailableBehavior::public_message)
     }
 
     pub(crate) fn behavior_executor_statuses(&self) -> BTreeMap<String, BehaviorExecutorStatus> {
@@ -460,7 +575,7 @@ fn configuration_fingerprint(
     behaviors: &HashMap<String, Arc<AgentBehavior>>,
     tool_surfaces: &HashMap<String, Arc<ToolSurface>>,
     backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
-    unavailable_behaviors: &HashMap<String, String>,
+    unavailable_behaviors: &HashMap<String, UnavailableBehavior>,
     active_schedules: &HashMap<String, ResolvedSchedule>,
     unavailable_schedules: &HashSet<String>,
     active_event_triggers: &HashMap<String, ResolvedEventTrigger>,
@@ -534,7 +649,9 @@ fn configuration_fingerprint(
         fingerprint.push_str("unavailable:");
         fingerprint.push_str(&behavior_id);
         fingerprint.push('=');
-        fingerprint.push_str(reason);
+        fingerprint.push_str(&reason.diagnostic);
+        fingerprint.push(':');
+        fingerprint.push_str(&format!("{:?}", reason.public_reason));
         fingerprint.push('\n');
     }
 

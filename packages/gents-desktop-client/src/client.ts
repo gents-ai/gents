@@ -16,9 +16,11 @@ import type {
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.14.0";
-// The global sync-health/session-hydration ownership split removed a
-// serialized field, so this client requires the breaking 2.0 bridge.
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "2.0";
+// Runtime-authored behavior readiness is required and the duplicate runtime
+// counters are gone, so this client requires the breaking 3.0 bridge.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "3.0";
+export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
+  "069c6ec496e69096c001ac9a73e4745a4488493a00d26f949d08da35001832b1";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);
@@ -50,6 +52,12 @@ export function assertCompatibleBridgeContract(
   if (contract.packageVersion !== PACKAGE_VERSION) {
     throw new Error(
       `Gents desktop package mismatch: bridge ${contract.packageVersion}, client ${PACKAGE_VERSION}`,
+    );
+  }
+  if (contract.wireSchemaHash !== EXPECTED_BRIDGE_WIRE_SCHEMA_HASH) {
+    throw new Error(
+      `Incompatible Gents desktop wire schema ${contract.wireSchemaHash}; ` +
+        `client requires ${EXPECTED_BRIDGE_WIRE_SCHEMA_HASH}`,
     );
   }
 }

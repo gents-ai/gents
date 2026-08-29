@@ -5,6 +5,10 @@ use tokio::sync::{mpsc, watch};
 
 use super::*;
 use crate::identity::{AgentIdentity as _, AgentPrincipal, KeyIdentity};
+use crate::tool_surface::{
+    BehaviorToolConfig, FileToolMode, RuntimeToolAvailability, SubagentToolConfig, ToolCeiling,
+    ToolSelection,
+};
 
 /// Build a minimal `Arc<AgentPrincipal>` for tests that call `.activate()`.
 /// Does not exercise signing — only satisfies the principal invariant so that
@@ -48,6 +52,37 @@ fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnap
     })
 }
 
+fn fingerprint_tool_surface(
+    approval_required_tools: Vec<String>,
+    lsp_config: Option<String>,
+) -> Arc<ToolSurface> {
+    let enable_lsp = lsp_config.is_some();
+    let file_tools = if enable_lsp {
+        FileToolMode::ReadWrite
+    } else {
+        FileToolMode::Off
+    };
+    Arc::new(
+        BehaviorToolConfig::from_selection(
+            "fingerprint",
+            ToolSelection {
+                file_tools,
+                approval_required_tools,
+                enable_lsp,
+                lsp_config,
+                ..ToolSelection::default()
+            },
+            &ToolCeiling::readwrite(std::env::temp_dir()),
+            Vec::new(),
+        )
+        .unwrap()
+        .resolve_with_subagent_tools_for_runtime_availability(
+            RuntimeToolAvailability::all(),
+            SubagentToolConfig::default(),
+        ),
+    )
+}
+
 #[test]
 fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
     let resolved = ResolvedRuntimeSnapshot {
@@ -58,7 +93,13 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::from([("code".to_string(), "missing backend".to_string())]),
+        unavailable_behaviors: HashMap::from([(
+            "code".to_string(),
+            UnavailableBehavior::new(
+                BehaviorReadinessUnavailableReason::BackendNotConfigured,
+                "missing backend",
+            ),
+        )]),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
@@ -74,7 +115,42 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
     assert_eq!(active.local_did, "did:local");
     assert!(active.paired_peer_dids.contains("did:peer"));
     assert!(active.dispatchers.contains_key("general"));
-    assert_eq!(active.unavailable_reason("code"), Some("missing backend"));
+    assert_eq!(
+        active.unavailable_diagnostic("code"),
+        Some("missing backend")
+    );
+}
+
+#[test]
+fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
+    let mut resolved = ResolvedRuntimeSnapshot {
+        principal: None,
+        local_did: String::new(),
+        paired_peer_dids: HashSet::new(),
+        default_behavior_id: "missing".to_string(),
+        behaviors: HashMap::new(),
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::from([(
+            "general".to_string(),
+            UnavailableBehavior::new(
+                BehaviorReadinessUnavailableReason::BackendNotConfigured,
+                "missing backend",
+            ),
+        )]),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: HashSet::new(),
+        active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
+        active_tasks: HashMap::new(),
+    };
+    assert!(resolved.validate_behavior_readiness_source().is_err());
+
+    resolved.default_behavior_id = " general".to_string();
+    assert!(resolved.validate_behavior_readiness_source().is_err());
+
+    resolved.default_behavior_id = "general".to_string();
+    assert!(resolved.validate_behavior_readiness_source().is_ok());
 }
 
 #[test]
@@ -149,6 +225,43 @@ fn configuration_fingerprint_reflects_schedule_set() {
         .clone()
         .with_schedules(HashMap::new(), HashSet::from(["s2".to_string()]));
     assert_ne!(baseline, with_unavailable.configuration_fingerprint());
+}
+
+#[test]
+fn configuration_fingerprint_reflects_approval_and_lsp_configuration() {
+    let base = ResolvedRuntimeSnapshot {
+        principal: None,
+        local_did: String::new(),
+        paired_peer_dids: HashSet::new(),
+        default_behavior_id: "general".to_string(),
+        behaviors: HashMap::new(),
+        tool_surfaces: HashMap::from([(
+            "general".to_string(),
+            fingerprint_tool_surface(Vec::new(), Some("{}".to_string())),
+        )]),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: HashSet::new(),
+        active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
+        active_tasks: HashMap::new(),
+    };
+    let baseline = base.configuration_fingerprint();
+
+    let mut held = base.clone();
+    held.tool_surfaces.insert(
+        "general".to_string(),
+        fingerprint_tool_surface(vec!["bash".to_string()], Some("{}".to_string())),
+    );
+    assert_ne!(baseline, held.configuration_fingerprint());
+
+    let mut lsp_changed = base;
+    lsp_changed.tool_surfaces.insert(
+        "general".to_string(),
+        fingerprint_tool_surface(Vec::new(), Some(r#"{"format_on_write":true}"#.to_string())),
+    );
+    assert_ne!(baseline, lsp_changed.configuration_fingerprint());
 }
 
 #[test]

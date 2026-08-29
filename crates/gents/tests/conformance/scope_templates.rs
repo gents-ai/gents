@@ -130,6 +130,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "Schedule",
         "EventTrigger",
     ];
+    const OWNER_PROJECTION: &[&str] = &["AgentBehaviorReadiness"];
     const RUNTIME_TO_CLIENT: &[&str] = &[
         "AgentRequest",
         "AgentResponse",
@@ -154,6 +155,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "Task",
         "Schedule",
         "EventTrigger",
+        "AgentBehaviorReadiness",
     ];
 
     assert_eq!(
@@ -233,7 +235,10 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         requester,
         owner,
     );
-    assert_eq!(returning.len(), CLIENT_TO_RUNTIME.len());
+    assert_eq!(
+        returning.len(),
+        CLIENT_TO_RUNTIME.len() + OWNER_PROJECTION.len()
+    );
     assert_eq_filter(
         returning
             .get("PeerEndpoint")
@@ -248,6 +253,14 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
             "bounded return control-plane collection {collection} is deliberately unfiltered"
         );
     }
+    assert_eq_filter(
+        returning
+            .get("AgentBehaviorReadiness")
+            .expect("readiness owner filter"),
+        "agent_did",
+        owner,
+    );
+    assert!(!outbound.contains_key("AgentBehaviorReadiness"));
     for excluded in [
         "InferenceBackend",
         "PeerPairingDesired",

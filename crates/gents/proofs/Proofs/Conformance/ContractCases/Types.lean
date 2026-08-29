@@ -28,6 +28,22 @@ structure RuntimeReconcileCase where
   trackedSessionBehavior : BehaviorId
   deriving Repr
 
+structure ClientBehaviorReadinessCase where
+  name : String
+  observationPresent : Bool
+  observationKind : String
+  processState : String
+  activeGeneration : Generation
+  routerGeneration : Generation
+  runnable : Bool
+  unavailable : Bool
+  startupDemoted : Bool
+  runtimeUnavailableReason : String
+  expectedState : String
+  expectedReason : Option String
+  expectedRuntimeAdmissible : Bool
+  deriving Repr
+
 structure SessionRecoveryCase where
   name : String
   action : String

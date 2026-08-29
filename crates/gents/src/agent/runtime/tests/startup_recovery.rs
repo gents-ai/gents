@@ -213,8 +213,11 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
         .get(&default_behavior_id)
         .expect("default behavior should be unavailable");
     assert!(
-        unavailable_reason.contains("references missing tool selection missing-tool-selection"),
-        "unexpected unavailable reason: {unavailable_reason}"
+        unavailable_reason
+            .diagnostic
+            .contains("references missing tool selection missing-tool-selection"),
+        "unexpected unavailable reason: {}",
+        unavailable_reason.diagnostic
     );
 
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -228,20 +231,35 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
         "unexpected startup error: {error_text}"
     );
     assert!(
-        error_text.contains("references missing tool selection missing-tool-selection"),
+        error_text.contains("tool configuration is invalid"),
         "unexpected startup error: {error_text}"
+    );
+    assert!(
+        !error_text.contains("missing-tool-selection"),
+        "private configuration diagnostics leaked through startup error: {error_text}"
     );
 
     let status = fetch_runtime_status(node.as_ref(), identity.did()).await;
-    assert_eq!(status.process_state, "recovering");
+    assert_eq!(status.process_state, "shutdown");
     assert_eq!(status.reconcile_phase, "idle");
     assert_eq!(status.active_generation, 0);
-    assert_eq!(status.runnable_behavior_count, 0);
-    assert_eq!(status.unavailable_behavior_count, 0);
     assert_eq!(status.last_reconcile_result, "error");
     assert!(status
         .last_reconcile_error
-        .contains("references missing tool selection missing-tool-selection"));
+        .contains("tool configuration is invalid"));
+    assert!(!status
+        .last_reconcile_error
+        .contains("missing-tool-selection"));
+    let readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
+    assert_eq!(
+        readiness.process_state,
+        BehaviorReadinessProcessState::Shutdown
+    );
+    assert_eq!(readiness.behaviors.len(), 1);
+    assert_eq!(
+        readiness.behaviors[0].reason,
+        Some(BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid)
+    );
 }
 
 #[tokio::test]
@@ -279,10 +297,22 @@ async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at
     assert_eq!(status.process_state, "ready");
     assert_eq!(status.reconcile_phase, "idle");
     assert_eq!(status.active_generation, 1);
-    assert_eq!(status.runnable_behavior_count, 0);
-    assert_eq!(status.unavailable_behavior_count, 1);
     assert_eq!(status.last_reconcile_result, "startup");
     assert!(status.last_reconcile_error.is_empty());
+    let readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
+    assert_eq!(
+        readiness.process_state,
+        BehaviorReadinessProcessState::Ready
+    );
+    assert_eq!(readiness.behaviors.len(), 1);
+    assert_eq!(
+        readiness.behaviors[0].state,
+        BehaviorReadinessState::Unavailable
+    );
+    assert_eq!(
+        readiness.behaviors[0].reason,
+        Some(BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable)
+    );
 
     let request_doc_id = create_agent_request(
         node.as_ref(),
@@ -318,9 +348,9 @@ async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    assert!(
-        failure_reason.contains("backend backend-unavailable is unavailable"),
-        "unexpected failure reason: {failure_reason}"
+    assert_eq!(
+        failure_reason, "inference backend is temporarily unavailable",
+        "runtime rejection must expose only the typed public readiness reason"
     );
 
     let _ = shutdown_tx.send(true);
@@ -363,21 +393,27 @@ async fn run_agent_recovers_backend_availability_without_restart() {
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
     let startup_status = fetch_runtime_status(node.as_ref(), identity.did()).await;
     assert_eq!(startup_status.active_generation, 1);
-    assert_eq!(startup_status.runnable_behavior_count, 0);
-    assert_eq!(startup_status.unavailable_behavior_count, 1);
     assert_eq!(startup_status.last_reconcile_result, "startup");
+    let startup_readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
+    assert_eq!(startup_readiness.behaviors.len(), 1);
+    assert_eq!(
+        startup_readiness.behaviors[0].state,
+        BehaviorReadinessState::Unavailable
+    );
 
     update_backend_probe_status(node.as_ref(), "backend-recovers", "healthy").await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     loop {
         let status = fetch_runtime_status(node.as_ref(), identity.did()).await;
+        let readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
         if status.process_state == "ready"
             && status.active_generation >= 2
-            && status.runnable_behavior_count == 1
-            && status.unavailable_behavior_count == 0
             && status.last_reconcile_result == "applied"
             && status.last_reconcile_error.is_empty()
+            && readiness.active_generation >= 2
+            && readiness.behaviors.len() == 1
+            && readiness.behaviors[0].state == BehaviorReadinessState::Ready
         {
             break;
         }

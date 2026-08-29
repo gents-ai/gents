@@ -353,6 +353,7 @@ impl std::fmt::Debug for ToolSurface {
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("subagent_tools", &self.subagent_tools)
             .field("background_tools", &self.background_tools)
+            .field("approval_required_tools", &self.approval_required_tools)
             .field(
                 "custom_tools",
                 &self
@@ -377,6 +378,22 @@ impl std::fmt::Debug for ToolSurface {
             .field("eth_queries", &self.eth_queries)
             .field("enable_skills", &self.enable_skills)
             .field("self_config", &self.self_config)
+            .field(
+                "lsp_digest",
+                &self.lsp.as_ref().map(|config| config.digest.as_str()),
+            )
+            .field(
+                "lsp_options",
+                &self.lsp.as_ref().map(|config| {
+                    (
+                        config.format_on_write,
+                        config.diagnostics_on_write,
+                        config.diagnostics_on_edit,
+                        config.diagnostics_deduplicate,
+                        config.idle_timeout,
+                    )
+                }),
+            )
             .finish()
     }
 }

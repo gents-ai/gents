@@ -46,6 +46,14 @@ pub async fn fetch_doc_patch(
             )
             .await?;
         }
+        AGENT_BEHAVIOR_READINESS_NAME => {
+            rows.behavior_readiness = load_rows(
+                node,
+                AGENT_BEHAVIOR_READINESS_NAME,
+                &format!("query {{ {AGENT_BEHAVIOR_READINESS_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"),
+            )
+            .await?;
+        }
         AGENT_CONVERSATION_NAME => {
             rows.conversations = load_rows(
                 node,
@@ -201,6 +209,7 @@ pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
         AGENT_PRINCIPAL_NAME
             | AGENT_BEHAVIOR_NAME
             | AGENT_RUNTIME_NAME
+            | AGENT_BEHAVIOR_READINESS_NAME
             | AGENT_CONVERSATION_NAME
             | AGENT_REQUEST_NAME
             | MAILBOX_ITEM_NAME

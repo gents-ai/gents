@@ -616,6 +616,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("required_mcp_service_ids", &self.required_mcp_service_ids)
             .field("subagent_tools", &self.subagent_tools)
             .field("background_tools", &self.background_tools)
+            .field("approval_required_tools", &self.approval_required_tools)
             .field(
                 "custom_tools",
                 &self
@@ -640,6 +641,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("behavior_policy", &self.behavior_policy)
             .field("ceiling_policy", &self.ceiling_policy)
             .field("static_policy", &self.static_policy)
+            .field("lsp_config", &self.lsp_config)
             .finish()
     }
 }

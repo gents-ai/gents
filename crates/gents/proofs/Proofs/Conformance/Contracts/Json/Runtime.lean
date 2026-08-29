@@ -30,6 +30,23 @@ def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
     ++ "\"tracked_session_behavior\":" ++ toString witness.trackedSessionBehavior
     ++ "}"
 
+def clientBehaviorReadinessCaseJson (witness : ClientBehaviorReadinessCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"observation_present\":" ++ boolString witness.observationPresent ++ ","
+    ++ "\"observation_kind\":" ++ jsonString witness.observationKind ++ ","
+    ++ "\"process_state\":" ++ jsonString witness.processState ++ ","
+    ++ "\"active_generation\":" ++ toString witness.activeGeneration ++ ","
+    ++ "\"router_generation\":" ++ toString witness.routerGeneration ++ ","
+    ++ "\"runnable\":" ++ boolString witness.runnable ++ ","
+    ++ "\"unavailable\":" ++ boolString witness.unavailable ++ ","
+    ++ "\"startup_demoted\":" ++ boolString witness.startupDemoted ++ ","
+    ++ "\"runtime_unavailable_reason\":" ++ jsonString witness.runtimeUnavailableReason ++ ","
+    ++ "\"expected_state\":" ++ jsonString witness.expectedState ++ ","
+    ++ "\"expected_reason\":" ++ jsonOptionalString witness.expectedReason ++ ","
+    ++ "\"expected_runtime_admissible\":" ++ boolString witness.expectedRuntimeAdmissible
+    ++ "}"
+
 def pairingReconcileShutdownBoundaryCaseJson
     (witness : PairingReconcileShutdownBoundaryCase) : String :=
   "{"

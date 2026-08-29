@@ -1,5 +1,10 @@
 export type { AgentPrincipalView } from "../generated/AgentPrincipalView.js";
 export type { BehaviorEnvironmentView } from "../generated/BehaviorEnvironmentView.js";
+export type { BehaviorReadinessSourceView } from "../generated/BehaviorReadinessSourceView.js";
+export type { BehaviorReadinessStatusView } from "../generated/BehaviorReadinessStatusView.js";
+export type { BehaviorReadinessUnknownReasonView } from "../generated/BehaviorReadinessUnknownReasonView.js";
+export type { BehaviorReadinessView } from "../generated/BehaviorReadinessView.js";
+export type { BehaviorUnavailableReasonView } from "../generated/BehaviorUnavailableReasonView.js";
 export type { BehaviorView } from "../generated/BehaviorView.js";
 export type { ConversationSummary } from "../generated/ConversationSummary.js";
 export type { DeploymentView } from "../generated/DeploymentView.js";

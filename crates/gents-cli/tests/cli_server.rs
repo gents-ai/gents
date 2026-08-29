@@ -1213,7 +1213,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         Some("serving")
     );
     assert_eq!(
-        readiness.get("behavior_readiness").and_then(Value::as_str),
+        readiness.get("readiness_status").and_then(Value::as_str),
         Some("degraded")
     );
     assert_eq!(
@@ -1225,17 +1225,17 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
     );
     let unavailable = readiness
         .get("unavailable_behaviors")
-        .and_then(Value::as_object)
+        .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("readiness missing unavailable_behaviors: {readiness}"))?;
     assert_eq!(unavailable.len(), 1);
     let reason = unavailable
-        .values()
-        .next()
+        .first()
+        .and_then(|entry| entry.get("message"))
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
     assert!(
-        reason.contains("probe_status=unknown"),
+        reason.contains("inference backend is temporarily unavailable"),
         "unexpected unavailable reason: {reason}"
     );
     assert_eq!(
@@ -1249,7 +1249,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         Some("ready")
     );
     assert_eq!(
-        status.get("behavior_readiness").and_then(Value::as_str),
+        status.get("readiness_status").and_then(Value::as_str),
         Some("degraded")
     );
     assert_eq!(
@@ -1270,7 +1270,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         .unwrap_or_default()
         .to_string();
     assert!(
-        status_reason.contains("probe_status=unknown"),
+        status_reason.contains("inference backend is temporarily unavailable"),
         "unexpected status unavailable reason: {status_reason}"
     );
 

@@ -331,6 +331,7 @@ mod tests {
                         created_by: None,
                     },
                     runtime: None,
+                    behavior_readiness: Default::default(),
                     behaviors: vec![BehaviorView {
                         behavior_id: "default".into(),
                         display_name: "Default".into(),

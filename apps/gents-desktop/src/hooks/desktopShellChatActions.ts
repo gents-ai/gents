@@ -1,6 +1,7 @@
 import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
 
 import type {
+  BehaviorReadinessDecision,
   ChatShellProjection,
   ChatWorkflowState,
   OptimisticPendingTurn,
@@ -13,13 +14,13 @@ import type {
 
 type ChatActionParams = {
   api: DesktopApiAdapter;
+  behaviorReadiness: BehaviorReadinessDecision;
   draft: string;
   newConversationAgentRef: MutableRefObject<string | null>;
   refreshSession: (
     nextSessionId: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
-  selectedBehaviorId: string | null;
   selectedDeployment: DeploymentView | null;
   selectedSessionId: string | null;
   pendingMailboxCauseId: string | null;
@@ -34,15 +35,16 @@ type ChatActionParams = {
   setPendingMailboxCauseId: Dispatch<SetStateAction<string | null>>;
   setSession: Dispatch<SetStateAction<DesktopSessionSnapshot | null>>;
   shellProjection: ChatShellProjection;
+  retryShellProjection: ChatShellProjection;
 };
 
 export function createDesktopShellChatActions({
   api,
+  behaviorReadiness,
   draft,
   newConversationAgentRef,
   refreshSession,
   refreshSnapshot,
-  selectedBehaviorId,
   selectedDeployment,
   selectedSessionId,
   pendingMailboxCauseId,
@@ -57,6 +59,7 @@ export function createDesktopShellChatActions({
   setPendingMailboxCauseId,
   setSession,
   shellProjection,
+  retryShellProjection,
 }: ChatActionParams) {
   async function submitContent(content: string): Promise<boolean> {
     if (!selectedDeployment || !content.trim()) {
@@ -65,6 +68,9 @@ export function createDesktopShellChatActions({
 
     if (shellProjection.nonEmptyContentSendStatus.kind !== "ready") {
       setError(shellProjection.nonEmptyContentSendStatus.hint);
+      return false;
+    }
+    if (behaviorReadiness.kind !== "ready") {
       return false;
     }
 
@@ -78,7 +84,7 @@ export function createDesktopShellChatActions({
     try {
       const result = await api.sendChatMessage({
         agentDid: selectedDeployment.agentDid,
-        behaviorId: selectedBehaviorId,
+        behaviorId: behaviorReadiness.behaviorId,
         sessionId: selectedSessionId,
         content,
         causedBySourceDocId: pendingMailboxCauseId,
@@ -122,8 +128,8 @@ export function createDesktopShellChatActions({
     if (!selectedDeployment) {
       return;
     }
-    if (shellProjection.nonEmptyContentSendStatus.kind !== "ready") {
-      setError(shellProjection.nonEmptyContentSendStatus.hint);
+    if (retryShellProjection.nonEmptyContentSendStatus.kind !== "ready") {
+      setError(retryShellProjection.nonEmptyContentSendStatus.hint);
       return;
     }
     setLocalWorkflow({

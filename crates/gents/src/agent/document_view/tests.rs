@@ -1601,8 +1601,9 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
         .get(&default_behavior_id)
         .expect("behavior should be reported unavailable");
     assert!(
-        reason.contains("codex-login"),
-        "unavailable reason should point at codex-login: {reason}"
+        reason.diagnostic.contains("codex-login"),
+        "unavailable reason should point at codex-login: {}",
+        reason.diagnostic
     );
 }
 
@@ -1773,6 +1774,47 @@ fn empty_runtime_view(agent_did: &str) -> DocumentRuntimeView {
         graph_run_pins: Default::default(),
         visible_graph_package_artifact_ids: Default::default(),
     }
+}
+
+#[test]
+fn runtime_skill_projection_is_canonical_across_map_insertion_order() {
+    fn skill(skill_id: &str) -> DocumentRecord<crate::document_config::SkillDocument> {
+        DocumentRecord {
+            doc_id: format!("doc-{skill_id}"),
+            value: crate::document_config::SkillDocument {
+                skill_id: skill_id.to_string(),
+                agent_did: "did:key:owner".to_string(),
+                scope: Some("principal".to_string()),
+                name: Some(skill_id.to_string()),
+                description: None,
+                instructions: Some(format!("Instructions for {skill_id}")),
+                tool_refs: Vec::new(),
+                display_name: None,
+                interface_json: None,
+                enabled: true,
+                created_at: None,
+            },
+        }
+    }
+
+    let mut forward = empty_runtime_view("did:key:owner");
+    forward.skills.insert("alpha".to_string(), skill("alpha"));
+    forward.skills.insert("zeta".to_string(), skill("zeta"));
+    let mut reverse = empty_runtime_view("did:key:owner");
+    reverse.skills.insert("zeta".to_string(), skill("zeta"));
+    reverse.skills.insert("alpha".to_string(), skill("alpha"));
+
+    let forward_ids = super::snapshot::sorted_skills(&forward)
+        .into_iter()
+        .map(|skill| skill.skill_id)
+        .collect::<Vec<_>>();
+    let reverse_ids = super::snapshot::sorted_skills(&reverse)
+        .into_iter()
+        .map(|skill| skill.skill_id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(forward_ids, vec!["alpha", "zeta"]);
+    assert_eq!(reverse_ids, forward_ids);
 }
 
 #[test]

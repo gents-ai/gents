@@ -164,11 +164,7 @@ async function smokePeer(baseUrl, peer) {
 }
 
 async function smokeChat(baseUrl, peer, deployment) {
-  const behaviorId =
-    deployment.defaultBehaviorId ||
-    deployment.behaviors?.find((behavior) => behavior.isDefault)?.behaviorId ||
-    deployment.behaviors?.[0]?.behaviorId ||
-    null;
+  const behaviorId = deployment.behaviorReadiness?.defaultBehaviorId ?? null;
   const content = [
     "Desktop remote smoke test.",
     `Peer: ${peer.label}.`,

@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use tokio::sync::{mpsc, watch, Mutex};
+use tokio::task::JoinSet;
 use tracing::Instrument;
 
 use crate::admission::AdmissionRegistry;
@@ -18,13 +19,13 @@ mod diff;
 mod slot;
 
 use diff::diff_counts;
-#[cfg(test)]
-use slot::spawn_slot;
 pub(in crate::agent) use slot::SlotFailurePolicy;
 use slot::{
-    behavior_executor_capacity, retire_slot, spawn_slot_with_capacity, spawn_slots, BehaviorSlot,
+    behavior_executor_capacity, spawn_slot_with_capacity, spawn_slots, BehaviorSlot,
     BehaviorSlotState,
 };
+#[cfg(test)]
+use slot::{retire_slot, spawn_slot};
 
 pub(super) struct GenerationSupervisor<F> {
     current_snapshot: Arc<ActiveRuntimeSnapshot>,
@@ -34,6 +35,49 @@ pub(super) struct GenerationSupervisor<F> {
     runner: F,
     runtime_status: RuntimeStatusHandle,
     slot_failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
+    retiring_slots: JoinSet<()>,
+}
+
+struct StagedSlots {
+    slots: HashMap<String, BehaviorSlot>,
+    failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
+}
+
+impl StagedSlots {
+    fn new(failure_policy: Option<Arc<dyn SlotFailurePolicy>>) -> Self {
+        Self {
+            slots: HashMap::new(),
+            failure_policy,
+        }
+    }
+
+    fn insert(&mut self, behavior_id: String, slot: BehaviorSlot) {
+        self.slots.insert(behavior_id, slot);
+    }
+
+    fn get(&self, behavior_id: &str) -> Option<&BehaviorSlot> {
+        self.slots.get(behavior_id)
+    }
+
+    fn into_slots(self) -> HashMap<String, BehaviorSlot> {
+        self.slots
+    }
+
+    async fn abort(self) {
+        for (behavior_id, slot) in self.slots {
+            let generation = slot.generation;
+            let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
+            drop(slot.dispatcher);
+            if let Err(error) = slot.handle.await {
+                if !error.is_cancelled() {
+                    tracing::error!(behavior_id, generation, error = %error, "staged behavior slot join failed during rollback");
+                }
+            }
+            if let Some(policy) = &self.failure_policy {
+                policy.on_slot_retired(&behavior_id, generation, true).await;
+            }
+        }
+    }
 }
 
 impl<F, Fut> GenerationSupervisor<F>
@@ -42,6 +86,7 @@ where
             Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            u64,
             watch::Receiver<bool>,
         ) -> Fut
         + Send
@@ -50,7 +95,7 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    pub(super) fn bootstrap(
+    pub(super) async fn bootstrap(
         resolved_snapshot: ResolvedRuntimeSnapshot,
         admission_registry: AdmissionRegistry,
         retry_policy: RetryPolicy,
@@ -59,9 +104,16 @@ where
         shutdown: watch::Receiver<bool>,
         slot_failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
     ) -> Result<Self> {
+        resolved_snapshot.validate_behavior_readiness_source()?;
+        if let Some(policy) = &slot_failure_policy {
+            for behavior_id in resolved_snapshot.behaviors.keys() {
+                policy.on_slot_created(behavior_id, 1).await;
+            }
+        }
         admission_registry.reconcile(1, &resolved_snapshot.backend_admission_configs);
         let active_slots = spawn_slots(
             &resolved_snapshot,
+            1,
             retry_policy.clone(),
             runner.clone(),
             shutdown,
@@ -94,6 +146,7 @@ where
             runner,
             runtime_status,
             slot_failure_policy,
+            retiring_slots: JoinSet::new(),
         })
     }
 
@@ -164,7 +217,10 @@ where
         self.runtime_status
             .set_reconcile_phase(ReconcilePhase::Applying)
             .await;
-        match self.apply_snapshot(proposal, next_generation, active_snapshot_tx, shutdown) {
+        match self
+            .apply_snapshot(proposal, next_generation, active_snapshot_tx, shutdown)
+            .await
+        {
             Ok(()) => {
                 tracing::info!(
                     generation = next_generation,
@@ -179,7 +235,8 @@ where
                     for (behavior_id, reason) in &self.current_snapshot.unavailable_behaviors {
                         tracing::warn!(
                             behavior_id = %behavior_id,
-                            reason = %reason,
+                            public_reason = ?reason.public_reason,
+                            diagnostic = %reason.diagnostic,
                             "behavior unavailable after runtime reconcile"
                         );
                     }
@@ -206,118 +263,191 @@ where
         }
     }
 
-    fn apply_snapshot(
+    async fn apply_snapshot(
         &mut self,
         resolved_snapshot: ResolvedRuntimeSnapshot,
         generation: u64,
         active_snapshot_tx: &watch::Sender<Arc<ActiveRuntimeSnapshot>>,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
-        let mut next_slots = HashMap::new();
-        let mut retired_slots = Vec::new();
-        let mut retired_behaviors: Vec<(String, bool)> = Vec::new();
+        resolved_snapshot.validate_behavior_readiness_source()?;
 
+        // Complete the entire recreation plan before registering generations
+        // or spawning executors. Invalid snapshots have no observable side
+        // effects on either readiness standing or slot ownership.
+        let mut recreated_behavior_ids = Vec::new();
         for (behavior_id, behavior) in &resolved_snapshot.behaviors {
             let tool_surface = resolved_snapshot
                 .tool_surfaces
                 .get(behavior_id)
-                .cloned()
-                .ok_or_else(|| anyhow!("missing tool surface for behavior {behavior_id}"))?;
+                .expect("validated runnable/tool-surface keyset parity");
             let executor_capacity =
                 behavior_executor_capacity(behavior, &resolved_snapshot.backend_admission_configs);
-
-            match self.active_slots.remove(behavior_id) {
-                Some(existing) if existing.matches(behavior, &tool_surface, executor_capacity) => {
-                    next_slots.insert(behavior_id.clone(), existing);
-                }
-                Some(existing) => {
-                    retired_slots.push(existing);
-                    retired_behaviors.push((behavior_id.clone(), true));
-                    next_slots.insert(
-                        behavior_id.clone(),
-                        spawn_slot_with_capacity(
-                            behavior.clone(),
-                            tool_surface,
-                            executor_capacity,
-                            self.retry_policy.clone(),
-                            self.runner.clone(),
-                            shutdown.clone(),
-                            self.slot_failure_policy.clone(),
-                        ),
-                    );
-                }
-                None => {
-                    next_slots.insert(
-                        behavior_id.clone(),
-                        spawn_slot_with_capacity(
-                            behavior.clone(),
-                            tool_surface,
-                            executor_capacity,
-                            self.retry_policy.clone(),
-                            self.runner.clone(),
-                            shutdown.clone(),
-                            self.slot_failure_policy.clone(),
-                        ),
-                    );
-                }
+            if self
+                .active_slots
+                .get(behavior_id)
+                .is_none_or(|slot| !slot.matches(behavior, tool_surface, executor_capacity))
+            {
+                recreated_behavior_ids.push(behavior_id.clone());
             }
         }
 
-        retired_behaviors.extend(
-            self.active_slots
-                .keys()
-                .map(|behavior_id| (behavior_id.clone(), false)),
-        );
-        retired_slots.extend(self.active_slots.drain().map(|(_, slot)| slot));
+        if let Some(policy) = &self.slot_failure_policy {
+            for behavior_id in &recreated_behavior_ids {
+                policy.on_slot_created(behavior_id, generation).await;
+            }
+        }
 
-        let dispatchers = next_slots
-            .iter()
-            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.dispatcher.clone()))
-            .collect();
-        let executor_capacities = next_slots
-            .iter()
-            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.executor_capacity))
-            .collect();
-        let executor_queue_capacities = next_slots
-            .iter()
-            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.queue_capacity))
-            .collect();
+        let mut staged = StagedSlots::new(self.slot_failure_policy.clone());
+        for behavior_id in &recreated_behavior_ids {
+            let behavior = resolved_snapshot
+                .behaviors
+                .get(behavior_id)
+                .expect("recreation plan references a runnable behavior");
+            let tool_surface = resolved_snapshot
+                .tool_surfaces
+                .get(behavior_id)
+                .cloned()
+                .expect("validated runnable/tool-surface keyset parity");
+            let executor_capacity =
+                behavior_executor_capacity(behavior, &resolved_snapshot.backend_admission_configs);
+            staged.insert(
+                behavior_id.clone(),
+                spawn_slot_with_capacity(
+                    behavior.clone(),
+                    tool_surface,
+                    executor_capacity,
+                    generation,
+                    self.retry_policy.clone(),
+                    self.runner.clone(),
+                    shutdown.clone(),
+                    self.slot_failure_policy.clone(),
+                ),
+            );
+        }
+
+        let runnable_behavior_ids = resolved_snapshot
+            .behaviors
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut dispatchers = HashMap::new();
+        let mut executor_capacities = HashMap::new();
+        let mut executor_queue_capacities = HashMap::new();
+        for behavior_id in &runnable_behavior_ids {
+            let slot = staged
+                .get(behavior_id)
+                .or_else(|| self.active_slots.get(behavior_id))
+                .expect("validated recreation plan owns every runnable slot");
+            dispatchers.insert(behavior_id.clone(), slot.dispatcher.clone());
+            executor_capacities.insert(behavior_id.clone(), slot.executor_capacity);
+            executor_queue_capacities.insert(behavior_id.clone(), slot.queue_capacity);
+        }
         let next_snapshot = Arc::new(resolved_snapshot.activate_with_executor_metadata(
             generation,
             dispatchers,
             executor_capacities,
             executor_queue_capacities,
         ));
+        // Publish the new source before changing the active dispatcher set.
+        // The router observes this generation skew and stops dequeuing until
+        // the active snapshot watch catches up, so no request can enter the
+        // handoff gap between retiring the old slots and installing the new.
+        if let Err(error) = self
+            .runtime_status
+            .readiness()
+            .publish_snapshot(next_snapshot.as_ref())
+            .await
+        {
+            // The candidate snapshot owns dispatcher clones for every staged
+            // slot. Drop it before joining rollback so closing the staged
+            // owners also closes their request channels.
+            drop(next_snapshot);
+            staged.abort().await;
+            return Err(error).context("publish behavior readiness before active generation");
+        }
+
+        let mut next_slots = HashMap::new();
+        let mut retired_slots = Vec::new();
+        let mut retired_behaviors: Vec<(String, u64, bool)> = Vec::new();
+        let mut staged_slots = staged.into_slots();
+        for behavior_id in &runnable_behavior_ids {
+            if let Some(slot) = staged_slots.remove(behavior_id) {
+                if let Some(existing) = self.active_slots.remove(behavior_id) {
+                    let old_generation = existing.generation;
+                    retired_slots.push(existing);
+                    retired_behaviors.push((behavior_id.clone(), old_generation, true));
+                }
+                next_slots.insert(behavior_id.clone(), slot);
+            } else {
+                let existing = self
+                    .active_slots
+                    .remove(behavior_id)
+                    .expect("reused slot disappeared before transaction commit");
+                next_slots.insert(behavior_id.clone(), existing);
+            }
+        }
+        debug_assert!(staged_slots.is_empty());
+        for (behavior_id, slot) in self.active_slots.drain() {
+            retired_behaviors.push((behavior_id, slot.generation, false));
+            retired_slots.push(slot);
+        }
+
         self.admission_registry
             .reconcile(generation, &next_snapshot.backend_admission_configs);
 
         self.current_snapshot = next_snapshot.clone();
         self.active_slots = next_slots;
+        // Transfer every retiring handle into the supervisor-owned join set
+        // before the fallible watch publication. A closed receiver must not
+        // detach executors that still own daemons or in-flight requests.
+        for slot in retired_slots {
+            let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
+            drop(slot.dispatcher);
+            self.retiring_slots.spawn(async move {
+                if let Err(error) = slot.handle.await {
+                    if !error.is_cancelled() {
+                        tracing::error!(error = %error, "retired behavior slot join failed");
+                    }
+                }
+            });
+        }
         active_snapshot_tx
             .send(next_snapshot)
             .map_err(|_| anyhow!("active runtime snapshot receiver closed"))?;
 
-        for slot in retired_slots {
-            retire_slot(slot);
+        while let Some(joined) = self.retiring_slots.try_join_next() {
+            if let Err(error) = joined {
+                if !error.is_cancelled() {
+                    tracing::error!(error = %error, "retired behavior slot owner join failed");
+                }
+            }
         }
         if let Some(policy) = self.slot_failure_policy.clone() {
-            tokio::spawn(async move {
-                for (behavior_id, recreated) in retired_behaviors {
-                    policy.on_slot_retired(&behavior_id, recreated).await;
-                }
-            });
+            for (behavior_id, old_generation, recreated) in retired_behaviors {
+                policy
+                    .on_slot_retired(&behavior_id, old_generation, recreated)
+                    .await;
+            }
         }
 
         Ok(())
     }
 
-    async fn shutdown_slots(self) {
+    async fn shutdown_slots(mut self) {
         for slot in self.active_slots.into_values() {
             let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
             drop(slot.dispatcher);
             if let Err(error) = slot.handle.await {
                 if !error.is_cancelled() {
                     tracing::error!(error = %error, "behavior slot join failed during shutdown");
+                }
+            }
+        }
+        while let Some(joined) = self.retiring_slots.join_next().await {
+            if let Err(error) = joined {
+                if !error.is_cancelled() {
+                    tracing::error!(error = %error, "retired behavior slot owner join failed during shutdown");
                 }
             }
         }

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertCompatibleBridgeContract,
   createDesktopClient,
+  EXPECTED_BRIDGE_WIRE_SCHEMA_HASH,
   MINIMUM_BRIDGE_CONTRACT_VERSION,
   PACKAGE_VERSION,
   type DesktopBridgeContract,
@@ -24,6 +25,7 @@ function contract(
   return {
     contractVersion,
     packageVersion,
+    wireSchemaHash: EXPECTED_BRIDGE_WIRE_SCHEMA_HASH,
     events: [],
     eventReasons: [],
     errorCodes: [],
@@ -67,6 +69,15 @@ describe("desktop bridge compatibility", () => {
     ).toThrow("Gents desktop package mismatch");
   });
 
+  it("rejects a mismatched generated wire schema", () => {
+    expect(() =>
+      assertCompatibleBridgeContract({
+        ...contract(MINIMUM_BRIDGE_CONTRACT_VERSION),
+        wireSchemaHash: "stale-wire-schema",
+      }),
+    ).toThrow("Incompatible Gents desktop wire schema");
+  });
+
   it("accepts the actual packaged Rust bridge fingerprint", () => {
     const fingerprint = JSON.parse(
       readFileSync(
@@ -82,7 +93,7 @@ describe("desktop bridge compatibility", () => {
     let starts = 0;
     const transport = createMemoryTransport({
       handlers: {
-        desktop_bridge_contract: () => contract("1.6"),
+        desktop_bridge_contract: () => contract("2.0"),
         desktop_client_start: () => {
           starts += 1;
           return {};
@@ -92,7 +103,7 @@ describe("desktop bridge compatibility", () => {
 
     await expect(
       createDesktopClient(transport).api.startDesktopClient(),
-    ).rejects.toThrow("Incompatible Gents desktop bridge contract 1.6");
+    ).rejects.toThrow("Incompatible Gents desktop bridge contract 2.0");
     expect(starts).toBe(0);
     expect(transport.calls.map(({ command }) => command)).toEqual([
       "desktop_bridge_contract",

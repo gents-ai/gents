@@ -129,8 +129,6 @@ pub struct RuntimeSnapshot {
     pub active_generation: i64,
     pub router_generation: i64,
     pub default_behavior_id: String,
-    pub runnable_behavior_count: i64,
-    pub unavailable_behavior_count: i64,
     pub last_reconcile_result: String,
     pub last_reconcile_error: String,
 }
@@ -437,8 +435,6 @@ pub async fn fetch_runtime_snapshot(
                 active_generation
                 router_generation
                 default_behavior_id
-                runnable_behavior_count
-                unavailable_behavior_count
                 last_reconcile_result
                 last_reconcile_error
             }}
@@ -446,6 +442,33 @@ pub async fn fetch_runtime_snapshot(
     );
     let resp = node.execute(&query).await;
     first_optional_row::<RuntimeSnapshot>(&resp, "AgentRuntime")
+}
+
+pub async fn fetch_behavior_readiness_snapshot(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Option<gents_protocol::row::BehaviorReadinessSnapshot> {
+    let agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentBehaviorReadiness(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                limit: 1
+            ) {{
+                snapshot_json
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentBehaviorReadiness"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("snapshot_json"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|json| serde_json::from_str(json).ok())
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]

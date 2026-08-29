@@ -34,10 +34,11 @@ describeLegacy("legacy remote GraphQL recovery and interrupt", () => {
     );
     expect(deployment).toBeDefined();
     expect(deployment?.conversations).toHaveLength(0);
+    expect(deployment?.behaviorReadiness.defaultBehaviorId).toBeTruthy();
 
     const submitted = await runner.adapter.sendChatMessage({
       agentDid: peer.agentDid,
-      behaviorId: peer.defaultBehaviorId ?? "default",
+      behaviorId: deployment!.behaviorReadiness.defaultBehaviorId,
       sessionId: null,
       content:
         "This is an interrupt-path test. Think carefully for several seconds before answering, and do not modify files or configuration.",

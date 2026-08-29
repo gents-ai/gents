@@ -95,4 +95,13 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn behavior_readiness_is_subscribed_but_not_in_broad_sync_inventory() {
+        let names = subscribed_collection_names();
+        assert!(names.contains(&"AgentBehaviorReadiness"));
+        assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&"AgentBehaviorReadiness"));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
+            .contains(&"AgentBehaviorReadiness"));
+    }
 }

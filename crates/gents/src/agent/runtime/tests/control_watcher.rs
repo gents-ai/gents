@@ -195,8 +195,9 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         .get(&behavior_id)
         .expect("unavailable reason for demoted behavior");
     assert!(
-        reason.contains("measured unhealthy"),
-        "reason must name the local measurement, got: {reason}"
+        reason.diagnostic.contains("measured unhealthy"),
+        "reason must name the local measurement, got: {}",
+        reason.diagnostic
     );
     let config = snapshot
         .backend_admission_configs

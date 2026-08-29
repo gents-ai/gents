@@ -65,7 +65,7 @@ impl ProductionMaterializer {
         let snapshot = self.snapshot_rx.borrow().clone();
         let behavior = snapshot.behavior(&task.behavior_id).ok_or_else(|| {
             let reason = snapshot
-                .unavailable_reason(&task.behavior_id)
+                .unavailable_public_message(&task.behavior_id)
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| format!("behavior {} is not loaded", task.behavior_id));
             anyhow!("resolving behavior for task {}: {reason}", task.task_id)

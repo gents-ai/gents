@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createDesktopClient,
+  EXPECTED_BRIDGE_WIRE_SCHEMA_HASH,
   MINIMUM_BRIDGE_CONTRACT_VERSION,
   PACKAGE_VERSION,
 } from "./client.js";
@@ -16,6 +17,7 @@ function compatibleBridgeContract() {
   return {
     contractVersion: MINIMUM_BRIDGE_CONTRACT_VERSION,
     packageVersion: PACKAGE_VERSION,
+    wireSchemaHash: EXPECTED_BRIDGE_WIRE_SCHEMA_HASH,
     events: [],
     eventReasons: [],
     errorCodes: [],

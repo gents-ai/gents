@@ -4,6 +4,8 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
+use gents_protocol::row::BehaviorReadinessUnavailableReason;
+
 use super::*;
 use crate::ensure_runtime_schemas;
 use crate::lean_vocab_test::{
@@ -20,13 +22,17 @@ struct AgentRuntimeRow {
     active_generation: i64,
     router_generation: i64,
     default_behavior_id: String,
-    runnable_behavior_count: i64,
-    unavailable_behavior_count: i64,
     behavior_executor_capacity: i64,
     behavior_executor_queue_depth: i64,
     behavior_executor_status_json: String,
     last_reconcile_result: String,
     last_reconcile_error: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentBehaviorReadinessRow {
+    snapshot_json: String,
+    updated_at: String,
 }
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
@@ -69,6 +75,16 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
     }
 }
 
+fn unavailable_general() -> HashMap<String, crate::runtime_snapshot::UnavailableBehavior> {
+    HashMap::from([(
+        "general".to_string(),
+        crate::runtime_snapshot::UnavailableBehavior::new(
+            BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid,
+            "test runtime is not configured",
+        ),
+    )])
+}
+
 async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> AgentRuntimeRow {
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
@@ -79,8 +95,6 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
                 active_generation
                 router_generation
                 default_behavior_id
-                runnable_behavior_count
-                unavailable_behavior_count
                 behavior_executor_capacity
                 behavior_executor_queue_depth
                 behavior_executor_status_json
@@ -104,6 +118,80 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
         .cloned()
         .expect("AgentRuntime row");
     serde_json::from_value(value).expect("decode AgentRuntime row")
+}
+
+async fn fetch_behavior_readiness_row(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+) -> AgentBehaviorReadinessRow {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let response = node
+        .execute(&format!(
+            r#"{{
+                AgentBehaviorReadiness(
+                    filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                    limit: 1
+                ) {{
+                    snapshot_json
+                    updated_at
+                }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "AgentBehaviorReadiness query failed: {:?}",
+        response.errors
+    );
+    let value = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentBehaviorReadiness"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("AgentBehaviorReadiness row");
+    serde_json::from_value(value).expect("decode AgentBehaviorReadiness row")
+}
+
+#[tokio::test]
+async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let agent_did = "did:test:readiness-restart";
+
+    let (first_owner, first) = RuntimeStatusHandle::start(node.clone(), agent_did);
+    first.initialize_startup("general").await.unwrap();
+    first
+        .set_process_state_durable(ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
+            &fetch_behavior_readiness_row(node.as_ref(), agent_did)
+                .await
+                .snapshot_json
+        )
+        .unwrap()
+        .process_state,
+        gents_protocol::row::BehaviorReadinessProcessState::Ready
+    );
+    first_owner.close().await.unwrap();
+
+    let (second_owner, second) = RuntimeStatusHandle::start(node.clone(), agent_did);
+    second.initialize_startup("general").await.unwrap();
+    let restarted = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
+        &fetch_behavior_readiness_row(node.as_ref(), agent_did)
+            .await
+            .snapshot_json,
+    )
+    .unwrap();
+    assert_eq!(
+        restarted.process_state,
+        gents_protocol::row::BehaviorReadinessProcessState::Recovering,
+        "a prior durable Ready must be overwritten before restart work can fail"
+    );
+    second_owner.close().await.unwrap();
 }
 
 #[test]
@@ -173,7 +261,8 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let agent_did = format!("did:test:process-contract:{}", case.name);
-    let status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
+    let (owner, status) = RuntimeStatusHandle::start(node.clone(), agent_did.clone());
+    status.readiness().initialize("general").await.unwrap();
     let action = case
         .action
         .as_deref()
@@ -217,6 +306,7 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
         "generated Process transition {} expected {} -> {} classified as {} via {:?}, got persisted process_state={}",
         case.name, case.from, case.to, case.classification, case.action, row.process_state
     );
+    owner.close().await.unwrap();
 }
 
 #[tokio::test]
@@ -311,13 +401,16 @@ async fn runtime_status_persists_process_and_reconcile_state() {
             principal: None,
             local_did: String::new(),
             paired_peer_dids: HashSet::new(),
-            default_behavior_id: "general".to_string(),
+            default_behavior_id: "code".to_string(),
             behaviors: HashMap::new(),
             tool_surfaces: HashMap::new(),
             backend_admission_configs: HashMap::new(),
             unavailable_behaviors: HashMap::from([(
                 "code".to_string(),
-                "behavior code is disabled".to_string(),
+                crate::runtime_snapshot::UnavailableBehavior::new(
+                    BehaviorReadinessUnavailableReason::BehaviorDisabled,
+                    "behavior code is disabled",
+                ),
             )]),
             active_schedules: HashMap::new(),
             unavailable_schedules: HashSet::new(),
@@ -337,9 +430,7 @@ async fn runtime_status_persists_process_and_reconcile_state() {
     assert_eq!(row.reconcile_phase, "idle");
     assert_eq!(row.active_generation, 1);
     assert_eq!(row.router_generation, 1);
-    assert_eq!(row.default_behavior_id, "general");
-    assert_eq!(row.runnable_behavior_count, 0);
-    assert_eq!(row.unavailable_behavior_count, 1);
+    assert_eq!(row.default_behavior_id, "code");
     assert_eq!(row.last_reconcile_result, "startup");
     assert!(row.last_reconcile_error.is_empty());
 }
@@ -395,6 +486,48 @@ async fn runtime_status_persists_behavior_executor_capacity_and_queue_depth() {
 }
 
 #[tokio::test]
+async fn executor_metrics_do_not_republish_unchanged_behavior_readiness() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let (tx, _rx) = mpsc::channel(2);
+    let snapshot = ActiveRuntimeSnapshot {
+        generation: 1,
+        principal: None,
+        local_did: String::new(),
+        paired_peer_dids: HashSet::new(),
+        default_behavior_id: "general".to_string(),
+        behaviors: HashMap::new(),
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: HashSet::new(),
+        active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
+        active_tasks: HashMap::new(),
+        dispatchers: HashMap::from([("general".to_string(), tx.clone())]),
+        behavior_executor_capacities: HashMap::from([("general".to_string(), 1)]),
+        behavior_executor_queue_capacities: HashMap::from([("general".to_string(), 2)]),
+    };
+    let agent_did = "did:test:readiness-metric-owner";
+    let status = RuntimeStatusHandle::new(node.clone(), agent_did);
+    status.publish_startup_snapshot(&snapshot).await;
+    let before = fetch_behavior_readiness_row(node.as_ref(), agent_did).await;
+
+    tx.try_send(status_test_request("metric-only-change"))
+        .unwrap();
+    status.publish_executor_snapshot(&snapshot).await;
+    let after = fetch_behavior_readiness_row(node.as_ref(), agent_did).await;
+
+    assert_eq!(after.snapshot_json, before.snapshot_json);
+    assert_eq!(
+        after.updated_at, before.updated_at,
+        "executor polling must not become an incidental readiness writer"
+    );
+}
+
+#[tokio::test]
 async fn runtime_status_serializes_persisted_generation_updates() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -409,7 +542,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_behaviors: unavailable_general(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
@@ -428,7 +561,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_behaviors: unavailable_general(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
@@ -455,6 +588,11 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     assert_eq!(row.active_generation, 2);
     assert_eq!(row.router_generation, 2);
     assert_eq!(row.last_reconcile_result, "applied");
+    let readiness = fetch_behavior_readiness_row(node.as_ref(), "did:test:status-serialize").await;
+    let readiness: gents_protocol::row::BehaviorReadinessSnapshot =
+        serde_json::from_str(&readiness.snapshot_json).expect("decode serialized readiness");
+    assert_eq!(readiness.active_generation, 2);
+    assert_eq!(readiness.router_generation, 2);
 }
 
 #[tokio::test]
@@ -477,7 +615,7 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_behaviors: unavailable_general(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
@@ -496,7 +634,7 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_behaviors: unavailable_general(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
@@ -508,6 +646,9 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
     };
 
     status.publish_startup_snapshot(&startup).await;
+    status
+        .publish_router_generation(publish.pre_router_generation as u64)
+        .await;
     status.set_reconcile_phase(ReconcilePhase::Applying).await;
     status.publish_applied(&applied).await;
     let row = fetch_runtime_row(node.as_ref(), "did:test:runtime-contract").await;

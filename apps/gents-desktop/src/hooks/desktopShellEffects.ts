@@ -240,20 +240,10 @@ export function useDesktopShellEffects({
       return;
     }
 
-    const defaultBehaviorId =
-      selectedDeployment.defaultBehaviorId ??
-      selectedDeployment.behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
-      selectedDeployment.behaviors[0]?.behaviorId ??
-      null;
-    const effectiveBehaviorId =
-      selectedBehaviorId &&
-      selectedDeployment.behaviors.some(
-        (behavior) => behavior.behaviorId === selectedBehaviorId,
-      )
-        ? selectedBehaviorId
-        : defaultBehaviorId;
+    const defaultBehaviorId = selectedDeployment.behaviorReadiness.defaultBehaviorId;
+    const effectiveBehaviorId = selectedBehaviorId ?? defaultBehaviorId;
 
-    if (selectedBehaviorId !== effectiveBehaviorId) {
+    if (!selectedBehaviorId && defaultBehaviorId) {
       setSelectedBehaviorId(defaultBehaviorId);
     }
 

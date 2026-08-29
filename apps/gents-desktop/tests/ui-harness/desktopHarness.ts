@@ -155,13 +155,14 @@ export function createDesktopUiHarness(
   if (scenario === "backend-unavailable") {
     deployment = {
       ...deployment,
-      runtime: deployment.runtime
-        ? {
-            ...deployment.runtime,
-            runnableBehaviorCount: 0,
-            unavailableBehaviorCount: deployment.behaviors.length,
-          }
-        : null,
+      behaviorReadiness: {
+        ...deployment.behaviorReadiness,
+        behaviors: deployment.behaviorReadiness.behaviors.map((behavior) => ({
+          state: "unavailable" as const,
+          behaviorId: behavior.behaviorId,
+          reason: "backend_disabled" as const,
+        })),
+      },
       inferenceBackends: deployment.inferenceBackends.map((backend) => ({
         ...backend,
         enabled: false,
@@ -1642,9 +1643,13 @@ export function createDesktopUiHarness(
 
   function runHarnessTask(taskId: string): TaskRunResult {
     const task = deployment.tasks.find((row) => row.taskId === taskId);
+    const behaviorId = deployment.behaviorReadiness.defaultBehaviorId;
+    if (!behaviorId) {
+      throw new Error("runtime readiness did not assign a default behavior");
+    }
     const { session, requestId } = createSessionFromPrompt(
       `Run task ${taskId}`,
-      deployment.defaultBehaviorId,
+      behaviorId,
       {
         taskId,
         taskName: task?.name ?? taskId,
@@ -1655,7 +1660,7 @@ export function createDesktopUiHarness(
       requestId,
       sessionId: session.sessionId,
       agentDid: deployment.agentDid,
-      behaviorId: deployment.defaultBehaviorId ?? DEFAULT_BEHAVIOR_ID,
+      behaviorId,
       status: "completed",
       lifecycleState: "completed",
     };
@@ -1918,6 +1923,19 @@ function createDeployment(): DeploymentView {
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
     dialSucceeded: true,
     pairingReady: true,
+    chatSafe: true,
+    behaviorReadiness: {
+      source: { state: "current" },
+      activeGeneration: 1,
+      routerGeneration: 1,
+      defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
+      updatedAt: STARTED_AT,
+      behaviors: [
+        { state: "ready", behaviorId: DEFAULT_BEHAVIOR_ID },
+        { state: "ready", behaviorId: "ops" },
+      ],
+    },
+    routes: [],
     pairing: [],
     lastError: null,
     defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
@@ -1937,8 +1955,6 @@ function createDeployment(): DeploymentView {
       updatedAt: THIRTY_DAYS_AGO,
       behaviorExecutorCapacity: 4,
       behaviorExecutorQueueDepth: 0,
-      runnableBehaviorCount: 2,
-      unavailableBehaviorCount: 0,
     },
     behaviors: [
       {

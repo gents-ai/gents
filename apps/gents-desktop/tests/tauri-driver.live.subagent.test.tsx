@@ -17,7 +17,8 @@ describeLive("Tauri app live subagent backgrounding", () => {
   it("spawns a configured local subagent and projects its lineage", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
       const defaultBehavior = deployment.behaviors.find(
-        (behavior) => behavior.isDefault,
+        (behavior) =>
+          behavior.behaviorId === deployment.behaviorReadiness.defaultBehaviorId,
       );
       const defaultTools = deployment.toolSelections.find(
         (selection) => selection.selectionId === defaultBehavior?.toolSelectionId,

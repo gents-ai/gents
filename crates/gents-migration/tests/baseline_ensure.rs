@@ -114,6 +114,31 @@ fn default_baseline_covers_every_protocol_collection_once() {
 }
 
 #[tokio::test]
+async fn fresh_agent_runtime_baseline_has_no_duplicate_readiness_counts() {
+    let node = fresh_node().await;
+    ensure_migrations(node.as_ref())
+        .await
+        .expect("ensure migrations");
+    let runtime = node
+        .get_collection(gents_protocol::schemas::AGENT_RUNTIME_NAME)
+        .expect("get AgentRuntime")
+        .expect("AgentRuntime installed");
+    assert_eq!(
+        runtime.version_id,
+        "bafyreidpwzqb72kwq4f7qi4jyvmvoe53ofklzyncvmx2pgiirjvg7powce"
+    );
+    let field_names = runtime
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(!field_names.contains("runnable_behavior_count"));
+    assert!(!field_names.contains("unavailable_behavior_count"));
+    assert!(field_names.contains("updated_at"));
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn ensure_migrations_registers_baseline_and_is_idempotent() {
     let node = fresh_node().await;
     let report1 = ensure_migrations(node.as_ref())

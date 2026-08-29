@@ -4,17 +4,19 @@ use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::row::{
-    AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
-    AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
-    MailboxItemRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    AgentBehaviorReadinessRow, AgentBehaviorRow, AgentConversationRow, AgentMessageRow,
+    AgentPrincipalRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow, AgentSessionRow,
+    AgentToolCallRow, AgentToolResultRow, CompactionEntryRow, EventTriggerRow, GoalRow,
+    InferenceBackendRow, InferenceProfileRow, MailboxItemRow, ScheduleRow, SkillRow, TaskRow,
+    ToolSelectionRow, ToolServiceRegistryRow,
 };
 use gents_protocol::schemas::{
-    AGENT_BEHAVIOR_NAME, AGENT_CONVERSATION_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
-    AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
-    AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME,
-    GOAL_NAME, INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, SCHEDULE_NAME,
-    SKILL_NAME, TASK_NAME, TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
+    AGENT_BEHAVIOR_NAME, AGENT_BEHAVIOR_READINESS_NAME, AGENT_CONVERSATION_NAME,
+    AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME, AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME,
+    AGENT_RUNTIME_NAME, AGENT_SESSION_NAME, AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME,
+    COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME, GOAL_NAME, INFERENCE_BACKEND_NAME,
+    INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, SCHEDULE_NAME, SKILL_NAME, TASK_NAME,
+    TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
 };
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -63,7 +65,8 @@ pub(super) struct TranscriptCursorRow {
 pub(super) const AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
 pub(super) const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
-pub(super) const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id runnable_behavior_count unavailable_behavior_count behavior_executor_capacity behavior_executor_queue_depth last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
+pub(super) const AGENT_RUNTIME_FIELDS: &str = "agent_did process_state reconcile_phase active_generation router_generation default_behavior_id behavior_executor_capacity behavior_executor_queue_depth last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
+pub(super) const AGENT_BEHAVIOR_READINESS_FIELDS: &str = "agent_did snapshot_json updated_at";
 pub(super) const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did requester_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
 pub(super) const AGENT_REQUEST_FIELDS: &str = "request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content temperature top_p top_k seed max_tokens max_total_tokens metadata status lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until workspace_id workspace_authority workspace_owner_deployment_id workspace_seal_hash";
 pub(super) const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did requester_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";

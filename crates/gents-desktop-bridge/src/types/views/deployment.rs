@@ -69,8 +69,87 @@ pub struct RuntimeView {
     pub updated_at: Option<String>,
     pub behavior_executor_capacity: Option<i64>,
     pub behavior_executor_queue_depth: Option<i64>,
-    pub runnable_behavior_count: Option<i64>,
-    pub unavailable_behavior_count: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BehaviorUnavailableReasonView {
+    BehaviorDisabled,
+    RuntimeConfigurationInvalid,
+    BackendNotConfigured,
+    BackendDisabled,
+    BackendTemporarilyUnavailable,
+    CredentialsRequired,
+    InferenceProfileInvalid,
+    ToolConfigurationInvalid,
+    ToolSurfaceUnavailable,
+    ExecutorStartFailed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BehaviorReadinessUnknownReasonView {
+    ReadinessMissing,
+    ReadinessMalformed,
+    ReadinessVersionUnsupported,
+    ProcessNotReady,
+    RouterGenerationStale,
+    BehaviorNotAssigned,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum BehaviorReadinessStatusView {
+    Ready {
+        behavior_id: String,
+    },
+    Unavailable {
+        behavior_id: String,
+        reason: BehaviorUnavailableReasonView,
+    },
+    Unknown {
+        behavior_id: String,
+        reason: BehaviorReadinessUnknownReasonView,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum BehaviorReadinessSourceView {
+    Current,
+    Unknown {
+        reason: BehaviorReadinessUnknownReasonView,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BehaviorReadinessView {
+    pub source: BehaviorReadinessSourceView,
+    pub active_generation: Option<u64>,
+    pub router_generation: Option<u64>,
+    pub default_behavior_id: Option<String>,
+    pub updated_at: Option<String>,
+    pub behaviors: Vec<BehaviorReadinessStatusView>,
+}
+
+impl Default for BehaviorReadinessView {
+    fn default() -> Self {
+        Self {
+            source: BehaviorReadinessSourceView::Unknown {
+                reason: BehaviorReadinessUnknownReasonView::ReadinessMissing,
+            },
+            active_generation: None,
+            router_generation: None,
+            default_behavior_id: None,
+            updated_at: None,
+            behaviors: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -416,6 +495,7 @@ pub struct DeploymentView {
     pub default_behavior_id: Option<String>,
     pub agent_principal: AgentPrincipalView,
     pub runtime: Option<RuntimeView>,
+    pub behavior_readiness: BehaviorReadinessView,
     pub behaviors: Vec<BehaviorView>,
     pub behavior_environments: Vec<BehaviorEnvironmentView>,
     pub inference_backends: Vec<InferenceBackendView>,

@@ -22,16 +22,7 @@ export type ChatTranscriptPanelProps = {
 export const TRANSCRIPT_PAGE_SIZE = 40;
 const TRANSCRIPT_RETAINED_ITEMS = TRANSCRIPT_PAGE_SIZE * 2;
 
-export function responseErrorSummary(error: string): string {
-  const unavailable = error.match(
-    /^behavior\s+\S+\s+backend\s+(.+?)\s+is unavailable\s+\(enabled=(?:true|false)\s+probe_status=([^\s)]+)\)$/i,
-  );
-  if (!unavailable) return "The assistant couldn't complete this turn.";
-  const [, backendId, probeStatus] = unavailable;
-  return probeStatus === "unknown"
-    ? `Backend “${backendId}” is not ready yet. Check its connection or choose another behavior.`
-    : `Backend “${backendId}” is unavailable (${probeStatus.replace(/_/g, " ")}).`;
-}
+const RESPONSE_ERROR_SUMMARY = "The assistant couldn't complete this turn.";
 
 function timelineChangeSignal(items: RenderedTimelineItem[]) {
   return JSON.stringify(
@@ -428,7 +419,7 @@ export function ChatTranscriptPanel({
               >
                 <div className="message-role">assistant error</div>
                 <div className="message-content">
-                  {responseErrorSummary(responseError)}
+                  {RESPONSE_ERROR_SUMMARY}
                 </div>
                 <details className="response-error-details">
                   <summary>Error details</summary>

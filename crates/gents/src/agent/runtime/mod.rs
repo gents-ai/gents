@@ -14,10 +14,7 @@ use control_watcher::{
     run_control_watcher, CONTROL_RECONCILE_DEBOUNCE, CONTROL_RECONCILE_SETTLE_RETRY,
 };
 #[cfg(test)]
-use router::{
-    resolve_behavior_for_request, run_router_generation_observer,
-    wait_for_next_request_with_latest_snapshot,
-};
+use router::{resolve_behavior_for_request, wait_for_next_request_with_latest_snapshot};
 #[cfg(test)]
 use std::collections::HashMap;
 #[cfg(test)]

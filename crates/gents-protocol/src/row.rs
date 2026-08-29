@@ -12,6 +12,17 @@ use std::fmt;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
+pub use crate::behavior_readiness::{
+    effective_behavior_readiness_admission, project_behavior_readiness,
+    project_behavior_readiness_source, project_behavior_readiness_summary,
+    AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
+    BehaviorReadinessProjection, BehaviorReadinessSnapshot, BehaviorReadinessSourceEntry,
+    BehaviorReadinessState, BehaviorReadinessSummary, BehaviorReadinessUnavailableReason,
+    BehaviorReadinessUnknownReason, EffectiveBehaviorReadinessAdmission,
+    ProjectedBehaviorReadiness, ProjectedBehaviorReadinessSummary,
+    BEHAVIOR_READINESS_FORMAT_VERSION,
+};
+
 fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
@@ -139,10 +150,6 @@ pub struct AgentRuntimeRow {
     pub router_generation: Option<i64>,
     #[serde(default)]
     pub default_behavior_id: Option<String>,
-    #[serde(default)]
-    pub runnable_behavior_count: Option<i64>,
-    #[serde(default)]
-    pub unavailable_behavior_count: Option<i64>,
     #[serde(default)]
     pub behavior_executor_capacity: Option<i64>,
     #[serde(default)]

@@ -56,7 +56,8 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     approval_required_tools: Arc<Vec<String>>,
     output_obligations: Arc<Vec<(String, crate::document_config::WriteToolOutputObligation)>>,
     startup_barrier: Arc<StartupBarrier>,
-    startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
+    runtime_status: crate::runtime_status::RuntimeStatusHandle,
+    slot_generation: u64,
     operator_tool_root: Option<PathBuf>,
 }
 
@@ -81,7 +82,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         background_tool_registry: crate::hook::BackgroundToolRegistry,
         background_execution_registry: crate::hook::BackgroundExecutionRegistry,
         startup_barrier: Arc<StartupBarrier>,
-        startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
+        runtime_status: crate::runtime_status::RuntimeStatusHandle,
+        slot_generation: u64,
     ) -> Self {
         let stream_writer = DefraStreamWriter::new(
             node.clone(),
@@ -119,7 +121,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             approval_required_tools: Arc::new(Vec::new()),
             output_obligations: Arc::new(Vec::new()),
             startup_barrier,
-            startup_demotions,
+            runtime_status,
+            slot_generation,
             operator_tool_root: None,
         }
     }
@@ -178,13 +181,16 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             "gents behavior started"
         );
 
-        self.startup_barrier
-            .mark_behavior_ready(&self.behavior.behavior_id)
-            .await;
-        // A successful start supersedes any demotion that raced it: the
-        // behavior is serving, so the ledger entry (which would make the
-        // router reject its requests) must not survive.
-        self.startup_demotions.clear(&self.behavior.behavior_id);
+        if self
+            .runtime_status
+            .readiness()
+            .mark_slot_ready(&self.behavior.behavior_id, self.slot_generation)
+            .await?
+        {
+            self.startup_barrier
+                .mark_behavior_ready(&self.behavior.behavior_id, self.slot_generation)
+                .await;
+        }
         tracing::info!(
             behavior_id = %self.behavior.behavior_id,
             did = %self.behavior.agent_did(),

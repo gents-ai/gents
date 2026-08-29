@@ -83,6 +83,8 @@ def snapshotJson : String :=
       ++ startupReadinessCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
+    ++ "\"client_behavior_readiness_cases\":"
+      ++ jsonArray (clientBehaviorReadinessCases.map clientBehaviorReadinessCaseJson) ++ ","
     ++ "\"apply_reconcile_cases\":"
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"tool_policy_cases\":"

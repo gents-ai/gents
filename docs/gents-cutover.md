@@ -8,6 +8,13 @@ automatic migrations, dual-read paths, or compatibility shims.
 DefraDB and `defradb.rs` keep their names. Domain vocabulary such as agent,
 principal, behavior, deployment, and request also remains unchanged.
 
+The behavior-readiness cut is also fresh-state only. The canonical
+`AgentRuntime` baseline no longer stores runnable/unavailable behavior counts;
+`AgentBehaviorReadiness` is the sole durable authority. Any pre-cut v0.14
+server database and desktop/phone state must be wiped and re-created together.
+The runtime deliberately does not upgrade or dual-read the old AgentRuntime
+version.
+
 ## Locked mapping
 
 | Before the cutover | Gents |

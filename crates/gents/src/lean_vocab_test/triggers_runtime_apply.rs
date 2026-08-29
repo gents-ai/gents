@@ -77,6 +77,23 @@ pub(crate) struct LeanRuntimeReconcileCase {
     pub(crate) tracked_session_behavior: usize,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanClientBehaviorReadinessCase {
+    pub(crate) name: String,
+    pub(crate) observation_present: bool,
+    pub(crate) observation_kind: String,
+    pub(crate) process_state: String,
+    pub(crate) active_generation: u64,
+    pub(crate) router_generation: u64,
+    pub(crate) runnable: bool,
+    pub(crate) unavailable: bool,
+    pub(crate) startup_demoted: bool,
+    pub(crate) runtime_unavailable_reason: String,
+    pub(crate) expected_state: String,
+    pub(crate) expected_reason: Option<String>,
+    pub(crate) expected_runtime_admissible: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanApplyDocRef {
     pub(crate) collection: String,

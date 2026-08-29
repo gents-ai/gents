@@ -1,6 +1,5 @@
 //! Bridge contract fingerprint: command inventory, permission sets, events,
-//! error codes, and version. Phase 2 wires the snapshot; phase 3 enforces
-//! permission projection and typed errors against it.
+//! error codes, generated wire schema, and version.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -8,6 +7,8 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 3.0: breaking — runtime-authored behavior readiness is required on every
+//       deployment and duplicate AgentRuntime readiness counters are removed.
 // 2.0: breaking — global sync health no longer embeds selected-session
 //       hydration; hydration wakes use the existing store reason.
 // 1.6: additive — explicit session hydration retry command.
@@ -27,7 +28,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "2.0";
+pub const CONTRACT_VERSION: &str = "3.0";
+
+/// Exact digest of the committed generated TypeScript wire tree. The client
+/// checks this in addition to semantic versioning, so a DTO shape change
+/// cannot silently ship under an unchanged contract version.
+pub const WIRE_SCHEMA_HASH: &str =
+    "069c6ec496e69096c001ac9a73e4745a4488493a00d26f949d08da35001832b1";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -37,6 +44,7 @@ pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct BridgeContract {
     pub contract_version: String,
     pub package_version: String,
+    pub wire_schema_hash: String,
     pub events: Vec<String>,
     pub event_reasons: Vec<String>,
     pub error_codes: Vec<String>,
@@ -245,6 +253,7 @@ pub fn current_contract() -> BridgeContract {
     BridgeContract {
         contract_version: CONTRACT_VERSION.to_string(),
         package_version: PACKAGE_VERSION.to_string(),
+        wire_schema_hash: WIRE_SCHEMA_HASH.to_string(),
         events: vec![
             CLIENT_UPDATED_EVENT.to_string(),
             CODEX_LOGIN_URL_EVENT.to_string(),
@@ -295,6 +304,34 @@ mod tests {
     use serde::Deserialize;
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
+
+    fn generated_wire_schema_hash() -> String {
+        let generated = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/gents-desktop-client/src/generated");
+        let mut paths = std::fs::read_dir(&generated)
+            .expect("read generated wire bindings")
+            .map(|entry| entry.expect("generated binding entry").path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("ts"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        let mut hasher = blake3::Hasher::new();
+        for path in paths {
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .expect("generated binding filename");
+            hasher.update(name.as_bytes());
+            hasher.update(&[0]);
+            hasher.update(&std::fs::read(&path).expect("read generated binding"));
+            hasher.update(&[0]);
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
+    #[test]
+    fn wire_schema_hash_matches_generated_bindings() {
+        assert_eq!(WIRE_SCHEMA_HASH, generated_wire_schema_hash());
+    }
 
     #[derive(Debug, Deserialize)]
     struct PermissionSetFile {

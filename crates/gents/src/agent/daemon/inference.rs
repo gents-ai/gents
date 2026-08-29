@@ -1177,6 +1177,10 @@ mod tests {
         );
         let preamble = prompt_builder.preamble().to_string();
         let loop_tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(Vec::new());
+        let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            behavior.agent_did().to_string(),
+        );
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior,
@@ -1189,7 +1193,8 @@ mod tests {
             BackgroundToolRegistry::default(),
             BackgroundExecutionRegistry::default(),
             Arc::new(StartupBarrier::ready_for_test()),
-            Arc::new(crate::startup_readiness::StartupDemotions::new()),
+            runtime_status,
+            1,
         );
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 

@@ -123,7 +123,9 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     },
     newConversation: () => {
       const behaviorId =
-        shell.selectedBehaviorId ?? shell.behaviorOptions[0]?.behaviorId ?? null;
+        shell.selectedBehaviorId ??
+        shell.selectedDeployment?.behaviorReadiness.defaultBehaviorId ??
+        null;
       if (behaviorId) {
         requestWorkspaceNavigation(() => {
           setWorkspaceView("chat");
@@ -343,9 +345,9 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                   shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
                 }
                 retryUnavailableHint={
-                  shell.sendStatus.kind === "disabled" &&
-                  shell.sendStatus.reason === "behaviorUnavailable"
-                    ? shell.sendStatus.hint
+                  shell.retryStatus.kind === "disabled" &&
+                  shell.retryStatus.reason === "behaviorUnavailable"
+                    ? shell.retryStatus.hint
                     : null
                 }
                 selectedBehaviorId={shell.selectedBehaviorId}

@@ -121,8 +121,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     let selection_rows = tool_selection_rows(&bundle)?;
     let surface_rows = datastore_tool_surface_rows(&bundle)?;
     let eth_tool_rows = eth_tool_rows(&bundle)?;
-    let mut unavailable_behaviors =
-        crate::commands::status::collect_unavailable_behaviors_from_bundle(&bundle);
+    let mut configuration_issues = BTreeMap::new();
     let mut behaviors = Vec::new();
 
     for row in &bundle.agent_behaviors {
@@ -135,7 +134,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         }
 
         if !behavior.enabled {
-            unavailable_behaviors
+            configuration_issues
                 .entry(behavior.behavior_id.clone())
                 .or_insert_with(|| "behavior is disabled".to_string());
         }
@@ -161,7 +160,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                     .with_context(|| format!("decoding ToolSelection {selection_id}")),
                 ),
                 None => {
-                    unavailable_behaviors
+                    configuration_issues
                         .entry(behavior.behavior_id.clone())
                         .or_insert_with(|| {
                             format!("referenced ToolSelection {selection_id} is missing")
@@ -183,7 +182,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         let config = match config_result {
             Ok(config) => config,
             Err(error) => {
-                unavailable_behaviors
+                configuration_issues
                     .entry(behavior.behavior_id.clone())
                     .or_insert_with(|| error.to_string());
                 continue;
@@ -217,7 +216,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             row.get("behavior_id")
                 .and_then(Value::as_str)
                 .is_some_and(|value| value == only_behavior_id)
-        }) || unavailable_behaviors.contains_key(only_behavior_id);
+        }) || configuration_issues.contains_key(only_behavior_id);
         if !found {
             anyhow::bail!("behavior {only_behavior_id} was not found for agent {agent_did}");
         }
@@ -239,7 +238,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             "active_behavior_ids": active_behavior_ids.iter().cloned().collect::<Vec<_>>(),
         },
         "behaviors": behaviors,
-        "unavailable_behaviors": unavailable_behaviors,
+        "configuration_issues": configuration_issues,
         "operator_surfaces": {
             "included_in_model_tool_surface": false,
             "note": "Server HTTP routes and optional external /mcp are binary/operator surfaces; they are not included in per-behavior model-callable tool_names."

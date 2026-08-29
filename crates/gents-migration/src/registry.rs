@@ -349,7 +349,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_RUNTIME_NAME,
         gents_protocol::schemas::AGENT_RUNTIME,
-        "bafyreig2kkghd2y4fwjjzomtsp753nby752xon7rx4jt3efl4xflhm6wgy"
+        "bafyreidpwzqb72kwq4f7qi4jyvmvoe53ofklzyncvmx2pgiirjvg7powce"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_BEHAVIOR_READINESS_NAME,
+        gents_protocol::schemas::AGENT_BEHAVIOR_READINESS,
+        "bafyreiacvnnbi2vgx5py54oaqmbc3c4bep5nj26urw3zazxkowkncbmbym"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,

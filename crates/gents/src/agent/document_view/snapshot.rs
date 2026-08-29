@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::row::BehaviorReadinessUnavailableReason;
 use serde::Deserialize;
 
 use crate::admission::backend_admission_configs_from_backends;
@@ -12,7 +13,8 @@ use crate::document_config::{
 };
 use crate::runtime_snapshot::{
     ConcurrencyMode, EventTriggerFireMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
-    ResolvedSchedule, ResolvedTask, ScheduleCadence, MAX_EVENT_TRIGGER_GROUP_DOCS,
+    ResolvedSchedule, ResolvedTask, ScheduleCadence, UnavailableBehavior,
+    MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
 use crate::schedule_cron::{validate_cron_schedule, CronMissedRunPolicy};
 use crate::tool_surface::ToolSelection;
@@ -26,6 +28,17 @@ use crate::agent::{
 };
 use crate::identity::AgentPrincipal;
 use crate::tool_surface::SubagentToolConfig;
+
+struct BehaviorResolutionError {
+    code: BehaviorReadinessUnavailableReason,
+    detail: anyhow::Error,
+}
+
+impl BehaviorResolutionError {
+    fn new(code: BehaviorReadinessUnavailableReason, detail: anyhow::Error) -> Self {
+        Self { code, detail }
+    }
+}
 
 pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     node: &EmbeddedNode,
@@ -68,90 +81,121 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         >,
     > = Vec::new();
 
-    let all_skills: Vec<crate::skills::Skill> = view
-        .skills
-        .values()
-        .map(|record| skill_from_document(&record.value))
-        .collect();
+    let all_skills = sorted_skills(view);
 
     for behavior_record in view.behaviors.values() {
         let behavior = &behavior_record.value;
         if !behavior.enabled {
             unavailable_behaviors.insert(
                 behavior.behavior_id.clone(),
-                format!("behavior {} is disabled", behavior.behavior_id),
+                UnavailableBehavior::new(
+                    BehaviorReadinessUnavailableReason::BehaviorDisabled,
+                    format!("behavior {} is disabled", behavior.behavior_id),
+                ),
             );
             continue;
         }
 
-        let resolved_result: Result<_, anyhow::Error> = (|| {
+        let resolved_result: std::result::Result<_, BehaviorResolutionError> = (|| {
             let backend_id = behavior
                 .backend_id
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| {
-                    anyhow!("behavior {} has no backend binding", behavior.behavior_id)
+                    BehaviorResolutionError::new(
+                        BehaviorReadinessUnavailableReason::BackendNotConfigured,
+                        anyhow!("behavior {} has no backend binding", behavior.behavior_id),
+                    )
                 })?;
             let backend = view
                 .backends
                 .get(backend_id)
                 .map(|record| record.value.clone())
                 .ok_or_else(|| {
-                    anyhow!(
-                        "behavior {} references missing backend {}",
-                        behavior.behavior_id,
-                        backend_id
+                    BehaviorResolutionError::new(
+                        BehaviorReadinessUnavailableReason::BackendNotConfigured,
+                        anyhow!(
+                            "behavior {} references missing backend {}",
+                            behavior.behavior_id,
+                            backend_id
+                        ),
                     )
                 })?;
+            if !backend.enabled {
+                return Err(BehaviorResolutionError::new(
+                    BehaviorReadinessUnavailableReason::BackendDisabled,
+                    anyhow!(
+                        "behavior {} backend {} is unavailable (enabled={} probe_status={})",
+                        behavior.behavior_id,
+                        backend.backend_id,
+                        backend.enabled,
+                        backend.probe_status
+                    ),
+                ));
+            }
             if !backend.is_available() {
-                anyhow::bail!(
-                    "behavior {} backend {} is unavailable (enabled={} probe_status={})",
-                    behavior.behavior_id,
-                    backend.backend_id,
-                    backend.enabled,
-                    backend.probe_status
-                );
+                return Err(BehaviorResolutionError::new(
+                    BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
+                    anyhow!(
+                        "behavior {} backend {} is not ready (probe_status={})",
+                        behavior.behavior_id,
+                        backend.backend_id,
+                        backend.probe_status
+                    ),
+                ));
             }
             if measured_vetoed.contains(&backend.backend_id) {
-                anyhow::bail!(
-                    "behavior {} backend {} is measured unhealthy by the local prober \
-                     (document probe_status={} is operator intent; routing resumes on \
-                     the next successful probe)",
-                    behavior.behavior_id,
-                    backend.backend_id,
-                    backend.probe_status
-                );
+                return Err(BehaviorResolutionError::new(
+                    BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
+                    anyhow!(
+                        "behavior {} backend {} is measured unhealthy by the local prober \
+                         (document probe_status={} is operator intent; routing resumes on \
+                         the next successful probe)",
+                        behavior.behavior_id,
+                        backend.backend_id,
+                        backend.probe_status
+                    ),
+                ));
             }
             if backend.provider_kind == crate::backend_provider::BackendProviderKind::ChatGptCodex
                 && !view.has_enabled_oauth_credential(crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER)
             {
                 let agent_did = view.principal.value.agent_did.as_str();
-                anyhow::bail!(
-                    "behavior {} ChatGptCodex backend {} has no enabled OAuthCredential for agent \
-                     {agent_did}; run `gents codex-login --agent-did {agent_did}`",
-                    behavior.behavior_id,
-                    backend.backend_id,
-                );
+                return Err(BehaviorResolutionError::new(
+                    BehaviorReadinessUnavailableReason::CredentialsRequired,
+                    anyhow!(
+                        "behavior {} ChatGptCodex backend {} has no enabled OAuthCredential for agent \
+                         {agent_did}; run `gents codex-login --agent-did {agent_did}`",
+                        behavior.behavior_id,
+                        backend.backend_id,
+                    ),
+                ));
             }
             if backend.provider_kind == crate::backend_provider::BackendProviderKind::XaiGrokOAuth
                 && !view.has_enabled_oauth_credential(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER)
             {
                 let agent_did = view.principal.value.agent_did.as_str();
-                anyhow::bail!(
-                    "behavior {} XaiGrokOAuth backend {} has no enabled OAuthCredential for agent \
-                     {agent_did}; run `gents grok-login --agent-did {agent_did}`",
-                    behavior.behavior_id,
-                    backend.backend_id,
-                );
+                return Err(BehaviorResolutionError::new(
+                    BehaviorReadinessUnavailableReason::CredentialsRequired,
+                    anyhow!(
+                        "behavior {} XaiGrokOAuth backend {} has no enabled OAuthCredential for agent \
+                         {agent_did}; run `gents grok-login --agent-did {agent_did}`",
+                        behavior.behavior_id,
+                        backend.backend_id,
+                    ),
+                ));
             }
             let profile_id = behavior
                 .inference_profile_id
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
                 .ok_or_else(|| {
-                    anyhow!(
-                        "behavior {} has no inference profile binding",
-                        behavior.behavior_id
+                    BehaviorResolutionError::new(
+                        BehaviorReadinessUnavailableReason::InferenceProfileInvalid,
+                        anyhow!(
+                            "behavior {} has no inference profile binding",
+                            behavior.behavior_id
+                        ),
                     )
                 })?;
             let inference_profile = view
@@ -159,10 +203,13 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 .get(profile_id)
                 .map(|record| record.value.clone())
                 .ok_or_else(|| {
-                    anyhow!(
-                        "behavior {} references missing inference profile {}",
-                        behavior.behavior_id,
-                        profile_id
+                    BehaviorResolutionError::new(
+                        BehaviorReadinessUnavailableReason::InferenceProfileInvalid,
+                        anyhow!(
+                            "behavior {} references missing inference profile {}",
+                            behavior.behavior_id,
+                            profile_id
+                        ),
                     )
                 })?;
             let (tool_selection, subagent_tools) = match behavior
@@ -174,11 +221,33 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     Some(record) => {
                         let mut selection = record.value.clone();
                         let merged =
-                            crate::agent::document_view::merge_surface_tools(&record.value, view)?;
+                            crate::agent::document_view::merge_surface_tools(&record.value, view)
+                                .map_err(|error| {
+                                BehaviorResolutionError::new(
+                                    BehaviorReadinessUnavailableReason::ToolConfigurationInvalid,
+                                    error,
+                                )
+                            })?;
                         selection.write_tools = Some(merged.write_tools);
-                        selection.validate()?;
-                        validate_subagent_targets_resolve(&selection, view)?;
-                        let mut tool_selection = tool_selection_from_document(&selection)?;
+                        selection.validate().map_err(|error| {
+                            BehaviorResolutionError::new(
+                                BehaviorReadinessUnavailableReason::ToolConfigurationInvalid,
+                                error,
+                            )
+                        })?;
+                        validate_subagent_targets_resolve(&selection, view).map_err(|error| {
+                            BehaviorResolutionError::new(
+                                BehaviorReadinessUnavailableReason::ToolConfigurationInvalid,
+                                error,
+                            )
+                        })?;
+                        let mut tool_selection =
+                            tool_selection_from_document(&selection).map_err(|error| {
+                                BehaviorResolutionError::new(
+                                    BehaviorReadinessUnavailableReason::ToolConfigurationInvalid,
+                                    error,
+                                )
+                            })?;
                         tool_selection.query_tools = merged.query_tools;
                         let expanded =
                             crate::agent::document_view::expand_eth_tools(&record.value, view)?;
@@ -189,11 +258,16 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                             subagent_tool_config_from_document(&selection),
                         )
                     }
-                    None => anyhow::bail!(
-                        "behavior {} references missing tool selection {}",
-                        behavior.behavior_id,
-                        selection_id
-                    ),
+                    None => {
+                        return Err(BehaviorResolutionError::new(
+                            BehaviorReadinessUnavailableReason::ToolConfigurationInvalid,
+                            anyhow!(
+                                "behavior {} references missing tool selection {}",
+                                behavior.behavior_id,
+                                selection_id
+                            ),
+                        ));
+                    }
                 },
                 None => (ToolSelection::default(), SubagentToolConfig::default()),
             };
@@ -239,7 +313,10 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 behavior_factories.push(factory);
             }
             Err(error) => {
-                unavailable_behaviors.insert(behavior.behavior_id.clone(), error.to_string());
+                unavailable_behaviors.insert(
+                    behavior.behavior_id.clone(),
+                    UnavailableBehavior::new(error.code, error.detail.to_string()),
+                );
             }
         }
     }
@@ -252,7 +329,13 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         match result {
             Ok(behavior_arc) => behaviors.push(behavior_arc),
             Err(BehaviorBuildError { behavior_id, error }) => {
-                unavailable_behaviors.insert(behavior_id, error.to_string());
+                unavailable_behaviors.insert(
+                    behavior_id,
+                    UnavailableBehavior::new(
+                        BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                        error.to_string(),
+                    ),
+                );
             }
         }
     }
@@ -271,7 +354,13 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         {
             Ok(tool_surface) => behavior_surfaces.push((behavior, tool_surface)),
             Err(error) => {
-                unavailable_behaviors.insert(behavior.behavior_id.clone(), error.to_string());
+                unavailable_behaviors.insert(
+                    behavior.behavior_id.clone(),
+                    UnavailableBehavior::new(
+                        BehaviorReadinessUnavailableReason::ToolSurfaceUnavailable,
+                        error.to_string(),
+                    ),
+                );
             }
         }
     }
@@ -373,7 +462,7 @@ async fn load_paired_peer_dids(node: &EmbeddedNode, local_did: &str) -> Result<H
 
 fn resolve_tasks(
     view: &DocumentRuntimeView,
-    unavailable_behaviors: &HashMap<String, String>,
+    unavailable_behaviors: &HashMap<String, UnavailableBehavior>,
 ) -> HashMap<String, ResolvedTask> {
     let mut active_tasks = HashMap::new();
 
@@ -415,7 +504,7 @@ fn resolve_tasks(
 
 fn resolve_schedules(
     view: &DocumentRuntimeView,
-    unavailable_behaviors: &HashMap<String, String>,
+    unavailable_behaviors: &HashMap<String, UnavailableBehavior>,
 ) -> (HashMap<String, ResolvedSchedule>, HashSet<String>) {
     let mut active_schedules = HashMap::new();
     let mut unavailable_schedules = HashSet::new();
@@ -549,7 +638,7 @@ fn resolve_schedule_cadence(
 
 fn resolve_event_triggers(
     view: &DocumentRuntimeView,
-    unavailable_behaviors: &HashMap<String, String>,
+    unavailable_behaviors: &HashMap<String, UnavailableBehavior>,
 ) -> (HashMap<String, ResolvedEventTrigger>, HashSet<String>) {
     let mut active_event_triggers = HashMap::new();
     let mut unavailable_event_triggers = HashSet::new();
@@ -837,6 +926,20 @@ fn task_template_references_group(template: &str) -> bool {
         refs.iter()
             .any(|reference| reference.root() == Some("group"))
     })
+}
+
+// The runtime configuration fingerprint is compared across independently
+// resolved views. Every collection map is keyed/sorted by the projector;
+// skills are the one value vector embedded in AgentBehavior's Debug value, so
+// canonicalize it before both prompt construction and fingerprinting.
+pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::skills::Skill> {
+    let mut skills = view
+        .skills
+        .values()
+        .map(|record| skill_from_document(&record.value))
+        .collect::<Vec<_>>();
+    skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
+    skills
 }
 
 fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::skills::Skill {

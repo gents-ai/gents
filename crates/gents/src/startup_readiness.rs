@@ -10,15 +10,12 @@
 //! silently disabled.
 //!
 //! Build attempts now consume a budget. Exhausting it **demotes** the behavior:
-//! released from the barrier, never claimed healthy, its build error recorded
-//! in the [`StartupDemotions`] ledger where the router, runtime status, and
-//! `/healthz` can see it. The model is
+//! released from the barrier, never claimed healthy, and durably recorded by
+//! the runtime behavior-readiness publisher used by admission and clients. The model is
 //! `proofs/Proofs/RuntimeReconcile/StartupReadiness.lean`; the emitted case
 //! table is fenced by
 //! `conformance::generated_startup_readiness_cases_pin_bounded_barrier_release`.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::Duration;
 
 /// Observes failed startup behavior-build attempts.
@@ -89,49 +86,5 @@ impl BuildStanding {
             }
             (standing, _) => standing,
         }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct StartupDemotions {
-    inner: Mutex<HashMap<String, String>>,
-}
-
-impl StartupDemotions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn record(&self, behavior_id: &str, reason: impl Into<String>) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.insert(behavior_id.to_string(), reason.into());
-        }
-    }
-
-    pub fn reason(&self, behavior_id: &str) -> Option<String> {
-        self.inner
-            .lock()
-            .ok()
-            .and_then(|inner| inner.get(behavior_id).cloned())
-    }
-
-    pub fn clear(&self, behavior_id: &str) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.remove(behavior_id);
-        }
-    }
-
-    pub fn snapshot(&self) -> HashMap<String, String> {
-        self.inner
-            .lock()
-            .map(|inner| inner.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner
-            .lock()
-            .map(|inner| inner.is_empty())
-            .unwrap_or(true)
     }
 }

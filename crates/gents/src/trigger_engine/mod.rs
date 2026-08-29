@@ -311,7 +311,7 @@ impl TriggerEngine {
                 .map(|behavior| behavior.agent_did().to_string())
                 .ok_or_else(|| {
                     snapshot
-                        .unavailable_reason(&intent.task.behavior_id)
+                        .unavailable_public_message(&intent.task.behavior_id)
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| {
                             format!("behavior {} is not loaded", intent.task.behavior_id)

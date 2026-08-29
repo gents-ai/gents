@@ -31,7 +31,12 @@ impl ProcessLifecycleObserver for RuntimeEventObserver {
 }
 
 impl RuntimeSnapshotObserver for RuntimeEventObserver {
-    fn on_generation_published(&self, generation: u64, _runnable_behavior_ids: &[String]) {
+    fn on_generation_published(
+        &self,
+        generation: u64,
+        _configuration_fingerprint: &str,
+        _runnable_behavior_ids: &[String],
+    ) {
         self.generation_tx.send_replace(generation);
     }
 }

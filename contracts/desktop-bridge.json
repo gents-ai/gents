@@ -289,7 +289,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "2.0",
+  "contractVersion": "3.0",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -423,5 +423,6 @@
       "kind": "bundle",
       "name": "full"
     }
-  ]
+  ],
+  "wireSchemaHash": "069c6ec496e69096c001ac9a73e4745a4488493a00d26f949d08da35001832b1"
 }

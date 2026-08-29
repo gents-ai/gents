@@ -145,6 +145,12 @@ impl ClientStore {
             .map(|index| &self.runtimes[*index])
     }
 
+    pub fn behavior_readiness(&self, agent_did: &str) -> Option<&AgentBehaviorReadinessRow> {
+        self.behavior_readiness_by_agent_did
+            .get(agent_did)
+            .map(|index| &self.behavior_readiness[*index])
+    }
+
     pub fn latest_response_for_request(&self, request_id: &str) -> Option<&AgentResponseRow> {
         self.latest_response_by_request_id
             .get(request_id)
@@ -199,6 +205,7 @@ impl ClientStore {
         self.agent_principals.len()
             + self.behaviors.len()
             + self.runtimes.len()
+            + self.behavior_readiness.len()
             + self.conversations.len()
             + self.requests.len()
             + self.mailbox_items.len()

@@ -134,6 +134,10 @@ impl ClientStore {
         for (index, row) in rows.runtimes.iter().enumerate() {
             runtimes_by_agent_did.insert(row.agent_did.clone(), index);
         }
+        let mut behavior_readiness_by_agent_did = HashMap::new();
+        for (index, row) in rows.behavior_readiness.iter().enumerate() {
+            behavior_readiness_by_agent_did.insert(row.agent_did.clone(), index);
+        }
 
         let mut latest_response_by_request_id = HashMap::new();
         let mut response_index_by_key = HashMap::new();
@@ -170,6 +174,7 @@ impl ClientStore {
             agent_principals: rows.agent_principals,
             behaviors: rows.behaviors,
             runtimes: rows.runtimes,
+            behavior_readiness: rows.behavior_readiness,
             conversations: rows.conversations,
             requests: rows.requests,
             mailbox_items: rows.mailbox_items,
@@ -206,6 +211,7 @@ impl ClientStore {
             tool_calls_by_session_id,
             tool_results_by_session_id,
             runtimes_by_agent_did,
+            behavior_readiness_by_agent_did,
             latest_response_by_request_id,
             response_index_by_key,
             request_index_by_id,

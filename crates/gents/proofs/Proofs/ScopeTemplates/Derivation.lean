@@ -127,7 +127,12 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
     , { collection := "SessionHydrationRequest"
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
-          , { field := "agent_did", value := ownerDid } ] } ]
+          , { field := "agent_did", value := ownerDid } ] } ] ++
+    match direction with
+    | .clientToRuntime => []
+    | .runtimeToClient =>
+        [ { collection := "AgentBehaviorReadiness"
+          , clauses := [ { field := "agent_did", value := ownerDid } ] } ]
 
 def directionalScopeFilters (template : Template) (direction : RouteDirection)
     (requesterDid ownerDid : Did) : List CollectionPredicate :=
@@ -292,18 +297,31 @@ theorem client_transcript_rejects_another_destination
       { requesterDid := requesterDid, agentDid := otherDid } = false := by
   simp [clientTranscriptMatches, different]
 
-theorem client_filters_cover_exact_outbound_projection
+theorem client_filters_cover_exact_directional_projection
     (direction : RouteDirection) (requesterDid ownerDid : Did) :
     (clientRouteFilters direction requesterDid ownerDid).map
-        (fun predicate => predicate.collection) = clientToRuntimeCollections := by
+        (fun predicate => predicate.collection) =
+      match direction with
+      | .clientToRuntime => clientToRuntimeCollections
+      | .runtimeToClient => clientToRuntimeCollections ++ clientOwnerProjectionCollections := by
   cases direction <;>
     simp [clientRouteFilters, clientTranscriptPredicates,
-      clientTranscriptCollections, clientToRuntimeCollections]
+      clientTranscriptCollections, clientToRuntimeCollections,
+      clientOwnerProjectionCollections]
 
 theorem client_return_adds_exact_bounded_control_plane :
     clientRouteCollections .runtimeToClient =
-      clientToRuntimeCollections ++ clientControlPlaneCollections := by
-  rfl
+      clientToRuntimeCollections ++ clientControlPlaneCollections ++
+        clientOwnerProjectionCollections := by rfl
+
+theorem client_readiness_return_is_owner_scoped
+    (requesterDid ownerDid : Did) :
+    (clientRouteFilters .runtimeToClient requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "AgentBehaviorReadiness") =
+      some
+        { collection := "AgentBehaviorReadiness"
+        , clauses := [ { field := "agent_did", value := ownerDid } ] } := by
+  simp [clientRouteFilters, clientTranscriptPredicates, clientTranscriptCollections]
 
 theorem client_return_control_plane_is_unfiltered
     (requesterDid ownerDid : Did) :

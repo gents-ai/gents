@@ -56,6 +56,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) desktop_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
+    pub(crate) client_behavior_readiness_cases: Vec<LeanClientBehaviorReadinessCase>,
     #[serde(default)]
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
@@ -595,6 +596,10 @@ pub(crate) fn lean_startup_readiness_cases() -> &'static [LeanStartupReadinessCa
 
 pub(crate) fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCase] {
     &lean_contract_snapshot().runtime_reconcile_cases
+}
+
+pub(crate) fn lean_client_behavior_readiness_cases() -> &'static [LeanClientBehaviorReadinessCase] {
+    &lean_contract_snapshot().client_behavior_readiness_cases
 }
 
 pub(crate) fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileCase {

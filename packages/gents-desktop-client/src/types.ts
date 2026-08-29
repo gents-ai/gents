@@ -11,6 +11,11 @@ export type {
 export type {
   AgentPrincipalView,
   BehaviorEnvironmentView,
+  BehaviorReadinessSourceView,
+  BehaviorReadinessStatusView,
+  BehaviorReadinessUnknownReasonView,
+  BehaviorReadinessView,
+  BehaviorUnavailableReasonView,
   BehaviorView,
   ConversationSummary,
   DeploymentView,

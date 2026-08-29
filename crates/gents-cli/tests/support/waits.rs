@@ -19,8 +19,8 @@ pub async fn wait_for_runtime_ready(
             graphql,
             &format!(
                 r#"{{
-                    AgentRuntime(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
-                        process_state
+                    AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
+                        snapshot_json
                     }}
                 }}"#,
                 escape_graphql_string(agent_did),
@@ -29,8 +29,22 @@ pub async fn wait_for_runtime_ready(
         .await;
         match response {
             Ok(response) => {
-                if let Ok(row) = first_graphql_row(&response, "AgentRuntime") {
-                    if row.get("process_state").and_then(Value::as_str) == Some("ready") {
+                if let Ok(row) = first_graphql_row(&response, "AgentBehaviorReadiness") {
+                    let snapshot = row
+                        .get("snapshot_json")
+                        .and_then(Value::as_str)
+                        .and_then(|snapshot| serde_json::from_str::<Value>(snapshot).ok());
+                    if snapshot.as_ref().is_some_and(|snapshot| {
+                        snapshot.get("process_state").and_then(Value::as_str) == Some("ready")
+                            && snapshot
+                                .get("active_generation")
+                                .and_then(Value::as_u64)
+                                .is_some_and(|generation| {
+                                    generation > 0
+                                        && snapshot.get("router_generation").and_then(Value::as_u64)
+                                            == Some(generation)
+                                })
+                    }) {
                         return Ok(());
                     }
                 }
@@ -40,7 +54,7 @@ pub async fn wait_for_runtime_ready(
         }
 
         if Instant::now() >= deadline {
-            bail!("timed out waiting for AgentRuntime ready state for {agent_did}");
+            bail!("timed out waiting for authoritative runtime readiness for {agent_did}");
         }
 
         tokio::time::sleep(Duration::from_millis(100)).await;
