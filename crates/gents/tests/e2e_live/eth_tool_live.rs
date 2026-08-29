@@ -1,6 +1,9 @@
 //! Live EthTool qualification: GLM-5.3-Flash uses `{tool_id}_query` against
 //! Base Sepolia (live chain data, live inference).
 //!
+//! Write coverage lives in `eth_tool_write_live.rs` (local Hardhat/Anvil,
+//! provisioned key, native transfer + declared contract write).
+//!
 //! ```bash
 //! GENTS_ETH_LIVE=1 cargo test -p gents --features live-e2e --test e2e_live \
 //!   eth_tool_live_model_queries_base_sepolia \
@@ -35,15 +38,15 @@ const DEFAULT_MODEL: &str = "GLM-5.3-Flash-NVFP4";
 const DEFAULT_RPC: &str = "https://sepolia.base.org";
 const DEFAULT_CHAIN_ID: i64 = 84532;
 
-fn live_enabled() -> bool {
+pub(crate) fn live_enabled() -> bool {
     std::env::var("GENTS_ETH_LIVE").as_deref() == Ok("1")
 }
 
-fn live_endpoint() -> String {
+pub(crate) fn live_endpoint() -> String {
     std::env::var("GENTS_ETH_LIVE_ENDPOINT").unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string())
 }
 
-fn live_model() -> String {
+pub(crate) fn live_model() -> String {
     std::env::var("GENTS_ETH_LIVE_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string())
 }
 
@@ -58,7 +61,7 @@ fn live_chain_id() -> i64 {
         .unwrap_or(DEFAULT_CHAIN_ID)
 }
 
-async fn assert_endpoint_reachable(endpoint: &str) {
+pub(crate) async fn assert_endpoint_reachable(endpoint: &str) {
     let url = format!("{}/models", endpoint.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -108,7 +111,11 @@ async fn assert_rpc_reachable(rpc_url: &str, chain_id: i64) {
     );
 }
 
-async fn bind_glm_backend(node: &EmbeddedNode, identity: &dyn AgentIdentity) -> (String, String) {
+pub(crate) async fn bind_glm_backend(
+    node: &EmbeddedNode,
+    identity: &dyn AgentIdentity,
+    system_prompt: &str,
+) -> (String, String) {
     let agent_did = identity.did().to_string();
     let bootstrap = gents::ensure_agent_principal(node, &agent_did)
         .await
@@ -167,11 +174,7 @@ async fn bind_glm_backend(node: &EmbeddedNode, identity: &dyn AgentIdentity) -> 
         &behavior_id,
     ));
     behavior.enabled = true;
-    behavior.system_prompt = Some(
-        "You are an Ethereum operator. You have the native tool base-sepolia_query. \
-         When asked for chain data, call that tool. Do not guess block numbers."
-            .to_string(),
-    );
+    behavior.system_prompt = Some(system_prompt.to_string());
     upsert_agent_behavior(node, &behavior)
         .await
         .expect("point default behavior at glm");
@@ -208,13 +211,13 @@ async fn create_eth_tool(node: &EmbeddedNode, agent_did: &str) {
 }
 
 #[derive(Clone, Deserialize, Debug)]
-struct ToolCallRow {
-    tool_name: Option<String>,
-    args: Option<String>,
-    result: Option<String>,
+pub(crate) struct ToolCallRow {
+    pub(crate) tool_name: Option<String>,
+    pub(crate) args: Option<String>,
+    pub(crate) result: Option<String>,
 }
 
-async fn fetch_tool_calls(node: &EmbeddedNode, request_id: &str) -> Vec<ToolCallRow> {
+pub(crate) async fn fetch_tool_calls(node: &EmbeddedNode, request_id: &str) -> Vec<ToolCallRow> {
     let escaped = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -286,7 +289,13 @@ async fn eth_tool_live_model_queries_base_sepolia() {
 
     let db = test_db("eth-tool-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("eth-tool-live"));
-    let (agent_did, behavior_id) = bind_glm_backend(db.node.as_ref(), identity.as_ref()).await;
+    let (agent_did, behavior_id) = bind_glm_backend(
+        db.node.as_ref(),
+        identity.as_ref(),
+        "You are an Ethereum operator. You have the native tool base-sepolia_query. \
+         When asked for chain data, call that tool. Do not guess block numbers.",
+    )
+    .await;
     create_eth_tool(db.node.as_ref(), &agent_did).await;
 
     upsert_tool_selection(

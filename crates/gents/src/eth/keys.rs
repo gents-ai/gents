@@ -320,4 +320,39 @@ mod tests {
             binding_storage_key("did:key:zBob", "treasury")
         );
     }
+
+    #[test]
+    fn keyring_store_round_trips_across_entry_handles() {
+        let store = KeyringChainKeyStore;
+        let storage_key = format!(
+            "gents-keyring-test-{}",
+            lowercase_hex(&generate_secp256k1_secret()[..8])
+        );
+        struct Cleanup<'a>(&'a KeyringChainKeyStore, String);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.delete(&self.1);
+            }
+        }
+        let cleanup = Cleanup(&store, storage_key.clone());
+        if let Err(error) = store.store_new(&storage_key, &ANVIL0_SECRET) {
+            // Native backend compiled in, but this host has no usable OS
+            // keyring (headless CI without keyutils, locked keychain).
+            // The mock backend is still caught: it "stores" successfully
+            // and then load fails below.
+            eprintln!("skipping OS keyring round-trip: {error:#}");
+            drop(cleanup);
+            return;
+        }
+        let loaded = store.load(&storage_key).unwrap_or_else(|error| {
+            panic!(
+                "keyring store succeeded but load failed for {storage_key}: {error:#} \
+                 (native keyring feature is probably not enabled)"
+            )
+        });
+        assert_eq!(loaded, ANVIL0_SECRET);
+        store.delete(&storage_key).expect("delete");
+        assert!(store.load(&storage_key).is_err());
+        drop(cleanup);
+    }
 }

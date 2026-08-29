@@ -52,7 +52,13 @@ futures = "0.3"
 hostname.workspace = true
 identity.workspace = true
 k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
-keyring = "3"
+# keyring 3 has no default store. Without a native feature, Entry is a
+# per-handle mock and store/load cannot see each other.
+keyring = { version = "3", features = [
+    "apple-native",
+    "windows-native",
+    "linux-native",
+] }
 sha3 = "0.10"
 alloy-primitives = "1.0"
 alloy-dyn-abi = { version = "1.0", features = ["eip712"] }
