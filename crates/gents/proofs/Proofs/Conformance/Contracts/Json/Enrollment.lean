@@ -97,6 +97,13 @@ def enrollmentCaseJson (c : EnrollmentCase) : String :=
     ++ "\"steps\":" ++ jsonArray (c.steps.map enrollmentTraceStepJson)
     ++ "}"
 
+def enrollmentDurableProjectionCaseJson (c : EnrollmentDurableProjectionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString c.name ++ ","
+    ++ "\"documents\":" ++ jsonArray (c.documents.map enrollmentTraceStepJson) ++ ","
+    ++ "\"expected_current_approval\":" ++ boolJson c.expectedCurrentApproval
+    ++ "}"
+
 def enrollmentEncodingCaseJson (c : EnrollmentEncodingCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
@@ -119,6 +126,8 @@ def enrollmentDigestCaseJson (c : EnrollmentDigestCase) : String :=
     ++ "}"
 
 def enrollmentCasesJson : String := jsonArray (enrollmentCases.map enrollmentCaseJson)
+def enrollmentDurableProjectionCasesJson : String :=
+  jsonArray (enrollmentDurableProjectionCases.map enrollmentDurableProjectionCaseJson)
 def enrollmentEncodingCasesJson : String :=
   jsonArray (enrollmentEncodingCases.map enrollmentEncodingCaseJson)
 def enrollmentDigestCasesJson : String :=

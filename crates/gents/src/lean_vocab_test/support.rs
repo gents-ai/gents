@@ -52,6 +52,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) session_hydration_durable_cases: Vec<LeanSessionHydrationDurableCase>,
     #[serde(default)]
     pub(crate) enrollment_cases: Vec<LeanEnrollmentCase>,
+    pub(crate) enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
     #[serde(default)]
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     #[serde(default)]
@@ -483,6 +484,13 @@ pub(crate) struct LeanSessionHydrationDurableCase {
 pub(crate) struct LeanEnrollmentCase {
     pub(crate) name: String,
     pub(crate) steps: Vec<LeanEnrollmentTraceStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanEnrollmentDurableProjectionCase {
+    pub(crate) name: String,
+    pub(crate) documents: Vec<LeanEnrollmentTraceStep>,
+    pub(crate) expected_current_approval: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1299,6 +1307,11 @@ pub(crate) fn lean_session_hydration_durable_cases() -> &'static [LeanSessionHyd
 
 pub(crate) fn lean_enrollment_cases() -> &'static [LeanEnrollmentCase] {
     &lean_contract_snapshot().enrollment_cases
+}
+
+pub(crate) fn lean_enrollment_durable_projection_cases(
+) -> &'static [LeanEnrollmentDurableProjectionCase] {
+    &lean_contract_snapshot().enrollment_durable_projection_cases
 }
 
 pub(crate) fn lean_enrollment_encoding_cases() -> &'static [LeanEnrollmentEncodingCase] {

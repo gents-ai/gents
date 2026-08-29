@@ -2,14 +2,14 @@
 
 use gents::agent::p2p_reconcile::enrollment::{
     canonical_enrollment_digest, canonical_enrollment_payload, frame_enrollment_field,
-    AuthorizationRevision, AuthorizationRevisionKind, EnrollmentAction, EnrollmentDecision,
-    EnrollmentDecisionKind, EnrollmentOffer, EnrollmentRequest, EnrollmentRouteDirection,
-    EnrollmentState,
+    AuthorizationRevision, AuthorizationRevisionKind, DurableEnrollmentDocuments, EnrollmentAction,
+    EnrollmentDecision, EnrollmentDecisionKind, EnrollmentOffer, EnrollmentRequest,
+    EnrollmentRouteDirection, EnrollmentState, NetworkAdminPin,
 };
 
 use crate::lean_vocab_test::{
-    lean_enrollment_cases, lean_enrollment_digest_cases, lean_enrollment_encoding_cases,
-    LeanEnrollmentTraceStep,
+    lean_enrollment_cases, lean_enrollment_digest_cases, lean_enrollment_durable_projection_cases,
+    lean_enrollment_encoding_cases, LeanEnrollmentTraceStep,
 };
 
 fn lower_hex(bytes: &[u8]) -> String {
@@ -301,6 +301,75 @@ fn generated_enrollment_cases_match_production_transition_core() {
             apply_step(&mut state, step);
             assert_step(&state, step, &format!("{} step {index}", case.name));
         }
+    }
+}
+
+#[test]
+fn generated_enrollment_durable_projection_cases_are_order_independent() {
+    let cases = lean_enrollment_durable_projection_cases();
+    assert_eq!(cases.len(), 5);
+    for case in cases {
+        let mut documents = DurableEnrollmentDocuments::default();
+        for step in &case.documents {
+            match step.action.as_str() {
+                "observe_offer" => {
+                    documents.offers.insert(offer(step));
+                }
+                "confirm_admin_pin" => {
+                    let offer = offer(step);
+                    documents.admin_pins.insert(NetworkAdminPin {
+                        network_id: offer.network_id,
+                        admin_did: offer.admin_did,
+                    });
+                }
+                "accept_request" => {
+                    documents.requests.insert(request(step));
+                }
+                "approve_request" | "deny_request" => {
+                    documents.decisions.insert(decision(step));
+                }
+                "merge_authorization" => {
+                    documents.revisions.insert(revision(step));
+                }
+                other => panic!("unknown durable enrollment document action {other:?}"),
+            }
+        }
+        let offer = case
+            .documents
+            .iter()
+            .find(|step| step.action == "observe_offer")
+            .map(offer)
+            .expect("generated durable case must name the observed offer");
+        let request = case
+            .documents
+            .iter()
+            .find(|step| step.action == "accept_request")
+            .map(request)
+            .expect("generated durable case must name the target request");
+        let decision = case
+            .documents
+            .iter()
+            .find(|step| step.action == "approve_request")
+            .map(decision)
+            .expect("generated durable case must name the target approval");
+        assert_eq!(
+            documents.current_approval(&offer, &request, &decision),
+            case.expected_current_approval,
+            "{}",
+            case.name
+        );
+
+        let mut reversed = documents.clone();
+        reversed.offers = documents.offers.iter().rev().cloned().collect();
+        reversed.requests = documents.requests.iter().rev().cloned().collect();
+        reversed.decisions = documents.decisions.iter().rev().cloned().collect();
+        reversed.revisions = documents.revisions.iter().rev().cloned().collect();
+        assert_eq!(
+            reversed.current_approval(&offer, &request, &decision),
+            case.expected_current_approval,
+            "{} reversed",
+            case.name
+        );
     }
 }
 

@@ -464,6 +464,67 @@ def enrollmentCases : List EnrollmentCase :=
         [.merge enrollmentRequest enrollmentDecision conflictingRevoked])
   ]
 
+private def durableDocumentStep (action : EnrollmentAction) : EnrollmentTraceStep :=
+  enrollmentTraceStep action {}
+
+private def durableCase
+    (name : String) (documents : List EnrollmentAction)
+    (docs : DurableDocuments) (offer : Offer) (request : Request) (decision : Decision) :
+    EnrollmentDurableProjectionCase :=
+  { name
+  , documents := documents.map durableDocumentStep
+  , expectedCurrentApproval := decide (durableCurrentApproval docs offer request decision) }
+
+def enrollmentDurableProjectionCases : List EnrollmentDurableProjectionCase :=
+  let pin := adminPinFor enrollmentOffer
+  let revision := revisionForApproval enrollmentRequest enrollmentDecision
+  let baseDocs : DurableDocuments :=
+    { offers := {enrollmentOffer}, adminPins := {pin}, requests := {enrollmentRequest}
+    , decisions := {enrollmentDecision}, revisions := {revision} }
+  let baseActions : List EnrollmentAction :=
+    [.observe enrollmentOffer, .confirmPin enrollmentOffer,
+     .accept enrollmentOffer enrollmentRequest,
+     .decide enrollmentRequest enrollmentDecision,
+     .merge enrollmentRequest enrollmentDecision revision]
+  let collisionOffer := { enrollmentOffer with offerId := "offer-2", challenge := "challenge-2" }
+  let collisionUnsigned := { unsignedEnrollmentRequest with
+    offerId := collisionOffer.offerId, challenge := collisionOffer.challenge,
+    clientNonce := "nonce-2" }
+  let collisionRequest := canonicalizeEnrollmentRequest collisionUnsigned
+  let challengeUnsigned := { unsignedEnrollmentRequest with
+    requestId := "request-2", clientNonce := "nonce-2" }
+  let challengeRequest := canonicalizeEnrollmentRequest challengeUnsigned
+  let deniedDecision := decisionFor enrollmentRequest .denied
+  let conflictingRevision := { revision with signerDid := "did:key:hostile-replica" }
+  let requestIdConflictDocs := { baseDocs with
+    offers := insert collisionOffer baseDocs.offers
+    requests := insert collisionRequest baseDocs.requests }
+  let challengeConflictDocs := { baseDocs with
+    requests := insert challengeRequest baseDocs.requests }
+  let decisionConflictDocs := { baseDocs with
+    decisions := insert deniedDecision baseDocs.decisions }
+  let revisionConflictDocs := { baseDocs with
+    revisions := insert conflictingRevision baseDocs.revisions }
+  [ durableCase "durable_unique_approval" baseActions baseDocs
+      enrollmentOffer enrollmentRequest enrollmentDecision
+  , durableCase "durable_request_id_conflict_fails_closed"
+      (baseActions ++ [.observe collisionOffer, .accept collisionOffer collisionRequest])
+      requestIdConflictDocs
+      enrollmentOffer enrollmentRequest enrollmentDecision
+  , durableCase "durable_challenge_conflict_fails_closed"
+      (baseActions ++ [.accept enrollmentOffer challengeRequest])
+      challengeConflictDocs
+      enrollmentOffer enrollmentRequest enrollmentDecision
+  , durableCase "durable_terminal_decision_conflict_fails_closed"
+      (baseActions ++ [.decide enrollmentRequest deniedDecision])
+      decisionConflictDocs
+      enrollmentOffer enrollmentRequest enrollmentDecision
+  , durableCase "durable_equal_revision_conflict_fails_closed"
+      (baseActions ++ [.merge enrollmentRequest enrollmentDecision conflictingRevision])
+      revisionConflictDocs
+      enrollmentOffer enrollmentRequest enrollmentDecision
+  ]
+
 def enrollmentEncodingCases : List EnrollmentEncodingCase :=
   let renderedFrame (value : String) := utf8HexString (frameWireField (stringBytes value))
   [ { name := "empty", value := "", expectedFrame := "ff",

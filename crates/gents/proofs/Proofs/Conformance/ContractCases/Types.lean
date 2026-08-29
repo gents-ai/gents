@@ -131,6 +131,12 @@ structure EnrollmentCase where
   steps : List EnrollmentTraceStep
   deriving Repr
 
+structure EnrollmentDurableProjectionCase where
+  name : String
+  documents : List EnrollmentTraceStep
+  expectedCurrentApproval : Bool
+  deriving Repr
+
 structure EnrollmentEncodingCase where
   name : String
   value : String

@@ -157,6 +157,58 @@ pub struct EnrollmentAppliedRoute {
     pub live: bool,
 }
 
+/// Unordered durable enrollment documents restored from DefraDB.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DurableEnrollmentDocuments {
+    pub offers: BTreeSet<EnrollmentOffer>,
+    pub admin_pins: BTreeSet<NetworkAdminPin>,
+    pub requests: BTreeSet<EnrollmentRequest>,
+    pub decisions: BTreeSet<EnrollmentDecision>,
+    pub revisions: BTreeSet<AuthorizationRevision>,
+}
+
+impl DurableEnrollmentDocuments {
+    pub fn request_identity_unique(&self, request: &EnrollmentRequest) -> bool {
+        self.requests.contains(request)
+            && self.requests.iter().all(|other| {
+                (other.request_id != request.request_id && other.challenge != request.challenge)
+                    || other == request
+            })
+    }
+
+    pub fn decision_identity_unique(&self, decision: &EnrollmentDecision) -> bool {
+        self.decisions.contains(decision)
+            && self
+                .decisions
+                .iter()
+                .all(|other| other.request_id != decision.request_id || other == decision)
+    }
+
+    /// Order-independent restored authority projection.
+    pub fn current_approval(
+        &self,
+        offer: &EnrollmentOffer,
+        request: &EnrollmentRequest,
+        decision: &EnrollmentDecision,
+    ) -> bool {
+        let state = EnrollmentState {
+            observed_offers: self.offers.clone(),
+            admin_pins: self.admin_pins.clone(),
+            authorizations: self.revisions.clone(),
+            ..EnrollmentState::default()
+        };
+        self.request_identity_unique(request)
+            && state.request_admissible(offer, request)
+            && self.decision_identity_unique(decision)
+            && EnrollmentState::decision_matches_request(request, decision)
+            && decision.kind == EnrollmentDecisionKind::Approved
+            && decision.admin_signed
+            && decision.fresh
+            && state
+                .unique_maximum_revision(&EnrollmentState::revision_for_approval(request, decision))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ChallengeBinding {
     challenge: String,
