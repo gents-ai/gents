@@ -601,6 +601,12 @@ fn verify_with_public_key(
         .with_context(|| format!("verifying payload for {did}"))
 }
 
+/// Verify a signature against the public key identified by a DID without
+/// requiring access to that principal's private signer.
+pub(crate) fn verify_did_signature(did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+    verify_with_public_key(did, known_public_key_for_did(did)?, payload, signature)
+}
+
 fn validate_registered_identity_config(did: &str, config: &SigningConfig) -> Result<()> {
     if !config.has_local_private_key() && !config.has_remote_signer() {
         anyhow::bail!("registered identity {did} has neither a local key nor a remote signer");

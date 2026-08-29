@@ -1,0 +1,17 @@
+type EthTool @branchable {
+    tool_id: String @index(unique: true)
+    agent_did: String @index
+    display_name: String
+    enabled: Boolean @index
+    # Logical endpoint: one chain + one HTTP JSON-RPC URL per document.
+    chain_id: Int
+    rpc_url: String
+    # Allowlisted read-only RPC methods. Empty/null = no query tool.
+    query_methods: [String]
+    # JSON-serialized call decls (any_read or declared). Empty/null = none.
+    calls: [String]
+    # ChainKeyBinding.binding_id this behavior may sign with. Null = read-only.
+    key_binding_id: String
+    created_at: String
+    updated_at: DateTime @index(direction: DESC)
+}

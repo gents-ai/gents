@@ -10,8 +10,8 @@ use crate::shared::ConfigExportBundle;
 use crate::{
     graphql_rows, graphql_rows_or_empty_if_collection_missing, graphql_string_list_literal,
     CONFIG_EXPORT_FORMAT, EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_AGENT_PRINCIPAL_FIELDS,
-    EXPORT_DATASTORE_TOOL_SURFACE_FIELDS, EXPORT_EVENT_TRIGGER_FIELDS,
-    EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS,
+    EXPORT_CHAIN_KEY_BINDING_FIELDS, EXPORT_DATASTORE_TOOL_SURFACE_FIELDS, EXPORT_ETH_TOOL_FIELDS,
+    EXPORT_EVENT_TRIGGER_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS,
     EXPORT_PROJECTION_ACP_BINDING_FIELDS, EXPORT_SCHEDULE_FIELDS, EXPORT_SKILL_FIELDS,
     EXPORT_TASK_FIELDS, EXPORT_TOOL_SELECTION_FIELDS, EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
 };
@@ -225,6 +225,42 @@ pub(crate) async fn build_config_export_bundle(
     .await?;
     sort_document_rows(&mut datastore_tool_surface_rows, "surface_id");
 
+    let mut chain_key_binding_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "ChainKeyBinding",
+        &format!(
+            r#"{{
+                ChainKeyBinding(
+                    filter: {{ principal_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_CHAIN_KEY_BINDING_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut chain_key_binding_rows, "binding_id");
+
+    let mut eth_tool_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "EthTool",
+        &format!(
+            r#"{{
+                EthTool(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_ETH_TOOL_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut eth_tool_rows, "tool_id");
+
     let mut projection_acp_binding_rows = graphql_rows_or_empty_if_collection_missing(
         access,
         "ProjectionAcpBinding",
@@ -253,6 +289,8 @@ pub(crate) async fn build_config_export_bundle(
         agent_behaviors: behavior_rows,
         skills: skill_rows,
         datastore_tool_surfaces: datastore_tool_surface_rows,
+        chain_key_bindings: chain_key_binding_rows,
+        eth_tools: eth_tool_rows,
         // WorkspaceRoot has no live-query wiring yet; see shared::ConfigExportBundle::workspace_roots.
         workspace_roots: Vec::new(),
         tool_selections: tool_selection_rows,
@@ -533,6 +571,42 @@ pub(crate) async fn build_desired_state_live_bundle(
     .await?;
     sort_document_rows(&mut datastore_tool_surface_rows, "surface_id");
 
+    let mut chain_key_binding_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "ChainKeyBinding",
+        &format!(
+            r#"{{
+                ChainKeyBinding(
+                    filter: {{ principal_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_CHAIN_KEY_BINDING_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut chain_key_binding_rows, "binding_id");
+
+    let mut eth_tool_rows = graphql_rows_or_empty_if_collection_missing(
+        access,
+        "EthTool",
+        &format!(
+            r#"{{
+                EthTool(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                ) {{
+                    {fields}
+                }}
+            }}"#,
+            agent_did = escape_graphql_string(agent_did),
+            fields = EXPORT_ETH_TOOL_FIELDS,
+        ),
+    )
+    .await?;
+    sort_document_rows(&mut eth_tool_rows, "tool_id");
+
     let desired_binding_ids = desired_manifest
         .projection_acp_bindings
         .iter()
@@ -570,6 +644,8 @@ pub(crate) async fn build_desired_state_live_bundle(
         agent_behaviors: behavior_rows,
         skills: skill_rows,
         datastore_tool_surfaces: datastore_tool_surface_rows,
+        chain_key_bindings: chain_key_binding_rows,
+        eth_tools: eth_tool_rows,
         // WorkspaceRoot has no live-query wiring yet; see shared::ConfigExportBundle::workspace_roots.
         workspace_roots: Vec::new(),
         tool_selections: tool_selection_rows,
@@ -602,6 +678,8 @@ pub(crate) fn live_manifest_from_bundle(
                 agent_behaviors: Vec::new(),
                 skills: Vec::new(),
                 datastore_tool_surfaces: Vec::new(),
+                chain_key_bindings: Vec::new(),
+                eth_tools: Vec::new(),
                 tool_selections: Vec::new(),
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
@@ -759,6 +837,17 @@ pub(crate) fn sanitize_import_document(
         }
         "ToolSelection" => {
             desired_state::strip_retired_tool_selection_fields(&mut object);
+        }
+        "ChainKeyBinding" if for_update => {
+            // Revocation is a tombstone. An active desired-state document may
+            // update its public metadata, but it must never clear a live
+            // revocation by writing null back over it.
+            if object
+                .get("revoked_at")
+                .is_none_or(|value| value.is_null() || value.as_str().is_some_and(str::is_empty))
+            {
+                object.remove("revoked_at");
+            }
         }
         "Task" => {
             for field in ["created_at", "updated_at"] {
@@ -930,6 +1019,25 @@ mod tests {
         .unwrap();
         assert_eq!(updated.get("skill_refs"), Some(&Value::Null));
         assert_eq!(updated.get("skill_excludes"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn active_chain_key_import_does_not_clear_revocation() {
+        let updated = sanitize_import_document(
+            "ChainKeyBinding",
+            &json!({ "binding_id": "bind-1", "revoked_at": null }),
+            true,
+        )
+        .unwrap();
+        assert!(updated.get("revoked_at").is_none());
+
+        let revoked = sanitize_import_document(
+            "ChainKeyBinding",
+            &json!({ "binding_id": "bind-1", "revoked_at": "2026-08-28T00:00:00Z" }),
+            true,
+        )
+        .unwrap();
+        assert_eq!(revoked["revoked_at"], "2026-08-28T00:00:00Z");
     }
 
     #[test]

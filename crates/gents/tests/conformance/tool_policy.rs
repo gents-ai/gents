@@ -132,5 +132,23 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
         if case.name == "bash_all_allowed_kind_idempotent" {
             assert_eq!(case.expected.bash_allowed_kind, "all");
         }
+        if case.name == "eth_query_methods_intersect" {
+            assert_eq!(case.behavior.eth_query_methods_kind, "only");
+            assert_eq!(case.ceiling.eth_query_methods_kind, "only");
+            assert!(case
+                .behavior
+                .eth_query_methods_keys
+                .contains(&"eth_chainId".to_string()));
+            assert!(case
+                .ceiling
+                .eth_query_methods_keys
+                .contains(&"eth_call".to_string()));
+            assert_eq!(
+                case.expected.eth_query_methods_keys,
+                vec!["eth_blockNumber".to_string()]
+            );
+            assert_eq!(case.expected.eth_query_methods_kind, "only");
+            assert_eq!(case.expected.eth_call_tools_kind, "none");
+        }
     }
 }

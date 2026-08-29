@@ -808,6 +808,14 @@ fn desired_manifest_from_lean(
             .into_iter()
             .map(|doc| desired_datastore_tool_surface(doc, &agent_did))
             .collect(),
+        chain_key_bindings: docs_for_collection(case, Collection::ChainKeyBinding)
+            .into_iter()
+            .map(|doc| desired_chain_key_binding(doc, &agent_did))
+            .collect(),
+        eth_tools: docs_for_collection(case, Collection::EthTool)
+            .into_iter()
+            .map(|doc| desired_eth_tool(doc, &agent_did))
+            .collect(),
         tool_selections: docs_for_collection(case, Collection::ToolSelection)
             .into_iter()
             .map(|doc| desired_tool_selection(doc, &agent_did))
@@ -910,6 +918,35 @@ fn desired_datastore_tool_surface(
     }
 }
 
+fn desired_chain_key_binding(
+    doc: &LeanApplyDesiredDoc,
+    agent_did: &str,
+) -> desired_state::DesiredChainKeyBinding {
+    desired_state::DesiredChainKeyBinding {
+        binding_id: doc.id.clone(),
+        principal_did: agent_did.to_string(),
+        address: "0x0000000000000000000000000000000000000001".to_string(),
+        key_backend: "keyring".to_string(),
+        attestation: Some("0x00".to_string()),
+        created_at: Some("2026-08-28T00:00:00Z".to_string()),
+        revoked_at: None,
+    }
+}
+
+fn desired_eth_tool(doc: &LeanApplyDesiredDoc, agent_did: &str) -> desired_state::DesiredEthTool {
+    desired_state::DesiredEthTool {
+        tool_id: doc.id.clone(),
+        agent_did: agent_did.to_string(),
+        display_name: Some(doc.content.clone()),
+        enabled: true,
+        chain_id: 8453,
+        rpc_url: "https://mainnet.base.org".to_string(),
+        query_methods: Vec::new(),
+        calls: Vec::new(),
+        key_binding_id: None,
+    }
+}
+
 fn desired_tool_selection(
     doc: &LeanApplyDesiredDoc,
     agent_did: &str,
@@ -956,6 +993,7 @@ fn desired_tool_selection(
         cross_deployment_spawn_timeout_seconds: None,
         write_tools: Vec::new(),
         datastore_tool_surface_ids: Vec::new(),
+        eth_tool_ids: Vec::new(),
         enable_self_config: false,
         self_config_categories: Vec::new(),
         self_config_no_lockout: false,
@@ -1095,6 +1133,8 @@ fn diff_report_from_lean(case: &LeanApplyReconcileCase) -> desired_state::Desire
         agent_behaviors: diff_for_collection(case, Collection::AgentBehavior),
         skills: diff_for_collection(case, Collection::Skill),
         datastore_tool_surfaces: diff_for_collection(case, Collection::DatastoreToolSurface),
+        chain_key_bindings: diff_for_collection(case, Collection::ChainKeyBinding),
+        eth_tools: diff_for_collection(case, Collection::EthTool),
         // WorkspaceRoot is not part of Collection::ALL yet, so no Lean
         // fixture ever references it; this is always an empty diff.
         workspace_roots: diff_for_collection(case, Collection::WorkspaceRoot),
@@ -1234,6 +1274,8 @@ fn count_for_collection(counts: &ConfigApplyCounts, collection: Collection) -> u
         Collection::AgentBehavior => counts.agent_behaviors,
         Collection::Skill => counts.skills,
         Collection::DatastoreToolSurface => counts.datastore_tool_surfaces,
+        Collection::ChainKeyBinding => counts.chain_key_bindings,
+        Collection::EthTool => counts.eth_tools,
         Collection::WorkspaceRoot => counts.workspace_roots,
         Collection::ToolSelection => counts.tool_selections,
         Collection::InferenceBackend => counts.inference_backends,

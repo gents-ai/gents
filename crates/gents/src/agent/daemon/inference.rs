@@ -719,6 +719,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             request.requester_did.clone(),
             Some(request.agent_did.clone()),
             Some(behavior_id.to_string()),
+            Some(request.request_id.clone()),
             crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
                 request_deadline,
                 request_token.clone(),

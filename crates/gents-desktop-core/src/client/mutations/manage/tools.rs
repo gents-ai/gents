@@ -137,6 +137,11 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         // Each entry is JSON-serialized WriteToolDecl; graphql_string_list_field
         // escapes every element and emits null (not []) when empty.
         Some(graphql_string_list_field("write_tools", &row.write_tools)),
+        Some(graphql_string_list_field(
+            "datastore_tool_surface_ids",
+            &row.datastore_tool_surface_ids,
+        )),
+        Some(graphql_string_list_field("eth_tool_ids", &row.eth_tool_ids)),
         Some(graphql_optional_bool_field(
             "enable_self_config",
             row.enable_self_config,
@@ -271,6 +276,11 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             &row.defra_query_collections,
         )),
         Some(graphql_string_list_field("write_tools", &row.write_tools)),
+        Some(graphql_string_list_field(
+            "datastore_tool_surface_ids",
+            &row.datastore_tool_surface_ids,
+        )),
+        Some(graphql_string_list_field("eth_tool_ids", &row.eth_tool_ids)),
         Some(graphql_optional_bool_field(
             "enable_self_config",
             row.enable_self_config,

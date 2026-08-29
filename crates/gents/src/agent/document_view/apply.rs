@@ -4,7 +4,7 @@ use defra_node::EmbeddedNode;
 use crate::backend_registry::lookup_backend_by_doc_id;
 use crate::document_config::{
     load_agent_behavior_by_doc_id, load_agent_principal_by_doc_id,
-    load_datastore_tool_surface_by_doc_id, load_event_trigger_by_doc_id,
+    load_datastore_tool_surface_by_doc_id, load_eth_tool_by_doc_id, load_event_trigger_by_doc_id,
     load_graph_definition_by_doc_id, load_graph_run_pin_by_doc_id,
     load_inference_profile_by_doc_id, load_schedule_by_doc_id, load_skill_by_doc_id,
     load_task_by_doc_id, load_tool_selection_by_doc_id,
@@ -158,6 +158,28 @@ pub(crate) async fn apply_control_update(
     }
     if view.has_datastore_tool_surface_doc_id(doc_id) {
         view.remove_datastore_tool_surface_by_doc_id(doc_id);
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+
+    if let Some((loaded_doc_id, tool)) = load_eth_tool_by_doc_id(node, doc_id).await? {
+        if tool.agent_did != agent_did {
+            if view.remove_eth_tool_by_doc_id(doc_id) {
+                return Ok(ControlUpdateOutcome::Applied);
+            }
+            return Ok(ControlUpdateOutcome::Irrelevant);
+        }
+        view.remove_eth_tool_by_doc_id(doc_id);
+        view.eth_tools.insert(
+            tool.tool_id.trim().to_string(),
+            DocumentRecord {
+                doc_id: loaded_doc_id,
+                value: tool,
+            },
+        );
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+    if view.has_eth_tool_doc_id(doc_id) {
+        view.remove_eth_tool_by_doc_id(doc_id);
         return Ok(ControlUpdateOutcome::Applied);
     }
 

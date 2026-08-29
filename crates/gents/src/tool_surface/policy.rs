@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::defra_query::CollectionScope;
 use crate::document_config::{QueryToolDecl, SubagentTarget, WriteToolDecl, WriteToolField};
+use crate::eth::ResolvedEthQuery;
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 
 use super::modes::{BashMode, FileToolMode};
@@ -216,6 +217,8 @@ pub struct ToolPolicySurface {
     pub background_tools: EndpointScope<String, ()>,
     pub write_tools: EndpointScope<(String, String), BTreeSet<String>>,
     pub query_tools: EndpointScope<(String, String), BTreeSet<String>>,
+    pub eth_query_methods: EndpointScope<String, ()>,
+    pub eth_call_tools: EndpointScope<String, ()>,
 }
 
 impl ToolPolicySurface {
@@ -243,6 +246,8 @@ impl ToolPolicySurface {
             background_tools: EndpointScope::none(),
             write_tools: EndpointScope::none(),
             query_tools: EndpointScope::none(),
+            eth_query_methods: EndpointScope::none(),
+            eth_call_tools: EndpointScope::none(),
         }
     }
 
@@ -282,6 +287,8 @@ impl ToolPolicySurface {
             background_tools: EndpointScope::all(),
             write_tools: EndpointScope::all(),
             query_tools: EndpointScope::all(),
+            eth_query_methods: EndpointScope::all(),
+            eth_call_tools: EndpointScope::all(),
         }
     }
 
@@ -309,6 +316,8 @@ impl ToolPolicySurface {
             background_tools: EndpointScope::all(),
             write_tools: EndpointScope::all(),
             query_tools: EndpointScope::all(),
+            eth_query_methods: EndpointScope::all(),
+            eth_call_tools: EndpointScope::all(),
         }
     }
 
@@ -434,6 +443,8 @@ impl ToolPolicySurface {
             ),
             write_tools: write_scope_from_decls(&selection.write_tools),
             query_tools: query_scope_from_decls(&selection.query_tools),
+            eth_query_methods: eth_query_scope_from_resolved(&selection.eth_queries),
+            eth_call_tools: eth_call_scope_from_resolved(&selection.eth_calls),
         }
     }
 
@@ -481,6 +492,12 @@ impl ToolPolicySurface {
                 .meet_with(&other.query_tools, |left, right| {
                     left.intersection(right).cloned().collect()
                 }),
+            eth_query_methods: self
+                .eth_query_methods
+                .meet_with(&other.eth_query_methods, |(), ()| ()),
+            eth_call_tools: self
+                .eth_call_tools
+                .meet_with(&other.eth_call_tools, |(), ()| ()),
         }
     }
 
@@ -693,6 +710,28 @@ fn write_scope_from_decls(
         );
     }
     EndpointScope::Only(grants)
+}
+
+fn eth_query_scope_from_resolved(queries: &[ResolvedEthQuery]) -> EndpointScope<String, ()> {
+    let mut methods = BTreeSet::new();
+    for query in queries {
+        methods.extend(query.methods.iter().cloned());
+    }
+    if methods.is_empty() {
+        EndpointScope::none()
+    } else {
+        EndpointScope::<String, ()>::only_units(methods)
+    }
+}
+
+fn eth_call_scope_from_resolved(
+    calls: &[crate::eth::ResolvedEthCall],
+) -> EndpointScope<String, ()> {
+    if calls.is_empty() {
+        EndpointScope::none()
+    } else {
+        EndpointScope::<String, ()>::only_units(calls.iter().map(|call| call.tool_name.clone()))
+    }
 }
 
 fn query_scope_from_decls(

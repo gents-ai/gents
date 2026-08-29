@@ -284,6 +284,8 @@ mod tests {
             agent_behaviors,
             skills: Vec::new(),
             datastore_tool_surfaces: Vec::new(),
+            chain_key_bindings: Vec::new(),
+            eth_tools: Vec::new(),
             workspace_roots: Vec::new(),
             tool_selections,
             inference_backends,

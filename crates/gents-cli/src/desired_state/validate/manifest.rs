@@ -5,6 +5,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
     let principal_agent_did = agent::validate_principal(manifest, errors);
     agent::validate_peer_pairings(manifest, principal_agent_did, errors);
     tooling::validate_surfaces(manifest, principal_agent_did, errors);
+    tooling::validate_eth_tools(manifest, principal_agent_did, errors);
     let (backend_ids, backend_models) = agent::validate_backends(manifest, errors);
     let tool_selection_ids =
         tooling::validate_tool_selections(manifest, principal_agent_did, errors);

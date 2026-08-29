@@ -152,6 +152,7 @@ fn validate_rejects_write_tool_with_empty_tool_name() {
             output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         ..Default::default()
     };
     let result = doc.validate();
@@ -176,6 +177,7 @@ fn validate_rejects_invalid_write_tool_collection_identifiers() {
                 output_obligation: None,
             }]),
             datastore_tool_surface_ids: None,
+            eth_tool_ids: None,
             ..Default::default()
         };
         let err = doc
@@ -209,6 +211,7 @@ fn validate_rejects_invalid_write_tool_field_identifiers() {
                 output_obligation: None,
             }]),
             datastore_tool_surface_ids: None,
+            eth_tool_ids: None,
             ..Default::default()
         };
         let err = doc
@@ -262,6 +265,7 @@ fn validate_rejects_duplicate_write_tool_names() {
         agent_did: "did:test:test".to_string(),
         write_tools: Some(vec![decl("ActionRequest"), decl("OtherCollection")]),
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         ..Default::default()
     };
     let result = doc.validate();
@@ -299,6 +303,7 @@ fn validate_accepts_well_formed_write_tools() {
             },
         ]),
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         ..Default::default()
     };
     assert!(
@@ -402,6 +407,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
             output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         ..Default::default()
     };
     let result = doc.validate();
@@ -429,6 +435,7 @@ fn validate_rejects_write_tool_name_colliding_with_defra_query() {
             output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         ..Default::default()
     };
     assert!(
@@ -453,6 +460,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
             output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         ..Default::default()
     };
     let result = doc.validate();
@@ -491,6 +499,7 @@ fn validate_rejects_duplicate_field_names_within_decl() {
             output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         ..Default::default()
     };
     let result = doc.validate();
@@ -738,6 +747,7 @@ async fn tool_selection_document_round_trips_write_tools() {
             output_obligation: None,
         }]),
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         ..Default::default()
     };
     upsert_tool_selection(&node, &doc)

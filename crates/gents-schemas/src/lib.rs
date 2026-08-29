@@ -52,6 +52,12 @@ pub const SKILL: &str = include_str!("../schemas/agent/skill.graphql");
 pub const DATASTORE_TOOL_SURFACE_NAME: &str = "DatastoreToolSurface";
 pub const DATASTORE_TOOL_SURFACE: &str =
     include_str!("../schemas/agent/datastore_tool_surface.graphql");
+pub const CHAIN_KEY_BINDING_NAME: &str = "ChainKeyBinding";
+pub const CHAIN_KEY_BINDING: &str = include_str!("../schemas/agent/chain_key_binding.graphql");
+pub const ETH_TOOL_NAME: &str = "EthTool";
+pub const ETH_TOOL: &str = include_str!("../schemas/agent/eth_tool.graphql");
+pub const ETH_SUBMISSION_NAME: &str = "EthSubmission";
+pub const ETH_SUBMISSION: &str = include_str!("../schemas/agent/eth_submission.graphql");
 pub const WORKSPACE_ROOT_NAME: &str = "WorkspaceRoot";
 pub const WORKSPACE_ROOT: &str = include_str!("../schemas/agent/workspace_root.graphql");
 pub const ISOLATED_WORKSPACE_NAME: &str = "IsolatedWorkspace";
@@ -139,6 +145,9 @@ pub const ALL: &[&str] = &[
     TOOL_SELECTION,
     SKILL,
     DATASTORE_TOOL_SURFACE,
+    CHAIN_KEY_BINDING,
+    ETH_TOOL,
+    ETH_SUBMISSION,
     WORKSPACE_ROOT,
     ISOLATED_WORKSPACE,
     WORKSPACE_PLACEMENT,
@@ -197,6 +206,9 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     TOOL_SELECTION_NAME,
     SKILL_NAME,
     DATASTORE_TOOL_SURFACE_NAME,
+    CHAIN_KEY_BINDING_NAME,
+    ETH_TOOL_NAME,
+    ETH_SUBMISSION_NAME,
     WORKSPACE_ROOT_NAME,
     ISOLATED_WORKSPACE_NAME,
     WORKSPACE_PLACEMENT_NAME,
@@ -279,13 +291,16 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_RESULT_NAME,
 ];
 
-/// Plaintext prompt-bearing audit facts that stay on the runtime node until
-/// installable DefraDB ACP provides an enforceable read boundary (#1074).
+/// Sensitive runtime facts that stay on the runtime node until installable
+/// DefraDB ACP provides an enforceable read boundary (#1074).
 ///
 /// This is a placement classification, not an ACP claim. Every broad
 /// replication catalog filters these names explicitly.
-pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] =
-    &[RENDERED_REQUEST_NAME, PROVIDER_CONTEXT_REDUCTION_NAME];
+pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
+    RENDERED_REQUEST_NAME,
+    PROVIDER_CONTEXT_REDUCTION_NAME,
+    ETH_SUBMISSION_NAME,
+];
 
 pub fn is_local_audit_collection(name: &str) -> bool {
     LOCAL_AUDIT_COLLECTION_NAMES.contains(&name)

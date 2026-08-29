@@ -233,6 +233,8 @@ fn template_manifest(
         }],
         skills: Vec::new(),
         datastore_tool_surfaces: Vec::new(),
+        chain_key_bindings: Vec::new(),
+        eth_tools: Vec::new(),
         tool_selections: Vec::new(),
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),

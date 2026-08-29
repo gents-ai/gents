@@ -1,0 +1,10 @@
+type ChainKeyBinding @branchable {
+    binding_id: String @index(unique: true)
+    principal_did: String @index
+    address: String @index(unique: true)
+    key_backend: String
+    attestation: String
+    created_at: String
+    revoked_at: String
+    updated_at: DateTime @index(direction: DESC)
+}

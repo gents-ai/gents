@@ -215,6 +215,22 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
             },
             &view.query_grants,
         ),
+        eth_query_methods: unit_scope_from_strings(
+            if view.eth_query_methods_kind.is_empty() {
+                "none"
+            } else {
+                &view.eth_query_methods_kind
+            },
+            &view.eth_query_methods_keys,
+        ),
+        eth_call_tools: unit_scope_from_strings(
+            if view.eth_call_tools_kind.is_empty() {
+                "none"
+            } else {
+                &view.eth_call_tools_kind
+            },
+            &view.eth_call_tools_keys,
+        ),
     }
 }
 
@@ -287,6 +303,10 @@ fn view_from_surface(
             .lookup(&query_probe)
             .map(|fields| fields.iter().cloned().collect())
             .unwrap_or_default(),
+        eth_query_methods_kind: surface.eth_query_methods.kind().to_string(),
+        eth_query_methods_keys: surface.eth_query_methods.keys(),
+        eth_call_tools_kind: surface.eth_call_tools.kind().to_string(),
+        eth_call_tools_keys: surface.eth_call_tools.keys(),
     }
 }
 

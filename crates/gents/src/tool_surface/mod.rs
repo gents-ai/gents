@@ -56,6 +56,8 @@ pub struct ToolSurface {
     pub(super) defra_query_scope: CollectionScope,
     pub(super) write_tools: Vec<WriteToolDecl>,
     pub(super) query_tools: Vec<QueryToolDecl>,
+    pub(super) eth_queries: Vec<crate::eth::ResolvedEthQuery>,
+    pub(super) eth_calls: Vec<crate::eth::ResolvedEthCall>,
     pub(super) enable_skills: bool,
     pub(super) self_config: SelfConfigToolConfig,
     pub(super) lsp: Option<crate::toolset::lsp::LspToolConfig>,
@@ -206,6 +208,8 @@ impl ToolSurface {
                 names.push(decl.tool_name.clone());
             }
         }
+        names.extend(self.eth_queries.iter().map(|query| query.tool_name()));
+        names.extend(self.eth_calls.iter().map(|call| call.tool_name.clone()));
         build::dedupe_strings(names)
     }
 
@@ -317,6 +321,26 @@ impl ToolSurface {
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
+        for query in &self.eth_queries {
+            let tool = crate::eth::EthQueryTool::new(query.clone());
+            if !registered_names.insert(tool.name()) {
+                anyhow::bail!(
+                    "eth query tool `{}` reached registration with a duplicate tool name",
+                    tool.name()
+                );
+            }
+            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+        }
+        for call in &self.eth_calls {
+            let tool = crate::eth::EthCallTool::new(call.clone(), runtime.node.clone());
+            if !registered_names.insert(tool.name()) {
+                anyhow::bail!(
+                    "eth call tool `{}` reached registration with a duplicate tool name",
+                    tool.name()
+                );
+            }
+            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+        }
         Ok(tools)
     }
 }
@@ -350,6 +374,7 @@ impl std::fmt::Debug for ToolSurface {
             .field("defra_query_scope", &self.defra_query_scope)
             .field("write_tools", &self.write_tools)
             .field("query_tools", &self.query_tools)
+            .field("eth_queries", &self.eth_queries)
             .field("enable_skills", &self.enable_skills)
             .field("self_config", &self.self_config)
             .finish()

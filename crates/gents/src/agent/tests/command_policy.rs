@@ -38,6 +38,7 @@ fn tool_selection_doc(bash_mode: &str) -> ToolSelectionDocument {
         defra_query_collections: None,
         write_tools: None,
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         enable_self_config: None,
         self_config_categories: None,
         self_config_no_lockout: None,

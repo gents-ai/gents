@@ -76,7 +76,8 @@ def conversationTranscriptCollections : List String :=
 
 def agentConfigCollections : List String :=
   ["AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
-   "ToolServiceRegistry", "Skill", "DatastoreToolSurface"]
+   "ToolServiceRegistry", "Skill", "DatastoreToolSurface", "ChainKeyBinding",
+   "EthTool"]
 
 def conversationCollections : List String :=
   conversationTranscriptCollections ++ agentConfigCollections
@@ -88,7 +89,8 @@ def clientTranscriptCollections : List String :=
 
 def clientControlPlaneCollections : List String :=
   ["AgentBehavior", "ToolSelection", "InferenceProfile", "ToolServiceRegistry",
-   "Skill", "DatastoreToolSurface", "Task", "Schedule", "EventTrigger"]
+   "Skill", "DatastoreToolSurface", "ChainKeyBinding", "EthTool", "Task",
+   "Schedule", "EventTrigger"]
 
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
@@ -108,7 +110,8 @@ def machineCollections : List String :=
 def discoveryCollections : List String :=
   ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest",
    "AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
-   "ToolServiceRegistry", "Skill", "DatastoreToolSurface"]
+   "ToolServiceRegistry", "Skill", "DatastoreToolSurface", "ChainKeyBinding",
+   "EthTool"]
 
 def networkControlCollections : List String :=
   ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest"]

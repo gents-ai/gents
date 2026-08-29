@@ -140,6 +140,44 @@ pub(crate) fn manifest_from_export_bundle(
                 )
             })
             .collect::<Result<Vec<_>>>()?,
+        chain_key_bindings: bundle
+            .chain_key_bindings
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "binding_id",
+                        "principal_did",
+                        "address",
+                        "key_backend",
+                        "attestation",
+                        "created_at",
+                        "revoked_at",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
+        eth_tools: bundle
+            .eth_tools
+            .iter()
+            .map(|value| {
+                desired_from_value(
+                    value,
+                    &[
+                        "tool_id",
+                        "agent_did",
+                        "display_name",
+                        "enabled",
+                        "chain_id",
+                        "rpc_url",
+                        "query_methods",
+                        "calls",
+                        "key_binding_id",
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>>>()?,
         tool_selections: bundle
             .tool_selections
             .iter()
@@ -181,6 +219,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "cross_deployment_spawn_timeout_seconds",
                         "write_tools",
                         "datastore_tool_surface_ids",
+                        "eth_tool_ids",
                         "enable_self_config",
                         "self_config_categories",
                         "self_config_no_lockout",
@@ -369,6 +408,16 @@ pub(crate) fn export_bundle_from_manifest(
             .collect::<serde_json::Result<Vec<_>>>()?,
         datastore_tool_surfaces: manifest
             .datastore_tool_surfaces
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        chain_key_bindings: manifest
+            .chain_key_bindings
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        eth_tools: manifest
+            .eth_tools
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,

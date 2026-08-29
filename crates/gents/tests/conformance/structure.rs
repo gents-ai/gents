@@ -35,6 +35,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("DurableLineage", Module("conformance/background.rs")),
         ("DescendantGraph", Module("misc/descendant_graph.rs")),
         ("EditMatch", Module("conformance/edit_match.rs")),
+        ("EthSubmission", Module("conformance/eth_submission.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
         ("Goals", Module("conformance/goals.rs")),

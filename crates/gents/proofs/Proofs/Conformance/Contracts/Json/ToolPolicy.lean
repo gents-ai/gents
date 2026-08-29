@@ -64,7 +64,11 @@ def surfaceViewJson (v : SurfaceView) : String :=
     ++ "\"query_scope_kind\":" ++ jsonString v.queryScopeKind ++ ","
     ++ "\"query_grants\":"
       ++ jsonArray (v.queryGrants.map writeGrantViewJson) ++ ","
-    ++ "\"query_fields\":" ++ jsonArray (v.queryFields.map jsonString)
+    ++ "\"query_fields\":" ++ jsonArray (v.queryFields.map jsonString) ++ ","
+    ++ "\"eth_query_methods_kind\":" ++ jsonString v.ethQueryMethodsKind ++ ","
+    ++ "\"eth_query_methods_keys\":" ++ jsonStringArray v.ethQueryMethodsKeys ++ ","
+    ++ "\"eth_call_tools_kind\":" ++ jsonString v.ethCallToolsKind ++ ","
+    ++ "\"eth_call_tools_keys\":" ++ jsonStringArray v.ethCallToolsKeys
   ++ "}"
 
 def toolPolicyCaseJson (c : Case) : String :=

@@ -21,6 +21,8 @@ fn empty_manifest(agent_did: &str) -> DesiredStateManifest {
         agent_behaviors: Vec::new(),
         skills: Vec::new(),
         datastore_tool_surfaces: Vec::new(),
+        chain_key_bindings: Vec::new(),
+        eth_tools: Vec::new(),
         tool_selections: Vec::new(),
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),
@@ -94,6 +96,39 @@ fn backend(id: &str) -> DesiredInferenceBackend {
         enabled: true,
         models: Vec::new(),
     }
+}
+
+fn chain_key_binding(id: &str, revoked_at: Option<&str>) -> DesiredChainKeyBinding {
+    DesiredChainKeyBinding {
+        binding_id: id.to_string(),
+        principal_did: "did:test:test".to_string(),
+        address: "0x1111111111111111111111111111111111111111".to_string(),
+        key_backend: "keyring".to_string(),
+        attestation: Some("0xsig".to_string()),
+        created_at: Some("2026-08-28T00:00:00Z".to_string()),
+        revoked_at: revoked_at.map(ToOwned::to_owned),
+    }
+}
+
+#[test]
+fn chain_key_revocation_is_sticky_in_desired_state_diff() {
+    let mut desired = empty_manifest("did:test:test");
+    desired
+        .chain_key_bindings
+        .push(chain_key_binding("bind-1", None));
+    let mut live = desired.clone();
+    live.chain_key_bindings[0].revoked_at = Some("2026-08-28T01:00:00Z".to_string());
+
+    let diff = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &desired,
+        Some(&live.agent_principal),
+        &live,
+        false,
+    );
+    assert_eq!(diff.collections.chain_key_bindings.unchanged, ["bind-1"]);
+    assert!(diff.collections.chain_key_bindings.update.is_empty());
 }
 
 fn profile(id: &str) -> DesiredInferenceProfile {
@@ -343,6 +378,67 @@ fn prune_deletes_unreferenced_orphan_backend() {
 }
 
 #[test]
+fn prune_keeps_chain_binding_until_its_eth_tool_is_gone() {
+    let desired = empty_manifest("did:test:test");
+    let mut live = empty_manifest("did:test:test");
+    live.chain_key_bindings
+        .push(chain_key_binding("bind-1", None));
+    live.eth_tools.push(DesiredEthTool {
+        tool_id: "base".to_string(),
+        agent_did: "did:test:test".to_string(),
+        display_name: None,
+        enabled: true,
+        chain_id: 8453,
+        rpc_url: "http://127.0.0.1:8545".to_string(),
+        query_methods: Vec::new(),
+        calls: Vec::new(),
+        key_binding_id: Some("bind-1".to_string()),
+    });
+
+    let deletes = super::prune::prune_safe_deletes(&desired, &live);
+    assert!(deletes_contain(
+        &deletes,
+        gents::Collection::EthTool,
+        "base"
+    ));
+    assert!(
+        !deletes_contain(&deletes, gents::Collection::ChainKeyBinding, "bind-1"),
+        "a live EthTool reference must keep its key binding for this prune pass"
+    );
+}
+
+#[test]
+fn prune_keeps_eth_tool_until_its_selection_is_gone() {
+    let desired = empty_manifest("did:test:test");
+    let mut live = empty_manifest("did:test:test");
+    live.eth_tools.push(DesiredEthTool {
+        tool_id: "base".to_string(),
+        agent_did: "did:test:test".to_string(),
+        display_name: None,
+        enabled: true,
+        chain_id: 8453,
+        rpc_url: "http://127.0.0.1:8545".to_string(),
+        query_methods: Vec::new(),
+        calls: Vec::new(),
+        key_binding_id: None,
+    });
+    let mut selection = sample_tool_selection("default");
+    selection.eth_tool_ids.push("base".to_string());
+    live.tool_selections.push(selection);
+
+    let deletes = super::prune::prune_safe_deletes(&desired, &live);
+    assert!(deletes_contain(
+        &deletes,
+        gents::Collection::ToolSelection,
+        "default"
+    ));
+    assert!(
+        !deletes_contain(&deletes, gents::Collection::EthTool, "base"),
+        "a live ToolSelection reference must keep its EthTool for this prune pass"
+    );
+}
+
+#[test]
 fn prune_blocks_backend_referenced_by_behavior() {
     let desired = empty_manifest("did:test:test");
     let mut live = empty_manifest("did:test:test");
@@ -493,6 +589,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         cross_deployment_spawn_timeout_seconds: None,
         write_tools: Vec::new(),
         datastore_tool_surface_ids: Vec::new(),
+        eth_tool_ids: Vec::new(),
         enable_self_config: false,
         self_config_categories: Vec::new(),
         self_config_no_lockout: false,
@@ -1987,6 +2084,8 @@ pub(super) mod write_manifest_root {
             }],
             skills: Vec::new(),
             datastore_tool_surfaces: Vec::new(),
+            chain_key_bindings: Vec::new(),
+            eth_tools: Vec::new(),
             tool_selections: Vec::new(),
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),

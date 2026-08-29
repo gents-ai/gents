@@ -38,6 +38,8 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -110,6 +112,8 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -165,6 +169,8 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ceiling,
         Vec::new(),
@@ -210,6 +216,8 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ceiling,
         Vec::new(),
@@ -254,6 +262,8 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -297,6 +307,8 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readonly_at(operator_root),
         Vec::new(),
@@ -340,6 +352,8 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -381,6 +395,8 @@ fn readonly_ceiling_clamps_unrestricted_bash_policy() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -420,6 +436,8 @@ fn selection_without_root_inherits_operator_root() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root.clone()),
         Vec::new(),
@@ -472,6 +490,8 @@ fn selection_cli_tools_require_ceiling_entries() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -521,6 +541,8 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ceiling,
         Vec::new(),
@@ -573,6 +595,8 @@ fn selection_mcp_service_allowlist_is_deduped() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -686,6 +710,8 @@ fn background_tool_allowlist_registers_r6_tools() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -726,6 +752,8 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -774,6 +802,8 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             self_config_dry_run: false,
             enable_lsp: false,
             lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -1041,6 +1071,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
         "reporter",
         &selection,
         &surfaces,
+        &[],
         &ToolCeiling::meta_only(),
         Vec::new(),
     )
@@ -1404,6 +1435,7 @@ fn init_like_tool_selection_document(
         defra_query_collections: Some(Vec::new()),
         write_tools: None,
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         enable_self_config: None,
         self_config_categories: None,
         self_config_no_lockout: None,
@@ -1697,6 +1729,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         ]),
         write_tools: None,
         datastore_tool_surface_ids: None,
+        eth_tool_ids: None,
         enable_self_config: None,
         self_config_categories: None,
         self_config_no_lockout: None,
@@ -2056,4 +2089,87 @@ async fn agent_config_alias_expands_to_config_scope() {
             "{denied} must stay outside the agent-config preset"
         );
     }
+}
+
+#[test]
+fn eth_query_tools_advertise_when_selection_has_resolved_queries() {
+    let query = crate::eth::ResolvedEthQuery {
+        tool_id: "base-read".to_string(),
+        chain_id: 8453,
+        rpc_url: "https://mainnet.base.org".to_string(),
+        methods: vec!["eth_chainId".to_string(), "eth_blockNumber".to_string()],
+    };
+    let config = BehaviorToolConfig::from_selection(
+        "ops",
+        ToolSelection {
+            eth_queries: vec![query],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(config
+        .static_policy()
+        .eth_query_methods
+        .permits(&"eth_chainId".to_string()));
+    assert!(!config
+        .static_policy()
+        .eth_query_methods
+        .permits(&"eth_sendRawTransaction".to_string()));
+    assert!(config.static_policy().eth_call_tools.is_deny_all());
+}
+
+#[test]
+fn explain_expands_eth_tool_ids_from_documents() {
+    let agent_did = "did:key:zExplainEth";
+    let selection = crate::document_config::ToolSelectionDocument {
+        selection_id: "sel".to_string(),
+        agent_did: agent_did.to_string(),
+        eth_tool_ids: Some(vec!["base-read".to_string()]),
+        ..Default::default()
+    };
+    let eth_tools = vec![crate::document_config::EthToolDocument {
+        tool_id: "base-read".to_string(),
+        agent_did: agent_did.to_string(),
+        display_name: Some("base".to_string()),
+        enabled: true,
+        chain_id: Some(8453),
+        rpc_url: Some("https://mainnet.base.org".to_string()),
+        query_methods: Some(vec![
+            "eth_blockNumber".to_string(),
+            "eth_chainId".to_string(),
+        ]),
+        calls: None,
+        key_binding_id: None,
+        created_at: None,
+    }];
+    let missing = BehaviorToolConfig::from_tool_selection_document(
+        "ops",
+        &selection,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap_err();
+    assert!(missing.to_string().contains("missing EthTool"));
+
+    let config = BehaviorToolConfig::from_tool_selection_document_with_surfaces(
+        "ops",
+        &selection,
+        &[],
+        &eth_tools,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+    let explanation =
+        config.explain_with_runtime(false, agent_did, &std::collections::HashSet::new());
+    assert!(
+        explanation
+            .tool_names
+            .iter()
+            .any(|name| name == "base-read_query"),
+        "explain must advertise expanded eth tools: {:?}",
+        explanation.tool_names
+    );
 }

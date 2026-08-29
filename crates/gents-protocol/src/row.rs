@@ -847,6 +847,10 @@ pub struct ToolSelectionRow {
     pub defra_query_collections: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub write_tools: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub datastore_tool_surface_ids: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pub eth_tool_ids: Vec<String>,
     #[serde(default)]
     pub enable_self_config: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]

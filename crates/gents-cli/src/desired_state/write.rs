@@ -90,6 +90,13 @@ pub(crate) fn write_manifest_root(
     write_per_doc_collection(root, Collection::Skill, &manifest.skills, no_sidecar)?;
     write_per_doc_collection(
         root,
+        Collection::ChainKeyBinding,
+        &manifest.chain_key_bindings,
+        no_sidecar,
+    )?;
+    write_per_doc_collection(root, Collection::EthTool, &manifest.eth_tools, no_sidecar)?;
+    write_per_doc_collection(
+        root,
         Collection::DatastoreToolSurface,
         &manifest.datastore_tool_surfaces,
         no_sidecar,

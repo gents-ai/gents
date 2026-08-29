@@ -34,6 +34,8 @@ pub struct BehaviorToolConfig {
     defra_query_collections: Vec<String>,
     write_tools: Vec<WriteToolDecl>,
     query_tools: Vec<QueryToolDecl>,
+    eth_queries: Vec<crate::eth::ResolvedEthQuery>,
+    eth_calls: Vec<crate::eth::ResolvedEthCall>,
     self_config: super::SelfConfigToolConfig,
     behavior_policy: ToolPolicySurface,
     ceiling_policy: ToolPolicySurface,
@@ -68,6 +70,8 @@ impl BehaviorToolConfig {
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
             self_config: super::SelfConfigToolConfig::default(),
             behavior_policy: behavior_policy.clone(),
             ceiling_policy: ToolPolicySurface::legacy_non_host_wide(
@@ -104,6 +108,7 @@ impl BehaviorToolConfig {
             behavior_name,
             selection,
             &[],
+            &[],
             ceiling,
             custom_tools,
         )
@@ -113,13 +118,18 @@ impl BehaviorToolConfig {
         behavior_name: &str,
         selection: &crate::document_config::ToolSelectionDocument,
         surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
+        eth_tools: &[crate::document_config::EthToolDocument],
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
         let merged = crate::document_config::merge_datastore_tool_surfaces(selection, surfaces)?;
+        let expanded =
+            crate::agent::document_view::expand_eth_tools_from_docs(selection, eth_tools)?;
         let mut resolved = ToolSelection::from_document(selection)?;
         resolved.write_tools = merged.write_tools;
         resolved.query_tools = merged.query_tools;
+        resolved.eth_queries = expanded.queries;
+        resolved.eth_calls = expanded.calls;
         Self::from_selection_with_subagent_tools(
             behavior_name,
             resolved,
@@ -181,6 +191,8 @@ impl BehaviorToolConfig {
             self_config_dry_run,
             enable_lsp: _,
             lsp_config,
+            eth_queries,
+            eth_calls,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, static_policy.file);
@@ -256,7 +268,16 @@ impl BehaviorToolConfig {
             },
             // A hold requirement narrows the surface (dispatch waits on an
             // operator verdict), so no ceiling filtering applies.
-            approval_required_tools: dedupe_strings(approval_required_tools),
+            approval_required_tools: {
+                let mut names = approval_required_tools;
+                names.extend(
+                    eth_calls
+                        .iter()
+                        .filter(|call| call.is_signing())
+                        .map(|call| call.tool_name.clone()),
+                );
+                dedupe_strings(names)
+            },
             custom_tools,
             enable_memory: static_policy.memory && enable_memory,
             enable_context_budget_tool: static_policy.context_budget && enable_context_budget,
@@ -265,6 +286,8 @@ impl BehaviorToolConfig {
             defra_query_collections: static_policy.defra_query_collections_for_runtime(),
             write_tools: static_policy.write_decls_for_runtime(&write_tools),
             query_tools: static_policy.query_decls_for_runtime(&query_tools),
+            eth_queries,
+            eth_calls,
             // `behavior_name` is the behavior_id on the document path
             // (agent.rs `behavior_config_from_documents`): the identity anchor
             // for "my config". Programmatic builder surfaces that enable
@@ -405,6 +428,29 @@ impl BehaviorToolConfig {
             defra_query_scope: effective_policy.defra_query_collection_scope(),
             write_tools: effective_policy.write_decls_for_runtime(&self.write_tools),
             query_tools: effective_policy.query_decls_for_runtime(&self.query_tools),
+            eth_queries: if effective_policy.eth_query_methods.is_deny_all() {
+                Vec::new()
+            } else {
+                self.eth_queries
+                    .iter()
+                    .cloned()
+                    .filter_map(|mut query| {
+                        query
+                            .methods
+                            .retain(|method| effective_policy.eth_query_methods.permits(method));
+                        (!query.methods.is_empty()).then_some(query)
+                    })
+                    .collect()
+            },
+            eth_calls: if effective_policy.eth_call_tools.is_deny_all() {
+                Vec::new()
+            } else {
+                self.eth_calls
+                    .iter()
+                    .cloned()
+                    .filter(|call| effective_policy.eth_call_tools.permits(&call.tool_name))
+                    .collect()
+            },
             enable_skills: effective_policy.skills,
             self_config: super::SelfConfigToolConfig {
                 enabled: effective_policy.include_self_config(),

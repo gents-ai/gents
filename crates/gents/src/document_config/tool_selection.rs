@@ -634,6 +634,13 @@ pub struct ToolSelectionDocument {
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
     )]
     pub datastore_tool_surface_ids: Option<Vec<String>>,
+    /// Bare `tool_id` refs to same-agent `EthTool` docs. Expanded at snapshot
+    /// build (fail-closed). Empty/absent = no eth tools.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    pub eth_tool_ids: Option<Vec<String>>,
     /// Self-configuration gate (#654): opt-in, never backfilled true.
     pub enable_self_config: Option<bool>,
     /// Self-config category allowlist; unset means the core spine
@@ -891,6 +898,7 @@ pub(crate) async fn load_tool_selection_record(
                 defra_query_collections
                 write_tools
                 datastore_tool_surface_ids
+                eth_tool_ids
                 enable_self_config
                 self_config_categories
                 self_config_no_lockout
@@ -958,6 +966,7 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 defra_query_collections
                 write_tools
                 datastore_tool_surface_ids
+                eth_tool_ids
                 enable_self_config
                 self_config_categories
                 self_config_no_lockout
@@ -1025,6 +1034,7 @@ pub(crate) async fn list_tool_selection_records(
                 defra_query_collections
                 write_tools
                 datastore_tool_surface_ids
+                eth_tool_ids
                 enable_self_config
                 self_config_categories
                 self_config_no_lockout
@@ -1086,6 +1096,7 @@ pub(crate) async fn list_all_tool_selection_records(
                 defra_query_collections
                 write_tools
                 datastore_tool_surface_ids
+                eth_tool_ids
                 enable_self_config
                 self_config_categories
                 self_config_no_lockout
@@ -1225,6 +1236,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_string_list_field(
             "datastore_tool_surface_ids",
             selection.datastore_tool_surface_ids.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "eth_tool_ids",
+            selection.eth_tool_ids.as_deref(),
         ),
         graphql_fields::graphql_optional_bool_field(
             "enable_self_config",
@@ -1369,6 +1384,10 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_string_list_field(
             "datastore_tool_surface_ids",
             selection.datastore_tool_surface_ids.as_deref(),
+        ),
+        graphql_fields::graphql_string_list_field(
+            "eth_tool_ids",
+            selection.eth_tool_ids.as_deref(),
         ),
         graphql_fields::graphql_optional_bool_field(
             "enable_self_config",
