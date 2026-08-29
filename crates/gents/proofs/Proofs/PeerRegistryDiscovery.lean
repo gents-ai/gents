@@ -7,3 +7,4 @@ import Proofs.PeerRegistryDiscovery.ReciprocalConversation
 import Proofs.PeerRegistryDiscovery.BearerClaim
 import Proofs.PeerRegistryDiscovery.DirectoryProjection
 import Proofs.PeerRegistryDiscovery.PersonaRequest
+import Proofs.Enrollment

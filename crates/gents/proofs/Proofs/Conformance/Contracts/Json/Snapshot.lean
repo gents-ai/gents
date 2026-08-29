@@ -15,6 +15,7 @@ import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.Contracts.Json.SessionHydration
+import Proofs.Conformance.Contracts.Json.Enrollment
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
@@ -69,6 +70,12 @@ def snapshotJson : String :=
       ++ sessionHydrationProgressCasesJson ++ ","
     ++ "\"session_hydration_durable_cases\":"
       ++ sessionHydrationDurableCasesJson ++ ","
+    ++ "\"enrollment_cases\":"
+      ++ enrollmentCasesJson ++ ","
+    ++ "\"enrollment_encoding_cases\":"
+      ++ enrollmentEncodingCasesJson ++ ","
+    ++ "\"enrollment_digest_cases\":"
+      ++ enrollmentDigestCasesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"

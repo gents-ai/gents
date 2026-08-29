@@ -17,3 +17,4 @@ import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Conformance.ContractCases.RenderedCapture
 import Proofs.Conformance.ContractCases.AggregateBudget
 import Proofs.Conformance.ContractCases.DurableReduction
+import Proofs.Conformance.ContractCases.Enrollment
