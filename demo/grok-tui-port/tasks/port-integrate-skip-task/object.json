@@ -1,0 +1,9 @@
+{
+  "task_id": "port-integrate-skip-task",
+  "name": "port-integrate-skip-task",
+  "description": null,
+  "behavior_id": "port-integrate-skip",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

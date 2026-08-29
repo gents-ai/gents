@@ -1,0 +1,23 @@
+Grok TUI port run {{ event.correlation }} closed its PortSurface ledger with
+{{ group.count }} rows.
+
+<untrusted_surfaces>
+{{ group.docs }}
+</untrusted_surfaces>
+
+Call `read_grok_port_job` and `read_port_surface` for the complete ledger.
+Required areas are exactly the mandatory set `attach session model context
+tool_call subprocess subagent interrupt`; extra areas are allowed. Confirm:
+
+- row count is within the job's inclusive `surface_min` / `surface_max`;
+- every mandatory area occurs at least once;
+- every `surface_id` is unique and every row uses an allowed verdict;
+- `grok_wire` is self-contained rather than path-only;
+- `evidence` contains quoted source text, not just citations;
+- every implement row has a real live prompt and both wire/document evidence
+  in `live_expect`;
+- every row carries the same non-symbolic commit SHA and repository ID.
+
+Call `write_port_recon_audit` exactly once. Use `status=accepted` only if all
+checks pass; otherwise `status=rejected` and enumerate missing/invalid content
+in `missing_areas` and `summary`. Do not supply `run_id`.

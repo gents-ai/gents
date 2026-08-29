@@ -42,6 +42,11 @@ struct PackManifest {
     await_timeout_secs: u64,
     #[serde(default)]
     scan: Option<PackScan>,
+    /// Bundled graph packages installed into the fresh demo home before seed.
+    /// This lets a pack call a reusable graph without relying on ambient home
+    /// state from a previous run.
+    #[serde(default)]
+    bundled_graph_packages: Vec<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -661,6 +666,18 @@ fn validate_manifest(manifest: &PackManifest) -> Result<()> {
         bail!("expect.source_edges requires expect.signed_provenance=true");
     }
     validate_tool_package(&manifest.init.tool_package)?;
+    let mut graph_packages = BTreeSet::new();
+    for package in &manifest.bundled_graph_packages {
+        let package = package.trim();
+        if package.is_empty() {
+            bail!("bundled_graph_packages entries must not be empty");
+        }
+        if !graph_packages.insert(package) {
+            bail!("bundled_graph_packages contains duplicate {package}");
+        }
+        gents::graph_package::load_bundled_graph_package(package)
+            .with_context(|| format!("loading bundled graph dependency {package}"))?;
+    }
     let mut result_collections = BTreeSet::new();
     for result in &manifest.expect.result_documents {
         validate_collection_identifier(&result.collection)?;
@@ -759,6 +776,36 @@ fn validate_manifest(manifest: &PackManifest) -> Result<()> {
             "init.tool_package={} requires init.tool_root (a read-only/write ceiling needs a workspace root)",
             manifest.init.tool_package
         );
+    }
+    Ok(())
+}
+
+async fn install_bundled_graph_dependencies(
+    bin: &Path,
+    home: &Path,
+    graphql: &str,
+    agent_did: &str,
+    packages: &[String],
+) -> Result<()> {
+    for package in packages {
+        tracing::info!(%package, "installing bundled graph dependency");
+        let args = vec![
+            "graph".to_string(),
+            "install".to_string(),
+            package.clone(),
+            "--home".to_string(),
+            path_arg(home),
+            "--graphql".to_string(),
+            graphql.to_string(),
+            "--agent-did".to_string(),
+            agent_did.to_string(),
+            "--output".to_string(),
+            "json".to_string(),
+        ];
+        run_cli_json(bin, &args)
+            .await
+            .with_context(|| format!("installing bundled graph dependency {package}"))?;
+        tracing::info!(%package, "installed bundled graph dependency");
     }
     Ok(())
 }
@@ -2701,6 +2748,14 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     let outcome = async {
         wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
+        install_bundled_graph_dependencies(
+            &bin,
+            &home,
+            &graphql,
+            &agent_did,
+            &manifest.bundled_graph_packages,
+        )
+        .await?;
         println!(
             "runtime  ready; waiting for {} event source collection(s)…",
             observed_collections.len()
@@ -3197,6 +3252,7 @@ mod tests {
             },
             await_timeout_secs: 1,
             scan: None,
+            bundled_graph_packages: Vec::new(),
         };
 
         let error = validate_manifest(&manifest).expect_err("unsigned source edges must fail");
@@ -4215,6 +4271,7 @@ mod tests {
                 "maintenance-execute-workspace",
                 "MaintenanceReport",
             ),
+            ("grok-tui-port", "port-implement-workspace", "PortWorkUnit"),
         ] {
             let pack = demo.join(pack_name);
             let binding = read_pack_json_defaults(
@@ -4232,7 +4289,74 @@ mod tests {
             let trigger_ids = experiment["expect"]["trigger_ids"]
                 .as_array()
                 .expect("trigger_ids");
-            if pack_name == "repo-maintenance" {
+            if pack_name == "grok-tui-port" {
+                assert!(trigger_ids.iter().any(|id| id == "port-integrate-skip"));
+                assert!(trigger_ids.iter().any(|id| id == "port-recon-audit"));
+                assert!(trigger_ids.iter().any(|id| id == "port-final-review"));
+                assert!(trigger_ids.iter().any(|id| id == "port-publish"));
+                assert!(trigger_ids.iter().any(|id| id == "port-review"));
+                assert!(!pack.join("event_triggers/port-revise").exists());
+                assert!(!pack.join("tasks/port-revise-task").exists());
+                assert_eq!(experiment["bundled_graph_packages"], json!(["code-review"]));
+                let backend_dirs = std::fs::read_dir(pack.join("inference-backends"))
+                    .expect("grok backend directory should load")
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("grok backend entries should load");
+                assert_eq!(backend_dirs.len(), 1);
+                for behavior in std::fs::read_dir(pack.join("agent-behaviors"))
+                    .expect("grok behavior directory should load")
+                {
+                    let behavior = behavior.expect("grok behavior entry should load");
+                    let object = read_pack_json_defaults(&behavior.path().join("object.json"))
+                        .expect("grok behavior should load");
+                    assert_eq!(object["backend_id"], "grok-port-backend-ws1");
+                }
+                assert_eq!(
+                    experiment["expect"]["trigger_request_count_sources"]["port-implement"]
+                        ["match_value"],
+                    "ready"
+                );
+                assert_eq!(
+                    experiment["expect"]["trigger_request_count_sources"]["port-integrate"]
+                        ["match_value"],
+                    "accepted"
+                );
+                assert_eq!(
+                    experiment["expect"]["trigger_request_count_sources"]["port-integrate-skip"]
+                        ["match_value"],
+                    "blocked"
+                );
+                let skip_trigger = read_pack_json_defaults(
+                    &pack
+                        .join("event_triggers")
+                        .join("port-integrate-skip")
+                        .join("object.json"),
+                )
+                .expect("port-integrate-skip trigger should load");
+                assert_eq!(skip_trigger["source_collection"], "PortUnitClosure");
+                assert_eq!(skip_trigger["filter"], "{ status: { _eq: \"blocked\" } }");
+                let route_review =
+                    std::fs::read_to_string(pack.join("tasks/port-review-task/prompt.md"))
+                        .expect("route review prompt should load");
+                assert!(route_review.contains("git diff {{ doc.base_sha }}"));
+                assert!(!route_review.contains("gents graph run code-review"));
+                let final_review =
+                    std::fs::read_to_string(pack.join("tasks/port-final-review-task/prompt.md"))
+                        .expect("final review prompt should load");
+                assert!(final_review.contains("gents graph run code-review"));
+                assert!(final_review.contains("At most two full rounds"));
+                let publish =
+                    std::fs::read_to_string(pack.join("tasks/port-publish-task/prompt.md"))
+                        .expect("publish prompt should load");
+                for gate in [
+                    "failed_count=0",
+                    "blocked_count=0",
+                    "coverage_complete=true",
+                    "expected_count=observed_count",
+                ] {
+                    assert!(publish.contains(gate), "publish is missing {gate}");
+                }
+            } else if pack_name == "repo-maintenance" {
                 assert!(trigger_ids
                     .iter()
                     .any(|id| id == "maintenance-execute-skip"));
@@ -4315,6 +4439,8 @@ mod tests {
 
             let patch_or_execute = if pack_name == "defending-code" {
                 pack.join("tasks/defend-patch-task/prompt.md")
+            } else if pack_name == "grok-tui-port" {
+                pack.join("tasks/port-implement-task/prompt.md")
             } else {
                 pack.join("tasks/maintenance-execute-task/prompt.md")
             };
@@ -4544,6 +4670,7 @@ mod tests {
             },
             await_timeout_secs: 1,
             scan: None,
+            bundled_graph_packages: Vec::new(),
         };
         let error = validate_manifest(&manifest).expect_err("readonly needs tool_root");
         assert!(error.to_string().contains("tool_root"), "{error}");

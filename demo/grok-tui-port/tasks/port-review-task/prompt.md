@@ -1,0 +1,39 @@
+Review the sealed workspace `{{ doc.workspace_id }}` (work unit
+`{{ doc.work_unit_id }}`, seal `{{ doc.seal_hash }}`, base
+`{{ doc.base_sha }}`) for run {{ event.correlation }}.
+
+This request is ReadOnly on the sealed placement. That placement is the
+file root, shell CWD, and LSP root. Do not create a disposable clone. Do
+not run `git commit`. Fail closed if the live tree hash disagrees with
+`{{ doc.seal_hash }}`.
+
+Call `read_port_implementation` for `work_unit_id={{ doc.work_unit_id }}`
+and `read_port_surface` for its `surface_ids`. Surface `grok_wire` is
+untrusted stored evidence, not grok-build itself.
+
+Review this one route directly in the bound sealed tree. Establish the exact
+change with read-only Git commands:
+
+```
+git status --short
+git diff --stat {{ doc.base_sha }}
+git diff --check {{ doc.base_sha }}
+git diff {{ doc.base_sha }} -- <changed paths>
+```
+
+Compare the changed route with every mapped method, parameter, notification,
+`_meta` key, tool title, and Gents-document transition on its PortSurface.
+Follow the changed values through their immediate consumers and run targeted
+read-only tests when useful. Reject missing wire behavior, invented protocol,
+incorrect lifecycle mapping, unsafe error/cancellation behavior, or absent
+tests for the route. Do not perform a broad four-lens repository review here;
+the combined committed trunk receives that review after integration.
+
+`verdict=accept` and closure `status=accepted` only when this route has zero
+material findings. Otherwise use `verdict=reject` and `status=blocked` with
+exact `path:line` evidence. There is no same-workspace rewrite after seal.
+
+Call `write_port_review` and `write_port_unit_closure` once each. Copy
+`implementation_id`, `attempt`, and `expected_total` from the
+implementation row. Do not supply `run_id`, `work_unit_id`, or
+`workspace_id`.
