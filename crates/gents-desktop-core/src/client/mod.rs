@@ -13,8 +13,8 @@ mod sync_projection;
 pub use collection_resolver::CollectionResolver;
 pub use core::{
     BearerInvitePreview, BearerPairingResult, ClientCore, ClientCoreOptions, ClientPeerStatus,
-    ClientRouteStatus, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
-    PairingCollectionStatus, STUCK_THRESHOLD_ATTEMPTS,
+    ClientRouteStatus, ClientSyncStateSnapshot, EnrollmentRequestResult, P2PHealth,
+    P2PHealthStatus, PairingCollectionStatus, STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{

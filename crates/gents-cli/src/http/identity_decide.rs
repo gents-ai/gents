@@ -315,6 +315,7 @@ mod tests {
             None,
             None,
             None,
+            crate::http::enrollment::empty_issuer_handle(),
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;

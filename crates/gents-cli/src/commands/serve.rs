@@ -636,6 +636,7 @@ pub(crate) async fn serve_with_control(
     preflight_embedded_http_bind(http_addr).await?;
     let bind_probe_token = Uuid::new_v4().simple().to_string();
     let bind_probe_path = format!("/_gents/http-bind/{}", Uuid::new_v4().simple());
+    let enrollment_offer_issuer = crate::http::enrollment::empty_issuer_handle();
     let extra_routes = runtime_contract_router(
         graphql_url.clone(),
         agent_name.clone(),
@@ -644,6 +645,7 @@ pub(crate) async fn serve_with_control(
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
         Some(codex_shim_health.clone()),
+        enrollment_offer_issuer.clone(),
     )
     .merge(embedded_http_probe_router(
         &bind_probe_path,
@@ -670,6 +672,13 @@ pub(crate) async fn serve_with_control(
         return Err(error);
     }
     gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    let enrollment_network = crate::http::enrollment::ensure_enrollment_network(
+        node.as_ref(),
+        identity.as_ref(),
+        &agent_name,
+    )
+    .await
+    .context("ensuring authenticated enrollment network")?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
     let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
     let (configuration_tx, mut configuration_rx) =
@@ -753,6 +762,16 @@ pub(crate) async fn serve_with_control(
 
     let p2p_status =
         load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission).await?;
+    if let Some(p2p) = node.p2p_arc() {
+        *enrollment_offer_issuer.write().await =
+            Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
+                identity.clone(),
+                p2p,
+                enrollment_network.network_id,
+                identity.did().to_string(),
+                "client".to_string(),
+            ));
+    }
 
     let mut codex_shim_output = None;
     let codex_shim_bind_args = CodexShimBindArgs {

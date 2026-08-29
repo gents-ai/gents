@@ -10,6 +10,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
+use crate::http::enrollment::EnrollmentOfferIssuerHandle;
 use crate::http::fleet::load_fleet_snapshot;
 use crate::http::fleet_slots::load_fleet_slot_snapshot;
 use crate::http::healthz::render_healthz_payload;
@@ -42,6 +43,7 @@ pub(crate) struct RuntimeHttpState {
     /// HTTP surface is already serving (#699). `None` when the host does not run
     /// a shim at all (embedders, desktop).
     pub(crate) codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
+    pub(crate) enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
 }
 
 pub(crate) fn runtime_contract_router(
@@ -55,6 +57,7 @@ pub(crate) fn runtime_contract_router(
     backend_health: Option<gents::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
     codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
+    enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
@@ -74,6 +77,7 @@ pub(crate) fn runtime_contract_router(
         p2p_metrics_cache: Arc::new(Mutex::new(None)),
         p2p_http_client,
         codex_shim_health,
+        enrollment_offer_issuer,
     };
 
     let mut router = Router::new()
@@ -305,6 +309,24 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     }
 
     if let Some(map) = body.as_object_mut() {
+        let enrollment = match state.enrollment_offer_issuer.read().await.clone() {
+            Some(issuer) => match issuer.mint().await {
+                Ok(offer) => crate::http::enrollment::EnrollmentStatus::Available {
+                    token: offer.token,
+                    offer: offer.offer,
+                },
+                Err(error) => {
+                    tracing::warn!(error = %error, "failed to mint authenticated enrollment offer");
+                    crate::http::enrollment::EnrollmentStatus::Unavailable {
+                        reason: "offer_mint_failed",
+                    }
+                }
+            },
+            None => crate::http::enrollment::EnrollmentStatus::Unavailable {
+                reason: "runtime_not_ready",
+            },
+        };
+        map.insert("enrollment".to_string(), json!(enrollment));
         crate::commands::p2p::flatten_p2p_fields(map, &p2p);
     }
 
@@ -515,6 +537,7 @@ mod tests {
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             p2p_http_client: reqwest::Client::new(),
             codex_shim_health: None,
+            enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
         }
     }
 

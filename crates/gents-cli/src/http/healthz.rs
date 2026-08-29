@@ -174,6 +174,7 @@ mod tests {
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             p2p_http_client: reqwest::Client::new(),
             codex_shim_health: None,
+            enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
         }
     }
 

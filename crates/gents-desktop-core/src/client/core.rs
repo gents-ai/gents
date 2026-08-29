@@ -1,5 +1,6 @@
 pub(super) mod bearer_pairing;
 mod bootstrap;
+mod enrollment;
 mod p2p_ops;
 mod route_manager;
 mod supervisor;
@@ -32,6 +33,7 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use bearer_pairing::{BearerInvitePreview, BearerPairingResult};
+pub use enrollment::EnrollmentRequestResult;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);

@@ -53,6 +53,7 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
         .iter()
         .chain(ALL_COLLECTION_NAMES.iter())
         .filter(|name| !gents_protocol::schemas::is_local_audit_collection(name))
+        .filter(|name| !gents_protocol::schemas::is_local_only_collection(name))
         .copied()
         .collect()
 }
@@ -103,5 +104,12 @@ mod tests {
         assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&"AgentBehaviorReadiness"));
         assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
             .contains(&"AgentBehaviorReadiness"));
+    }
+
+    #[test]
+    fn local_admin_pin_is_never_subscribed_or_broad_synced() {
+        let names = subscribed_collection_names();
+        assert!(!names.contains(&"NetworkAdminPin"));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&"NetworkAdminPin"));
     }
 }
