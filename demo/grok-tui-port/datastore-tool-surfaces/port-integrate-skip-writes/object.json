@@ -1,0 +1,23 @@
+{
+  "surface_id": "port-integrate-skip-writes",
+  "agent_did": "did:key:zGrokTuiPortAgentPlaceholder00000000000000000000000",
+  "display_name": "Skip integrate for a blocked work unit",
+  "enabled": true,
+  "entries": [
+    {
+      "tool_name": "write_port_integrate_result",
+      "collection": "PortIntegrateResult",
+      "description": "Record that a blocked work unit was not applied.",
+      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "fields": [
+        {"name": "run_id", "required": false, "fill": "correlation"},
+        {"name": "integrate_id", "required": true},
+        {"name": "work_unit_id", "required": false, "fill": {"source_field": "work_unit_id"}},
+        {"name": "workspace_id", "required": false, "fill": {"source_field": "workspace_id"}},
+        {"name": "status", "required": true},
+        {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}},
+        {"name": "summary", "required": true}
+      ]
+    }
+  ]
+}

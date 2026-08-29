@@ -1,0 +1,9 @@
+{
+  "task_id": "port-plan-skip-task",
+  "name": "port-plan-skip-task",
+  "description": null,
+  "behavior_id": "port-plan-skip",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

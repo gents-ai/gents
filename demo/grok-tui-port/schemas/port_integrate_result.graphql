@@ -1,0 +1,9 @@
+type PortIntegrateResult {
+  run_id: String @index @immutable
+  integrate_id: String @index(unique: true) @immutable
+  work_unit_id: String @immutable
+  workspace_id: String @immutable
+  status: String @immutable
+  expected_total: String @immutable
+  summary: String @immutable
+}

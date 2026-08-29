@@ -1,0 +1,9 @@
+{
+  "task_id": "port-publish-task",
+  "name": "port-publish-task",
+  "description": null,
+  "behavior_id": "port-publish",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

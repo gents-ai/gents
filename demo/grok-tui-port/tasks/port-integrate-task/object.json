@@ -1,0 +1,9 @@
+{
+  "task_id": "port-integrate-task",
+  "name": "port-integrate-task",
+  "description": null,
+  "behavior_id": "port-integrate",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

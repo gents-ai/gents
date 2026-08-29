@@ -1,0 +1,18 @@
+{
+  "behavior_id": "port-integrate-skip",
+  "agent_did": "did:key:zGrokTuiPortAgentPlaceholder00000000000000000000000",
+  "display_name": "Skip integrate for a blocked unit",
+  "description": "Write a skipped integrate result; no workspace apply.",
+  "summary": null,
+  "system_prompt": "./system_prompt.md",
+  "request_context_template": null,
+  "backend_id": "grok-port-backend-ws1",
+  "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
+  "tool_selection_id": "port-integrate-skip-tools",
+  "inference_profile_id": "grok-port-profile",
+  "compaction_strategy": null,
+  "compaction_threshold": null,
+  "enabled": true,
+  "skill_refs": [],
+  "skill_excludes": []
+}

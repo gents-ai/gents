@@ -1,0 +1,9 @@
+{
+  "task_id": "port-recon-audit-task",
+  "name": "port-recon-audit-task",
+  "description": null,
+  "behavior_id": "port-recon-audit",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

@@ -10,6 +10,7 @@ that agent.
 ```bash
 # Run a pack end to end: init, apply, seed, await, report. Exit code is the result.
 gents demo run pipeline
+gents demo run grok-tui-port         # map grok-build, implement a Gents Grok TUI shim, prove with live GLM
 
 gents demo list                      # what packs exist
 gents demo run pipeline --prompt "…" # override the seed prompt
