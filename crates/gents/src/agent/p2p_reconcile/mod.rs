@@ -7,6 +7,7 @@ pub mod embedded_impl;
 pub mod endpoint;
 pub mod engine;
 pub mod enrollment;
+pub mod enrollment_store;
 pub mod error_class;
 mod graphql_helpers;
 pub mod intervals;
@@ -44,6 +45,9 @@ pub use engine::{
     update_applied_after_success, GraphqlPairingStateStore, LoadedPairingApplied,
     PairingStateStore, PairingTickOutcome, MAX_CONCURRENT_PEER_PREPARATIONS,
     PAIRING_SWEEP_INTERVAL,
+};
+pub use enrollment_store::{
+    ActiveEnrollment, EnrollmentProjection, GraphqlEnrollmentStore, PendingEnrollment,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use network::{
