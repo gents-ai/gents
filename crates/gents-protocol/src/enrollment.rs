@@ -311,6 +311,76 @@ impl EnrollmentDecisionRecord {
             ],
         )
     }
+
+    pub fn validate_against_request(&self, request: &EnrollmentRequestRecord) -> Result<()> {
+        anyhow::ensure!(
+            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
+            "unsupported enrollment decision version {}",
+            self.protocol_version
+        );
+        anyhow::ensure!(
+            self.request_id == request.request_id,
+            "decision request_id mismatch"
+        );
+        anyhow::ensure!(
+            self.request_digest == request.request_digest,
+            "decision request_digest mismatch"
+        );
+        anyhow::ensure!(
+            self.network_id == request.network_id,
+            "decision network_id mismatch"
+        );
+        anyhow::ensure!(
+            self.admin_did == request.admin_did,
+            "decision admin_did mismatch"
+        );
+        anyhow::ensure!(
+            self.candidate_did == request.candidate_did,
+            "decision candidate_did mismatch"
+        );
+        anyhow::ensure!(
+            self.candidate_peer == request.candidate_peer,
+            "decision candidate_peer mismatch"
+        );
+        anyhow::ensure!(
+            self.owner_agent == request.owner_agent,
+            "decision owner_agent mismatch"
+        );
+        anyhow::ensure!(
+            self.signer_did == request.admin_did,
+            "decision signer mismatch"
+        );
+        anyhow::ensure!(
+            self.decision_id == derive_decision_id(&request.request_id, &request.request_digest),
+            "decision_id mismatch"
+        );
+        match self.decision {
+            EnrollmentDecisionKind::Approved => anyhow::ensure!(
+                self.authorization_sequence > 0,
+                "approved decision requires a positive authorization sequence"
+            ),
+            EnrollmentDecisionKind::Denied => anyhow::ensure!(
+                self.authorization_sequence == 0,
+                "denied decision cannot allocate an authorization sequence"
+            ),
+        }
+        anyhow::ensure!(
+            self.authorization_sequence <= i64::MAX as u64,
+            "decision authorization sequence exceeds the DefraDB Int range"
+        );
+        anyhow::ensure!(
+            self.admin_sig.len() == 64,
+            "invalid decision signature length"
+        );
+        let request_issued = parse_canonical_timestamp("request issued_at", &request.issued_at)?;
+        let request_expires = parse_canonical_timestamp("request expires_at", &request.expires_at)?;
+        let decided = parse_canonical_timestamp("decision decided_at", &self.decided_at)?;
+        anyhow::ensure!(
+            request_issued <= decided && decided <= request_expires,
+            "decision is outside the signed request window"
+        );
+        Ok(())
+    }
 }
 
 impl AuthorizationRevisionRecord {
@@ -336,6 +406,122 @@ impl AuthorizationRevisionRecord {
             ],
         )
     }
+
+    pub fn validate_against_approval(
+        &self,
+        request: &EnrollmentRequestRecord,
+        decision: &EnrollmentDecisionRecord,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
+            "unsupported authorization revision version {}",
+            self.protocol_version
+        );
+        anyhow::ensure!(
+            decision.decision == EnrollmentDecisionKind::Approved,
+            "authorization revision requires an approved decision"
+        );
+        anyhow::ensure!(
+            self.request_id == request.request_id,
+            "revision request_id mismatch"
+        );
+        anyhow::ensure!(
+            self.request_digest == request.request_digest,
+            "revision request_digest mismatch"
+        );
+        anyhow::ensure!(
+            self.network_id == request.network_id,
+            "revision network_id mismatch"
+        );
+        anyhow::ensure!(
+            self.admin_did == request.admin_did,
+            "revision admin_did mismatch"
+        );
+        anyhow::ensure!(
+            self.member_did == request.candidate_did,
+            "revision member_did mismatch"
+        );
+        anyhow::ensure!(
+            self.member_peer == request.candidate_peer,
+            "revision member_peer mismatch"
+        );
+        anyhow::ensure!(
+            self.owner_agent == request.owner_agent,
+            "revision owner_agent mismatch"
+        );
+        anyhow::ensure!(
+            self.signer_did == request.admin_did,
+            "revision signer mismatch"
+        );
+        anyhow::ensure!(
+            self.sequence > 0,
+            "authorization revision sequence must be positive"
+        );
+        anyhow::ensure!(
+            self.sequence <= i64::MAX as u64,
+            "authorization revision sequence exceeds the DefraDB Int range"
+        );
+        anyhow::ensure!(
+            self.revision_id
+                == derive_revision_id(
+                    &self.network_id,
+                    &self.member_did,
+                    self.sequence,
+                    &self.kind,
+                    &self.request_digest,
+                ),
+            "revision_id mismatch"
+        );
+        match self.kind {
+            AuthorizationRevisionKind::Active => anyhow::ensure!(
+                self.sequence == decision.authorization_sequence,
+                "active revision sequence must equal its approval"
+            ),
+            AuthorizationRevisionKind::Revoked => anyhow::ensure!(
+                self.sequence > decision.authorization_sequence,
+                "revocation must dominate its approval"
+            ),
+        }
+        anyhow::ensure!(
+            self.admin_sig.len() == 64,
+            "invalid revision signature length"
+        );
+        parse_canonical_timestamp("revision issued_at", &self.issued_at)?;
+        Ok(())
+    }
+}
+
+pub fn derive_decision_id(request_id: &str, request_digest: &str) -> String {
+    format!(
+        "decision-{}",
+        derive_enrollment_id(
+            "gents-enrollment-decision-id-v1",
+            &[request_id, request_digest],
+        )
+    )
+}
+
+pub fn derive_revision_id(
+    network_id: &str,
+    member_did: &str,
+    sequence: u64,
+    kind: &AuthorizationRevisionKind,
+    request_digest: &str,
+) -> String {
+    let sequence = sequence.to_string();
+    format!(
+        "authorization-{}",
+        derive_enrollment_id(
+            "gents-network-authorization-id-v1",
+            &[
+                network_id,
+                member_did,
+                &sequence,
+                kind.as_str(),
+                request_digest
+            ],
+        )
+    )
 }
 
 pub fn canonical_enrollment_payload<'a>(fields: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
@@ -608,6 +794,54 @@ mod tests {
         };
         request.request_digest = request.computed_digest();
         assert!(request.validate_against_offer(&offer).is_ok());
+
+        let decision = EnrollmentDecisionRecord {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            decision_id: derive_decision_id(&request.request_id, &request.request_digest),
+            request_id: request.request_id.clone(),
+            request_digest: request.request_digest.clone(),
+            network_id: request.network_id.clone(),
+            admin_did: request.admin_did.clone(),
+            candidate_did: request.candidate_did.clone(),
+            candidate_peer: request.candidate_peer.clone(),
+            owner_agent: request.owner_agent.clone(),
+            decision: EnrollmentDecisionKind::Approved,
+            authorization_sequence: 1,
+            decided_at: "2026-08-29T00:02:00Z".into(),
+            signer_did: request.admin_did.clone(),
+            admin_sig: vec![3; 64],
+        };
+        assert!(decision.validate_against_request(&request).is_ok());
+        let revision = AuthorizationRevisionRecord {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            revision_id: derive_revision_id(
+                &request.network_id,
+                &request.candidate_did,
+                1,
+                &AuthorizationRevisionKind::Active,
+                &request.request_digest,
+            ),
+            request_id: request.request_id.clone(),
+            request_digest: request.request_digest.clone(),
+            network_id: request.network_id.clone(),
+            admin_did: request.admin_did.clone(),
+            member_did: request.candidate_did.clone(),
+            member_peer: request.candidate_peer.clone(),
+            owner_agent: request.owner_agent.clone(),
+            sequence: 1,
+            kind: AuthorizationRevisionKind::Active,
+            issued_at: decision.decided_at.clone(),
+            signer_did: request.admin_did.clone(),
+            admin_sig: vec![4; 64],
+        };
+        assert!(revision
+            .validate_against_approval(&request, &decision)
+            .is_ok());
+
+        let mut opposite = decision.clone();
+        opposite.decision = EnrollmentDecisionKind::Denied;
+        assert_eq!(opposite.decision_id, decision.decision_id);
+        assert!(opposite.validate_against_request(&request).is_err());
 
         request.expires_at = "2026-08-29T00:06:00Z".into();
         request.request_digest = request.computed_digest();
