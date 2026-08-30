@@ -4596,6 +4596,10 @@ mod tests {
                 assert!(implement_prompt.contains("at most 12"));
                 assert!(implement_prompt.contains("Do not search Cargo registries"));
                 assert!(implement_prompt.contains("bounded `EmbeddedNode::execute` polling"));
+                assert!(implement_prompt.contains("Immediately after the scaffold is complete"));
+                assert!(implement_prompt.contains("request_helpers.rs:32-45,295-424"));
+                assert!(implement_prompt.contains("Do not run `cargo`, `rustc`"));
+                assert!(implement_prompt.contains("without piping through `tail`"));
                 assert!(implement_prompt.contains("do not change schemas, Lean proofs"));
                 assert!(implement_prompt.contains("fresh `grok_shim` module"));
                 let implement_behavior = read_pack_json_defaults(
