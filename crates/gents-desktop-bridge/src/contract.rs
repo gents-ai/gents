@@ -35,7 +35,7 @@ pub const CONTRACT_VERSION: &str = "4.0";
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "88444c308e1d96ecf2bc8589f141ec99bd38e330965ad8dfe0b3f63339144afe";
+    "ca9ff3b1c6a7a121b75d68ed134d6d4d76136116d3b89b74ed3ebdce331afc2b";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
