@@ -161,6 +161,8 @@ struct PackExpect {
     #[serde(default)]
     tool_calls: Vec<ToolCallExpectation>,
     #[serde(default)]
+    stage_tool_sequences: Vec<StageToolSequenceExpectation>,
+    #[serde(default)]
     result_documents: Vec<ResultDocumentExpectation>,
 }
 
@@ -195,6 +197,16 @@ struct ToolCallExpectation {
     symbol: Option<String>,
     #[serde(default)]
     result_contains: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StageToolSequenceExpectation {
+    trigger_id: String,
+    boundary_tool_name: String,
+    max_calls_before_boundary: usize,
+    max_calls_per_message_before_boundary: usize,
+    exact_boundary_calls: usize,
+    allowed_at_or_after_boundary: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -744,6 +756,43 @@ fn validate_manifest(manifest: &PackManifest) -> Result<()> {
             }
         }
     }
+    let mut sequenced_triggers = BTreeSet::new();
+    for expected in &manifest.expect.stage_tool_sequences {
+        if !manifest.expect.trigger_ids.contains(&expected.trigger_id) {
+            bail!(
+                "expect.stage_tool_sequences names unknown trigger {}",
+                expected.trigger_id
+            );
+        }
+        if !sequenced_triggers.insert(&expected.trigger_id) {
+            bail!(
+                "expect.stage_tool_sequences contains duplicate trigger {}",
+                expected.trigger_id
+            );
+        }
+        if expected.boundary_tool_name.trim().is_empty() {
+            bail!("expect.stage_tool_sequences boundary_tool_name must not be empty");
+        }
+        if expected.exact_boundary_calls == 0 {
+            bail!("expect.stage_tool_sequences exact_boundary_calls must be greater than zero");
+        }
+        if expected.max_calls_per_message_before_boundary == 0 {
+            bail!(
+                "expect.stage_tool_sequences max_calls_per_message_before_boundary must be greater than zero"
+            );
+        }
+        if !expected
+            .allowed_at_or_after_boundary
+            .iter()
+            .any(|name| name == &expected.boundary_tool_name)
+        {
+            bail!(
+                "expect.stage_tool_sequences for {} must allow its boundary tool {}",
+                expected.trigger_id,
+                expected.boundary_tool_name
+            );
+        }
+    }
     if let Some(fan_in) = &manifest.expect.fan_in {
         if fan_in.min_expected_count == Some(0) || fan_in.max_expected_count == Some(0) {
             bail!("expect.fan_in count bounds must be greater than zero");
@@ -1104,6 +1153,141 @@ struct StageResult {
     request_id: String,
     lifecycle_state: RequestLifecycleState,
     caused_by_source_doc_id: Option<String>,
+}
+
+async fn verify_stage_tool_sequences(
+    graphql: &str,
+    stage: &StageResult,
+    expectations: &[StageToolSequenceExpectation],
+) -> Result<()> {
+    for expected in expectations
+        .iter()
+        .filter(|expected| expected.trigger_id == stage.trigger_id)
+    {
+        let escaped = escape_graphql_string(&stage.request_id);
+        let query = format!(
+            r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
+                message_sequence
+                tool_name
+                lifecycle_state
+            }} }}"#
+        );
+        let rows = graphql_rows(graphql, "AgentToolCall", &query).await?;
+        verify_stage_tool_sequence_rows(stage, expected, &rows)?;
+    }
+    Ok(())
+}
+
+fn verify_stage_tool_sequence_rows(
+    stage: &StageResult,
+    expected: &StageToolSequenceExpectation,
+    rows: &[Value],
+) -> Result<()> {
+    let sequence_and_name = rows
+        .iter()
+        .map(|row| {
+            let sequence = row
+                .get("message_sequence")
+                .and_then(Value::as_i64)
+                .with_context(|| {
+                    format!(
+                        "trigger {} request {} has a tool call without message_sequence",
+                        stage.trigger_id, stage.request_id
+                    )
+                })?;
+            let name = row
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .with_context(|| {
+                    format!(
+                        "trigger {} request {} has a tool call without tool_name",
+                        stage.trigger_id, stage.request_id
+                    )
+                })?;
+            Ok((sequence, name))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let boundary_sequence = sequence_and_name
+        .iter()
+        .filter(|(_, name)| *name == expected.boundary_tool_name)
+        .map(|(sequence, _)| *sequence)
+        .min()
+        .with_context(|| {
+            format!(
+                "trigger {} request {} never called boundary tool {}",
+                stage.trigger_id, stage.request_id, expected.boundary_tool_name
+            )
+        })?;
+    let calls_before_boundary = sequence_and_name
+        .iter()
+        .filter(|(sequence, _)| *sequence < boundary_sequence)
+        .count();
+    if calls_before_boundary > expected.max_calls_before_boundary {
+        bail!(
+            "trigger {} request {} made {} tool calls before {}; maximum is {}",
+            stage.trigger_id,
+            stage.request_id,
+            calls_before_boundary,
+            expected.boundary_tool_name,
+            expected.max_calls_before_boundary
+        );
+    }
+    let mut calls_by_message = BTreeMap::new();
+    for (sequence, _) in sequence_and_name
+        .iter()
+        .filter(|(sequence, _)| *sequence < boundary_sequence)
+    {
+        *calls_by_message.entry(sequence).or_insert(0usize) += 1;
+    }
+    if let Some((sequence, count)) = calls_by_message
+        .into_iter()
+        .find(|(_, count)| *count > expected.max_calls_per_message_before_boundary)
+    {
+        bail!(
+            "trigger {} request {} made {} tool calls in pre-boundary message {}; maximum is {}",
+            stage.trigger_id,
+            stage.request_id,
+            count,
+            sequence,
+            expected.max_calls_per_message_before_boundary
+        );
+    }
+    let boundary_calls = sequence_and_name
+        .iter()
+        .filter(|(_, name)| *name == expected.boundary_tool_name)
+        .count();
+    if boundary_calls != expected.exact_boundary_calls {
+        bail!(
+            "trigger {} request {} called {} {} times; expected exactly {}",
+            stage.trigger_id,
+            stage.request_id,
+            expected.boundary_tool_name,
+            boundary_calls,
+            expected.exact_boundary_calls
+        );
+    }
+    let disallowed = sequence_and_name
+        .iter()
+        .filter(|(sequence, name)| {
+            *sequence >= boundary_sequence
+                && !expected
+                    .allowed_at_or_after_boundary
+                    .iter()
+                    .any(|allowed| allowed == *name)
+        })
+        .map(|(_, name)| *name)
+        .collect::<Vec<_>>();
+    if !disallowed.is_empty() {
+        bail!(
+            "trigger {} request {} called disallowed tools at or after {} began: {}",
+            stage.trigger_id,
+            stage.request_id,
+            expected.boundary_tool_name,
+            disallowed.join(", ")
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -1826,6 +2010,7 @@ async fn await_stages(
     trigger_ids: &[String],
     trigger_request_counts: &BTreeMap<String, usize>,
     trigger_request_count_sources: &BTreeMap<String, TriggerRequestCountSource>,
+    stage_tool_sequences: &[StageToolSequenceExpectation],
     correlation: &str,
     deadline: Duration,
 ) -> Result<Vec<StageResult>> {
@@ -1874,7 +2059,7 @@ async fn await_stages(
                             .unwrap_or_default();
                         bail!("trigger {trigger_id} request {request_id} ended {state}: {reason}");
                     }
-                    done.push(StageResult {
+                    let stage = StageResult {
                         trigger_id: trigger_id.clone(),
                         request_id: request_id.to_string(),
                         lifecycle_state: RequestLifecycleState::Completed,
@@ -1882,7 +2067,9 @@ async fn await_stages(
                             .get("caused_by_source_doc_id")
                             .and_then(Value::as_str)
                             .map(ToOwned::to_owned),
-                    });
+                    };
+                    verify_stage_tool_sequences(graphql, &stage, stage_tool_sequences).await?;
+                    done.push(stage);
                 }
             }
         }
@@ -2797,6 +2984,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             &manifest.expect.trigger_ids,
             &manifest.expect.trigger_request_counts,
             &manifest.expect.trigger_request_count_sources,
+            &manifest.expect.stage_tool_sequences,
             &job_id,
             Duration::from_secs(manifest.await_timeout_secs),
         )
@@ -3248,6 +3436,7 @@ mod tests {
                 prompt_tool_contracts: Vec::new(),
                 background_completion: None,
                 tool_calls: Vec::new(),
+                stage_tool_sequences: Vec::new(),
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
@@ -4342,8 +4531,11 @@ mod tests {
                 assert!(!route_review.contains("gents graph run code-review"));
                 let recon = std::fs::read_to_string(pack.join("tasks/port-recon-task/prompt.md"))
                     .expect("recon prompt should load");
-                assert!(recon.contains("target budget of 40 total"));
-                assert!(recon.contains("Every function in a parallel tool-call"));
+                assert!(recon.contains("hard budget of 40 total"));
+                assert!(recon.contains("function in a parallel tool-call"));
+                assert!(recon.contains("no more than four discovery calls"));
+                assert!(recon.contains("no more than ten discovery batches"));
+                assert!(recon.contains("eleventh inference must"));
                 assert!(recon.contains("endpoint-probe"));
                 assert!(recon.contains("numbered list"));
                 assert!(recon.contains("do not interleave discovery"));
@@ -4360,7 +4552,17 @@ mod tests {
                     &pack.join("inference-profiles/grok-port-recon-profile/object.json"),
                 )
                 .expect("recon profile should load");
-                assert_eq!(recon_profile["max_turns"], 30);
+                assert_eq!(recon_profile["max_turns"], 10);
+                let sequence = &experiment["expect"]["stage_tool_sequences"][0];
+                assert_eq!(sequence["trigger_id"], "port-recon");
+                assert_eq!(sequence["boundary_tool_name"], "write_port_surface");
+                assert_eq!(sequence["max_calls_before_boundary"], 40);
+                assert_eq!(sequence["max_calls_per_message_before_boundary"], 4);
+                assert_eq!(sequence["exact_boundary_calls"], 13);
+                assert_eq!(
+                    sequence["allowed_at_or_after_boundary"],
+                    serde_json::json!(["write_port_surface"])
+                );
                 let implement_prompt =
                     std::fs::read_to_string(pack.join("tasks/port-implement-task/prompt.md"))
                         .expect("implement prompt should load");
@@ -4609,6 +4811,82 @@ mod tests {
     }
 
     #[test]
+    fn stage_tool_sequence_is_fail_closed_at_the_write_boundary() {
+        let stage = StageResult {
+            trigger_id: "recon".into(),
+            request_id: "request-1".into(),
+            lifecycle_state: "completed".into(),
+            caused_by_source_doc_id: None,
+        };
+        let expected = StageToolSequenceExpectation {
+            trigger_id: "recon".into(),
+            boundary_tool_name: "write_row".into(),
+            max_calls_before_boundary: 2,
+            max_calls_per_message_before_boundary: 2,
+            exact_boundary_calls: 2,
+            allowed_at_or_after_boundary: vec!["write_row".into()],
+        };
+        let row = |sequence, name| {
+            json!({
+                "message_sequence": sequence,
+                "tool_name": name,
+                "lifecycle_state": "completed"
+            })
+        };
+        let valid = vec![
+            row(2, "read_file"),
+            row(2, "grep"),
+            row(4, "write_row"),
+            row(4, "write_row"),
+        ];
+        verify_stage_tool_sequence_rows(&stage, &expected, &valid)
+            .expect("bounded consecutive writes should pass");
+
+        let over_budget = vec![
+            row(2, "read_file"),
+            row(2, "grep"),
+            row(3, "glob"),
+            row(4, "write_row"),
+            row(4, "write_row"),
+        ];
+        let error = verify_stage_tool_sequence_rows(&stage, &expected, &over_budget)
+            .expect_err("the pre-write budget must be enforced");
+        assert!(error.to_string().contains("maximum is 2"));
+
+        let oversized_batch = vec![
+            row(2, "read_file"),
+            row(2, "grep"),
+            row(2, "glob"),
+            row(4, "write_row"),
+            row(4, "write_row"),
+        ];
+        let mut batch_expected = StageToolSequenceExpectation {
+            trigger_id: "recon".into(),
+            boundary_tool_name: "write_row".into(),
+            max_calls_before_boundary: 3,
+            max_calls_per_message_before_boundary: 2,
+            exact_boundary_calls: 2,
+            allowed_at_or_after_boundary: vec!["write_row".into()],
+        };
+        let error = verify_stage_tool_sequence_rows(&stage, &batch_expected, &oversized_batch)
+            .expect_err("the per-message discovery ceiling must be enforced");
+        assert!(error.to_string().contains("pre-boundary message"));
+        batch_expected.max_calls_per_message_before_boundary = 3;
+        verify_stage_tool_sequence_rows(&stage, &batch_expected, &oversized_batch)
+            .expect("the configured per-message discovery ceiling should pass");
+
+        let interleaved = vec![
+            row(2, "read_file"),
+            row(3, "write_row"),
+            row(3, "grep"),
+            row(3, "write_row"),
+        ];
+        let error = verify_stage_tool_sequence_rows(&stage, &expected, &interleaved)
+            .expect_err("discovery in the first write batch must be rejected");
+        assert!(error.to_string().contains("disallowed tools"));
+    }
+
+    #[test]
     fn background_completion_expectation_requires_the_whole_delivery_path() {
         let expected = BackgroundCompletionExpectation {
             min_completed_subagent_requests: 2,
@@ -4739,6 +5017,7 @@ mod tests {
                 prompt_tool_contracts: Vec::new(),
                 background_completion: None,
                 tool_calls: Vec::new(),
+                stage_tool_sequences: Vec::new(),
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,

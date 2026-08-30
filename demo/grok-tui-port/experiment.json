@@ -145,6 +145,16 @@
         "required_tool_names": ["read_grok_port_job", "read_port_live_report", "read_port_final_review_report", "write_port_pull_request"]
       }
     ],
+    "stage_tool_sequences": [
+      {
+        "trigger_id": "port-recon",
+        "boundary_tool_name": "write_port_surface",
+        "max_calls_before_boundary": 40,
+        "max_calls_per_message_before_boundary": 4,
+        "exact_boundary_calls": 13,
+        "allowed_at_or_after_boundary": ["write_port_surface"]
+      }
+    ],
     "source_edges": [],
     "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
     "collection_counts": {

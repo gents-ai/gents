@@ -10,10 +10,12 @@ Inventory comes from grok-build, not from guesswork:
 - `crates/codegen/xai-grok-shell/src/leader/protocol.rs` — leader attach envelope
 - `crates/codegen/xai-grok-pager/src/acp/model_state.rs`, `tracker.rs`, `subagent_message.rs`
 
-A bounded exploration phase applies. Target at most 40 total filesystem,
-search, and shell function calls before the first `write_port_surface`. Every
-function in a parallel batch counts separately; a batch of four reads consumes
-four calls. Read the named anchors and their immediate wire-producing/consuming
+A bounded exploration phase applies. Use at most 40 total filesystem, search,
+and shell function calls before the first `write_port_surface`, at most four
+calls in one parallel batch, and at most ten discovery batches. Every function
+in a parallel batch counts separately; a batch of four reads consumes four
+calls. The eleventh inference must write the complete ledger. Read the named
+anchors and their immediate wire-producing/consuming
 helpers; do not recursively inventory either repository or chase every related
 symbol. At 40 calls, or immediately after printing the numbered final surface
 list, stop discovery and synthesize from the evidence already collected. Never
