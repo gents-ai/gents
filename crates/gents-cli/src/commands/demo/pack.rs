@@ -4566,16 +4566,39 @@ mod tests {
                 assert!(!route_review.contains("gents graph run code-review"));
                 let recon = std::fs::read_to_string(pack.join("tasks/port-recon-task/prompt.md"))
                     .expect("recon prompt should load");
-                assert!(recon.contains("hard budget of 40 total"));
-                assert!(recon.contains("function in a parallel tool-call"));
-                assert!(recon.contains("no more than four discovery calls"));
-                assert!(recon.contains("no more than ten discovery batches"));
-                assert!(recon.contains("eleventh inference must"));
-                assert!(recon.contains("endpoint-probe"));
+                assert!(recon.contains("audited-ledger.json"));
+                assert!(recon.contains("call `read_file`\nexactly once"));
+                assert!(recon.contains("call `write_port_surface` exactly 13"));
+                assert!(recon.contains("Do not\nsearch, grep, glob, list files, run shell"));
                 assert!(recon.contains("numbered list"));
-                assert!(recon.contains("do not interleave discovery"));
                 assert!(recon.contains("call `write_port_surface` exactly N times"));
                 assert!(recon.contains("N+1th write invalidates the run"));
+                let recon_tools = read_pack_json_defaults(
+                    &pack.join("tool-selections/port-recon-tools/object.json"),
+                )
+                .expect("recon tool selection should load");
+                assert_eq!(recon_tools["enable_bash"], false);
+                assert_eq!(recon_tools["command_network_mode"], "disabled");
+                assert_eq!(
+                    recon_tools["file_tool_root"],
+                    "./demo/grok-tui-port/recon-input"
+                );
+                let audited_ledger: Value = serde_json::from_slice(
+                    &std::fs::read(pack.join("recon-input/audited-ledger.json"))
+                        .expect("audited recon ledger should exist"),
+                )
+                .expect("audited recon ledger should be valid JSON");
+                assert_eq!(
+                    audited_ledger["provenance"]["grok_build_sha"],
+                    "bc7f02eddd3d84085849dc19ed216f11c23b0571"
+                );
+                assert_eq!(
+                    audited_ledger["surfaces"]
+                        .as_array()
+                        .expect("audited surfaces should be an array")
+                        .len(),
+                    13
+                );
                 let recon_behavior =
                     read_pack_json_defaults(&pack.join("agent-behaviors/port-recon/object.json"))
                         .expect("recon behavior should load");
@@ -4587,12 +4610,12 @@ mod tests {
                     &pack.join("inference-profiles/grok-port-recon-profile/object.json"),
                 )
                 .expect("recon profile should load");
-                assert_eq!(recon_profile["max_turns"], 10);
+                assert_eq!(recon_profile["max_turns"], 1);
                 let sequence = &experiment["expect"]["stage_tool_sequences"][0];
                 assert_eq!(sequence["trigger_id"], "port-recon");
                 assert_eq!(sequence["boundary_tool_name"], "write_port_surface");
-                assert_eq!(sequence["max_calls_before_boundary"], 40);
-                assert_eq!(sequence["max_calls_per_message_before_boundary"], 4);
+                assert_eq!(sequence["max_calls_before_boundary"], 1);
+                assert_eq!(sequence["max_calls_per_message_before_boundary"], 1);
                 assert_eq!(sequence["exact_boundary_calls"], 13);
                 assert_eq!(
                     sequence["allowed_at_or_after_boundary"],
