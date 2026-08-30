@@ -104,13 +104,28 @@ slice begins instead of searching for symbols:
 Do not run `cargo`, `rustc`, or another build command until slices 1 through 5
 and their tests are written. The worker shell sandbox may block clang temporary
 files unless its temporary directory is inside the workspace. When implementation
-is complete, run exactly this one admitted shell command once:
+is complete, run this exact admitted shell command:
 `TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`. Do not add a
 pipe, redirection, separator, wrapper, `echo`, or preceding shell probe. Its real
 exit status must be preserved. Do not use the shell for grep, git inspection,
-formatting, or any other check; use native tools. If this exact Cargo command
-still reports a temporary-file sandbox failure, do not diagnose or retry it.
+formatting, or any other check; use native tools. If it returns real source
+compiler/test diagnostics, fix every diagnostic and rerun the identical command,
+up to four total executions. If it is `policyDenied` or reports a temporary-file
+sandbox failure, do not diagnose or retry it.
 The host/reviewer will run the full package gate outside the worker sandbox.
+
+Before the first Cargo execution, use native grep on the fresh shim and close
+this wire checklist with focused tests: `session/set_model`, `session/set_mode`,
+`x.ai/models/update`, `x.ai/compact_conversation`, `x.ai/interject`,
+`x.ai/session/interjection`, `session/cancel`, `available_commands_update`,
+`subagent_spawned`, `subagent_progress`, `subagent_finished`, and the shaped
+stub `terminal/create`, `terminal/output`, `terminal/wait_for_exit`,
+`terminal/kill`, and `terminal/release`. The permission gate remains the one
+ignored surface. Do not claim coverage for a wire name absent from code/tests.
+Compiler compatibility reminders for this workspace: Tokio `read_exact` may
+return a byte count, enums formatted with `{:?}` require `Debug`, compare owned
+and borrowed status strings explicitly, and never return a borrowed input as
+`&'static str`.
 
 Do not search Cargo registries, Cargo git checkouts, subscription APIs, or any
 grok-build path after recon. The ledger's `grok_wire` and evidence are the

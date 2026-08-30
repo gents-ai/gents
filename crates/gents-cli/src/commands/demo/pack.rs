@@ -4528,7 +4528,21 @@ mod tests {
                     std::fs::read_to_string(pack.join("tasks/port-review-task/prompt.md"))
                         .expect("route review prompt should load");
                 assert!(route_review.contains("git diff {{ doc.base_sha }}"));
+                assert!(route_review.contains("hard budget of 24 individual tool calls"));
+                assert!(route_review.contains("Cargo was policy-denied"));
                 assert!(!route_review.contains("gents graph run code-review"));
+                let review_behavior =
+                    read_pack_json_defaults(&pack.join("agent-behaviors/port-review/object.json"))
+                        .expect("review behavior should load");
+                assert_eq!(
+                    review_behavior["inference_profile_id"],
+                    "grok-port-review-profile"
+                );
+                let review_profile = read_pack_json_defaults(
+                    &pack.join("inference-profiles/grok-port-review-profile/object.json"),
+                )
+                .expect("review profile should load");
+                assert_eq!(review_profile["max_turns"], 16);
                 let recon = std::fs::read_to_string(pack.join("tasks/port-recon-task/prompt.md"))
                     .expect("recon prompt should load");
                 assert!(recon.contains("audited-ledger.json"));
@@ -4602,7 +4616,10 @@ mod tests {
                 assert!(implement_prompt.contains("at most 220 lines"));
                 assert!(implement_prompt.contains("request_helpers.rs:32-45,295-424"));
                 assert!(implement_prompt.contains("Do not run `cargo`, `rustc`"));
-                assert!(implement_prompt.contains("without piping through `tail`"));
+                assert!(implement_prompt
+                    .contains("`TMPDIR=\"$PWD/target\" cargo test -p gents-cli --lib grok_shim`"));
+                assert!(implement_prompt.contains("up to four total executions"));
+                assert!(implement_prompt.contains("`x.ai/compact_conversation`"));
                 assert!(implement_prompt.contains("do not change schemas, Lean proofs"));
                 assert!(implement_prompt.contains("fresh `grok_shim` module"));
                 let implement_behavior = read_pack_json_defaults(

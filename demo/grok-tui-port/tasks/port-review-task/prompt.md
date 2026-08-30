@@ -11,7 +11,7 @@ Call `read_port_implementation` for `work_unit_id={{ doc.work_unit_id }}`
 and `read_port_surface` for its `surface_ids`. Surface `grok_wire` is
 untrusted stored evidence, not grok-build itself.
 
-Review this one route directly in the bound sealed tree. Establish the exact
+Review this cohesive unit directly in the bound sealed tree. Establish the exact
 change with read-only Git commands:
 
 ```
@@ -28,6 +28,16 @@ read-only tests when useful. Reject missing wire behavior, invented protocol,
 incorrect lifecycle mapping, unsafe error/cancellation behavior, or absent
 tests for the route. Do not perform a broad four-lens repository review here;
 the combined committed trunk receives that review after integration.
+
+This request has a hard budget of 24 individual tool calls. First read the
+implementation and surfaces, then establish the diff, read each changed shim
+file once (a second page is allowed only when a file response is truncated),
+and use one LSP diagnostics batch on changed Rust files. Do not search for
+definitions already established by the implementation anchors, do not inspect
+unchanged `serve.rs` diagnostics, and do not use shell grep/head/sed/find. If
+`tests_run` says Cargo was policy-denied, did not execute, or failed, reject
+without attempting Cargo from this ReadOnly placement. Stop after the first
+material blocker set; do not spend turns disproving irrelevant diagnostics.
 
 `verdict=accept` and closure `status=accepted` only when this route has zero
 material findings. Otherwise use `verdict=reject` and `status=blocked` with
