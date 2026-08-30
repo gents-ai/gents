@@ -44,8 +44,12 @@ fixed acceptance criteria for this unit:
   `leader.sock.lock`. Open that exact lock with `O_NOFOLLOW`, force its mode to
   `0600` even when the file already existed, take
   `flock(LOCK_EX | LOCK_NB)`, replace its contents with the current PID, and
-  keep the open `File` alive for the entire listener task. A second shim must
-  fail while the first owns the lock.
+  keep the open `File` alive for the entire listener task. The guard must be
+  moved into the spawned accept-loop future (or another owner with exactly the
+  same lifetime), never left in the synchronous spawn function where it drops
+  on return. A focused regression test must start the actual listener through
+  its production spawn path and prove a second lock acquisition fails while
+  that listener is still serving.
 - Publish the socket securely: walk existing ancestors of the requested target
   parent to choose a same-device ancestor where a private staging directory
   with mode `0700` and a deliberately short socket basename fit within
@@ -53,8 +57,16 @@ fixed acceptance criteria for this unit:
   atomically into place. Creating staging only beneath the requested parent is
   insufficient because a long parent can make the staging path unbindable.
   Include separate tests for a near-limit public path with a long parent and a
-  long filename. Never follow a lock symlink or expose a permissive socket
-  between bind and chmod.
+  long filename. Both tests must use a deliberately short explicit Unix temp
+  root such as `/tmp` despite the Cargo command's long `TMPDIR`, and must
+  actually bind, publish, connect, and clean up; conditional skips or
+  staging-selection-only fallbacks are not evidence. Never follow a lock
+  symlink or expose a permissive socket between bind and chmod.
+- The pager sends `register` first. Read and validate exactly one
+  `ClientEnvelope::Register` before sending `ServerEnvelope::Registered`;
+  never send `registered` proactively on accept. Add a duplex test that sends
+  `register`, observes `registered`, then proves ping/pong and disconnect, plus
+  a pre-registration negative test.
 - The registered version is
   `format!("gents-{}", env!("CARGO_PKG_VERSION"))`; the bare string `gents` is
   not acceptable. Resolve the model name, context window, and optional behavior
@@ -68,8 +80,12 @@ fixed acceptance criteria for this unit:
   outbound send; if the registry entry was already drained/missing/cancelled,
   immediately interrupt that just-submitted request. Every outbound-send
   failure after submission must also interrupt before finishing the prompt.
-  Add focused tests for disconnect-before-request-id and send-failure-after-
-  submission so no submitted request can become orphaned.
+  A cancel-before-request-id race must additionally finish/remove the pending
+  registry entry and resolve the still-connected deferred `session/prompt`
+  response with `stopReason="cancelled"`; it must not wedge later prompts.
+  Add focused tests for cancel-before-request-id, disconnect-before-request-id,
+  and send-failure-after-submission that assert interruption, response/cleanup
+  where the connection remains live, and acceptance of the next prompt.
 - Every inline GraphQL value uses `gents::graphql::escape_graphql_string`.
   Project `AgentResponse` by request id (latest row), `AgentMessage` by request
   id ordered by sequence, `AgentToolCall` by request id, and child

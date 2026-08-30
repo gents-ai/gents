@@ -40,19 +40,28 @@ The leader election and projection invariants are settled too. Hold Grok's
 sibling extension-swapped lock (`leader.sock` -> `leader.lock` via
 `with_extension("lock")`, never `leader.sock.lock`) with `O_NOFOLLOW`, forced
 `0600` permissions even for an existing file, nonblocking exclusive `flock`,
-and the current PID for the listener lifetime. Atomically publish a `0600`
-socket from a `0700` staging directory placed at a short same-device ancestor;
-staging only under a long requested parent is insufficient. The short staging
-socket must work for near-`sun_path` public paths with both long-parent and
-long-filename tests. Advertise
+and the current PID for the listener lifetime: move the guard into the spawned
+accept-loop owner so returning from the spawn function cannot release it, and
+test the production spawn path against a second acquisition. Atomically
+publish a `0600` socket from a `0700` staging directory placed at a short
+same-device ancestor; staging only under a long requested parent is
+insufficient. The short staging socket must work for near-`sun_path` public
+paths with both long-parent and long-filename tests that use an explicit short
+Unix temp root and really bind/connect even when Cargo sets a long `TMPDIR`.
+The pager sends `register` first; never emit `registered` until that envelope
+has been read and validated. Advertise
 `format!("gents-{}", env!("CARGO_PKG_VERSION"))`. Pending JSON-RPC ids belong
 to a connection; disconnect interrupts that connection's requests, including
 when disconnect races request submission before the returned request id is
-recorded or when the first post-submission outbound send fails. Project
+recorded or when the first post-submission outbound send fails. A cancellation
+that wins before request-id recording must interrupt the returned request,
+remove the pending entry, and resolve the live deferred prompt as cancelled so
+the next prompt is accepted. Project
 messages by request id, not the whole session, escape every GraphQL string, and
 deduplicate durable materialization from streaming overlays. Subagent get,
 list-running, and cancel return the exact shaped not-found/empty successful
-results in the task prompt. Use `tracing`, never `println!` or `eprintln!`.
+results in the task prompt. Use `tracing`, never `println!` or `eprintln!`, in
+every changed file including CLI/serve wiring outside the shim directory.
 
 After each edit, use at most 12 individual filesystem/search/shell calls before
 the next tracked edit. Build in this fixed order: Unix listener plus
