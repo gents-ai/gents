@@ -25,7 +25,9 @@ Call `write_port_work_unit` once per unit with:
 - `verdict`: `implement` or `shaped-stub`
 - `status`: `ready`
 - `attempt`: `1`
-- `branch`: `gents/<work_unit_id>` (unique; do not reuse the job PR branch)
+- `branch`: `gents/{{ event.correlation }}/unit-<nn>` (unique and Git-ref
+  safe; use the same two-digit ordinal as `work_unit_id`; never copy the `:`
+  separators from `work_unit_id` into a branch; do not reuse the job PR branch)
 - `expected_total`: number of work units, same on every unit
 - copy `area`, `grok_call_sites`, `grok_wire`, `gents_docs`, `live_prompt`,
   `live_expect`, and `evidence` verbatim from the members
