@@ -24,10 +24,16 @@ Read grok-build under `{{ doc.grok_root }}` and Gents under
 `subprocess`, `subagent`, `interrupt`. Later stages cannot open grok-build;
 the wire packet on each row is the only grok-build the implementer will see.
 
-You have a hard budget of 64 total filesystem, search, and shell tool calls
-before the first ledger write. Prefer targeted ranges and searches in the
-named anchor files. Do not broaden into a repository inventory. When the
-budget is reached, stop reading and write from the collected evidence; do not interleave more discovery between ledger writes.
+You have a target budget of 40 total filesystem, search, and shell function
+calls before the first ledger write. Every function in a parallel tool-call
+batch counts separately; never count a batch as one call. Prefer targeted
+ranges and searches in the named anchor files. Do not broaden into a
+repository inventory. At 40 calls, or as soon as you print the numbered final
+surface list, stop reading and write from the collected evidence. Do not call
+another filesystem, search, shell, endpoint-probe, or context tool after the
+numbered list, and do not interleave discovery between ledger writes. The
+request also has a finite runtime turn ceiling; spend the remaining turns on
+the complete ledger rather than optional evidence.
 
 Write between {{ doc.surface_min }} and {{ doc.surface_max }} `PortSurface`
 rows. Put the same integer `expected_total` on every row, equal to the
