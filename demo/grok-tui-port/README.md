@@ -1,7 +1,7 @@
 # Grok TUI port pack
 
 Map the Grok TUI wire from `grok-build`, audit the closed protocol ledger,
-implement a Gents-only thin client in isolated git worktrees, directly review
+implement a Gents-owned Grok leader shim in isolated git worktrees, directly review
 each small sealed route, serial-apply accepted diffs onto the operator checkout
 (one trunk), run the bundled full **code-review** graph on the committed
 combined result, prove that exact reviewed head with live GLM turns, then open
@@ -11,6 +11,11 @@ This pack does not add DefraDB access-control policy and does not implement
 Grok permission UI. Threat model is reachability of the Gents server / leader
 socket. Workers never `make worktree` or `git commit`; the host creates,
 seals, and integrates worktrees.
+
+Gents is the leader-socket server in this port. It binds the Unix socket and
+stock `grok --leader --leader-socket <path>` connects as the pager client. The
+shim reads Grok `ClientMessage` frames, writes `ServerMessage` frames, and maps
+ACP traffic onto Gents documents; it does not launch Grok's own leader process.
 
 ```text
 GrokPortJob

@@ -4399,9 +4399,13 @@ mod tests {
                 let implement_prompt =
                     std::fs::read_to_string(pack.join("tasks/port-implement-task/prompt.md"))
                         .expect("implement prompt should load");
-                assert!(implement_prompt.contains("third tool"));
+                assert!(implement_prompt.contains("next tool batch"));
                 assert!(implement_prompt.contains("filesystem searches or shell commands"));
                 assert!(implement_prompt.contains("four-byte big-endian frame codec"));
+                assert!(implement_prompt.contains("Gents is the\nleader server"));
+                assert!(implement_prompt.contains("at most 12"));
+                assert!(implement_prompt.contains("Do not search Cargo registries"));
+                assert!(implement_prompt.contains("bounded `EmbeddedNode::execute` polling"));
                 assert!(implement_prompt.contains("do not change schemas, Lean proofs"));
                 assert!(implement_prompt.contains("fresh `grok_shim` module"));
                 let implement_behavior = read_pack_json_defaults(
