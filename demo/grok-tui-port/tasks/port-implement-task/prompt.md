@@ -32,12 +32,20 @@ redesigning it:
   focused tests; shaped-stub commands remain record-only and permission UI is
   out of scope
 
-Before the first edit, use at most 40 filesystem, search, and shell function
-calls. Every function in a parallel batch counts separately. Once you state a
-file plan, stop architectural exploration and edit immediately. By 48 calls
-you must have made a tracked edit or fail the run instead of continuing to
-narrate. After edits begin, inspect only what is needed to compile and test.
-Run the tests that belong to this unit.
+The first two tool calls are the required datastore reads above. The third tool
+batch must use `write_file` or `edit_file` to make these tracked scaffold edits:
+
+- add `mod grok_shim;` to `crates/gents-cli/src/commands/mod.rs`
+- create `crates/gents-cli/src/commands/grok_shim.rs`, declaring a fresh
+  `protocol` submodule
+- create `crates/gents-cli/src/commands/grok_shim/protocol.rs` with the initial
+  four-byte big-endian frame codec and its focused unit tests
+
+An incomplete scaffold is expected; build it out after the edit. Do not run
+filesystem searches or shell commands before this scaffold, and do not use the
+shell to edit files. After edits begin, inspect only the exact launch/helper
+signatures needed for the next compile-tested slice. Run the tests that belong
+to this unit.
 
 Call `write_port_implementation` once with a unique `implementation_id`,
 `work_unit_id={{ doc.work_unit_id }}`, copied `surface_ids`, `attempt=1`,
