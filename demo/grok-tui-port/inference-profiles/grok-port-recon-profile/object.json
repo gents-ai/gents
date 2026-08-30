@@ -3,7 +3,7 @@
   "display_name": "Bounded Grok TUI reconnaissance profile",
   "context_window": ${GENTS_GROK_PORT_CONTEXT_WINDOW:-524288},
   "max_output_tokens": ${GENTS_GROK_PORT_MAX_OUTPUT_TOKENS:-65536},
-  "max_turns": ${GENTS_GROK_PORT_RECON_MAX_TURNS:-10},
+  "max_turns": ${GENTS_GROK_PORT_RECON_MAX_TURNS:-1},
   "temperature": ${GENTS_GROK_PORT_RECON_TEMPERATURE:-0.1},
   "top_p": ${GENTS_GROK_PORT_TOP_P:-0.95},
   "top_k": null,
