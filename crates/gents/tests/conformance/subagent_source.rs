@@ -232,7 +232,7 @@ async fn trusted_path_uses_targeted_bridge_without_parent_request() {
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(coordinator_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let _source = crate::support::fixtures::spawn_subagent_source_with_authorized_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
@@ -255,7 +255,7 @@ async fn trusted_path_uses_targeted_bridge_without_parent_request() {
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.agent_did, local_did);
-    assert_eq!(child.requester_did.as_deref(), Some(coordinator_did));
+    assert_eq!(child.requester_did.as_deref(), Some(local_did.as_str()));
     assert_eq!(child.subagent_depth, Some(2));
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),
@@ -269,8 +269,9 @@ async fn trusted_path_uses_targeted_bridge_without_parent_request() {
 }
 
 #[tokio::test]
-async fn trusted_path_normalizes_requester_did_before_stamping_route() {
+async fn trusted_path_rejects_noncanonical_bridge_author() {
     let db = test_db("r3-subagent-source-xdep-requester-normalization").await;
+    let agent_did = db.node_identity.did().to_string();
     let child_request_id = "r3-child-normalized-requester";
     let (parent_request_doc_id, parent_tool_call_doc_id) = write_targeted_cross_deployment_bridge(
         db.node.as_ref(),
@@ -279,12 +280,12 @@ async fn trusted_path_normalizes_requester_did_before_stamping_route() {
         "r3-tc-normalized-requester",
         child_request_id,
         "test",
-        crate::support::AGENT_DID,
+        &agent_did,
         0,
     )
     .await;
 
-    create_subagent_request_with_trusted_parent_request_id(
+    let error = create_subagent_request_with_trusted_parent_request_id(
         db.node.as_ref(),
         child_request_id.to_string(),
         "r3-parent-not-replicated".to_string(),
@@ -292,20 +293,23 @@ async fn trusted_path_normalizes_requester_did_before_stamping_route() {
         "r3-tc-normalized-requester".to_string(),
         parent_tool_call_doc_id,
         0,
-        crate::support::AGENT_DID.to_string(),
+        agent_did.clone(),
         "test".to_string(),
         "prompt".to_string(),
         None,
         "  did:key:zNormalizedRequester  ".to_string(),
     )
     .await
-    .expect("trusted child request should normalize requester DID");
-
-    let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
-    assert_eq!(
-        child.requester_did.as_deref(),
-        Some("did:key:zNormalizedRequester")
-    );
+    .expect_err("signed bridge author identifiers must be canonical before authoring");
+    assert!(error
+        .to_string()
+        .contains("AgentRequest parent linkage incoherent"));
+    assert_no_child_request_for_tool(
+        db.node.as_ref(),
+        "r3-tc-normalized-requester",
+        Duration::ZERO,
+    )
+    .await;
 }
 
 async fn wait_for_child_interrupt_latch(
@@ -875,19 +879,25 @@ async fn create_subagent_request_rejects_tool_call_from_another_parent_document(
 #[tokio::test]
 async fn create_subagent_request_enforces_depth_boundary() {
     let db = test_db("r3-subagent-source-depth").await;
-    let parent_request_doc_id = crate::support::create_request(
+    let agent_did = db.node_identity.did().to_string();
+    let parent_request_doc_id = crate::support::create_request_for_agent_with_signed_fields(
         db.node.as_ref(),
+        &agent_did,
         "r3-parent-depth",
         "r3-session-depth",
         "processing",
         &chrono::Utc::now().to_rfc3339(),
+        None,
+        None,
+        None,
+        None,
     )
     .await;
     let mut bridge = ToolCallLifecycle::new(
         db.node.clone(),
         "r3-parent-depth".to_string(),
         "r3-session-depth".to_string(),
-        crate::support::AGENT_DID.to_string(),
+        agent_did.clone(),
         "r3-tc-depth-max".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -906,7 +916,7 @@ async fn create_subagent_request_enforces_depth_boundary() {
         "r3-tc-depth-max".to_string(),
         parent_tool_call_doc_id,
         MAX_SUBAGENT_DEPTH - 1,
-        crate::support::AGENT_DID.to_string(),
+        agent_did,
         "test".to_string(),
         "prompt".to_string(),
         None,
@@ -1250,7 +1260,7 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let _source = crate::support::fixtures::spawn_subagent_source_with_authorized_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
@@ -1309,7 +1319,7 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let _source = crate::support::fixtures::spawn_subagent_source_with_authorized_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
@@ -1367,7 +1377,7 @@ async fn trusted_path_refuses_spawn_targeting_other_host() {
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let _source = crate::support::fixtures::spawn_subagent_source_with_authorized_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
@@ -1426,7 +1436,7 @@ async fn trusted_path_refuses_missing_spawn_target_did() {
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let _source = crate::support::fixtures::spawn_subagent_source_with_authorized_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
@@ -1826,25 +1836,31 @@ async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupt
 #[tokio::test]
 async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() {
     let db = test_db("r3-subagent-source-orphan-recovery").await;
+    let agent_did = db.node_identity.did().to_string();
     let parent_request_id = "r3-parent-orphan";
     let parent_session_id = "r3-session-orphan";
     let parent_tool_call_id = "r3-tc-orphan";
     let child_request_id = "child-orphan-1";
     ensure_parent_subagent_authorization(
         db.node.as_ref(),
-        crate::support::AGENT_DID,
+        &agent_did,
         crate::support::AGENT_NAME,
         vec![crate::support::AGENT_NAME.to_string()],
         true,
         true,
     )
     .await;
-    let parent_request_doc_id = crate::support::create_request(
+    let parent_request_doc_id = crate::support::create_request_for_agent_with_signed_fields(
         db.node.as_ref(),
+        &agent_did,
         parent_request_id,
         parent_session_id,
         "processing",
         &chrono::Utc::now().to_rfc3339(),
+        None,
+        None,
+        None,
+        None,
     )
     .await;
     create_orphan_subagent_tool_call(
@@ -1854,10 +1870,11 @@ async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() 
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
+        &agent_did,
     )
     .await;
 
-    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), crate::support::AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), &agent_did)
         .await
         .unwrap();
     assert_eq!(
@@ -1917,6 +1934,7 @@ async fn recovery_rejects_unauthorized_orphan_child_request() {
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
+        crate::support::AGENT_DID,
     )
     .await;
 
@@ -1966,6 +1984,7 @@ async fn recovery_rejects_orphan_when_spawn_disabled_even_with_authorized_target
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
+        crate::support::AGENT_DID,
     )
     .await;
 
@@ -2014,6 +2033,7 @@ async fn recovery_rejects_background_orphan_when_background_disabled() {
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
+        crate::support::AGENT_DID,
         AwaitMode::Background,
     )
     .await;
@@ -2482,6 +2502,7 @@ async fn create_orphan_subagent_tool_call(
     parent_session_id: &str,
     parent_tool_call_id: &str,
     child_request_id: &str,
+    agent_did: &str,
 ) {
     create_orphan_subagent_tool_call_with_await_mode(
         node,
@@ -2490,6 +2511,7 @@ async fn create_orphan_subagent_tool_call(
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
+        agent_did,
         AwaitMode::Foreground,
     )
     .await;
@@ -2502,6 +2524,7 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
     parent_session_id: &str,
     parent_tool_call_id: &str,
     child_request_id: &str,
+    agent_did: &str,
     await_mode: AwaitMode,
 ) {
     let escaped_parent_request_id = escape_graphql_string(parent_request_id);
@@ -2509,7 +2532,8 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let escaped_spawn_target_did = escape_graphql_string(crate::support::AGENT_DID);
+    let escaped_spawn_target_did = escape_graphql_string(agent_did);
+    let agent_did = escape_graphql_string(agent_did);
     let tool_call_key = format!("{escaped_parent_session_id}:{escaped_parent_tool_call_id}");
     let args = serde_json::json!({
         "behavior_id": crate::support::AGENT_NAME,
@@ -2547,7 +2571,6 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
                 latency_ms: null
             }}) {{ _docID }}
         }}"#,
-        agent_did = escape_graphql_string(crate::support::AGENT_DID),
     );
     let response = node.execute(&mutation).await;
     assert!(

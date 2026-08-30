@@ -8,8 +8,7 @@ use clap::{Parser, Subcommand};
 use gents_desktop_core::client::DesktopPaths;
 use gents_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, default_agent_home, init_standard_local_runtime,
-    init_status_endpoint_runtime, render_human_summary, reset_desktop_runtime_state,
-    DesktopInitOptions, StatusEndpointInitOptions,
+    render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
 };
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -25,7 +24,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    #[command(about = "Discover and save a local or status-endpoint Gents runtime")]
+    #[command(about = "Discover and save a local Gents runtime")]
     Init(InitArgs),
 }
 
@@ -33,13 +32,6 @@ enum Command {
 struct InitArgs {
     #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
     agent_home: Option<PathBuf>,
-    #[arg(
-        long,
-        visible_aliases = ["status-url", "graphql", "graphql-endpoint"],
-        value_name = "URL",
-        help = "Remote Gents /status or GraphQL endpoint to seed as the initial desktop deployment"
-    )]
-    status_endpoint: Option<String>,
     #[arg(
         long,
         help = "Desktop data directory. Defaults to the platform-local desktop data dir"
@@ -89,20 +81,12 @@ fn run_command(command: Command) -> anyhow::Result<()> {
             } else if args.reset {
                 let _ = reset_desktop_runtime_state(&desktop_paths)?;
             }
-            let summary = if let Some(status_endpoint) = args.status_endpoint {
-                runtime.block_on(init_status_endpoint_runtime(StatusEndpointInitOptions {
-                    desktop_paths,
-                    status_endpoint,
-                    label: args.label,
-                }))?
-            } else {
-                let agent_home = args.agent_home.unwrap_or(default_agent_home()?);
-                runtime.block_on(init_standard_local_runtime(DesktopInitOptions {
-                    agent_home,
-                    desktop_paths,
-                    label: args.label.unwrap_or_else(|| "Local Agent".to_string()),
-                }))?
-            };
+            let agent_home = args.agent_home.unwrap_or(default_agent_home()?);
+            let summary = runtime.block_on(init_standard_local_runtime(DesktopInitOptions {
+                agent_home,
+                desktop_paths,
+                label: args.label.unwrap_or_else(|| "Local Agent".to_string()),
+            }))?;
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             } else {

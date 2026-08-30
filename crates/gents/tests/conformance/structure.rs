@@ -58,10 +58,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             Module("conformance/pairing_reconcile.rs"),
         ),
         (
-            "PeerRegistryDiscovery",
-            Module("conformance/peer_registry_discovery.rs"),
-        ),
-        (
             "Persistence",
             Boundary("fail-open/closed policies are an accepted boundary (Boundaries.lean)"),
         ),

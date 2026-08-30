@@ -188,19 +188,9 @@ test.describe("desktop responsive layout guardrails", () => {
       .click();
 
     const statusForm = page.getByTestId("fleet-status-form");
-    const manualAlternative = page.locator(".fleet-manual-disclosure");
-    const signedAlternative = page.locator(".fleet-alternative-disclosure");
     await expect(statusForm).toBeVisible();
-    await expect(manualAlternative).not.toHaveAttribute("open", "");
-    await expect(signedAlternative).not.toHaveAttribute("open", "");
-
-    const pairingOrder = await Promise.all(
-      [statusForm, manualAlternative, signedAlternative].map((locator) =>
-        locator.evaluate((element) => element.getBoundingClientRect().top),
-      ),
-    );
-    expect(pairingOrder[0]).toBeLessThan(pairingOrder[1]);
-    expect(pairingOrder[1]).toBeLessThan(pairingOrder[2]);
+    await expect(page.locator(".fleet-manual-disclosure")).toHaveCount(0);
+    await expect(page.locator(".fleet-alternative-disclosure")).toHaveCount(0);
 
     await page.getByTestId("fleet-add-server-address").fill("http://studio-1:9191");
 

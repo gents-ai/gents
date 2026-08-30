@@ -85,21 +85,10 @@ impl ClientStore {
             .iter()
             .find(|row| row.session_id == session_id)
             .and_then(|row| clean_string(row.latest_request_id.as_deref()))
-            .filter(|request_id| {
-                !self.requests.iter().any(|request| {
-                    request.request_id == *request_id
-                        && request.session_id.as_deref() == Some(session_id)
-                        && is_deprecated_background_completion_request(request)
-                })
-            })
             .or_else(|| {
                 self.requests_by_session_id
                     .get(session_id)
-                    .and_then(|indexes| {
-                        indexes.iter().rev().find(|index| {
-                            !is_deprecated_background_completion_request(&self.requests[**index])
-                        })
-                    })
+                    .and_then(|indexes| indexes.last())
                     .copied()
                     .map(|index| self.requests[index].request_id.clone())
             })
@@ -114,14 +103,6 @@ impl ClientStore {
             .iter()
             .find(|row| row.session_id == session_id && row.agent_did.as_deref() == Some(agent_did))
             .and_then(|row| clean_string(row.latest_request_id.as_deref()))
-            .filter(|request_id| {
-                !self.requests.iter().any(|request| {
-                    request.request_id == *request_id
-                        && request.session_id.as_deref() == Some(session_id)
-                        && row_agent_matches(request.agent_did.as_deref(), agent_did)
-                        && is_deprecated_background_completion_request(request)
-                })
-            })
             .or_else(|| {
                 self.requests_by_session_id
                     .get(session_id)
@@ -130,8 +111,6 @@ impl ClientStore {
                             row_agent_matches(
                                 self.requests[**index].agent_did.as_deref(),
                                 agent_did,
-                            ) && !is_deprecated_background_completion_request(
-                                &self.requests[**index],
                             )
                         })
                     })

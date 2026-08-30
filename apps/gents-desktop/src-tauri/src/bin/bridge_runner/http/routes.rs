@@ -20,8 +20,8 @@ use gents_desktop_bridge::commands::mcp_health::{
     load_mcp_services_with_health, probe_mcp_service,
 };
 use gents_desktop_bridge::commands::{
-    add_peer, pair_bearer, rename_conversation, repair_p2p, run_schedule_config, run_task_config,
-    save_agent_config, save_backend_config, save_behavior_config, save_event_trigger_config,
+    rename_conversation, repair_p2p, run_schedule_config, run_task_config, save_agent_config,
+    save_backend_config, save_behavior_config, save_event_trigger_config,
     save_inference_profile_config, save_schedule_config, save_task_config,
     save_tool_selection_config, save_tool_service_config, send_chat_message,
     test_tool_service_config,
@@ -36,15 +36,15 @@ use gents_desktop_bridge::tauri_commands::operations::{
     list_tool_call_holds_for_core, resolve_tool_call_hold_for_core,
 };
 use gents_desktop_bridge::types::{
-    AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BearerPairingRequest,
-    BehaviorSaveRequest, ChatSendRequest, ConversationRenameRequest, DesktopInterruptRequest,
-    DesktopListHoldsRequest, DesktopListSubagentTreeRequest, DesktopOperationsSnapshot,
-    DesktopOperationsSnapshotRequest, DesktopPreviewInterruptCascadeRequest,
-    DesktopProbeMcpServiceRequest, DesktopResolveHoldRequest, EventTriggerSaveRequest,
-    InferenceCallSummaryView, InferenceProfileSaveRequest, NativeExecutorStatusView,
-    PeerAddRequest, PeerProbeRequest, RuntimeLivenessView, ScheduleRunRequest, ScheduleSaveRequest,
-    SubagentTreeView, TaskRunRequest, TaskSaveRequest, ToolSelectionSaveRequest,
-    ToolServiceSaveRequest, ToolServiceTestRequest,
+    AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BehaviorSaveRequest,
+    ChatSendRequest, ConversationRenameRequest, DesktopInterruptRequest, DesktopListHoldsRequest,
+    DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
+    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
+    DesktopResolveHoldRequest, EnrollmentRequestView, EnrollmentStatusRequest,
+    EventTriggerSaveRequest, InferenceCallSummaryView, InferenceProfileSaveRequest,
+    NativeExecutorStatusView, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleRunRequest,
+    ScheduleSaveRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
+    ToolSelectionSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
 };
 
 #[derive(Debug, Deserialize)]
@@ -180,11 +180,6 @@ pub(super) fn handle_request(
             }
             Ok(HttpResponse::json_ok(serde_json::json!({}).to_string()))
         }
-        ("POST", "/desktop/peer/add") => {
-            let request = decode::<PeerAddRequest>(&request.body, "decoding peer add request")?;
-            runtime.block_on(add_peer(fixture.desktop_core().as_ref(), request))?;
-            Ok(snapshot_response(runtime, fixture)?)
-        }
         ("POST", "/desktop/test-fixture/remove-peer") => {
             require_live_fixture()?;
             let request = decode::<PeerIdRequest>(&request.body, "decoding peer removal")?;
@@ -221,39 +216,37 @@ pub(super) fn handle_request(
             let replicators = runtime.block_on(fixture.remote_core().p2p().get_replicators())?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
-        ("POST", "/desktop/peer/pair-bearer") => {
-            let request =
-                decode::<BearerPairingRequest>(&request.body, "decoding bearer pairing request")?;
-            let pairing =
-                runtime.block_on(pair_bearer(fixture.desktop_core().as_ref(), request))?;
-            let snapshot = runtime.block_on(build_desktop_client_snapshot(fixture));
-            Ok(HttpResponse::json_ok(
-                serde_json::json!({
-                    "bootstrap": snapshot.bootstrap,
-                    "client": snapshot.client,
-                    "pairing": {
-                        "peerId": pairing.peer_id,
-                        "label": pairing.label,
-                        "addr": pairing.addr,
-                        "issuerDid": pairing.issuer_did,
-                        "claimantDid": pairing.claimant_did,
-                        "networkId": pairing.network_id,
-                        "template": pairing.template,
-                        "connected": pairing.connected,
-                        "claimSubmitted": pairing.claim_submitted,
-                        "endpointPublished": pairing.endpoint_published,
-                        "replicationConfigured": pairing.replication_configured,
-                    }
-                })
-                .to_string(),
-            ))
-        }
         ("POST", "/desktop/peer/status") => {
-            let request =
-                decode::<PeerProbeRequest>(&request.body, "decoding peer status request")?;
+            let request = decode::<PeerStatusFetchRequest>(
+                &request.body,
+                "decoding saved peer status request",
+            )?;
+            let address = runtime
+                .block_on(fixture.desktop_core().peer_records())
+                .into_iter()
+                .find(|record| record.peer_id == request.peer_id)
+                .map(|record| record.addr)
+                .with_context(|| format!("saved peer {} was not found", request.peer_id))?;
+            let payload = runtime.block_on(fetch_runtime_connection_payload(&address))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&payload)?))
+        }
+        ("POST", "/desktop/peer/enroll-status") => {
+            let request = decode::<EnrollmentStatusRequest>(
+                &request.body,
+                "decoding enrollment status request",
+            )?;
             let payload =
                 runtime.block_on(fetch_runtime_connection_payload(&request.server_address))?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&payload)?))
+            let token = payload
+                .pointer("/enrollment/token")
+                .and_then(serde_json::Value::as_str)
+                .filter(|token| !token.trim().is_empty())
+                .context("server does not advertise authenticated status enrollment")?;
+            let enrollment =
+                runtime.block_on(fixture.desktop_core().request_status_enrollment(token))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(
+                &EnrollmentRequestView::from(enrollment),
+            )?))
         }
         ("POST", "/desktop/p2p/repair") => {
             runtime.block_on(repair_p2p(

@@ -82,8 +82,16 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
     assert_eq!(child.lifecycle_state.as_deref(), Some("pending"));
     assert_eq!(child.subagent_depth, Some(1));
     assert_eq!(
-        child.deadline.as_deref(),
-        Some(child_deadline.to_rfc3339().as_str())
+        child.deadline, None,
+        "claim owns the first execution deadline"
+    );
+    assert_eq!(
+        child.valid_until.as_deref(),
+        Some(
+            child_deadline
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                .as_str()
+        )
     );
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),

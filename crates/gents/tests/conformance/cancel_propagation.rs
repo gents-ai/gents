@@ -17,7 +17,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::lean_vocab_test::lean_cancel_propagation_cases;
-use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
+use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::{first_optional_row, test_p2p_db, TestDb};
@@ -76,50 +77,70 @@ pub(super) async fn cancel_propagation_cases_drive_production_interrupt() {
 }
 
 async fn drive_declarative_cancel_propagation() {
-    let coord_identity: Arc<dyn AgentIdentity> =
-        Arc::new(test_identity("cancel-propagation-coord"));
-    let host_identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("cancel-propagation-host"));
+    let coord_db = test_p2p_db("cancel-propagation-coord").await;
+    let host_db = test_p2p_db("cancel-propagation-host").await;
+    let coord_identity = coord_db.node_identity.clone();
+    let host_identity = host_db.node_identity.clone();
     let coord_did = coord_identity.did().to_string();
     let host_did = host_identity.did().to_string();
     let coord_behavior_id = default_behavior_id_for_agent(&coord_did);
     let host_behavior_id = default_behavior_id_for_agent(&host_did);
+    let (coord_peer, coord_addr) = wait_for_peer_identity(coord_db.node.as_ref()).await;
+    let (host_peer, host_addr) = wait_for_peer_identity(host_db.node.as_ref()).await;
 
-    let coord_db = test_p2p_db("cancel-propagation-coord").await;
-    let host_db = test_p2p_db("cancel-propagation-host").await;
-    let coord_addr = wait_for_listen_addr(coord_db.node.as_ref()).await;
-    let host_addr = wait_for_listen_addr(host_db.node.as_ref()).await;
+    // Construct both runtimes first so each P2P responder serves the same
+    // agent DID that signs its enrollment request.
+    let host = boot_agent(host_db, host_identity.clone(), "cancel-propagation-host").await;
+    let coord = boot_agent(coord_db, coord_identity.clone(), "cancel-propagation-coord").await;
 
-    write_pairing(
-        coord_db.node.as_ref(),
-        "cancel-host",
-        &host_did,
+    authorize_enrollment_peer(
+        coord.db.node.clone(),
+        "cancel-propagation-coord-network",
+        "Cancel Propagation Coordinator Network",
+        coord_identity.clone(),
+        host_identity.clone(),
+        &host_peer,
+        &host_addr,
+    )
+    .await;
+    authorize_enrollment_peer(
+        host.db.node.clone(),
+        "cancel-propagation-host-network",
+        "Cancel Propagation Host Network",
+        host_identity.clone(),
+        coord_identity.clone(),
+        &coord_peer,
+        &coord_addr,
+    )
+    .await;
+    write_data_plane_pairing(
+        coord.db.node.as_ref(),
+        &host_peer,
+        &coord_did,
         "subagent-coordinator",
         &host_addr,
     )
     .await;
-    write_pairing(
-        host_db.node.as_ref(),
-        "cancel-coord",
-        &coord_did,
+    write_data_plane_pairing(
+        host.db.node.as_ref(),
+        &coord_peer,
+        &host_did,
         "subagent-host",
         &coord_addr,
     )
     .await;
 
-    let host = boot_agent(host_db, host_identity, "cancel-propagation-host").await;
-    let coord = boot_agent(coord_db, coord_identity, "cancel-propagation-coord").await;
-
     wait_for_replicator_installed(
         coord.db.node.as_ref(),
         &coord_did,
-        "cancel-host",
+        &host_peer,
         Duration::from_secs(180),
     )
     .await;
     wait_for_replicator_installed(
         host.db.node.as_ref(),
         &host_did,
-        "cancel-coord",
+        &coord_peer,
         Duration::from_secs(180),
     )
     .await;
@@ -331,10 +352,10 @@ async fn boot_agent(db: TestDb, identity: Arc<dyn AgentIdentity>, name: &str) ->
     }
 }
 
-async fn write_pairing(
+async fn write_data_plane_pairing(
     node: &EmbeddedNode,
     peer_id: &str,
-    peer_did: &str,
+    self_did: &str,
     template: &str,
     peer_addr: &str,
 ) {
@@ -346,38 +367,41 @@ async fn write_pairing(
         .collect::<Vec<_>>()
         .join(", ");
     let peer_id = escape_graphql_string(peer_id);
-    let peer_did = escape_graphql_string(peer_did);
+    let self_did = escape_graphql_string(self_did);
     let template = escape_graphql_string(template);
     let peer_addr = escape_graphql_string(peer_addr);
     let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
-            upsert_PeerPairingDesired(
+            upsert_DataPlanePairingDesired(
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
-                    agent_did: "{peer_did}",
+                    agent_did: "{self_did}",
                     collections: [{collections}],
                     replicator_addresses: ["{peer_addr}"],
-                    profiles: null,
                     template: "{template}",
-                    source: "operator",
+                    source: "test-authenticated-subagent",
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
-                    agent_did: "{peer_did}",
+                    agent_did: "{self_did}",
                     collections: [{collections}],
                     replicator_addresses: ["{peer_addr}"],
-                    profiles: null,
                     template: "{template}",
-                    source: "operator",
+                    source: "test-authenticated-subagent",
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}
         }}"#
     );
-    exec(node, &mutation, "write PeerPairingDesired").await;
+    exec(
+        node,
+        &mutation,
+        "write enrollment-gated DataPlanePairingDesired",
+    )
+    .await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -446,25 +470,6 @@ fn graphql_nullable_string(value: Option<&str>) -> String {
     match value {
         Some(value) => format!("\"{}\"", escape_graphql_string(value)),
         None => "null".to_string(),
-    }
-}
-
-async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let addrs = node
-            .p2p()
-            .expect("p2p should be enabled")
-            .listen_addresses()
-            .await
-            .expect("listen addresses");
-        if let Some(addr) = addrs.first() {
-            return addr.clone();
-        }
-        if Instant::now() >= deadline {
-            panic!("node never exposed a P2P listen address; last_addrs={addrs:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 

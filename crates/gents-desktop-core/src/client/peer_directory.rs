@@ -6,7 +6,8 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use gents_protocol::enrollment::authorization_lease_is_fresh_at;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -27,26 +28,70 @@ pub struct PeerRecord {
     pub pairing_network_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollment_request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollment_request_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollment_admin_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollment_authorization_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollment_authorization_expires_at: Option<String>,
     #[serde(default)]
     pub pairing_ready: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_agent_home: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
 
 impl PeerRecord {
-    pub fn is_bearer_pairing(&self) -> bool {
-        self.source.as_deref() == Some(super::core::bearer_pairing::BEARER_PAIRING_SOURCE)
+    pub fn is_enrollment(&self) -> bool {
+        self.source.as_deref() == Some("enrollment")
     }
 
-    pub fn is_chat_ready(&self) -> bool {
-        self.source.as_deref() == Some("local-standard")
-            || (self.source.is_none() && self.graphql.is_none())
-            || self.pairing_ready
+    /// Whether this exact durable route generation may authorize a chat write
+    /// at `now`.
+    ///
+    /// `pairing_ready` is applied-state evidence, not timeless authority. An
+    /// enrollment row must still carry a complete, unexpired signed
+    /// generation at the instant a write is admitted.
+    pub fn is_chat_ready_at(&self, now: DateTime<Utc>) -> bool {
+        if self.source.as_deref() == Some("local-standard") {
+            return true;
+        }
+        self.is_enrollment()
+            && self.pairing_ready
+            && self
+                .pairing_network_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            && self
+                .enrollment_request_digest
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            && self
+                .enrollment_authorization_sequence
+                .is_some_and(|sequence| sequence > 0)
+            && self
+                .enrollment_authorization_expires_at
+                .as_deref()
+                .is_some_and(|expires_at| authorization_lease_is_fresh_at(expires_at, now))
     }
 
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
+        label: impl Into<String>,
+        addr: impl Into<String>,
+        agent_did: impl Into<String>,
+    ) -> Self {
+        Self::base(label, addr, agent_did)
+    }
+
+    fn base(
         label: impl Into<String>,
         addr: impl Into<String>,
         agent_did: impl Into<String>,
@@ -61,8 +106,14 @@ impl PeerRecord {
             source: None,
             pairing_network_id: None,
             pairing_template: None,
+            enrollment_request_digest: None,
+            enrollment_request_id: None,
+            enrollment_admin_did: None,
+            enrollment_authorization_sequence: None,
+            enrollment_authorization_expires_at: None,
             pairing_ready: false,
             graphql: None,
+            local_agent_home: None,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -74,7 +125,7 @@ impl PeerRecord {
         agent_did: impl Into<String>,
         graphql: impl Into<String>,
     ) -> Self {
-        let mut record = Self::new(label, addr, agent_did);
+        let mut record = Self::base(label, addr, agent_did);
         record.source = Some("local-standard".to_string());
         record.graphql = Some(graphql.into());
         record
@@ -176,98 +227,19 @@ impl PeerDirectory {
             .any(|pending| pending == expected)
     }
 
-    #[cfg(test)]
-    pub(in crate::client) async fn upsert_saved_peer(
-        &mut self,
-        label: &str,
-        addr: &str,
-        agent_did: &str,
-    ) -> Result<PeerRecord> {
-        self.upsert_saved_peer_with_graphql(label, addr, agent_did, None, None)
-            .await
-    }
-
-    pub(in crate::client) async fn upsert_saved_peer_with_graphql(
-        &mut self,
-        label: &str,
-        addr: &str,
-        agent_did: &str,
-        graphql: Option<&str>,
-        default_behavior_id: Option<&str>,
-    ) -> Result<PeerRecord> {
-        let label = normalize_non_empty("label", label)?;
-        let addr = normalize_non_empty("addr", addr)?;
-        let agent_did = normalize_non_empty("agent_did", agent_did)?;
-        let graphql = normalize_optional(graphql);
-        let default_behavior_id = normalize_optional(default_behavior_id);
-        let incoming_source = graphql.map(|_| "server-status");
-
-        let mut candidate = self.clone();
-        let matching_active = candidate
-            .peers
-            .iter()
-            .filter(|existing| {
-                existing.agent_did == agent_did
-                    && (existing.source.as_deref() == incoming_source
-                        || (incoming_source == Some("server-status") && existing.source.is_none()))
-            })
-            .collect::<Vec<_>>();
-        if matching_active.len() > 1 {
-            anyhow::bail!(
-                "multiple saved deployments already own agent {agent_did} for source {:?}; remove the duplicate explicitly before updating",
-                incoming_source
-            );
-        }
-
-        let active = matching_active.first().map(|record| (*record).clone());
-        let pending_index = active.is_none().then(|| {
-            candidate.pending_removals.iter().position(|existing| {
-                existing.agent_did == agent_did
-                    && (existing.source.as_deref() == incoming_source
-                        || (incoming_source == Some("server-status") && existing.source.is_none()))
-            })
-        });
-        let mut record = active
-            .or_else(|| {
-                pending_index
-                    .flatten()
-                    .map(|index| candidate.pending_removals.remove(index))
-            })
-            .unwrap_or_else(|| PeerRecord::new(label, addr, agent_did));
-        if record.addr != addr {
-            record.pairing_ready = false;
-        }
-        record.label = label.to_string();
-        record.addr = addr.to_string();
-        record.agent_did = agent_did.to_string();
-        if record.source.as_deref() != Some(super::core::bearer_pairing::BEARER_PAIRING_SOURCE) {
-            if let Some(default_behavior_id) = default_behavior_id {
-                record.default_behavior_id = Some(default_behavior_id.to_string());
-            }
-            if let Some(graphql) = graphql {
-                record.graphql = Some(graphql.to_string());
-                if record.source.as_deref() != Some("local-standard") {
-                    record.source = Some("server-status".to_string());
-                }
-            }
-        }
-
-        let record = candidate.apply_upsert(record);
-        self.commit(candidate).await?;
-        Ok(record)
-    }
-
     pub(in crate::client) async fn upsert_local_standard_peer(
         &mut self,
         label: &str,
         addr: &str,
         agent_did: &str,
         graphql: &str,
+        agent_home: &str,
     ) -> Result<PeerRecord> {
         let label = normalize_non_empty("label", label)?;
         let addr = normalize_non_empty("addr", addr)?;
         let agent_did = normalize_non_empty("agent_did", agent_did)?;
         let graphql = normalize_non_empty("graphql", graphql)?;
+        let agent_home = normalize_non_empty("agent_home", agent_home)?;
 
         let mut candidate = self.clone();
         let mut record = candidate
@@ -281,71 +253,111 @@ impl PeerDirectory {
         record.agent_did = agent_did.to_string();
         record.source = Some("local-standard".to_string());
         record.graphql = Some(graphql.to_string());
+        record.local_agent_home = Some(agent_home.to_string());
 
         let record = candidate.apply_upsert(record);
         self.commit(candidate).await?;
         Ok(record)
     }
 
-    pub(in crate::client) async fn upsert_bearer_peer(
+    pub(in crate::client) async fn upsert_enrollment_peer(
         &mut self,
+        peer_id: &str,
         label: &str,
         addr: &str,
         agent_did: &str,
         network_id: &str,
-        template: &str,
-        default_behavior_id: Option<&str>,
+        request_id: &str,
+        request_digest: &str,
+        admin_did: &str,
+        authorization_sequence: u64,
+        authorization_expires_at: &str,
     ) -> Result<PeerRecord> {
+        let peer_id = normalize_non_empty("peer_id", peer_id)?;
         let label = normalize_non_empty("label", label)?;
         let addr = normalize_non_empty("addr", addr)?;
         let agent_did = normalize_non_empty("agent_did", agent_did)?;
         let network_id = normalize_non_empty("network_id", network_id)?;
-        let template = normalize_non_empty("template", template)?;
-        let default_behavior_id = normalize_optional(default_behavior_id);
+        let request_id = normalize_non_empty("request_id", request_id)?;
+        let request_digest = normalize_non_empty("request_digest", request_digest)?;
+        let admin_did = normalize_non_empty("admin_did", admin_did)?;
+        anyhow::ensure!(
+            authorization_sequence > 0,
+            "authorization_sequence must be positive"
+        );
+        let authorization_expires_at =
+            normalize_non_empty("authorization_expires_at", authorization_expires_at)?;
 
         let mut candidate = self.clone();
+        if let Some(conflict) = candidate.peers.iter().find(|record| {
+            (record.peer_id == peer_id || record.agent_did == agent_did)
+                && record.source.as_deref() != Some("enrollment")
+        }) {
+            anyhow::bail!(
+                "authenticated enrollment conflicts with {}-owned peer {}",
+                conflict.source.as_deref().unwrap_or("legacy"),
+                conflict.peer_id
+            );
+        }
+        let now = Utc::now().to_rfc3339();
         let mut record = candidate
             .peers
             .iter()
-            .find(|existing| existing.agent_did == agent_did)
+            .find(|record| {
+                record.source.as_deref() == Some("enrollment")
+                    && (record.peer_id == peer_id || record.agent_did == agent_did)
+            })
             .cloned()
-            .unwrap_or_else(|| PeerRecord::new(label, addr, agent_did));
+            .unwrap_or(PeerRecord {
+                peer_id: peer_id.to_string(),
+                label: label.to_string(),
+                addr: addr.to_string(),
+                agent_did: agent_did.to_string(),
+                default_behavior_id: None,
+                source: Some("enrollment".to_string()),
+                pairing_network_id: Some(network_id.to_string()),
+                pairing_template: Some("client".to_string()),
+                enrollment_request_id: Some(request_id.to_string()),
+                enrollment_request_digest: Some(request_digest.to_string()),
+                enrollment_admin_did: Some(admin_did.to_string()),
+                enrollment_authorization_sequence: Some(authorization_sequence),
+                enrollment_authorization_expires_at: Some(authorization_expires_at.to_string()),
+                pairing_ready: false,
+                graphql: None,
+                local_agent_home: None,
+                created_at: now.clone(),
+                updated_at: now,
+            });
+        if record.peer_id != peer_id
+            || record.addr != addr
+            || record.agent_did != agent_did
+            || record.pairing_network_id.as_deref() != Some(network_id)
+            || record.enrollment_request_id.as_deref() != Some(request_id)
+            || record.enrollment_request_digest.as_deref() != Some(request_digest)
+            || record.enrollment_admin_did.as_deref() != Some(admin_did)
+            || record.enrollment_authorization_sequence != Some(authorization_sequence)
+            || record.enrollment_authorization_expires_at.as_deref()
+                != Some(authorization_expires_at)
+        {
+            record.pairing_ready = false;
+        }
+        record.peer_id = peer_id.to_string();
         record.label = label.to_string();
         record.addr = addr.to_string();
         record.agent_did = agent_did.to_string();
-        record.default_behavior_id = default_behavior_id.map(str::to_owned);
-        record.source = Some(super::core::bearer_pairing::BEARER_PAIRING_SOURCE.to_string());
+        record.source = Some("enrollment".to_string());
         record.pairing_network_id = Some(network_id.to_string());
-        record.pairing_template = Some(template.to_string());
-        record.pairing_ready = false;
+        record.pairing_template = Some("client".to_string());
+        record.enrollment_request_id = Some(request_id.to_string());
+        record.enrollment_request_digest = Some(request_digest.to_string());
+        record.enrollment_admin_did = Some(admin_did.to_string());
+        record.enrollment_authorization_sequence = Some(authorization_sequence);
+        record.enrollment_authorization_expires_at = Some(authorization_expires_at.to_string());
         record.graphql = None;
 
         let record = candidate.apply_upsert(record);
         self.commit(candidate).await?;
         Ok(record)
-    }
-
-    pub(in crate::client) async fn set_bearer_pairing_ready(
-        &mut self,
-        peer_id: &str,
-        ready: bool,
-    ) -> Result<Option<PeerRecord>> {
-        let mut candidate = self.clone();
-        let Some(mut record) = candidate
-            .peers
-            .iter()
-            .find(|record| record.peer_id == peer_id && record.is_bearer_pairing())
-            .cloned()
-        else {
-            return Ok(None);
-        };
-        if record.pairing_ready == ready {
-            return Ok(Some(record));
-        }
-        record.pairing_ready = ready;
-        let record = candidate.apply_upsert(record);
-        self.commit(candidate).await?;
-        Ok(Some(record))
     }
 
     pub(in crate::client) async fn set_pairing_ready(
@@ -463,9 +475,8 @@ impl PeerDirectory {
     }
 
     /// Route readiness is an observation, not durable authority across a
-    /// process restart. Managed and bearer deployments must re-establish both
-    /// live legs before chat writes reopen. Legacy GraphQL-less rows keep their
-    /// explicit one-way compatibility behavior in `PeerRecord::is_chat_ready`.
+    /// process restart. Every non-local deployment must re-establish its live
+    /// authority and both route legs before chat writes reopen.
     pub(in crate::client) async fn clear_ephemeral_pairing_readiness(&mut self) -> Result<()> {
         let mut candidate = self.clone();
         let mut changed = false;
@@ -545,10 +556,11 @@ pub async fn initialize_local_standard_peer(
     addr: &str,
     agent_did: &str,
     graphql: &str,
+    agent_home: &str,
 ) -> Result<PeerRecord> {
     let mut directory = PeerDirectory::open_writer(path).await?;
     directory
-        .upsert_local_standard_peer(label, addr, agent_did, graphql)
+        .upsert_local_standard_peer(label, addr, agent_did, graphql, agent_home)
         .await
 }
 
@@ -566,20 +578,6 @@ pub(crate) async fn load_peer_directory_snapshot(
     Ok((stored.peers, stored.pending_removals))
 }
 
-pub(crate) async fn initialize_status_endpoint_peer(
-    path: &Path,
-    label: &str,
-    addr: &str,
-    agent_did: &str,
-    graphql: &str,
-    default_behavior_id: Option<&str>,
-) -> Result<PeerRecord> {
-    let mut directory = PeerDirectory::open_writer(path).await?;
-    directory
-        .upsert_saved_peer_with_graphql(label, addr, agent_did, Some(graphql), default_behavior_id)
-        .await
-}
-
 fn normalize_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
     let trimmed = value.trim();
     (!trimmed.is_empty())
@@ -590,14 +588,32 @@ fn normalize_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
 async fn read_stored_directory(path: &Path) -> Result<StoredPeerDirectory> {
     match tokio::fs::read(path).await {
         Ok(bytes) if bytes.is_empty() => Ok(StoredPeerDirectory::default()),
-        Ok(bytes) => serde_json::from_slice::<StoredPeerDirectory>(&bytes)
-            .with_context(|| format!("parsing peer directory {}", path.display())),
+        Ok(bytes) => {
+            let stored = serde_json::from_slice::<StoredPeerDirectory>(&bytes)
+                .with_context(|| format!("parsing peer directory {}", path.display()))?;
+            #[cfg(not(test))]
+            validate_fresh_directory(&stored)?;
+            Ok(stored)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(StoredPeerDirectory::default())
         }
         Err(error) => Err(anyhow::Error::from(error))
             .with_context(|| format!("reading peer directory {}", path.display())),
     }
+}
+
+fn validate_fresh_directory(stored: &StoredPeerDirectory) -> Result<()> {
+    for record in stored.peers.iter().chain(&stored.pending_removals) {
+        anyhow::ensure!(
+            matches!(
+                record.source.as_deref(),
+                Some("local-standard" | "enrollment")
+            ),
+            "peer directory contains unsupported pre-enrollment source"
+        );
+    }
+    Ok(())
 }
 
 fn sort_peer_records(records: &mut [PeerRecord]) {
@@ -610,25 +626,19 @@ fn sort_peer_records(records: &mut [PeerRecord]) {
     });
 }
 
-fn normalize_optional(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn legacy_graphql_less_peer_keeps_one_way_chat_compatibility() {
+    fn source_less_peer_is_not_an_immediate_chat_authority() {
         let legacy = PeerRecord::new("Legacy bridge", "iroh://legacy", "did:test:legacy");
-        assert!(legacy.is_chat_ready());
-
-        let mut managed = legacy;
-        managed.source = Some("server-status".to_string());
-        managed.graphql = Some("http://runtime.local/graphql".to_string());
-        assert!(!managed.is_chat_ready());
-        managed.pairing_ready = true;
-        assert!(managed.is_chat_ready());
+        assert!(!legacy.is_chat_ready_at(Utc::now()));
+        assert!(validate_fresh_directory(&StoredPeerDirectory {
+            peers: vec![legacy],
+            pending_removals: Vec::new(),
+        })
+        .is_err());
     }
 
     #[tokio::test]
@@ -637,8 +647,7 @@ mod tests {
         let path = tempdir.path().join("peers.json");
         let mut directory = PeerDirectory::load(&path).await.unwrap();
         let mut managed = PeerRecord::new("Mandrake", "iroh://ticket", "did:test:mandrake");
-        managed.source = Some("server-status".to_string());
-        managed.graphql = Some("http://runtime.local/graphql".to_string());
+        managed.source = Some("enrollment".to_string());
         managed.pairing_ready = true;
         directory.upsert(managed.clone()).await.unwrap();
 
@@ -649,7 +658,7 @@ mod tests {
             .find(|record| record.peer_id == managed.peer_id)
             .unwrap();
         assert!(!record.pairing_ready);
-        assert!(!record.is_chat_ready());
+        assert!(!record.is_chat_ready_at(Utc::now()));
 
         let reloaded = load_peer_records(&path).await.unwrap();
         assert!(!reloaded[0].pairing_ready);
@@ -742,38 +751,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_saved_peer_persists_graphql_pairing_endpoint() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("peers.json");
-        let mut directory = PeerDirectory::load(&path).await.unwrap();
-
-        let record = directory
-            .upsert_saved_peer_with_graphql(
-                "Workshop Bay",
-                "iroh://alpha",
-                "did:key:z6MkAlpha",
-                Some(" http://100.73.235.38:9181/api/v0/graphql "),
-                Some(" default "),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            record.graphql.as_deref(),
-            Some("http://100.73.235.38:9181/api/v0/graphql")
-        );
-        assert_eq!(record.source.as_deref(), Some("server-status"));
-        assert_eq!(record.default_behavior_id.as_deref(), Some("default"));
-
-        let reloaded = load_peer_records(&path).await.unwrap();
-        assert_eq!(
-            reloaded[0].graphql.as_deref(),
-            Some("http://100.73.235.38:9181/api/v0/graphql")
-        );
-        assert_eq!(reloaded[0].default_behavior_id.as_deref(), Some("default"));
-    }
-
-    #[tokio::test]
     async fn records_are_sorted_for_deterministic_output() {
         let tempdir = tempfile::tempdir().unwrap();
         let path = tempdir.path().join("peers.json");
@@ -793,132 +770,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_saved_peer_reuses_existing_record_for_same_addr_and_agent() {
+    async fn enrollment_generation_rotation_is_durable_and_clears_readiness() {
         let tempdir = tempfile::tempdir().unwrap();
         let path = tempdir.path().join("peers.json");
         let mut directory = PeerDirectory::load(&path).await.unwrap();
-
         let first = directory
-            .upsert_saved_peer("Workshop Bay", "iroh://alpha", "did:test:alpha")
-            .await
-            .unwrap();
-        let second = directory
-            .upsert_saved_peer("Workshop Bay Updated", "iroh://alpha", "did:test:alpha")
-            .await
-            .unwrap();
-
-        assert_eq!(first.peer_id, second.peer_id);
-        assert_eq!(directory.records().len(), 1);
-        assert_eq!(directory.records()[0].label, "Workshop Bay Updated");
-    }
-
-    #[tokio::test]
-    async fn server_status_ticket_rotation_preserves_directory_id_and_clears_ready() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("peers.json");
-        let mut directory = PeerDirectory::load(&path).await.unwrap();
-        let mut first = directory
-            .upsert_saved_peer_with_graphql(
-                "Mandrake",
-                "iroh://old-ticket",
-                "did:test:mandrake",
-                Some("http://mandrake.local/graphql"),
-                Some("mandrake-default"),
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Enrolled server",
+                "iroh://ticket",
+                "did:key:agent",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                7,
+                "2099-09-29T00:00:00Z",
             )
             .await
             .unwrap();
-        first.pairing_ready = true;
-        directory.upsert(first.clone()).await.unwrap();
+        let first = directory
+            .set_pairing_ready(&first.peer_id, true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(first.pairing_ready);
 
         let rotated = directory
-            .upsert_saved_peer_with_graphql(
-                "Mandrake",
-                "iroh://new-ticket",
-                "did:test:mandrake",
-                Some("http://mandrake.local/graphql"),
-                Some("mandrake-default"),
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Enrolled server",
+                "iroh://ticket",
+                "did:key:agent",
+                "network-a",
+                "request-a",
+                "digest-b",
+                "did:key:admin",
+                8,
+                "2099-10-29T00:00:00Z",
             )
             .await
             .unwrap();
-
-        assert_eq!(rotated.peer_id, first.peer_id);
-        assert_eq!(rotated.addr, "iroh://new-ticket");
         assert!(!rotated.pairing_ready);
-        assert_eq!(directory.records().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn duplicate_agent_source_is_rejected_without_silent_record_loss() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("peers.json");
-        let mut directory = PeerDirectory::load(&path).await.unwrap();
-        directory
-            .upsert(PeerRecord::new(
-                "First",
-                "iroh://first",
-                "did:test:duplicate",
-            ))
-            .await
-            .unwrap();
-        directory
-            .upsert(PeerRecord::new(
-                "Second",
-                "iroh://second",
-                "did:test:duplicate",
-            ))
-            .await
-            .unwrap();
-
-        let error = directory
-            .upsert_saved_peer("Updated", "iroh://updated", "did:test:duplicate")
-            .await
-            .expect_err("ambiguous ownership must require explicit removal");
-        assert!(error
-            .to_string()
-            .contains("remove the duplicate explicitly"));
-        assert_eq!(directory.records().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn bearer_pairing_upgrades_existing_principal_and_rotates_iroh_ticket() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("peers.json");
-        let mut directory = PeerDirectory::load(&path).await.unwrap();
-
-        let first = directory
-            .upsert_saved_peer_with_graphql(
-                "Amy manual",
-                "iroh://old-ticket",
-                "did:test:amy",
-                Some("http://amy.local/graphql"),
-                None,
-            )
-            .await
-            .unwrap();
-        let paired = directory
-            .upsert_bearer_peer(
-                "Amy",
-                "iroh://fresh-ticket",
-                "did:test:amy",
-                "network-amy",
-                "machine",
-                Some("default"),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(first.peer_id, paired.peer_id);
-        assert_eq!(directory.records().len(), 1);
-        assert_eq!(paired.addr, "iroh://fresh-ticket");
-        assert_eq!(paired.default_behavior_id.as_deref(), Some("default"));
-        assert_eq!(paired.pairing_network_id.as_deref(), Some("network-amy"));
-        assert_eq!(paired.pairing_template.as_deref(), Some("machine"));
-        assert!(!paired.pairing_ready);
         assert_eq!(
-            paired.source.as_deref(),
-            Some(crate::client::core::bearer_pairing::BEARER_PAIRING_SOURCE)
+            rotated.enrollment_request_digest.as_deref(),
+            Some("digest-b")
         );
-        assert_eq!(paired.graphql, None);
+        assert_eq!(rotated.enrollment_authorization_sequence, Some(8));
+        assert_eq!(
+            rotated.enrollment_authorization_expires_at.as_deref(),
+            Some("2099-10-29T00:00:00Z")
+        );
+
+        drop(directory);
+        let reloaded = load_peer_records(&path).await.unwrap();
+        assert_eq!(reloaded, vec![rotated]);
     }
 
     #[tokio::test]
@@ -933,6 +839,7 @@ mod tests {
                 "iroh://first",
                 "did:test:default",
                 "http://127.0.0.1:9191/api/v0/graphql",
+                "/tmp/test-agent-home",
             )
             .await
             .unwrap();
@@ -942,6 +849,7 @@ mod tests {
                 "iroh://second",
                 "did:test:default",
                 "http://127.0.0.1:9192/api/v0/graphql",
+                "/tmp/test-agent-home",
             )
             .await
             .unwrap();

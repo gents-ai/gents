@@ -53,10 +53,6 @@ pub(super) fn path_arg(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-pub(super) fn cli(args: &[&str]) -> Vec<String> {
-    args.iter().map(|value| value.to_string()).collect()
-}
-
 pub(super) async fn run_cli_text(bin: &Path, args: &[String]) -> Result<String> {
     let output = Command::new(bin)
         .args(args)

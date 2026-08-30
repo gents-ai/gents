@@ -2,8 +2,6 @@ pub(crate) const DEPRECATED: &[(&[&str], &str)] = &[
     (&["config", "task"], "task"),
     (&["show", "request"], "request show"),
     (&["show", "response"], "response show"),
-    (&["p2p", "pair"], "p2p pairings set"),
-    (&["p2p", "unpair"], "p2p pairings rm"),
 ];
 
 pub(crate) fn deprecation_warning(argv: &[String]) -> Option<String> {
@@ -125,46 +123,6 @@ mod tests {
         assert_eq!(
             deprecation_warning(&argv(&["gents", "config", "backend", "set"])),
             None
-        );
-    }
-
-    #[test]
-    fn p2p_pair_warns() {
-        let warning = deprecation_warning(&argv(&["gents", "p2p", "pair", "--peer", "peer-1"]))
-            .expect("expected p2p pair warning");
-        assert_eq!(
-            warning,
-            "warning: `gents p2p pair` is deprecated; use `gents p2p pairings set`"
-        );
-    }
-
-    #[test]
-    fn p2p_unpair_warns() {
-        let warning = deprecation_warning(&argv(&["gents", "p2p", "unpair", "--peer", "peer-1"]))
-            .expect("expected p2p unpair warning");
-        assert_eq!(
-            warning,
-            "warning: `gents p2p unpair` is deprecated; use `gents p2p pairings rm`"
-        );
-    }
-
-    #[test]
-    fn pairings_alias_paths_do_not_warn() {
-        assert_eq!(
-            deprecation_warning(&argv(&[
-                "gents", "p2p", "pairings", "unpair", "--peer", "peer-1",
-            ])),
-            None
-        );
-    }
-
-    #[test]
-    fn trailing_option_values_are_skipped() {
-        assert_eq!(
-            command_words(&argv(&[
-                "gents", "p2p", "pairings", "remove", "--peer", "peer-1",
-            ])),
-            vec!["p2p", "pairings", "remove"]
         );
     }
 }

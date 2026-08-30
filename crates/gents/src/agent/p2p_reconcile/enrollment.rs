@@ -98,6 +98,7 @@ pub struct EnrollmentDecision {
     pub owner_agent: String,
     pub kind: EnrollmentDecisionKind,
     pub authorization_sequence: usize,
+    pub authorization_expires_at: String,
     pub signer_did: String,
     pub admin_signed: bool,
     pub fresh: bool,
@@ -119,6 +120,7 @@ pub struct AuthorizationRevision {
     pub member_peer: String,
     pub owner_agent: String,
     pub sequence: usize,
+    pub authorization_expires_at: String,
     pub kind: AuthorizationRevisionKind,
     pub signer_did: String,
     pub admin_signed: bool,
@@ -133,6 +135,7 @@ pub struct EnrollmentMembership {
     pub member_peer: String,
     pub owner_agent: String,
     pub authorization_sequence: usize,
+    pub authorization_expires_at: String,
     pub active: bool,
     pub admin_signed: bool,
     pub fresh: bool,
@@ -149,12 +152,31 @@ pub struct EnrollmentAppliedRoute {
     pub request_id: String,
     pub network_id: String,
     pub authorization_sequence: usize,
+    pub authorization_expires_at: String,
     pub direction: EnrollmentRouteDirection,
     pub peer: String,
     pub requester: String,
     pub agent: String,
     pub profile: String,
     pub live: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EnrollmentRouteReceipt {
+    pub request_id: String,
+    pub request_digest: String,
+    pub network_id: String,
+    pub admin_did: String,
+    pub member_did: String,
+    pub member_peer: String,
+    pub server_peer: String,
+    pub owner_agent: String,
+    pub authorization_sequence: usize,
+    pub authorization_expires_at: String,
+    pub direction: EnrollmentRouteDirection,
+    pub signer_did: String,
+    pub admin_signed: bool,
+    pub applied: bool,
 }
 
 /// Unordered durable enrollment documents restored from DefraDB.
@@ -165,6 +187,7 @@ pub struct DurableEnrollmentDocuments {
     pub requests: BTreeSet<EnrollmentRequest>,
     pub decisions: BTreeSet<EnrollmentDecision>,
     pub revisions: BTreeSet<AuthorizationRevision>,
+    pub route_receipts: BTreeSet<EnrollmentRouteReceipt>,
 }
 
 impl DurableEnrollmentDocuments {
@@ -182,6 +205,30 @@ impl DurableEnrollmentDocuments {
                 .decisions
                 .iter()
                 .all(|other| other.request_id != decision.request_id || other == decision)
+    }
+
+    pub fn route_receipt_identity_unique(&self, receipt: &EnrollmentRouteReceipt) -> bool {
+        self.route_receipts.contains(receipt)
+            && self.route_receipts.iter().all(|other| {
+                other.request_id != receipt.request_id
+                    || other.authorization_sequence != receipt.authorization_sequence
+                    || other.direction != receipt.direction
+                    || other == receipt
+            })
+    }
+
+    pub fn current_server_route_receipt(
+        &self,
+        offer: &EnrollmentOffer,
+        request: &EnrollmentRequest,
+        decision: &EnrollmentDecision,
+        receipt: &EnrollmentRouteReceipt,
+    ) -> bool {
+        self.current_approval(offer, request, decision)
+            && self.route_receipt_identity_unique(receipt)
+            && receipt == &EnrollmentState::server_route_receipt_for(request, decision)
+            && receipt.admin_signed
+            && receipt.applied
     }
 
     /// Order-independent restored authority projection.
@@ -232,16 +279,23 @@ pub struct EnrollmentState {
     pub decisions: BTreeSet<EnrollmentDecision>,
     pub authorizations: BTreeSet<AuthorizationRevision>,
     pub memberships: BTreeSet<EnrollmentMembership>,
+    pub route_receipts: BTreeSet<EnrollmentRouteReceipt>,
     pub applied_routes: BTreeSet<EnrollmentAppliedRoute>,
 }
 
 pub enum EnrollmentAction {
+    ObserveLegacyPairingDesired(String),
     ObserveOffer(EnrollmentOffer),
     ConfirmAdminPin(EnrollmentOffer),
     AcceptRequest(EnrollmentOffer, EnrollmentRequest),
     DecideRequest(EnrollmentRequest, EnrollmentDecision),
     MaterializeMembership(EnrollmentRequest, EnrollmentDecision),
-    MaterializeRoutes(EnrollmentRequest, EnrollmentDecision),
+    MaterializeClientRoute(EnrollmentRequest, EnrollmentDecision),
+    RecordServerRouteReceipt(
+        EnrollmentRequest,
+        EnrollmentDecision,
+        EnrollmentRouteReceipt,
+    ),
     Revoke(EnrollmentRequest, AuthorizationRevision),
     MergeAuthorization(AuthorizationRevision),
 }
@@ -249,6 +303,7 @@ pub enum EnrollmentAction {
 impl EnrollmentState {
     pub fn apply(&mut self, action: EnrollmentAction) {
         match action {
+            EnrollmentAction::ObserveLegacyPairingDesired(_) => {}
             EnrollmentAction::ObserveOffer(offer) => {
                 self.observed_offers.insert(offer);
             }
@@ -285,16 +340,28 @@ impl EnrollmentState {
                         .insert(Self::membership_for(&request, &decision));
                 }
             }
-            EnrollmentAction::MaterializeRoutes(request, decision) => {
+            EnrollmentAction::MaterializeClientRoute(request, decision) => {
                 if self.current_approval(&request, &decision)
                     && self
                         .memberships
                         .contains(&Self::membership_for(&request, &decision))
                 {
                     self.applied_routes
-                        .insert(Self::client_route(&request, &decision));
-                    self.applied_routes
                         .insert(Self::server_route(&request, &decision));
+                }
+            }
+            EnrollmentAction::RecordServerRouteReceipt(request, decision, receipt) => {
+                if self.current_approval(&request, &decision)
+                    && self
+                        .memberships
+                        .contains(&Self::membership_for(&request, &decision))
+                    && receipt == Self::server_route_receipt_for(&request, &decision)
+                    && receipt.admin_signed
+                    && receipt.applied
+                {
+                    self.route_receipts.insert(receipt);
+                    self.applied_routes
+                        .insert(Self::client_route(&request, &decision));
                 }
             }
             EnrollmentAction::Revoke(request, revision) => {
@@ -365,6 +432,7 @@ impl EnrollmentState {
             member_peer: request.candidate_peer.clone(),
             owner_agent: request.owner_agent.clone(),
             sequence: decision.authorization_sequence,
+            authorization_expires_at: decision.authorization_expires_at.clone(),
             kind: AuthorizationRevisionKind::Active,
             signer_did: decision.signer_did.clone(),
             admin_signed: decision.admin_signed,
@@ -383,6 +451,7 @@ impl EnrollmentState {
             member_peer: request.candidate_peer.clone(),
             owner_agent: request.owner_agent.clone(),
             authorization_sequence: decision.authorization_sequence,
+            authorization_expires_at: decision.authorization_expires_at.clone(),
             active: true,
             admin_signed: true,
             fresh: true,
@@ -403,6 +472,28 @@ impl EnrollmentState {
         Self::route_for(request, decision, EnrollmentRouteDirection::ServerToClient)
     }
 
+    pub fn server_route_receipt_for(
+        request: &EnrollmentRequest,
+        decision: &EnrollmentDecision,
+    ) -> EnrollmentRouteReceipt {
+        EnrollmentRouteReceipt {
+            request_id: request.request_id.clone(),
+            request_digest: request.digest.clone(),
+            network_id: request.network_id.clone(),
+            admin_did: request.admin_did.clone(),
+            member_did: request.candidate_did.clone(),
+            member_peer: request.candidate_peer.clone(),
+            server_peer: request.server_peer.clone(),
+            owner_agent: request.owner_agent.clone(),
+            authorization_sequence: decision.authorization_sequence,
+            authorization_expires_at: decision.authorization_expires_at.clone(),
+            direction: EnrollmentRouteDirection::ClientToServer,
+            signer_did: request.admin_did.clone(),
+            admin_signed: true,
+            applied: true,
+        }
+    }
+
     pub fn current_approval(
         &self,
         request: &EnrollmentRequest,
@@ -419,12 +510,25 @@ impl EnrollmentState {
             && self.unique_maximum_revision(&revision)
     }
 
+    pub fn peer_operationally_authorized(&self, member_did: &str) -> bool {
+        self.accepted_requests.iter().any(|request| {
+            request.candidate_did == member_did
+                && self
+                    .decisions
+                    .iter()
+                    .any(|decision| self.current_approval(request, decision))
+        })
+    }
+
     pub fn enrollment_ready(&self, request: &EnrollmentRequest) -> bool {
         self.decisions.iter().any(|decision| {
             self.current_approval(request, decision)
                 && self
                     .memberships
                     .contains(&Self::membership_for(request, decision))
+                && self
+                    .route_receipts
+                    .contains(&Self::server_route_receipt_for(request, decision))
                 && self
                     .applied_routes
                     .contains(&Self::client_route(request, decision))
@@ -588,6 +692,7 @@ impl EnrollmentState {
             && decision.candidate_peer == request.candidate_peer
             && decision.owner_agent == request.owner_agent
             && decision.signer_did == request.admin_did
+            && !decision.authorization_expires_at.is_empty()
     }
 
     fn revision_matches_request(
@@ -602,6 +707,7 @@ impl EnrollmentState {
             && revision.member_peer == request.candidate_peer
             && revision.owner_agent == request.owner_agent
             && revision.signer_did == request.admin_did
+            && !revision.authorization_expires_at.is_empty()
     }
 
     fn same_member(left: &AuthorizationRevision, right: &AuthorizationRevision) -> bool {
@@ -632,6 +738,10 @@ impl EnrollmentState {
             && Self::revision_matches_request(request, revision)
             && revision.kind == AuthorizationRevisionKind::Revoked
             && revision.admin_signed
+            && self.decisions.iter().any(|decision| {
+                self.current_approval(request, decision)
+                    && revision.authorization_expires_at == decision.authorization_expires_at
+            })
             && !self.dominating_revision_exists(revision)
     }
 
@@ -697,6 +807,7 @@ impl EnrollmentState {
             request_id: request.request_id.clone(),
             network_id: request.network_id.clone(),
             authorization_sequence: decision.authorization_sequence,
+            authorization_expires_at: decision.authorization_expires_at.clone(),
             direction,
             peer,
             requester: request.candidate_did.clone(),

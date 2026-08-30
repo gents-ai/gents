@@ -9,8 +9,8 @@ use defra_p2p_adapter::P2POperations as P2POps;
 use gents::agent::p2p_reconcile::{
     client_route_id, desired_route_is_applied, reconcile_peer_tick,
     teardown_owned_replicators_at_endpoint, ClientRouteIdentity, EmbeddedRemoteP2pAdmin,
-    GraphqlPairingStateStore, PairingDesired, PairingDirection, PairingStateStore, RemoteP2pAdmin,
-    RemoteP2pAdminError,
+    EnrollmentEndpointEntry, GraphqlPairingStateStore, PairingDesired, PairingDirection,
+    PairingStateStore, RemoteP2pAdmin, RemoteP2pAdminError,
 };
 use gents_protocol::graphql::escape_graphql_string;
 use p2p::iroh::parse_public_peer_addr;
@@ -20,9 +20,8 @@ use tokio::time::{sleep, Instant};
 use super::super::peer_directory::PeerRecord;
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::schema::subscribed_collection_names;
-use super::bearer_pairing::saved_peer_replicator_collections;
-use super::bearer_pairing::{current_local_endpoint, is_bearer_peer, publish_local_endpoint};
-use super::bootstrap::{connect_peer_with_retry_until, is_connected_peer};
+use super::bootstrap::is_connected_peer;
+use super::enrollment::current_local_endpoint;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
 use super::sync_state::ClientSyncStateOwner;
 use super::{
@@ -44,12 +43,6 @@ pub(super) struct ClientRouteManager {
 pub(super) struct ClientRouteLifecycle<'a> {
     manager: &'a ClientRouteManager,
     _guard: MutexGuard<'a, ()>,
-}
-
-pub(super) struct RouteActivation {
-    pub(super) record: PeerRecord,
-    pub(super) connected: bool,
-    pub(super) warning: Option<String>,
 }
 
 pub(super) struct RouteRemoval {
@@ -99,71 +92,6 @@ impl ClientRouteManager {
         }
     }
 
-    pub(super) async fn activate_peer(
-        &self,
-        sync_state: &ClientSyncStateOwner,
-        label: &str,
-        addr: &str,
-        agent_did: &str,
-        graphql: Option<&str>,
-        default_behavior_id: Option<&str>,
-    ) -> Result<RouteActivation> {
-        let lifecycle = self.lock().await;
-        let record = sync_state
-            .upsert_saved_peer_with_graphql(label, addr, agent_did, graphql, default_behavior_id)
-            .await?;
-        let mut warning = None;
-        let connected = match connect_peer_with_retry_until(
-            &self.p2p,
-            &record.addr,
-            &record.label,
-            PEER_ADD_OPERATION_TIMEOUT,
-        )
-        .await
-        {
-            Ok(()) => true,
-            Err(error) => {
-                append_warning(
-                    &mut warning,
-                    format!("deployment saved but dial failed: {error}"),
-                );
-                false
-            }
-        };
-        if let Err(error) = lifecycle.configure(&record).await {
-            let prefix = if connected {
-                "deployment connected"
-            } else {
-                "deployment saved"
-            };
-            append_warning(
-                &mut warning,
-                format!("{prefix} but reverse pairing failed: {error}"),
-            );
-        }
-        // Publish the activation observation before releasing the route
-        // lifecycle. A later projection refresh must never replay this whole
-        // status over newer supervisor pairing or route observations.
-        sync_state.replace_peer(
-            &record,
-            ClientPeerStatus {
-                peer_id: record.peer_id.clone(),
-                label: record.label.clone(),
-                agent_did: record.agent_did.clone(),
-                addr: record.addr.clone(),
-                dial_succeeded: connected,
-                last_error: warning.clone(),
-                pairing: Vec::new(),
-                routes: Vec::new(),
-            },
-        );
-        Ok(RouteActivation {
-            record,
-            connected,
-            warning,
-        })
-    }
-
     pub(super) async fn remove_peer(
         &self,
         sync_state: &ClientSyncStateOwner,
@@ -205,26 +133,26 @@ impl ClientRouteManager {
             .await
     }
 
+    pub(super) async fn configure_enrollment_peer(&self, record: &PeerRecord) -> Result<()> {
+        anyhow::ensure!(
+            is_enrollment_peer(record),
+            "enrollment route configuration requires enrollment-owned peer"
+        );
+        self.lock().await.configure(record).await
+    }
+
     async fn configure(&self, record: &PeerRecord) -> Result<()> {
-        let local = publish_local_endpoint(&self.node, &self.p2p, self.actor.as_ref())
-            .await
-            .context("resolving requester P2P endpoint for reciprocal pairing")?;
         let outbound = ClientRouteIdentity::new(
             &record.peer_id,
             &record.addr,
             self.actor.did(),
             &record.agent_did,
         )?;
-        let inbound = ClientRouteIdentity::new(
-            &record.peer_id,
-            local.address,
-            self.actor.did(),
-            &record.agent_did,
-        )?;
-
-        self.upsert_desired(&outbound, PairingDirection::ClientToRuntime)
-            .await?;
-        self.upsert_desired(&inbound, PairingDirection::RuntimeToClient)
+        anyhow::ensure!(
+            is_enrollment_peer(record),
+            "authenticated enrollment is required to configure a remote client route"
+        );
+        self.upsert_desired(&outbound, PairingDirection::ClientToRuntime, record)
             .await
     }
 
@@ -233,7 +161,7 @@ impl ClientRouteManager {
         sync_state: &ClientSyncStateOwner,
         saved: &PeerRecord,
     ) -> PeerRecord {
-        if is_bearer_peer(saved) {
+        if is_enrollment_peer(saved) {
             return saved.clone();
         }
         let current = match gents::agent::p2p_reconcile::TransportEndpoint::parse(
@@ -258,20 +186,6 @@ impl ClientRouteManager {
                     .and_then(|addresses| replacement_endpoint(&current, addresses)),
                 Err(_) => None,
             }
-        } else if saved.source.is_none() {
-            // Legacy rows have no authoritative server-status endpoint. A
-            // signed, freshness-checked PeerEndpoint is their upgrade path.
-            let identity: Arc<dyn gents::AgentIdentity> = self.actor.clone();
-            let store = gents::agent::p2p_reconcile::GraphqlReciprocalStore::new(
-                Arc::clone(&self.node),
-                identity,
-            );
-            store
-                .load_verified_endpoint_for_did(&saved.agent_did)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|endpoint| replacement_endpoint(&current, [endpoint.address]))
         } else {
             None
         };
@@ -311,8 +225,16 @@ impl ClientRouteManager {
         &self,
         record: &PeerRecord,
         sync_state: &ClientSyncStateOwner,
+        enrollment_remote_applied: bool,
     ) -> Option<bool> {
-        let store = self.pairing_store();
+        let store = match self.pairing_store(record) {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!(peer_id = %record.peer_id, error = %error,
+                    "enrollment route has no exact durable authority generation");
+                return Some(false);
+            }
+        };
         let outbound = self
             .reconcile_route(
                 &EmbeddedRemoteP2pAdmin::new(Arc::clone(&self.node)),
@@ -322,55 +244,49 @@ impl ClientRouteManager {
                 sync_state,
             )
             .await;
-        let inbound = match management_endpoint(record) {
-            Some(graphql) => {
-                match HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor)) {
-                    Ok(admin) => {
-                        self.reconcile_route(
-                            &admin.with_local_resolver(Arc::clone(&self.node)),
-                            &store,
-                            PairingDirection::RuntimeToClient,
-                            record,
-                            sync_state,
-                        )
-                        .await
-                    }
-                    Err(error) => {
-                        self.publish_unavailable_route(
-                            &store,
-                            PairingDirection::RuntimeToClient,
-                            record,
-                            sync_state,
-                            format!("invalid remote GraphQL endpoint: {error}"),
-                            true,
-                        )
-                        .await
+        let inbound = if is_enrollment_peer(record) {
+            enrollment_remote_route_state(enrollment_remote_applied)
+        } else {
+            match management_endpoint(record) {
+                Some(graphql) => {
+                    match HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor)) {
+                        Ok(admin) => {
+                            self.reconcile_route(
+                                &admin.with_local_resolver(Arc::clone(&self.node)),
+                                &store,
+                                PairingDirection::RuntimeToClient,
+                                record,
+                                sync_state,
+                            )
+                            .await
+                        }
+                        Err(error) => {
+                            self.publish_unavailable_route(
+                                &store,
+                                PairingDirection::RuntimeToClient,
+                                record,
+                                sync_state,
+                                format!("invalid remote GraphQL endpoint: {error}"),
+                                true,
+                            )
+                            .await
+                        }
                     }
                 }
-            }
-            None => {
-                self.publish_unavailable_route(
-                    &store,
-                    PairingDirection::RuntimeToClient,
-                    record,
-                    sync_state,
-                    "remote GraphQL endpoint is unavailable".to_string(),
-                    true,
-                )
-                .await
+                None => {
+                    self.publish_unavailable_route(
+                        &store,
+                        PairingDirection::RuntimeToClient,
+                        record,
+                        sync_state,
+                        "remote GraphQL endpoint is unavailable".to_string(),
+                        true,
+                    )
+                    .await
+                }
             }
         };
         let readiness = combined_route_readiness(outbound, inbound);
-        if readiness == Some(true) {
-            if let Err(error) = self.cleanup_legacy(record).await {
-                tracing::warn!(
-                    target: "gents_desktop_core::pairing_reconcile",
-                    directory_peer_id = %record.peer_id,
-                    error = %error,
-                    "client route is ready but legacy route cleanup will retry"
-                );
-            }
-        }
         readiness
     }
 
@@ -547,6 +463,7 @@ impl ClientRouteManager {
         &self,
         route: &ClientRouteIdentity,
         direction: PairingDirection,
+        record: &PeerRecord,
     ) -> Result<()> {
         use gents::agent::p2p_reconcile::templates::CLIENT_TEMPLATE;
 
@@ -556,6 +473,25 @@ impl ClientRouteManager {
         let now = escape_graphql_string(
             &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
+        anyhow::ensure!(
+            record.is_enrollment(),
+            "manual pairing desired authority is disabled"
+        );
+        let request_digest = escape_graphql_string(
+            record
+                .enrollment_request_digest
+                .as_deref()
+                .context("enrollment record has no request digest")?,
+        );
+        let authorization_sequence = record
+            .enrollment_authorization_sequence
+            .context("enrollment record has no authorization sequence")?;
+        let authorization_expires_at = escape_graphql_string(
+            record
+                .enrollment_authorization_expires_at
+                .as_deref()
+                .context("enrollment record has no authorization expiry")?,
+        );
         let response = self
             .node
             .execute(&format!(
@@ -563,9 +499,15 @@ impl ClientRouteManager {
                     filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                     add: {{ peer_id: "{peer_id}", agent_did: "{agent_did}", collections: null,
                         template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
+                        source: "enrollment", enrollment_request_digest: "{request_digest}",
+                        enrollment_authorization_sequence: {authorization_sequence},
+                        enrollment_authorization_expires_at: "{authorization_expires_at}",
                         profiles: null, created_at: "{now}", updated_at: "{now}" }},
                     update: {{ agent_did: "{agent_did}", collections: null,
                         template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
+                        source: "enrollment", enrollment_request_digest: "{request_digest}",
+                        enrollment_authorization_sequence: {authorization_sequence},
+                        enrollment_authorization_expires_at: "{authorization_expires_at}",
                         profiles: null, updated_at: "{now}" }}
                 ) {{ _docID }} }}"#
             ))
@@ -574,8 +516,14 @@ impl ClientRouteManager {
     }
 
     async fn teardown_remote(&self, record: &PeerRecord) -> Result<()> {
+        if is_enrollment_peer(record) {
+            // The runtime enrollment owner retracts its own return route from
+            // the authorization revision. This client only tears down its
+            // locally owned outbound route.
+            return Ok(());
+        }
         let route_id = client_route_id(&record.peer_id, PairingDirection::RuntimeToClient);
-        let store = self.pairing_store();
+        let store = self.pairing_store(record)?;
         let mut addresses = store
             .load_desired(&route_id)
             .await?
@@ -605,7 +553,6 @@ impl ClientRouteManager {
 
     async fn delete_local_state(&self, directory_id: &str) -> Result<bool> {
         let ids = [
-            directory_id.to_string(),
             client_route_id(directory_id, PairingDirection::ClientToRuntime),
             client_route_id(directory_id, PairingDirection::RuntimeToClient),
         ]
@@ -629,30 +576,37 @@ impl ClientRouteManager {
             .is_some_and(|rows| !rows.is_empty()))
     }
 
-    async fn cleanup_legacy(&self, record: &PeerRecord) -> Result<()> {
-        // Iroh authorizes one replicator per transport peer. Installing each
-        // directional route replaces that peer's old broad collections and
-        // filter atomically; deleting guessed collections here would instead
-        // mutate the newly installed route.
-        self.delete_legacy_state(&record.peer_id).await
-    }
-
-    async fn delete_legacy_state(&self, directory_id: &str) -> Result<()> {
-        let id = escape_graphql_string(directory_id);
-        let response = self
-            .node
-            .execute(&format!(
-                r#"mutation {{
-                    delete_PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{id}" }} }}) {{ _docID }}
-                    delete_PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{id}" }} }}) {{ _docID }}
-                }}"#
-            ))
-            .await;
-        ensure_graphql_ok(&response, "delete legacy client pairing state")
-    }
-
-    fn pairing_store(&self) -> GraphqlPairingStateStore {
-        GraphqlPairingStateStore::new(Arc::clone(&self.node), self.actor.clone())
+    fn pairing_store(&self, record: &PeerRecord) -> Result<GraphqlPairingStateStore> {
+        if !record.is_enrollment() {
+            return Ok(GraphqlPairingStateStore::for_explicit_desired(
+                Arc::clone(&self.node),
+                self.actor.clone(),
+            ));
+        }
+        let request_digest = record
+            .enrollment_request_digest
+            .clone()
+            .context("enrollment record has no request digest")?;
+        let authorization_sequence = record
+            .enrollment_authorization_sequence
+            .context("enrollment record has no authorization sequence")?;
+        let authorization_expires_at = record
+            .enrollment_authorization_expires_at
+            .clone()
+            .context("enrollment record has no authorization expiry")?;
+        Ok(GraphqlPairingStateStore::for_enrollment_materialization(
+            Arc::clone(&self.node),
+            self.actor.clone(),
+            EnrollmentEndpointEntry {
+                desired_id: client_route_id(&record.peer_id, PairingDirection::ClientToRuntime),
+                peer_id: record.peer_id.clone(),
+                agent_did: record.agent_did.clone(),
+                address: record.addr.clone(),
+                request_digest,
+                authorization_sequence,
+                authorization_expires_at,
+            },
+        ))
     }
 }
 
@@ -673,8 +627,11 @@ impl ClientRouteLifecycle<'_> {
         &self,
         record: &PeerRecord,
         sync_state: &ClientSyncStateOwner,
+        enrollment_remote_applied: bool,
     ) -> Option<bool> {
-        self.manager.reconcile(record, sync_state).await
+        self.manager
+            .reconcile(record, sync_state, enrollment_remote_applied)
+            .await
     }
 
     pub(super) async fn teardown_remote(&self, record: &PeerRecord) -> Result<()> {
@@ -741,10 +698,10 @@ impl ClientRouteLifecycle<'_> {
     #[cfg(test)]
     pub(super) async fn upsert_desired(
         &self,
-        route: &ClientRouteIdentity,
-        direction: PairingDirection,
+        _route: &ClientRouteIdentity,
+        _direction: PairingDirection,
     ) -> Result<()> {
-        self.manager.upsert_desired(route, direction).await
+        anyhow::bail!("manual PeerPairingDesired authoring is disabled")
     }
 }
 
@@ -753,24 +710,29 @@ pub(super) async fn cleanup_saved_peer_p2p(
     record: &PeerRecord,
 ) -> Result<()> {
     let mut replicator_errors = Vec::new();
-    if let Err(error) =
-        p2p_remove_replicator(p2p, saved_peer_replicator_collections(record), &record.addr).await
+    if let Err(error) = p2p_remove_replicator(
+        p2p,
+        gents::agent::p2p_reconcile::client_route_collections(PairingDirection::ClientToRuntime)
+            .iter()
+            .map(|collection| (*collection).to_string())
+            .collect(),
+        &record.addr,
+    )
+    .await
     {
         replicator_errors.push(error.to_string());
     }
-    if !record.is_bearer_pairing() {
-        if let Err(error) = p2p_remove_replicator(
-            p2p,
-            subscribed_collection_names()
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-            &record.addr,
-        )
-        .await
-        {
-            replicator_errors.push(error.to_string());
-        }
+    if let Err(error) = p2p_remove_replicator(
+        p2p,
+        subscribed_collection_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        &record.addr,
+    )
+    .await
+    {
+        replicator_errors.push(error.to_string());
     }
     let replicator_result = if replicator_errors.is_empty() {
         Ok(())
@@ -832,31 +794,20 @@ fn same_transport_peer(left: &PeerRecord, right: &PeerRecord) -> bool {
 }
 
 fn requires_managed_remote_teardown(record: &PeerRecord) -> bool {
-    !record.is_bearer_pairing()
-        && record
-            .graphql
-            .as_deref()
-            .is_some_and(|endpoint| !endpoint.trim().is_empty())
-}
-
-fn append_warning(warning: &mut Option<String>, message: String) {
-    match warning {
-        Some(existing) => {
-            existing.push_str("; ");
-            existing.push_str(&message);
-        }
-        None => *warning = Some(message),
-    }
+    record
+        .graphql
+        .as_deref()
+        .is_some_and(|endpoint| !endpoint.trim().is_empty())
 }
 
 #[derive(Clone, Copy)]
-enum RouteReconcileState {
+pub(super) enum RouteReconcileState {
     Ready,
     Drifted,
     Unavailable,
 }
 
-fn combined_route_readiness(
+pub(super) fn combined_route_readiness(
     outbound: RouteReconcileState,
     inbound: RouteReconcileState,
 ) -> Option<bool> {
@@ -867,12 +818,24 @@ fn combined_route_readiness(
     }
 }
 
+pub(super) fn enrollment_remote_route_state(signed_current_receipt: bool) -> RouteReconcileState {
+    if signed_current_receipt {
+        RouteReconcileState::Ready
+    } else {
+        RouteReconcileState::Drifted
+    }
+}
+
 fn management_endpoint(record: &PeerRecord) -> Option<&str> {
     record
         .graphql
         .as_deref()
         .map(str::trim)
         .filter(|endpoint| !endpoint.is_empty())
+}
+
+pub(super) fn is_enrollment_peer(record: &PeerRecord) -> bool {
+    record.source.as_deref() == Some("enrollment")
 }
 
 fn replacement_endpoint(
@@ -1087,6 +1050,24 @@ mod tests {
         assert_eq!(
             combined_route_readiness(RouteReconcileState::Ready, RouteReconcileState::Drifted),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn enrollment_needs_current_server_route_receipt() {
+        assert_eq!(
+            combined_route_readiness(
+                RouteReconcileState::Ready,
+                enrollment_remote_route_state(false),
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            combined_route_readiness(
+                RouteReconcileState::Ready,
+                enrollment_remote_route_state(true),
+            ),
+            Some(true)
         );
     }
 

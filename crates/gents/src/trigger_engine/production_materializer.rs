@@ -205,12 +205,15 @@ impl MaterializerHandle for ProductionMaterializer {
         task: &ResolvedTask,
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
+        trigger_doc_id: Option<&str>,
         source_doc_id: Option<&str>,
         correlation: Option<&str>,
         trigger_context: Option<&str>,
         rendered_prompt: &str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>> {
-        if matches!(trigger_kind, TriggerKind::Manual) && trigger_id.is_some() {
+        if matches!(trigger_kind, TriggerKind::Manual)
+            && (trigger_id.is_some() || trigger_doc_id.is_some())
+        {
             return Box::pin(async {
                 Err(anyhow!(
                     "Manual trigger materialization must not carry trigger_id"
@@ -224,6 +227,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let task_label = task.display_label().to_string();
         let rendered_prompt = rendered_prompt.to_string();
         let trigger_id = trigger_id.map(str::to_owned);
+        let trigger_doc_id = trigger_doc_id.map(str::to_owned);
         let source_doc_id = source_doc_id.map(str::to_owned);
         let correlation = correlation.map(str::to_owned);
         let trigger_context = trigger_context.map(str::to_owned);
@@ -306,6 +310,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     workspace_ref,
                     Some(&request_id),
                     requester_did,
+                    trigger_doc_id.as_deref(),
                 )
                 .await?;
             if workspace_ref.is_some() {

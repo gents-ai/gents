@@ -141,9 +141,9 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
     let bootstrap_address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-a";
     let signed_address = "/ip4/127.0.0.1/tcp/5103/p2p/peer-a";
     let control = PairingDesired {
-        collections: set(&["AgentNetwork", "NetworkMembership", "PeerEndpoint"]),
+        collections: set(&["ControlA", "ControlB", "ControlC"]),
         replicator_addresses: set(&[bootstrap_address]),
-        replicator_collections: set(&["AgentNetwork", "NetworkMembership", "PeerEndpoint"]),
+        replicator_collections: set(&["ControlA", "ControlB", "ControlC"]),
         replicator_filter: PairingFilters::new(),
         template_ids: BTreeSet::new(),
     };
@@ -162,15 +162,15 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
 
     assert_eq!(
         merged.collections,
-        set(&["AgentNetwork", "NetworkMembership", "PeerEndpoint"]),
+        set(&["ControlA", "ControlB", "ControlC"]),
         "data-plane collections must not become unfiltered subscriptions"
     );
     assert_eq!(
         merged.replicator_collections,
         set(&[
-            "AgentNetwork",
-            "NetworkMembership",
-            "PeerEndpoint",
+            "ControlA",
+            "ControlB",
+            "ControlC",
             "AgentRequest",
             "AgentResponse",
         ])
@@ -191,8 +191,8 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
         Some(("requester_did", "did:key:a"))
     );
     assert!(
-        !merged.replicator_filter.contains_key("AgentNetwork"),
-        "network-control collections stay unfiltered inside the mixed replicator"
+        !merged.replicator_filter.contains_key("ControlA"),
+        "explicit control collections stay unfiltered inside the mixed replicator"
     );
 }
 
@@ -226,27 +226,6 @@ fn layered_desired_merge_prefers_signed_data_plane_filter() {
 }
 
 #[test]
-fn layered_desired_merge_uses_signed_readiness_claimant() {
-    let layer = |claimant| PairingDesired {
-        replicator_filter: one_filter("BearerPairingReady", "claimant_did", claimant),
-        ..Default::default()
-    };
-    let merged = merge_desired(
-        Some(layer("did:key:claimant")),
-        Some(layer("did:key:signed")),
-    )
-    .expect("merged desired state");
-
-    assert_eq!(
-        merged
-            .replicator_filter
-            .get("BearerPairingReady")
-            .and_then(single_string_eq),
-        Some(("claimant_did", "did:key:signed"))
-    );
-}
-
-#[test]
 fn self_pairing_base_is_not_materialized() {
     assert!(merge_layered_desired(
         "did:key:self",
@@ -260,9 +239,9 @@ fn self_pairing_base_is_not_materialized() {
 #[test]
 fn layered_desired_merge_absent_data_plane_preserves_control_only() {
     let control = PairingDesired {
-        collections: set(&["AgentNetwork", "NetworkMembership"]),
+        collections: set(&["ControlA", "ControlB"]),
         replicator_addresses: set(&["/ip4/127.0.0.1/tcp/4103/p2p/peer-a"]),
-        replicator_collections: set(&["AgentNetwork", "NetworkMembership"]),
+        replicator_collections: set(&["ControlA", "ControlB"]),
         replicator_filter: PairingFilters::new(),
         template_ids: BTreeSet::new(),
     };
@@ -292,7 +271,7 @@ fn merge_preserves_app_collections_subscription_only() {
         replicator_addresses: set(&["addr-b"]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: Default::default(),
-        template_ids: set(&["network-control"]),
+        template_ids: set(&["explicit-control"]),
     };
     let merged_nc = merge_desired(None, Some(nc_layer)).expect("merged nc");
     assert!(
@@ -304,11 +283,11 @@ fn merge_preserves_app_collections_subscription_only() {
 #[test]
 fn app_collections_coexists_with_control_pairing() {
     let base = PairingDesired {
-        collections: set(&["AgentNetwork", "NetworkMembership"]),
+        collections: set(&["ControlA", "ControlB"]),
         replicator_addresses: set(&["addr-b"]),
-        replicator_collections: set(&["AgentNetwork", "NetworkMembership"]),
+        replicator_collections: set(&["ControlA", "ControlB"]),
         replicator_filter: Default::default(),
-        template_ids: set(&["network-control"]),
+        template_ids: set(&["explicit-control"]),
     };
     let app_layer = PairingDesired {
         collections: set(&["ChangeProposed"]),
@@ -318,16 +297,16 @@ fn app_collections_coexists_with_control_pairing() {
         template_ids: set(&["app-collections"]),
     };
     let merged = merge_desired(Some(base), Some(app_layer)).expect("merged");
-    assert!(merged.collections.contains("AgentNetwork"));
-    assert!(merged.collections.contains("NetworkMembership"));
+    assert!(merged.collections.contains("ControlA"));
+    assert!(merged.collections.contains("ControlB"));
     assert!(merged.collections.contains("ChangeProposed"));
-    assert!(merged.replicator_collections.contains("AgentNetwork"));
+    assert!(merged.replicator_collections.contains("ControlA"));
     assert!(merged.replicator_collections.contains("ChangeProposed"));
     assert!(
         merged.replicator_filter.is_empty(),
         "both layers unscoped => no filter"
     );
-    assert!(merged.template_ids.contains("network-control"));
+    assert!(merged.template_ids.contains("explicit-control"));
     assert!(merged.template_ids.contains("app-collections"));
 }
 

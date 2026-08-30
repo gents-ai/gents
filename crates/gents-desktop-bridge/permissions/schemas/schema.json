@@ -751,40 +751,16 @@
           "markdownDescription": "Denies the desktop_p2p_repair command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_peer_add command without any pre-configured scope.",
+          "description": "Enables the desktop_peer_enroll_status command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-desktop-peer-add",
-          "markdownDescription": "Enables the desktop_peer_add command without any pre-configured scope."
+          "const": "allow-desktop-peer-enroll-status",
+          "markdownDescription": "Enables the desktop_peer_enroll_status command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_peer_add command without any pre-configured scope.",
+          "description": "Denies the desktop_peer_enroll_status command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-desktop-peer-add",
-          "markdownDescription": "Denies the desktop_peer_add command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_peer_pair_bearer command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-peer-pair-bearer",
-          "markdownDescription": "Enables the desktop_peer_pair_bearer command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_peer_pair_bearer command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-peer-pair-bearer",
-          "markdownDescription": "Denies the desktop_peer_pair_bearer command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_peer_probe_address command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-peer-probe-address",
-          "markdownDescription": "Enables the desktop_peer_probe_address command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_peer_probe_address command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-peer-probe-address",
-          "markdownDescription": "Denies the desktop_peer_probe_address command without any pre-configured scope."
+          "const": "deny-desktop-peer-enroll-status",
+          "markdownDescription": "Denies the desktop_peer_enroll_status command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_peer_remove command without any pre-configured scope.",
@@ -1237,10 +1213,10 @@
           "markdownDescription": "Workspace browser\n#### This permission set includes:\n\n- `allow-desktop-workspace-list`"
         },
         {
-          "description": "Peer add/remove/rename, bearer pairing, address probe, P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-add`\n- `allow-desktop-peer-pair-bearer`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-peer-probe-address`\n- `allow-desktop-p2p-repair`",
+          "description": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`",
           "type": "string",
           "const": "fleet-admin",
-          "markdownDescription": "Peer add/remove/rename, bearer pairing, address probe, P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-add`\n- `allow-desktop-peer-pair-bearer`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-peer-probe-address`\n- `allow-desktop-p2p-repair`"
+          "markdownDescription": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`"
         },
         {
           "description": "Operations snapshot, health, subagent tree, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-list-subagent-tree`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",

@@ -15,15 +15,14 @@ use defra_node::{EmbeddedNode, EventName};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::graphql::escape_graphql_string;
-use crate::identity::AgentIdentity;
-
+use super::enrollment_reconcile::{EnrollmentAuthorityHandle, EnrollmentAuthorizationFence};
 use super::graphql_helpers::{ensure_no_errors, rows};
 use super::session_hydration::{
     decide_hydration, AppliedPairingRoute, HydrationCatalog, HydrationDocument, HydrationRequest,
     HydrationVerdict, SessionOwner, VerifiedActiveMembership, HYDRATION_COLLECTIONS,
 };
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
+use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct HydrationTickOutcome {
@@ -43,9 +42,20 @@ trait HydrationDelivery: Send + Sync {
 #[async_trait]
 trait HydrationRequestStore: Send + Sync {
     async fn load_pending_requests(&self) -> Result<Vec<HydrationRequestRow>>;
-    async fn load_catalog(&self, request: &HydrationRequest) -> Result<HydrationCatalog>;
+    async fn load_catalog(&self, request: &HydrationRequest) -> Result<LoadedHydrationCatalog>;
+    async fn authorization_is_current(
+        &self,
+        request: &HydrationRequest,
+        fence: &EnrollmentAuthorizationFence,
+    ) -> Result<bool>;
     async fn mark_served(&self, request_key: &str, served_doc_count: usize) -> Result<()>;
     async fn mark_rejected(&self, request_key: &str, detail: &str) -> Result<()>;
+}
+
+#[derive(Debug, Clone)]
+struct LoadedHydrationCatalog {
+    catalog: HydrationCatalog,
+    authorization: EnrollmentAuthorizationFence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,13 +117,24 @@ async fn process_one_request(
         }
     };
 
-    let catalog = store
+    let loaded = store
         .load_catalog(&request)
         .await
         .context("load hydration catalog")?;
 
-    match decide_hydration(&request, &catalog) {
+    match decide_hydration(&request, &loaded.catalog) {
         HydrationVerdict::Admit(documents) => {
+            if !store
+                .authorization_is_current(&request, &loaded.authorization)
+                .await
+                .context("revalidate hydration authorization generation")?
+            {
+                let detail =
+                    "authenticated enrollment authorization changed before hydration delivery";
+                store.mark_rejected(&request.request_key, detail).await?;
+                outcome.rejected.insert(request.request_key);
+                return Ok(());
+            }
             delivery
                 .push_documents_to_peer(&request.peer_id, &documents)
                 .await
@@ -137,12 +158,12 @@ async fn process_one_request(
 
 pub async fn run_session_hydration_reconciler(
     node: Arc<EmbeddedNode>,
-    identity: Arc<dyn AgentIdentity>,
+    enrollment: EnrollmentAuthorityHandle,
     cancel: CancellationToken,
 ) -> Result<()> {
     let store = GraphqlHydrationStore {
         node: node.clone(),
-        identity,
+        enrollment,
     };
     let delivery: Arc<dyn HydrationDelivery> =
         Arc::new(EmbeddedHydrationDelivery { node: node.clone() });
@@ -212,7 +233,7 @@ async fn sweep_hydration_requests(
 
 struct GraphqlHydrationStore {
     node: Arc<EmbeddedNode>,
-    identity: Arc<dyn AgentIdentity>,
+    enrollment: EnrollmentAuthorityHandle,
 }
 
 struct EmbeddedHydrationDelivery {
@@ -292,45 +313,17 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             .collect())
     }
 
-    async fn load_catalog(&self, request: &HydrationRequest) -> Result<HydrationCatalog> {
-        let active =
-            super::network::GraphqlNetworkStore::new(self.node.clone(), self.identity.clone())
-                .load_verified_active_memberships()
-                .await
-                .context("load verified active hydration memberships")?;
+    async fn load_catalog(&self, request: &HydrationRequest) -> Result<LoadedHydrationCatalog> {
+        let authorization = self
+            .enrollment
+            .fresh_authorization(&request.requester_did, &request.peer_id)
+            .await
+            .context("load fresh authenticated enrollment authority for hydration")?
+            .context("requester has no active authenticated enrollment")?;
+        let network_id = authorization.network_id.clone();
         let session_id = escape_graphql_string(&request.session_id);
         let peer_id = escape_graphql_string(&request.peer_id);
-        let query = format!(
-            r#"{{
-                PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    peer_id agent_did
-                }}
-                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                    peer_id replicator_filter
-                }}
-                AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    session_id requester_did agent_did
-                }}
-                AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    _docID requester_did agent_did session_id
-                }}
-                AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    _docID requester_did agent_did session_id
-                }}
-                AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    _docID requester_did agent_did session_id
-                }}
-                AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    _docID requester_did agent_did session_id
-                }}
-                AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    _docID requester_did agent_did session_id
-                }}
-                CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                    _docID requester_did agent_did session_id
-                }}
-            }}"#
-        );
+        let query = hydration_catalog_query(&session_id, &peer_id);
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "query session hydration catalog")?;
 
@@ -373,20 +366,32 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             }
         }
 
-        Ok(HydrationCatalog {
-            applied_pairing_routes,
-            selected_network_id: active.network_id.clone(),
-            verified_active_memberships: active
-                .member_dids
-                .into_iter()
-                .map(|member_did| VerifiedActiveMembership {
-                    network_id: active.network_id.clone(),
-                    member_did,
-                })
-                .collect(),
-            sessions,
-            documents,
+        Ok(LoadedHydrationCatalog {
+            catalog: HydrationCatalog {
+                applied_pairing_routes,
+                selected_network_id: network_id.clone(),
+                verified_active_memberships: BTreeSet::from([VerifiedActiveMembership {
+                    network_id,
+                    member_did: authorization.member_did.clone(),
+                }]),
+                sessions,
+                documents,
+            },
+            authorization,
         })
+    }
+
+    async fn authorization_is_current(
+        &self,
+        request: &HydrationRequest,
+        fence: &EnrollmentAuthorizationFence,
+    ) -> Result<bool> {
+        Ok(self
+            .enrollment
+            .fresh_authorization(&request.requester_did, &request.peer_id)
+            .await?
+            .as_ref()
+            == Some(fence))
     }
 
     async fn mark_served(&self, request_key: &str, served_doc_count: usize) -> Result<()> {
@@ -412,6 +417,40 @@ impl HydrationRequestStore for GraphqlHydrationStore {
         .await
         .map(|_| ())
     }
+}
+
+fn hydration_catalog_query(session_id: &str, peer_id: &str) -> String {
+    format!(
+        r#"{{
+            PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }} }}) {{
+                peer_id agent_did
+            }}
+            PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
+                peer_id replicator_filter
+            }}
+            AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                session_id requester_did agent_did
+            }}
+            AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                _docID requester_did agent_did session_id
+            }}
+            AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                _docID requester_did agent_did session_id
+            }}
+            AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                _docID requester_did agent_did session_id
+            }}
+            AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                _docID requester_did agent_did session_id
+            }}
+            AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                _docID requester_did agent_did session_id
+            }}
+            CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                _docID requester_did agent_did session_id
+            }}
+        }}"#
+    )
 }
 
 fn applied_pairing_route(
@@ -495,8 +534,15 @@ mod tests {
     struct MemoryStore {
         pending: Vec<HydrationRequestRow>,
         catalog: HydrationCatalog,
+        authorization_current: std::sync::atomic::AtomicBool,
+        authorization_check: Option<Arc<AuthorizationCheckBarrier>>,
         served: std::sync::Mutex<Vec<(String, usize)>>,
         rejected: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    struct AuthorizationCheckBarrier {
+        started: tokio::sync::Notify,
+        released: tokio::sync::Notify,
     }
 
     struct RecordingDelivery {
@@ -512,8 +558,27 @@ mod tests {
         async fn load_pending_requests(&self) -> Result<Vec<HydrationRequestRow>> {
             Ok(self.pending.clone())
         }
-        async fn load_catalog(&self, _request: &HydrationRequest) -> Result<HydrationCatalog> {
-            Ok(self.catalog.clone())
+        async fn load_catalog(
+            &self,
+            _request: &HydrationRequest,
+        ) -> Result<LoadedHydrationCatalog> {
+            Ok(LoadedHydrationCatalog {
+                catalog: self.catalog.clone(),
+                authorization: test_authorization_fence(),
+            })
+        }
+        async fn authorization_is_current(
+            &self,
+            _request: &HydrationRequest,
+            _fence: &EnrollmentAuthorizationFence,
+        ) -> Result<bool> {
+            if let Some(barrier) = &self.authorization_check {
+                barrier.started.notify_one();
+                barrier.released.notified().await;
+            }
+            Ok(self
+                .authorization_current
+                .load(std::sync::atomic::Ordering::SeqCst))
         }
         async fn mark_served(&self, request_key: &str, served_doc_count: usize) -> Result<()> {
             self.served
@@ -591,8 +656,25 @@ mod tests {
                 }]),
                 documents: BTreeSet::from([document]),
             },
+            authorization_current: std::sync::atomic::AtomicBool::new(true),
+            authorization_check: None,
             served: std::sync::Mutex::new(Vec::new()),
             rejected: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn test_authorization_fence() -> EnrollmentAuthorizationFence {
+        EnrollmentAuthorizationFence {
+            network_id: "network-1".into(),
+            request_id: "request-1".into(),
+            admin_did: "did:key:admin-1".into(),
+            member_did: "did:key:requester-1".into(),
+            member_peer: "peer-1".into(),
+            member_ticket: "ticket-1".into(),
+            owner_agent: "did:key:agent-1".into(),
+            request_digest: "digest-1".into(),
+            authorization_sequence: 1,
+            authorization_expires_at: "2099-09-29T00:00:00Z".into(),
         }
     }
 
@@ -615,6 +697,48 @@ mod tests {
             *store.served.lock().expect("served lock"),
             vec![("peer-1:session-1".into(), 1)]
         );
+    }
+
+    #[tokio::test]
+    async fn revocation_after_catalog_load_blocks_delivery_at_generation_fence() {
+        let barrier = Arc::new(AuthorizationCheckBarrier {
+            started: tokio::sync::Notify::new(),
+            released: tokio::sync::Notify::new(),
+        });
+        let mut store = admitted_store();
+        store.authorization_check = Some(barrier.clone());
+        let delivery = RecordingDelivery {
+            pushed: std::sync::Mutex::new(Vec::new()),
+        };
+        let tick = reconcile_hydration_tick(&store, &delivery);
+        tokio::pin!(tick);
+        tokio::select! {
+            result = &mut tick => panic!("hydration completed before the authorization fence: {result:?}"),
+            _ = barrier.started.notified() => {}
+        }
+        // The catalog was admitted under the old generation. Commit the
+        // revocation while the fresh owner-command recheck is paused.
+        store
+            .authorization_current
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        barrier.released.notify_one();
+        let outcome = tick.await.unwrap();
+        assert!(outcome.served.is_empty());
+        assert_eq!(
+            outcome.rejected,
+            BTreeSet::from(["peer-1:session-1".to_string()])
+        );
+        assert!(delivery.pushed.lock().unwrap().is_empty());
+        assert!(store.served.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn hydration_catalog_filter_is_accepted_by_real_schema() {
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let query = hydration_catalog_query("session-1", "peer-1");
+        let response = node.execute(&query).await;
+        ensure_no_errors(&response, "real hydration catalog query").unwrap();
     }
 
     #[test]
@@ -682,6 +806,8 @@ mod tests {
                 session_id: "session-1".into(),
             }],
             catalog: HydrationCatalog::default(),
+            authorization_current: std::sync::atomic::AtomicBool::new(true),
+            authorization_check: None,
             served: std::sync::Mutex::new(Vec::new()),
             rejected: std::sync::Mutex::new(Vec::new()),
         };

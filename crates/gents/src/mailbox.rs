@@ -944,6 +944,7 @@ mod tests {
     use defra_node::EmbeddedNode;
 
     use super::*;
+    use crate::identity::AgentIdentity;
 
     const FIXTURE_CLOSE: &[MailboxCloseCollection] = &[MailboxCloseCollection {
         collection: "MailboxFixture",
@@ -1097,10 +1098,20 @@ mod tests {
 
     #[tokio::test]
     async fn event_stage_materialization_persists_explicit_requester_lineage() {
-        let node = test_node().await;
+        let key_path =
+            std::env::temp_dir().join(format!("mailbox-event-stage-{}.key", uuid::Uuid::new_v4()));
+        let identity = crate::identity::KeyIdentity::load_or_create(key_path, None).unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let trigger_context = serde_json::json!({
             "version": 1,
-            "source_fields": {"requester_did": "did:test:owner"}
+            "source_fields": {"requester_did": identity.did()}
         })
         .to_string();
         let parsed =
@@ -1111,7 +1122,7 @@ mod tests {
             .map(String::as_str);
         let enqueued = crate::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
             node.as_ref(),
-            "did:test:agent",
+            identity.did(),
             "operator",
             "continue the graph",
             crate::lifecycle::ExecutionOrigin::Scheduled,
@@ -1126,6 +1137,7 @@ mod tests {
             None,
             None,
             requester_did,
+            Some("event-trigger-config-doc-1"),
         )
         .await
         .unwrap();
@@ -1141,7 +1153,7 @@ mod tests {
         .unwrap();
         let rows = rows::<Value>(&response, "AgentRequest").unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["requester_did"], "did:test:owner");
+        assert_eq!(rows[0]["requester_did"], identity.did());
         assert_eq!(rows[0]["caused_by_source_doc_id"], "source-doc-1");
     }
 

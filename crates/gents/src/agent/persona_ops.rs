@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::persona::LocalPersonaRequestRecord;
 
 use super::persona_presets;
 use crate::config_client::{
@@ -104,9 +105,23 @@ impl PersonaOp {
 /// being discarded during parsing.
 #[derive(Debug, Clone, Default)]
 pub struct PersonaRequestDoc {
+    /// Exact physical row identity used for terminal outcome mutation.
+    pub doc_id: String,
     pub request_key: String,
     pub requester_did: String,
     pub agent_did: String,
+    pub authority_kind: String,
+    pub local_signer_did: String,
+    pub local_signature: Vec<u8>,
+    pub local_signature_valid: bool,
+    pub network_id: String,
+    pub member_peer: String,
+    pub enrollment_request_digest: String,
+    pub authorization_sequence: u64,
+    pub authorization_expires_at: String,
+    /// Set only by the runtime after a fresh query through the single
+    /// enrollment-authority owner matches every immutable generation field.
+    pub current_enrollment_authorized: bool,
     pub op_raw: String,
     pub op: Option<PersonaOp>,
     pub behavior_id: Option<String>,
@@ -120,6 +135,46 @@ pub struct PersonaRequestDoc {
     pub status_detail: Option<String>,
     pub applied_behavior_id: Option<String>,
     pub processed_at: Option<String>,
+}
+
+/// Render the one canonical local/self request shape. The signature is over
+/// all semantic fields and the GraphQL mutation only transports that record.
+pub fn local_persona_request_mutation(record: &LocalPersonaRequestRecord) -> String {
+    fn nullable(value: Option<&str>) -> String {
+        value
+            .map(crate::graphql::escape_graphql_string)
+            .map(|value| format!("\"{value}\""))
+            .unwrap_or_else(|| "null".to_string())
+    }
+    let signature = bs58::encode(&record.local_signature).into_string();
+    format!(
+        r#"mutation {{
+            create_PersonaConfigRequest(input: {{
+                request_key: "{}", requester_did: "{}", agent_did: "{}",
+                authority_kind: "{}", local_signer_did: "{}", local_signature: "{}",
+                network_id: null, member_peer: null, enrollment_request_digest: null,
+                authorization_sequence: null, authorization_expires_at: null,
+                op: "{}", behavior_id: {}, clone_from: {},
+                persona_name: {}, backend_model: {}, root: {}, preset: {}, profile_id: {},
+                created_at: "{}", status: "pending"
+            }}) {{ _docID }}
+        }}"#,
+        crate::graphql::escape_graphql_string(&record.request_key),
+        crate::graphql::escape_graphql_string(&record.requester_did),
+        crate::graphql::escape_graphql_string(&record.agent_did),
+        crate::graphql::escape_graphql_string(&record.authority_kind),
+        crate::graphql::escape_graphql_string(&record.local_signer_did),
+        crate::graphql::escape_graphql_string(&signature),
+        crate::graphql::escape_graphql_string(&record.op),
+        nullable(record.behavior_id.as_deref()),
+        nullable(record.clone_from.as_deref()),
+        nullable(record.persona_name.as_deref()),
+        nullable(record.backend_model.as_deref()),
+        nullable(record.root.as_deref()),
+        nullable(record.preset.as_deref()),
+        nullable(record.profile_id.as_deref()),
+        crate::graphql::escape_graphql_string(&record.created_at),
+    )
 }
 
 /// The result of admission. `Reject`'s message is user-facing: it becomes
@@ -236,6 +291,32 @@ pub fn decide_persona_request(
             doc.op_raw
         ));
     };
+
+    match doc.authority_kind.as_str() {
+        gents_protocol::persona::PERSONA_AUTHORITY_ENROLLMENT => {
+            if !doc.current_enrollment_authorized {
+                return PersonaVerdict::Reject(
+                    "persona request has no exact current enrollment authorization".to_string(),
+                );
+            }
+        }
+        gents_protocol::persona::PERSONA_AUTHORITY_LOCAL_SELF => {
+            if !doc.local_signature_valid
+                || doc.local_signer_did != doc.requester_did
+                || doc.requester_did != doc.agent_did
+            {
+                return PersonaVerdict::Reject(
+                    "persona request has no valid local-self principal signature".to_string(),
+                );
+            }
+        }
+        _ => {
+            return PersonaVerdict::Reject(format!(
+                "persona request has unknown authority_kind {:?}",
+                doc.authority_kind
+            ));
+        }
+    }
 
     // Lean `agentOk`: every op requires a known enabled principal, so a
     // request can never mint or touch config for a phantom/foreign agent.
@@ -809,6 +890,8 @@ mod tests {
             request_key: "req-1".to_string(),
             requester_did: "did:key:requester".to_string(),
             agent_did: "did:key:agent".to_string(),
+            authority_kind: gents_protocol::persona::PERSONA_AUTHORITY_ENROLLMENT.to_string(),
+            current_enrollment_authorized: true,
             op_raw: "create".to_string(),
             op: Some(op),
             persona_name: Some("Research Assistant".to_string()),
@@ -1063,13 +1146,9 @@ mod tests {
 
     #[test]
     fn rejects_disable_unknown_behavior_id() {
-        let doc = PersonaRequestDoc {
-            agent_did: "did:key:agent".to_string(),
-            op_raw: "disable".to_string(),
-            op: Some(PersonaOp::Disable),
-            behavior_id: Some("no-such-behavior".to_string()),
-            ..Default::default()
-        };
+        let mut doc = create_doc(PersonaOp::Disable);
+        doc.op_raw = "disable".to_string();
+        doc.behavior_id = Some("no-such-behavior".to_string());
         let verdict = decide_persona_request(&doc, &base_catalog());
         assert_eq!(
             verdict,
@@ -1126,13 +1205,9 @@ mod tests {
 
     #[test]
     fn admits_happy_disable() {
-        let doc = PersonaRequestDoc {
-            agent_did: "did:key:agent".to_string(),
-            op_raw: "disable".to_string(),
-            op: Some(PersonaOp::Disable),
-            behavior_id: Some("existing-enabled".to_string()),
-            ..Default::default()
-        };
+        let mut doc = create_doc(PersonaOp::Disable);
+        doc.op_raw = "disable".to_string();
+        doc.behavior_id = Some("existing-enabled".to_string());
         assert_eq!(
             decide_persona_request(&doc, &base_catalog()),
             PersonaVerdict::Admit

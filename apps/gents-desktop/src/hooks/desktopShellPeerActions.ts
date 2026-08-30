@@ -2,10 +2,8 @@ import type { Dispatch, SetStateAction } from "react";
 
 import { formatPeerConnectionError } from "@source-inc/gents-desktop-fleet";
 import type {
-  BearerPairingRequest,
   DesktopApiAdapter,
   DesktopClientSnapshot,
-  PeerAddRequest,
 } from "@source-inc/gents-desktop-client";
 
 type PeerActionParams = {
@@ -47,17 +45,9 @@ export function createDesktopShellPeerActions({
         dangerouslyOverwrite: false,
         reset: false,
       });
-      const peerRequest: PeerAddRequest = {
-        label: summary.label,
-        agentDid: summary.agentDid,
-        addr: summary.p2pListenAddress,
-        graphql: summary.graphql,
-      };
-      // Init writes the peer directory entry; a fresh start bootstraps it.
-      // A live client needs an explicit addPeer for the new record.
-      const next = snapshot?.client
-        ? await api.addPeer(peerRequest)
-        : await ensureDesktopClientStarted();
+      // Init durably writes the local-standard peer entry. Restarting the
+      // client is the only supported way to hydrate that trusted local route.
+      const next = await ensureDesktopClientStarted();
       if (!next) {
         throw new Error("desktop client failed to start after local runtime init");
       }
@@ -81,57 +71,6 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function onAddPeer(request: PeerAddRequest) {
-    setAddingPeer(true);
-    setError(null);
-    try {
-      if (!snapshot?.client) {
-        const started = await ensureDesktopClientStarted();
-        if (!started) {
-          throw new Error("desktop client failed to start before adding peer");
-        }
-      }
-      const next = await api.addPeer(request);
-      setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
-      return next;
-    } catch (err) {
-      const message = formatPeerConnectionError(err, "add-peer");
-      setError(message);
-      throw new Error(message);
-    } finally {
-      setStarting(false);
-      setAddingPeer(false);
-    }
-  }
-
-  async function onPairBearer(request: BearerPairingRequest) {
-    setAddingPeer(true);
-    setError(null);
-    try {
-      if (!snapshot?.client) {
-        const started = await ensureDesktopClientStarted();
-        if (!started) {
-          throw new Error("desktop client failed to start before pairing");
-        }
-      }
-      const response = await api.pairBearer(request);
-      setSnapshot({
-        bootstrap: response.bootstrap,
-        client: response.client,
-      });
-      setSelectedAgentDid(response.pairing.issuerDid);
-      return response;
-    } catch (err) {
-      const message = formatPeerConnectionError(err, "add-peer");
-      setError(message);
-      throw new Error(message);
-    } finally {
-      setStarting(false);
-      setAddingPeer(false);
-    }
-  }
-
   async function onFetchPeerStatus(peerId: string) {
     setError(null);
     try {
@@ -143,10 +82,16 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function onProbePeerAddress(serverAddress: string) {
+  async function onRequestStatusEnrollment(serverAddress: string) {
     setError(null);
     try {
-      return await api.probePeerAddress(serverAddress);
+      if (!snapshot?.client) {
+        const started = await ensureDesktopClientStarted();
+        if (!started) {
+          throw new Error("desktop client failed to start before enrollment");
+        }
+      }
+      return await api.requestStatusEnrollment(serverAddress);
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
       setError(message);
@@ -197,11 +142,9 @@ export function createDesktopShellPeerActions({
   }
 
   return {
-    onAddPeer,
     onFetchPeerStatus,
-    onProbePeerAddress,
+    onRequestStatusEnrollment,
     onInitLocalRuntime,
-    onPairBearer,
     onRemovePeer,
     onRenamePeer,
     onRepairP2P,

@@ -2,13 +2,16 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use super::*;
+
+fn test_local_admission(core: &ClientCore) -> AgentRequestAdmissionRecord {
+    AgentRequestAdmissionRecord::local_self(core.principal().did())
+}
 use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 
 use super::lean_vocab_test::{
     assert_lean_transition_is_legal, lean_contract_snapshot, LeanSessionRecoveryCase,
 };
 
-const RECOVERY_AGENT_DID: &str = "did:test:amy";
 const RECOVERY_BEHAVIOR_ID: &str = "amy-code";
 
 #[derive(Debug)]
@@ -24,11 +27,8 @@ struct RecoveryPreState {
 struct ForcedRequestState {
     status: &'static str,
     lifecycle_state: String,
-    retry_count: i64,
-    max_retries: i64,
     deadline: String,
     backend_id: String,
-    execution_origin: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,13 +54,23 @@ struct RecoveryRequestRow {
     metadata: Option<String>,
     status: String,
     lifecycle_state: String,
+    #[serde(deserialize_with = "null_string_default")]
     backend_id: String,
+    #[serde(deserialize_with = "null_string_default")]
     execution_origin: String,
     retry_root_request: String,
+    #[serde(deserialize_with = "null_string_default")]
     retry_parent_request: String,
     retry_parent_request_doc_id: Option<String>,
     retry_count: i64,
     max_retries: i64,
+}
+
+fn null_string_default<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[test]
@@ -81,12 +91,18 @@ fn prepare_prompt_submission_strips_skill_selector_and_records_metadata() -> Res
 #[tokio::test]
 async fn submit_request_rejects_negative_seed_before_store_access() -> Result<()> {
     let node = defra_node::EmbeddedNode::builder().build().await?;
+    let tempdir = tempfile::tempdir()?;
+    let signer =
+        gents::identity::KeyIdentity::load_or_create(&tempdir.path().join("request.key"), None)?;
+    let signer_did = gents::identity::AgentIdentity::did(&signer).to_string();
     let error = submit_request(
         &node,
         &ClientStore::default(),
         "session-one",
-        "did:key:agent",
-        "did:key:requester",
+        &signer_did,
+        &signer_did,
+        &signer,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&signer_did),
         "hello",
         None,
         SubmitRequestOptions {
@@ -258,7 +274,7 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
         ClientCoreOptions::local_only(),
     )
     .await?;
-    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+    core.add_local_standard_peer_for_test(core.principal().did())
         .await?;
 
     let result = async {
@@ -488,7 +504,12 @@ async fn seed_session_recovery_pre_state(
         );
         parent
     } else {
-        synthetic_missing_retry_parent(case, &session_id, &failed_request_id)
+        synthetic_missing_retry_parent(
+            case,
+            &session_id,
+            &failed_request_id,
+            core.principal().did(),
+        )
     };
 
     Ok(RecoveryPreState {
@@ -506,23 +527,58 @@ async fn submit_recovery_seed_request(
     case: &LeanSessionRecoveryCase,
     role: &str,
 ) -> Result<SubmittedRequest> {
-    core.submit_request(
+    // Signed timestamps intentionally have whole-second precision. Encode the
+    // Lean witness's intended latest-row order in this fixture's stable
+    // request-ID tie-break instead of relying on UUID randomness.
+    let latest_rank =
+        if role == "latest" || (role == "failed" && case.pre_latest_id == case.failed_id) {
+            2
+        } else {
+            1
+        };
+    let request_id = format!("recovery-{session_id}-{latest_rank}-{role}");
+    let mut create = AgentRequestCreate::base(
+        request_id.clone(),
+        core.principal().did(),
+        core.principal().did(),
+        RECOVERY_BEHAVIOR_ID,
         session_id,
-        RECOVERY_AGENT_DID,
-        &format!("{role} request for {}", case.name),
-        Some(RECOVERY_BEHAVIOR_ID),
+        format!("{role} request for {}", case.name),
+        case.pre_origin.clone(),
+        Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::local_self(core.principal().did()),
+    );
+    create.retry_count = if role == "failed" {
+        case.pre_retry_count as i64
+    } else {
+        0
+    };
+    create.max_retries = case.max_retries as i64;
+    gents::sign_agent_request_create(core.principal(), &mut create).await?;
+    execute_mutation(
+        core.node(),
+        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+        "seed signed recovery request",
     )
-    .await
+    .await?;
+    core.refresh_store().await?;
+    Ok(SubmittedRequest {
+        request_id,
+        session_id: session_id.to_string(),
+        agent_did: core.principal().did().to_string(),
+        behavior_id: Some(RECOVERY_BEHAVIOR_ID.to_string()),
+    })
 }
 
 fn synthetic_missing_retry_parent(
     case: &LeanSessionRecoveryCase,
     session_id: &str,
     request_id: &str,
+    agent_did: &str,
 ) -> AgentRequestRow {
     AgentRequestRow {
         request_id: request_id.to_string(),
-        agent_did: Some(RECOVERY_AGENT_DID.to_string()),
+        agent_did: Some(agent_did.to_string()),
         requester_did: None,
         behavior_id: Some(RECOVERY_BEHAVIOR_ID.to_string()),
         session_id: Some(session_id.to_string()),
@@ -545,6 +601,7 @@ fn synthetic_missing_retry_parent(
         caused_by_trigger_kind: None,
         caused_by_correlation: None,
         caused_by_trigger_context: None,
+        caused_by_trigger_doc_id: None,
         caused_by_source_doc_id: None,
         caused_by_parent_request_id: None,
         failure_reason: Some(String::new()),
@@ -621,7 +678,7 @@ async fn assert_legal_session_recovery_post_state(
     let new_request = fetch_request_row_for_test(core.node(), new_request_id).await?;
     assert_eq!(new_request.request_id, new_request_id);
     assert_eq!(new_request.session_id, pre.session_id);
-    assert_eq!(new_request.agent_did, RECOVERY_AGENT_DID);
+    assert_eq!(new_request.agent_did, core.principal().did());
     assert_eq!(new_request.behavior_id, RECOVERY_BEHAVIOR_ID);
     assert_eq!(
         new_request.content,
@@ -715,6 +772,8 @@ async fn retry_request_with_id_injection_for_test(
         snapshot.as_ref(),
         parent,
         core.principal().did(),
+        core.principal(),
+        test_local_admission(core),
         injection.new_request_id,
     )
     .await?;
@@ -728,11 +787,8 @@ fn forced_retry_parent_state(case: &LeanSessionRecoveryCase) -> ForcedRequestSta
     ForcedRequestState {
         status: retry_parent_status_for_case(case),
         lifecycle_state: case.pre_failed_state.clone(),
-        retry_count: case.pre_retry_count as i64,
-        max_retries: case.max_retries as i64,
         deadline: recovery_deadline_for_case(case),
         backend_id: case.pre_backend.clone(),
-        execution_origin: case.pre_origin.clone(),
     }
 }
 
@@ -749,11 +805,8 @@ fn forced_latest_request_state(case: &LeanSessionRecoveryCase) -> ForcedRequestS
     ForcedRequestState {
         status: status_for_lifecycle_state(&case.pre_latest_state),
         lifecycle_state: case.pre_latest_state.clone(),
-        retry_count: 0,
-        max_retries: case.max_retries as i64,
         deadline: (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
         backend_id: case.pre_backend.clone(),
-        execution_origin: case.pre_origin.clone(),
     }
 }
 
@@ -1014,10 +1067,10 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
         ClientCoreOptions::local_only(),
     )
     .await?;
-    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+    core.add_local_standard_peer_for_test(core.principal().did())
         .await?;
     let requester_did = core.principal().did().to_string();
-    let agent_did = "did:test:amy";
+    let agent_did = core.principal().did();
     let session_id = Uuid::new_v4().to_string();
     let submitted = core
         .submit_request(&session_id, agent_did, "requester route regression", None)
@@ -1088,9 +1141,6 @@ async fn force_request_state_for_test(
     let escaped_lifecycle_state = escape_graphql_string(&state.lifecycle_state);
     let escaped_deadline = escape_graphql_string(&state.deadline);
     let escaped_backend_id = escape_graphql_string(&state.backend_id);
-    let escaped_execution_origin = escape_graphql_string(&state.execution_origin);
-    let retry_count = state.retry_count;
-    let max_retries = state.max_retries;
     let mutation = format!(
         r#"mutation {{
                 update_AgentRequest(
@@ -1098,11 +1148,8 @@ async fn force_request_state_for_test(
                     input: {{
                         status: "{escaped_status}",
                         lifecycle_state: "{escaped_lifecycle_state}",
-                        retry_count: {retry_count},
-                        max_retries: {max_retries},
                         deadline: "{escaped_deadline}",
-                        backend_id: "{escaped_backend_id}",
-                        execution_origin: "{escaped_execution_origin}"
+                        backend_id: "{escaped_backend_id}"
                     }}
                 ) {{ _docID }}
             }}"#
@@ -1118,12 +1165,12 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         ClientCoreOptions::local_only(),
     )
     .await?;
-    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+    core.add_local_standard_peer_for_test(core.principal().did())
         .await?;
 
     let session_id = Uuid::new_v4().to_string();
     let original = core
-        .submit_request(&session_id, "did:test:amy", "first attempt", None)
+        .submit_request(&session_id, core.principal().did(), "first attempt", None)
         .await?;
     let mut parent = core
         .store()
@@ -1135,18 +1182,12 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         .context("expected submitted parent request in desktop store")?;
 
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    force_retry_parent_eligible_for_test(
-        core.node(),
-        &original.request_id,
-        1,
-        i64::from(DEFAULT_REQUEST_MAX_RETRIES),
-        &deadline.to_rfc3339(),
-    )
-    .await?;
+    force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
+        .await?;
     parent.status = Some("error".to_string());
     parent.lifecycle_state = Some("failed".to_string());
     parent.deadline = Some(deadline.to_rfc3339());
-    parent.retry_count = Some(1);
+    parent.retry_count = Some(0);
     parent.max_retries = Some(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
 
     let duplicate_request_id = "duplicate-retry-request-id";
@@ -1154,7 +1195,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         core.node(),
         duplicate_request_id,
         &session_id,
-        "did:test:amy",
+        core.principal().did(),
         "amy-code",
     )
     .await?;
@@ -1169,6 +1210,8 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         snapshot.as_ref(),
         &parent,
         core.principal().did(),
+        core.principal(),
+        test_local_admission(&core),
         duplicate_request_id.to_string(),
     )
     .await
@@ -1196,7 +1239,7 @@ async fn retry_request_preserves_parent_overrides_and_metadata() -> Result<()> {
         ClientCoreOptions::local_only(),
     )
     .await?;
-    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+    core.add_local_standard_peer_for_test(core.principal().did())
         .await?;
 
     let session_id = Uuid::new_v4().to_string();
@@ -1204,7 +1247,7 @@ async fn retry_request_preserves_parent_overrides_and_metadata() -> Result<()> {
     let original = core
         .submit_request_with_options(
             &session_id,
-            "did:test:amy",
+            core.principal().did(),
             "retry should preserve overrides",
             None,
             SubmitRequestOptions {
@@ -1220,14 +1263,8 @@ async fn retry_request_preserves_parent_overrides_and_metadata() -> Result<()> {
         )
         .await?;
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    force_retry_parent_eligible_for_test(
-        core.node(),
-        &original.request_id,
-        1,
-        i64::from(DEFAULT_REQUEST_MAX_RETRIES),
-        &deadline.to_rfc3339(),
-    )
-    .await?;
+    force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
+        .await?;
     core.refresh_store().await?;
 
     let parent = request_from_store_for_test(&core, &original.request_id)?;
@@ -1268,22 +1305,21 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
         ClientCoreOptions::local_only(),
     )
     .await?;
-    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
+    core.add_local_standard_peer_for_test(core.principal().did())
         .await?;
 
     let session_id = Uuid::new_v4().to_string();
     let original = core
-        .submit_request(&session_id, "did:test:amy", "retry exactly once", None)
+        .submit_request(
+            &session_id,
+            core.principal().did(),
+            "retry exactly once",
+            None,
+        )
         .await?;
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    force_retry_parent_eligible_for_test(
-        core.node(),
-        &original.request_id,
-        0,
-        i64::from(DEFAULT_REQUEST_MAX_RETRIES),
-        &deadline.to_rfc3339(),
-    )
-    .await?;
+    force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
+        .await?;
     core.refresh_store().await?;
     let parent = request_from_store_for_test(&core, &original.request_id)?;
 
@@ -1309,72 +1345,9 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn retry_ignores_legacy_background_wake_when_selecting_latest_request() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
-    )
-    .await?;
-    core.add_local_standard_peer_for_test(RECOVERY_AGENT_DID)
-        .await?;
-
-    let session_id = Uuid::new_v4().to_string();
-    let original = core
-        .submit_request(&session_id, "did:test:amy", "retry after legacy wake", None)
-        .await?;
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
-    force_retry_parent_eligible_for_test(
-        core.node(),
-        &original.request_id,
-        0,
-        i64::from(DEFAULT_REQUEST_MAX_RETRIES),
-        &deadline.to_rfc3339(),
-    )
-    .await?;
-
-    let session_id = escape_graphql_string(&session_id);
-    let now = Utc::now().to_rfc3339();
-    let metadata = escape_graphql_string(
-        r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"child-1","queued_after_request_id":null}}"#,
-    );
-    let mutation = format!(
-        r#"mutation {{
-                wake: create_AgentRequest(input: {{
-                    request_id: "legacy-wake",
-                    agent_did: "did:test:amy",
-                    behavior_id: "amy-code",
-                    session_id: "{session_id}",
-                    content: "legacy wake",
-                    metadata: "{metadata}",
-                    status: "pending",
-                    lifecycle_state: "pending",
-                    execution_origin: "scheduled",
-                    created_at: "{now}",
-                    retry_count: 0,
-                    max_retries: 3
-                }}) {{ _docID }}
-            }}"#
-    );
-    execute_mutation(core.node(), &mutation, "seed_legacy_wake_for_retry").await?;
-    core.refresh_store().await?;
-
-    let parent = request_from_store_for_test(&core, &original.request_id)?;
-    let submitted = core.retry_request(&parent).await?;
-    let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;
-    assert_eq!(retried.retry_parent_request, original.request_id);
-    assert_eq!(retried.execution_origin, "interactive");
-
-    core.shutdown().await?;
-    Ok(())
-}
-
 async fn force_retry_parent_eligible_for_test(
     node: &EmbeddedNode,
     request_id: &str,
-    retry_count: i64,
-    max_retries: i64,
     deadline: &str,
 ) -> Result<()> {
     let escaped_request_id = escape_graphql_string(request_id);
@@ -1386,8 +1359,6 @@ async fn force_retry_parent_eligible_for_test(
                     input: {{
                         status: "error",
                         lifecycle_state: "failed",
-                        retry_count: {retry_count},
-                        max_retries: {max_retries},
                         deadline: "{escaped_deadline}"
                     }}
                 ) {{ _docID }}

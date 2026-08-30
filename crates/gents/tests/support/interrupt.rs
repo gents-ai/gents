@@ -110,21 +110,19 @@ pub async fn create_runtime_request(
         request_id,
         session_id,
         None,
+        "interactive",
         content,
     )
     .await
 }
 
-/// Create an interactive runtime request whose immutable requester lineage is
-/// explicit. Live P2P tests use this to create server-side history owned by a
-/// client that has not connected yet.
-pub async fn create_runtime_request_for_requester(
+pub async fn create_runtime_request_with_valid_until(
     node: &EmbeddedNode,
     agent_did: &str,
     behavior_id: &str,
     request_id: &str,
     session_id: &str,
-    requester_did: &str,
+    valid_until: &str,
     content: &str,
 ) -> String {
     create_runtime_request_inner(
@@ -133,7 +131,30 @@ pub async fn create_runtime_request_for_requester(
         behavior_id,
         request_id,
         session_id,
-        Some(requester_did),
+        Some(valid_until),
+        "interactive",
+        content,
+    )
+    .await
+}
+
+pub async fn create_runtime_request_with_execution_origin(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    request_id: &str,
+    session_id: &str,
+    execution_origin: &str,
+    content: &str,
+) -> String {
+    create_runtime_request_inner(
+        node,
+        agent_did,
+        behavior_id,
+        request_id,
+        session_id,
+        None,
+        execution_origin,
         content,
     )
     .await
@@ -145,44 +166,32 @@ async fn create_runtime_request_inner(
     behavior_id: &str,
     request_id: &str,
     session_id: &str,
-    requester_did: Option<&str>,
+    valid_until: Option<&str>,
+    execution_origin: &str,
     content: &str,
 ) -> String {
     upsert_generated_conversation(node, agent_did, behavior_id, session_id).await;
 
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let requester_did_field = requester_did
-        .map(escape_graphql_string)
-        .map(|requester_did| format!(r#"requester_did: "{requester_did}","#))
-        .unwrap_or_default();
-    let escaped_content = escape_graphql_string(content);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
-                {requester_did_field}
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "{escaped_content}",
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id,
+        agent_did,
+        agent_did,
+        behavior_id,
+        session_id,
+        content,
+        execution_origin,
+        created_at,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did),
     );
+    create.max_retries = i64::from(gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
+    create.valid_until = valid_until.map(str::to_string);
+    gents::sign_agent_request_create_as_registered_target(&mut create)
+        .await
+        .expect("sign local-self runtime test request");
+    let mutation = create
+        .graphql_mutation()
+        .expect("render canonical runtime test request");
     let response =
         execute_mutation_with_transaction_retry(node, &mutation, "create_runtime_request").await;
     assert!(

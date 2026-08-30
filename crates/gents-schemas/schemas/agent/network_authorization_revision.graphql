@@ -12,6 +12,7 @@ type NetworkAuthorizationRevision @branchable {
     member_peer: String @index @immutable
     owner_agent: String @index @immutable
     sequence: Int @index @immutable
+    authorization_expires_at: DateTime @immutable
     kind: String @index @immutable
     issued_at: DateTime @immutable
     signer_did: String @index @immutable

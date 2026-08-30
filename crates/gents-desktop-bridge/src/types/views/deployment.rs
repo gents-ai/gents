@@ -1,4 +1,3 @@
-use gents_desktop_core::client::BearerPairingResult;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -600,55 +599,24 @@ pub struct PeerRemoveResponse {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct BearerPairingView {
-    pub peer_id: String,
-    pub label: String,
-    pub addr: String,
-    pub issuer_did: String,
-    pub claimant_did: String,
+pub struct EnrollmentRequestView {
+    pub request_id: String,
     pub network_id: String,
-    pub template: String,
-    pub connected: bool,
-    pub claim_submitted: bool,
-    pub endpoint_published: bool,
-    pub replication_configured: bool,
-    pub membership_observed: bool,
-    pub bidirectional_replication_observed: bool,
+    pub admin_did: String,
+    pub server_peer: String,
+    pub owner_agent: String,
+    pub state: String,
 }
 
-impl From<BearerPairingResult> for BearerPairingView {
-    fn from(result: BearerPairingResult) -> Self {
+impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentRequestView {
+    fn from(result: gents_desktop_core::client::EnrollmentRequestResult) -> Self {
         Self {
-            peer_id: result.peer_id,
-            label: result.label,
-            addr: result.addr,
-            issuer_did: result.issuer_did,
-            claimant_did: result.claimant_did,
+            request_id: result.request_id,
             network_id: result.network_id,
-            template: result.template,
-            connected: result.connected,
-            claim_submitted: result.claim_submitted,
-            endpoint_published: result.endpoint_published,
-            replication_configured: result.replication_configured,
-            membership_observed: result.membership_observed,
-            bidirectional_replication_observed: result.bidirectional_replication_observed,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct BearerPairingResponse {
-    #[serde(flatten)]
-    pub snapshot: DesktopClientSnapshot,
-    pub pairing: BearerPairingView,
-}
-
-impl BearerPairingResponse {
-    pub fn new(snapshot: DesktopClientSnapshot, pairing: BearerPairingResult) -> Self {
-        Self {
-            snapshot,
-            pairing: pairing.into(),
+            admin_did: result.admin_did,
+            server_peer: result.server_peer,
+            owner_agent: result.owner_agent,
+            state: result.state,
         }
     }
 }

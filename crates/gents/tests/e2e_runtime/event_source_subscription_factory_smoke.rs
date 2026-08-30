@@ -18,7 +18,6 @@ async fn integration_can_construct_event_source_and_mock_delivers_updates() {
         generation: 1,
         principal: None,
         local_did: String::new(),
-        paired_peer_dids: HashSet::new(),
         default_behavior_id: "test".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),

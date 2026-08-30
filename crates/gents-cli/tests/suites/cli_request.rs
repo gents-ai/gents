@@ -14,13 +14,12 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-submit-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let expected_content = format!("wait-ok-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_content)?;
     let port = allocate_port()?;
     let agent_name = format!("cli-submit-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
-    let request_agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     let request_content = format!("CLI wait test {}", Uuid::new_v4());
-    let expected_content = format!("wait-ok-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
         &home_dir,
@@ -45,7 +44,7 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
             "--graphql",
             &graphql,
             "--agent-did",
-            &request_agent_did,
+            &agent_did,
             "--content",
             &request_content,
             "--timeout-secs",
@@ -54,18 +53,6 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
             "1",
         ],
     )?;
-
-    let (request_id, session_id, behavior_id) =
-        wait_for_request(&graphql, &request_agent_did, &request_content).await?;
-    insert_terminal_response(
-        &graphql,
-        &request_id,
-        &request_agent_did,
-        &behavior_id,
-        &session_id,
-        &expected_content,
-    )
-    .await?;
 
     let output = submit
         .wait_with_output()
@@ -80,9 +67,12 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
 
     let parsed: Value =
         serde_json::from_slice(&output.stdout).context("parsing request submit JSON")?;
-    assert_eq!(
-        parsed.get("request_id").and_then(Value::as_str),
-        Some(request_id.as_str())
+    assert!(
+        parsed
+            .get("request_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()),
+        "request submit output omitted request_id: {parsed}"
     );
     assert_eq!(
         parsed.pointer("/response/status").and_then(Value::as_str),
@@ -103,13 +93,12 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-submit-file-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let expected_content = format!("wait-file-ok-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_content)?;
     let port = allocate_port()?;
     let agent_name = format!("cli-submit-file-{}", Uuid::new_v4().simple());
     let graphql = graphql_url(port);
-    let request_agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     let request_content = format!("CLI file request {}", Uuid::new_v4());
-    let expected_content = format!("wait-file-ok-{}", Uuid::new_v4().simple());
     let content_path = tempdir.path().join("request.txt");
     let output_path = tempdir.path().join("request-output.json");
     fs::write(&content_path, &request_content)?;
@@ -137,7 +126,7 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
             "--graphql",
             &graphql,
             "--agent-did",
-            &request_agent_did,
+            &agent_did,
             "--content-file",
             content_path
                 .to_str()
@@ -152,18 +141,6 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
             "1",
         ],
     )?;
-
-    let (request_id, session_id, behavior_id) =
-        wait_for_request(&graphql, &request_agent_did, &request_content).await?;
-    insert_terminal_response(
-        &graphql,
-        &request_id,
-        &request_agent_did,
-        &behavior_id,
-        &session_id,
-        &expected_content,
-    )
-    .await?;
 
     let output = submit
         .wait_with_output()

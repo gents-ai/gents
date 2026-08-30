@@ -214,6 +214,8 @@ structure Decision where
   ownerAgent : Did
   kind : DecisionKind
   authorizationSequence : Nat
+  /-- Signed lease boundary. `fresh` is the verifier's result at observation time. -/
+  authorizationExpiresAt : String
   signerDid : Did
   adminSigned : Bool
   fresh : Bool
@@ -228,6 +230,8 @@ structure AuthorizationRevision where
   memberPeer : PeerId
   ownerAgent : Did
   sequence : Nat
+  /-- Exact lease generation copied from the approval; revocations retain it as history. -/
+  authorizationExpiresAt : String
   kind : RevisionKind
   signerDid : Did
   adminSigned : Bool
@@ -241,6 +245,7 @@ structure Membership where
   memberPeer : PeerId
   ownerAgent : Did
   authorizationSequence : Nat
+  authorizationExpiresAt : String
   active : Bool
   adminSigned : Bool
   fresh : Bool
@@ -250,12 +255,35 @@ structure AppliedRoute where
   requestId : RequestId
   networkId : String
   authorizationSequence : Nat
+  authorizationExpiresAt : String
   direction : RouteDirection
   peer : PeerId
   requester : Did
   agent : Did
   profile : String
   live : Bool
+  deriving DecidableEq, Repr
+
+/--
+Admin-signed evidence that the runtime reconciled the exact client-to-server
+route for one authorization generation.  The receipt is evidence, not
+authority: a later authorization revision makes it non-current.
+-/
+structure RouteReceipt where
+  requestId : RequestId
+  requestDigest : Digest
+  networkId : String
+  adminDid : Did
+  memberDid : Did
+  memberPeer : PeerId
+  serverPeer : PeerId
+  ownerAgent : Did
+  authorizationSequence : Nat
+  authorizationExpiresAt : String
+  direction : RouteDirection
+  signerDid : Did
+  adminSigned : Bool
+  applied : Bool
   deriving DecidableEq, Repr
 
 structure State where
@@ -267,6 +295,7 @@ structure State where
   decisions : Finset Decision := ∅
   authorizations : Finset AuthorizationRevision := ∅
   memberships : Finset Membership := ∅
+  routeReceipts : Finset RouteReceipt := ∅
   appliedRoutes : Finset AppliedRoute := ∅
   deriving DecidableEq
 
@@ -358,7 +387,8 @@ def decisionMatchesRequest (r : Request) (d : Decision) : Prop :=
   d.requestId = r.requestId ∧ d.requestDigest = r.digest ∧
   d.networkId = r.networkId ∧ d.adminDid = r.adminDid ∧
   d.candidateDid = r.candidateDid ∧ d.candidatePeer = r.candidatePeer ∧
-  d.ownerAgent = r.ownerAgent ∧ d.signerDid = r.adminDid
+  d.ownerAgent = r.ownerAgent ∧ d.signerDid = r.adminDid ∧
+  d.authorizationExpiresAt ≠ ""
 
 instance (r : Request) (d : Decision) : Decidable (decisionMatchesRequest r d) := by
   unfold decisionMatchesRequest; infer_instance
@@ -368,13 +398,15 @@ def revisionForApproval (r : Request) (d : Decision) : AuthorizationRevision :=
   , networkId := r.networkId, adminDid := r.adminDid
   , memberDid := r.candidateDid, memberPeer := r.candidatePeer
   , ownerAgent := r.ownerAgent, sequence := d.authorizationSequence
+  , authorizationExpiresAt := d.authorizationExpiresAt
   , kind := .active, signerDid := d.signerDid, adminSigned := d.adminSigned }
 
 def revisionMatchesRequest (r : Request) (revision : AuthorizationRevision) : Prop :=
   revision.requestId = r.requestId ∧ revision.requestDigest = r.digest ∧
   revision.networkId = r.networkId ∧ revision.adminDid = r.adminDid ∧
   revision.memberDid = r.candidateDid ∧ revision.memberPeer = r.candidatePeer ∧
-  revision.ownerAgent = r.ownerAgent ∧ revision.signerDid = r.adminDid
+  revision.ownerAgent = r.ownerAgent ∧ revision.signerDid = r.adminDid ∧
+  revision.authorizationExpiresAt ≠ ""
 
 instance (r : Request) (revision : AuthorizationRevision) : Decidable
     (revisionMatchesRequest r revision) := by
@@ -437,24 +469,75 @@ def currentApproval (s : State) (r : Request) (d : Decision) : Prop :=
 instance (s : State) (r : Request) (d : Decision) : Decidable (currentApproval s r d) := by
   unfold currentApproval; infer_instance
 
+/-- Operational peer admission comes only from an exact current enrollment. -/
+def peerOperationallyAuthorized (s : State) (memberDid : Did) : Prop :=
+  ∃ r ∈ s.acceptedRequests, ∃ d ∈ s.decisions,
+    currentApproval s r d ∧ r.candidateDid = memberDid
+
+instance (s : State) (memberDid : Did) : Decidable
+    (peerOperationallyAuthorized s memberDid) := by
+  unfold peerOperationallyAuthorized; infer_instance
+
+/--
+The operational admission projector accepts legacy materialization rows only as
+an explicit ignored input. They may witness effects but never grant authority.
+-/
+def projectsPeerAdmission (s : State) (_legacyDesiredPeers : Finset Did)
+    (memberDid : Did) : Prop :=
+  peerOperationallyAuthorized s memberDid
+
+instance (s : State) (legacyDesiredPeers : Finset Did) (memberDid : Did) : Decidable
+    (projectsPeerAdmission s legacyDesiredPeers memberDid) := by
+  unfold projectsPeerAdmission; infer_instance
+
 def membershipFor (r : Request) (d : Decision) : Membership :=
   { requestId := r.requestId, requestDigest := r.digest
   , networkId := r.networkId, memberDid := r.candidateDid
   , memberPeer := r.candidatePeer, ownerAgent := r.ownerAgent
   , authorizationSequence := d.authorizationSequence
+  , authorizationExpiresAt := d.authorizationExpiresAt
   , active := true, adminSigned := true, fresh := true }
 
 def clientToServerRoute (r : Request) (d : Decision) : AppliedRoute :=
   { requestId := r.requestId, networkId := r.networkId
-  , authorizationSequence := d.authorizationSequence, direction := .clientToServer
+  , authorizationSequence := d.authorizationSequence
+  , authorizationExpiresAt := d.authorizationExpiresAt, direction := .clientToServer
   , peer := r.candidatePeer, requester := r.candidateDid
   , agent := r.ownerAgent, profile := r.profile, live := true }
 
 def serverToClientRoute (r : Request) (d : Decision) : AppliedRoute :=
   { requestId := r.requestId, networkId := r.networkId
-  , authorizationSequence := d.authorizationSequence, direction := .serverToClient
+  , authorizationSequence := d.authorizationSequence
+  , authorizationExpiresAt := d.authorizationExpiresAt, direction := .serverToClient
   , peer := r.serverPeer, requester := r.candidateDid
   , agent := r.ownerAgent, profile := r.profile, live := true }
+
+def serverRouteReceiptFor (r : Request) (d : Decision) : RouteReceipt :=
+  { requestId := r.requestId, requestDigest := r.digest
+  , networkId := r.networkId, adminDid := r.adminDid
+  , memberDid := r.candidateDid, memberPeer := r.candidatePeer
+  , serverPeer := r.serverPeer, ownerAgent := r.ownerAgent
+  , authorizationSequence := d.authorizationSequence
+  , authorizationExpiresAt := d.authorizationExpiresAt
+  , direction := .clientToServer, signerDid := r.adminDid
+  , adminSigned := true, applied := true }
+
+def routeReceiptMatchesApproval (r : Request) (d : Decision) (receipt : RouteReceipt) : Prop :=
+  receipt = serverRouteReceiptFor r d
+
+instance (r : Request) (d : Decision) (receipt : RouteReceipt) : Decidable
+    (routeReceiptMatchesApproval r d receipt) := by
+  unfold routeReceiptMatchesApproval; infer_instance
+
+def currentServerRouteReceipt (s : State) (r : Request) (d : Decision)
+    (receipt : RouteReceipt) : Prop :=
+  currentApproval s r d ∧ receipt ∈ s.routeReceipts ∧
+  routeReceiptMatchesApproval r d receipt ∧
+  receipt.adminSigned = true ∧ receipt.applied = true
+
+instance (s : State) (r : Request) (d : Decision) (receipt : RouteReceipt) : Decidable
+    (currentServerRouteReceipt s r d receipt) := by
+  unfold currentServerRouteReceipt; infer_instance
 
 def membershipOwnedBy (r : Request) (membership : Membership) : Prop :=
   membership.networkId = r.networkId ∧ membership.memberDid = r.candidateDid
@@ -504,6 +587,7 @@ instance (s : State) (route : AppliedRoute) : Decidable
 def enrollmentReady (s : State) (r : Request) : Prop :=
   ∃ d ∈ s.decisions, currentApproval s r d ∧
     membershipFor r d ∈ s.memberships ∧
+    serverRouteReceiptFor r d ∈ s.routeReceipts ∧
     clientToServerRoute r d ∈ s.appliedRoutes ∧
     serverToClientRoute r d ∈ s.appliedRoutes
 

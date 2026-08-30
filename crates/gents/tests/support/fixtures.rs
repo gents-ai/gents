@@ -35,7 +35,7 @@ pub fn spawn_subagent_source(
     parent_behavior_id: &str,
     child_behavior_id: &str,
 ) -> SubagentSourceGuard {
-    spawn_subagent_source_with_paired_peers(
+    spawn_subagent_source_with_authorized_peers(
         node,
         agent_did,
         parent_behavior_id,
@@ -44,12 +44,12 @@ pub fn spawn_subagent_source(
     )
 }
 
-pub fn spawn_subagent_source_with_paired_peers(
+pub fn spawn_subagent_source_with_authorized_peers(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
     parent_behavior_id: &str,
     child_behavior_id: &str,
-    paired_peer_dids: HashSet<String>,
+    authorized_peer_dids: HashSet<String>,
 ) -> SubagentSourceGuard {
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("subagent-source-principal"));
     let principal = test_principal_for(identity, parent_behavior_id);
@@ -67,7 +67,6 @@ pub fn spawn_subagent_source_with_paired_peers(
         generation: 1,
         principal: None,
         local_did: agent_did.to_string(),
-        paired_peer_dids,
         default_behavior_id: parent_behavior_id.to_string(),
         behaviors,
         tool_surfaces: HashMap::new(),
@@ -87,6 +86,7 @@ pub fn spawn_subagent_source_with_paired_peers(
     let handle = tokio::spawn(run_subagent_source_for_test(
         node,
         snapshot_rx,
+        authorized_peer_dids,
         cancel.clone(),
     ));
     SubagentSourceGuard {

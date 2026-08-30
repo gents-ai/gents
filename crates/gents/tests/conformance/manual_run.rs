@@ -40,7 +40,7 @@ use gents::graphql::escape_graphql_string;
 use gents::write_manual_agent_request;
 use serde_json::Value;
 
-use crate::support::{test_db, AGENT_DID, AGENT_NAME};
+use crate::support::{test_db, AGENT_NAME};
 
 async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) -> Value {
     let escaped = escape_graphql_string(doc_id);
@@ -97,7 +97,7 @@ async fn manual_run_materializes_agent_request_with_lineage() {
 
     let doc_id = write_manual_agent_request(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         AGENT_NAME,
         "task-manual-lineage",
         "manual body",
@@ -147,7 +147,7 @@ async fn manual_run_renders_args_scope() {
 
     let doc_id = write_manual_agent_request(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         AGENT_NAME,
         "task-args",
         "hi {{ args.name }}",
@@ -170,7 +170,7 @@ async fn manual_run_bypasses_serial_in_flight_check() {
 
     let first = write_manual_agent_request(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         AGENT_NAME,
         "task-parallel",
         "one",
@@ -186,7 +186,7 @@ async fn manual_run_bypasses_serial_in_flight_check() {
 
     let second = write_manual_agent_request(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         AGENT_NAME,
         "task-parallel",
         "two",

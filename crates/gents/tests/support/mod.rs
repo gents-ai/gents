@@ -9,6 +9,7 @@ use serde::Deserialize;
 use tempfile::TempDir;
 
 pub mod conformance_consumers;
+pub mod enrollment;
 pub mod fixtures;
 pub mod http_mock;
 pub(crate) mod identity_stubs;
@@ -27,8 +28,17 @@ pub const AGENT_NAME: &str = "test";
 pub const BACKEND_ID: &str = "backend-test";
 pub const DEADLINE_SECS: u64 = 300;
 
+pub fn materialization_identity() -> Arc<dyn AgentIdentity> {
+    materialization_identity_for(AGENT_DID)
+}
+
+pub fn materialization_identity_for(did: &str) -> Arc<dyn AgentIdentity> {
+    identity_stubs::SigningStubAgentIdentity::arc(did)
+}
+
 pub struct TestDb {
     pub node: Arc<EmbeddedNode>,
+    pub node_identity: Arc<dyn AgentIdentity>,
     pub process_generation: u64,
     node_identity_did: String,
     tempdir: TempDir,
@@ -97,8 +107,9 @@ pub async fn test_db(name: &str) -> TestDb {
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
-    let node_identity =
-        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity");
+    let node_identity: Arc<dyn AgentIdentity> = Arc::new(
+        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity"),
+    );
     let node_identity_did = node_identity.did().to_string();
     let node = Arc::new(
         EmbeddedNode::builder()
@@ -113,6 +124,7 @@ pub async fn test_db(name: &str) -> TestDb {
         .expect("runtime schemas");
     TestDb {
         node,
+        node_identity,
         process_generation: 0,
         node_identity_did,
         tempdir,
@@ -153,8 +165,9 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
-    let node_identity =
-        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity");
+    let node_identity: Arc<dyn AgentIdentity> = Arc::new(
+        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity"),
+    );
     let node_identity_did = node_identity.did().to_string();
     let node = Arc::new(
         EmbeddedNode::builder()
@@ -179,6 +192,7 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
     }
     TestDb {
         node,
+        node_identity,
         process_generation: 0,
         node_identity_did,
         tempdir,
@@ -312,8 +326,9 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
-    let node_identity =
-        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity");
+    let node_identity: Arc<dyn AgentIdentity> = Arc::new(
+        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity"),
+    );
     let node_identity_did = node_identity.did().to_string();
     let node = Arc::new(
         EmbeddedNode::builder()
@@ -343,6 +358,7 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
         .expect("runtime schemas");
     TestDb {
         node,
+        node_identity,
         process_generation: 0,
         node_identity_did,
         tempdir,
@@ -356,6 +372,71 @@ pub async fn create_request(
     status: &str,
     created_at: &str,
 ) -> String {
+    create_request_with_valid_until(node, request_id, session_id, status, created_at, None).await
+}
+
+pub async fn create_request_with_valid_until(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    status: &str,
+    created_at: &str,
+    valid_until: Option<&str>,
+) -> String {
+    create_request_with_signed_fields(
+        node,
+        request_id,
+        session_id,
+        status,
+        created_at,
+        valid_until,
+        None,
+        None,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_request_with_signed_fields(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    status: &str,
+    created_at: &str,
+    valid_until: Option<&str>,
+    metadata: Option<&str>,
+    retry_parent_request: Option<&str>,
+    retry_root_request: Option<&str>,
+) -> String {
+    create_request_for_agent_with_signed_fields(
+        node,
+        AGENT_DID,
+        request_id,
+        session_id,
+        status,
+        created_at,
+        valid_until,
+        metadata,
+        retry_parent_request,
+        retry_root_request,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_request_for_agent_with_signed_fields(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    status: &str,
+    created_at: &str,
+    valid_until: Option<&str>,
+    metadata: Option<&str>,
+    retry_parent_request: Option<&str>,
+    retry_root_request: Option<&str>,
+) -> String {
     let lifecycle_state = match status {
         "pending" => "pending",
         "processing" => "processing",
@@ -368,15 +449,28 @@ pub async fn create_request(
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let created_at = escape_graphql_string(created_at);
+    let agent_did = escape_graphql_string(agent_did);
+    let valid_until = valid_until
+        .map(escape_graphql_string)
+        .map(|value| format!(r#"valid_until: "{value}","#))
+        .unwrap_or_default();
+    let metadata = metadata
+        .map(escape_graphql_string)
+        .map(|value| format!(r#"metadata: "{value}","#))
+        .unwrap_or_default();
+    let retry_parent_request = retry_parent_request
+        .map(escape_graphql_string)
+        .unwrap_or_default();
+    let retry_root_request = escape_graphql_string(retry_root_request.unwrap_or(&request_id));
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
-                agent_did: "{AGENT_DID}",
+                agent_did: "{agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
+                retry_parent_request: "{retry_parent_request}",
+                retry_root_request: "{retry_root_request}",
                 superseded_by_request: "",
                 content: "hello",
                 status: "{status}",
@@ -384,6 +478,8 @@ pub async fn create_request(
                 backend_id: "",
                 execution_origin: "interactive",
                 created_at: "{created_at}",
+                {valid_until}
+                {metadata}
                 retry_count: 0,
                 max_retries: {max_retries}
             }}) {{ _docID }}
@@ -451,6 +547,7 @@ pub async fn create_retry_request(
     retry_root_request: &str,
     content: &str,
     created_at: &str,
+    valid_until: Option<&str>,
 ) -> String {
     let request_id_escaped = escape_graphql_string(request_id);
     let session_id_escaped = escape_graphql_string(session_id);
@@ -458,6 +555,10 @@ pub async fn create_retry_request(
     let retry_root_escaped = escape_graphql_string(retry_root_request);
     let content_escaped = escape_graphql_string(content);
     let created_at_escaped = escape_graphql_string(created_at);
+    let valid_until = valid_until
+        .map(escape_graphql_string)
+        .map(|value| format!(r#"valid_until: "{value}","#))
+        .unwrap_or_default();
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -474,6 +575,7 @@ pub async fn create_retry_request(
                 backend_id: "",
                 execution_origin: "interactive",
                 created_at: "{created_at_escaped}",
+                {valid_until}
                 retry_count: 0,
                 max_retries: {max_retries}
             }}) {{ _docID }}
@@ -572,6 +674,18 @@ pub async fn upsert_conversation(
     content: &str,
     status: &str,
 ) {
+    upsert_conversation_for_agent(node, AGENT_DID, session_id, request_id, content, status).await;
+}
+
+pub async fn upsert_conversation_for_agent(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    session_id: &str,
+    request_id: &str,
+    content: &str,
+    status: &str,
+) {
+    let agent_did = escape_graphql_string(agent_did);
     let session_id = escape_graphql_string(session_id);
     let request_id = escape_graphql_string(request_id);
     let content = escape_graphql_string(content);
@@ -584,7 +698,7 @@ pub async fn upsert_conversation(
                 add: {{
                     session_id: "{session_id}",
                     agent_name: "{AGENT_NAME}",
-                    agent_did: "{AGENT_DID}",
+                    agent_did: "{agent_did}",
                     behavior_id: "{AGENT_NAME}",
                     title: "Test Conversation",
                     preview_text: "{content}",
@@ -595,7 +709,7 @@ pub async fn upsert_conversation(
                 }},
                 update: {{
                     agent_name: "{AGENT_NAME}",
-                    agent_did: "{AGENT_DID}",
+                    agent_did: "{agent_did}",
                     behavior_id: "{AGENT_NAME}",
                     title: "Test Conversation",
                     preview_text: "{content}",
@@ -653,7 +767,7 @@ pub async fn set_request_lifecycle_state(node: &EmbeddedNode, doc_id: &str, life
     );
 }
 
-pub async fn set_valid_until(node: &EmbeddedNode, doc_id: &str, at: &str) {
+pub async fn try_set_valid_until(node: &EmbeddedNode, doc_id: &str, at: &str) -> QueryResponse {
     let doc_id = escape_graphql_string(doc_id);
     let at = escape_graphql_string(at);
     let mutation = format!(
@@ -664,12 +778,7 @@ pub async fn set_valid_until(node: &EmbeddedNode, doc_id: &str, at: &str) {
             ) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "set_valid_until failed: {:?}",
-        resp.errors
-    );
+    node.execute(&mutation).await
 }
 
 pub fn build_request(

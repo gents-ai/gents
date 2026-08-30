@@ -75,7 +75,10 @@ use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::interrupt::wait_for_runtime_ready;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::fetch_runtime_snapshot;
-use crate::support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
+use crate::support::{
+    materialization_identity, materialization_identity_for, test_db, AGENT_DID, AGENT_NAME,
+    BACKEND_ID, DEADLINE_SECS,
+};
 
 fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
@@ -604,7 +607,7 @@ async fn fires_at_next_run_at() {
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "template fires",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -847,7 +850,7 @@ async fn serial_skips_when_prior_active_runtime() {
     RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "seed in-flight",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -980,7 +983,7 @@ async fn latest_only_supersedes_prior_fire() {
     let prior = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "seed prior",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1021,7 +1024,7 @@ async fn latest_only_supersedes_prior_fire() {
     let new_fire = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "latest fire",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1148,7 +1151,7 @@ async fn serial_gate_is_scoped_by_agent_did() {
     RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         "foreign-steward",
-        FOREIGN_DID,
+        materialization_identity_for(FOREIGN_DID),
         "foreign in-flight",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1194,7 +1197,7 @@ async fn serial_gate_ignores_expired_claims() {
     let orphan = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "wedged orphan",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1265,7 +1268,7 @@ async fn supersede_only_touches_own_agent_requests() {
         RequestLifecycle::materialize_claimed_with_execution_binding(
             db.node.clone(),
             name,
-            did,
+            materialization_identity_for(did),
             content,
             DEADLINE_SECS,
             ExecutionOrigin::Scheduled,

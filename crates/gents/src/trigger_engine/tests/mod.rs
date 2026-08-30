@@ -272,6 +272,7 @@ impl MaterializerHandle for SpyMaterializer {
         _task: &ResolvedTask,
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
+        _trigger_doc_id: Option<&str>,
         source_doc_id: Option<&str>,
         correlation: Option<&str>,
         _trigger_context: Option<&str>,
@@ -458,6 +459,7 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
 
 fn resolved_schedule(schedule_id: &str, task: ResolvedTask) -> ResolvedSchedule {
     ResolvedSchedule {
+        trigger_doc_id: format!("{schedule_id}-doc"),
         schedule_id: schedule_id.to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -473,6 +475,7 @@ fn resolved_schedule_with_concurrency(
     concurrency: ConcurrencyMode,
 ) -> ResolvedSchedule {
     ResolvedSchedule {
+        trigger_doc_id: format!("{schedule_id}-doc"),
         schedule_id: schedule_id.to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -488,6 +491,7 @@ fn resolved_event_trigger_with_concurrency(
     concurrency: ConcurrencyMode,
 ) -> ResolvedEventTrigger {
     ResolvedEventTrigger {
+        trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
         task_id: task.task_id.clone(),
         task,

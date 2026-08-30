@@ -80,17 +80,17 @@ use support::snapshots::{
 };
 use support::{
     build_request, create_agent_session, create_conversation_row, create_request,
+    create_request_with_signed_fields, create_request_with_valid_until,
     create_response_with_content_and_status, create_response_with_status, first_optional_row,
-    first_row, set_interrupt_requested_at, set_request_lifecycle_state, set_valid_until, test_db,
-    upsert_conversation, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    first_row, materialization_identity, set_interrupt_requested_at, set_request_lifecycle_state,
+    test_db, try_set_valid_until, upsert_conversation, AGENT_DID, AGENT_NAME, BACKEND_ID,
+    DEADLINE_SECS,
 };
 
 #[path = "conformance/backend_health.rs"]
 mod backend_health;
 #[path = "conformance/background.rs"]
 mod background;
-#[path = "conformance/bearer_claim.rs"]
-mod bearer_claim;
 #[path = "conformance/callback_lifecycle.rs"]
 mod callback_lifecycle;
 #[path = "conformance/cancel_propagation.rs"]
@@ -145,8 +145,6 @@ mod process;
 mod prompt_template;
 #[path = "conformance/r5_cross_deployment.rs"]
 mod r5_cross_deployment;
-#[path = "conformance/reciprocal_conversation.rs"]
-mod reciprocal_conversation;
 #[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
 #[path = "conformance/replicated_request_convergence.rs"]
@@ -577,8 +575,6 @@ mod manual_run;
 mod pairing_invariant_tests;
 #[path = "conformance/pairing_reconcile.rs"]
 mod pairing_reconcile;
-#[path = "conformance/peer_registry_discovery.rs"]
-mod peer_registry_discovery;
 #[path = "conformance/persona_request.rs"]
 mod persona_request;
 #[path = "conformance/prompt_assembly.rs"]

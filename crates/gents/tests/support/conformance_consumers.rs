@@ -231,6 +231,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_enrollment_digest_vectors_match_wire_codec",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::enrollment::generated_agent_request_admission_cases_match_shared_projector",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/enrollment.rs",
+            module_path: "conformance::enrollment",
+            function: "generated_agent_request_admission_cases_match_shared_projector",
+        },
+        ConformanceConsumer::RustTest {
             id: "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary",
             package: "gents-cli",
             source_path:

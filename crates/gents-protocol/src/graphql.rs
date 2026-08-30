@@ -18,26 +18,6 @@ pub struct GraphqlSubmittedRequest {
     pub session_id: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct CreateAgentRequestInput<'a> {
-    pub request_id: &'a str,
-    pub agent_did: &'a str,
-    pub content: &'a str,
-    pub session_id: &'a str,
-    pub behavior_id: Option<&'a str>,
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
-    pub top_k: Option<i64>,
-    pub seed: Option<i64>,
-    pub max_tokens: Option<i64>,
-    pub max_total_tokens: Option<i64>,
-    pub metadata: Option<&'a str>,
-    pub created_at: &'a str,
-    pub caused_by_trigger_id: Option<&'a str>,
-    pub caused_by_trigger_kind: Option<&'a str>,
-    pub caused_by_source_doc_id: Option<&'a str>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphqlTurnState {
     pub request: Option<AgentRequestRow>,
@@ -245,108 +225,6 @@ pub fn escape_graphql_string(value: &str) -> String {
         }
     }
     escaped
-}
-
-pub fn create_agent_request_mutation(input: &CreateAgentRequestInput<'_>) -> String {
-    let behavior_field = input
-        .behavior_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            format!(
-                r#"
-                behavior_id: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let caused_by_trigger_id_field = input
-        .caused_by_trigger_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            format!(
-                r#"
-                caused_by_trigger_id: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let caused_by_trigger_kind_field = input
-        .caused_by_trigger_kind
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            format!(
-                r#"
-                caused_by_trigger_kind: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let caused_by_source_doc_id_field = input
-        .caused_by_source_doc_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            format!(
-                r#"
-                caused_by_source_doc_id: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let request_override_fields = vec![
-        optional_f64_field("temperature", input.temperature),
-        optional_f64_field("top_p", input.top_p),
-        optional_i64_field("top_k", input.top_k),
-        optional_i64_field("seed", input.seed),
-        optional_i64_field("max_tokens", input.max_tokens),
-        optional_i64_field("max_total_tokens", input.max_total_tokens),
-        optional_string_field("metadata", input.metadata),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|field| {
-        format!(
-            r#"
-                {field},"#
-        )
-    })
-    .collect::<String>();
-    format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{agent_did}",
-                {behavior_field}
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "{content}",
-                {request_override_fields}
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",{caused_by_trigger_id_field}{caused_by_trigger_kind_field}{caused_by_source_doc_id_field}
-                failure_reason: "",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: 3
-            }}) {{ _docID }}
-        }}"#,
-        request_id = escape_graphql_string(input.request_id),
-        agent_did = escape_graphql_string(input.agent_did),
-        behavior_field = behavior_field,
-        session_id = escape_graphql_string(input.session_id),
-        content = escape_graphql_string(input.content),
-        request_override_fields = request_override_fields,
-        created_at = escape_graphql_string(input.created_at),
-        caused_by_trigger_id_field = caused_by_trigger_id_field,
-        caused_by_trigger_kind_field = caused_by_trigger_kind_field,
-        caused_by_source_doc_id_field = caused_by_source_doc_id_field,
-    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1151,36 +1029,6 @@ mod tests {
             string_list_field("cli_tool_names", &["rg".to_string(), "cargo".to_string()]),
             Some(r#"cli_tool_names: ["rg", "cargo"]"#.to_string()),
         );
-    }
-
-    #[test]
-    fn create_agent_request_mutation_includes_sampling_and_metadata() {
-        let mutation = create_agent_request_mutation(&CreateAgentRequestInput {
-            request_id: "req-1",
-            agent_did: "did:test:amy",
-            content: "hello",
-            session_id: "session-1",
-            behavior_id: Some("amy-default"),
-            temperature: Some(0.0),
-            top_p: Some(0.95),
-            top_k: Some(40),
-            seed: Some(1234),
-            max_tokens: Some(512),
-            max_total_tokens: Some(4096),
-            metadata: Some(r#"{"run_id":"run-1"}"#),
-            created_at: "2026-04-13T12:00:00Z",
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_source_doc_id: None,
-        });
-
-        assert!(mutation.contains("temperature: 0"));
-        assert!(mutation.contains("top_p: 0.95"));
-        assert!(mutation.contains("top_k: 40"));
-        assert!(mutation.contains("seed: 1234"));
-        assert!(mutation.contains("max_tokens: 512"));
-        assert!(mutation.contains("max_total_tokens: 4096"));
-        assert!(mutation.contains(r#"metadata: "{\"run_id\":\"run-1\"}""#));
     }
 
     #[test]

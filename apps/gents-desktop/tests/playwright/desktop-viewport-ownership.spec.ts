@@ -242,14 +242,14 @@ test.describe("mobile viewport ownership", () => {
     await expectVisualViewportOverlay(page, "shortcuts-help");
     await page.keyboard.press("Escape");
 
-    await page.getByRole("button", { name: "Add Agent", exact: true }).click();
-    await page.locator(".fleet-alternative-disclosure > summary").click();
-    await page.getByTestId("app-route-slot").evaluate((owner) => {
-      owner.scrollTop = owner.scrollHeight;
-    });
-    await page.getByTestId("fleet-pair-scan").click();
-    await expect(page.getByTestId("fleet-qr-scanner")).toBeVisible();
-    await expectVisualViewportOverlay(page, "fleet-qr-scanner");
+    await openConfig(page);
+    await openConfigTab(page, "behavior");
+    await page
+      .getByTestId("behavior-system-prompt")
+      .fill("Unsaved viewport ownership check");
+    await page.getByTestId("config-tab-backends").click();
+    await expect(page.getByTestId("confirm-dialog")).toBeVisible();
+    await expectVisualViewportOverlay(page, "confirm-dialog");
   });
 
   test("context and sync popovers share visual-viewport containment", async ({

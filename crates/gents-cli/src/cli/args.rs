@@ -1919,6 +1919,8 @@ pub(crate) struct BehaviorUpsertArgs {
 #[derive(clap::Args)]
 pub(crate) struct BehaviorCreateArgs {
     #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) agent_did: String,
@@ -1957,6 +1959,8 @@ pub(crate) struct BehaviorCreateArgs {
 #[derive(clap::Args)]
 pub(crate) struct BehaviorCloneArgs {
     #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
     pub(crate) graphql: String,
     #[arg(value_name = "SOURCE_BEHAVIOR_ID")]
     pub(crate) source_behavior_id: String,
@@ -1974,6 +1978,8 @@ pub(crate) struct BehaviorCloneArgs {
 /// target's `agent_did` is derived from `behavior_id` itself.
 #[derive(clap::Args)]
 pub(crate) struct BehaviorDisableArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(value_name = "BEHAVIOR_ID")]
@@ -2548,24 +2554,25 @@ pub(crate) enum P2pCommand {
     #[command(about = "Run P2P HTTP endpoint diagnostics")]
     Diagnose(P2pAccessArgs),
     #[command(
-        about = "Manage declarative P2P pairings (the runtime reconciles them)",
+        about = "Inspect authenticated enrollment-owned P2P pairings",
         after_help = "\
-Pairings are declarative: every subcommand here writes or reads \
-PeerPairingDesired documents, and the running runtime reconciles live P2P \
-state toward them. This is the normal way to configure P2P. The imperative \
-`p2p admin` commands mutate live wiring directly and are an escape hatch for \
-diagnostics, break-glass repair, and non-paired topologies."
+Pairing documents are authored only by authenticated enrollment. This command \
+is observational and cannot grant, replace, or revoke enrollment authority."
     )]
     Pairings {
         #[command(subcommand)]
         command: P2pPairingsCommand,
     },
+    #[command(about = "Operate authenticated enrollment authority")]
+    Enrollment {
+        #[command(subcommand)]
+        command: P2pEnrollmentCommand,
+    },
     #[command(
         about = "Register into and inspect the peer discovery registry",
         after_help = "\
-The peer registry (PeerRegistry collection) is the service-discovery layer: \
-nodes self-register here, peers replicate the collection, and the discovery \
-reconciler materializes registry-owned PeerPairingDesired rows for live peers.\n\
+The peer registry (PeerRegistry collection) is informational discovery metadata. \
+It cannot authorize enrollment or materialize P2P routes.\n\
 \n\
 `p2p network register` — write this node's row (idempotent / upsert).\n\
 `p2p network list`     — read all PeerRegistry rows with liveness and pairing annotations.\n\
@@ -2576,14 +2583,12 @@ reconciler materializes registry-owned PeerPairingDesired rows for live peers.\n
         command: P2pNetworkCommand,
     },
     #[command(
-        about = "Low-level live P2P admin (escape hatch — prefer `p2p pairings`)",
+        about = "Low-level live P2P admin for diagnostics and repair",
         after_help = "\
-These commands mutate live P2P state on the running runtime directly, without \
-writing PeerPairingDesired documents — so the pairing reconciler does not own \
-or manage what they install. Use them for diagnostics, break-glass repair when \
-the reconciler is the suspect component, and intentionally ad-hoc topologies \
-(one-off document fetches, test connectivity). For normal pairing, use \
-`p2p pairings`."
+These commands mutate live P2P state on the running runtime directly. The \
+enrollment reconciler does not treat those changes as durable authority. Use \
+them only for diagnostics, break-glass repair, \
+and one-off document fetches. Authenticated enrollment is the sole route authority."
     )]
     Admin {
         #[command(subcommand)]
@@ -2594,8 +2599,7 @@ the reconciler is the suspect component, and intentionally ad-hoc topologies \
         after_help = "\
 Scope templates are named pairing intents that bundle a fixed collection set, \
 a per-collection scoping policy, and a delivery \
-mode (push or replicate).  Use them as the --template argument when creating \
-PeerPairingDesired rows."
+mode (push or replicate). Enrollment approvals select the authoritative route scope."
     )]
     Templates {
         #[command(subcommand)]
@@ -2616,12 +2620,18 @@ pub(crate) enum P2pNetworkCommand {
         aliases = ["deregister", "remove"]
     )]
     Rm(P2pAccessArgs),
-    #[command(about = "Create the local singleton AgentNetwork control-plane root")]
-    Create(P2pNetworkCreateArgs),
-    #[command(about = "Grant active network membership to a member DID")]
-    Grant(P2pNetworkGrantArgs),
-    #[command(about = "Revoke network membership with a retained tombstone")]
-    Revoke(P2pNetworkRevokeArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum P2pEnrollmentCommand {
+    #[command(about = "List fresh pending authenticated enrollment requests")]
+    Pending(P2pAccessArgs),
+    #[command(about = "Approve a pending request with a bounded lease")]
+    Approve(P2pEnrollmentDecisionArgs),
+    #[command(about = "Deny a pending request")]
+    Deny(P2pEnrollmentDecisionArgs),
+    #[command(about = "Revoke the current authorization for a request")]
+    Revoke(P2pEnrollmentDecisionArgs),
 }
 
 #[derive(clap::Args)]
@@ -2655,40 +2665,16 @@ pub(crate) struct P2pNetworkListArgs {
 }
 
 #[derive(Debug, clap::Args)]
-pub(crate) struct P2pNetworkCreateArgs {
-    /// Human-readable network name; network_id is derived from (admin_did, name).
-    #[arg(long)]
-    pub(crate) name: String,
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) output: OutputFormat,
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct P2pNetworkGrantArgs {
-    /// The member DID to admit.
-    pub(crate) member_did: String,
+pub(crate) struct P2pEnrollmentDecisionArgs {
+    /// Immutable enrollment request ID shown by the operator pending queue.
+    pub(crate) request_id: String,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) output: OutputFormat,
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct P2pNetworkRevokeArgs {
-    /// The member DID to revoke.
-    pub(crate) member_did: String,
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) output: OutputFormat,
+    /// Approval lease in seconds; ignored for deny/revoke.
+    #[arg(long, default_value_t = gents_protocol::enrollment::DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS)]
+    pub(crate) lease_seconds: u64,
 }
 
 /// Subcommands for `p2p templates`.
@@ -2782,95 +2768,8 @@ pub(crate) enum P2pDocumentsCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum P2pPairingsCommand {
-    #[command(about = "List desired pairings annotated with live health")]
+    #[command(about = "List enrollment-owned pairings annotated with live health")]
     List(P2pPairingsListArgs),
-    #[command(
-        about = "Create or update a desired pairing row (the runtime reconciles it)",
-        after_help = "\
-Writes a PeerPairingDesired row. A running gents runtime reads desired \
-rows on its pairing sweep and reconciles live P2P state toward them — this \
-command never mutates live wiring itself.\n\
-\n\
---did (the expected remote agent DID) is required: the DID is the permission \
-and audit boundary, so a pairing always names who it trusts. If you do not \
-know the remote DID, use `p2p pairings invite` / `p2p pairings join`, which \
-carry it for you.\n\
-\n\
---peer may be omitted when a --address is a shareable ticket or multiaddr; the \
-peer id is derived from it.\n\
-\n\
-Pairing is directional. For bidirectional delegation, create a row on BOTH \
-servers, each naming the other.\n\
-\n\
-NOTE: replication alone does NOT enable cross-deployment delegation. That is \
-off by default and DEFERRED — opt in with `subagent_allow_cross_deployment: \
-true` on the relevant behaviors' tool selections on BOTH servers \
-(trusted-fleet only)."
-    )]
-    Set(P2pPairingSetArgs),
-    #[command(
-        name = "rm",
-        about = "Remove a desired pairing row (runtime tears down only what it applied)",
-        aliases = ["unpair", "remove"]
-    )]
-    Remove(P2pPairingRefArgs),
-    #[command(about = "Create a shareable, DID-carrying pairing invite token")]
-    Invite(P2pInviteArgs),
-    #[command(about = "Accept a pairing invite token and write a desired row")]
-    Join(P2pJoinArgs),
-    #[command(
-        about = "Claim an audience-unbound bearer invite token (scan-one-QR pairing)",
-        long_about = "Claim a dabear1- bearer invite: verify the issuer signature, wire the \
-local push pairing toward the issuer, and publish a self-signed claim that the \
-issuer's daemon turns into a membership grant (and, for conversation invites, \
-the reciprocal conversation edge)."
-    )]
-    Claim(P2pClaimArgs),
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pPairingSetArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    /// Remote peer ID. Optional when a --address is a shareable ticket or
-    /// multiaddr the peer id can be derived from.
-    #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
-    pub(crate) peer_id: Option<String>,
-    /// Agent DID expected for the remote peer. Required: the DID is the trust boundary.
-    #[arg(long = "did", alias = "agent-did", value_name = "AGENT_DID")]
-    pub(crate) agent_did: String,
-    /// Replicator address (shareable ticket or multiaddr) to install during
-    /// reconcile. Repeat for multiple addresses.
-    #[arg(long = "address", value_name = "ADDRESS")]
-    pub(crate) addresses: Vec<String>,
-    /// Scope template id driving the pairing (collections + scope + delivery).
-    /// Defaults to `conversation` (filtered push of the peer's conversation slice).
-    /// Use `p2p templates list` to see all available templates.
-    #[arg(
-        long = "template",
-        value_name = "TEMPLATE",
-        default_value = "conversation"
-    )]
-    pub(crate) template: String,
-    /// Wait for the runtime to observe the peer as connected.
-    #[arg(long, default_value_t = false)]
-    pub(crate) wait: bool,
-    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
-    #[arg(long, default_value = "30s")]
-    pub(crate) timeout: String,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pPairingRefArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    /// Remote peer ID stored in PeerPairingDesired.peer_id.
-    #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
-    pub(crate) peer_id: String,
 }
 
 #[derive(clap::Args)]
@@ -2881,80 +2780,6 @@ pub(crate) struct P2pPairingsListArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub(crate) output: OutputFormat,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pInviteArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    /// Scope template id for this invite (e.g. `conversation`, `agent-config`, `backup`).
-    /// The template is encoded in the invite token and read by `p2p pairings join`.
-    /// Defaults to `conversation`; mobile clients should request `client` explicitly.
-    /// Use `p2p templates list` to see all available templates.
-    #[arg(
-        long = "template",
-        value_name = "TEMPLATE",
-        default_value = "conversation"
-    )]
-    pub(crate) template: String,
-    /// Member DID this invite admits. The DID must already have an active
-    /// admin-signed NetworkMembership grant on the issuer.
-    #[arg(long = "member-did", value_name = "DID")]
-    pub(crate) member_did: Option<String>,
-    /// Mint an audience-unbound bearer invite (`dabear1-`) instead of a
-    /// DID-bound one. The claiming device binds itself at claim time with
-    /// `p2p pairings claim`; the running issuer daemon authors the membership
-    /// grant (and, for conversation invites, the reciprocal intent) when the
-    /// claim replicates in. Bearer invites are single-use and expire after
-    /// 5 minutes.
-    #[arg(
-        long = "bearer",
-        default_value_t = false,
-        conflicts_with = "member_did"
-    )]
-    pub(crate) bearer: bool,
-    /// Render the minted token as a scannable QR code on stdout (bearer only).
-    #[arg(long = "qr", default_value_t = false, requires = "bearer")]
-    pub(crate) qr: bool,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pClaimArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    /// The `dabear1-` bearer invite token to claim.
-    #[arg(value_name = "TOKEN")]
-    pub(crate) token: String,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct P2pJoinArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    /// Invite token produced by `gents p2p pairings invite`.
-    #[arg(value_name = "TOKEN")]
-    pub(crate) token: String,
-    /// Override the scope template from the token. When both `--template` and a
-    /// token template are present, `--template` wins. Omit to use the token's
-    /// template (the normal path).
-    #[arg(long = "template", value_name = "TEMPLATE")]
-    pub(crate) template: Option<String>,
-    /// Deprecated compatibility flag accepted by older scripts. v5 joins always
-    /// verify the token's admin-signed network root and membership grant.
-    #[arg(long, default_value_t = false)]
-    pub(crate) reciprocal: bool,
-    /// Wait for the runtime to observe the peer as connected.
-    #[arg(long, default_value_t = false)]
-    pub(crate) wait: bool,
-    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
-    #[arg(long, default_value = "30s")]
-    pub(crate) timeout: String,
 }
 
 #[derive(clap::Args)]

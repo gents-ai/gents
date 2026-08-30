@@ -572,6 +572,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::enrollment::generated_enrollment_digest_vectors_match_wire_codec")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "agent_request_admission_cases"
+      "AgentRequestAdmissionCases"
+      "conformance::enrollment::generated_agent_request_admission_cases_match_shared_projector")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_decision_cases"
       "GoalDecisionCases"
       "goal_continuation_live::durable_goal_continues_with_real_inference_until_model_completes")

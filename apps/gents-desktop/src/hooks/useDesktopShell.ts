@@ -169,11 +169,9 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   });
 
   const {
-    onAddPeer,
     onFetchPeerStatus,
-    onProbePeerAddress,
+    onRequestStatusEnrollment,
     onInitLocalRuntime,
-    onPairBearer,
     onRemovePeer,
     onRenamePeer,
     onRepairP2P,
@@ -341,12 +339,10 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     retrySessionHydration,
     loadOlderSessionTimeline,
     refreshSnapshot,
-    onAddPeer,
-    onPairBearer,
     onRemovePeer,
     onRenamePeer,
     onFetchPeerStatus,
-    onProbePeerAddress,
+    onRequestStatusEnrollment,
     onInitLocalRuntime,
     onRepairP2P,
     onSendMessage,

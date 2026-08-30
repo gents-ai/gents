@@ -13,17 +13,17 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::lean_vocab_test::{lean_r5_cross_deployment_cases, LeanR5CrossDeploymentCase};
+use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::{first_optional_row, test_db, test_p2p_db, TestDb};
 
-const PARENT_AGENT_DID: &str = "did:test:r5-lean-parent";
-
 struct RunningChildAgent {
     db: TestDb,
     booted: BootedAgent,
+    identity: Arc<dyn AgentIdentity>,
     _endpoint: MockModelEndpoint,
 }
 
@@ -85,14 +85,28 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
 
     let child_agent = boot_child_agent(case).await;
     let parent_db = test_p2p_db(&format!("{}-parent", case.name)).await;
+    let parent_identity = parent_db.node_identity.clone();
+    let parent_agent_did = parent_identity.did().to_string();
+    let (parent_peer, parent_address) = wait_for_peer_identity(parent_db.node.as_ref()).await;
     install_one_way_replicator(
         parent_db.node.as_ref(),
         child_agent.db.node.as_ref(),
         &["AgentToolCall"],
     )
     .await;
+    authorize_enrollment_peer(
+        child_agent.db.node.clone(),
+        &format!("network-{}", case.name),
+        &format!("R5 {}", case.name),
+        child_agent.identity.clone(),
+        parent_identity,
+        &parent_peer,
+        &parent_address,
+    )
+    .await;
     let (parent_db, hook, parent_session_id, _parent_behavior_id) = setup_parent_hook_on_db(
         case,
+        &parent_agent_did,
         false,
         Some(child_agent.booted.agent_did.as_str()),
         parent_db,
@@ -141,14 +155,15 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     );
     assert_eq!(
         child.requester_did.as_deref(),
-        Some(PARENT_AGENT_DID),
-        "{}: child request must route back only to its coordinator",
+        Some(child_agent_did.as_str()),
+        "{}: the target runtime must attest and own the child request",
         case.name
     );
 
     let RunningChildAgent {
         db: child_db,
         booted,
+        identity: _,
         _endpoint,
     } = child_agent;
     booted.shutdown().await;
@@ -169,7 +184,7 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
         setup_parent_hook(case, true).await;
     let _source = super::support::fixtures::spawn_subagent_source(
         parent_db.node.clone(),
-        PARENT_AGENT_DID,
+        parent_db.node_identity.did(),
         &parent_behavior_id,
         &case.target_behavior_id,
     );
@@ -186,7 +201,8 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
     let child = wait_for_child_request(parent_db.node.as_ref(), &child_request_id).await;
     assert_child_matches_case(case, &child, &child_request_id);
     assert_eq!(
-        child.agent_did, PARENT_AGENT_DID,
+        child.agent_did,
+        parent_db.node_identity.did(),
         "{}: same-deployment fallback should keep child ownership local",
         case.name
     );
@@ -194,7 +210,6 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
 
 async fn boot_child_agent(case: &LeanR5CrossDeploymentCase) -> RunningChildAgent {
     let db = test_p2p_db(&format!("{}-child", case.name)).await;
-    write_pairing(db.node.as_ref(), "deployment-a", PARENT_AGENT_DID).await;
 
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(&format!("{}-child", case.name)));
     let child_agent_did = identity.did().to_string();
@@ -216,7 +231,7 @@ async fn boot_child_agent(case: &LeanR5CrossDeploymentCase) -> RunningChildAgent
 
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
-        identity,
+        identity.clone(),
         DocumentRuntimeOptions {
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
@@ -232,6 +247,7 @@ async fn boot_child_agent(case: &LeanR5CrossDeploymentCase) -> RunningChildAgent
     RunningChildAgent {
         db,
         booted: BootedAgent::new(shutdown_tx, handle, child_agent_did),
+        identity,
         _endpoint: endpoint,
     }
 }
@@ -241,11 +257,13 @@ async fn setup_parent_hook(
     target_is_local: bool,
 ) -> (TestDb, DefraSessionHook, String, String) {
     let db = test_db(&format!("{}-parent", case.name)).await;
-    setup_parent_hook_on_db(case, target_is_local, None, db).await
+    let parent_agent_did = db.node_identity.did().to_string();
+    setup_parent_hook_on_db(case, &parent_agent_did, target_is_local, None, db).await
 }
 
 async fn setup_parent_hook_on_db(
     case: &LeanR5CrossDeploymentCase,
+    parent_agent_did: &str,
     target_is_local: bool,
     remote_target_owner_did: Option<&str>,
     db: TestDb,
@@ -255,7 +273,7 @@ async fn setup_parent_hook_on_db(
     let selection_id = format!("{parent_behavior_id}-tools");
 
     let target_owner_did = if target_is_local {
-        PARENT_AGENT_DID.to_string()
+        parent_agent_did.to_string()
     } else {
         remote_target_owner_did
             .expect("cross-deployment case must pass the booted child agent DID")
@@ -266,7 +284,7 @@ async fn setup_parent_hook_on_db(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
-            agent_did: PARENT_AGENT_DID.to_string(),
+            agent_did: parent_agent_did.to_string(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 case.target_behavior_id.clone(),
                 target_owner_did,
@@ -288,7 +306,7 @@ async fn setup_parent_hook_on_db(
         db.node.as_ref(),
         &AgentBehaviorDocument {
             behavior_id: parent_behavior_id.clone(),
-            agent_did: PARENT_AGENT_DID.to_string(),
+            agent_did: parent_agent_did.to_string(),
             display_name: Some(parent_behavior_id.clone()),
             description: None,
             summary: None,
@@ -314,7 +332,7 @@ async fn setup_parent_hook_on_db(
             db.node.as_ref(),
             &AgentBehaviorDocument {
                 behavior_id: case.target_behavior_id.clone(),
-                agent_did: PARENT_AGENT_DID.to_string(),
+                agent_did: parent_agent_did.to_string(),
                 display_name: Some(case.target_behavior_id.clone()),
                 description: None,
                 summary: None,
@@ -341,6 +359,7 @@ async fn setup_parent_hook_on_db(
         &case.parent_request_id,
         &parent_session_id,
         &parent_behavior_id,
+        parent_agent_did,
     )
     .await;
     crate::support::create_agent_session(
@@ -355,7 +374,7 @@ async fn setup_parent_hook_on_db(
         db.node.clone(),
         &parent_session_id,
         &parent_behavior_id,
-        PARENT_AGENT_DID,
+        parent_agent_did,
         FailurePolicy::default(),
     )
     .await
@@ -453,11 +472,12 @@ async fn create_parent_request(
     request_id: &str,
     session_id: &str,
     behavior_id: &str,
+    agent_did: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let behavior_id = escape_graphql_string(behavior_id);
-    let agent_did = escape_graphql_string(PARENT_AGENT_DID);
+    let agent_did = escape_graphql_string(agent_did);
     let created_at = chrono::Utc::now().to_rfc3339();
     let deadline = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
     let mutation = format!(
@@ -486,36 +506,6 @@ async fn create_parent_request(
         }}"#
     );
     exec(node, &mutation, "create parent AgentRequest").await;
-}
-
-async fn write_pairing(node: &EmbeddedNode, peer_id: &str, peer_agent_did: &str) {
-    let peer_id = escape_graphql_string(peer_id);
-    let peer_agent_did = escape_graphql_string(peer_agent_did);
-    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            upsert_PeerPairingDesired(
-                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
-                add: {{
-                    peer_id: "{peer_id}",
-                    agent_did: "{peer_agent_did}",
-                    collections: null,
-                    replicator_addresses: null,
-                    profiles: null,
-                    created_at: "{now}",
-                    updated_at: "{now}"
-                }},
-                update: {{
-                    agent_did: "{peer_agent_did}",
-                    collections: null,
-                    replicator_addresses: null,
-                    profiles: null,
-                    updated_at: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    exec(node, &mutation, "write PeerPairingDesired").await;
 }
 
 async fn install_one_way_replicator(

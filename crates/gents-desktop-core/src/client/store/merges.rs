@@ -125,25 +125,8 @@ impl ClientStore {
 
     /// Replace one agent's authoritative projection instead of additively
     /// merging it. This is used for scoped reloads and delete recovery so rows
-    /// absent from the database snapshot (including foreign-requester legacy
-    /// bearer rows) cannot survive indefinitely in memory.
+    /// absent from the database snapshot cannot survive indefinitely in memory.
     pub fn replace_agent_scope(&self, agent_did: &str, snapshot: ClientStore) -> Self {
-        self.replace_agent_scope_inner(agent_did, snapshot, true)
-    }
-
-    /// Replace rows fetched from a legacy remote authority. Remote snapshots
-    /// are source-stamped, so unstamped local rows must survive even when a
-    /// remote agent reuses the same session ID.
-    pub fn replace_remote_agent_scope(&self, agent_did: &str, snapshot: ClientStore) -> Self {
-        self.replace_agent_scope_inner(agent_did, snapshot, false)
-    }
-
-    fn replace_agent_scope_inner(
-        &self,
-        agent_did: &str,
-        snapshot: ClientStore,
-        replace_unstamped: bool,
-    ) -> Self {
         let mut rows = self.to_rows();
         let mut agent_session_ids = rows
             .conversations
@@ -183,8 +166,7 @@ impl ClientStore {
             &mut rows.message_source_agent_dids,
             |row, source| {
                 source != Some(agent_did)
-                    && !(replace_unstamped
-                        && source.is_none()
+                    && !(source.is_none()
                         && row
                             .session_id
                             .as_deref()
@@ -196,9 +178,7 @@ impl ClientStore {
             &mut rows.session_source_agent_dids,
             |row, source| {
                 source != Some(agent_did)
-                    && !(replace_unstamped
-                        && source.is_none()
-                        && agent_session_ids.contains(&row.session_id))
+                    && !(source.is_none() && agent_session_ids.contains(&row.session_id))
             },
         );
         retain_rows_and_sources(
@@ -206,8 +186,7 @@ impl ClientStore {
             &mut rows.tool_call_source_agent_dids,
             |row, source| {
                 source != Some(agent_did)
-                    && !(replace_unstamped
-                        && source.is_none()
+                    && !(source.is_none()
                         && row
                             .session_id
                             .as_deref()
@@ -219,8 +198,7 @@ impl ClientStore {
             &mut rows.compaction_entry_source_agent_dids,
             |row, source| {
                 source != Some(agent_did)
-                    && !(replace_unstamped
-                        && source.is_none()
+                    && !(source.is_none()
                         && row
                             .session_id
                             .as_deref()
@@ -234,17 +212,17 @@ impl ClientStore {
         retain_rows_and_sources(
             &mut rows.tasks,
             &mut rows.task_source_agent_dids,
-            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+            |_row, source| source != Some(agent_did) && source.is_some(),
         );
         retain_rows_and_sources(
             &mut rows.schedules,
             &mut rows.schedule_source_agent_dids,
-            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+            |_row, source| source != Some(agent_did) && source.is_some(),
         );
         retain_rows_and_sources(
             &mut rows.event_triggers,
             &mut rows.event_trigger_source_agent_dids,
-            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+            |_row, source| source != Some(agent_did) && source.is_some(),
         );
         retain_rows_and_sources(
             &mut rows.skills,
@@ -252,23 +230,23 @@ impl ClientStore {
             |row, source| {
                 row.agent_did.as_deref() != Some(agent_did)
                     && source != Some(agent_did)
-                    && (!replace_unstamped || source.is_some())
+                    && source.is_some()
             },
         );
         retain_rows_and_sources(
             &mut rows.inference_backends,
             &mut rows.inference_backend_source_agent_dids,
-            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+            |_row, source| source != Some(agent_did) && source.is_some(),
         );
         retain_rows_and_sources(
             &mut rows.inference_profiles,
             &mut rows.inference_profile_source_agent_dids,
-            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+            |_row, source| source != Some(agent_did) && source.is_some(),
         );
         retain_rows_and_sources(
             &mut rows.tool_service_registries,
             &mut rows.tool_service_registry_source_agent_dids,
-            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+            |_row, source| source != Some(agent_did) && source.is_some(),
         );
 
         ClientStore::from_rows(rows).merge_snapshot(snapshot)

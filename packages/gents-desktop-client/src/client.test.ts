@@ -109,4 +109,34 @@ describe("desktop bridge compatibility", () => {
       "desktop_bridge_contract",
     ]);
   });
+
+  it("routes status enrollment through the authenticated bridge command", async () => {
+    const enrollment = {
+      requestId: "request-1",
+      networkId: "network-1",
+      adminDid: "did:key:zAdmin",
+      serverPeer: "server-peer-1",
+      ownerAgent: "did:key:zAgent",
+      state: "pending_approval",
+    };
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_peer_enroll_status: (args) => {
+          expect(args).toEqual({
+            request: { serverAddress: "http://amy.local:9191" },
+          });
+          return enrollment;
+        },
+      },
+    });
+
+    await expect(
+      createDesktopClient(transport).api.requestStatusEnrollment(
+        "http://amy.local:9191",
+      ),
+    ).resolves.toEqual(enrollment);
+    expect(transport.calls.map(({ command }) => command)).toEqual([
+      "desktop_peer_enroll_status",
+    ]);
+  });
 });

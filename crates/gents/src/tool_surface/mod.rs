@@ -278,6 +278,7 @@ impl ToolSurface {
         tools.extend(crate::self_config::build_self_config_tools(
             runtime.node.clone(),
             runtime.agent_did.clone(),
+            runtime.identity.clone(),
             &self.self_config,
         ));
         let mut registered_names: HashSet<String> = tools.iter().map(|tool| tool.name()).collect();

@@ -16,7 +16,6 @@ import type {
   InterruptRequestResult,
   MCPServiceHealthView,
   McpServiceProbeResult,
-  PeerAddRequest,
   SubagentTreeView,
   SyncHealthView,
   TaskRunResult,
@@ -600,22 +599,6 @@ export function createDesktopUiHarness(
     };
   }
 
-  function upsertDeployment(nextPeer: PeerAddRequest) {
-    deployment = {
-      ...deployment,
-      peerId: nextPeer.agentDid === AGENT_DID ? deployment.peerId : "peer-added",
-      label: nextPeer.label.trim() || deployment.label,
-      agentDid: nextPeer.agentDid.trim() || deployment.agentDid,
-      addr: nextPeer.addr.trim() || deployment.addr,
-      graphql: nextPeer.graphql?.trim() || deployment.graphql,
-      agentPrincipal: {
-        ...deployment.agentPrincipal,
-        agentDid: nextPeer.agentDid.trim() || deployment.agentDid,
-        displayName: nextPeer.label.trim() || deployment.label,
-      },
-    };
-  }
-
   function createSessionFromPrompt(
     prompt: string,
     behaviorId?: string | null,
@@ -720,43 +703,6 @@ export function createDesktopUiHarness(
     },
     async setSelectedAgent() {
       return undefined;
-    },
-    async addPeer(request) {
-      upsertDeployment(request);
-      notify("peers");
-      return snapshot();
-    },
-    async pairBearer(request) {
-      const label = request.label?.trim() || "Amy";
-      upsertDeployment({
-        label,
-        agentDid: AGENT_DID,
-        addr: "127.0.0.1:56000/p2p/amy-bearer-peer",
-        graphql: null,
-      });
-      deployment = {
-        ...deployment,
-        source: "bearer-pairing",
-        graphql: null,
-      };
-      notify("peers");
-      const next = snapshot();
-      return {
-        ...next,
-        pairing: {
-          peerId: deployment.peerId,
-          label,
-          addr: deployment.addr,
-          issuerDid: AGENT_DID,
-          claimantDid: "did:key:zPhone",
-          networkId: "amy-network",
-          template: "conversation",
-          connected: true,
-          claimSubmitted: true,
-          endpointPublished: true,
-          replicationConfigured: true,
-        },
-      };
     },
     async removePeer(peerId) {
       if (peerId !== deployment.peerId) {
@@ -917,12 +863,14 @@ export function createDesktopUiHarness(
         graphql: "http://127.0.0.1:9181/api/v0/graphql",
       };
     },
-    async probePeerAddress() {
+    async requestStatusEnrollment() {
       return {
-        label: "Bombadil UI Agent",
-        agentDid: AGENT_DID,
-        addr: "/ip4/127.0.0.1/tcp/9292",
-        graphql: "http://127.0.0.1:9181/api/v0/graphql",
+        requestId: "enrollment-request-harness",
+        networkId: "network-harness",
+        adminDid: AGENT_DID,
+        serverPeer: deployment.peerId,
+        ownerAgent: AGENT_DID,
+        state: "pending_approval",
       };
     },
     async repairP2P() {

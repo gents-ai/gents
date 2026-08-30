@@ -1,9 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -30,14 +29,11 @@ enum BackgroundTaskResult {
     GraphRunReconcile(Result<()>),
     CrossDeploymentCancelMirror(Result<()>),
     PairingReconcile(Result<()>),
+    EnrollmentReconcile(Result<()>),
     RegistryHeartbeat(Result<()>),
     EndpointHeartbeat(Result<()>),
-    NetworkReconcile(Result<()>),
-    ReciprocalReconcile(Result<()>),
-    BearerClaimReconcile(Result<()>),
-    PersonaRequestReconcile(Result<()>),
     SessionHydrationReconcile(Result<()>),
-    DiscoveryReconcile(Result<()>),
+    PersonaRequestReconcile(Result<()>),
     DirectoryProjection(Result<()>),
 }
 
@@ -396,6 +392,7 @@ async fn run_agent_owned(
         agent.local_hostname.clone(),
         agent.local_subnet.clone(),
         agent.agent_did().to_string(),
+        Some(agent.principal_arc().identity.clone()),
     );
     backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
 
@@ -454,6 +451,8 @@ async fn run_agent_owned(
         agent.process_state_observer.clone(),
     ));
     let admission_registry = AdmissionRegistry::new(agent.node.clone());
+    let (enrollment_owner, enrollment_handle) =
+        crate::agent::p2p_reconcile::enrollment_authority_channel();
     let lsp_pool = tool_runtime.lsp_pool.clone();
     let runtime = RuntimeContext {
         node: agent.node.clone(),
@@ -466,6 +465,7 @@ async fn run_agent_owned(
         startup_readiness: agent.startup_readiness.clone(),
         runtime_status: runtime_status.clone(),
         operator_tool_root: agent.operator_tool_root().map(PathBuf::from),
+        enrollment_authority: enrollment_handle.clone(),
     };
     let runtime_for_runner = runtime.clone();
     #[cfg(test)]
@@ -579,6 +579,9 @@ async fn run_agent_owned(
     let trigger_engine_subagent_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_engine_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
+    let trigger_engine_peer_admission: Arc<
+        dyn crate::agent::p2p_reconcile::PeerAdmissionAuthority,
+    > = Arc::new(enrollment_handle.clone());
     let trigger_engine_cancel = cancel.child_token();
     let trigger_engine_startup_barrier = startup_barrier.clone();
     // Construct the `ManualSource` up-front so the `ManualTriggerHandle` can
@@ -631,6 +634,7 @@ async fn run_agent_owned(
             Box::new(crate::trigger_engine::subagent_source::SubagentSource::new(
                 trigger_engine_subagent_snapshot_rx,
                 trigger_engine_node.clone(),
+                trigger_engine_peer_admission,
                 trigger_engine_cancel.clone(),
             ));
         let goal_source: Box<dyn crate::trigger_engine::TriggerSource> =
@@ -770,13 +774,31 @@ async fn run_agent_owned(
 
     let cancel_mirror_node = agent.node.clone();
     let cancel_mirror_snapshot_rx = active_snapshot_rx.clone();
+    let cancel_mirror_peer_admission: Arc<dyn crate::agent::p2p_reconcile::PeerAdmissionAuthority> =
+        Arc::new(enrollment_handle.clone());
     let cancel_mirror_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::CrossDeploymentCancelMirror(
             crate::trigger_engine::cross_deployment_cancel_mirror::run_cross_deployment_cancel_mirror(
                 cancel_mirror_node,
                 cancel_mirror_snapshot_rx,
+                cancel_mirror_peer_admission,
                 cancel_mirror_cancel,
+            )
+            .await,
+        )
+    });
+
+    let enrollment_node = agent.node.clone();
+    let enrollment_identity = agent.principal_arc().identity.clone();
+    let enrollment_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::EnrollmentReconcile(
+            crate::agent::p2p_reconcile::run_enrollment_reconciler(
+                enrollment_node,
+                enrollment_identity,
+                enrollment_owner,
+                enrollment_cancel,
             )
             .await,
         )
@@ -784,12 +806,14 @@ async fn run_agent_owned(
 
     let pairing_node = agent.node.clone();
     let pairing_identity = agent.principal_arc().identity.clone();
+    let pairing_enrollment = enrollment_handle.clone();
     let pairing_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::PairingReconcile(
             crate::agent::p2p_reconcile::run_pairing_reconciler(
                 pairing_node,
                 pairing_identity,
+                pairing_enrollment,
                 pairing_cancel,
             )
             .await,
@@ -825,29 +849,15 @@ async fn run_agent_owned(
         )
     });
 
-    let network_node = agent.node.clone();
-    let network_identity = agent.principal_arc().identity.clone();
-    let network_cancel = cancel.child_token();
+    let hydration_node = agent.node.clone();
+    let hydration_enrollment = enrollment_handle.clone();
+    let hydration_cancel = cancel.child_token();
     background_tasks.spawn(async move {
-        BackgroundTaskResult::NetworkReconcile(
-            crate::agent::p2p_reconcile::run_network_reconciler(
-                network_node,
-                network_identity,
-                network_cancel,
-            )
-            .await,
-        )
-    });
-
-    let bearer_node = agent.node.clone();
-    let bearer_identity = agent.principal_arc().identity.clone();
-    let bearer_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::BearerClaimReconcile(
-            crate::agent::p2p_reconcile::run_bearer_claim_reconciler(
-                bearer_node,
-                bearer_identity,
-                bearer_cancel,
+        BackgroundTaskResult::SessionHydrationReconcile(
+            crate::agent::p2p_reconcile::run_session_hydration_reconciler(
+                hydration_node,
+                hydration_enrollment,
+                hydration_cancel,
             )
             .await,
         )
@@ -858,41 +868,17 @@ async fn run_agent_owned(
         .document_runtime_context()
         .and_then(|context| context.tool_ceiling.root())
         .map(std::path::Path::to_path_buf);
+    let persona_request_authority = enrollment_handle;
+    let persona_request_identity = agent.principal_arc().identity.clone();
     let persona_request_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::PersonaRequestReconcile(
             crate::agent::p2p_reconcile::run_persona_request_reconciler(
                 persona_request_node,
                 persona_request_ceiling,
+                persona_request_authority,
+                persona_request_identity,
                 persona_request_cancel,
-            )
-            .await,
-        )
-    });
-
-    let hydration_node = agent.node.clone();
-    let hydration_identity = agent.principal_arc().identity.clone();
-    let hydration_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::SessionHydrationReconcile(
-            crate::agent::p2p_reconcile::run_session_hydration_reconciler(
-                hydration_node,
-                hydration_identity,
-                hydration_cancel,
-            )
-            .await,
-        )
-    });
-
-    let reciprocal_node = agent.node.clone();
-    let reciprocal_identity = agent.principal_arc().identity.clone();
-    let reciprocal_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::ReciprocalReconcile(
-            crate::agent::p2p_reconcile::run_reciprocal_reconciler(
-                reciprocal_node,
-                reciprocal_identity,
-                reciprocal_cancel,
             )
             .await,
         )
@@ -914,15 +900,6 @@ async fn run_agent_owned(
                 directory_cancel,
             )
             .await,
-        )
-    });
-
-    let discovery_node = agent.node.clone();
-    let discovery_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::DiscoveryReconcile(
-            crate::agent::p2p_reconcile::run_discovery_reconciler(discovery_node, discovery_cancel)
-                .await,
         )
     });
 
@@ -1018,14 +995,11 @@ async fn run_agent_owned(
             Ok(BackgroundTaskResult::GraphRunReconcile(result)) => result,
             Ok(BackgroundTaskResult::CrossDeploymentCancelMirror(result)) => result,
             Ok(BackgroundTaskResult::PairingReconcile(result)) => result,
+            Ok(BackgroundTaskResult::EnrollmentReconcile(result)) => result,
             Ok(BackgroundTaskResult::RegistryHeartbeat(result)) => result,
             Ok(BackgroundTaskResult::EndpointHeartbeat(result)) => result,
-            Ok(BackgroundTaskResult::NetworkReconcile(result)) => result,
-            Ok(BackgroundTaskResult::ReciprocalReconcile(result)) => result,
-            Ok(BackgroundTaskResult::BearerClaimReconcile(result)) => result,
-            Ok(BackgroundTaskResult::PersonaRequestReconcile(result)) => result,
             Ok(BackgroundTaskResult::SessionHydrationReconcile(result)) => result,
-            Ok(BackgroundTaskResult::DiscoveryReconcile(result)) => result,
+            Ok(BackgroundTaskResult::PersonaRequestReconcile(result)) => result,
             Ok(BackgroundTaskResult::DirectoryProjection(result)) => result,
             Err(error) => Err(anyhow!("background task join failed: {error}")),
         },
@@ -1254,8 +1228,6 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
                 resolve_tool_surfaces(agent.node.as_ref(), &agent.behaviors).await?;
             let backend_admission_configs =
                 resolve_backend_admission_configs(agent.node.as_ref(), &agent.behaviors).await?;
-            let paired_peer_dids =
-                load_startup_paired_peer_dids(agent.node.as_ref(), agent.agent_did()).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
                 agent.default_behavior_id().to_string(),
                 agent.behaviors.clone(),
@@ -1267,57 +1239,9 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
                 snapshot
                     .with_principal(agent.principal_arc())
                     .with_local_did(agent.agent_did().to_string())
-                    .with_paired_peer_dids(paired_peer_dids)
             })
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct StartupPeerPairingDesiredRow {
-    peer_id: String,
-    agent_did: Option<String>,
-}
-
-async fn load_startup_paired_peer_dids(
-    node: &defra_node::EmbeddedNode,
-    local_did: &str,
-) -> Result<HashSet<String>> {
-    let query = r#"{
-        PeerPairingDesired {
-            peer_id
-            agent_did
-        }
-    }"#;
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query PeerPairingDesired for startup paired peer DIDs failed: {:?}",
-            response.errors
-        );
-    }
-    let rows: Vec<StartupPeerPairingDesiredRow> = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("PeerPairingDesired"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    let local_did = local_did.trim();
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            row.agent_did
-                .as_deref()
-                .map(str::trim)
-                .filter(|did| !did.is_empty())
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    let peer_id = row.peer_id.trim();
-                    peer_id.starts_with("did:").then(|| peer_id.to_string())
-                })
-        })
-        .filter(|did| !did.trim().is_empty() && did.trim() != local_did)
-        .collect())
 }
 
 async fn resolve_backend_admission_configs(
@@ -1416,6 +1340,7 @@ mod degraded_reason_tests {
 
 #[cfg(test)]
 mod startup_slot_failure_policy_tests {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use crate::agent::reconcile::SlotFailurePolicy as _;
@@ -1511,7 +1436,6 @@ mod startup_slot_failure_policy_tests {
                 generation: 1,
                 principal: None,
                 local_did: String::new(),
-                paired_peer_dids: HashSet::new(),
                 default_behavior_id: "general".to_string(),
                 behaviors: HashMap::new(),
                 tool_surfaces: HashMap::new(),

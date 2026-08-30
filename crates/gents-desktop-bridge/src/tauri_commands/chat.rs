@@ -62,7 +62,7 @@ pub async fn desktop_session_snapshot(
         core.peer_records()
             .await
             .iter()
-            .any(|peer| peer.agent_did == agent_did && peer.is_bearer_pairing())
+            .any(|peer| peer.agent_did == agent_did && peer.is_enrollment())
             .then(|| core.principal().did().to_string())
     } else {
         None

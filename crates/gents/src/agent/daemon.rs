@@ -38,6 +38,52 @@ async fn finalize_request_failure(
     }
 }
 
+/// Authenticate the exact durable request immediately before claim. Admission
+/// rejection is terminalized here so no caller can accidentally continue into
+/// `claim_with_identity` or provider execution with the stale queued snapshot.
+pub(crate) async fn verify_request_at_claim_boundary(
+    verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
+    node: Arc<defra_node::EmbeddedNode>,
+    behavior_id: &str,
+    request: AgentRequest,
+) -> Option<AgentRequest> {
+    match verifier.verify_fresh(&request, behavior_id).await {
+        Ok(verified) => Some(verified),
+        Err(error) if error.is_denied() => {
+            let reason = format!("request admission denied: {error:#}");
+            record_current_claim_outcome("admission_denied");
+            record_current_request_outcome("admission_denied");
+            if let Err(persist_error) =
+                crate::request_admission::terminalize_pending_request_rejection(
+                    node.as_ref(),
+                    &request.doc_id,
+                    &request.agent_did,
+                    &reason,
+                    "terminalize_request_admission_rejection",
+                )
+                .await
+            {
+                tracing::error!(
+                    request_id = %request.request_id,
+                    error = %persist_error,
+                    "failed to terminalize rejected AgentRequest after bounded retries"
+                );
+            }
+            None
+        }
+        Err(error) => {
+            record_current_claim_outcome("admission_unavailable");
+            record_current_request_outcome("admission_retry");
+            tracing::warn!(
+                request_id = %request.request_id,
+                error = %error,
+                "request admission authority is temporarily unavailable; leaving request pending"
+            );
+            None
+        }
+    }
+}
+
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<AgentBehavior>,
@@ -59,6 +105,7 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     runtime_status: crate::runtime_status::RuntimeStatusHandle,
     slot_generation: u64,
     operator_tool_root: Option<PathBuf>,
+    request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
 }
 
 enum HandleRequestOutcome {
@@ -84,6 +131,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         startup_barrier: Arc<StartupBarrier>,
         runtime_status: crate::runtime_status::RuntimeStatusHandle,
         slot_generation: u64,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
     ) -> Self {
         let stream_writer = DefraStreamWriter::new(
             node.clone(),
@@ -124,6 +172,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             runtime_status,
             slot_generation,
             operator_tool_root: None,
+            request_admission,
         }
     }
 
@@ -252,11 +301,21 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         }
     }
 
-    async fn process_request(
+    pub(in crate::agent) async fn process_request(
         &mut self,
         request: AgentRequest,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
+        let Some(request) = verify_request_at_claim_boundary(
+            &self.request_admission,
+            self.node.clone(),
+            &self.behavior.behavior_id,
+            request,
+        )
+        .await
+        else {
+            return;
+        };
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
             &self.behavior.behavior_id,

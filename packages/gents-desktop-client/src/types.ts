@@ -1,11 +1,8 @@
 export type {
   BootstrapSummary,
-  BearerPairingRequest,
-  BearerPairingResponse,
-  BearerPairingResult,
+  EnrollmentRequestView,
   InitSummary,
   P2PHealth,
-  PeerAddRequest,
   SavedPeer,
 } from "./types/bootstrap.js";
 export type {
@@ -65,7 +62,7 @@ export type {
   InferenceProbeResult,
   InferenceProbeRequest,
   InferenceProfileSaveRequest,
-  PeerProbeRequest,
+  EnrollmentStatusRequest,
   PeerStatusFetchRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,

@@ -10,7 +10,7 @@ use tokio::sync::watch;
 use super::collection_resolver::CollectionResolver;
 use super::core::sync_state::ClientSyncStateOwner;
 use super::query::{
-    fetch_doc_patch, is_transcript_content_collection, isolate_legacy_bearer_rows,
+    fetch_doc_patch, is_transcript_content_collection,
     load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
     supports_doc_patch_collection,
 };
@@ -128,20 +128,7 @@ pub fn spawn_observer_with_selection(
 
                 let scope = selected_agent_did_rx.borrow().clone();
                 let peers = configured_peers.records();
-                let selected_is_legacy_remote = scope.as_deref().is_some_and(|did| {
-                    peers.iter().any(|peer| {
-                        peer.agent_did == did
-                            && peer
-                                .graphql
-                                .as_deref()
-                                .is_some_and(|value| !value.trim().is_empty())
-                    })
-                });
                 let result = match scope {
-                    _ if selected_is_legacy_remote => {
-                        load_full_snapshot_with_peer_records(node.as_ref(), &peers, &requester_did)
-                            .await
-                    }
                     Some(ref did) => {
                         load_agent_scoped_snapshot_with_peer_records(
                             node.as_ref(),
@@ -158,10 +145,9 @@ pub fn spawn_observer_with_selection(
                 };
                 match result {
                     Ok(snapshot) => {
-                        match (selected_is_legacy_remote, scope.as_deref()) {
-                            (true, _) => store.replace_snapshot(snapshot),
-                            (false, Some(did)) => store.replace_agent_snapshot(did, snapshot),
-                            (false, None) => store.replace_snapshot(snapshot),
+                        match scope.as_deref() {
+                            Some(did) => store.replace_agent_snapshot(did, snapshot),
+                            None => store.replace_snapshot(snapshot),
                         };
                         metrics_for_task
                             .scope_reloads
@@ -232,24 +218,7 @@ pub fn spawn_observer_with_selection(
                             // the removed row cannot remain visible until restart.
                             let scope = selected_agent_did_rx.borrow().clone();
                             let peers = configured_peers.records();
-                            let selected_is_legacy_remote = scope.as_deref().is_some_and(|did| {
-                                peers.iter().any(|peer| {
-                                    peer.agent_did == did
-                                        && peer
-                                            .graphql
-                                            .as_deref()
-                                            .is_some_and(|value| !value.trim().is_empty())
-                                })
-                            });
                             let reload = match scope.as_deref() {
-                                _ if selected_is_legacy_remote => {
-                                    load_full_snapshot_with_peer_records(
-                                        node.as_ref(),
-                                        &peers,
-                                        &requester_did,
-                                    )
-                                    .await
-                                }
                                 Some(did) => {
                                     load_agent_scoped_snapshot_with_peer_records(
                                         node.as_ref(),
@@ -269,15 +238,11 @@ pub fn spawn_observer_with_selection(
                                 }
                             };
                             match reload {
-                                Ok(snapshot) => match (selected_is_legacy_remote, scope.as_deref())
-                                {
-                                    (true, _) => {
-                                        store.replace_snapshot(snapshot);
-                                    }
-                                    (false, Some(did)) => {
+                                Ok(snapshot) => match scope.as_deref() {
+                                    Some(did) => {
                                         store.replace_agent_snapshot(did, snapshot);
                                     }
-                                    (false, None) => {
+                                    None => {
                                         store.replace_snapshot(snapshot);
                                     }
                                 },
@@ -290,9 +255,7 @@ pub fn spawn_observer_with_selection(
                                 }
                             }
                         } else {
-                            let mut rows = patch.to_rows();
-                            let peers = configured_peers.records();
-                            isolate_legacy_bearer_rows(&mut rows, &peers, &requester_did);
+                            let rows = patch.to_rows();
                             let response_only = collection_name == "AgentResponse";
                             let outcome = store.merge_observer_patch_with_outcome(
                                 ClientStore::from_rows(rows),

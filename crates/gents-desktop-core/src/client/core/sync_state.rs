@@ -111,61 +111,52 @@ impl ClientSyncStateOwner {
         self.directory.read().await.has_pending_removal(expected)
     }
 
-    pub(super) async fn upsert_saved_peer_with_graphql(
-        &self,
-        label: &str,
-        addr: &str,
-        agent_did: &str,
-        graphql: Option<&str>,
-        default_behavior_id: Option<&str>,
-    ) -> anyhow::Result<PeerRecord> {
-        let mut directory = self.directory.write().await;
-        let record = directory
-            .upsert_saved_peer_with_graphql(label, addr, agent_did, graphql, default_behavior_id)
-            .await?;
-        let records = directory.records().to_vec();
-        self.publish_persisted_directory(records);
-        Ok(record)
-    }
-
     pub(super) async fn upsert_local_standard_peer(
         &self,
         label: &str,
         addr: &str,
         agent_did: &str,
         graphql: &str,
+        agent_home: &str,
     ) -> anyhow::Result<PeerRecord> {
         let mut directory = self.directory.write().await;
         let record = directory
-            .upsert_local_standard_peer(label, addr, agent_did, graphql)
+            .upsert_local_standard_peer(label, addr, agent_did, graphql, agent_home)
             .await?;
         let records = directory.records().to_vec();
         self.publish_persisted_directory(records);
         Ok(record)
     }
 
-    pub(super) async fn upsert_bearer_peer(
+    pub(super) async fn upsert_enrollment_peer(
         &self,
+        peer_id: &str,
         label: &str,
         addr: &str,
         agent_did: &str,
         network_id: &str,
-        template: &str,
-        default_behavior_id: Option<&str>,
+        request_id: &str,
+        request_digest: &str,
+        admin_did: &str,
+        authorization_sequence: u64,
+        authorization_expires_at: &str,
     ) -> anyhow::Result<PeerRecord> {
         let mut directory = self.directory.write().await;
         let record = directory
-            .upsert_bearer_peer(
+            .upsert_enrollment_peer(
+                peer_id,
                 label,
                 addr,
                 agent_did,
                 network_id,
-                template,
-                default_behavior_id,
+                request_id,
+                request_digest,
+                admin_did,
+                authorization_sequence,
+                authorization_expires_at,
             )
             .await?;
-        let records = directory.records().to_vec();
-        self.publish_persisted_directory(records);
+        self.publish_persisted_directory(directory.records().to_vec());
         Ok(record)
     }
 
@@ -248,57 +239,6 @@ impl ClientSyncStateOwner {
         Ok(record)
     }
 
-    pub(super) async fn set_bearer_pairing_ready(
-        &self,
-        expected: &PeerRecord,
-        ready: bool,
-        last_error_patch: Option<LastErrorPatch>,
-    ) -> anyhow::Result<Option<PeerRecord>> {
-        let mut directory = self.directory.write().await;
-        if !directory.records().iter().any(|record| record == expected) {
-            return Ok(None);
-        }
-        let record = directory
-            .set_bearer_pairing_ready(&expected.peer_id, ready)
-            .await?;
-        if let Some(record) = record.as_ref() {
-            let mut records = directory.records().to_vec();
-            self.publish_persisted_directory_inner(
-                &mut records,
-                last_error_patch.map(|patch| (record.peer_id.clone(), patch)),
-            );
-        }
-        Ok(record)
-    }
-
-    #[cfg(test)]
-    async fn set_bearer_pairing_ready_with_publication_barrier(
-        &self,
-        expected: &PeerRecord,
-        ready: bool,
-        last_error_patch: Option<LastErrorPatch>,
-        persisted: Arc<tokio::sync::Notify>,
-        release: Arc<tokio::sync::Notify>,
-    ) -> anyhow::Result<Option<PeerRecord>> {
-        let mut directory = self.directory.write().await;
-        if !directory.records().iter().any(|record| record == expected) {
-            return Ok(None);
-        }
-        let record = directory
-            .set_bearer_pairing_ready(&expected.peer_id, ready)
-            .await?;
-        if let Some(record) = record.as_ref() {
-            let mut records = directory.records().to_vec();
-            persisted.notify_one();
-            release.notified().await;
-            self.publish_persisted_directory_inner(
-                &mut records,
-                last_error_patch.map(|patch| (record.peer_id.clone(), patch)),
-            );
-        }
-        Ok(record)
-    }
-
     pub(super) async fn queue_removal(
         &self,
         expected: &PeerRecord,
@@ -356,6 +296,7 @@ impl ClientSyncStateOwner {
     /// Patch one diagnostic only while both the durable peer generation and
     /// the previously observed diagnostic still match. Delayed projection
     /// work cannot use this path to overwrite newer supervisor state.
+    #[cfg(test)]
     pub(super) fn compare_and_set_last_error(
         &self,
         expected: &PeerRecord,
@@ -485,6 +426,8 @@ fn observation_generation_matches(previous: &PeerRecord, current: &PeerRecord) -
         && previous.source == current.source
         && previous.pairing_network_id == current.pairing_network_id
         && previous.pairing_template == current.pairing_template
+        && previous.enrollment_request_digest == current.enrollment_request_digest
+        && previous.enrollment_authorization_sequence == current.enrollment_authorization_sequence
         && previous.graphql == current.graphql
 }
 
@@ -571,7 +514,6 @@ mod tests {
         for (name, source) in [
             ("core", include_str!("../core.rs")),
             ("writes", include_str!("writes.rs")),
-            ("bearer_pairing", include_str!("bearer_pairing.rs")),
             ("route_manager", include_str!("route_manager.rs")),
             ("supervisor", include_str!("supervisor.rs")),
             ("observer", include_str!("../observe.rs")),
@@ -697,6 +639,7 @@ mod tests {
             "endpoint:other",
             "did:key:other",
             "http://127.0.0.1:1/api/v0/graphql",
+            "/tmp/test-agent-home",
         )
         .await
         .expect_err("live owner lease must reject an offline writer");
@@ -710,98 +653,11 @@ mod tests {
             "endpoint:other",
             "did:key:other",
             "http://127.0.0.1:1/api/v0/graphql",
+            "/tmp/test-agent-home",
         )
         .await
         .expect("offline initializer may write after live owner exits");
         assert_eq!(initialized.agent_did, "did:key:other");
-    }
-
-    #[tokio::test]
-    async fn stale_bearer_operation_cannot_ready_a_new_repair_generation() {
-        let mut old = record("a");
-        old.source = Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE.to_string());
-        old.pairing_network_id = Some("network-old".to_string());
-        old.pairing_template = Some("template-old".to_string());
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![old.clone()], vec![peer("a")]).await;
-        let persisted = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Notify::new());
-        let mut repaired = old.clone();
-        repaired.addr = "endpoint:a-new".to_string();
-        repaired.pairing_network_id = Some("network-new".to_string());
-        repaired.pairing_template = Some("template-new".to_string());
-        repaired.pairing_ready = false;
-
-        let repair_owner = owner.clone();
-        let repair_persisted = persisted.clone();
-        let repair_release = release.clone();
-        let repair_record = repaired.clone();
-        let repair = tokio::spawn(async move {
-            repair_owner
-                .upsert_with_publication_barrier(repair_record, repair_persisted, repair_release)
-                .await
-        });
-        persisted.notified().await;
-
-        let stale_owner = owner.clone();
-        let stale_expected = old.clone();
-        let stale = tokio::spawn(async move {
-            stale_owner
-                .set_bearer_pairing_ready(&stale_expected, true, None)
-                .await
-        });
-        tokio::task::yield_now().await;
-        assert!(
-            !stale.is_finished(),
-            "stale operation must serialize behind repair"
-        );
-
-        release.notify_one();
-        repair.await.unwrap().unwrap();
-        assert!(stale.await.unwrap().unwrap().is_none());
-        assert!(!owner.update_peer(&old, |status| status.dial_succeeded = true));
-        let snapshot = owner.snapshot();
-        assert_eq!(snapshot.directory[0].peer_id, repaired.peer_id);
-        assert_eq!(snapshot.directory[0].addr, repaired.addr);
-        assert_eq!(
-            snapshot.directory[0].pairing_network_id,
-            repaired.pairing_network_id
-        );
-        assert_eq!(
-            snapshot.directory[0].pairing_template,
-            repaired.pairing_template
-        );
-        assert!(!snapshot.directory[0].pairing_ready);
-        assert!(!snapshot.peers[0].dial_succeeded);
-    }
-
-    #[tokio::test]
-    async fn same_address_bearer_repair_resets_old_transport_observations() {
-        let mut old = record("a");
-        old.source = Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE.to_string());
-        old.pairing_network_id = Some("network-old".to_string());
-        old.pairing_template = Some("template-old".to_string());
-        let mut old_status = peer("a");
-        old_status.dial_succeeded = true;
-        let (_tempdir, owner) = ClientSyncStateOwner::for_test(vec![old], vec![old_status]).await;
-
-        let repaired = owner
-            .upsert_bearer_peer(
-                "a",
-                "endpoint:a",
-                "did:key:a",
-                "network-new",
-                "template-new",
-                None,
-            )
-            .await
-            .unwrap();
-
-        let snapshot = owner.snapshot();
-        assert_eq!(snapshot.directory, vec![repaired]);
-        assert!(!snapshot.directory[0].pairing_ready);
-        assert!(!snapshot.peers[0].dial_succeeded);
-        assert!(snapshot.peers[0].routes.is_empty());
     }
 
     #[tokio::test]
@@ -916,47 +772,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bearer_readiness_cannot_clear_a_newer_unrelated_error() {
-        let mut bearer = record("a");
-        bearer.source = Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE.to_string());
-        let mut initial_status = peer("a");
-        initial_status.last_error = Some("bearer readiness check failed: old".to_string());
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![bearer.clone()], vec![initial_status.clone()])
-                .await;
-        let persisted = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Notify::new());
-
-        let readiness_owner = owner.clone();
-        let readiness_expected = bearer.clone();
-        let readiness_persisted = persisted.clone();
-        let readiness_release = release.clone();
-        let readiness = tokio::spawn(async move {
-            readiness_owner
-                .set_bearer_pairing_ready_with_publication_barrier(
-                    &readiness_expected,
-                    true,
-                    Some((initial_status.last_error, None)),
-                    readiness_persisted,
-                    readiness_release,
-                )
-                .await
-        });
-        persisted.notified().await;
-
-        owner.update_peer(&bearer, |status| {
-            status.last_error = Some("transport disconnected".to_string());
-        });
-        release.notify_one();
-        readiness.await.unwrap().unwrap().expect("peer remains");
-
-        assert_eq!(
-            owner.snapshot().peers[0].last_error.as_deref(),
-            Some("transport disconnected")
-        );
-    }
-
-    #[tokio::test]
     async fn persisted_directory_insert_and_rotation_keep_conservative_status_invariant() {
         let (_tempdir, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
         let mut updates = owner.subscribe();
@@ -998,6 +813,63 @@ mod tests {
             vec!["a", "b"]
         );
         assert_eq!(snapshot.transport, P2PHealth::default());
+    }
+
+    #[tokio::test]
+    async fn enrollment_generation_rotation_resets_disk_and_watch_readiness() {
+        let (tempdir, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
+        let mut updates = owner.subscribe();
+        let first = owner
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Server",
+                "iroh://ticket",
+                "did:key:owner",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                1,
+                "2099-09-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        let ready = owner
+            .set_pairing_ready(&first, true)
+            .await
+            .unwrap()
+            .expect("enrollment remains configured");
+        assert!(ready.pairing_ready);
+        let rotated = owner
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Server",
+                "iroh://ticket",
+                "did:key:owner",
+                "network-b",
+                "request-b",
+                "digest-b",
+                "did:key:admin",
+                2,
+                "2099-10-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        assert!(!rotated.pairing_ready);
+        assert_eq!(rotated.pairing_network_id.as_deref(), Some("network-b"));
+        assert_eq!(
+            rotated.enrollment_request_digest.as_deref(),
+            Some("digest-b")
+        );
+        assert_eq!(rotated.enrollment_authorization_sequence, Some(2));
+        assert!(updates.has_changed().expect("watch remains open"));
+        let snapshot = updates.borrow_and_update().clone();
+        assert_eq!(snapshot.directory, vec![rotated.clone()]);
+        assert!(!snapshot.directory[0].pairing_ready);
+        let (persisted, _) = load_peer_directory_snapshot(&tempdir.path().join("peers.json"))
+            .await
+            .unwrap();
+        assert_eq!(persisted, vec![rotated]);
     }
 
     #[tokio::test]

@@ -72,7 +72,6 @@ fn manifest_with_subagent_targets(targets: Vec<SubagentTarget>) -> DesiredStateM
         inference_profiles: Vec::new(),
         tool_service_registries: Vec::new(),
         projection_acp_bindings: Vec::new(),
-        peer_pairings: Vec::new(),
         tasks: Vec::new(),
         schedules: Vec::new(),
         event_triggers: Vec::new(),

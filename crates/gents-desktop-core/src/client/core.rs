@@ -1,4 +1,3 @@
-pub(super) mod bearer_pairing;
 mod bootstrap;
 mod enrollment;
 mod p2p_ops;
@@ -32,7 +31,6 @@ use super::query::{
 };
 use crate::remote_admin::PairingErrorClass;
 
-pub use bearer_pairing::{BearerInvitePreview, BearerPairingResult};
 pub use enrollment::EnrollmentRequestResult;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
@@ -365,6 +363,7 @@ impl ClientCore {
                 "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
                 agent_did,
                 "http://127.0.0.1:56001/graphql",
+                "/tmp/test-agent-home",
             )
             .await?;
         Ok(())

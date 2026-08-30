@@ -12,8 +12,7 @@
   .fleet-brand,
   .fleet-header-actions,
   .fleet-row-actions,
-  .fleet-tool-icons,
-  .fleet-add-actions {
+  .fleet-tool-icons {
     display: flex;
     align-items: center;
   }
@@ -53,8 +52,7 @@
     padding: var(--space-2);
   }
 
-  .fleet-header-actions,
-  .fleet-add-actions {
+  .fleet-header-actions {
     justify-content: flex-end;
     gap: var(--space-4);
   }

@@ -1012,25 +1012,12 @@ Denies the desktop_p2p_repair command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-peer-add`
+`gents-desktop-bridge:allow-desktop-peer-enroll-status`
 
 </td>
 <td>
 
-Enables the desktop_peer_add command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-add`
-
-</td>
-<td>
-
-Denies the desktop_peer_add command without any pre-configured scope.
+Enables the desktop_peer_enroll_status command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1038,51 +1025,12 @@ Denies the desktop_peer_add command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-peer-pair-bearer`
+`gents-desktop-bridge:deny-desktop-peer-enroll-status`
 
 </td>
 <td>
 
-Enables the desktop_peer_pair_bearer command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-pair-bearer`
-
-</td>
-<td>
-
-Denies the desktop_peer_pair_bearer command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-peer-probe-address`
-
-</td>
-<td>
-
-Enables the desktop_peer_probe_address command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-probe-address`
-
-</td>
-<td>
-
-Denies the desktop_peer_probe_address command without any pre-configured scope.
+Denies the desktop_peer_enroll_status command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2057,7 +2005,7 @@ Workspace browser
 </td>
 <td>
 
-Peer add/remove/rename, bearer pairing, address probe, P2P repair
+Authenticated peer enrollment, removal/rename, and P2P repair
 
 </td>
 </tr>

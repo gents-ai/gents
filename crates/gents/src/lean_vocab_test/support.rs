@@ -57,6 +57,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     #[serde(default)]
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
+    #[serde(default)]
+    pub(crate) agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub(crate) frontend_client_shell_case_count: usize,
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) desktop_client_shell_case_count: usize,
@@ -491,11 +493,13 @@ pub(crate) struct LeanEnrollmentDurableProjectionCase {
     pub(crate) name: String,
     pub(crate) documents: Vec<LeanEnrollmentTraceStep>,
     pub(crate) expected_current_approval: bool,
+    pub(crate) expected_current_route_receipt: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) action: String,
+    pub(crate) peer_admission_did: String,
     pub(crate) offer_id: String,
     pub(crate) offer_challenge: String,
     pub(crate) offer_network_id: String,
@@ -528,6 +532,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) candidate_signed: bool,
     pub(crate) request_fresh: bool,
     pub(crate) decision_authorization_sequence: usize,
+    pub(crate) decision_authorization_expires_at: String,
     pub(crate) decision_signer_did: String,
     pub(crate) decision_kind: String,
     pub(crate) decision_request_id: String,
@@ -541,6 +546,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) decision_fresh: bool,
     pub(crate) revision_kind: String,
     pub(crate) revision_sequence: usize,
+    pub(crate) revision_authorization_expires_at: String,
     pub(crate) revision_signer_did: String,
     pub(crate) revision_request_id: String,
     pub(crate) revision_request_digest: String,
@@ -550,6 +556,20 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) revision_member_peer: String,
     pub(crate) revision_owner_agent: String,
     pub(crate) revision_admin_signed: bool,
+    pub(crate) receipt_request_id: String,
+    pub(crate) receipt_request_digest: String,
+    pub(crate) receipt_network_id: String,
+    pub(crate) receipt_admin_did: String,
+    pub(crate) receipt_member_did: String,
+    pub(crate) receipt_member_peer: String,
+    pub(crate) receipt_server_peer: String,
+    pub(crate) receipt_owner_agent: String,
+    pub(crate) receipt_authorization_sequence: usize,
+    pub(crate) receipt_authorization_expires_at: String,
+    pub(crate) receipt_direction: String,
+    pub(crate) receipt_signer_did: String,
+    pub(crate) receipt_admin_signed: bool,
+    pub(crate) receipt_applied: bool,
     pub(crate) observed_offer_count: usize,
     pub(crate) admin_pin_count: usize,
     pub(crate) challenge_binding_count: usize,
@@ -558,11 +578,13 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) decision_count: usize,
     pub(crate) authorization_count: usize,
     pub(crate) membership_count: usize,
+    pub(crate) receipt_count: usize,
     pub(crate) route_count: usize,
     pub(crate) request_accepted: bool,
     pub(crate) decision_recorded: bool,
     pub(crate) authorization_recorded: bool,
     pub(crate) revision_recorded: bool,
+    pub(crate) receipt_recorded: bool,
     pub(crate) membership_present: bool,
     pub(crate) client_route_present: bool,
     pub(crate) server_route_present: bool,
@@ -571,6 +593,7 @@ pub(crate) struct LeanEnrollmentTraceStep {
     pub(crate) challenge_binding_conflict: bool,
     pub(crate) request_binding_conflict: bool,
     pub(crate) current_approval: bool,
+    pub(crate) peer_admitted: bool,
     pub(crate) ready: bool,
     pub(crate) client_hydration_admits: bool,
     pub(crate) server_hydration_admits: bool,
@@ -595,6 +618,38 @@ pub(crate) struct LeanEnrollmentDigestCase {
     pub(crate) actual_digest: String,
     pub(crate) payload_matches: bool,
     pub(crate) digest_matches: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanAgentRequestAdmissionCase {
+    pub(crate) name: String,
+    pub(crate) observation_available: bool,
+    pub(crate) kind: String,
+    pub(crate) signature_valid: bool,
+    pub(crate) signed_fields_match: bool,
+    pub(crate) branch_fields_exact: bool,
+    pub(crate) pending_deadline_absent: bool,
+    pub(crate) signer_matches_requester: bool,
+    pub(crate) requester_matches_target: bool,
+    pub(crate) signer_matches_target: bool,
+    pub(crate) signer_matches_issuer: bool,
+    pub(crate) requester_matches_issuer: bool,
+    pub(crate) current_approval: bool,
+    pub(crate) exact_generation: bool,
+    pub(crate) authorization_fresh: bool,
+    pub(crate) runtime_evidence_present: bool,
+    pub(crate) runtime_source_kind: String,
+    pub(crate) target_runtime_attestation_valid: bool,
+    pub(crate) source_binding_current: bool,
+    pub(crate) trigger_config_document_binding_current: bool,
+    pub(crate) source_document_binding_current: bool,
+    pub(crate) source_tool_call_binding_current: bool,
+    pub(crate) target_policy_allows: bool,
+    pub(crate) bridge_author_binding_current: bool,
+    pub(crate) bridge_author_authorization_fresh: bool,
+    pub(crate) target_cross_deployment_policy_allows: bool,
+    pub(crate) expected_admitted: bool,
+    pub(crate) expected_disposition: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1320,6 +1375,10 @@ pub(crate) fn lean_enrollment_encoding_cases() -> &'static [LeanEnrollmentEncodi
 
 pub(crate) fn lean_enrollment_digest_cases() -> &'static [LeanEnrollmentDigestCase] {
     &lean_contract_snapshot().enrollment_digest_cases
+}
+
+pub(crate) fn lean_agent_request_admission_cases() -> &'static [LeanAgentRequestAdmissionCase] {
+    &lean_contract_snapshot().agent_request_admission_cases
 }
 
 pub(crate) fn lean_trigger_dispatch_case_count() -> usize {

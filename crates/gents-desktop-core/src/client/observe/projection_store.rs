@@ -205,13 +205,6 @@ impl ObservedStore {
         })
     }
 
-    pub fn replace_remote_agent_snapshot(&self, agent_did: &str, incoming: ClientStore) -> u64 {
-        let incoming = incoming.into_observer_projection();
-        self.update(false, |snapshot| {
-            snapshot.replace_remote_agent_scope(agent_did, incoming)
-        })
-    }
-
     /// Publish a structural database change without retaining its transcript
     /// payload in the process-wide observer. Consumers reconcile by issuing a
     /// bounded DefraDB projection for the selected session.

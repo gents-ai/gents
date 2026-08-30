@@ -10,7 +10,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::http::enrollment::EnrollmentOfferIssuerHandle;
+use crate::http::enrollment::{EnrollmentDecisionServiceHandle, EnrollmentOfferIssuerHandle};
 use crate::http::fleet::load_fleet_snapshot;
 use crate::http::fleet_slots::load_fleet_slot_snapshot;
 use crate::http::healthz::render_healthz_payload;
@@ -44,6 +44,7 @@ pub(crate) struct RuntimeHttpState {
     /// a shim at all (embedders, desktop).
     pub(crate) codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
     pub(crate) enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
+    pub(crate) enrollment_decisions: EnrollmentDecisionServiceHandle,
 }
 
 pub(crate) fn runtime_contract_router(
@@ -58,6 +59,7 @@ pub(crate) fn runtime_contract_router(
     p2p_admission: Option<P2pAdmissionState>,
     codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
     enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
+    enrollment_decisions: EnrollmentDecisionServiceHandle,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
@@ -78,6 +80,7 @@ pub(crate) fn runtime_contract_router(
         p2p_http_client,
         codex_shim_health,
         enrollment_offer_issuer,
+        enrollment_decisions,
     };
 
     let mut router = Router::new()
@@ -85,6 +88,8 @@ pub(crate) fn runtime_contract_router(
         .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
         .route("/status", get(status_handler))
+        .route("/enrollment/decisions", post(enrollment_decision_handler))
+        .route("/enrollment/pending", post(enrollment_pending_handler))
         .route("/self", get(self_handler))
         .route("/sessions", get(sessions_handler))
         .route("/fleet", get(fleet_handler))
@@ -111,6 +116,58 @@ pub(crate) fn runtime_contract_router(
     }
 
     router.with_state(state)
+}
+
+async fn enrollment_decision_handler(
+    State(state): State<RuntimeHttpState>,
+    axum::Json(command): axum::Json<gents_protocol::enrollment::EnrollmentOperatorDecisionCommand>,
+) -> Response {
+    let Some(service) = state.enrollment_decisions.read().await.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error": "enrollment authority is not ready"})),
+        )
+            .into_response();
+    };
+    match service.decide(&command).await {
+        Ok(outcome) => (
+            StatusCode::OK,
+            axum::Json(json!({
+                "request_id": outcome.request_id,
+                "state": outcome.state,
+                "decision_doc_id": outcome.decision_doc_id,
+                "revision_doc_id": outcome.revision_doc_id,
+                "delivery_pending": outcome.delivery_pending,
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn enrollment_pending_handler(
+    State(state): State<RuntimeHttpState>,
+    axum::Json(command): axum::Json<gents_protocol::enrollment::EnrollmentOperatorQueryCommand>,
+) -> Response {
+    let Some(service) = state.enrollment_decisions.read().await.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error": "enrollment authority is not ready"})),
+        )
+            .into_response();
+    };
+    match service.pending(&command).await {
+        Ok(pending) => (StatusCode::OK, axum::Json(json!({"pending": pending}))).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
@@ -538,6 +595,7 @@ mod tests {
             p2p_http_client: reqwest::Client::new(),
             codex_shim_health: None,
             enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
+            enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
         }
     }
 

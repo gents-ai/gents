@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 use crate::cli::args::ChatArgs;
 use crate::cli::output_format::OutputFormat;
+use crate::request_helpers::ensure_local_request_signer;
 use crate::{
     create_agent_request, print_json, require_non_empty, resolve_home_dir,
     wait_for_terminal_response, write_json_output_file, RequestSubmitOptions, SubmittedRequest,
@@ -40,6 +41,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    ensure_local_request_signer(args.home.as_deref(), &agent_did)?;
 
     if let Some(message) = resolve_chat_message(&args.message, args.message_file.as_deref())? {
         match args

@@ -508,46 +508,38 @@ pub(super) async fn create_agent_request_for_behavior(
     session_id: &str,
     content: &str,
 ) -> String {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(behavior_id.unwrap_or_default());
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_content = escape_graphql_string(content);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "{escaped_content}",
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    let identity = crate::identity::RegisteredIdentity::from_registered_did(agent_did, None)
+        .expect("registered runtime test identity");
+    let behavior_id = behavior_id
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| crate::default_behavior_id_for_agent(agent_did));
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id,
+        agent_did,
+        agent_did,
+        behavior_id,
+        session_id,
+        content,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did),
     );
-    let response = node.execute(&mutation).await;
+    crate::sign_agent_request_create(&identity, &mut create)
+        .await
+        .expect("sign runtime test AgentRequest");
+    let response = node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(
         !response.has_errors(),
-        "create_AgentRequest failed: {:?}",
+        "create signed AgentRequest failed: {:?}",
         response.errors
     );
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                 _docID
             }}
-        }}"#
+        }}"#,
+        escape_graphql_string(request_id),
     );
     let response = node.execute(&query).await;
     assert!(

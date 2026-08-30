@@ -35,7 +35,6 @@ fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnap
         generation,
         principal: None,
         local_did: String::new(),
-        paired_peer_dids: HashSet::new(),
         default_behavior_id: default_behavior_id.to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -88,7 +87,6 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
     let resolved = ResolvedRuntimeSnapshot {
         principal: None,
         local_did: "did:local".to_string(),
-        paired_peer_dids: HashSet::from(["did:peer".to_string()]),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -113,7 +111,6 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
     assert_eq!(active.generation, 1);
     assert_eq!(active.default_behavior_id, "general");
     assert_eq!(active.local_did, "did:local");
-    assert!(active.paired_peer_dids.contains("did:peer"));
     assert!(active.dispatchers.contains_key("general"));
     assert_eq!(
         active.unavailable_diagnostic("code"),
@@ -126,7 +123,6 @@ fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
     let mut resolved = ResolvedRuntimeSnapshot {
         principal: None,
         local_did: String::new(),
-        paired_peer_dids: HashSet::new(),
         default_behavior_id: "missing".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -184,7 +180,6 @@ fn configuration_fingerprint_reflects_schedule_set() {
     let base = ResolvedRuntimeSnapshot {
         principal: None,
         local_did: String::new(),
-        paired_peer_dids: HashSet::new(),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -209,6 +204,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
         HashMap::from([(
             "s1".to_string(),
             ResolvedSchedule {
+                trigger_doc_id: "s1-doc".to_string(),
                 schedule_id: "s1".to_string(),
                 task_id: "t1".to_string(),
                 task: task.clone(),
@@ -232,7 +228,6 @@ fn configuration_fingerprint_reflects_approval_and_lsp_configuration() {
     let base = ResolvedRuntimeSnapshot {
         principal: None,
         local_did: String::new(),
-        paired_peer_dids: HashSet::new(),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::from([(

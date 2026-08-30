@@ -60,8 +60,6 @@ pub(super) struct SessionQueueRow {
     pub(super) doc_id: String,
     pub(super) status: String,
     pub(super) lifecycle_state: Option<String>,
-    pub(super) execution_origin: Option<String>,
-    pub(super) metadata: Option<String>,
 }
 
 impl SessionQueueRow {
@@ -71,13 +69,6 @@ impl SessionQueueRow {
 
     pub(super) fn is_active_non_pending(&self) -> bool {
         !self.is_pending()
-    }
-
-    pub(super) fn is_deprecated_background_completion_wakeup(&self) -> bool {
-        crate::lifecycle::queue::is_deprecated_background_completion_wakeup(
-            self.execution_origin.as_deref(),
-            self.metadata.as_deref(),
-        )
     }
 }
 
@@ -101,20 +92,12 @@ impl AgentRequestRow {
         })
     }
 
-    pub(super) fn is_deprecated_background_completion_wakeup(&self) -> bool {
-        crate::lifecycle::queue::is_deprecated_background_completion_wakeup(
-            self.execution_origin.as_deref(),
-            self.metadata.as_deref(),
-        )
-    }
-
     pub(super) fn is_aged_background_completion_wakeup(
         &self,
         now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         if self.execution_origin.as_deref() != Some("scheduled")
             || !crate::lifecycle::queue::is_automated_wakeup(self.metadata.as_deref())
-            || self.is_deprecated_background_completion_wakeup()
         {
             return false;
         }

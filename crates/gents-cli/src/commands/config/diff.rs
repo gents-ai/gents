@@ -30,16 +30,10 @@ pub(crate) async fn diff_bound_desired_manifest(
     bound: &super::binding::BoundDesiredManifest,
 ) -> Result<desired_state::DesiredStateDiffReport> {
     let desired_manifest = &bound.manifest;
-    let live_validation_errors =
-        desired_state::validate::validate_peer_pairing_ownership_against_live(
-            desired_manifest,
-            access,
-        )
-        .await?;
     let live_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (live_principal, live_manifest) =
         live_manifest_from_bundle(desired_manifest, &live_bundle)?;
-    let mut report = desired_state::diff_manifests(
+    let report = desired_state::diff_manifests(
         root,
         access.mode(),
         desired_manifest,
@@ -47,9 +41,5 @@ pub(crate) async fn diff_bound_desired_manifest(
         &live_manifest,
         false,
     );
-    if !live_validation_errors.is_empty() {
-        report.ok = false;
-        report.live_validation_errors = live_validation_errors;
-    }
     Ok(report)
 }

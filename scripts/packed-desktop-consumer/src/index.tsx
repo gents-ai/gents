@@ -8,10 +8,7 @@ import {
   type DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
 import type { BridgeContract } from "@source-inc/gents-desktop-client/generated/BridgeContract";
-import {
-  FleetDashboard,
-  parsePeerConnectionJson,
-} from "@source-inc/gents-desktop-fleet";
+import { FleetDashboard } from "@source-inc/gents-desktop-fleet";
 import {
   InferenceSetupWizard,
   LocalRuntimeConnect,
@@ -28,12 +25,6 @@ const store = createDesktopStore(client);
 const generatedContract: BridgeContract | null = null;
 const publicSnapshot: DesktopClientSnapshot | null = null;
 const timestamp = formatMessageTime("2026-07-27T00:00:00Z");
-const parsed = parsePeerConnectionJson(
-  JSON.stringify({
-    agent_did: "did:key:z6MkPackedConsumer",
-    p2p_shareable_address: "/ip4/127.0.0.1/tcp/9171",
-  }),
-);
 
 const publicComponents: ReactNode[] = [
   <ChatComposer
@@ -72,6 +63,5 @@ void store;
 void generatedContract;
 void publicSnapshot;
 void timestamp;
-void parsed;
 void publicComponents;
 void NARROW_BREAKPOINT_PX;

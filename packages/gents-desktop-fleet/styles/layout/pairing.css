@@ -4,17 +4,6 @@
     gap: var(--space-5);
   }
 
-  .fleet-bearer-form {
-    display: grid;
-    grid-template-columns: minmax(180px, 0.6fr) minmax(280px, 1.4fr) auto;
-    gap: var(--space-5);
-    align-items: end;
-    padding: var(--space-5);
-    border: 1px solid rgb(var(--color-accent-rgb) / 0.3);
-    border-radius: var(--radius-lg);
-    background: rgb(var(--color-accent-rgb) / 0.06);
-  }
-
   .fleet-status-form {
     display: grid;
     gap: var(--space-5);
@@ -30,8 +19,7 @@
     gap: var(--space-2);
   }
 
-  .fleet-pairing-copy h3,
-  .fleet-qr-dialog h3 {
+  .fleet-pairing-copy h3 {
     margin: 0;
   }
 
@@ -40,120 +28,12 @@
     max-width: 68ch;
   }
 
-  .fleet-bearer-token-field textarea {
-    min-height: 64px;
-    resize: vertical;
-  }
-
-  .fleet-pair-actions {
-    display: flex;
-    gap: var(--space-3);
-    align-items: center;
-  }
-
-  .fleet-pairing-success {
-    grid-column: 1 / -1;
-    margin: 0;
-    color: var(--color-accent);
-    font-size: var(--text-sm);
-  }
-
-  .fleet-manual-disclosure,
-  .fleet-alternative-disclosure {
-    border-top: 1px solid var(--border-subtle);
-    padding-top: var(--space-4);
-  }
-
-  .fleet-manual-disclosure > summary,
-  .fleet-alternative-disclosure > summary {
-    width: fit-content;
-    cursor: pointer;
-    color: var(--color-text-muted);
-  }
-
-  .fleet-manual-disclosure > p,
-  .fleet-alternative-disclosure > .fleet-bearer-form {
-    margin: var(--space-3) 0 var(--space-5);
-  }
-
-  .fleet-qr-backdrop {
-    position: fixed;
-    z-index: 1000;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    padding: var(--space-5);
-    background: rgb(var(--scrim-rgb) / 0.78);
-  }
-
-  .fleet-qr-dialog {
-    width: min(520px, 100%);
-    display: grid;
-    gap: var(--space-4);
-  }
-
-  .fleet-qr-dialog header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--space-4);
-  }
-
-  .fleet-qr-viewport {
-    position: relative;
-    overflow: hidden;
-    min-height: 280px;
-    border-radius: var(--radius-md);
-    background: var(--color-bg);
-  }
-
-  .fleet-qr-viewport video {
-    display: block;
-    width: 100%;
-    min-height: 280px;
-    object-fit: cover;
-  }
-
-  .fleet-qr-guide {
-    position: absolute;
-    inset: 12%;
-    border: 2px solid rgb(var(--color-accent-rgb) / 0.9);
-    border-radius: var(--radius-md);
-    outline: 999px solid rgb(var(--scrim-rgb) / 0.16);
-  }
-
-  .fleet-qr-dialog canvas {
-    display: none;
-  }
-
-  .fleet-add-form {
-    display: grid;
-    grid-template-columns:
-      minmax(160px, 0.75fr) minmax(240px, 1fr) minmax(340px, 1.4fr)
-      auto;
-    gap: var(--space-5);
-    align-items: end;
-  }
-
   .fleet-discovery-row {
     grid-column: 1 / -1;
     display: grid;
     grid-template-columns: minmax(260px, 1fr) auto;
     gap: var(--space-5);
     align-items: end;
-  }
-
-  .fleet-add-form > .field {
-    min-width: 0;
-  }
-
-  .fleet-import-field {
-    grid-column: 1 / -1;
-  }
-
-  .fleet-import-field textarea {
-    min-height: 84px;
-    resize: vertical;
   }
 
   .fleet-import-status {
@@ -179,21 +59,8 @@
     gap: var(--space-7);
   }
 
-  .fleet-empty-card .fleet-add-form {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .fleet-empty-card .fleet-discovery-row {
     grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .fleet-empty-card .fleet-add-actions {
-    grid-column: 1 / -1;
-    justify-content: flex-end;
-  }
-
-  .fleet-empty-card .fleet-add-actions .primary-button {
-    min-width: 184px;
   }
 
   .fleet-empty-copy {

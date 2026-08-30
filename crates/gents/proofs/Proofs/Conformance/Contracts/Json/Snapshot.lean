@@ -78,6 +78,8 @@ def snapshotJson : String :=
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
       ++ enrollmentDigestCasesJson ++ ","
+    ++ "\"agent_request_admission_cases\":"
+      ++ agentRequestAdmissionCasesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"

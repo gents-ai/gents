@@ -17,18 +17,6 @@ pub struct ManagedServerStartRequest {
     pub agent_name: String,
 }
 
-#[derive(Debug, Clone, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerAddRequest {
-    pub label: String,
-    pub agent_did: String,
-    pub addr: String,
-    #[serde(default)]
-    pub graphql: Option<String>,
-    #[serde(default)]
-    pub default_behavior_id: Option<String>,
-}
-
 /// Fetch peer runtime status by **saved peer id** only — read grants never
 /// accept arbitrary addresses (SSRF).
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -37,20 +25,12 @@ pub struct PeerStatusFetchRequest {
     pub peer_id: String,
 }
 
-/// Fleet-admin probe of an arbitrary address before the peer is saved.
-/// Lives only in `fleet-admin` — not a read grant.
+/// Fleet-admin request to authenticate a server status offer and author a
+/// pending enrollment request. Lives only in `fleet-admin`.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct PeerProbeRequest {
+pub struct EnrollmentStatusRequest {
     pub server_address: String,
-}
-
-#[derive(Debug, Clone, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct BearerPairingRequest {
-    pub token: String,
-    #[serde(default)]
-    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

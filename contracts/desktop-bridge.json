@@ -105,14 +105,6 @@
       "permissionSet": "workspace-read"
     },
     {
-      "name": "desktop_peer_add",
-      "permissionSet": "fleet-admin"
-    },
-    {
-      "name": "desktop_peer_pair_bearer",
-      "permissionSet": "fleet-admin"
-    },
-    {
       "name": "desktop_peer_remove",
       "permissionSet": "fleet-admin"
     },
@@ -121,7 +113,7 @@
       "permissionSet": "fleet-admin"
     },
     {
-      "name": "desktop_peer_probe_address",
+      "name": "desktop_peer_enroll_status",
       "permissionSet": "fleet-admin"
     },
     {
@@ -289,7 +281,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "3.0",
+  "contractVersion": "4.0",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -424,5 +416,5 @@
       "name": "full"
     }
   ],
-  "wireSchemaHash": "3dbcd688a022f9e16e653d83039ca148ad2b89da8ede781ea0f65755dba5be18"
+  "wireSchemaHash": "88444c308e1d96ecf2bc8589f141ec99bd38e330965ad8dfe0b3f63339144afe"
 }

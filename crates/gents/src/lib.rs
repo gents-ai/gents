@@ -91,6 +91,10 @@ pub mod prompt;
 pub mod provider_context_reduction;
 pub(crate) mod registry;
 pub mod rendered_request;
+mod request_admission;
+pub use request_admission::{
+    sign_agent_request_create, sign_agent_request_create_as_registered_target,
+};
 pub(crate) mod request_binding;
 pub mod retry;
 pub mod run_timeline;

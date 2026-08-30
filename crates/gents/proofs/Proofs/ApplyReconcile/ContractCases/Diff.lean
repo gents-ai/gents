@@ -58,7 +58,7 @@ def diffDelete (scenario : ApplyReconcileScenario) : List DocRef :=
   productionPruneOrder.flatMap fun collection =>
     (sortedDocRefs <|
       scenario.preDesired.filterMap fun doc =>
-        if (scenario.pruneMode || collection.manifestAuthoritative) &&
+        if scenario.pruneMode &&
             collectionBEq doc.ref.collection collection &&
             !(containsDoc scenario.manifest doc.ref) &&
             noDesiredDocReferencesTarget scenario.preDesired doc.ref then

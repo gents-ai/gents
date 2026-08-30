@@ -137,9 +137,12 @@ impl LiveBridgeFixture {
             remote_core.as_ref(),
             DEFAULT_DEPLOYMENT_LABEL,
         ))?;
-        let mut peer_record =
-            PeerRecord::new(DEFAULT_DEPLOYMENT_LABEL, &remote_addr, &running_agent.did);
-        peer_record.source = Some("local-standard".to_string());
+        let mut peer_record = PeerRecord::local_standard(
+            DEFAULT_DEPLOYMENT_LABEL,
+            &remote_addr,
+            &running_agent.did,
+            "http://127.0.0.1:1/graphql",
+        );
         // This fixture owns both nodes and installs both directional
         // replicators below. Keep the durable route truthful while the normal
         // supervisor is intentionally disabled for this manually managed
@@ -185,7 +188,6 @@ impl LiveBridgeFixture {
         let init_summary = DesktopInitSummary {
             status: "initialized",
             source: "bridge-runner",
-            status_endpoint: None,
             agent_home: agent_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
             peer_directory: desktop_paths.peer_directory_path().display().to_string(),
@@ -287,7 +289,6 @@ impl LiveBridgeFixture {
         let init_summary = DesktopInitSummary {
             status: "initialized",
             source: "bridge-runner-desktop-only",
-            status_endpoint: None,
             agent_home: agent_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
             peer_directory: desktop_paths.peer_directory_path().display().to_string(),

@@ -101,6 +101,7 @@ impl ResolvedTask {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedSchedule {
+    pub trigger_doc_id: String,
     pub schedule_id: String,
     #[allow(dead_code)]
     pub task_id: String,
@@ -193,6 +194,7 @@ impl ConcurrencyMode {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedEventTrigger {
+    pub trigger_doc_id: String,
     pub trigger_id: String,
     #[allow(dead_code)]
     pub task_id: String,
@@ -216,7 +218,6 @@ pub struct ResolvedEventTrigger {
 pub(crate) struct ResolvedRuntimeSnapshot {
     pub(crate) principal: Option<Arc<AgentPrincipal>>,
     pub(crate) local_did: String,
-    pub(crate) paired_peer_dids: HashSet<String>,
     pub(crate) default_behavior_id: String,
     pub(crate) behaviors: HashMap<String, Arc<AgentBehavior>>,
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
@@ -302,7 +303,6 @@ impl ResolvedRuntimeSnapshot {
         Self {
             principal: None,
             local_did: String::new(),
-            paired_peer_dids: HashSet::new(),
             default_behavior_id,
             behaviors: behaviors
                 .into_iter()
@@ -326,11 +326,6 @@ impl ResolvedRuntimeSnapshot {
 
     pub(crate) fn with_local_did(mut self, local_did: String) -> Self {
         self.local_did = local_did;
-        self
-    }
-
-    pub(crate) fn with_paired_peer_dids(mut self, paired_peer_dids: HashSet<String>) -> Self {
-        self.paired_peer_dids = paired_peer_dids;
         self
     }
 
@@ -398,7 +393,6 @@ impl ResolvedRuntimeSnapshot {
             generation,
             principal: self.principal,
             local_did: self.local_did,
-            paired_peer_dids: self.paired_peer_dids,
             default_behavior_id: self.default_behavior_id,
             behaviors: self.behaviors,
             tool_surfaces: self.tool_surfaces,
@@ -419,7 +413,6 @@ impl ResolvedRuntimeSnapshot {
         configuration_fingerprint(
             &self.default_behavior_id,
             &self.local_did,
-            &self.paired_peer_dids,
             &self.behaviors,
             &self.tool_surfaces,
             &self.backend_admission_configs,
@@ -438,7 +431,6 @@ pub struct ActiveRuntimeSnapshot {
     pub generation: u64,
     pub principal: Option<Arc<AgentPrincipal>>,
     pub local_did: String,
-    pub paired_peer_dids: HashSet<String>,
     pub default_behavior_id: String,
     pub behaviors: HashMap<String, Arc<AgentBehavior>>,
     pub tool_surfaces: HashMap<String, Arc<ToolSurface>>,
@@ -539,7 +531,6 @@ impl ActiveRuntimeSnapshot {
         configuration_fingerprint(
             &self.default_behavior_id,
             &self.local_did,
-            &self.paired_peer_dids,
             &self.behaviors,
             &self.tool_surfaces,
             &self.backend_admission_configs,
@@ -571,7 +562,6 @@ pub(crate) fn refresh_active_snapshot(
 fn configuration_fingerprint(
     default_behavior_id: &str,
     local_did: &str,
-    paired_peer_dids: &HashSet<String>,
     behaviors: &HashMap<String, Arc<AgentBehavior>>,
     tool_surfaces: &HashMap<String, Arc<ToolSurface>>,
     backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
@@ -585,14 +575,6 @@ fn configuration_fingerprint(
     let mut fingerprint = String::new();
     fingerprint.push_str("local_did:");
     fingerprint.push_str(local_did);
-    fingerprint.push('\n');
-    fingerprint.push_str("paired_peer_dids:");
-    let mut paired = paired_peer_dids.iter().collect::<Vec<_>>();
-    paired.sort();
-    for did in paired {
-        fingerprint.push_str(did);
-        fingerprint.push(',');
-    }
     fingerprint.push('\n');
     fingerprint.push_str("default:");
     fingerprint.push_str(default_behavior_id);

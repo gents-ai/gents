@@ -20,6 +20,8 @@ mod client_authored_collections_fence;
 mod descendant_graph;
 #[path = "misc/goal_controller.rs"]
 mod goal_controller;
+#[path = "misc/legacy_authority_absence.rs"]
+mod legacy_authority_absence;
 #[path = "misc/log_rate_filter.rs"]
 mod log_rate_filter;
 #[path = "misc/startup_readiness_barrier.rs"]

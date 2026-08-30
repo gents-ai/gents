@@ -107,8 +107,8 @@ pub fn references_of(payload: &DesiredFields) -> Vec<DocRef> {
     payload.refs.clone()
 }
 
-/// Default convergence diff. Mirrors Lean `diffManaged`: writes manifest rows
-/// and retracts absent rows only for manifest-authoritative collections.
+/// Default convergence diff writes manifest rows without deleting live-only
+/// documents. Destructive pruning is an explicit operator mode.
 pub fn diff(m: &Manifest, l: &LiveState) -> DiffReport {
     diff_inner(m, l, false)
 }
@@ -142,7 +142,7 @@ fn diff_inner(m: &Manifest, l: &LiveState, prune: bool) -> DiffReport {
             }
             (None, Some(_)) => {
                 live_only.push((*d).clone());
-                if (prune || d.collection.manifest_authoritative()) && delete_safe(l, d) {
+                if prune && delete_safe(l, d) {
                     delete.push((*d).clone());
                 }
             }
@@ -331,25 +331,6 @@ mod tests {
         let after = apply_all(&l, prune_report.steps());
         assert!(!after.desired.contains_key(&backend));
         assert_eq!(after.live, l.live);
-    }
-
-    #[test]
-    fn default_diff_retracts_manifest_authoritative_pairing() {
-        let pairing = DocRef {
-            collection: Collection::PeerPairingDesired,
-            id: "peer".into(),
-        };
-        let m = Manifest {
-            docs: BTreeMap::new(),
-        };
-        let l = LiveState {
-            desired: BTreeMap::from([(pairing.clone(), DesiredFields::opaque("owned"))]),
-            live: BTreeMap::new(),
-        };
-
-        let report = diff(&m, &l);
-        assert_eq!(report.delete, vec![pairing.clone()]);
-        assert_eq!(report.steps(), &[ApplyStep::Delete(pairing)]);
     }
 
     #[test]

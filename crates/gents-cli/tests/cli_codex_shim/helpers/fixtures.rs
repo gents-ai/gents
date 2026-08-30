@@ -525,12 +525,17 @@ pub(super) async fn update_request_lifecycle(
 
 pub(super) async fn seed_background_completion_wake(
     graphql: &str,
-    agent_did: &str,
+    identity: &dyn gents::AgentIdentity,
     behavior_id: &str,
     session_id: &str,
 ) -> Result<String> {
+    let agent_did = identity.did();
+    let source_request_id = Uuid::new_v4().to_string();
     let request_id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
+    let source_created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let wake_created_at = (chrono::DateTime::parse_from_rfc3339(&source_created_at)?
+        + chrono::Duration::seconds(1))
+    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let metadata = serde_json::to_string(&json!({
         "queue": {
             "source": "background_completion",
@@ -540,38 +545,74 @@ pub(super) async fn seed_background_completion_wake(
         },
         "background_completion_wake_version": 1
     }))?;
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "{content}",
-                metadata: "{metadata}",
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "scheduled",
-                failure_reason: "",
-                created_at: "{now}",
-                retry_count: 0,
-                max_retries: 3,
-                subagent_depth: 0
-            }}) {{ _docID }}
-        }}"#,
-        request_id = escape_graphql_string(&request_id),
-        agent_did = escape_graphql_string(agent_did),
-        behavior_id = escape_graphql_string(behavior_id),
-        session_id = escape_graphql_string(session_id),
-        content =
-            escape_graphql_string(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT),
-        metadata = escape_graphql_string(&metadata),
-        now = escape_graphql_string(&now),
+    let mut source = gents_protocol::request_admission::AgentRequestCreate::base(
+        &source_request_id,
+        agent_did,
+        agent_did,
+        behavior_id,
+        session_id,
+        "completed source for background continuation",
+        "interactive",
+        &source_created_at,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did),
     );
-    graphql_query(graphql, &mutation).await?;
+    gents::sign_agent_request_create(identity, &mut source).await?;
+    let source_fields = source.graphql_input_fields().map_err(anyhow::Error::msg)?;
+    // Publish the source and terminalize it in one DefraDB transaction so the
+    // live watcher can never observe this fixture-only source as executable.
+    let source_response = graphql_query(
+        graphql,
+        &format!(
+            r#"mutation {{
+                source: create_AgentRequest(input: {{ {source_fields} }}) {{ _docID }}
+                terminal: update_AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{}" }} }},
+                    input: {{ status: "completed", lifecycle_state: "completed" }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&source_request_id),
+        ),
+    )
+    .await?;
+    let source_doc_id = source_response
+        .pointer("/data/source")
+        .and_then(|value| {
+            value.get("_docID").or_else(|| {
+                value
+                    .as_array()
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| row.get("_docID"))
+            })
+        })
+        .and_then(serde_json::Value::as_str)
+        .with_context(|| {
+            format!("signed background source mutation returned no _docID: {source_response}")
+        })?;
+
+    let admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
+            agent_did,
+            &source_request_id,
+        );
+    let mut wake = gents_protocol::request_admission::AgentRequestCreate::base(
+        &request_id,
+        agent_did,
+        agent_did,
+        behavior_id,
+        session_id,
+        gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+        "scheduled",
+        &wake_created_at,
+        admission,
+    );
+    wake.metadata = Some(metadata);
+    wake.caused_by_parent_request_id = Some(source_request_id);
+    wake.caused_by_parent_request_doc_id = Some(source_doc_id.to_string());
+    gents::sign_agent_request_create(identity, &mut wake).await?;
+    graphql_query(
+        graphql,
+        &wake.graphql_mutation().map_err(anyhow::Error::msg)?,
+    )
+    .await?;
     Ok(request_id)
 }

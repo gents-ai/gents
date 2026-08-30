@@ -637,6 +637,7 @@ pub(crate) async fn serve_with_control(
     let bind_probe_token = Uuid::new_v4().simple().to_string();
     let bind_probe_path = format!("/_gents/http-bind/{}", Uuid::new_v4().simple());
     let enrollment_offer_issuer = crate::http::enrollment::empty_issuer_handle();
+    let enrollment_decisions = crate::http::enrollment::empty_decision_service_handle();
     let extra_routes = runtime_contract_router(
         graphql_url.clone(),
         agent_name.clone(),
@@ -646,6 +647,7 @@ pub(crate) async fn serve_with_control(
         p2p_admission_state.clone(),
         Some(codex_shim_health.clone()),
         enrollment_offer_issuer.clone(),
+        enrollment_decisions.clone(),
     )
     .merge(embedded_http_probe_router(
         &bind_probe_path,
@@ -679,6 +681,9 @@ pub(crate) async fn serve_with_control(
     )
     .await
     .context("ensuring authenticated enrollment network")?;
+    *enrollment_decisions.write().await = Some(
+        crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
+    );
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
     let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
     let (configuration_tx, mut configuration_rx) =

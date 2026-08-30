@@ -458,7 +458,7 @@ async fn spawn_subagent_bind_id_stamps_existing_workspace() {
         "abc123",
         "topic",
         &placement,
-        "did:test:r4-spawn_ws_bind",
+        &fixture.agent_did,
     )
     .await;
 

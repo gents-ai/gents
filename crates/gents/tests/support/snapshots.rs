@@ -4,15 +4,25 @@ use serde::Deserialize;
 
 use super::{first_optional_row, first_row};
 
+fn null_string_default<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RequestSnapshotRow {
     status: String,
     lifecycle_state: String,
     behavior_id: String,
+    #[serde(deserialize_with = "null_string_default")]
     backend_id: String,
     execution_origin: String,
+    #[serde(deserialize_with = "null_string_default")]
     retry_parent_request: String,
     retry_root_request: String,
+    #[serde(deserialize_with = "null_string_default")]
     superseded_by_request: String,
     retry_count: i64,
     max_retries: i64,

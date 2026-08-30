@@ -32,6 +32,7 @@ async fn live_core_persists_managed_server_peer_through_watched_owner() -> Resul
             "endpoint:managed",
             "did:key:managed",
             "http://127.0.0.1:9191/api/v0/graphql",
+            "/tmp/test-agent-home",
         )
         .await?;
 
@@ -69,6 +70,7 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
     let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
     let agent_did = "did:test:amy";
+    persist_local_route(&core, agent_did).await?;
     let session_id = "session-with-local-failed-turn";
     let response = core
         .node()
@@ -205,6 +207,7 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
     let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
     let agent_did = "did:test:amy";
+    persist_local_route(&core, agent_did).await?;
     let session_id = "session-rejected";
     let other_session_id = "session-other";
     let request_key =
@@ -349,6 +352,18 @@ async fn hydration_request_status(core: &ClientCore, request_key: &str) -> Resul
         .and_then(|row| row.get("status"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string))
+}
+
+async fn persist_local_route(core: &ClientCore, agent_did: &str) -> Result<()> {
+    core.persist_local_standard_peer(
+        "Hydration test runtime",
+        "endpoint:hydration-test",
+        agent_did,
+        "http://127.0.0.1:9191/api/v0/graphql",
+        "/tmp/test-agent-home",
+    )
+    .await?;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

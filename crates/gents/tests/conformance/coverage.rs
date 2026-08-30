@@ -120,7 +120,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 8);
     assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
-    assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 10);
+    assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 18);
     assert_eq!(
         lean_contract_snapshot()
@@ -1096,6 +1096,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "EnrollmentDigestCases".to_string(),
         ));
     }
+    if !snapshot.agent_request_admission_cases.is_empty() {
+        emitted.insert((
+            "agent_request_admission_cases".to_string(),
+            "AgentRequestAdmissionCases".to_string(),
+        ));
+    }
     for hook in &snapshot.follow_up_hooks {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
@@ -1184,6 +1190,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "enrollment_cases",
         "enrollment_encoding_cases",
         "enrollment_digest_cases",
+        "agent_request_admission_cases",
         "follow_up_hook",
     ];
     let registered_consumers = assert_registered_conformance_consumers_resolve();

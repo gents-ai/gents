@@ -11,8 +11,9 @@ use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
-    create_runtime_request, wait_for_request_lifecycle_state, wait_for_response_doc_id,
-    wait_for_runtime_ready, BootedAgent,
+    create_runtime_request, create_runtime_request_with_execution_origin,
+    wait_for_request_lifecycle_state, wait_for_response_doc_id, wait_for_runtime_ready,
+    BootedAgent,
 };
 use crate::support::snapshots::{fetch_request_snapshot, fetch_response_snapshot};
 use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
@@ -307,16 +308,16 @@ async fn deterministic_400_tape() {
     .await;
     let agent_did = agent.agent_did().to_string();
     let request_id = "req-deterministic-400";
-    let request_doc_id = create_runtime_request(
+    let request_doc_id = create_runtime_request_with_execution_origin(
         db.node.as_ref(),
         &agent_did,
         RETRY_BEHAVIOR_ID,
         request_id,
         "session-deterministic-400",
+        "scheduled",
         &format!("trigger deterministic parse retry {marker}"),
     )
     .await;
-    set_request_execution_origin(db.node.as_ref(), &request_doc_id, "scheduled").await;
 
     let agent = spawn_agent(db.node.as_ref(), agent, agent_did).await;
     let terminal_state = wait_for_request_terminal_state(db.node.as_ref(), &request_doc_id).await;
@@ -468,25 +469,6 @@ async fn upsert_retry_backend(node: &EmbeddedNode, endpoint: &str, max_concurren
     assert!(
         !response.has_errors(),
         "upsert retry tape backend failed: {:?}",
-        response.errors
-    );
-}
-
-async fn set_request_execution_origin(node: &EmbeddedNode, request_doc_id: &str, origin: &str) {
-    let doc_id = escape_graphql_string(request_doc_id);
-    let origin = escape_graphql_string(origin);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{ execution_origin: "{origin}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "set request execution origin failed: {:?}",
         response.errors
     );
 }

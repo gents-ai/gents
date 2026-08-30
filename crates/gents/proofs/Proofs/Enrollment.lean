@@ -3,3 +3,4 @@ import Proofs.Enrollment.Transition
 import Proofs.Enrollment.Executable
 import Proofs.Enrollment.Properties
 import Proofs.Enrollment.DurableProjection
+import Proofs.Enrollment.RequestAdmission

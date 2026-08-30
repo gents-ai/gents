@@ -23,7 +23,7 @@ export {
 
 type NativeE2eConfig = {
   agentLabel: string;
-  pairToken: string;
+  serverAddress: string;
   prompt: string;
   expectedResponse: string;
   expectEmptyConversationSlice: boolean;
@@ -219,31 +219,40 @@ async function pairAgent(config: NativeE2eConfig) {
   );
   disclosure.click();
 
-  const labelInput = await waitFor(
-    () => document.querySelector<HTMLInputElement>('[data-testid="fleet-pair-label"]'),
-    10_000,
-    "pairing label input",
-  );
-  const tokenInput = await waitFor(
+  const serverAddressInput = await waitFor(
     () =>
-      document.querySelector<HTMLTextAreaElement>('[data-testid="fleet-pair-token"]'),
+      document.querySelector<HTMLInputElement>(
+        '[data-testid="fleet-add-server-address"]',
+      ),
     10_000,
-    "pairing invite input",
+    "server address input",
   );
-  setControlledValue(labelInput, config.agentLabel);
-  setControlledValue(tokenInput, config.pairToken);
+  setControlledValue(serverAddressInput, config.serverAddress);
 
   const submit = await waitFor(
     () => {
       const button = document.querySelector<HTMLButtonElement>(
-        '[data-testid="fleet-pair-submit"]',
+        '[data-testid="fleet-fetch-status"]',
       );
       return button && !button.disabled ? button : null;
     },
     10_000,
-    "enabled secure-pairing button",
+    "enabled enrollment request button",
   );
   submit.click();
+
+  const requestStatus = await waitFor(
+    () => document.querySelector<HTMLElement>('[data-testid="fleet-import-status"]'),
+    30_000,
+    "enrollment request status",
+  );
+  const requestId = requestStatus.textContent?.match(
+    /Enrollment request (\S+) sent/,
+  )?.[1];
+  if (!requestId) {
+    throw new Error("Enrollment request status did not include its request ID");
+  }
+  await reportStatus({ stage: "enrollment-pending", detail: requestId });
 }
 
 function setControlledValue(

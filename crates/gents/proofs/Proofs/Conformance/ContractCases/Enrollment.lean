@@ -1,7 +1,196 @@
 import Proofs.Enrollment
+import Proofs.Enrollment.RequestAdmission
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases
+
+open Enrollment
+
+private def requestAdmissionKindName : AgentRequestAdmissionKind → String
+  | .omitted => "omitted"
+  | .enrollment => "enrollment"
+  | .localSelf => "local-self"
+  | .runtimeInternal => "runtime-internal"
+
+private def runtimeInternalSourceKindName : RuntimeInternalSourceKind → String
+  | .localChild => "local-child"
+  | .crossDeploymentChild => "cross-deployment-child"
+  | .localControl => "local-control"
+  | .automatedTrigger => "automated-trigger"
+
+private def requestAdmissionDispositionName : AgentRequestAdmissionDisposition → String
+  | .admit => "admit"
+  | .deny => "deny"
+  | .retry => "retry"
+
+private def requestAdmissionCase (name : String)
+    (observation : AgentRequestAdmissionObservation)
+    (observationAvailable : Bool := true) : AgentRequestAdmissionCase :=
+  { name
+  , observationAvailable
+  , kind := requestAdmissionKindName observation.kind
+  , signatureValid := observation.signatureValid
+  , signedFieldsMatch := observation.signedFieldsMatch
+  , branchFieldsExact := observation.branchFieldsExact
+  , pendingDeadlineAbsent := observation.pendingDeadlineAbsent
+  , signerMatchesRequester := observation.signerMatchesRequester
+  , requesterMatchesTarget := observation.requesterMatchesTarget
+  , signerMatchesTarget := observation.signerMatchesTarget
+  , signerMatchesIssuer := observation.signerMatchesIssuer
+  , requesterMatchesIssuer := observation.requesterMatchesIssuer
+  , currentApproval := observation.currentApproval
+  , exactGeneration := observation.exactGeneration
+  , authorizationFresh := observation.authorizationFresh
+  , runtimeEvidencePresent := observation.runtimeEvidencePresent
+  , runtimeSourceKind := runtimeInternalSourceKindName observation.runtimeSourceKind
+  , targetRuntimeAttestationValid := observation.targetRuntimeAttestationValid
+  , sourceBindingCurrent := observation.sourceBindingCurrent
+  , triggerConfigDocumentBindingCurrent := observation.triggerConfigDocumentBindingCurrent
+  , sourceDocumentBindingCurrent := observation.sourceDocumentBindingCurrent
+  , sourceToolCallBindingCurrent := observation.sourceToolCallBindingCurrent
+  , targetPolicyAllows := observation.targetPolicyAllows
+  , bridgeAuthorBindingCurrent := observation.bridgeAuthorBindingCurrent
+  , bridgeAuthorAuthorizationFresh := observation.bridgeAuthorAuthorizationFresh
+  , targetCrossDeploymentPolicyAllows := observation.targetCrossDeploymentPolicyAllows
+  , expectedAdmitted := projectAgentRequestAdmission observation
+  , expectedDisposition := requestAdmissionDispositionName
+      (projectAgentRequestAdmissionDisposition observationAvailable observation) }
+
+private def requestAdmissionBase (kind : AgentRequestAdmissionKind) :
+    AgentRequestAdmissionObservation :=
+  { kind
+  , signatureValid := true
+  , signedFieldsMatch := true
+  , branchFieldsExact := true
+  , pendingDeadlineAbsent := true
+  , signerMatchesRequester := true
+  , requesterMatchesTarget := true
+  , signerMatchesTarget := true
+  , signerMatchesIssuer := true
+  , requesterMatchesIssuer := true
+  , currentApproval := true
+  , exactGeneration := true
+  , authorizationFresh := true
+  , runtimeEvidencePresent := false
+  , runtimeSourceKind := .localControl
+  , targetRuntimeAttestationValid := false
+  , sourceBindingCurrent := false
+  , triggerConfigDocumentBindingCurrent := false
+  , sourceDocumentBindingCurrent := false
+  , sourceToolCallBindingCurrent := false
+  , targetPolicyAllows := false
+  , bridgeAuthorBindingCurrent := false
+  , bridgeAuthorAuthorizationFresh := false
+  , targetCrossDeploymentPolicyAllows := false }
+
+def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
+  [ requestAdmissionCase "valid-current-enrollment" (requestAdmissionBase .enrollment)
+  , requestAdmissionCase "revoked-enrollment"
+      { requestAdmissionBase .enrollment with currentApproval := false }
+  , requestAdmissionCase "expired-enrollment"
+      { requestAdmissionBase .enrollment with authorizationFresh := false }
+  , requestAdmissionCase "superseded-enrollment-generation"
+      { requestAdmissionBase .enrollment with exactGeneration := false }
+  , requestAdmissionCase "forged-enrollment-signature"
+      { requestAdmissionBase .enrollment with signatureValid := false }
+  , requestAdmissionCase "omitted-admission" (requestAdmissionBase .omitted)
+  , requestAdmissionCase "valid-signed-local-self" (requestAdmissionBase .localSelf)
+  , requestAdmissionCase "forged-local-self"
+      { requestAdmissionBase .localSelf with signerMatchesRequester := false }
+  , requestAdmissionCase "valid-runtime-local-control"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, sourceDocumentBindingCurrent := true }
+  , requestAdmissionCase "valid-runtime-local-child"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .localChild
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, sourceDocumentBindingCurrent := true
+          sourceToolCallBindingCurrent := true, targetPolicyAllows := true }
+  , requestAdmissionCase "valid-runtime-cross-deployment-child-without-parent-document"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .crossDeploymentChild
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, sourceDocumentBindingCurrent := false
+          sourceToolCallBindingCurrent := true, bridgeAuthorBindingCurrent := true
+          bridgeAuthorAuthorizationFresh := true
+          targetCrossDeploymentPolicyAllows := true }
+  , requestAdmissionCase "valid-runtime-automated-trigger"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .automatedTrigger
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := true
+          targetPolicyAllows := true }
+  , requestAdmissionCase "lineage-alone-cannot-select-runtime-internal"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := false
+          sourceBindingCurrent := true, sourceDocumentBindingCurrent := true }
+  , requestAdmissionCase "stale-runtime-source-binding"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := false, sourceDocumentBindingCurrent := true }
+  , requestAdmissionCase "stale-runtime-trigger-config-document"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .automatedTrigger
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := false
+          sourceDocumentBindingCurrent := true
+          sourceToolCallBindingCurrent := true, targetPolicyAllows := true }
+  , requestAdmissionCase "stale-runtime-source-document"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .localChild
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := true
+          sourceDocumentBindingCurrent := false
+          sourceToolCallBindingCurrent := true, targetPolicyAllows := true }
+  , requestAdmissionCase "stale-runtime-tool-call-document"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .localChild
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := true
+          sourceDocumentBindingCurrent := true
+          sourceToolCallBindingCurrent := false, targetPolicyAllows := true }
+  , requestAdmissionCase "runtime-target-policy-denied"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .localChild
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := true
+          sourceDocumentBindingCurrent := true
+          sourceToolCallBindingCurrent := true, targetPolicyAllows := false }
+  , requestAdmissionCase "cross-deployment-author-revoked"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .crossDeploymentChild
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
+          bridgeAuthorBindingCurrent := true
+          bridgeAuthorAuthorizationFresh := false
+          targetCrossDeploymentPolicyAllows := true }
+  , requestAdmissionCase "cross-deployment-target-policy-denied"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .crossDeploymentChild
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
+          bridgeAuthorBindingCurrent := true
+          bridgeAuthorAuthorizationFresh := true
+          targetCrossDeploymentPolicyAllows := false }
+  , requestAdmissionCase "cross-target-local-self"
+      { requestAdmissionBase .localSelf with requesterMatchesTarget := false }
+  , requestAdmissionCase "tampered-signed-request-fields"
+      { requestAdmissionBase .enrollment with signedFieldsMatch := false }
+  , requestAdmissionCase "caller-authored-preclaim-deadline"
+      { requestAdmissionBase .enrollment with pendingDeadlineAbsent := false }
+  , requestAdmissionCase "enrollment-with-foreign-branch-fields"
+      { requestAdmissionBase .enrollment with branchFieldsExact := false }
+  , requestAdmissionCase "local-self-with-foreign-branch-fields"
+      { requestAdmissionBase .localSelf with branchFieldsExact := false }
+  , requestAdmissionCase "runtime-internal-with-foreign-branch-fields"
+      { requestAdmissionBase .runtimeInternal with
+          branchFieldsExact := false, runtimeEvidencePresent := true
+          targetRuntimeAttestationValid := true, sourceBindingCurrent := true
+          sourceDocumentBindingCurrent := true }
+  , requestAdmissionCase "authority-observation-unavailable-retries"
+      (requestAdmissionBase .enrollment) false
+  ]
 
 open Enrollment
 
@@ -33,6 +222,7 @@ def decisionFor (r : Request) (kind : DecisionKind := .approved) (sequence : Nat
   , networkId := r.networkId, adminDid := r.adminDid
   , candidateDid := r.candidateDid, candidatePeer := r.candidatePeer
   , ownerAgent := r.ownerAgent, kind, authorizationSequence := sequence
+  , authorizationExpiresAt := "lease-2"
   , signerDid := r.adminDid, adminSigned := true, fresh := true }
 
 def revocationFor (r : Request) (sequence : Nat := 2) : AuthorizationRevision :=
@@ -40,41 +230,51 @@ def revocationFor (r : Request) (sequence : Nat := 2) : AuthorizationRevision :=
   , networkId := r.networkId, adminDid := r.adminDid
   , memberDid := r.candidateDid, memberPeer := r.candidatePeer
   , ownerAgent := r.ownerAgent, sequence, kind := .revoked
+  , authorizationExpiresAt := "lease-2"
   , signerDid := r.adminDid, adminSigned := true }
 
 def enrollmentDecision : Decision := decisionFor enrollmentRequest
 def enrollmentRevocation : AuthorizationRevision := revocationFor enrollmentRequest
+def enrollmentRouteReceipt : RouteReceipt :=
+  serverRouteReceiptFor enrollmentRequest enrollmentDecision
 
 inductive EnrollmentAction where
+  | observeLegacyDesired (memberDid : Did)
   | observe (offer : Offer)
   | confirmPin (offer : Offer)
   | accept (offer : Offer) (request : Request)
   | decide (request : Request) (decision : Decision)
   | membership (request : Request) (decision : Decision)
-  | routes (request : Request) (decision : Decision)
+  | clientRoute (request : Request) (decision : Decision)
+  | serverReceipt (request : Request) (decision : Decision) (receipt : RouteReceipt)
   | revoke (request : Request) (revision : AuthorizationRevision)
   /-- A restore/replication merge, with the approval whose projection is observed. -/
   | merge (request : Request) (decision : Decision) (revision : AuthorizationRevision)
   deriving Repr
 
 def applyEnrollmentAction (state : Enrollment.State) : EnrollmentAction → Enrollment.State
+  | .observeLegacyDesired _ => state
   | .observe offer => observeOffer state offer
   | .confirmPin offer => confirmAdminPin state offer
   | .accept offer request => acceptRequest state offer request
   | .decide request decision => decideRequest state request decision
   | .membership request decision => materializeMembership state request decision
-  | .routes request decision => materializeRoutes state request decision
+  | .clientRoute request decision => materializeClientRoute state request decision
+  | .serverReceipt request decision receipt =>
+      recordServerRouteReceipt state request decision receipt
   | .revoke request revision => Enrollment.revoke state request revision
   | .merge _ _ revision => mergeAuthorization state revision
 
 private def actionName : EnrollmentAction → String
+  | .observeLegacyDesired _ => "observe_legacy_pairing_desired"
   | .observe _ => "observe_offer"
   | .confirmPin _ => "confirm_admin_pin"
   | .accept _ _ => "accept_request"
   | .decide _ decision => match decision.kind with
       | .approved => "approve_request" | .denied => "deny_request"
   | .membership _ _ => "materialize_membership"
-  | .routes _ _ => "materialize_routes"
+  | .clientRoute _ _ => "materialize_client_route"
+  | .serverReceipt _ _ _ => "record_server_route_receipt"
   | .revoke _ _ => "revoke_membership"
   | .merge _ _ _ => "merge_authorization"
 
@@ -84,17 +284,31 @@ private def actionOffer? : EnrollmentAction → Option Offer
 
 private def actionRequest? : EnrollmentAction → Option Request
   | .accept _ request | .decide request _ | .membership request _
-  | .routes request _ | .revoke request _ | .merge request _ _ => some request
+  | .clientRoute request _ | .serverReceipt request _ _
+  | .revoke request _ | .merge request _ _ => some request
   | _ => none
 
 private def actionDecision? : EnrollmentAction → Option Decision
-  | .decide _ decision | .membership _ decision | .routes _ decision
+  | .decide _ decision | .membership _ decision | .clientRoute _ decision
+  | .serverReceipt _ decision _
   | .merge _ decision _ => some decision
   | _ => none
 
 private def actionRevision? : EnrollmentAction → Option AuthorizationRevision
   | .revoke _ revision | .merge _ _ revision => some revision
   | _ => none
+
+private def actionReceipt? : EnrollmentAction → Option RouteReceipt
+  | .serverReceipt _ _ receipt => some receipt
+  | _ => none
+
+private def actionPeerAdmissionDid : EnrollmentAction → Did
+  | .observeLegacyDesired memberDid => memberDid
+  | action => actionRequest? action |>.map Request.candidateDid |>.getD ""
+
+private def routeDirectionName : RouteDirection → String
+  | .clientToServer => "client_to_server"
+  | .serverToClient => "server_to_client"
 
 private def decisionKindName : DecisionKind → String
   | .approved => "approved" | .denied => "denied"
@@ -108,6 +322,8 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
   let request? := actionRequest? action
   let decision? := actionDecision? action
   let revision? := actionRevision? action
+  let receipt? := actionReceipt? action
+  let peerAdmissionDid := actionPeerAdmissionDid action
   let offerId := match offer? with | some offer => offer.offerId | none => ""
   let offerChallenge := match offer? with | some offer => offer.challenge | none => ""
   let offerNetworkId := match offer? with | some offer => offer.networkId | none => ""
@@ -168,6 +384,8 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
   let requestFresh := match request? with | some request => request.fresh | none => false
   let decisionAuthorizationSequence := match decision? with
     | some decision => decision.authorizationSequence | none => 0
+  let decisionAuthorizationExpiresAt := match decision? with
+    | some decision => decision.authorizationExpiresAt | none => ""
   let decisionSignerDid := match decision? with
     | some decision => decision.signerDid | none => ""
   let decisionKind := match decision? with
@@ -194,6 +412,8 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
     | some revision => revisionKindName revision.kind | none => ""
   let revisionSequence := match revision? with
     | some revision => revision.sequence | none => 0
+  let revisionAuthorizationExpiresAt := match revision? with
+    | some revision => revision.authorizationExpiresAt | none => ""
   let revisionSignerDid := match revision? with
     | some revision => revision.signerDid | none => ""
   let revisionRequestId := match revision? with
@@ -212,6 +432,24 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
     | some revision => revision.ownerAgent | none => ""
   let revisionAdminSigned := match revision? with
     | some revision => revision.adminSigned | none => false
+  let receiptRequestId := match receipt? with | some receipt => receipt.requestId | none => ""
+  let receiptRequestDigest := match receipt? with
+    | some receipt => renderDigestString receipt.requestDigest | none => ""
+  let receiptNetworkId := match receipt? with | some receipt => receipt.networkId | none => ""
+  let receiptAdminDid := match receipt? with | some receipt => receipt.adminDid | none => ""
+  let receiptMemberDid := match receipt? with | some receipt => receipt.memberDid | none => ""
+  let receiptMemberPeer := match receipt? with | some receipt => receipt.memberPeer | none => ""
+  let receiptServerPeer := match receipt? with | some receipt => receipt.serverPeer | none => ""
+  let receiptOwnerAgent := match receipt? with | some receipt => receipt.ownerAgent | none => ""
+  let receiptAuthorizationSequence := match receipt? with
+    | some receipt => receipt.authorizationSequence | none => 0
+  let receiptAuthorizationExpiresAt := match receipt? with
+    | some receipt => receipt.authorizationExpiresAt | none => ""
+  let receiptDirection := match receipt? with
+    | some receipt => routeDirectionName receipt.direction | none => ""
+  let receiptSignerDid := match receipt? with | some receipt => receipt.signerDid | none => ""
+  let receiptAdminSigned := match receipt? with | some receipt => receipt.adminSigned | none => false
+  let receiptApplied := match receipt? with | some receipt => receipt.applied | none => false
   let requestAccepted := match request? with
     | some request => decide (request ∈ state.acceptedRequests) | none => false
   let decisionRecorded := match decision? with
@@ -222,6 +460,9 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
     | _, _ => false
   let revisionRecorded := match revision? with
     | some revision => decide (revision ∈ state.authorizations)
+    | none => false
+  let receiptRecorded := match receipt? with
+    | some receipt => decide (receipt ∈ state.routeReceipts)
     | none => false
   let membershipPresent := match request?, decision? with
     | some request, some decision => decide (membershipFor request decision ∈ state.memberships)
@@ -237,6 +478,7 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
   let current := match request?, decision? with
     | some request, some decision => decide (currentApproval state request decision)
     | _, _ => false
+  let peerAdmitted := decide (peerOperationallyAuthorized state peerAdmissionDid)
   let ready := match request? with
     | some request => decide (enrollmentReady state request) | none => false
   let adminPinPresent := match offer? with
@@ -261,20 +503,27 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
         decide (SessionHydration.admits
           (projectedServerToClientHydrationCatalog state request.networkId sessions) hydration)
     | none => false
-  { action := actionName action, offerId, offerChallenge, offerNetworkId, offerAdminDid
+  { action := actionName action, peerAdmissionDid, offerId, offerChallenge, offerNetworkId, offerAdminDid
   , offerServerPeer, offerOwnerAgent, offerProfile, challenge, requestId, requestDigest
   , requestOfferId
   , networkId, adminDid, serverPeer, serverTicketPeer, resolvedServerDid, profile
   , schemaCompatible, offerAdminSigned, offerFresh
   , candidateDid, candidatePeer, observedCandidatePeer, resolvedCandidateDid
   , candidateTicketPeer, ownerAgent, clientNonce, issuedAt, expiresAt
-  , candidateSigned, requestFresh, decisionAuthorizationSequence, decisionSignerDid
+  , candidateSigned, requestFresh, decisionAuthorizationSequence
+  , decisionAuthorizationExpiresAt, decisionSignerDid
   , decisionKind, decisionRequestId, decisionRequestDigest, decisionNetworkId, decisionAdminDid
   , decisionCandidateDid, decisionCandidatePeer, decisionOwnerAgent
-  , decisionAdminSigned, decisionFresh, revisionKind, revisionSequence, revisionSignerDid
+  , decisionAdminSigned, decisionFresh, revisionKind, revisionSequence
+  , revisionAuthorizationExpiresAt, revisionSignerDid
   , revisionRequestId, revisionRequestDigest
   , revisionNetworkId, revisionAdminDid, revisionMemberDid, revisionMemberPeer
   , revisionOwnerAgent, revisionAdminSigned
+  , receiptRequestId, receiptRequestDigest, receiptNetworkId, receiptAdminDid
+  , receiptMemberDid, receiptMemberPeer, receiptServerPeer, receiptOwnerAgent
+  , receiptAuthorizationSequence, receiptAuthorizationExpiresAt
+  , receiptDirection, receiptSignerDid
+  , receiptAdminSigned, receiptApplied
   , observedOfferCount := state.observedOffers.card
   , adminPinCount := state.adminPins.card
   , challengeBindingCount := state.challengeBindings.card
@@ -283,11 +532,13 @@ def enrollmentTraceStep (action : EnrollmentAction) (state : Enrollment.State) :
   , decisionCount := state.decisions.card
   , authorizationCount := state.authorizations.card
   , membershipCount := state.memberships.card
+  , receiptCount := state.routeReceipts.card
   , routeCount := state.appliedRoutes.card
-  , requestAccepted, decisionRecorded, authorizationRecorded, revisionRecorded, membershipPresent
+  , requestAccepted, decisionRecorded, authorizationRecorded, revisionRecorded, receiptRecorded
+  , membershipPresent
   , clientRoutePresent, serverRoutePresent, adminPinPresent, adminPinConflict := pinConflict
   , challengeBindingConflict, requestBindingConflict
-  , currentApproval := current, ready, clientHydrationAdmits, serverHydrationAdmits
+  , currentApproval := current, peerAdmitted, ready, clientHydrationAdmits, serverHydrationAdmits
   }
 
 def runEnrollmentTrace : Enrollment.State → List EnrollmentAction → List EnrollmentTraceStep
@@ -304,7 +555,8 @@ def validEnrollmentActions : List EnrollmentAction :=
    .accept enrollmentOffer enrollmentRequest,
    .decide enrollmentRequest enrollmentDecision,
    .membership enrollmentRequest enrollmentDecision,
-   .routes enrollmentRequest enrollmentDecision]
+   .clientRoute enrollmentRequest enrollmentDecision,
+   .serverReceipt enrollmentRequest enrollmentDecision enrollmentRouteReceipt]
 
 def invalidOfferCase (name : String) (offer : Offer) : EnrollmentCase :=
   enrollmentCase name [.observe offer, .confirmPin offer, .accept offer enrollmentRequest]
@@ -374,7 +626,11 @@ def enrollmentCases : List EnrollmentCase :=
     memberPeer := "hostile-peer", signerDid := "did:key:hostile-replica" }
   let conflictingRevoked := { revisionForApproval enrollmentRequest enrollmentDecision with
     kind := RevisionKind.revoked }
-  [ enrollmentCase "status_first_ordering"
+  let unsignedReceipt := { enrollmentRouteReceipt with adminSigned := false }
+  let wrongGenerationReceipt := { enrollmentRouteReceipt with authorizationSequence := 2 }
+  [ enrollmentCase "legacy_pairing_desired_cannot_grant_peer_admission"
+      [.observeLegacyDesired enrollmentRequest.candidateDid]
+  , enrollmentCase "status_first_ordering"
       [.accept enrollmentOffer enrollmentRequest, .observe enrollmentOffer,
        .accept enrollmentOffer enrollmentRequest, .confirmPin enrollmentOffer,
        .accept enrollmentOffer enrollmentRequest]
@@ -434,11 +690,32 @@ def enrollmentCases : List EnrollmentCase :=
        .accept enrollmentOffer enrollmentRequest,
        .decide enrollmentRequest enrollmentDecision,
        .membership enrollmentRequest enrollmentDecision]
+  , enrollmentCase "local_route_without_server_receipt_not_ready"
+      [.observe enrollmentOffer, .confirmPin enrollmentOffer,
+       .accept enrollmentOffer enrollmentRequest,
+       .decide enrollmentRequest enrollmentDecision,
+       .membership enrollmentRequest enrollmentDecision,
+       .clientRoute enrollmentRequest enrollmentDecision]
+  , enrollmentCase "unsigned_server_route_receipt_rejected"
+      [.observe enrollmentOffer, .confirmPin enrollmentOffer,
+       .accept enrollmentOffer enrollmentRequest,
+       .decide enrollmentRequest enrollmentDecision,
+       .membership enrollmentRequest enrollmentDecision,
+       .clientRoute enrollmentRequest enrollmentDecision,
+       .serverReceipt enrollmentRequest enrollmentDecision unsignedReceipt]
+  , enrollmentCase "wrong_generation_server_route_receipt_rejected"
+      [.observe enrollmentOffer, .confirmPin enrollmentOffer,
+       .accept enrollmentOffer enrollmentRequest,
+       .decide enrollmentRequest enrollmentDecision,
+       .membership enrollmentRequest enrollmentDecision,
+       .clientRoute enrollmentRequest enrollmentDecision,
+       .serverReceipt enrollmentRequest enrollmentDecision wrongGenerationReceipt]
   , enrollmentCase "revocation_dominates_stale_materialization"
       (validEnrollmentActions ++
         [.revoke enrollmentRequest enrollmentRevocation,
          .membership enrollmentRequest enrollmentDecision,
-         .routes enrollmentRequest enrollmentDecision])
+         .clientRoute enrollmentRequest enrollmentDecision,
+         .serverReceipt enrollmentRequest enrollmentDecision enrollmentRouteReceipt])
   , enrollmentCase "equal_revocation_rejected"
       (validEnrollmentActions ++ [.revoke enrollmentRequest equalRevocation])
   , enrollmentCase "lower_revocation_rejected"
@@ -455,7 +732,9 @@ def enrollmentCases : List EnrollmentCase :=
          .accept replacementOffer replacementRequest,
          .decide replacementRequest replacementDecision,
          .membership replacementRequest replacementDecision,
-         .routes replacementRequest replacementDecision])
+         .clientRoute replacementRequest replacementDecision,
+         .serverReceipt replacementRequest replacementDecision
+           (serverRouteReceiptFor replacementRequest replacementDecision)])
   , enrollmentCase "restored_equal_sequence_active_active_fails_closed"
       (validEnrollmentActions ++
         [.merge enrollmentRequest enrollmentDecision conflictingActive])
@@ -469,23 +748,28 @@ private def durableDocumentStep (action : EnrollmentAction) : EnrollmentTraceSte
 
 private def durableCase
     (name : String) (documents : List EnrollmentAction)
-    (docs : DurableDocuments) (offer : Offer) (request : Request) (decision : Decision) :
+    (docs : DurableDocuments) (offer : Offer) (request : Request) (decision : Decision)
+    (receipt : RouteReceipt) :
     EnrollmentDurableProjectionCase :=
   { name
   , documents := documents.map durableDocumentStep
-  , expectedCurrentApproval := decide (durableCurrentApproval docs offer request decision) }
+  , expectedCurrentApproval := decide (durableCurrentApproval docs offer request decision)
+  , expectedCurrentRouteReceipt := decide
+      (durableCurrentServerRouteReceipt docs offer request decision receipt) }
 
 def enrollmentDurableProjectionCases : List EnrollmentDurableProjectionCase :=
   let pin := adminPinFor enrollmentOffer
   let revision := revisionForApproval enrollmentRequest enrollmentDecision
   let baseDocs : DurableDocuments :=
     { offers := {enrollmentOffer}, adminPins := {pin}, requests := {enrollmentRequest}
-    , decisions := {enrollmentDecision}, revisions := {revision} }
+    , decisions := {enrollmentDecision}, revisions := {revision}
+    , routeReceipts := {enrollmentRouteReceipt} }
   let baseActions : List EnrollmentAction :=
     [.observe enrollmentOffer, .confirmPin enrollmentOffer,
      .accept enrollmentOffer enrollmentRequest,
      .decide enrollmentRequest enrollmentDecision,
-     .merge enrollmentRequest enrollmentDecision revision]
+     .merge enrollmentRequest enrollmentDecision revision,
+     .serverReceipt enrollmentRequest enrollmentDecision enrollmentRouteReceipt]
   let collisionOffer := { enrollmentOffer with offerId := "offer-2", challenge := "challenge-2" }
   let collisionUnsigned := { unsignedEnrollmentRequest with
     offerId := collisionOffer.offerId, challenge := collisionOffer.challenge,
@@ -496,6 +780,7 @@ def enrollmentDurableProjectionCases : List EnrollmentDurableProjectionCase :=
   let challengeRequest := canonicalizeEnrollmentRequest challengeUnsigned
   let deniedDecision := decisionFor enrollmentRequest .denied
   let conflictingRevision := { revision with signerDid := "did:key:hostile-replica" }
+  let conflictingReceipt := { enrollmentRouteReceipt with signerDid := "did:key:hostile-replica" }
   let requestIdConflictDocs := { baseDocs with
     offers := insert collisionOffer baseDocs.offers
     requests := insert collisionRequest baseDocs.requests }
@@ -505,24 +790,31 @@ def enrollmentDurableProjectionCases : List EnrollmentDurableProjectionCase :=
     decisions := insert deniedDecision baseDocs.decisions }
   let revisionConflictDocs := { baseDocs with
     revisions := insert conflictingRevision baseDocs.revisions }
+  let receiptConflictDocs := { baseDocs with
+    routeReceipts := insert conflictingReceipt baseDocs.routeReceipts }
   [ durableCase "durable_unique_approval" baseActions baseDocs
-      enrollmentOffer enrollmentRequest enrollmentDecision
+      enrollmentOffer enrollmentRequest enrollmentDecision enrollmentRouteReceipt
   , durableCase "durable_request_id_conflict_fails_closed"
       (baseActions ++ [.observe collisionOffer, .accept collisionOffer collisionRequest])
       requestIdConflictDocs
-      enrollmentOffer enrollmentRequest enrollmentDecision
+      enrollmentOffer enrollmentRequest enrollmentDecision enrollmentRouteReceipt
   , durableCase "durable_challenge_conflict_fails_closed"
       (baseActions ++ [.accept enrollmentOffer challengeRequest])
       challengeConflictDocs
-      enrollmentOffer enrollmentRequest enrollmentDecision
+      enrollmentOffer enrollmentRequest enrollmentDecision enrollmentRouteReceipt
   , durableCase "durable_terminal_decision_conflict_fails_closed"
       (baseActions ++ [.decide enrollmentRequest deniedDecision])
       decisionConflictDocs
-      enrollmentOffer enrollmentRequest enrollmentDecision
+      enrollmentOffer enrollmentRequest enrollmentDecision enrollmentRouteReceipt
   , durableCase "durable_equal_revision_conflict_fails_closed"
       (baseActions ++ [.merge enrollmentRequest enrollmentDecision conflictingRevision])
       revisionConflictDocs
-      enrollmentOffer enrollmentRequest enrollmentDecision
+      enrollmentOffer enrollmentRequest enrollmentDecision enrollmentRouteReceipt
+  , durableCase "durable_route_receipt_conflict_fails_closed"
+      (baseActions ++
+        [.serverReceipt enrollmentRequest enrollmentDecision conflictingReceipt])
+      receiptConflictDocs
+      enrollmentOffer enrollmentRequest enrollmentDecision enrollmentRouteReceipt
   ]
 
 def enrollmentEncodingCases : List EnrollmentEncodingCase :=

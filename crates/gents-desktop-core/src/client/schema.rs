@@ -110,6 +110,19 @@ mod tests {
     fn local_admin_pin_is_never_subscribed_or_broad_synced() {
         let names = subscribed_collection_names();
         assert!(!names.contains(&"NetworkAdminPin"));
+        assert!(!names.contains(&"EnrollmentOperatorNonce"));
         assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&"NetworkAdminPin"));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
+            .contains(&"EnrollmentOperatorNonce"));
+    }
+
+    #[test]
+    fn enrollment_receipt_is_subscribed_but_excluded_from_broad_sync() {
+        let names = subscribed_collection_names();
+        assert!(names.contains(&"NetworkEnrollmentRouteReceipt"));
+        assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES
+            .contains(&"NetworkEnrollmentRouteReceipt"));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
+            .contains(&"NetworkEnrollmentRouteReceipt"));
     }
 }

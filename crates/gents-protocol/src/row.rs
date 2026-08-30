@@ -250,6 +250,8 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub caused_by_source_doc_id: Option<String>,
     #[serde(default)]
+    pub caused_by_trigger_doc_id: Option<String>,
+    #[serde(default)]
     pub caused_by_parent_request_id: Option<String>,
     #[serde(default)]
     pub failure_reason: Option<String>,

@@ -78,7 +78,6 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
         base_port: port,
         backend,
         server_a: server,
-        node_b: None,
     };
     print_welcome(&fleet);
     let result = async {

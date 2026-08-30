@@ -1,10 +1,12 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::sync::RwLock as StdRwLock;
+use std::sync::{Arc, RwLock as StdRwLock};
 
 use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
@@ -23,6 +25,13 @@ use super::ClientCore;
 use super::ClientPeerStatus;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
+
+fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .with_context(|| format!("{name} is missing from the current peer authority"))
+}
 
 fn is_terminal_lifecycle_state(value: Option<&str>) -> bool {
     matches!(
@@ -86,7 +95,6 @@ fn behavior_id_for_write(
         .map(str::to_owned)
         .or_else(|| {
             peer_record
-                .filter(|record| record.is_bearer_pairing())
                 .and_then(|record| record.default_behavior_id.as_deref())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -94,9 +102,13 @@ fn behavior_id_for_write(
         })
 }
 
-fn ensure_peer_chat_ready(agent_did: &str, peer_record: Option<&PeerRecord>) -> Result<()> {
+fn ensure_peer_chat_ready_at(
+    agent_did: &str,
+    peer_record: Option<&PeerRecord>,
+    now: DateTime<Utc>,
+) -> Result<()> {
     match peer_record {
-        Some(record) if record.is_chat_ready() => Ok(()),
+        Some(record) if record.is_chat_ready_at(now) => Ok(()),
         Some(_) => bail!(
             "the selected deployment route is not ready; no request was saved (wait for pairing repair or inspect pairing status)"
         ),
@@ -106,18 +118,16 @@ fn ensure_peer_chat_ready(agent_did: &str, peer_record: Option<&PeerRecord>) -> 
     }
 }
 
-fn peer_record_owning_agent(records: &[PeerRecord], agent_did: &str) -> Option<PeerRecord> {
-    if let Some(exact) = records.iter().find(|record| record.agent_did == agent_did) {
-        return Some(exact.clone());
-    }
-    // A machine bearer intentionally carries requests for child agent DIDs
-    // hosted behind the paired runtime. Preserve that established fleet path,
-    // but fail closed when more than one machine could own the target.
-    let mut machine_routes = records.iter().filter(|record| {
-        record.pairing_template.as_deref() == Some("machine") && record.is_chat_ready()
-    });
-    let route = machine_routes.next()?.clone();
-    machine_routes.next().is_none().then_some(route)
+fn peer_record_owning_agent_at(
+    records: &[PeerRecord],
+    agent_did: &str,
+    now: DateTime<Utc>,
+) -> Option<PeerRecord> {
+    records
+        .iter()
+        .find(|record| record.agent_did == agent_did)
+        .filter(|record| record.is_chat_ready_at(now))
+        .cloned()
 }
 
 impl ClientCore {
@@ -132,6 +142,7 @@ impl ClientCore {
             &discovery.p2p_listen_address,
             &discovery.agent_did,
             &discovery.graphql,
+            &agent_home.display().to_string(),
         )
         .await
     }
@@ -142,6 +153,7 @@ impl ClientCore {
         addr: &str,
         agent_did: &str,
         graphql: &str,
+        agent_home: &str,
     ) -> Result<PeerRecord> {
         self.sync_state
             .upsert_local_standard_peer(
@@ -149,6 +161,7 @@ impl ClientCore {
                 normalize_required("addr", addr)?,
                 normalize_required("agent_did", agent_did)?,
                 normalize_required("graphql", graphql)?,
+                normalize_required("agent_home", agent_home)?,
             )
             .await
     }
@@ -194,15 +207,22 @@ impl ClientCore {
         options: SubmitRequestOptions,
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        let peer_record = self.peer_record_for_agent(agent_did).await;
-        ensure_peer_chat_ready(agent_did, peer_record.as_ref())?;
+        let peer_record = self
+            .peer_record_for_chat_write(agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(agent_did, peer_record.as_ref(), Utc::now())?;
+        let (signer, admission, requester_did) = self
+            .request_authority(agent_did, peer_record.as_ref())
+            .await?;
         let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::submit_request(
             self.node.as_ref(),
             snapshot.as_ref(),
             session_id,
             agent_did,
-            self.principal.did(),
+            &requester_did,
+            signer.as_ref(),
+            admission,
             content,
             behavior_id.as_deref(),
             options,
@@ -271,6 +291,10 @@ impl ClientCore {
         reason: Option<String>,
     ) -> Result<String> {
         let agent_did = normalize_required("agent_did", agent_did)?;
+        let peer_record = self
+            .peer_record_for_chat_write(&agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(&agent_did, peer_record.as_ref(), Utc::now())?;
         let tool_call_id = normalize_required("tool_call_id", tool_call_id)?;
         let approval_id = match self
             .resolve_tool_call_hold_inner(agent_did, tool_call_id, approve, reason)
@@ -360,12 +384,102 @@ impl ClientCore {
         }
     }
 
-    pub async fn peer_record_for_agent(&self, agent_did: &str) -> Option<PeerRecord> {
-        let agent_did = agent_did.trim();
-        if agent_did.is_empty() {
-            return None;
+    /// Reload the current directory generation and synchronously fence a chat
+    /// mutation against its signed enrollment lease. Expired readiness is
+    /// durably demoted before the caller can create an AgentRequest.
+    async fn peer_record_for_chat_write(
+        &self,
+        agent_did: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<PeerRecord>> {
+        let records = self.sync_state.records();
+        let record = peer_record_owning_agent_at(&records, agent_did.trim(), now);
+        if record.is_some() {
+            return Ok(record);
         }
-        peer_record_owning_agent(&self.sync_state.records(), agent_did)
+
+        let stale = records
+            .iter()
+            .find(|record| record.agent_did == agent_did.trim())
+            .cloned();
+        if let Some(stale) = stale {
+            if stale.is_enrollment() && stale.pairing_ready {
+                self.sync_state
+                    .set_pairing_ready(&stale, false)
+                    .await
+                    .context("persisting expired enrollment write fence")?;
+            }
+            ensure_peer_chat_ready_at(agent_did, Some(&stale), now)?;
+        }
+        Ok(None)
+    }
+
+    async fn request_authority(
+        &self,
+        agent_did: &str,
+        record: Option<&PeerRecord>,
+    ) -> Result<(
+        Arc<dyn gents::identity::AgentIdentity>,
+        AgentRequestAdmissionRecord,
+        String,
+    )> {
+        let record = record.context("chat target has no current owned peer route")?;
+        if record.is_enrollment() {
+            let request_id = required_peer_generation(
+                "enrollment_request_id",
+                record.enrollment_request_id.as_deref(),
+            )?;
+            let digest = required_peer_generation(
+                "enrollment_request_digest",
+                record.enrollment_request_digest.as_deref(),
+            )?;
+            let admin_did = required_peer_generation(
+                "enrollment_admin_did",
+                record.enrollment_admin_did.as_deref(),
+            )?;
+            let sequence = record
+                .enrollment_authorization_sequence
+                .filter(|value| *value > 0)
+                .context("enrollment authorization sequence is missing")?;
+            let expires_at = required_peer_generation(
+                "enrollment_authorization_expires_at",
+                record.enrollment_authorization_expires_at.as_deref(),
+            )?;
+            let signer: Arc<dyn gents::identity::AgentIdentity> = Arc::new(self.principal.clone());
+            let admission = AgentRequestAdmissionRecord::enrollment(
+                self.principal.did(),
+                request_id,
+                digest,
+                admin_did,
+                sequence,
+                expires_at,
+            );
+            return Ok((signer, admission, self.principal.did().to_string()));
+        }
+        anyhow::ensure!(
+            record.source.as_deref() == Some("local-standard") && record.agent_did == agent_did,
+            "chat target is not owned by enrollment or a local standard runtime"
+        );
+        let signer: Arc<dyn gents::identity::AgentIdentity> =
+            match gents::identity::RegisteredIdentity::from_registered_did(agent_did, None) {
+                Ok(identity) => Arc::new(identity),
+                Err(_) => {
+                    let home = required_peer_generation(
+                        "local_agent_home",
+                        record.local_agent_home.as_deref(),
+                    )?;
+                    crate::local_runtime::load_standard_runtime_identity(Path::new(home))?
+                }
+            };
+        anyhow::ensure!(
+            signer.did() == agent_did,
+            "local request signer does not own target agent"
+        );
+        Ok((
+            signer,
+            AgentRequestAdmissionRecord::local_self(agent_did),
+            agent_did.to_string(),
+        ))
     }
 
     pub async fn refresh_local_request(
@@ -1078,14 +1192,21 @@ impl ClientCore {
             .agent_did
             .as_deref()
             .context("stale request has no agent_did")?;
-        let peer_record = self.peer_record_for_agent(agent_did).await;
-        ensure_peer_chat_ready(agent_did, peer_record.as_ref())?;
+        let peer_record = self
+            .peer_record_for_chat_write(agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(agent_did, peer_record.as_ref(), Utc::now())?;
+        let (signer, admission, requester_did) = self
+            .request_authority(agent_did, peer_record.as_ref())
+            .await?;
         let result = mutations::resend_request(
             self.node.as_ref(),
             snapshot.as_ref(),
             stale_request_id,
             agent_did,
-            self.principal.did(),
+            &requester_did,
+            signer.as_ref(),
+            admission,
         )
         .await;
         match result {
@@ -1108,6 +1229,32 @@ impl ClientCore {
     }
 
     pub async fn interrupt_request(&self, request_id: &str) -> Result<()> {
+        let snapshot = self.store.snapshot();
+        let selected_agent_did = self.selected_agent_did();
+        let mut requests = snapshot
+            .requests
+            .iter()
+            .filter(|request| request.request_id == request_id)
+            .filter(|request| {
+                selected_agent_did
+                    .as_deref()
+                    .is_none_or(|selected| request.agent_did.as_deref() == Some(selected))
+            });
+        let request = requests
+            .next()
+            .with_context(|| format!("request {request_id} is absent from the selected agent"))?;
+        anyhow::ensure!(
+            requests.next().is_none(),
+            "request {request_id} is ambiguous across the selected agent scope"
+        );
+        let agent_did = request
+            .agent_did
+            .as_deref()
+            .context("request has no agent_did")?;
+        let peer_record = self
+            .peer_record_for_chat_write(agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(agent_did, peer_record.as_ref(), Utc::now())?;
         match mutations::interrupt_request(self.node.as_ref(), request_id).await {
             Ok(()) => {
                 self.clear_mutation_error();
@@ -1129,13 +1276,20 @@ impl ClientCore {
             .agent_did
             .as_deref()
             .context("retry parent has no agent_did")?;
-        let peer_record = self.peer_record_for_agent(agent_did).await;
-        ensure_peer_chat_ready(agent_did, peer_record.as_ref())?;
+        let peer_record = self
+            .peer_record_for_chat_write(agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(agent_did, peer_record.as_ref(), Utc::now())?;
+        let (signer, admission, requester_did) = self
+            .request_authority(agent_did, peer_record.as_ref())
+            .await?;
         let result = mutations::retry_request(
             self.node.as_ref(),
             snapshot.as_ref(),
             parent,
-            self.principal.did(),
+            &requester_did,
+            signer.as_ref(),
+            admission,
         )
         .await;
         match result {
@@ -1186,75 +1340,6 @@ impl ClientCore {
         {
             self.sync_state.replace_peer(&expected, status);
         }
-    }
-
-    pub async fn add_peer(
-        &self,
-        label: &str,
-        addr: &str,
-        agent_did: &str,
-        graphql: Option<&str>,
-        default_behavior_id: Option<&str>,
-    ) -> Result<PeerMutationResult> {
-        let label = normalize_required("label", label)?;
-        let addr = normalize_required("addr", addr)?;
-        let agent_did = normalize_required("agent_did", agent_did)?;
-        let graphql = graphql.map(str::trim).filter(|value| !value.is_empty());
-        let default_behavior_id = default_behavior_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-
-        let activation = self
-            .route_manager
-            .activate_peer(
-                &self.sync_state,
-                label,
-                addr,
-                agent_did,
-                graphql,
-                default_behavior_id,
-            )
-            .await?;
-        let record = activation.record;
-        let connected = activation.connected;
-        let mut warning = activation.warning;
-        let activation_warning = warning.clone();
-        if let Err(error) = self.refresh_agent(&record.agent_did).await {
-            append_warning(
-                &mut warning,
-                format!("deployment saved but local replica refresh failed: {error}"),
-            );
-            self.sync_state.compare_and_set_last_error(
-                &record,
-                &activation_warning,
-                warning.clone(),
-            );
-        }
-        self.clear_mutation_error();
-        if let Some(warning) = warning.as_deref() {
-            tracing::warn!(
-                target: "gents_desktop_core::peer",
-                peer_id = %record.peer_id,
-                label = %record.label,
-                error = %warning,
-                "desktop deployment add warning"
-            );
-        } else {
-            tracing::info!(
-                target: "gents_desktop_core::peer",
-                peer_id = %record.peer_id,
-                label = %record.label,
-                "desktop deployment added"
-            );
-        }
-
-        Ok(PeerMutationResult {
-            peer_id: record.peer_id,
-            label: record.label,
-            addr: record.addr,
-            connected,
-            warning,
-        })
     }
 
     pub async fn remove_peer(&self, peer_id: &str) -> Result<PeerMutationResult> {
@@ -1566,6 +1651,10 @@ impl ClientCore {
     async fn request_session_hydration(&self, session_id: &str, agent_did: &str) -> Result<()> {
         let session_id = normalize_required("session_id", session_id)?;
         let agent_did = normalize_required("agent_did", agent_did)?;
+        let peer_record = self
+            .peer_record_for_chat_write(&agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(&agent_did, peer_record.as_ref(), Utc::now())?;
         let request_key = format!("{}:{session_id}", self.local_peer_id());
         let requester_did = gents::graphql::escape_graphql_string(self.principal.did());
         let agent_did_gql = gents::graphql::escape_graphql_string(&agent_did);
@@ -1873,16 +1962,6 @@ fn complete_confirmed_delete(
     );
 }
 
-fn append_warning(warning: &mut Option<String>, message: String) {
-    match warning {
-        Some(existing) => {
-            existing.push_str("; ");
-            existing.push_str(&message);
-        }
-        None => *warning = Some(message),
-    }
-}
-
 #[cfg(test)]
 mod delete_source_tests {
     use super::*;
@@ -1993,18 +2072,21 @@ mod delete_source_tests {
         let mut record = PeerRecord::new("Amy", "endpoint-amy", "did:key:amy");
         record.source = source.map(str::to_owned);
         record.default_behavior_id = default_behavior_id.map(str::to_owned);
+        if source == Some("enrollment") {
+            record.pairing_network_id = Some("network-a".into());
+            record.enrollment_request_digest = Some("digest-a".into());
+            record.enrollment_authorization_sequence = Some(1);
+            record.enrollment_authorization_expires_at = Some("2099-09-29T00:00:00Z".into());
+        }
         record
     }
 
     #[test]
-    fn bearer_peer_signed_default_is_used_when_caller_omits_behavior() {
-        let mut peer = peer_record(
-            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
-            Some("default"),
-        );
+    fn enrolled_peer_default_is_used_when_caller_omits_behavior() {
+        let mut peer = peer_record(Some("enrollment"), Some("default"));
         peer.pairing_ready = true;
 
-        ensure_peer_chat_ready(&peer.agent_did, Some(&peer)).unwrap();
+        ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).unwrap();
         assert_eq!(
             behavior_id_for_write(None, Some(&peer)).as_deref(),
             Some("default")
@@ -2015,61 +2097,58 @@ mod delete_source_tests {
         );
     }
 
-    #[test]
-    fn machine_pairing_routes_non_owner_subagent_only_when_unambiguous() {
-        let mut machine = peer_record(
-            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
-            Some("default"),
+    #[tokio::test(start_paused = true)]
+    async fn expired_enrollment_cannot_admit_a_request_without_waiting_for_the_sweep() {
+        let mut peer = peer_record(Some("enrollment"), Some("default"));
+        peer.pairing_ready = true;
+        peer.enrollment_authorization_expires_at = Some("2026-08-30T12:00:01Z".into());
+        let before = "2026-08-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let expired = "2026-08-30T12:00:01Z".parse::<DateTime<Utc>>().unwrap();
+
+        assert!(ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), before).is_ok());
+        assert!(ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), expired).is_err());
+        assert!(
+            peer_record_owning_agent_at(std::slice::from_ref(&peer), &peer.agent_did, expired,)
+                .is_none()
         );
+    }
+
+    #[test]
+    fn machine_pairing_never_claims_an_unlisted_child_agent() {
+        let mut machine = peer_record(Some("enrollment"), Some("default"));
         machine.pairing_template = Some("machine".to_string());
         machine.pairing_ready = true;
-        assert_eq!(
-            peer_record_owning_agent(&[machine.clone()], "did:key:child")
-                .as_ref()
-                .map(|record| record.peer_id.as_str()),
-            Some(machine.peer_id.as_str())
-        );
-
-        let mut second = machine.clone();
-        second.peer_id = "second-machine".to_string();
-        second.agent_did = "did:key:second-host".to_string();
-        assert!(peer_record_owning_agent(&[machine, second], "did:key:child").is_none());
+        assert!(peer_record_owning_agent_at(&[machine], "did:key:child", Utc::now()).is_none());
     }
 
     #[test]
-    fn pending_bearer_peer_rejects_chat_writes() {
-        let peer = peer_record(
-            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
-            Some("default"),
-        );
+    fn pending_enrollment_peer_rejects_chat_writes() {
+        let peer = peer_record(Some("enrollment"), Some("default"));
 
-        assert!(ensure_peer_chat_ready(&peer.agent_did, Some(&peer))
-            .unwrap_err()
-            .to_string()
-            .contains("route is not ready"));
+        assert!(
+            ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now())
+                .unwrap_err()
+                .to_string()
+                .contains("route is not ready")
+        );
     }
 
     #[test]
-    fn pending_server_status_and_missing_owner_reject_chat_writes() {
-        let peer = peer_record(Some("server-status"), Some("default"));
-        assert!(ensure_peer_chat_ready(&peer.agent_did, Some(&peer)).is_err());
-        assert!(ensure_peer_chat_ready("did:key:missing", None)
-            .unwrap_err()
-            .to_string()
-            .contains("no saved deployment route"));
+    fn malformed_source_and_missing_owner_reject_chat_writes() {
+        let peer = peer_record(None, Some("default"));
+        assert!(ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).is_err());
+        assert!(
+            ensure_peer_chat_ready_at("did:key:missing", None, Utc::now())
+                .unwrap_err()
+                .to_string()
+                .contains("no saved deployment route")
+        );
     }
 
     #[test]
     fn local_standard_is_explicitly_exempt_from_route_readiness() {
         let peer = peer_record(Some("local-standard"), Some("default"));
-        ensure_peer_chat_ready(&peer.agent_did, Some(&peer)).unwrap();
-    }
-
-    #[test]
-    fn unsigned_legacy_peer_default_is_not_trusted_for_routing() {
-        let peer = peer_record(Some("server-status"), Some("forged"));
-
-        assert_eq!(behavior_id_for_write(None, Some(&peer)), None);
+        ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).unwrap();
     }
 
     #[test]

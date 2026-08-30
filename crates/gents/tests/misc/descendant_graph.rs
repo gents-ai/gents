@@ -57,6 +57,7 @@ async fn create_nested_bridge(
     parent_request_doc_id: &str,
     parent_session_id: &str,
     requester_did: &str,
+    worker_did: &str,
 ) -> String {
     let args = escape_graphql_string(r#"{"name":"reviewer","behavior_id":"reviewer"}"#);
     let now = Utc::now().to_rfc3339();
@@ -69,7 +70,7 @@ async fn create_nested_bridge(
                     request_id: "request-worker",
                     request_doc_id: "{parent_request_doc_id}",
                     session_id: "{parent_session_id}",
-                    agent_did: "did:test:worker-host",
+                    agent_did: "{worker_did}",
                     requester_did: "{requester_did}",
                     message_sequence: 1,
                     tool_name: "spawn_subagent",
@@ -81,7 +82,7 @@ async fn create_nested_bridge(
                     started_at: "{now}",
                     deadline_at: "{deadline}",
                     child_request_id: "request-reviewer",
-                    spawn_target_did: "did:test:worker-host",
+                    spawn_target_did: "{worker_did}",
                     await_mode: "foreground",
                     cancel_policy: "cascade",
                     selected_service_id: null,
@@ -93,6 +94,7 @@ async fn create_nested_bridge(
             parent_request_doc_id = escape_graphql_string(parent_request_doc_id),
             parent_session_id = escape_graphql_string(parent_session_id),
             requester_did = escape_graphql_string(requester_did),
+            worker_did = escape_graphql_string(worker_did),
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -114,6 +116,7 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
     let root_id = "graph-root";
     let root_session = "graph-root-session";
     let root_did = "did:test:coordinator";
+    let worker_did = db.node_identity.did().to_string();
     let root_doc =
         create_request(db.node.as_ref(), root_id, root_session, root_did, "default").await;
 
@@ -131,7 +134,7 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
         AwaitMode::Background,
         CancelPolicy::Cascade,
         "request-worker".to_string(),
-        "did:test:worker-host".to_string(),
+        worker_did.clone(),
     )
     .with_request_doc_id(Some(root_doc.clone()));
     worker_bridge.start_running().await.unwrap();
@@ -170,7 +173,7 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
         "call-worker".to_string(),
         worker_bridge_doc.clone(),
         0,
-        "did:test:worker-host".to_string(),
+        worker_did.clone(),
         "fast-worker".to_string(),
         "work".to_string(),
         Some(deadline),
@@ -201,8 +204,14 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
         .child_session_id
         .clone()
         .expect("worker session");
-    let reviewer_bridge_doc =
-        create_nested_bridge(db.node.as_ref(), &worker_doc, &worker_session, root_did).await;
+    let reviewer_bridge_doc = create_nested_bridge(
+        db.node.as_ref(),
+        &worker_doc,
+        &worker_session,
+        &worker_did,
+        &worker_did,
+    )
+    .await;
     create_subagent_request_with_request_id(
         db.node.as_ref(),
         "request-reviewer".to_string(),
@@ -211,7 +220,7 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
         "call-reviewer".to_string(),
         reviewer_bridge_doc,
         1,
-        "did:test:worker-host".to_string(),
+        worker_did,
         "reviewer".to_string(),
         "review".to_string(),
         Some(deadline),

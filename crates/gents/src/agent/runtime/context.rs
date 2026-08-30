@@ -29,6 +29,7 @@ pub(super) struct RuntimeContext {
     pub(super) startup_readiness: crate::startup_readiness::StartupReadinessOptions,
     pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
     pub(super) operator_tool_root: Option<PathBuf>,
+    pub(super) enrollment_authority: crate::agent::p2p_reconcile::EnrollmentAuthorityHandle,
 }
 
 pub(super) struct BehaviorResolution {
@@ -382,6 +383,11 @@ impl RuntimeContext {
             self.admission_registry.clone(),
             behavior.as_ref(),
         ));
+        let request_admission = crate::request_admission::AgentRequestAdmissionVerifier::new(
+            self.node.clone(),
+            behavior.principal_identity().clone(),
+            self.enrollment_authority.clone(),
+        );
         let mut daemon = BehaviorDaemon::new(
             self.node.clone(),
             behavior,
@@ -396,6 +402,7 @@ impl RuntimeContext {
             self.startup_barrier.clone(),
             self.runtime_status.clone(),
             slot_generation,
+            request_admission,
         )
         .with_approval_required_tools(approval_required_tools)
         .with_output_obligations(output_obligations)

@@ -4,23 +4,21 @@ import { createDesktopApiAdapter } from "./api/adapter.js";
 import type { DesktopApiAdapter } from "./api/types.js";
 import type { BridgeContract as GeneratedBridgeContract } from "./generated/BridgeContract.js";
 import type {
-  BearerPairingRequest,
-  BearerPairingResponse,
   ChatSendRequest,
   ChatSendResult,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
-  PeerAddRequest,
 } from "./types.js";
 
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.14.0";
 // Runtime-authored behavior readiness is required and the duplicate runtime
-// counters are gone, so this client requires the breaking 3.0 bridge.
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "3.0";
+// counters are gone and status pairing is authenticated enrollment, so this
+// client requires the breaking 4.0 bridge.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "4.0";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "3dbcd688a022f9e16e653d83039ca148ad2b89da8ede781ea0f65755dba5be18";
+  "88444c308e1d96ecf2bc8589f141ec99bd38e330965ad8dfe0b3f63339144afe";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);
@@ -81,8 +79,6 @@ export type DesktopClient = {
     agentDid?: string | null;
     requestId?: string | null;
   }): Promise<DesktopSessionSnapshot | null>;
-  peerPairBearer(request: BearerPairingRequest): Promise<BearerPairingResponse>;
-  peerAdd(request: PeerAddRequest): Promise<DesktopClientSnapshot>;
 };
 
 export function createDesktopClient(
@@ -125,8 +121,5 @@ export function createDesktopClient(
         agentDid: args.agentDid ?? null,
         requestId: args.requestId ?? null,
       }),
-    peerPairBearer: (request) =>
-      invoke("desktop_peer_pair_bearer", { request }),
-    peerAdd: (request) => invoke("desktop_peer_add", { request }),
   };
 }

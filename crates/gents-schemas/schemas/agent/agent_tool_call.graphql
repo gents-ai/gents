@@ -1,13 +1,13 @@
 type AgentToolCall @branchable {
     tool_call_key: String @index(unique: true)
-    request_id: String @index
+    request_id: String @index @immutable
     request_doc_id: String @index @immutable
     session_id: String @index
     agent_did: String @index @immutable
     requester_did: String @index @immutable
     message_sequence: Int
     tool_name: String @index
-    tool_call_id: String @index
+    tool_call_id: String @index @immutable
     args: String
     result: String
     # Persistence/delivery state. A terminal failed tool may still use
@@ -34,7 +34,7 @@ type AgentToolCall @branchable {
     await_mode: String
     cancel_policy: String
     cancel_cause: String
-    child_request_id: String @index
+    child_request_id: String @index @immutable
     spawn_target_did: String @index @immutable
     # deprecated: fan_out_and_synthesize removed; retained for schema compatibility, unused.
     workflow_group_id: String @index

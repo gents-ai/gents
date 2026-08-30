@@ -7,7 +7,29 @@ pub struct EnqueuedAgentRequest {
     pub session_id: String,
 }
 
-fn trigger_lineage_graphql_fields(trigger_lineage: &TriggerLineage) -> Result<String> {
+fn validate_trigger_lineage(
+    trigger_lineage: &TriggerLineage,
+    trigger_doc_id: Option<&str>,
+) -> Result<()> {
+    validate_trigger_provenance(trigger_lineage)?;
+    let trigger_kind = trigger_lineage
+        .trigger_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let trigger_doc_id = trigger_doc_id.map(str::trim);
+    match (trigger_kind, trigger_doc_id) {
+        (Some("event" | "schedule"), Some(value)) if !value.is_empty() => {}
+        (Some("event" | "schedule"), _) => {
+            anyhow::bail!("Automated trigger lineage requires trigger_doc_id")
+        }
+        (_, Some(_)) => anyhow::bail!("Only automated trigger lineage may carry trigger_doc_id"),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_trigger_provenance(trigger_lineage: &TriggerLineage) -> Result<()> {
     let trigger_kind = trigger_lineage
         .trigger_kind
         .as_deref()
@@ -20,79 +42,7 @@ fn trigger_lineage_graphql_fields(trigger_lineage: &TriggerLineage) -> Result<St
         (_, Some(_)) => anyhow::bail!("Only Event trigger lineage may carry source_doc_id"),
         _ => {}
     }
-
-    let caused_by_trigger_id_field = trigger_lineage
-        .trigger_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            format!(
-                r#"
-                    caused_by_trigger_id: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let caused_by_trigger_kind_field = trigger_lineage
-        .trigger_kind
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            format!(
-                r#"
-                    caused_by_trigger_kind: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let caused_by_source_doc_id_field = source_doc_id
-        .map(|value| {
-            format!(
-                r#"
-                    caused_by_source_doc_id: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let caused_by_correlation_field = trigger_lineage
-        .correlation
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            format!(
-                r#"
-                    caused_by_correlation: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let caused_by_trigger_context_field = trigger_lineage
-        .trigger_context
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            crate::lifecycle::TriggerExecutionContext::parse(Some(value))?;
-            Ok::<_, anyhow::Error>(format!(
-                r#"
-                    caused_by_trigger_context: "{}","#,
-                escape_graphql_string(value)
-            ))
-        })
-        .transpose()?
-        .unwrap_or_default();
-    Ok(format!(
-        "{caused_by_trigger_id_field}{caused_by_trigger_kind_field}{caused_by_source_doc_id_field}{caused_by_correlation_field}{caused_by_trigger_context_field}"
-    ))
-}
-
-fn workspace_lineage_graphql_fields(workspace: Option<&WorkspaceLineage>) -> String {
-    workspace
-        .map(WorkspaceLineage::graphql_fields)
-        .unwrap_or_default()
+    Ok(())
 }
 
 async fn resolve_created_agent_request_doc_id(
@@ -155,6 +105,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
         None,
         None,
         None,
+        None,
     )
     .await
 }
@@ -170,7 +121,9 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     workspace_lineage: Option<&WorkspaceLineage>,
     request_id: Option<&str>,
     requester_did: Option<&str>,
+    trigger_doc_id: Option<&str>,
 ) -> Result<EnqueuedAgentRequest> {
+    validate_trigger_lineage(&trigger_lineage, trigger_doc_id)?;
     if trigger_lineage.trigger_kind.as_deref() == Some("manual")
         && trigger_lineage.trigger_id.is_some()
     {
@@ -189,17 +142,8 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     let session_id = uuid::Uuid::new_v4().to_string();
 
     let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let escaped_session_id = escape_graphql_string(&session_id);
     let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
     let content = prompt_selection.prompt.as_str();
-    let escaped_content = escape_graphql_string(content);
-    let escaped_created_at = escape_graphql_string(&now);
-    let execution_origin = execution_origin.as_str();
-    let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage)?;
-    let workspace_fields = workspace_lineage_graphql_fields(workspace_lineage);
-    let requester_did_field = crate::session::requester_did_create_field(requester_did);
     let initial_status = if workspace_lineage.is_some_and(WorkspaceLineage::is_bound) {
         "workspace_binding_pending"
     } else {
@@ -222,40 +166,55 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
             serde_json::Value::String(title.to_string()),
         );
     }
-    let metadata_field = if metadata.is_empty() {
-        String::new()
-    } else {
-        let metadata = serde_json::Value::Object(metadata).to_string();
-        format!(
-            r#"
-                metadata: "{}","#,
-            escape_graphql_string(&metadata)
-        )
+    let admission = match trigger_lineage.trigger_kind.as_deref() {
+        Some("manual") | None => {
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did)
+        }
+        Some("event" | "schedule") => {
+            let source = trigger_lineage.trigger_id.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("runtime trigger request requires a durable trigger id")
+            })?;
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_automated_trigger(
+                agent_did, source,
+            )
+        }
+        Some(kind) => anyhow::bail!("unsupported runtime request trigger kind {kind}"),
     };
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
-                {requester_did_field}
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "{escaped_content}",{metadata_field}
-                status: "{initial_status}",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "{execution_origin}",{lineage_fields}{workspace_fields}
-                failure_reason: "",
-                created_at: "{escaped_created_at}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id.clone(),
+        agent_did,
+        agent_did,
+        behavior_id,
+        session_id.clone(),
+        content,
+        execution_origin.as_str(),
+        now,
+        admission,
     );
+    create.metadata =
+        (!metadata.is_empty()).then(|| serde_json::Value::Object(metadata).to_string());
+    create.initial_status = initial_status.to_string();
+    create.caused_by_trigger_id = trigger_lineage.trigger_id.clone();
+    create.caused_by_trigger_kind = trigger_lineage.trigger_kind.clone();
+    create.caused_by_trigger_doc_id = trigger_doc_id.map(str::to_owned);
+    create.caused_by_source_doc_id = trigger_lineage.source_doc_id.clone();
+    create.caused_by_correlation = trigger_lineage.correlation.clone();
+    create.caused_by_trigger_context = trigger_lineage.trigger_context.clone();
+    create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
+    if let Some(workspace) = workspace_lineage {
+        create.workspace_id = workspace.workspace_id.clone();
+        create.workspace_authority = workspace.workspace_authority.clone();
+        create.workspace_owner_deployment_id = workspace.workspace_owner_deployment_id.clone();
+        create.workspace_seal_hash = workspace.workspace_seal_hash.clone();
+    }
+    if requester_did.is_some_and(|did| did.trim() != agent_did) {
+        tracing::debug!(
+            target_agent_did = agent_did,
+            "runtime trigger requester provenance remains in signed trigger context"
+        );
+    }
+    crate::sign_agent_request_create_as_registered_target(&mut create).await?;
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
 
     // A trigger fire is not replayable: `event_kind: created` is first-seen, so
     // dropping this create on a transient conflict loses the stage for good.
@@ -367,72 +326,63 @@ impl RequestLifecycle {
     pub async fn materialize_claimed_with_execution_binding(
         node: Arc<EmbeddedNode>,
         agent_name: &str,
-        agent_did: &str,
+        identity: Arc<dyn crate::identity::AgentIdentity>,
         content: &str,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
         backend_id: impl Into<String>,
         trigger_lineage: TriggerLineage,
     ) -> Result<Self> {
+        let agent_did = identity.did().to_string();
         let backend_id = backend_id.into();
         let behavior_id = agent_name.to_string();
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now();
-        let created_at = now.to_rfc3339();
-        let claimed_at = created_at.clone();
-        let deadline_at = now + chrono::Duration::seconds(deadline_duration_secs as i64);
-        let deadline = deadline_at.to_rfc3339();
-        let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage)?;
-
-        let escaped_request_id = escape_graphql_string(&request_id);
-        let escaped_agent_did = escape_graphql_string(agent_did);
-        let escaped_behavior_id = escape_graphql_string(&behavior_id);
-        let escaped_session_id = escape_graphql_string(&session_id);
-        let escaped_content = escape_graphql_string(content);
-        let escaped_backend_id = escape_graphql_string(&backend_id);
-        let escaped_retry_root_request = graphql_retry_root_request(None, &request_id);
-        let escaped_created_at = escape_graphql_string(&created_at);
-        let escaped_claimed_at = escape_graphql_string(&claimed_at);
-        let escaped_deadline = escape_graphql_string(&deadline);
-        let execution_origin_str = execution_origin.as_str();
-        let mutation = format!(
-            r#"mutation {{
-                add_AgentRequest(input: {{
-                    request_id: "{escaped_request_id}",
-                    agent_did: "{escaped_agent_did}",
-                    behavior_id: "{escaped_behavior_id}",
-                    session_id: "{escaped_session_id}",
-                    retry_parent_request: "",
-                    retry_root_request: "{escaped_retry_root_request}",
-                    superseded_by_request: "",
-                    content: "{escaped_content}",
-                    status: "processing",
-                    lifecycle_state: "{lifecycle_state}",
-                    backend_id: "{escaped_backend_id}",
-                    execution_origin: "{execution_origin_str}",{lineage_fields}
-                    failure_reason: "",
-                    created_at: "{escaped_created_at}",
-                    claimed_at: "{escaped_claimed_at}",
-                    deadline: "{escaped_deadline}",
-                    retry_count: 0,
-                    max_retries: {max_retries}
-                }}) {{
-                    _docID
-                    _version {{ cid height fieldName }}
-                }}
-            }}"#,
-            lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
-            max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+        validate_trigger_provenance(&trigger_lineage)?;
+        let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            request_id.clone(),
+            &agent_did,
+            &agent_did,
+            behavior_id.clone(),
+            session_id.clone(),
+            content,
+            execution_origin.as_str(),
+            created_at.clone(),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did),
         );
+        create.backend_id = (!backend_id.is_empty()).then(|| backend_id.clone());
+        create.caused_by_trigger_id = trigger_lineage.trigger_id.clone();
+        create.caused_by_trigger_kind = trigger_lineage.trigger_kind.clone();
+        create.caused_by_source_doc_id = trigger_lineage.source_doc_id.clone();
+        create.caused_by_correlation = trigger_lineage.correlation.clone();
+        create.caused_by_trigger_context = trigger_lineage.trigger_context.clone();
+        create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
+        crate::sign_agent_request_create(identity.as_ref(), &mut create).await?;
+        let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+        let resp = crate::graphql::graphql_mutation_with_transaction_retry(
+            node.as_ref(),
+            &mutation,
+            "materialize_signed_pending_request_before_owned_claim",
+        )
+        .await?;
 
-        let request = AgentRequest {
-            doc_id: String::new(),
-            request_id: request_id.clone(),
-            agent_did: agent_did.to_string(),
-            requester_did: None,
-            behavior_id: Some(behavior_id.clone()),
-            session_id: session_id.clone(),
+        let doc_id = resolve_created_agent_request_doc_id(
+            node.as_ref(),
+            &resp,
+            "create_AgentRequest",
+            &escape_graphql_string(&request_id),
+            "querying created AgentRequest doc id failed",
+            "create_AgentRequest returned no _docID",
+        )
+        .await?;
+        let queued_request = AgentRequest {
+            doc_id,
+            request_id,
+            agent_did: agent_did.clone(),
+            requester_did: Some(agent_did.clone()),
+            behavior_id: Some(behavior_id),
+            session_id,
             content: content.to_string(),
             temperature: None,
             top_p: None,
@@ -441,68 +391,46 @@ impl RequestLifecycle {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            execution_origin: Some(execution_origin_str.to_string()),
-            created_at: created_at.clone(),
-            deadline: Some(deadline.clone()),
+            execution_origin: Some(execution_origin.as_str().to_string()),
+            created_at,
+            deadline: None,
             subagent_depth: 0,
             caused_by_parent_request_id: None,
             caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
             caused_by_parent_tool_call_doc_id: None,
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_source_doc_id: None,
-            caused_by_correlation: None,
-            caused_by_trigger_context: None,
+            caused_by_trigger_id: trigger_lineage.trigger_id,
+            caused_by_trigger_kind: trigger_lineage.trigger_kind,
+            caused_by_source_doc_id: trigger_lineage.source_doc_id,
+            caused_by_correlation: trigger_lineage.correlation,
+            caused_by_trigger_context: trigger_lineage.trigger_context,
             workspace_id: None,
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
         };
-        let projection =
-            request_session_projection(&request, agent_name, agent_did, &behavior_id, &claimed_at);
-        let resp =
-            materialize_claimed_request_with_projection(node.as_ref(), &mutation, &projection)
-                .await?;
-
-        let doc_id = resolve_created_agent_request_doc_id(
+        let request = crate::request_admission::verify_fresh_local_self_request(
             node.as_ref(),
-            &resp,
-            "add_AgentRequest",
-            &escaped_request_id,
-            "querying created AgentRequest doc id failed",
-            "add_AgentRequest returned no _docID",
+            identity.as_ref(),
+            &queued_request,
+            agent_name,
         )
         .await?;
-        let request_commit_cid =
-            crate::graphql::mutation_composite_version(&resp, "add_AgentRequest")?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "materialized AgentRequest {doc_id} returned no composite version"
-                    )
-                })?
-                .cid;
-
-        let request = AgentRequest { doc_id, ..request };
-
-        Ok(Self {
+        let mut lifecycle = Self::new_with_execution_binding(
             node,
-            agent_name: agent_name.to_string(),
-            agent_did: agent_did.to_string(),
-            behavior_id,
+            agent_name,
+            &agent_did,
+            request,
+            deadline_duration_secs,
             execution_origin,
             backend_id,
-            failure_reason: None,
-            request,
-            request_commit_cid: Some(request_commit_cid),
-            response_doc_id: None,
-            progress_seq: 0,
-            deadline_duration_secs,
-            claimed_deadline_at: Some(deadline_at),
-            background_completion_input_through_sequence: None,
-            state: LocalLifecycleState::Claimed,
-            valid_until_at_claim: None,
-        })
+        );
+        match lifecycle.claim_with_identity().await? {
+            ClaimOutcome::Claimed => Ok(lifecycle),
+            outcome => {
+                anyhow::bail!("newly materialized signed AgentRequest was not claimed: {outcome:?}")
+            }
+        }
     }
 
     pub fn request(&self) -> &AgentRequest {
@@ -686,52 +614,4 @@ pub(super) async fn apply_request_session_projection(
             .await?;
     }
     Ok(())
-}
-
-async fn materialize_claimed_request_with_projection(
-    node: &EmbeddedNode,
-    request_mutation: &str,
-    projection: &RequestSessionProjection,
-) -> Result<defra_node::QueryResponse> {
-    let mut last_error = None;
-    for retry_index in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
-        let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-        let attempt = async {
-            let created = txn.execute_local_response(request_mutation).await?;
-            if !created
-                .data
-                .as_ref()
-                .and_then(|data| data.get("add_AgentRequest"))
-                .is_some_and(response_has_documents)
-            {
-                anyhow::bail!("materialized AgentRequest mutation returned no document");
-            }
-            apply_request_session_projection(&txn, projection).await?;
-            Ok::<_, anyhow::Error>(created)
-        }
-        .await;
-        let result = match attempt {
-            Ok(created) => txn.commit().await.map(|()| created),
-            Err(error) => {
-                let _ = txn.discard().await;
-                Err(error)
-            }
-        };
-        match result {
-            Ok(created) => return Ok(created),
-            Err(error)
-                if retry_index < crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES
-                    && crate::graphql::is_defradb_transaction_conflict_text(
-                        &error.to_string().to_ascii_lowercase(),
-                    ) =>
-            {
-                last_error = Some(error);
-                tokio::time::sleep(crate::graphql::defradb_conflict_retry_backoff(retry_index))
-                    .await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Err(last_error
-        .unwrap_or_else(|| anyhow::anyhow!("materialize claimed request transaction exhausted")))
 }

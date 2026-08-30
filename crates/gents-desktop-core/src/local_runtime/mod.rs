@@ -5,15 +5,14 @@ mod identity;
 mod tests;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::client::{
-    initialize_local_standard_peer, initialize_status_endpoint_peer, DesktopPaths,
-};
+use crate::client::{initialize_local_standard_peer, DesktopPaths};
 
 use self::http::{http_get_json, p2p_api_base, read_json};
 use self::identity::{normalize_optional_string, resolve_p2p_peer_id};
@@ -21,7 +20,6 @@ use self::identity::{normalize_optional_string, resolve_p2p_peer_id};
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
-const SERVER_STATUS_SOURCE: &str = "server-status";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
@@ -40,19 +38,10 @@ pub(crate) struct StandardRuntimeDiscovery {
     pub p2p_listen_address: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct StatusEndpointInitOptions {
-    pub desktop_paths: DesktopPaths,
-    pub status_endpoint: String,
-    pub label: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct DesktopInitSummary {
     pub status: &'static str,
     pub source: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status_endpoint: Option<String>,
     pub agent_home: String,
     pub desktop_home: String,
     pub peer_directory: String,
@@ -71,6 +60,61 @@ pub struct DesktopInitSummary {
 struct StoredInitConfig {
     agent_name: String,
     agent_did: String,
+    #[serde(default)]
+    key_path: Option<String>,
+    #[serde(default)]
+    identity_backend: Option<String>,
+    #[serde(default)]
+    keychain_label: Option<String>,
+    #[serde(default)]
+    secure_enclave_label: Option<String>,
+}
+
+pub(crate) fn load_standard_runtime_identity(
+    agent_home: &Path,
+) -> Result<Arc<dyn gents::identity::AgentIdentity>> {
+    use gents::identity::{
+        load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity,
+    };
+    let config = read_json::<StoredInitConfig>(&agent_home.join(INIT_CONFIG_FILE_NAME))?;
+    let identity: Arc<dyn gents::identity::AgentIdentity> = if let Some(path) = config
+        .key_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Arc::new(KeyIdentity::load_or_create(Path::new(path), None)?)
+    } else {
+        match config.identity_backend.as_deref().map(str::trim) {
+            Some("macos-keychain") => Arc::new(load_macos_keychain_identity(
+                config
+                    .keychain_label
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .context("local runtime keychain identity has no label")?,
+                None,
+            )?),
+            Some("macos-secure-enclave") => Arc::new(load_macos_secure_enclave_identity(
+                config
+                    .secure_enclave_label
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .context("local runtime Secure Enclave identity has no label")?,
+                None,
+            )?),
+            backend => anyhow::bail!(
+                "local runtime {} has no key path and unsupported identity backend {backend:?}",
+                agent_home.display()
+            ),
+        }
+    };
+    anyhow::ensure!(
+        identity.did() == config.agent_did.trim(),
+        "local runtime identity does not match configured agent DID"
+    );
+    Ok(identity)
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,18 +146,6 @@ struct GraphqlResponse {
     data: Option<Value>,
     #[serde(default)]
     errors: Option<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct StatusEndpointConnection {
-    label: String,
-    agent_name: String,
-    agent_did: String,
-    default_behavior_id: Option<String>,
-    graphql: String,
-    p2p_transport: String,
-    p2p_peer_id: String,
-    p2p_listen_address: String,
 }
 
 pub fn default_agent_home() -> Result<PathBuf> {
@@ -166,10 +198,6 @@ pub fn runtime_graphql_url(endpoint: &str) -> Result<String> {
     url.set_query(None);
     url.set_fragment(None);
     Ok(url.to_string())
-}
-
-pub fn runtime_discovery_url(endpoint: &str) -> Result<String> {
-    runtime_graphql_url(endpoint).or_else(|_| runtime_status_url(endpoint))
 }
 
 pub fn graphql_endpoint_for_desktop_access(
@@ -286,13 +314,13 @@ pub async fn init_standard_local_runtime(
         &discovery.p2p_listen_address,
         &discovery.agent_did,
         &discovery.graphql,
+        &options.agent_home.display().to_string(),
     )
     .await?;
 
     Ok(DesktopInitSummary {
         status: "initialized",
         source: LOCAL_STANDARD_SOURCE,
-        status_endpoint: None,
         agent_home: options.agent_home.display().to_string(),
         desktop_home: options.desktop_paths.root().display().to_string(),
         peer_directory: options
@@ -361,68 +389,11 @@ pub(crate) async fn discover_standard_runtime(
     })
 }
 
-pub async fn init_status_endpoint_runtime(
-    options: StatusEndpointInitOptions,
-) -> Result<DesktopInitSummary> {
-    options.desktop_paths.ensure_root_dirs().await?;
-    let client = reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()
-        .context("building status endpoint HTTP client")?;
-    let discovery_url = runtime_discovery_url(&options.status_endpoint)?;
-    let payload = fetch_runtime_connection_payload_with_client(&client, &options.status_endpoint)
-        .await
-        .with_context(|| format!("discovering runtime from {}", options.status_endpoint))?;
-    let connection =
-        extract_status_endpoint_connection(&payload, &discovery_url, options.label.as_deref())?;
-
-    let peer = initialize_status_endpoint_peer(
-        &options.desktop_paths.peer_directory_path(),
-        &connection.label,
-        &connection.p2p_listen_address,
-        &connection.agent_did,
-        &connection.graphql,
-        connection.default_behavior_id.as_deref(),
-    )
-    .await?;
-
-    Ok(DesktopInitSummary {
-        status: "initialized",
-        source: SERVER_STATUS_SOURCE,
-        status_endpoint: Some(discovery_url),
-        agent_home: String::new(),
-        desktop_home: options.desktop_paths.root().display().to_string(),
-        peer_directory: options
-            .desktop_paths
-            .peer_directory_path()
-            .display()
-            .to_string(),
-        label: peer.label,
-        agent_name: connection.agent_name,
-        agent_did: connection.agent_did,
-        graphql: connection.graphql,
-        p2p_transport: connection.p2p_transport,
-        p2p_peer_id: connection.p2p_peer_id,
-        p2p_listen_address: connection.p2p_listen_address,
-        peer_record_id: peer.peer_id,
-        next_steps: vec![
-            "Run `gents-desktop` and leave the desktop app open.".to_string(),
-            "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
-        ],
-    })
-}
-
 pub fn render_human_summary(summary: &DesktopInitSummary) -> String {
-    let discovery_line = match summary.status_endpoint.as_deref() {
-        Some(status_endpoint) => {
-            format!("Discovered Gents runtime from discovery endpoint: {status_endpoint}")
-        }
-        None => format!(
-            "Discovered local Gents runtime: {agent_home}",
-            agent_home = summary.agent_home
-        ),
-    };
+    let discovery_line = format!(
+        "Discovered local Gents runtime: {agent_home}",
+        agent_home = summary.agent_home
+    );
 
     format!(
         "\
@@ -576,108 +547,12 @@ fn errors_is_empty(errors: &Value) -> bool {
     }
 }
 
-fn extract_status_endpoint_connection(
-    payload: &Value,
-    status_url: &str,
-    label: Option<&str>,
-) -> Result<StatusEndpointConnection> {
-    let agent_did = string_at(payload, "/agent_did")
-        .or_else(|| string_at(payload, "/runtime_state/agent_did"))
-        .or_else(|| string_at(payload, "/runtime/agent_did"))
-        .context("status response did not include agent_did")?
-        .to_string();
-    let agent_name = string_at(payload, "/agent_name")
-        .or_else(|| string_at(payload, "/runtime_state/agent_name"))
-        .or_else(|| string_at(payload, "/runtime/agent_name"))
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| fallback_agent_name(&agent_did));
-    let default_behavior_id = status_default_behavior_id(payload);
-    let graphql = string_at(payload, "/desktop_graphql")
-        .map(ToOwned::to_owned)
-        .or_else(|| graphql_endpoint_for_desktop_access(payload, status_url))
-        .context("status response did not include a usable GraphQL endpoint")?;
-    p2p_api_base(&graphql).with_context(|| {
-        format!("status response GraphQL endpoint is not usable for P2P pairing: {graphql}")
-    })?;
-
-    let p2p_listen_address = string_at(payload, "/p2p_shareable_address")
-        .or_else(|| string_at(payload, "/p2p/p2p_shareable_address"))
-        .or_else(|| string_at(payload, "/runtime_state/p2p_shareable_address"))
-        .or_else(|| first_string_at(payload, "/p2p_listen_addresses"))
-        .or_else(|| first_string_at(payload, "/p2p/p2p_listen_addresses"))
-        .or_else(|| first_string_at(payload, "/runtime_state/p2p_listen_addresses"))
-        .context("status response did not include a shareable P2P address")?
-        .to_string();
-    let p2p_peer_id = string_at(payload, "/p2p_peer_id")
-        .or_else(|| string_at(payload, "/p2p/p2p_peer_id"))
-        .or_else(|| string_at(payload, "/runtime_state/p2p_peer_id"))
-        .map(ToOwned::to_owned)
-        .or_else(|| resolve_p2p_peer_id(None, Some(&p2p_listen_address), None))
-        .context("status response did not include a usable P2P peer id")?;
-    let p2p_transport = string_at(payload, "/p2p_transport")
-        .or_else(|| string_at(payload, "/p2p/p2p_transport"))
-        .or_else(|| string_at(payload, "/runtime_state/p2p_transport"))
-        .unwrap_or("iroh")
-        .to_string();
-    if p2p_transport != "iroh" {
-        anyhow::bail!(
-            "status response uses p2p_transport={p2p_transport}; desktop pairing requires iroh"
-        );
-    }
-    let label = normalize_optional_string(label).unwrap_or_else(|| agent_name.clone());
-
-    Ok(StatusEndpointConnection {
-        label,
-        agent_name,
-        agent_did,
-        default_behavior_id,
-        graphql,
-        p2p_transport,
-        p2p_peer_id,
-        p2p_listen_address,
-    })
-}
-
-fn status_default_behavior_id(payload: &Value) -> Option<String> {
-    string_at(payload, "/default_behavior_id")
-        .or_else(|| string_at(payload, "/runtime/default_behavior_id"))
-        .or_else(|| string_at(payload, "/runtime_state/default_behavior_id"))
-        .map(str::to_owned)
-        .or_else(|| {
-            [
-                "/behaviors",
-                "/runtime/behaviors",
-                "/runtime_state/behaviors",
-            ]
-            .into_iter()
-            .filter_map(|pointer| payload.pointer(pointer).and_then(Value::as_array))
-            .flatten()
-            .filter(|behavior| behavior.get("enabled").and_then(Value::as_bool) != Some(false))
-            .filter_map(|behavior| string_at(behavior, "/behavior_id"))
-            .find(|behavior_id| *behavior_id == "default")
-            .map(str::to_owned)
-        })
-}
-
 fn string_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
     value
         .pointer(pointer)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-fn first_string_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
-    value
-        .pointer(pointer)
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .find(|value| !value.is_empty())
-        })
 }
 
 fn fallback_agent_name(agent_did: &str) -> String {

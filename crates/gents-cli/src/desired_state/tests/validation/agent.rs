@@ -240,7 +240,6 @@ fn template_manifest(
         inference_profiles: Vec::new(),
         tool_service_registries: Vec::new(),
         projection_acp_bindings: Vec::new(),
-        peer_pairings: Vec::new(),
         tasks: task_prompt
             .map(|prompt| {
                 vec![DesiredTask {

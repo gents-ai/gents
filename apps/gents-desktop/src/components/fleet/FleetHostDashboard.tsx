@@ -65,15 +65,7 @@ export function FleetHostDashboard({
           {fleetProps.deployments.length === 0 ? indicator : null}
         </div>
       }
-      copy={{
-        ...fleetProps.copy,
-        pairingQrHint: fleetProps.copy?.pairingQrHint ?? (
-          <>
-            Point the camera at the QR code printed by{" "}
-            <code>gents p2p pairings invite --bearer --qr</code>.
-          </>
-        ),
-      }}
+      copy={fleetProps.copy}
       headerLeadingActions={
         <>
           {fleetProps.deployments.length > 0 ? indicator : null}

@@ -46,6 +46,7 @@ structure ClientBehaviorReadinessCase where
 
 structure EnrollmentTraceStep where
   action : String
+  peerAdmissionDid : String
   offerId : String
   offerChallenge : String
   offerNetworkId : String
@@ -78,6 +79,7 @@ structure EnrollmentTraceStep where
   candidateSigned : Bool
   requestFresh : Bool
   decisionAuthorizationSequence : Nat
+  decisionAuthorizationExpiresAt : String
   decisionSignerDid : String
   decisionKind : String
   decisionRequestId : String
@@ -91,6 +93,7 @@ structure EnrollmentTraceStep where
   decisionFresh : Bool
   revisionKind : String
   revisionSequence : Nat
+  revisionAuthorizationExpiresAt : String
   revisionSignerDid : String
   revisionRequestId : String
   revisionRequestDigest : String
@@ -100,6 +103,20 @@ structure EnrollmentTraceStep where
   revisionMemberPeer : String
   revisionOwnerAgent : String
   revisionAdminSigned : Bool
+  receiptRequestId : String
+  receiptRequestDigest : String
+  receiptNetworkId : String
+  receiptAdminDid : String
+  receiptMemberDid : String
+  receiptMemberPeer : String
+  receiptServerPeer : String
+  receiptOwnerAgent : String
+  receiptAuthorizationSequence : Nat
+  receiptAuthorizationExpiresAt : String
+  receiptDirection : String
+  receiptSignerDid : String
+  receiptAdminSigned : Bool
+  receiptApplied : Bool
   observedOfferCount : Nat
   adminPinCount : Nat
   challengeBindingCount : Nat
@@ -108,11 +125,13 @@ structure EnrollmentTraceStep where
   decisionCount : Nat
   authorizationCount : Nat
   membershipCount : Nat
+  receiptCount : Nat
   routeCount : Nat
   requestAccepted : Bool
   decisionRecorded : Bool
   authorizationRecorded : Bool
   revisionRecorded : Bool
+  receiptRecorded : Bool
   membershipPresent : Bool
   clientRoutePresent : Bool
   serverRoutePresent : Bool
@@ -121,6 +140,7 @@ structure EnrollmentTraceStep where
   challengeBindingConflict : Bool
   requestBindingConflict : Bool
   currentApproval : Bool
+  peerAdmitted : Bool
   ready : Bool
   clientHydrationAdmits : Bool
   serverHydrationAdmits : Bool
@@ -135,6 +155,7 @@ structure EnrollmentDurableProjectionCase where
   name : String
   documents : List EnrollmentTraceStep
   expectedCurrentApproval : Bool
+  expectedCurrentRouteReceipt : Bool
   deriving Repr
 
 structure EnrollmentEncodingCase where
@@ -154,6 +175,37 @@ structure EnrollmentDigestCase where
   actualDigest : String
   payloadMatches : Bool
   digestMatches : Bool
+  deriving Repr
+
+structure AgentRequestAdmissionCase where
+  name : String
+  observationAvailable : Bool
+  kind : String
+  signatureValid : Bool
+  signedFieldsMatch : Bool
+  branchFieldsExact : Bool
+  pendingDeadlineAbsent : Bool
+  signerMatchesRequester : Bool
+  requesterMatchesTarget : Bool
+  signerMatchesTarget : Bool
+  signerMatchesIssuer : Bool
+  requesterMatchesIssuer : Bool
+  currentApproval : Bool
+  exactGeneration : Bool
+  authorizationFresh : Bool
+  runtimeEvidencePresent : Bool
+  runtimeSourceKind : String
+  targetRuntimeAttestationValid : Bool
+  sourceBindingCurrent : Bool
+  triggerConfigDocumentBindingCurrent : Bool
+  sourceDocumentBindingCurrent : Bool
+  sourceToolCallBindingCurrent : Bool
+  targetPolicyAllows : Bool
+  bridgeAuthorBindingCurrent : Bool
+  bridgeAuthorAuthorizationFresh : Bool
+  targetCrossDeploymentPolicyAllows : Bool
+  expectedAdmitted : Bool
+  expectedDisposition : String
   deriving Repr
 
 structure SessionRecoveryCase where

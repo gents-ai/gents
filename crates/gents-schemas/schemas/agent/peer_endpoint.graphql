@@ -1,14 +1,10 @@
-# A DID's self-published reachability record. Mirrors the Lean `Endpoint`
-# entity (Proofs/PeerRegistryDiscovery/NetworkMembership.lean; design spec §9):
-# the binding from a `did` (unique) to its current
+# A DID's self-published reachability record: the binding from a `did` (unique) to its current
 # transport coordinates (`node_id`, `address`). `binding_sig` is the DID's own
 # signature over the binding (did, node_id, address, updated_at), proving the
 # endpoint owner published this record and binding the address to the DID.
 # `@branchable` is REQUIRED: this collection replicates over P2P (the network
-# reconciler materializes the membership mesh from replicated endpoints), and
-# DefraDB only P2P-syncs branchable collections (they carry the Merkle-DAG
-# commit history sync needs). Without it, `add_replicator`/`add_p2p_collections`
-# cannot move these rows between nodes.
+# exact authenticated routes can deliver it), and DefraDB only P2P-syncs
+# branchable collections.
 type PeerEndpoint @branchable {
     # This is both the endpoint identity and the client-specific bootstrap
     # replication route key; it must never change after document creation.

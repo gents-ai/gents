@@ -7,6 +7,7 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 4.0: breaking — status-first enrollment replaces unauthenticated peer add.
 // 3.0: breaking — runtime-authored behavior readiness is required on every
 //       deployment and duplicate AgentRuntime readiness counters are removed.
 // 2.0: breaking — global sync health no longer embeds selected-session
@@ -28,13 +29,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "3.0";
+pub const CONTRACT_VERSION: &str = "4.0";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "3dbcd688a022f9e16e653d83039ca148ad2b89da8ede781ea0f65755dba5be18";
+    "88444c308e1d96ecf2bc8589f141ec99bd38e330965ad8dfe0b3f63339144afe";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -124,11 +125,9 @@ pub fn command_inventory() -> Vec<CommandContract> {
         // workspace-read
         ("desktop_workspace_list", "workspace-read"),
         // fleet-admin
-        ("desktop_peer_add", "fleet-admin"),
-        ("desktop_peer_pair_bearer", "fleet-admin"),
         ("desktop_peer_remove", "fleet-admin"),
         ("desktop_peer_rename", "fleet-admin"),
-        ("desktop_peer_probe_address", "fleet-admin"),
+        ("desktop_peer_enroll_status", "fleet-admin"),
         ("desktop_p2p_repair", "fleet-admin"),
         // operations-read
         ("desktop_operations_snapshot", "operations-read"),
@@ -580,11 +579,9 @@ mod tests {
             ("desktop_peer_status_fetch", "read"),
             ("desktop_network_status", "read"),
             ("desktop_workspace_list", "read"),
-            ("desktop_peer_add", "mutate"),
-            ("desktop_peer_pair_bearer", "mutate"),
             ("desktop_peer_remove", "mutate"),
             ("desktop_peer_rename", "mutate"),
-            ("desktop_peer_probe_address", "mutate"),
+            ("desktop_peer_enroll_status", "mutate"),
             ("desktop_p2p_repair", "mutate"),
             ("desktop_operations_snapshot", "read"),
             ("desktop_list_subagent_tree", "read"),

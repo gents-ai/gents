@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
-  BearerPairingRequest,
-  BearerPairingResponse,
   BootstrapSummary,
   DesktopApiAdapter,
   DeploymentView,
   P2PHealth,
-  PeerAddRequest,
 } from "@source-inc/gents-desktop-client";
 import type { FleetCopy } from "../copy.js";
-import { formatPeerConnectionError } from "../peerConnectionErrors.js";
-import { validateAgentDid } from "../peerConnectionImport.js";
 import { needsInferenceSetup } from "../fleetMetrics.js";
-import { AddPeerForm } from "./AddPeerForm.js";
+import { AddPeerForm, type AddPeerFormProps } from "./AddPeerForm.js";
 import { FleetRow } from "./FleetRow.js";
 import { NetworkPanel } from "./NetworkPanel.js";
 
@@ -25,11 +20,7 @@ export type FleetDashboardProps = {
   p2pHealth: P2PHealth | null;
   repairingP2P: boolean;
   starting: boolean;
-  onAddPeer: (request: PeerAddRequest) => Promise<unknown>;
-  onPairBearer: (
-    request: BearerPairingRequest,
-  ) => Promise<BearerPairingResponse>;
-  onProbePeerAddress: (serverAddress: string) => Promise<unknown>;
+  onRequestStatusEnrollment: AddPeerFormProps["onRequestStatusEnrollment"];
   onOpenChat: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
   onRemovePeer?: (peerId: string) => Promise<unknown> | void;
@@ -46,13 +37,6 @@ export type FleetDashboardProps = {
   ) => ReactNode;
 };
 
-const DEFAULT_PEER_FORM: PeerAddRequest = {
-  label: "",
-  agentDid: "",
-  addr: "",
-  graphql: null,
-};
-
 export function FleetDashboard({
   addingPeer,
   bootstrap,
@@ -61,9 +45,7 @@ export function FleetDashboard({
   p2pHealth,
   repairingP2P,
   starting,
-  onAddPeer,
-  onPairBearer,
-  onProbePeerAddress,
+  onRequestStatusEnrollment,
   onOpenChat,
   onOpenConfig,
   onRemovePeer,
@@ -77,11 +59,8 @@ export function FleetDashboard({
   renderInferenceSetup,
 }: FleetDashboardProps) {
   const [showAddPeer, setShowAddPeer] = useState(false);
-  const [peerForm, setPeerForm] = useState(DEFAULT_PEER_FORM);
-  const [peerFormError, setPeerFormError] = useState<string | null>(null);
   const [wizardDeployment, setWizardDeployment] =
     useState<DeploymentView | null>(null);
-  const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const autoPromptedInference = useRef(new Set<string>());
   const hasDeployments = deployments.length > 0;
   const deploymentNeedingInference =
@@ -112,30 +91,6 @@ export function FleetDashboard({
     setWizardDeployment(deploymentNeedingInference);
   }, [deploymentNeedingInference, renderInferenceSetup]);
 
-  async function submitPeer(request: PeerAddRequest) {
-    setPeerFormError(null);
-    try {
-      await onAddPeer({
-        ...request,
-        agentDid: validateAgentDid(request.agentDid),
-      });
-      setPeerForm(DEFAULT_PEER_FORM);
-      setShowAddPeer(false);
-    } catch (error) {
-      setPeerFormError(formatPeerConnectionError(error, "add-peer"));
-    }
-  }
-
-  async function pairWithBearer(request: BearerPairingRequest) {
-    const response = await onPairBearer(request);
-    setPeerFormError(null);
-    setPairingNotice(
-      `${response.pairing.label} is ready. Signed membership and bidirectional replication were observed.`,
-    );
-    setShowAddPeer(false);
-    return response;
-  }
-
   if (!hasDeployments) {
     return (
       <section className="fleet-empty" data-testid="fleet-empty">
@@ -162,13 +117,8 @@ export function FleetDashboard({
             <AddPeerForm
               addingPeer={addingPeer}
               disabled={starting || loading}
-              localError={peerFormError}
-              peerForm={peerForm}
-              onPeerFormChange={setPeerForm}
-              onProbePeerAddress={onProbePeerAddress}
-              onPairBearer={pairWithBearer}
-              pairingQrHint={copy?.pairingQrHint}
-              onSubmit={submitPeer}
+              localError={null}
+              onRequestStatusEnrollment={onRequestStatusEnrollment}
             />
           </details>
         </div>
@@ -197,7 +147,6 @@ export function FleetDashboard({
           <button
             className="primary-button"
             onClick={() => {
-              setPairingNotice(null);
               setShowAddPeer((value) => !value);
             }}
             type="button"
@@ -207,29 +156,14 @@ export function FleetDashboard({
         </div>
       </header>
 
-      {pairingNotice ? (
-        <p
-          aria-live="polite"
-          className="fleet-pairing-success"
-          data-testid="fleet-pair-status"
-        >
-          {pairingNotice}
-        </p>
-      ) : null}
-
       {showAddPeer ? (
         <section className="panel fleet-add-panel">
           {localRuntimeSetup}
           <AddPeerForm
             addingPeer={addingPeer}
             disabled={starting || loading}
-            localError={peerFormError}
-            peerForm={peerForm}
-            onPeerFormChange={setPeerForm}
-            onProbePeerAddress={onProbePeerAddress}
-            onPairBearer={pairWithBearer}
-            pairingQrHint={copy?.pairingQrHint}
-            onSubmit={submitPeer}
+            localError={null}
+            onRequestStatusEnrollment={onRequestStatusEnrollment}
           />
         </section>
       ) : null}

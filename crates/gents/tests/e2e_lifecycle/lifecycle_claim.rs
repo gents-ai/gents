@@ -4,8 +4,9 @@ use gents::RequestLifecycle;
 use serde::Deserialize;
 
 use crate::support::{
-    create_conversation_row, create_request, first_row, set_interrupt_requested_at,
-    set_valid_until, test_db, test_db_with_duplicate_tolerant_conversations, AGENT_DID, AGENT_NAME,
+    create_conversation_row, create_request, create_request_with_valid_until, first_row,
+    set_interrupt_requested_at, test_db, test_db_with_duplicate_tolerant_conversations, AGENT_DID,
+    AGENT_NAME,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -329,9 +330,16 @@ async fn queued_request_valid_until_wins_before_queue_block() {
     .await;
 
     let later = "2026-03-23T00:00:01Z";
-    let doc_id = create_request(&db.node, "req-later-expired", &session_id, "pending", later).await;
     let expired_at = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    set_valid_until(&db.node, &doc_id, &expired_at).await;
+    let doc_id = create_request_with_valid_until(
+        &db.node,
+        "req-later-expired",
+        &session_id,
+        "pending",
+        later,
+        Some(&expired_at),
+    )
+    .await;
 
     let request = AgentRequest {
         doc_id,

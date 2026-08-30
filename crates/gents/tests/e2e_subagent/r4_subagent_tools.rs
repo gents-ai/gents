@@ -65,6 +65,7 @@ struct ChildRequestRow {
     failure_reason: Option<String>,
     subagent_depth: Option<i64>,
     deadline: Option<String>,
+    valid_until: Option<String>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
     caused_by_trigger_id: Option<String>,
@@ -135,7 +136,7 @@ async fn setup_spawn_fixture_with_parent_fields(
     extra_parent_fields: &str,
 ) -> SpawnFixture {
     let db = test_db(test_name).await;
-    let agent_did = format!("did:test:r4-{test_name}");
+    let agent_did = db.node_identity.did().to_string();
 
     upsert_tool_selection(
         db.node.as_ref(),
@@ -421,6 +422,7 @@ async fn fetch_child_request(node: &EmbeddedNode, child_request_id: &str) -> Chi
                 failure_reason
                 subagent_depth
                 deadline
+                valid_until
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
                 caused_by_trigger_id

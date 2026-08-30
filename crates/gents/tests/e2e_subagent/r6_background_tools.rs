@@ -166,14 +166,20 @@ async fn setup_hook(
     registry: BackgroundToolRegistry,
 ) -> (crate::support::TestDb, DefraSessionHook, String, String) {
     let db = test_db(test_name).await;
+    let agent_did = db.node_identity.did().to_string();
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    crate::support::create_request(
+    crate::support::create_request_for_agent_with_signed_fields(
         db.node.as_ref(),
+        &agent_did,
         &request_id,
         &session_id,
         "processing",
         "2026-05-14T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
     )
     .await;
     crate::support::create_agent_session(
@@ -188,7 +194,7 @@ async fn setup_hook(
         db.node.clone(),
         &session_id,
         "r6-background",
-        crate::support::AGENT_DID,
+        &agent_did,
         FailurePolicy::default(),
     )
     .await
@@ -580,13 +586,10 @@ async fn periodic_recovery_does_not_terminalize_registered_background_worker() {
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
     set_parent_state(db.node.as_ref(), &request_id, "completed", "completed").await;
-    let _runs = gents::run_periodic_recovery_sweeps(
-        db.node.as_ref(),
-        crate::support::AGENT_DID,
-        &executions,
-    )
-    .await
-    .unwrap();
+    let _runs =
+        gents::run_periodic_recovery_sweeps(db.node.as_ref(), db.node_identity.did(), &executions)
+            .await
+            .unwrap();
     assert_eq!(
         load_tool_call(db.node.as_ref(), &session_id, &tool_call_id)
             .await
@@ -626,7 +629,7 @@ async fn periodic_recovery_preserves_registered_worker_after_parent_interrupt() 
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
     set_parent_state(db.node.as_ref(), &request_id, "interrupted", "interrupted").await;
-    gents::run_periodic_recovery_sweeps(db.node.as_ref(), crate::support::AGENT_DID, &executions)
+    gents::run_periodic_recovery_sweeps(db.node.as_ref(), db.node_identity.did(), &executions)
         .await
         .unwrap();
     assert_eq!(
@@ -659,7 +662,7 @@ async fn periodic_recovery_applies_deadline_before_terminal_parent_to_orphan() {
         db.node.clone(),
         request_id.clone(),
         session_id.clone(),
-        crate::support::AGENT_DID.to_string(),
+        db.node_identity.did().to_string(),
         tool_call_id.to_string(),
         1,
         "slow_tool".to_string(),
@@ -671,7 +674,7 @@ async fn periodic_recovery_applies_deadline_before_terminal_parent_to_orphan() {
 
     gents::run_periodic_recovery_sweeps(
         db.node.as_ref(),
-        crate::support::AGENT_DID,
+        db.node_identity.did(),
         &BackgroundExecutionRegistry::default(),
     )
     .await
@@ -693,7 +696,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
         db.node.clone(),
         request_id,
         session_id.clone(),
-        crate::support::AGENT_DID.to_string(),
+        db.node_identity.did().to_string(),
         tool_call_id.to_string(),
         1,
         "slow_tool".to_string(),
@@ -711,7 +714,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
                 await_mode: "background"
             }}) {{ _docID }}
         }}"#,
-        escape_graphql_string(crate::support::AGENT_DID)
+        escape_graphql_string(db.node_identity.did())
     );
     let response = db.node.execute(&malformed).await;
     assert!(
@@ -723,7 +726,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     let report =
         gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
             db.node.as_ref(),
-            crate::support::AGENT_DID,
+            db.node_identity.did(),
             &BackgroundExecutionRegistry::default(),
         )
         .await
@@ -1212,7 +1215,7 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
 
     let escaped_session_id = escape_graphql_string(&session_id);
     let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_agent_did = escape_graphql_string(crate::support::AGENT_DID);
+    let escaped_agent_did = escape_graphql_string(db.node_identity.did());
     let malformed_rows = format!(
         r#"mutation {{
             null_identity: create_AgentToolCall(input: {{

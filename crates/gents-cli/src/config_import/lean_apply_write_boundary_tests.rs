@@ -836,10 +836,6 @@ fn desired_manifest_from_lean(
             .into_iter()
             .map(|doc| desired_projection_acp_binding(doc, &agent_did))
             .collect(),
-        peer_pairings: docs_for_collection(case, Collection::PeerPairingDesired)
-            .into_iter()
-            .map(desired_peer_pairing)
-            .collect(),
         tasks: docs_for_collection(case, Collection::Task)
             .into_iter()
             .map(desired_task)
@@ -1085,16 +1081,6 @@ fn desired_task(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredTask {
     }
 }
 
-fn desired_peer_pairing(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredPeerPairing {
-    desired_state::DesiredPeerPairing {
-        peer_did: format!("did:key:{}", doc.content),
-        addresses: vec![format!("{}@127.0.0.1:4100", doc.id)],
-        template: "conversation".to_string(),
-        enabled: true,
-        peer_id: doc.id.clone(),
-    }
-}
-
 fn desired_schedule(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredSchedule {
     desired_state::DesiredSchedule {
         schedule_id: doc.id.clone(),
@@ -1143,7 +1129,6 @@ fn diff_report_from_lean(case: &LeanApplyReconcileCase) -> desired_state::Desire
         inference_profiles: diff_for_collection(case, Collection::InferenceProfile),
         tool_service_registries: diff_for_collection(case, Collection::ToolServiceRegistry),
         projection_acp_bindings: diff_for_collection(case, Collection::ProjectionAcpBinding),
-        peer_pairings: diff_for_collection(case, Collection::PeerPairingDesired),
         tasks: diff_for_collection(case, Collection::Task),
         schedules: diff_for_collection(case, Collection::Schedule),
         event_triggers: diff_for_collection(case, Collection::EventTrigger),
@@ -1282,7 +1267,6 @@ fn count_for_collection(counts: &ConfigApplyCounts, collection: Collection) -> u
         Collection::InferenceProfile => counts.inference_profiles,
         Collection::ToolServiceRegistry => counts.tool_service_registries,
         Collection::ProjectionAcpBinding => counts.projection_acp_bindings,
-        Collection::PeerPairingDesired => counts.peer_pairings,
         Collection::Task => counts.tasks,
         Collection::Schedule => counts.schedules,
         Collection::EventTrigger => counts.event_triggers,
@@ -1294,7 +1278,6 @@ fn runtime_owned_fields(collection: Collection) -> &'static [&'static str] {
         Collection::InferenceBackend => &["probe_status"],
         Collection::ToolServiceRegistry => &["tools", "version"],
         Collection::ProjectionAcpBinding => &[],
-        Collection::PeerPairingDesired => &[],
         Collection::Schedule => &[
             "next_run_at",
             "last_attempt_at",

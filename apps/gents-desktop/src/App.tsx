@@ -223,9 +223,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
             syncHealth={shell.snapshot?.client?.syncHealth ?? null}
             repairingP2P={shell.repairingP2P}
             starting={shell.starting}
-            onAddPeer={shell.onAddPeer}
-            onPairBearer={shell.onPairBearer}
-            onProbePeerAddress={shell.onProbePeerAddress}
+            onRequestStatusEnrollment={shell.onRequestStatusEnrollment}
             onInitLocalRuntime={shell.onInitLocalRuntime}
             onStartManagedServer={
               bridge.api.startManagedServer

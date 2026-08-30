@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
@@ -11,6 +12,20 @@ use super::graphql_helpers::{graphql_nullable_string_literal, graphql_string_lis
 use super::templates::resolve_template;
 
 pub const REGISTRY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+pub const REGISTRY_STALE_AFTER: Duration = Duration::from_secs(90);
+
+/// Resolve informational registry liveness without granting any pairing or
+/// routing authority. Excessive future skew is stale as well as old data.
+pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Duration) -> bool {
+    match now.signed_duration_since(ts).to_std() {
+        Ok(age) => age <= stale_after,
+        Err(_) => ts
+            .signed_duration_since(now)
+            .to_std()
+            .map(|ahead| ahead <= stale_after)
+            .unwrap_or(false),
+    }
+}
 
 pub const DEFAULT_NETWORK_ID: &str = "default";
 

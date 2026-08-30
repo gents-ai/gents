@@ -7,17 +7,23 @@
 use std::io::Cursor;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-pub const ENROLLMENT_PROTOCOL_VERSION: u8 = 1;
+pub const ENROLLMENT_PROTOCOL_VERSION: u8 = 2;
+pub const DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS: u64 = 30 * 24 * 60 * 60;
+pub const MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS: u64 = 90 * 24 * 60 * 60;
 pub const ENROLLMENT_DIGEST_DOMAIN: &str = "gents-enrollment-request-v1";
 pub const ENROLLMENT_DIGEST_PREFIX: &str = "utf8hex-v1:";
 const OFFER_SIGNATURE_DOMAIN: &str = "gents-enrollment-offer-signature-v1";
 const REQUEST_SIGNATURE_DOMAIN: &str = "gents-enrollment-request-signature-v1";
 const DECISION_SIGNATURE_DOMAIN: &str = "gents-enrollment-decision-signature-v1";
 const REVISION_SIGNATURE_DOMAIN: &str = "gents-network-authorization-signature-v1";
+const ROUTE_RECEIPT_SIGNATURE_DOMAIN: &str = "gents-enrollment-route-receipt-signature-v1";
+const OPERATOR_DECISION_COMMAND_SIGNATURE_DOMAIN: &str =
+    "gents-enrollment-operator-decision-command-v1";
+const OPERATOR_QUERY_COMMAND_SIGNATURE_DOMAIN: &str = "gents-enrollment-operator-query-command-v1";
 const MAX_OFFER_TOKEN_BYTES: usize = 32 * 1024;
 const MAX_ENROLLMENT_FIELD_BYTES: usize = 16 * 1024;
 const ENROLLMENT_SCHEMA_DOMAIN: &str = "gents-enrollment-schema-v1";
@@ -176,12 +182,188 @@ pub enum EnrollmentDecisionKind {
     Denied,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentOperatorAction {
+    Approve,
+    Deny,
+    Revoke,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentOperatorQuery {
+    Pending,
+}
+
+impl EnrollmentOperatorQuery {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+        }
+    }
+}
+
+impl EnrollmentOperatorAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::Deny => "deny",
+            Self::Revoke => "revoke",
+        }
+    }
+}
+
 impl EnrollmentDecisionKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Approved => "approved",
             Self::Denied => "denied",
         }
+    }
+}
+
+/// Short-lived, admin-signed command accepted by the live runtime operator
+/// surface. The durable decision and authorization revision remain the only
+/// enrollment authority; this record merely authenticates an invocation of
+/// that owner.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentOperatorDecisionCommand {
+    pub protocol_version: u8,
+    pub request_id: String,
+    pub action: EnrollmentOperatorAction,
+    /// Requested approval lease. Must be zero for deny/revoke.
+    pub lease_seconds: u64,
+    pub admin_did: String,
+    pub issued_at: String,
+    pub nonce: String,
+    pub admin_sig: Vec<u8>,
+}
+
+impl EnrollmentOperatorDecisionCommand {
+    pub fn signing_payload(&self) -> Vec<u8> {
+        let version = self.protocol_version.to_string();
+        canonical_domain_payload(
+            OPERATOR_DECISION_COMMAND_SIGNATURE_DOMAIN,
+            [
+                version.as_str(),
+                &self.request_id,
+                self.action.as_str(),
+                &self.lease_seconds.to_string(),
+                &self.admin_did,
+                &self.issued_at,
+                &self.nonce,
+            ],
+        )
+    }
+
+    pub fn validate_at(&self, now: DateTime<Utc>) -> Result<()> {
+        anyhow::ensure!(
+            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
+            "unsupported operator decision command version {}",
+            self.protocol_version
+        );
+        for (name, value) in [
+            ("request_id", self.request_id.as_str()),
+            ("admin_did", self.admin_did.as_str()),
+            ("issued_at", self.issued_at.as_str()),
+            ("nonce", self.nonce.as_str()),
+        ] {
+            validate_exact_field(name, value)?;
+            anyhow::ensure!(
+                value.chars().all(|character| !character.is_control()),
+                "operator decision command {name} contains control characters"
+            );
+        }
+        anyhow::ensure!(
+            self.admin_sig.len() == 64,
+            "invalid operator decision command signature length"
+        );
+        match self.action {
+            EnrollmentOperatorAction::Approve => anyhow::ensure!(
+                (1..=MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS).contains(&self.lease_seconds),
+                "approval lease_seconds is outside the supported range"
+            ),
+            EnrollmentOperatorAction::Deny | EnrollmentOperatorAction::Revoke => anyhow::ensure!(
+                self.lease_seconds == 0,
+                "deny/revoke command cannot allocate a lease"
+            ),
+        }
+        let issued = parse_canonical_timestamp("operator command issued_at", &self.issued_at)?
+            .with_timezone(&Utc);
+        anyhow::ensure!(
+            issued <= now + chrono::Duration::seconds(5),
+            "operator decision command is issued in the future"
+        );
+        anyhow::ensure!(
+            now - issued <= chrono::Duration::seconds(60),
+            "operator decision command expired"
+        );
+        Ok(())
+    }
+}
+
+/// Short-lived, admin-signed read invocation. Pending enrollment identities
+/// are operator data and are never exposed by an unauthenticated GET.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentOperatorQueryCommand {
+    pub protocol_version: u8,
+    pub query: EnrollmentOperatorQuery,
+    pub admin_did: String,
+    pub issued_at: String,
+    pub nonce: String,
+    pub admin_sig: Vec<u8>,
+}
+
+impl EnrollmentOperatorQueryCommand {
+    pub fn signing_payload(&self) -> Vec<u8> {
+        let version = self.protocol_version.to_string();
+        canonical_domain_payload(
+            OPERATOR_QUERY_COMMAND_SIGNATURE_DOMAIN,
+            [
+                version.as_str(),
+                self.query.as_str(),
+                &self.admin_did,
+                &self.issued_at,
+                &self.nonce,
+            ],
+        )
+    }
+
+    pub fn validate_at(&self, now: DateTime<Utc>) -> Result<()> {
+        anyhow::ensure!(
+            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
+            "unsupported operator query command version {}",
+            self.protocol_version
+        );
+        for (name, value) in [
+            ("admin_did", self.admin_did.as_str()),
+            ("issued_at", self.issued_at.as_str()),
+            ("nonce", self.nonce.as_str()),
+        ] {
+            validate_exact_field(name, value)?;
+            anyhow::ensure!(
+                value.chars().all(|character| !character.is_control()),
+                "operator query command {name} contains control characters"
+            );
+        }
+        anyhow::ensure!(
+            self.admin_sig.len() == 64,
+            "invalid operator query command signature length"
+        );
+        let issued = parse_canonical_timestamp("operator query issued_at", &self.issued_at)?
+            .with_timezone(&Utc);
+        anyhow::ensure!(
+            issued <= now + chrono::Duration::seconds(5),
+            "operator query command is issued in the future"
+        );
+        anyhow::ensure!(
+            now - issued <= chrono::Duration::seconds(60),
+            "operator query command expired"
+        );
+        Ok(())
     }
 }
 
@@ -198,6 +380,7 @@ pub struct EnrollmentDecisionRecord {
     pub owner_agent: String,
     pub decision: EnrollmentDecisionKind,
     pub authorization_sequence: u64,
+    pub authorization_expires_at: String,
     pub decided_at: String,
     pub signer_did: String,
     pub admin_sig: Vec<u8>,
@@ -231,10 +414,45 @@ pub struct AuthorizationRevisionRecord {
     pub member_peer: String,
     pub owner_agent: String,
     pub sequence: u64,
+    pub authorization_expires_at: String,
     pub kind: AuthorizationRevisionKind,
     pub issued_at: String,
     pub signer_did: String,
     pub admin_sig: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrollmentRouteReceiptRecord {
+    pub protocol_version: u8,
+    pub receipt_id: String,
+    pub request_id: String,
+    pub request_digest: String,
+    pub network_id: String,
+    pub admin_did: String,
+    pub member_did: String,
+    pub member_peer: String,
+    pub server_peer: String,
+    pub owner_agent: String,
+    pub authorization_sequence: u64,
+    pub authorization_expires_at: String,
+    pub direction: EnrollmentRouteReceiptDirection,
+    pub applied_at: String,
+    pub signer_did: String,
+    pub admin_sig: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentRouteReceiptDirection {
+    ClientToServer,
+}
+
+impl EnrollmentRouteReceiptDirection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ClientToServer => "client_to_server",
+        }
+    }
 }
 
 impl EnrollmentOfferRecord {
@@ -306,6 +524,7 @@ impl EnrollmentDecisionRecord {
                 &self.owner_agent,
                 self.decision.as_str(),
                 sequence.as_str(),
+                &self.authorization_expires_at,
                 &self.decided_at,
                 &self.signer_did,
             ],
@@ -355,14 +574,42 @@ impl EnrollmentDecisionRecord {
             "decision_id mismatch"
         );
         match self.decision {
-            EnrollmentDecisionKind::Approved => anyhow::ensure!(
-                self.authorization_sequence > 0,
-                "approved decision requires a positive authorization sequence"
-            ),
-            EnrollmentDecisionKind::Denied => anyhow::ensure!(
-                self.authorization_sequence == 0,
-                "denied decision cannot allocate an authorization sequence"
-            ),
+            EnrollmentDecisionKind::Approved => {
+                anyhow::ensure!(
+                    self.authorization_sequence > 0,
+                    "approved decision requires a positive authorization sequence"
+                );
+                let expires = parse_canonical_timestamp(
+                    "decision authorization_expires_at",
+                    &self.authorization_expires_at,
+                )?;
+                let decided = parse_canonical_timestamp("decision decided_at", &self.decided_at)?;
+                anyhow::ensure!(
+                    expires > decided,
+                    "approval lease must expire after its decision"
+                );
+                anyhow::ensure!(
+                    expires - decided
+                        <= chrono::Duration::seconds(
+                            MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS as i64
+                        ),
+                    "approval lease exceeds the supported maximum"
+                );
+            }
+            EnrollmentDecisionKind::Denied => {
+                anyhow::ensure!(
+                    self.authorization_sequence == 0,
+                    "denied decision cannot allocate an authorization sequence"
+                );
+                anyhow::ensure!(
+                    self.authorization_expires_at == self.decided_at,
+                    "denied decision must use its decision time as its non-leased boundary"
+                );
+                parse_canonical_timestamp(
+                    "denied decision authorization_expires_at",
+                    &self.authorization_expires_at,
+                )?;
+            }
         }
         anyhow::ensure!(
             self.authorization_sequence <= i64::MAX as u64,
@@ -400,6 +647,7 @@ impl AuthorizationRevisionRecord {
                 &self.member_peer,
                 &self.owner_agent,
                 sequence.as_str(),
+                &self.authorization_expires_at,
                 self.kind.as_str(),
                 &self.issued_at,
                 &self.signer_did,
@@ -462,6 +710,10 @@ impl AuthorizationRevisionRecord {
             "authorization revision sequence exceeds the DefraDB Int range"
         );
         anyhow::ensure!(
+            self.authorization_expires_at == decision.authorization_expires_at,
+            "revision authorization lease mismatch"
+        );
+        anyhow::ensure!(
             self.revision_id
                 == derive_revision_id(
                     &self.network_id,
@@ -473,20 +725,150 @@ impl AuthorizationRevisionRecord {
             "revision_id mismatch"
         );
         match self.kind {
-            AuthorizationRevisionKind::Active => anyhow::ensure!(
-                self.sequence == decision.authorization_sequence,
-                "active revision sequence must equal its approval"
-            ),
-            AuthorizationRevisionKind::Revoked => anyhow::ensure!(
-                self.sequence > decision.authorization_sequence,
-                "revocation must dominate its approval"
-            ),
+            AuthorizationRevisionKind::Active => {
+                anyhow::ensure!(
+                    self.sequence == decision.authorization_sequence,
+                    "active revision sequence must equal its approval"
+                );
+                anyhow::ensure!(
+                    self.issued_at == decision.decided_at,
+                    "active revision timestamp must equal its approval"
+                );
+            }
+            AuthorizationRevisionKind::Revoked => {
+                anyhow::ensure!(
+                    self.sequence > decision.authorization_sequence,
+                    "revocation must dominate its approval"
+                );
+                let decision_time =
+                    parse_canonical_timestamp("decision decided_at", &decision.decided_at)?;
+                let revision_time =
+                    parse_canonical_timestamp("revision issued_at", &self.issued_at)?;
+                anyhow::ensure!(
+                    revision_time >= decision_time,
+                    "revocation cannot predate its approval"
+                );
+            }
         }
         anyhow::ensure!(
             self.admin_sig.len() == 64,
             "invalid revision signature length"
         );
         parse_canonical_timestamp("revision issued_at", &self.issued_at)?;
+        Ok(())
+    }
+}
+
+impl EnrollmentRouteReceiptRecord {
+    pub fn signing_payload(&self) -> Vec<u8> {
+        let version = self.protocol_version.to_string();
+        let sequence = self.authorization_sequence.to_string();
+        canonical_domain_payload(
+            ROUTE_RECEIPT_SIGNATURE_DOMAIN,
+            [
+                version.as_str(),
+                &self.receipt_id,
+                &self.request_id,
+                &self.request_digest,
+                &self.network_id,
+                &self.admin_did,
+                &self.member_did,
+                &self.member_peer,
+                &self.server_peer,
+                &self.owner_agent,
+                sequence.as_str(),
+                &self.authorization_expires_at,
+                self.direction.as_str(),
+                &self.applied_at,
+                &self.signer_did,
+            ],
+        )
+    }
+
+    pub fn validate_against_approval(
+        &self,
+        request: &EnrollmentRequestRecord,
+        decision: &EnrollmentDecisionRecord,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
+            "unsupported enrollment route receipt version {}",
+            self.protocol_version
+        );
+        decision.validate_against_request(request)?;
+        anyhow::ensure!(
+            decision.decision == EnrollmentDecisionKind::Approved,
+            "route receipt requires an approved decision"
+        );
+        anyhow::ensure!(
+            self.request_id == request.request_id,
+            "receipt request_id mismatch"
+        );
+        anyhow::ensure!(
+            self.request_digest == request.request_digest,
+            "receipt request_digest mismatch"
+        );
+        anyhow::ensure!(
+            self.network_id == request.network_id,
+            "receipt network_id mismatch"
+        );
+        anyhow::ensure!(
+            self.admin_did == request.admin_did,
+            "receipt admin_did mismatch"
+        );
+        anyhow::ensure!(
+            self.member_did == request.candidate_did,
+            "receipt member_did mismatch"
+        );
+        anyhow::ensure!(
+            self.member_peer == request.candidate_peer,
+            "receipt member_peer mismatch"
+        );
+        anyhow::ensure!(
+            self.server_peer == request.server_peer,
+            "receipt server_peer mismatch"
+        );
+        anyhow::ensure!(
+            self.owner_agent == request.owner_agent,
+            "receipt owner_agent mismatch"
+        );
+        anyhow::ensure!(
+            self.authorization_sequence == decision.authorization_sequence,
+            "receipt authorization sequence mismatch"
+        );
+        anyhow::ensure!(
+            self.authorization_expires_at == decision.authorization_expires_at,
+            "receipt authorization lease mismatch"
+        );
+        anyhow::ensure!(
+            self.signer_did == request.admin_did,
+            "receipt signer mismatch"
+        );
+        anyhow::ensure!(
+            self.receipt_id
+                == derive_route_receipt_id(
+                    &self.request_id,
+                    &self.request_digest,
+                    self.authorization_sequence,
+                    &self.direction,
+                ),
+            "receipt_id mismatch"
+        );
+        let decided = parse_canonical_timestamp("decision decided_at", &decision.decided_at)?;
+        let applied = parse_canonical_timestamp("receipt applied_at", &self.applied_at)?;
+        anyhow::ensure!(applied >= decided, "route receipt cannot predate approval");
+        let expires = parse_canonical_timestamp(
+            "receipt authorization_expires_at",
+            &self.authorization_expires_at,
+        )?;
+        anyhow::ensure!(
+            applied < expires,
+            "route receipt cannot be issued after lease expiry"
+        );
+        anyhow::ensure!(
+            self.admin_sig.len() == 64,
+            "invalid route receipt signature length"
+        );
         Ok(())
     }
 }
@@ -520,6 +902,22 @@ pub fn derive_revision_id(
                 kind.as_str(),
                 request_digest
             ],
+        )
+    )
+}
+
+pub fn derive_route_receipt_id(
+    request_id: &str,
+    request_digest: &str,
+    authorization_sequence: u64,
+    direction: &EnrollmentRouteReceiptDirection,
+) -> String {
+    let sequence = authorization_sequence.to_string();
+    format!(
+        "route-receipt-{}",
+        derive_enrollment_id(
+            "gents-enrollment-route-receipt-id-v1",
+            &[request_id, request_digest, &sequence, direction.as_str()],
         )
     )
 }
@@ -559,6 +957,14 @@ pub fn derive_enrollment_id(domain: &str, fields: &[&str]) -> String {
     bs58::encode(&hash.finalize()[..20]).into_string()
 }
 
+/// Shared observation-time interpretation of a signed authorization lease.
+/// Invalid or non-canonical timestamps fail closed.
+pub fn authorization_lease_is_fresh_at(expires_at: &str, now: DateTime<Utc>) -> bool {
+    parse_canonical_timestamp("authorization_expires_at", expires_at)
+        .ok()
+        .is_some_and(|expires_at| now < expires_at.with_timezone(&Utc))
+}
+
 /// Fingerprint of the exact durable enrollment wire schemas.
 ///
 /// This is carried in signed offers so a client cannot write a request whose
@@ -572,10 +978,12 @@ pub fn enrollment_schema_fingerprint() -> String {
             gents_schemas::NETWORK_ENROLLMENT_REQUEST,
             gents_schemas::NETWORK_ENROLLMENT_DECISION,
             gents_schemas::NETWORK_AUTHORIZATION_REVISION,
+            gents_schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT,
             OFFER_SIGNATURE_DOMAIN,
             REQUEST_SIGNATURE_DOMAIN,
             DECISION_SIGNATURE_DOMAIN,
             REVISION_SIGNATURE_DOMAIN,
+            ROUTE_RECEIPT_SIGNATURE_DOMAIN,
         ],
     ));
     format!("sha256:{}", lower_hex(&hash.finalize()))
@@ -651,7 +1059,12 @@ fn validate_exact_field(name: &str, value: &str) -> Result<()> {
 
 fn parse_canonical_timestamp(name: &str, value: &str) -> Result<DateTime<FixedOffset>> {
     anyhow::ensure!(value.ends_with('Z'), "{name} must use canonical UTC form");
-    DateTime::parse_from_rfc3339(value).with_context(|| format!("parsing {name}"))
+    let parsed = DateTime::parse_from_rfc3339(value).with_context(|| format!("parsing {name}"))?;
+    anyhow::ensure!(
+        parsed.to_rfc3339_opts(SecondsFormat::Secs, true) == value,
+        "{name} must use canonical UTC seconds form"
+    );
+    Ok(parsed)
 }
 
 fn encode_wire_length(length: usize) -> Vec<u8> {
@@ -673,6 +1086,24 @@ fn lower_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authorization_lease_is_strict_and_canonical_at_the_write_boundary() {
+        let before = "2026-08-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let boundary = "2026-08-30T12:00:01Z".parse::<DateTime<Utc>>().unwrap();
+        assert!(authorization_lease_is_fresh_at(
+            "2026-08-30T12:00:01Z",
+            before
+        ));
+        assert!(!authorization_lease_is_fresh_at(
+            "2026-08-30T12:00:01Z",
+            boundary
+        ));
+        assert!(!authorization_lease_is_fresh_at(
+            "2026-08-30T12:00:01+00:00",
+            before
+        ));
+    }
 
     #[test]
     fn request_digest_matches_the_formal_wire_vectors() {
@@ -807,6 +1238,7 @@ mod tests {
             owner_agent: request.owner_agent.clone(),
             decision: EnrollmentDecisionKind::Approved,
             authorization_sequence: 1,
+            authorization_expires_at: "2026-09-28T00:02:00Z".into(),
             decided_at: "2026-08-29T00:02:00Z".into(),
             signer_did: request.admin_did.clone(),
             admin_sig: vec![3; 64],
@@ -829,6 +1261,7 @@ mod tests {
             member_peer: request.candidate_peer.clone(),
             owner_agent: request.owner_agent.clone(),
             sequence: 1,
+            authorization_expires_at: decision.authorization_expires_at.clone(),
             kind: AuthorizationRevisionKind::Active,
             issued_at: decision.decided_at.clone(),
             signer_did: request.admin_did.clone(),
@@ -837,6 +1270,71 @@ mod tests {
         assert!(revision
             .validate_against_approval(&request, &decision)
             .is_ok());
+
+        let direction = EnrollmentRouteReceiptDirection::ClientToServer;
+        let receipt = EnrollmentRouteReceiptRecord {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            receipt_id: derive_route_receipt_id(
+                &request.request_id,
+                &request.request_digest,
+                decision.authorization_sequence,
+                &direction,
+            ),
+            request_id: request.request_id.clone(),
+            request_digest: request.request_digest.clone(),
+            network_id: request.network_id.clone(),
+            admin_did: request.admin_did.clone(),
+            member_did: request.candidate_did.clone(),
+            member_peer: request.candidate_peer.clone(),
+            server_peer: request.server_peer.clone(),
+            owner_agent: request.owner_agent.clone(),
+            authorization_sequence: decision.authorization_sequence,
+            authorization_expires_at: decision.authorization_expires_at.clone(),
+            direction,
+            applied_at: "2026-08-29T00:02:01Z".into(),
+            signer_did: request.admin_did.clone(),
+            admin_sig: vec![5; 64],
+        };
+        assert!(receipt
+            .validate_against_approval(&request, &decision)
+            .is_ok());
+        let mut stale_generation = receipt.clone();
+        stale_generation.authorization_sequence += 1;
+        assert!(stale_generation
+            .validate_against_approval(&request, &decision)
+            .is_err());
+        let mut premature = receipt;
+        premature.applied_at = "2026-08-29T00:01:59Z".into();
+        assert!(premature
+            .validate_against_approval(&request, &decision)
+            .is_err());
+
+        let mut alternate_timestamp = revision.clone();
+        alternate_timestamp.issued_at = "2026-08-29T00:02:00.000Z".into();
+        assert!(alternate_timestamp
+            .validate_against_approval(&request, &decision)
+            .is_err());
+
+        let mut mismatched_active_time = revision.clone();
+        mismatched_active_time.issued_at = "2026-08-29T00:02:01Z".into();
+        assert!(mismatched_active_time
+            .validate_against_approval(&request, &decision)
+            .is_err());
+
+        let mut revocation = revision.clone();
+        revocation.sequence = 2;
+        revocation.kind = AuthorizationRevisionKind::Revoked;
+        revocation.issued_at = "2026-08-29T00:01:59Z".into();
+        revocation.revision_id = derive_revision_id(
+            &request.network_id,
+            &request.candidate_did,
+            revocation.sequence,
+            &revocation.kind,
+            &request.request_digest,
+        );
+        assert!(revocation
+            .validate_against_approval(&request, &decision)
+            .is_err());
 
         let mut opposite = decision.clone();
         opposite.decision = EnrollmentDecisionKind::Denied;
@@ -851,5 +1349,72 @@ mod tests {
         request.issued_at = "2026-08-28T23:59:59Z".into();
         request.request_digest = request.computed_digest();
         assert!(request.validate_against_offer(&offer).is_err());
+    }
+
+    #[test]
+    fn operator_decision_command_is_canonical_short_lived_and_signature_bounded() {
+        let now = "2026-08-29T00:01:30Z".parse::<DateTime<Utc>>().unwrap();
+        let command = EnrollmentOperatorDecisionCommand {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            request_id: "request-1".into(),
+            action: EnrollmentOperatorAction::Approve,
+            lease_seconds: DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+            admin_did: "did:key:admin".into(),
+            issued_at: "2026-08-29T00:01:00Z".into(),
+            nonce: "nonce-1".into(),
+            admin_sig: vec![7; 64],
+        };
+        assert!(command.validate_at(now).is_ok());
+        let payload = command.signing_payload();
+
+        let mut opposite = command.clone();
+        opposite.action = EnrollmentOperatorAction::Deny;
+        opposite.lease_seconds = 0;
+        assert_ne!(payload, opposite.signing_payload());
+        assert!(opposite.validate_at(now).is_ok());
+        opposite.action = EnrollmentOperatorAction::Revoke;
+        assert!(opposite.validate_at(now).is_ok());
+        opposite.lease_seconds = 1;
+        assert!(opposite.validate_at(now).is_err());
+
+        let mut excessive_lease = command.clone();
+        excessive_lease.lease_seconds = MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS + 1;
+        assert!(excessive_lease.validate_at(now).is_err());
+
+        let mut stale = command.clone();
+        stale.issued_at = "2026-08-29T00:00:00Z".into();
+        assert!(stale.validate_at(now).is_err());
+        let mut future = command.clone();
+        future.issued_at = "2026-08-29T00:01:36Z".into();
+        assert!(future.validate_at(now).is_err());
+        let mut hostile = command;
+        hostile.request_id = "request\n2".into();
+        assert!(hostile.validate_at(now).is_err());
+        let mut encoded = serde_json::to_value(&hostile).unwrap();
+        encoded
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), serde_json::json!(true));
+        assert!(serde_json::from_value::<EnrollmentOperatorDecisionCommand>(encoded).is_err());
+    }
+
+    #[test]
+    fn pending_operator_query_is_short_lived_and_signature_bounded() {
+        let now = "2026-08-29T00:01:30Z".parse::<DateTime<Utc>>().unwrap();
+        let query = EnrollmentOperatorQueryCommand {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            query: EnrollmentOperatorQuery::Pending,
+            admin_did: "did:key:admin".into(),
+            issued_at: "2026-08-29T00:01:00Z".into(),
+            nonce: "nonce-1".into(),
+            admin_sig: vec![7; 64],
+        };
+        assert!(query.validate_at(now).is_ok());
+        let mut stale = query.clone();
+        stale.issued_at = "2026-08-29T00:00:00Z".into();
+        assert!(stale.validate_at(now).is_err());
+        let mut hostile = query;
+        hostile.nonce = "nonce\n2".into();
+        assert!(hostile.validate_at(now).is_err());
     }
 }

@@ -5,11 +5,11 @@
 # materializing any AgentBehavior change and writes the outcome back onto
 # this same row.
 #
-# TRUST BASIS — this row grants NOTHING by itself (mirrors
-# `PairingBearerClaim`'s `unsigned_claim_grants_nothing`): it is a request.
-# Authority lives entirely in the server-side persona reconciler, which
-# validates against the published persona catalog before materializing any
-# config; forged or unauthorized rows are inert.
+# TRUST BASIS — this row grants nothing by itself. The server-side reconciler
+# fresh-loads the enrollment authority and requires every immutable generation
+# field below to equal one unique current authorization before it validates or
+# materializes the requested config. Revoked, superseded, malformed, or
+# cross-network rows are inert.
 #
 # `@branchable` is REQUIRED: the row replicates over P2P (phone-authored
 # requests reach the server) — DefraDB only P2P-syncs branchable
@@ -20,15 +20,25 @@ type PersonaConfigRequest @branchable {
     # (add_replicator rejects mutable filter fields).
     requester_did: String @index @immutable
     agent_did: String @immutable
+    # enrollment | local-self. The local branch additionally requires a
+    # signature by requester_did == agent_did over every request field.
+    authority_kind: String @index @immutable
+    local_signer_did: String @immutable
+    local_signature: String @immutable
+    network_id: String @index @immutable
+    member_peer: String @index @immutable
+    enrollment_request_digest: String @index @immutable
+    authorization_sequence: Int @immutable
+    authorization_expires_at: DateTime @immutable
     op: String @immutable
     behavior_id: String @immutable
     clone_from: String @immutable
-    persona_name: String
-    backend_model: String
-    root: String
-    preset: String
-    profile_id: String
-    created_at: DateTime
+    persona_name: String @immutable
+    backend_model: String @immutable
+    root: String @immutable
+    preset: String @immutable
+    profile_id: String @immutable
+    created_at: DateTime @immutable
     # Server-written outcome. pending | applied | rejected.
     status: String @index
     status_detail: String

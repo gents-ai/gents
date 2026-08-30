@@ -24,8 +24,8 @@ pub(super) async fn http_get_json<T: for<'de> Deserialize<'de>>(
         if error.is_connect() {
             anyhow::anyhow!(
                 "no gents server found at {url}. Start one first with \
-                 `gents server` or `gents demo`, or pass \
-                 --status-endpoint/--graphql to point at a remote runtime."
+                 `gents server` or `gents demo`. Remote runtimes must be added \
+                 through authenticated status enrollment in the desktop app."
             )
         } else {
             anyhow::Error::from(error).context(format!("sending GET request to {url}"))

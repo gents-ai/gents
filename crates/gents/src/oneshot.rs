@@ -298,7 +298,7 @@ where
     let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         node.clone(),
         &behavior.behavior_id,
-        behavior.agent_did(),
+        behavior.principal_identity().clone(),
         prompt,
         behavior.deadline_duration.as_secs(),
         ExecutionOrigin::Interactive,

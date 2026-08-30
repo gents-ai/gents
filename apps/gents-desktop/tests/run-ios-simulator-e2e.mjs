@@ -86,11 +86,6 @@ function simulator() {
 }
 
 function issuerSettings() {
-  const supplied = process.env.GENTS_E2E_PAIR_TOKEN?.trim();
-  if (supplied) {
-    return null;
-  }
-
   const remote = process.env.GENTS_E2E_ISSUER_SSH?.trim();
   const releaseBinary = resolve(APP_ROOT, "..", "..", "target", "release", "gents");
   const debugBinary = resolve(APP_ROOT, "..", "..", "target", "debug", "gents");
@@ -124,101 +119,26 @@ function issuerFailureDetail(result) {
   );
 }
 
-function mintInvite(settings) {
-  const supplied = process.env.GENTS_E2E_PAIR_TOKEN?.trim();
-  if (supplied) {
-    return supplied;
+function enrollmentServerAddress() {
+  const address = process.env.GENTS_E2E_SERVER_ADDRESS?.trim();
+  if (!address) {
+    throw new Error("GENTS_E2E_SERVER_ADDRESS is required for native E2E");
   }
-  if (!settings) {
-    throw new Error("Native E2E issuer settings are unavailable");
-  }
-  process.stdout.write(
-    `\nMinting a fresh single-use pairing invite from ${
-      settings.remote ?? `the local issuer at ${settings.home}`
-    }…\n`,
-  );
-  const inviteArgs = ["p2p", "pairings", "invite", "--home", settings.home, "--bearer"];
-  const result = runIssuer(settings, inviteArgs);
-  if (result.status !== 0) {
-    throw new Error(`Could not mint E2E issuer invite: ${issuerFailureDetail(result)}`);
-  }
-  const token = result.stdout.match(/dabear1-[1-9A-HJ-NP-Za-km-z]+/)?.[0];
-  if (!token) {
-    throw new Error("E2E issuer output did not contain a dabear1 token");
-  }
-  return token;
+  return address;
 }
 
-function listIssuerPairings(settings) {
-  if (!settings) {
-    return [];
-  }
+function approveEnrollment(settings, requestId) {
+  process.stdout.write(`Approving authenticated enrollment ${requestId}…\n`);
   const result = runIssuer(settings, [
     "p2p",
-    "pairings",
-    "list",
+    "enrollment",
+    "approve",
+    requestId,
     "--home",
     settings.home,
-    "--output",
-    "json",
   ]);
   if (result.status !== 0) {
-    throw new Error(
-      `Could not list E2E issuer pairings: ${issuerFailureDetail(result)}`,
-    );
-  }
-  const parsed = JSON.parse(result.stdout);
-  return Array.isArray(parsed.pairings) ? parsed.pairings : [];
-}
-
-function cleanNewIssuerPairings(settings, peerIdsBefore) {
-  if (!settings || settings.remote) {
-    return;
-  }
-
-  let pairings;
-  try {
-    pairings = listIssuerPairings(settings).filter(
-      (pairing) => !peerIdsBefore.has(pairing.peer_id),
-    );
-  } catch (error) {
-    process.stderr.write(`Native E2E pairing cleanup warning: ${error.message}\n`);
-    return;
-  }
-
-  for (const pairing of pairings) {
-    process.stdout.write(`Cleaning E2E pairing ${pairing.peer_id}…\n`);
-    if (pairing.agent_did) {
-      const revoke = runIssuer(settings, [
-        "p2p",
-        "network",
-        "revoke",
-        "--home",
-        settings.home,
-        pairing.agent_did,
-        "--output",
-        "json",
-      ]);
-      if (revoke.status !== 0) {
-        process.stderr.write(
-          `Native E2E membership cleanup warning: ${issuerFailureDetail(revoke)}\n`,
-        );
-      }
-    }
-    const remove = runIssuer(settings, [
-      "p2p",
-      "pairings",
-      "rm",
-      "--home",
-      settings.home,
-      "--peer",
-      pairing.peer_id,
-    ]);
-    if (remove.status !== 0) {
-      process.stderr.write(
-        `Native E2E pairing cleanup warning: ${issuerFailureDetail(remove)}\n`,
-      );
-    }
+    throw new Error(`Could not approve E2E enrollment: ${issuerFailureDetail(result)}`);
   }
 }
 
@@ -272,7 +192,14 @@ function captureScreenshot({ deviceId, path }) {
   process.stderr.write(`Simulator screenshot warning: ${detail}\n`);
 }
 
-async function waitForScenario({ deviceId, pid, runIndex, artifactRoot, statusPath }) {
+async function waitForScenario({
+  deviceId,
+  pid,
+  runIndex,
+  artifactRoot,
+  statusPath,
+  enrollmentOperator,
+}) {
   const timeoutMs = Number.parseInt(
     process.env.GENTS_E2E_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`,
     10,
@@ -285,6 +212,7 @@ async function waitForScenario({ deviceId, pid, runIndex, artifactRoot, statusPa
   let lastStage = null;
   let passedAt = null;
   const processSamples = [];
+  const approvedRequestIds = new Set();
 
   while (Date.now() < deadline) {
     const processSample = sampleProcess(pid);
@@ -298,6 +226,16 @@ async function waitForScenario({ deviceId, pid, runIndex, artifactRoot, statusPa
       if (["sent", "passed", "failed"].includes(status.stage)) {
         const screenshot = join(artifactRoot, `run-${runIndex}-${status.stage}.png`);
         captureScreenshot({ deviceId, path: screenshot });
+      }
+      if (status.stage === "enrollment-pending") {
+        const requestId = status.detail?.trim();
+        if (!requestId) {
+          throw new Error("Native app omitted the pending enrollment request ID");
+        }
+        if (!approvedRequestIds.has(requestId)) {
+          approveEnrollment(enrollmentOperator, requestId);
+          approvedRequestIds.add(requestId);
+        }
       }
       if (status.stage === "passed") {
         passedAt ??= Date.now();
@@ -425,13 +363,10 @@ const dataContainer = capture("xcrun", [
 ]).trim();
 const statusPath = join(dataContainer, "tmp", STATUS_FILENAME);
 const eventsPath = join(dataContainer, "tmp", EVENTS_FILENAME);
-const managedIssuer = issuerSettings();
-const issuerPeerIdsBefore = new Set(
-  listIssuerPairings(managedIssuer).map((pairing) => pairing.peer_id),
-);
-const invite = mintInvite(managedIssuer);
+const enrollmentOperator = issuerSettings();
+const serverAddress = enrollmentServerAddress();
 
-try {
+{
   const measurementRuns = [];
   for (let index = 1; index <= runs; index += 1) {
     rmSync(statusPath, { force: true });
@@ -443,7 +378,7 @@ try {
       SIMCTL_CHILD_GENTS_NATIVE_E2E: "1",
       SIMCTL_CHILD_GENTS_E2E_AGENT_LABEL:
         process.env.GENTS_E2E_AGENT_LABEL?.trim() || "iPhone E2E",
-      SIMCTL_CHILD_GENTS_E2E_PAIR_TOKEN: invite,
+      SIMCTL_CHILD_GENTS_E2E_SERVER_ADDRESS: serverAddress,
       SIMCTL_CHILD_GENTS_E2E_PROMPT:
         process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,
       SIMCTL_CHILD_GENTS_E2E_EXPECTED_RESPONSE:
@@ -473,6 +408,7 @@ try {
       runIndex: index,
       artifactRoot,
       statusPath,
+      enrollmentOperator,
     });
     if (measurePerformance) {
       const events = readEvents(eventsPath);
@@ -499,8 +435,6 @@ try {
   if (measurePerformance) {
     writeNativePerformanceArtifacts({ artifactRoot, device, runs: measurementRuns });
   }
-} finally {
-  cleanNewIssuerPairings(managedIssuer, issuerPeerIdsBefore);
 }
 
 process.stdout.write(`\nIsolated iPhone Simulator E2E passed ${runs} run(s).\n`);

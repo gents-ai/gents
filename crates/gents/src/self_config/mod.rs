@@ -44,12 +44,15 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Map, Value};
 
 use crate::agent::p2p_reconcile::{GraphqlPersonaRequestStore, PersonaRequestStore};
+use crate::agent::persona_ops::local_persona_request_mutation;
 use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::document_config::{Schedule, Task};
 use crate::graphql::escape_graphql_string;
 use crate::llm::tool::{Tool, ToolDefinition, ToolDyn};
 use crate::tool_surface::SelfConfigToolConfig;
+use crate::AgentIdentity;
 use defra_node::EmbeddedNode;
+use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL_SELF};
 use ops::{decode_merged, guard_selection_keeps_gate, validate_merged_selection, ApplyRequest};
 
 pub const GET_MY_CONFIG_TOOL_NAME: &str = "get_my_config";
@@ -945,6 +948,7 @@ impl Tool for ConfigureAutomationTool {
 pub struct ConfigurePersonaTool {
     node: Arc<EmbeddedNode>,
     agent_did: String,
+    identity: Arc<dyn AgentIdentity>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1116,62 +1120,6 @@ async fn resolve_model_arg(
     Ok(Some(resolve_model(value, &catalog.available_models)))
 }
 
-fn nullable_graphql_string(value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-        .unwrap_or_else(|| "null".to_string())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn create_persona_request_mutation(
-    request_key: &str,
-    requester_did: &str,
-    agent_did: &str,
-    op: &str,
-    behavior_id: Option<&str>,
-    clone_from: Option<&str>,
-    persona_name: Option<&str>,
-    backend_model: Option<&str>,
-    root: Option<&str>,
-    preset: Option<&str>,
-    profile_id: Option<&str>,
-    now: &str,
-) -> String {
-    format!(
-        r#"mutation {{
-            create_PersonaConfigRequest(input: {{
-                request_key: "{request_key}",
-                requester_did: "{requester_did}",
-                agent_did: "{agent_did}",
-                op: "{op}",
-                behavior_id: {behavior_id},
-                clone_from: {clone_from},
-                persona_name: {persona_name},
-                backend_model: {backend_model},
-                root: {root},
-                preset: {preset},
-                profile_id: {profile_id},
-                created_at: "{now}",
-                status: "pending"
-            }}) {{ _docID }}
-        }}"#,
-        request_key = escape_graphql_string(request_key),
-        requester_did = escape_graphql_string(requester_did),
-        agent_did = escape_graphql_string(agent_did),
-        op = escape_graphql_string(op),
-        behavior_id = nullable_graphql_string(behavior_id),
-        clone_from = nullable_graphql_string(clone_from),
-        persona_name = nullable_graphql_string(persona_name),
-        backend_model = nullable_graphql_string(backend_model),
-        root = nullable_graphql_string(root),
-        preset = nullable_graphql_string(preset),
-        profile_id = nullable_graphql_string(profile_id),
-        now = escape_graphql_string(now),
-    )
-}
-
 async fn load_persona_request_row(
     node: &Arc<EmbeddedNode>,
     request_key: &str,
@@ -1269,6 +1217,7 @@ async fn persona_list(node: &Arc<EmbeddedNode>, agent_did: &str) -> Result<Strin
 async fn persona_mutate(
     node: &Arc<EmbeddedNode>,
     agent_did: &str,
+    identity: &dyn AgentIdentity,
     args: &ConfigurePersonaParams,
 ) -> Result<String> {
     // Short-id normalization (#1052): resolved once, up front, so every
@@ -1339,20 +1288,26 @@ async fn persona_mutate(
 
     let request_key = format!("pcr-{}", uuid::Uuid::new_v4());
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = create_persona_request_mutation(
-        &request_key,
-        agent_did,
-        agent_did,
-        op,
-        resolved_behavior_id.as_deref(),
-        clone_from.as_deref(),
-        args.persona_name.as_deref(),
-        resolved_model.as_deref(),
-        args.root.as_deref(),
-        args.preset.as_deref(),
-        resolved_profile_id.as_deref(),
-        &now,
-    );
+    let mut record = LocalPersonaRequestRecord {
+        request_key: request_key.clone(),
+        requester_did: agent_did.to_string(),
+        agent_did: agent_did.to_string(),
+        authority_kind: PERSONA_AUTHORITY_LOCAL_SELF.to_string(),
+        local_signer_did: agent_did.to_string(),
+        op: op.to_string(),
+        behavior_id: resolved_behavior_id,
+        clone_from,
+        persona_name: args.persona_name.clone(),
+        backend_model: resolved_model,
+        root: args.root.clone(),
+        preset: args.preset.clone(),
+        profile_id: resolved_profile_id,
+        created_at: now,
+        local_signature: Vec::new(),
+    };
+    record.local_signature = identity.sign(&record.signing_payload()).await?;
+    record.validate_shape()?;
+    let mutation = local_persona_request_mutation(&record);
     crate::graphql::graphql_mutation_with_transaction_retry(
         node,
         &mutation,
@@ -1436,7 +1391,10 @@ impl Tool for ConfigurePersonaTool {
         match args.action.as_str() {
             "list" => Ok(persona_list(&self.node, &self.agent_did).await?),
             "create" | "edit" | "clone" | "disable" => {
-                Ok(persona_mutate(&self.node, &self.agent_did, &args).await?)
+                Ok(
+                    persona_mutate(&self.node, &self.agent_did, self.identity.as_ref(), &args)
+                        .await?,
+                )
             }
             other => Err(SelfConfigError(anyhow!(
                 "unknown action {other:?}; use list|create|edit|clone|disable"
@@ -1450,6 +1408,7 @@ impl Tool for ConfigurePersonaTool {
 pub fn build_self_config_tools(
     node: Arc<EmbeddedNode>,
     agent_did: String,
+    identity: Option<Arc<dyn AgentIdentity>>,
     config: &SelfConfigToolConfig,
 ) -> Vec<Box<dyn ToolDyn>> {
     if !config.enabled {
@@ -1482,10 +1441,19 @@ pub fn build_self_config_tools(
             "backend" => tools.push(Box::new(ConfigureBackendTool { core: core.clone() })),
             "mcp_service" => tools.push(Box::new(ConfigureMcpServiceTool { core: core.clone() })),
             "automation" => tools.push(Box::new(ConfigureAutomationTool { core: core.clone() })),
-            "persona" => tools.push(Box::new(ConfigurePersonaTool {
-                node: node.clone(),
-                agent_did: agent_did.clone(),
-            })),
+            "persona" => match identity.clone() {
+                Some(identity) if identity.did() == agent_did => {
+                    tools.push(Box::new(ConfigurePersonaTool {
+                        node: node.clone(),
+                        agent_did: agent_did.clone(),
+                        identity,
+                    }))
+                }
+                _ => tracing::warn!(
+                    agent_did = %agent_did,
+                    "configure_persona requires the exact local principal signer; skipping"
+                ),
+            },
             other => {
                 tracing::warn!(category = %other, "unknown self-config category; skipping");
             }

@@ -7,16 +7,6 @@ pub(crate) async fn enqueue_session_request(
     execution_origin: ExecutionOrigin,
     queue_hints: QueueHints,
 ) -> Result<EnqueuedAgentRequest> {
-    let request_only_control = matches!(
-        queue_hints.source,
-        QueueSource::Steering | QueueSource::BackgroundCompletion
-    );
-    let normalized_parent = if request_only_control {
-        Some(normalize_request_only_control_parent(node, parent).await?)
-    } else {
-        None
-    };
-    let parent = normalized_parent.as_ref().unwrap_or(parent);
     let behavior_id = parent_behavior_id(node, parent).await?;
 
     if let Some(key) = coalesce_key(&queue_hints) {
@@ -34,7 +24,7 @@ pub(crate) async fn enqueue_session_request(
     }
 
     let request_id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let metadata = queue_metadata_json(&queue_hints);
     let mutation = session_request_create_mutation(
         parent,
@@ -44,8 +34,8 @@ pub(crate) async fn enqueue_session_request(
         &metadata,
         &request_id,
         &now,
-        request_only_control,
-    )?;
+    )
+    .await?;
 
     let response =
         session::execute_mutation_with_retry(node, &mutation, "enqueue_session_request").await?;
@@ -98,11 +88,9 @@ pub(crate) async fn enqueue_steering_request_with_message(
         "atomic steering enqueue requires an unkeyed append"
     );
 
-    let normalized_parent = normalize_request_only_control_parent(node, parent).await?;
-    let parent = &normalized_parent;
     let behavior_id = parent_behavior_id(node, parent).await?;
     let request_id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let metadata = queue_metadata_json(&queue_hints);
     let request_mutation = session_request_create_mutation(
         parent,
@@ -112,8 +100,8 @@ pub(crate) async fn enqueue_steering_request_with_message(
         &metadata,
         &request_id,
         &now,
-        true,
-    )?;
+    )
+    .await?;
     // Match the hook's canonical persisted representation so its
     // request-scoped prompt dedup reuses this keyed row instead of appending a
     // second copy when the continuation starts.

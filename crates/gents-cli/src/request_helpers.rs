@@ -10,7 +10,31 @@ use gents::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::Value;
 
-use crate::{optional_f64_field, optional_i64_field, post_graphql, require_non_empty};
+use crate::{post_graphql, require_non_empty};
+
+pub(crate) fn ensure_local_request_signer(
+    home: Option<&Path>,
+    target_agent_did: &str,
+) -> Result<()> {
+    if gents::identity::RegisteredIdentity::from_registered_did(target_agent_did, None).is_ok() {
+        return Ok(());
+    }
+    let home = crate::resolve_home_dir(home);
+    let config = crate::read_init_config(&home)?.with_context(|| {
+        format!(
+            "initialized home {} is required to sign a local request",
+            home.display()
+        )
+    })?;
+    anyhow::ensure!(
+        config.agent_did.trim() == target_agent_did.trim(),
+        "local-self request target {} does not match initialized home principal {}",
+        target_agent_did,
+        config.agent_did
+    );
+    crate::load_initialized_home_identity(&home, &config)?;
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct SubmittedRequest {
@@ -306,60 +330,12 @@ pub(crate) async fn create_agent_request(
     let (request_content, request_metadata) =
         content_and_metadata_with_prompt_selected_skill_ids(options.metadata.as_deref(), content);
     let request_id = uuid::Uuid::new_v4().to_string();
+    let behavior_id = resolve_request_behavior_id(graphql, agent_did, behavior_id).await?;
     let session_id = session_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let behavior_field = behavior_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            format!(
-                r#"
-                behavior_id: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let valid_until_literal = options.valid_until.map(|at| {
-        format!(
-            r#"valid_until: "{}""#,
-            escape_graphql_string(&at.to_rfc3339())
-        )
-    });
-    let request_override_fields = vec![
-        optional_f64_field("temperature", options.temperature),
-        optional_f64_field("top_p", options.top_p),
-        optional_i64_field("top_k", options.top_k),
-        optional_i64_field("seed", options.seed),
-        optional_i64_field("max_tokens", options.max_tokens),
-        optional_i64_field("max_total_tokens", options.max_total_tokens),
-        request_metadata
-            .as_ref()
-            .map(|metadata| format!(r#"metadata: "{}""#, escape_graphql_string(metadata))),
-        valid_until_literal,
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                ");
-    let request_override_fields = if request_override_fields.is_empty() {
-        String::new()
-    } else {
-        format!("{request_override_fields},\n                ")
-    };
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let retry_parent_value = options.retry_parent_request.as_deref().unwrap_or_default();
-    let retry_parent_doc_field = options
-        .retry_parent_request_doc_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| {
-            format!(
-                r#"retry_parent_request_doc_id: "{}","#,
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
     let retry_root_value = options
         .retry_root_request
         .as_deref()
@@ -372,47 +348,42 @@ pub(crate) async fn create_agent_request(
                 retry_parent_value.to_string()
             }
         });
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{agent_did}",
-                {behavior_field}
-                session_id: "{session_id}",
-                retry_parent_request: "{retry_parent}",
-                {retry_parent_doc_field}
-                retry_root_request: "{retry_root}",
-                superseded_by_request: "",
-                content: "{content}",
-                {request_override_fields}status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                failure_reason: "",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: 3
-            }}) {{ _docID }}
-        }}"#,
-        request_id = escape_graphql_string(&request_id),
-        agent_did = escape_graphql_string(agent_did),
-        behavior_field = behavior_field,
-        session_id = escape_graphql_string(&session_id),
-        retry_parent = escape_graphql_string(retry_parent_value),
-        retry_root = escape_graphql_string(&retry_root_value),
-        content = escape_graphql_string(&request_content),
-        request_override_fields = request_override_fields,
+    let admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did);
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id.clone(),
+        agent_did,
+        agent_did,
+        &behavior_id,
+        session_id.clone(),
+        request_content.clone(),
+        "interactive",
+        created_at.clone(),
+        admission,
     );
+    create.temperature = options.temperature;
+    create.top_p = options.top_p;
+    create.top_k = options.top_k;
+    create.seed = options.seed;
+    create.max_tokens = options.max_tokens;
+    create.max_total_tokens = options.max_total_tokens;
+    create.metadata = request_metadata.clone();
+    create.valid_until = options
+        .valid_until
+        .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    create.retry_parent_request =
+        (!retry_parent_value.is_empty()).then(|| retry_parent_value.to_string());
+    create.retry_parent_request_doc_id = options.retry_parent_request_doc_id.clone();
+    create.retry_root_request = Some(retry_root_value);
+    gents::sign_agent_request_create_as_registered_target(&mut create).await?;
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     post_graphql(graphql, &mutation).await?;
 
     Ok(SubmittedRequest {
         request_id,
         session_id,
         agent_did: agent_did.to_string(),
-        behavior_id: behavior_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
+        behavior_id: Some(behavior_id),
         temperature: options.temperature,
         top_p: options.top_p,
         top_k: options.top_k,
@@ -422,6 +393,70 @@ pub(crate) async fn create_agent_request(
         metadata: request_metadata,
         created_at: Some(created_at),
     })
+}
+
+async fn resolve_request_behavior_id(
+    graphql: &str,
+    agent_did: &str,
+    requested: Option<&str>,
+) -> Result<String> {
+    let escaped_agent_did = gents::graphql::escape_graphql_string(agent_did);
+    let response = post_graphql(
+        graphql,
+        &format!(
+            r#"{{
+                AgentPrincipal(
+                    filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                    limit: 2
+                ) {{ agent_did default_behavior_id enabled }}
+                AgentBehavior(
+                    filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}
+                ) {{ behavior_id agent_did enabled }}
+            }}"#,
+        ),
+    )
+    .await
+    .context("loading authoritative request behavior")?;
+    let principals = response
+        .pointer("/data/AgentPrincipal")
+        .and_then(Value::as_array)
+        .context("AgentPrincipal query returned no row array")?;
+    anyhow::ensure!(
+        principals.len() == 1,
+        "request target principal must resolve to exactly one row"
+    );
+    let principal = &principals[0];
+    anyhow::ensure!(
+        principal.get("enabled").and_then(Value::as_bool) == Some(true),
+        "request target principal is disabled"
+    );
+    let behavior_id = match requested.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(behavior_id) => behavior_id.to_string(),
+        None => principal
+            .get("default_behavior_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .context("request target principal has no canonical default behavior")?,
+    };
+    let behaviors = response
+        .pointer("/data/AgentBehavior")
+        .and_then(Value::as_array)
+        .context("AgentBehavior query returned no row array")?;
+    let matching = behaviors
+        .iter()
+        .filter(|row| row.get("behavior_id").and_then(Value::as_str) == Some(&behavior_id))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        matching.len() == 1,
+        "request behavior must resolve to exactly one row owned by the target principal"
+    );
+    anyhow::ensure!(
+        matching[0].get("enabled").and_then(Value::as_bool) == Some(true),
+        "request behavior is disabled"
+    );
+    Ok(behavior_id)
 }
 
 pub(crate) fn content_and_metadata_with_prompt_selected_skill_ids(

@@ -1,7 +1,9 @@
 use super::set;
 use crate::agent::p2p_reconcile::{
-    engine::{data_plane_desired_from_pairing_row, desired_from_pairing_row, PairingStateRow},
-    network::NetworkEndpointEntry,
+    engine::{
+        data_plane_desired_from_pairing_row, desired_from_pairing_row, EnrollmentEndpointEntry,
+        PairingStateRow,
+    },
     single_string_eq,
 };
 
@@ -156,10 +158,14 @@ fn app_collections_on_control_plane_path_soft_skips() {
 
 #[test]
 fn app_collections_row_resolves_row_collections_as_subscription_and_replicator() {
-    let signed_endpoint = NetworkEndpointEntry {
+    let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         agent_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     };
     let layer = data_plane_desired_from_pairing_row(
         PairingStateRow {
@@ -185,10 +191,14 @@ fn app_collections_row_resolves_row_collections_as_subscription_and_replicator()
 
 #[test]
 fn app_collections_empty_collections_soft_skips() {
-    let signed_endpoint = NetworkEndpointEntry {
+    let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         agent_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     };
     let out = data_plane_desired_from_pairing_row(
         PairingStateRow {
@@ -213,10 +223,14 @@ fn app_collections_empty_collections_soft_skips() {
 /// including a co-existing control pairing. Security refusal, not soft-skip.
 #[test]
 fn foreign_agent_did_still_hard_fails_whole_peer_load() {
-    let signed_endpoint = NetworkEndpointEntry {
+    let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         agent_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     };
     let err = data_plane_desired_from_pairing_row(
         PairingStateRow {

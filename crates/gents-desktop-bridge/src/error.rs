@@ -26,7 +26,7 @@ pub enum BridgeErrorCode {
     PathEscapesRoot,
     /// Underlying store / GraphQL / runtime I/O failed.
     Backend,
-    /// Bearer pairing / peer-directory pairing family failures.
+    /// Enrollment-owned peer pairing and route-actuation failures.
     Pairing,
     /// Catch-all for uncategorized legacy string errors during migration.
     Unknown,

@@ -17,7 +17,7 @@ use super::supervisor::{
     request_index_for_ready_peers, saved_peer_needs_repair,
 };
 use super::*;
-use crate::client::PeerRecord;
+use crate::client::{PeerDirectory, PeerRecord};
 
 #[derive(Default)]
 struct RecordingP2P {
@@ -322,6 +322,136 @@ impl P2POps for RecordingP2P {
 }
 
 #[tokio::test]
+async fn restart_clears_and_defers_persisted_enrollment_until_current_authority() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().join("core")),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let peer_path = tmp.path().join("restart-peers.json");
+    let mut directory = PeerDirectory::open_writer(&peer_path).await.unwrap();
+    let enrolled = directory
+        .upsert_enrollment_peer(
+            "server-peer",
+            "Enrolled server",
+            "iroh://server-ticket",
+            "did:key:owner",
+            "network-a",
+            "request-a",
+            "request-digest",
+            "did:key:admin",
+            7,
+            "2099-09-29T00:00:00Z",
+        )
+        .await
+        .unwrap();
+    let enrolled = directory
+        .set_pairing_ready(&enrolled.peer_id, true)
+        .await
+        .unwrap()
+        .expect("enrollment remains configured");
+    assert!(enrolled.pairing_ready);
+    drop(directory);
+
+    let owner = super::sync_state::ClientSyncStateOwner::new(
+        P2PHealth::default(),
+        PeerDirectory::open_writer(&peer_path).await.unwrap(),
+        Vec::new(),
+    );
+    let mut updates = owner.subscribe();
+    owner.clear_ephemeral_pairing_readiness().await.unwrap();
+    assert!(updates.has_changed().expect("watch remains open"));
+    let restarted = updates.borrow_and_update().clone();
+    assert_eq!(restarted.directory.len(), 1);
+    assert!(!restarted.directory[0].pairing_ready);
+
+    let recording = Arc::new(RecordingP2P::default());
+    let p2p: Arc<dyn P2POps> = recording.clone();
+    let route_manager = Arc::new(super::route_manager::ClientRouteManager::new(
+        core.node_arc(),
+        Arc::clone(&p2p),
+        Arc::new(core.principal().clone()),
+    ));
+    let options = ClientCoreOptions {
+        install_replicators_on_bootstrap: true,
+        ..ClientCoreOptions::local_only()
+    };
+    let (statuses, errors) = super::bootstrap::bootstrap_saved_peers(
+        &core.node_arc(),
+        &p2p,
+        &owner.records(),
+        &options,
+        core.principal(),
+        &route_manager,
+    )
+    .await;
+    assert!(errors.is_empty());
+    assert_eq!(statuses.len(), 1);
+    assert!(!statuses[0].dial_succeeded);
+    assert!(statuses[0].pairing.is_empty());
+    assert!(statuses[0].routes.is_empty());
+    assert!(recording.connect_calls().is_empty());
+    assert!(recording.add_replicator_calls().is_empty());
+    let persisted = crate::client::load_peer_records(&peer_path).await.unwrap();
+    assert_eq!(persisted, restarted.directory);
+    assert!(!persisted[0].pairing_ready);
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn expired_enrollment_is_persistently_demoted_before_submit_can_write() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().to_path_buf()),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let enrolled = core
+        .sync_state
+        .upsert_enrollment_peer(
+            "server-peer",
+            "Expired server",
+            "iroh://server-ticket",
+            "did:key:owner",
+            "network-a",
+            "request-a",
+            "request-digest",
+            "did:key:admin",
+            7,
+            "2020-01-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+    core.sync_state
+        .set_pairing_ready(&enrolled, true)
+        .await
+        .unwrap()
+        .expect("enrollment remains configured");
+
+    let error = core
+        .submit_request("session-a", "did:key:owner", "must not persist", None)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("route is not ready"));
+    assert!(!core.sync_state.records()[0].pairing_ready);
+    assert!(core.store().snapshot().requests.is_empty());
+    let persisted = crate::client::load_peer_records(&core.paths().peer_directory_path())
+        .await
+        .unwrap();
+    assert!(!persisted[0].pairing_ready);
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
 async fn index_sync_request_targets_exactly_the_client_index() {
     use crate::client::paths::DesktopPaths;
 
@@ -358,118 +488,6 @@ async fn index_sync_request_targets_exactly_the_client_index() {
     expected.sort();
     actual.sort();
     assert_eq!(actual, expected);
-
-    core.shutdown().await.expect("shutdown");
-}
-
-#[tokio::test]
-async fn blocked_dial_cancellation_cannot_hide_a_persisted_configured_peer() {
-    use crate::client::paths::DesktopPaths;
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tmp.path().to_path_buf()),
-        ClientCoreOptions::local_only(),
-    )
-    .await
-    .expect("client core");
-    let recording = Arc::new(RecordingP2P::default());
-    recording.set_connect_gate(Arc::new(Notify::new()));
-    let p2p: Arc<dyn P2POps> = recording.clone();
-    let route_manager = Arc::new(super::route_manager::ClientRouteManager::new(
-        core.node_arc(),
-        p2p,
-        Arc::new(core.principal().clone()),
-    ));
-    let configured_peers = core.sync_state.clone();
-    let mut updates = configured_peers.subscribe();
-    let task = tokio::spawn({
-        let route_manager = Arc::clone(&route_manager);
-        let configured_peers = configured_peers.clone();
-        async move {
-            route_manager
-                .activate_peer(
-                    &configured_peers,
-                    "Blocked peer",
-                    "iroh://blocked",
-                    "did:key:blocked",
-                    Some("http://blocked.invalid/graphql"),
-                    Some("default"),
-                )
-                .await
-        }
-    });
-
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while recording.connect_calls().is_empty() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("dial reached blocking transport");
-    updates.changed().await.expect("sync watch remains open");
-    let snapshot = updates.borrow_and_update().clone();
-    assert_eq!(snapshot.directory.len(), 1);
-    assert_eq!(snapshot.peers.len(), 1);
-    assert_eq!(snapshot.directory[0].peer_id, snapshot.peers[0].peer_id);
-    assert!(!snapshot.directory[0].pairing_ready);
-    assert!(!snapshot.peers[0].dial_succeeded);
-
-    let persisted = crate::client::load_peer_records(&core.paths().peer_directory_path())
-        .await
-        .expect("reload persisted peer directory");
-    assert_eq!(persisted, snapshot.directory);
-
-    task.abort();
-    let cancellation = task.await;
-    assert!(cancellation.is_err_and(|error| error.is_cancelled()));
-    let after_cancel = configured_peers.snapshot();
-    assert_eq!(after_cancel.directory, snapshot.directory);
-    assert_eq!(after_cancel.peers, snapshot.peers);
-
-    core.shutdown().await.expect("shutdown");
-}
-
-#[tokio::test]
-async fn route_activation_publishes_connected_status_before_returning() {
-    use crate::client::paths::DesktopPaths;
-
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tmp.path().to_path_buf()),
-        ClientCoreOptions::local_only(),
-    )
-    .await
-    .expect("client core");
-    let recording = Arc::new(RecordingP2P::default());
-    recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
-    let p2p: Arc<dyn P2POps> = recording;
-    let route_manager = super::route_manager::ClientRouteManager::new(
-        core.node_arc(),
-        p2p,
-        Arc::new(core.principal().clone()),
-    );
-
-    let activation = route_manager
-        .activate_peer(
-            &core.sync_state,
-            "Connected peer",
-            "127.0.0.1:56001/p2p/remote-peer",
-            "did:key:remote",
-            None,
-            None,
-        )
-        .await
-        .expect("activate peer");
-
-    let snapshot = core.sync_state.snapshot();
-    let status = snapshot
-        .peers
-        .iter()
-        .find(|status| status.peer_id == activation.record.peer_id)
-        .expect("activation status was published before return");
-    assert!(activation.connected);
-    assert!(status.dial_succeeded);
-    assert_eq!(status.last_error, activation.warning);
 
     core.shutdown().await.expect("shutdown");
 }
@@ -649,20 +667,16 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
     )
     .expect("valid route fixture");
     let lifecycle = core.route_manager.lock().await;
-    lifecycle
+    let manual_write = lifecycle
         .upsert_desired(
             &route,
             gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
         )
-        .await
-        .expect("save pairing desired fixture");
-    lifecycle
-        .upsert_desired(
-            &route,
-            gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
-        )
-        .await
-        .expect("update pairing desired fixture");
+        .await;
+    assert!(manual_write
+        .expect_err("manual desired-state authoring must fail closed")
+        .to_string()
+        .contains("manual PeerPairingDesired authoring is disabled"));
     drop(lifecycle);
 
     let result = core
@@ -706,26 +720,9 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .and_then(|data| data.get("PeerPairingDesired"))
         .and_then(|rows| rows.as_array())
         .expect("saved pairing desired rows");
-    assert_eq!(rows.len(), 1, "writer must update the existing row");
-    let row = rows.first().expect("saved pairing desired row");
-    assert_eq!(
-        row.get("agent_did").and_then(serde_json::Value::as_str),
-        Some("did:test:invalid\"quoted")
-    );
-    assert!(row.get("profiles").is_some_and(serde_json::Value::is_null));
-    assert_eq!(
-        row.get("replicator_addresses")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|addresses| addresses.first())
-            .and_then(serde_json::Value::as_str),
-        Some(route.transport.address())
-    );
-    assert!(row
-        .get("collections")
-        .is_some_and(serde_json::Value::is_null));
-    assert_eq!(
-        row.get("template").and_then(serde_json::Value::as_str),
-        Some("client")
+    assert!(
+        rows.is_empty(),
+        "failed manual authoring and offline removal must not leave alternate desired authority"
     );
 
     core.shutdown().await.expect("shutdown");

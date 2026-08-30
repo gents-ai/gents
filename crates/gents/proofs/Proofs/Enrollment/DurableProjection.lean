@@ -9,6 +9,7 @@ structure DurableDocuments where
   requests : Finset Request := ∅
   decisions : Finset Decision := ∅
   revisions : Finset AuthorizationRevision := ∅
+  routeReceipts : Finset RouteReceipt := ∅
   deriving DecidableEq
 
 def requestIdentityUnique (docs : DurableDocuments) (request : Request) : Prop :=
@@ -65,6 +66,30 @@ instance (docs : DurableDocuments) (offer : Offer) (request : Request) (decision
     Decidable (durableCurrentApproval docs offer request decision) := by
   unfold durableCurrentApproval; infer_instance
 
+def routeReceiptIdentityUnique (docs : DurableDocuments) (receipt : RouteReceipt) : Prop :=
+  receipt ∈ docs.routeReceipts ∧
+  ∀ other ∈ docs.routeReceipts,
+    (other.requestId = receipt.requestId ∧
+      other.authorizationSequence = receipt.authorizationSequence ∧
+      other.direction = receipt.direction) → other = receipt
+
+instance (docs : DurableDocuments) (receipt : RouteReceipt) :
+    Decidable (routeReceiptIdentityUnique docs receipt) := by
+  unfold routeReceiptIdentityUnique; infer_instance
+
+def durableCurrentServerRouteReceipt
+    (docs : DurableDocuments) (offer : Offer) (request : Request) (decision : Decision)
+    (receipt : RouteReceipt) : Prop :=
+  durableCurrentApproval docs offer request decision ∧
+  routeReceiptIdentityUnique docs receipt ∧
+  routeReceiptMatchesApproval request decision receipt ∧
+  receipt.adminSigned = true ∧ receipt.applied = true
+
+instance (docs : DurableDocuments) (offer : Offer) (request : Request) (decision : Decision)
+    (receipt : RouteReceipt) : Decidable
+    (durableCurrentServerRouteReceipt docs offer request decision receipt) := by
+  unfold durableCurrentServerRouteReceipt; infer_instance
+
 theorem conflicting_request_id_fails_closed
     {docs : DurableDocuments} {first second : Request}
     (hfirst : first ∈ docs.requests) (hsecond : second ∈ docs.requests)
@@ -120,5 +145,30 @@ theorem durable_equal_revision_conflict_retracts_approval
   intro hcurrent
   exact (equal_sequence_conflict_has_no_unique_maximum hconflict hbase hsame hseq hne).2
     hcurrent.2.2.2.2.2.2
+
+theorem conflicting_route_receipt_fails_closed
+    {docs : DurableDocuments} {first second : RouteReceipt}
+    (hfirst : first ∈ docs.routeReceipts) (hsecond : second ∈ docs.routeReceipts)
+    (hrequest : first.requestId = second.requestId)
+    (hsequence : first.authorizationSequence = second.authorizationSequence)
+    (hdirection : first.direction = second.direction) (hne : first ≠ second) :
+    ¬ routeReceiptIdentityUnique docs first ∧ ¬ routeReceiptIdentityUnique docs second := by
+  constructor
+  · rintro ⟨_, hunique⟩
+    exact hne (hunique second hsecond ⟨hrequest.symm, hsequence.symm, hdirection.symm⟩).symm
+  · rintro ⟨_, hunique⟩
+    exact hne (hunique first hfirst ⟨hrequest, hsequence, hdirection⟩)
+
+theorem durable_conflicting_route_receipt_retracts_current
+    {docs : DurableDocuments} {offer : Offer} {request : Request} {decision : Decision}
+    {first second : RouteReceipt}
+    (hfirst : first ∈ docs.routeReceipts) (hsecond : second ∈ docs.routeReceipts)
+    (hrequest : first.requestId = second.requestId)
+    (hsequence : first.authorizationSequence = second.authorizationSequence)
+    (hdirection : first.direction = second.direction) (hne : first ≠ second) :
+    ¬ durableCurrentServerRouteReceipt docs offer request decision first := by
+  intro hcurrent
+  exact (conflicting_route_receipt_fails_closed hfirst hsecond hrequest hsequence hdirection hne).1
+    hcurrent.2.1
 
 end Enrollment

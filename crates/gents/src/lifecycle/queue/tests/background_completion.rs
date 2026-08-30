@@ -1,7 +1,7 @@
 use super::*;
 
-fn root_parent(session_id: &str) -> AgentRequest {
-    let mut parent = parent_request(session_id);
+fn root_parent(agent_did: &str, session_id: &str) -> AgentRequest {
+    let mut parent = parent_request(agent_did, session_id);
     parent.subagent_depth = 0;
     parent.caused_by_parent_request_id = None;
     parent.caused_by_parent_request_doc_id = None;
@@ -44,7 +44,7 @@ fn wake_agent_request(
         execution_origin: Some("scheduled".to_string()),
         caused_by_correlation: None,
         caused_by_trigger_context: None,
-        created_at: chrono::Utc::now().to_rfc3339(),
+        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: Some(parent.request_id.clone()),
@@ -64,7 +64,7 @@ fn wake_agent_request(
 #[tokio::test]
 async fn notification_is_atomically_bound_to_coalesced_wake() {
     let db = test_db("atomic-background-notification").await;
-    let parent = root_parent("atomic-background-session");
+    let parent = root_parent(db.agent_did(), "atomic-background-session");
     let first = enqueue_background_completion_with_message(
         &db.node,
         &parent,
@@ -148,7 +148,7 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
 #[tokio::test]
 async fn concurrent_notifications_converge_to_one_pending_wake() {
     let db = test_db("atomic-background-race").await;
-    let parent = root_parent("atomic-background-race-session");
+    let parent = root_parent(db.agent_did(), "atomic-background-race-session");
     let first = enqueue_background_completion_with_message(
         &db.node,
         &parent,
@@ -244,9 +244,9 @@ async fn concurrent_notifications_converge_to_one_pending_wake() {
 
 #[tokio::test]
 async fn restart_before_claim_preserves_pending_input_until_the_wake_completes() {
-    let TestDb { node, _tempdir } = test_db("background-restart-before-claim").await;
-    let node = std::sync::Arc::new(node);
-    let parent = root_parent("background-restart-before-claim-session");
+    let db = test_db("background-restart-before-claim").await;
+    let node = db.node.clone();
+    let parent = root_parent(db.agent_did(), "background-restart-before-claim-session");
     let hints = background_hints(&parent);
     let enqueued = enqueue_background_completion_with_message(
         node.as_ref(),
@@ -259,13 +259,13 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     .await
     .unwrap();
 
-    let recovery = crate::RequestLifecycle::recover_all(node.as_ref(), TEST_AGENT_DID)
+    let recovery = crate::RequestLifecycle::recover_all(node.as_ref(), db.agent_did())
         .await
         .unwrap();
     assert_eq!(recovery.background_wakes_redriven, 0);
     let before = crate::load_background_completion_diagnostics(
         &crate::config_client::ConfigAccess::Local(node.clone()),
-        TEST_AGENT_DID,
+        db.agent_did(),
     )
     .await
     .unwrap();
@@ -282,7 +282,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         TEST_BEHAVIOR_ID,
-        TEST_AGENT_DID,
+        db.agent_did(),
         request,
         60,
         ExecutionOrigin::Scheduled,
@@ -296,7 +296,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
 
     let after = crate::load_background_completion_diagnostics(
         &crate::config_client::ConfigAccess::Local(node),
-        TEST_AGENT_DID,
+        db.agent_did(),
     )
     .await
     .unwrap();
@@ -307,9 +307,9 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
 
 #[tokio::test]
 async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
-    let TestDb { node, _tempdir } = test_db("background-response-repair-ack").await;
-    let node = std::sync::Arc::new(node);
-    let parent = root_parent("background-response-repair-ack-session");
+    let db = test_db("background-response-repair-ack").await;
+    let node = db.node.clone();
+    let parent = root_parent(db.agent_did(), "background-response-repair-ack-session");
     let hints = background_hints(&parent);
     let enqueued = enqueue_background_completion_with_message(
         node.as_ref(),
@@ -330,7 +330,7 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         TEST_BEHAVIOR_ID,
-        TEST_AGENT_DID,
+        db.agent_did(),
         request,
         60,
         ExecutionOrigin::Scheduled,
@@ -347,7 +347,7 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
             r#"mutation {{
                 create_AgentResponse(input: {{
                     response_key: "{}", request_id: "{}", request_doc_id: "{}",
-                    agent_did: "{TEST_AGENT_DID}", behavior_id: "{TEST_BEHAVIOR_ID}",
+                    agent_did: "{}", behavior_id: "{TEST_BEHAVIOR_ID}",
                     session_id: "{}", content: "integrated notification",
                     status: "complete", token_count: 1, progress_seq: 1,
                     created_at: "2026-08-12T00:00:00Z",
@@ -357,6 +357,7 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
             escape_graphql_string(&enqueued.request.request_id),
             escape_graphql_string(&enqueued.request.request_id),
             escape_graphql_string(&enqueued.request.doc_id),
+            escape_graphql_string(db.agent_did()),
             escape_graphql_string(&parent.session_id),
         ))
         .await;
@@ -367,13 +368,13 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
     );
 
     let first_repair =
-        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), TEST_AGENT_DID)
+        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), db.agent_did())
             .await
             .unwrap();
     assert_eq!(first_repair.repaired, 1);
     let first = crate::load_background_completion_diagnostics(
         &crate::config_client::ConfigAccess::Local(node.clone()),
-        TEST_AGENT_DID,
+        db.agent_did(),
     )
     .await
     .unwrap();
@@ -382,13 +383,13 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
     assert_eq!(first.epochs[0].state, "acknowledged");
 
     let second_repair =
-        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), TEST_AGENT_DID)
+        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), db.agent_did())
             .await
             .unwrap();
     assert_eq!(second_repair.repaired, 0);
     let second = crate::load_background_completion_diagnostics(
         &crate::config_client::ConfigAccess::Local(node),
-        TEST_AGENT_DID,
+        db.agent_did(),
     )
     .await
     .unwrap();
@@ -400,9 +401,9 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
 
 #[tokio::test]
 async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
-    let TestDb { node, _tempdir } = test_db("background-successor-ack").await;
-    let node = std::sync::Arc::new(node);
-    let parent = root_parent("background-successor-ack-session");
+    let db = test_db("background-successor-ack").await;
+    let node = db.node.clone();
+    let parent = root_parent(db.agent_did(), "background-successor-ack-session");
     let hints = background_hints(&parent);
     let first = enqueue_background_completion_with_message(
         node.as_ref(),
@@ -423,7 +424,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     let mut first_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         TEST_BEHAVIOR_ID,
-        TEST_AGENT_DID,
+        db.agent_did(),
         first_request,
         60,
         ExecutionOrigin::Scheduled,
@@ -460,7 +461,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         TEST_BEHAVIOR_ID,
-        TEST_AGENT_DID,
+        db.agent_did(),
         second_request,
         60,
         ExecutionOrigin::Scheduled,
@@ -473,7 +474,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     second_lifecycle.complete().await.unwrap();
 
     let access = crate::config_client::ConfigAccess::Local(node);
-    let diagnostics = crate::load_background_completion_diagnostics(&access, TEST_AGENT_DID)
+    let diagnostics = crate::load_background_completion_diagnostics(&access, db.agent_did())
         .await
         .unwrap();
     assert_eq!(diagnostics.pending_notifications, 0);

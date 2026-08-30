@@ -1,12 +1,21 @@
 use super::*;
+use crate::identity::AgentIdentity;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 const TEST_AGENT_DID: &str = "did:test:queue-test";
 const TEST_BEHAVIOR_ID: &str = "general";
 
 struct TestDb {
-    node: EmbeddedNode,
+    node: Arc<EmbeddedNode>,
+    identity: Arc<crate::identity::KeyIdentity>,
     _tempdir: TempDir,
+}
+
+impl TestDb {
+    fn agent_did(&self) -> &str {
+        self.identity.did()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,11 +49,11 @@ fn hints(source: QueueSource, policy: QueuePolicy) -> QueueHints {
     }
 }
 
-fn parent_request(session_id: &str) -> AgentRequest {
+fn parent_request(agent_did: &str, session_id: &str) -> AgentRequest {
     AgentRequest {
         doc_id: "parent-doc".to_string(),
         request_id: "parent-request".to_string(),
-        agent_did: TEST_AGENT_DID.to_string(),
+        agent_did: agent_did.to_string(),
         requester_did: None,
         behavior_id: Some(TEST_BEHAVIOR_ID.to_string()),
         session_id: session_id.to_string(),
@@ -57,7 +66,7 @@ fn parent_request(session_id: &str) -> AgentRequest {
         max_total_tokens: None,
         metadata: None,
         execution_origin: Some("interactive".to_string()),
-        created_at: chrono::Utc::now().to_rfc3339(),
+        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         deadline: None,
         subagent_depth: 2,
         caused_by_parent_request_id: Some("root-parent-request".to_string()),
@@ -91,38 +100,29 @@ fn transaction_create_doc_id_accepts_both_defradb_response_shapes() {
     }
 }
 
-#[test]
-fn request_mutation_rejects_a_half_bound_parent_edge() {
-    let mut parent = parent_request("session-half-bound");
-    parent.caused_by_parent_tool_call_id = None;
-    let result = session_request_create_mutation(
-        &parent,
-        TEST_BEHAVIOR_ID,
-        "continue",
-        ExecutionOrigin::Scheduled,
-        "{}",
-        "request-next",
-        "2026-08-10T00:00:00Z",
-        false,
-    );
-    assert!(result.is_err());
-}
-
 async fn test_db(name: &str) -> TestDb {
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("gents-queue-{name}-"))
         .tempdir()
         .expect("tempdir");
-    let node = EmbeddedNode::builder()
-        .data_path(tempdir.path())
-        .build()
-        .await
-        .expect("embedded node");
+    let identity = Arc::new(
+        crate::identity::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
+            .expect("test identity"),
+    );
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(tempdir.path())
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .expect("embedded node"),
+    );
     crate::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
     TestDb {
         node,
+        identity,
         _tempdir: tempdir,
     }
 }
@@ -170,6 +170,7 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
 
 async fn insert_raw_queue_request(
     node: &EmbeddedNode,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     metadata: &str,
@@ -177,12 +178,13 @@ async fn insert_raw_queue_request(
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_metadata = escape_graphql_string(metadata);
-    let created_at = chrono::Utc::now().to_rfc3339();
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
-                agent_did: "{TEST_AGENT_DID}",
+                agent_did: "{escaped_agent_did}",
                 behavior_id: "{TEST_BEHAVIOR_ID}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
@@ -215,34 +217,27 @@ async fn insert_raw_queue_request(
 async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     let db = test_db("ambiguous-request-doc-lookup").await;
     let metadata = queue_metadata_json(&hints(QueueSource::User, QueuePolicy::Append));
-    insert_raw_queue_request(&db.node, "duplicate-logical-id", "session-a", &metadata).await;
-    insert_raw_queue_request(&db.node, "duplicate-logical-id", "session-b", &metadata).await;
+    insert_raw_queue_request(
+        &db.node,
+        db.agent_did(),
+        "duplicate-logical-id",
+        "session-a",
+        &metadata,
+    )
+    .await;
+    insert_raw_queue_request(
+        &db.node,
+        db.agent_did(),
+        "duplicate-logical-id",
+        "session-b",
+        &metadata,
+    )
+    .await;
 
     let error = lookup_request_doc_id_optional(&db.node, "duplicate-logical-id")
         .await
         .expect_err("duplicate logical ids must not resolve to an arbitrary document");
     assert!(error.to_string().contains("ambiguous across 2 documents"));
-}
-
-#[tokio::test]
-async fn control_parent_normalization_recovers_legacy_logical_request_edge() {
-    let db = test_db("legacy-control-parent").await;
-    let root_doc =
-        insert_raw_queue_request(&db.node, "legacy-root-request", "legacy-root-session", "{}")
-            .await;
-    let mut parent = parent_request("legacy-child-session");
-    parent.caused_by_parent_request_id = Some("legacy-root-request".to_string());
-    parent.caused_by_parent_request_doc_id = None;
-
-    let normalized = normalize_request_only_control_parent(&db.node, &parent)
-        .await
-        .unwrap();
-    assert_eq!(
-        normalized.caused_by_parent_request_doc_id.as_deref(),
-        Some(root_doc.as_str())
-    );
-    assert!(normalized.caused_by_parent_tool_call_id.is_none());
-    assert!(normalized.caused_by_parent_tool_call_doc_id.is_none());
 }
 
 mod background_completion;

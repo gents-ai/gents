@@ -1,36 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use gents_desktop_core::client::{BearerPairingResult, ClientCore, PeerMutationResult};
+use gents_desktop_core::client::{ClientCore, PeerMutationResult};
 
-use super::super::types::{BearerPairingRequest, PeerAddRequest};
-use super::util::{require_trimmed, trim_optional};
-
-pub async fn add_peer(core: &ClientCore, request: PeerAddRequest) -> Result<()> {
-    let label = require_trimmed("label", request.label)?;
-    let agent_did = require_trimmed("agent_did", request.agent_did)?;
-    let addr = require_trimmed("addr", request.addr)?;
-    let graphql = trim_optional(request.graphql);
-    let default_behavior_id = trim_optional(request.default_behavior_id);
-    core.add_peer(
-        &label,
-        &addr,
-        &agent_did,
-        graphql.as_deref(),
-        default_behavior_id.as_deref(),
-    )
-    .await?;
-    Ok(())
-}
-
-pub async fn pair_bearer(
-    core: &ClientCore,
-    request: BearerPairingRequest,
-) -> Result<BearerPairingResult> {
-    let token = require_trimmed("token", request.token)?;
-    let label = trim_optional(request.label);
-    core.pair_with_bearer_invite(&token, label.as_deref()).await
-}
+use super::util::require_trimmed;
 
 pub async fn repair_p2p(core: &ClientCore, settle_delay: Duration) -> Result<()> {
     core.request_p2p_repair().await?;

@@ -96,17 +96,16 @@ that a split is necessary.
 | Collection | Scope | Branchable | Identity/version contract | Retention | Primary consumers |
 | --- | --- | --- | --- | --- | --- |
 | `AgentNetwork` | Shared signed network root | Yes | `network_id`, `_docID`, exact CID and signer | SEC | network control, P2P |
-| `NetworkJoinRequest` | Shared signed admission request | Yes | `request_key`, `_docID`, admission/transition CID | SEC | network admission |
-| `NetworkMembership` | Shared signed grant/revocation ledger | Yes | `membership_key`, `_docID`, exact CID and signer | SEC | replication admission |
+| `NetworkAdminPin` | Local durable TOFU pin | No | network/admin pair, exact observed identity | SEC | enrollment admission |
+| `NetworkEnrollmentRequest` | Candidate-authored immutable request | Yes | request digest, candidate DID, challenge | SEC | enrollment admission |
+| `NetworkEnrollmentDecision` | Admin-signed terminal request decision | Yes | request digest, authorization sequence, signer | SEC | enrollment projection |
+| `NetworkAuthorizationRevision` | Admin-signed authorization generation | Yes | member/network key, unique maximal sequence | SEC | route admission and revocation |
+| `NetworkEnrollmentRouteReceipt` | Runtime-signed exact applied-route receipt | Yes | request digest, authorization sequence, route generation | SEC + FACT | client readiness |
 | `PeerEndpoint` | Shared signed DID/node/address binding | Yes | logical DID/node key, `_docID`, CID at use and signer | SEC + CFG | peer discovery |
-| `PairingBearerClaim` | Shared signed bearer claim | Yes | token, `_docID`, exact CID and signer | SEC | pairing protocol |
-| `BearerPairingReady` | Shared signed issuer acknowledgement | Yes | `readiness_key`, `_docID`, exact CID and signer | SEC | pairing protocol |
-| `ConsumedInviteNonce` | Shared replay-prevention ledger | **Yes** | nonce, `_docID`, exact CID | SEC | invite admission |
 | `PeerRegistry` | Shared fleet peer registry | **Yes** | `peer_id`, `_docID`, CID at use | CFG + SEC | peer reconcile, discovery |
 | `DataPlanePairingDesired` | Local replication intent | No | peer/agent key, `_docID` | OP | data-plane reconcile |
-| `PeerPairingDesired` | Local pairing intent | No | `peer_id`, `_docID` | OP | peer reconcile |
+| `PeerPairingDesired` | Enrollment-owned local pairing intent | No | exact authorization generation, `peer_id`, `_docID` | OP | peer reconcile |
 | `PeerPairingApplied` | Local applied observation | No | `peer_id`, `_docID` | OP | peer reconcile |
-| `ReciprocalConversationIntent` | Local reciprocal-replication intent | No | `member_did`, `_docID` | OP | conversation pairing |
 
 ## Remaining review gates
 

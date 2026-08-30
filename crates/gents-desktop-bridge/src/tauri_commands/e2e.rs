@@ -11,7 +11,7 @@ const E2E_EVENTS_FILENAME: &str = "native-e2e-events.jsonl";
 #[serde(rename_all = "camelCase")]
 pub struct NativeE2eConfig {
     agent_label: String,
-    pair_token: String,
+    server_address: String,
     prompt: String,
     expected_response: String,
     expect_empty_conversation_slice: bool,
@@ -49,19 +49,19 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeErro
             return Ok(None);
         }
 
-        let pair_token = std::env::var("GENTS_E2E_PAIR_TOKEN").map_err(|_| {
-            BridgeError::from_legacy_message("GENTS_E2E_PAIR_TOKEN is required for native E2E")
+        let server_address = std::env::var("GENTS_E2E_SERVER_ADDRESS").map_err(|_| {
+            BridgeError::from_legacy_message("GENTS_E2E_SERVER_ADDRESS is required for native E2E")
         })?;
-        if !pair_token.starts_with("dabear1-") {
+        if server_address.trim().is_empty() {
             return Err(BridgeError::from_legacy_message(
-                "GENTS_E2E_PAIR_TOKEN is not a bearer pairing invite",
+                "GENTS_E2E_SERVER_ADDRESS must not be empty",
             ));
         }
 
         Ok(Some(NativeE2eConfig {
             agent_label: std::env::var("GENTS_E2E_AGENT_LABEL")
                 .unwrap_or_else(|_| "Fleet E2E Agent".to_owned()),
-            pair_token,
+            server_address,
             prompt: std::env::var("GENTS_E2E_PROMPT").unwrap_or_else(|_| {
                 "Reply with only the uppercase underscore form of: fleet iphone simulator e2e."
                     .to_owned()

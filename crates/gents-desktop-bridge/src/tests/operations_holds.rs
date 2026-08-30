@@ -6,6 +6,18 @@ use crate::types::{DesktopListHoldsRequest, DesktopResolveHoldRequest};
 
 const AGENT_DID: &str = "did:test:holds-agent";
 
+async fn seed_owned_local_route(core: &gents_desktop_core::client::ClientCore) {
+    core.persist_local_standard_peer(
+        "Held tool runtime",
+        "127.0.0.1:56000/p2p/holds",
+        AGENT_DID,
+        "http://127.0.0.1:56001/graphql",
+        "/tmp/holds-agent-home",
+    )
+    .await
+    .expect("persist exact local-standard route");
+}
+
 async fn seed_held_tool_call(core: &gents_desktop_core::client::ClientCore) {
     let deadline = (chrono::Utc::now() + chrono::Duration::seconds(120)).to_rfc3339();
     let mutation = format!(
@@ -67,6 +79,7 @@ async fn list_holds_returns_seeded_awaiting_approval_row() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resolve_hold_writes_decision_signed_by_desktop_principal() {
     let (core, _tmp) = boot_core().await;
+    seed_owned_local_route(core.as_ref()).await;
     seed_held_tool_call(core.as_ref()).await;
 
     let result = resolve_tool_call_hold_for_core(
@@ -118,6 +131,7 @@ async fn resolve_hold_writes_decision_signed_by_desktop_principal() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resolve_hold_rejects_unknown_tool_call() {
     let (core, _tmp) = boot_core().await;
+    seed_owned_local_route(core.as_ref()).await;
 
     let error = resolve_tool_call_hold_for_core(
         core.clone(),
@@ -136,6 +150,7 @@ async fn resolve_hold_rejects_unknown_tool_call() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resolve_hold_approve_writes_approved_decision() {
     let (core, _tmp) = boot_core().await;
+    seed_owned_local_route(core.as_ref()).await;
     seed_held_tool_call(core.as_ref()).await;
 
     let result = resolve_tool_call_hold_for_core(

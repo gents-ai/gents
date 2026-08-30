@@ -350,6 +350,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         output_schema_ref: None,
     };
     let schedule = ResolvedSchedule {
+        trigger_doc_id: "sched-e2e-doc".to_string(),
         schedule_id: "sched-e2e".to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -592,6 +593,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         output_schema_ref: None,
     };
     let schedule = ResolvedSchedule {
+        trigger_doc_id: "sched-cron-null-doc".to_string(),
         schedule_id: "sched-cron-null".to_string(),
         task_id: task.task_id.clone(),
         task,

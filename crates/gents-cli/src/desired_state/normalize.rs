@@ -25,9 +25,6 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
         .projection_acp_bindings
         .sort_by(|left, right| left.binding_id.cmp(&right.binding_id));
     manifest
-        .peer_pairings
-        .sort_by(|left, right| left.peer_did.cmp(&right.peer_did));
-    manifest
         .tasks
         .sort_by(|left, right| left.task_id.cmp(&right.task_id));
     manifest
@@ -106,22 +103,6 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
         normalize_optional_string(&mut binding.resource_map_json);
         normalize_optional_string(&mut binding.publication_status);
         normalize_optional_string(&mut binding.published_at);
-    }
-    for pairing in &mut manifest.peer_pairings {
-        pairing.peer_did = pairing.peer_did.trim().to_string();
-        pairing.template = pairing.template.trim().to_string();
-        pairing.addresses = pairing
-            .addresses
-            .iter()
-            .map(|address| address.trim())
-            .filter(|address| !address.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-        pairing.addresses.sort();
-        pairing.addresses.dedup();
-        if pairing.peer_id.trim().is_empty() {
-            pairing.peer_id = pairing.resolved_peer_id().unwrap_or_default();
-        }
     }
 }
 

@@ -1561,16 +1561,6 @@ pub(crate) async fn load_parent_subagent_context(
     })
 }
 
-pub(crate) async fn parent_authorizes_subagent_target(
-    node: &EmbeddedNode,
-    parent_request_id: &str,
-    target_behavior_id: &str,
-) -> Result<bool> {
-    Ok(load_parent_subagent_authorization(node, parent_request_id)
-        .await?
-        .authorizes_target(target_behavior_id))
-}
-
 pub(crate) async fn load_parent_subagent_authorization(
     node: &EmbeddedNode,
     parent_request_id: &str,

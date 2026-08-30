@@ -16,10 +16,7 @@
 
     .fleet-local-runtime,
     .fleet-status-form,
-    .fleet-bearer-form,
     .fleet-discovery-row,
-    .fleet-add-form,
-    .fleet-empty-card .fleet-add-form,
     .fleet-empty-card .fleet-discovery-row {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -45,15 +42,8 @@
       padding-block: var(--space-2);
     }
 
-    .fleet-local-runtime .primary-button,
-    .fleet-pair-actions,
-    .fleet-add-actions .primary-button {
+    .fleet-local-runtime .primary-button {
       width: 100%;
-    }
-
-    .fleet-pair-actions {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
     }
   }
 }

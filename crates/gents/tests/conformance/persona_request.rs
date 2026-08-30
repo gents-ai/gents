@@ -72,6 +72,9 @@ fn create_doc(op: PersonaOp) -> PersonaRequestDoc {
         request_key: "req-1".to_string(),
         requester_did: "did:key:requester".to_string(),
         agent_did: "did:key:agent".to_string(),
+        authority_kind: gents_protocol::persona::PERSONA_AUTHORITY_ENROLLMENT.to_string(),
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
+        current_enrollment_authorized: true,
         op_raw: "create".to_string(),
         op: Some(op),
         persona_name: Some("Research Assistant".to_string()),
@@ -131,9 +134,11 @@ fn admission_matrix_mirrors_lean_admits() {
 
     let happy_disable = PersonaRequestDoc {
         agent_did: "did:key:agent".to_string(),
+        authority_kind: gents_protocol::persona::PERSONA_AUTHORITY_ENROLLMENT.to_string(),
         op_raw: "disable".to_string(),
         op: Some(PersonaOp::Disable),
         behavior_id: Some("existing-enabled".to_string()),
+        current_enrollment_authorized: true,
         ..Default::default()
     };
     assert_eq!(
@@ -227,7 +232,10 @@ fn admission_matrix_mirrors_lean_admits() {
         ..Default::default()
     });
 
-    for doc in rejects {
+    for mut doc in rejects {
+        // Isolate each legacy admission conjunct from the new Lean-modeled
+        // enrollment authorization conjunct.
+        doc.current_enrollment_authorized = true;
         assert!(
             matches!(
                 decide_persona_request(&doc, &cat),
@@ -237,6 +245,40 @@ fn admission_matrix_mirrors_lean_admits() {
             doc.op_raw
         );
     }
+
+    let mut stale_authorization = create_doc(PersonaOp::Create { clone_from: None });
+    stale_authorization.current_enrollment_authorized = false;
+    assert_eq!(
+        decide_persona_request(&stale_authorization, &cat),
+        PersonaVerdict::Reject(
+            "persona request has no exact current enrollment authorization".to_string()
+        )
+    );
+
+    let mut valid_local = create_doc(PersonaOp::Create { clone_from: None });
+    valid_local.authority_kind = gents_protocol::persona::PERSONA_AUTHORITY_LOCAL_SELF.to_string();
+    valid_local.current_enrollment_authorized = false;
+    valid_local.requester_did = valid_local.agent_did.clone();
+    valid_local.local_signer_did = valid_local.agent_did.clone();
+    valid_local.local_signature_valid = true;
+    assert_eq!(
+        decide_persona_request(&valid_local, &cat),
+        PersonaVerdict::Admit
+    );
+
+    let mut unsigned_local = valid_local.clone();
+    unsigned_local.local_signature_valid = false;
+    assert!(matches!(
+        decide_persona_request(&unsigned_local, &cat),
+        PersonaVerdict::Reject(_)
+    ));
+
+    let mut cross_branch = valid_local;
+    cross_branch.authority_kind = gents_protocol::persona::PERSONA_AUTHORITY_ENROLLMENT.to_string();
+    assert!(matches!(
+        decide_persona_request(&cross_branch, &cat),
+        PersonaVerdict::Reject(_)
+    ));
 }
 
 /// Mirrors Lean `admitted_create_mints_wellformed`: an admitted create mints an

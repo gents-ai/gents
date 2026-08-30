@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::Utc;
 use gents::{BashMode, FileToolMode};
 use gents_desktop_core::client::{ClientCore, ClientPeerStatus};
 use gents_protocol::row::{
@@ -44,7 +45,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .into_iter()
         .map(|peer| {
             let status = peer_statuses.get(&peer.agent_did);
-            let require_source_scope = peer.is_bearer_pairing()
+            let require_source_scope = peer.is_enrollment()
                 || peer
                     .graphql
                     .as_deref()
@@ -465,7 +466,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 &conversations,
             );
 
-            let pairing_ready = peer.is_chat_ready();
+            let pairing_ready = peer.is_chat_ready_at(Utc::now());
             let behavior_readiness = redact_unpaired_behavior_readiness(
                 project_behavior_readiness(
                     store.behavior_readiness(&peer.agent_did),

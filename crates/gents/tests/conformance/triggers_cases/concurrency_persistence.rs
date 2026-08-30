@@ -1,4 +1,5 @@
 use super::*;
+use crate::support::materialization_identity;
 
 #[tokio::test]
 async fn serial_skips_when_prior_active_runtime() {
@@ -14,7 +15,7 @@ async fn serial_skips_when_prior_active_runtime() {
     RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "seed event in-flight",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -62,7 +63,7 @@ async fn latest_only_supersedes_prior_fire() {
     let prior = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "seed prior",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -103,7 +104,7 @@ async fn latest_only_supersedes_prior_fire() {
     let new_fire = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "latest event fire",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,

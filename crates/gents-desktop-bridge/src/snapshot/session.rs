@@ -81,11 +81,8 @@ pub(super) fn keyed_steering_request_ids(
         .collect()
 }
 
-pub(super) fn request_is_deprecated_background_completion(request: &AgentRequestRow) -> bool {
-    gents::lifecycle::is_deprecated_background_completion_request(
-        request.execution_origin.as_deref(),
-        request.metadata.as_deref(),
-    )
+pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> bool {
+    gents::lifecycle::is_background_completion_request(request.metadata.as_deref())
 }
 
 struct LoadedRequestContext {

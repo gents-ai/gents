@@ -24,6 +24,12 @@ pub struct HarnessNode {
     pub db: TestDb,
 }
 
+impl HarnessNode {
+    fn did(&self) -> &str {
+        self.db.node_identity.did()
+    }
+}
+
 pub struct Harness {
     a: HarnessNode,
     b: HarnessNode,
@@ -126,7 +132,10 @@ impl Harness {
                 node,
                 peer,
                 collections,
-            } => write_pairing(self.node(node)?, peer, collections).await?,
+            } => {
+                let peer_did = self.node(peer)?.did().to_string();
+                write_pairing(self.node(node)?, peer, &peer_did, collections).await?
+            }
             Action::WriteAgentRequest {
                 node,
                 request_id,
@@ -136,6 +145,11 @@ impl Harness {
                 caused_by_parent_request_id,
                 caused_by_parent_tool_call_id,
             } => {
+                let agent_did = match agent_did.as_str() {
+                    NODE_A_DID => self.a.did(),
+                    NODE_B_DID => self.b.did(),
+                    other => other,
+                };
                 write_agent_request(
                     self.node(node)?,
                     request_id,
@@ -191,15 +205,17 @@ impl Harness {
             }
             Action::RunCancelMirrorObserverOnB => run_cancel_mirror_on_b(&self.b).await?,
             Action::RunUnclaimedSpawnReconcilerOnA => {
-                let _ =
-                    reconcile_unclaimed_cross_deployment_spawns(self.a.db.node.clone(), NODE_A_DID)
-                        .await?;
+                let _ = reconcile_unclaimed_cross_deployment_spawns(
+                    self.a.db.node.clone(),
+                    self.a.did(),
+                )
+                .await?;
             }
             Action::RunCancelAckObserverOnA => {
-                let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), NODE_A_DID).await?;
+                let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
             }
             Action::RunRecoverySweepOn { node } => {
-                let did = if node == "A" { NODE_A_DID } else { NODE_B_DID };
+                let did = self.node(node)?.did();
                 let _ =
                     ToolCallLifecycle::recover_all(self.node(node)?.db.node.as_ref(), did).await?;
                 let _ =
@@ -220,7 +236,7 @@ impl Harness {
 
     async fn wait_for_convergence(&mut self) -> Result<()> {
         run_background_completion_on_a(&self.a).await?;
-        let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), NODE_A_DID).await?;
+        let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
         run_cancel_mirror_on_b(&self.b).await?;
         Ok(())
     }
@@ -286,14 +302,12 @@ impl Harness {
     }
 }
 
-async fn write_pairing(node: &HarnessNode, peer: &str, collections: &[String]) -> Result<()> {
-    let peer_did = if peer == "A" {
-        NODE_A_DID
-    } else if peer == "B" {
-        NODE_B_DID
-    } else {
-        peer
-    };
+async fn write_pairing(
+    node: &HarnessNode,
+    peer: &str,
+    peer_did: &str,
+    collections: &[String],
+) -> Result<()> {
     let peer_id = escape_graphql_string(peer);
     let peer_did = escape_graphql_string(peer_did);
     let collections = collections
@@ -583,11 +597,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
     let tool_call_key = str_field(row, "tool_call_key")?;
     let request_id = str_field(row, "request_id")?;
     let request_doc_id = load_request(node, request_id).await?.doc_id;
-    let agent_did = opt_str_field(row, "agent_did").unwrap_or(if node.id == "B" {
-        NODE_B_DID
-    } else {
-        NODE_A_DID
-    });
+    let agent_did = opt_str_field(row, "agent_did").unwrap_or_else(|| node.did());
     let args = escape_graphql_string(str_field(row, "args")?);
     let result = escape_graphql_string(opt_str_field(row, "result").unwrap_or(""));
     let child_request_id =
@@ -819,7 +829,7 @@ async fn cancel_parent_on_a(node: &HarnessNode, parent_tool_call_id: &str) -> Re
     lifecycle
         .cancel_during_run(CancelCause::Interrupted)
         .await?;
-    if let Some(dispatch) = lifecycle.bridge_cancel_cascade_dispatch(NODE_A_DID).await? {
+    if let Some(dispatch) = lifecycle.bridge_cancel_cascade_dispatch(node.did()).await? {
         if let CascadeDispatch::Local(intent) = dispatch {
             interrupt_request(node.db.node.as_ref(), &intent.child_request_id).await?;
         }
@@ -847,7 +857,7 @@ async fn parent_request_for_tool(node: &HarnessNode, tool_call_id: &str) -> Resu
 async fn run_background_completion_on_a(node: &HarnessNode) -> Result<()> {
     for request_id in terminal_child_request_ids(node).await? {
         let _ =
-            project_background_subagent_completion(node.db.node.clone(), &request_id, NODE_A_DID)
+            project_background_subagent_completion(node.db.node.clone(), &request_id, node.did())
                 .await?;
     }
     Ok(())
@@ -864,7 +874,7 @@ async fn run_cancel_mirror_on_b(node: &HarnessNode) -> Result<()> {
         let Some(child) = load_request_optional(node, child_request_id).await? else {
             continue;
         };
-        if child.agent_did == NODE_B_DID
+        if child.agent_did == node.did()
             && !child.is_terminal()
             && child.interrupt_requested_at.is_none()
         {

@@ -54,12 +54,12 @@ describe("FleetRow", () => {
     expect(props.onOpenChat).toHaveBeenCalledWith(deployment.agentDid);
   });
 
-  it("keeps chat disabled while signed bearer readiness is pending", () => {
+  it("keeps chat disabled while authenticated enrollment is pending", () => {
     const props = renderRow(
       {},
       {
         ...deployment,
-        source: "bearer-pairing",
+        source: "enrollment",
         pairingReady: false,
       },
     );
@@ -115,7 +115,7 @@ describe("FleetRow", () => {
     const bootstrap = { initToolCeiling: "readonly" };
     renderRow(
       { bootstrap: bootstrap as FleetRowProps["bootstrap"] },
-      { ...deployment, source: "server-status" },
+      { ...deployment, source: "enrollment" },
     );
     expect(document.querySelector('[title*="Server ceiling"]')).toBeNull();
   });

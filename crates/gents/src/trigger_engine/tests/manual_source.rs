@@ -123,6 +123,7 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
             None,
             None,
             None,
+            None,
             "manual body",
         )
         .await
@@ -201,8 +202,29 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
 async fn production_materializer_persists_event_source_document_lineage() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let snapshot =
-        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
+    let behavior = integration_test_behavior("general");
+    let identity = behavior.principal_identity().clone();
+    let seed = node
+        .execute(
+            r#"mutation {
+                task: create_Task(input: {
+                    task_id: "task-event", name: "task-event", behavior_id: "general",
+                    prompt_template: "event body", enabled: true
+                }) { _docID }
+                trigger: create_EventTrigger(input: {
+                    trigger_id: "event-trigger", task_id: "task-event",
+                    source_collection: "AgentRequest", event_kind: "created",
+                    filter: "{}", enabled: true, concurrency: "serial", fire_count: 0
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!seed.has_errors(), "seed event trigger: {:?}", seed.errors);
+    let trigger_doc_id = seed.data.as_ref().unwrap()["trigger"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let task = resolved_task_for_test("task-event", "general", "event body");
@@ -212,6 +234,7 @@ async fn production_materializer_persists_event_source_document_lineage() {
             &task,
             Some("event-trigger"),
             TriggerKind::Event,
+            Some(&trigger_doc_id),
             Some("source-doc-exact"),
             None,
             None,
@@ -226,7 +249,7 @@ async fn production_materializer_persists_event_source_document_lineage() {
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                 limit: 1
-            ) {{ caused_by_trigger_kind caused_by_source_doc_id }}
+            ) {{ _docID caused_by_trigger_kind caused_by_trigger_doc_id caused_by_source_doc_id }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -248,10 +271,102 @@ async fn production_materializer_persists_event_source_document_lineage() {
         Some("event")
     );
     assert_eq!(
+        row.get("caused_by_trigger_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some(trigger_doc_id.as_str())
+    );
+    assert_eq!(
         row.get("caused_by_source_doc_id")
             .and_then(serde_json::Value::as_str),
         Some("source-doc-exact")
     );
+    let request_doc_id = row["_docID"].as_str().unwrap();
+    let queued =
+        crate::request_admission::load_request_for_admission_test(node.as_ref(), request_doc_id)
+            .await
+            .unwrap();
+    let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        identity,
+        authority,
+    );
+    verifier.verify_fresh(&queued, "general").await.unwrap();
+}
+
+#[tokio::test]
+async fn production_schedule_materialization_passes_final_exact_config_admission() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let behavior = integration_test_behavior("general");
+    let identity = behavior.principal_identity().clone();
+    let seed = node
+        .execute(
+            r#"mutation {
+                task: create_Task(input: {
+                    task_id: "task-schedule", name: "task-schedule", behavior_id: "general",
+                    prompt_template: "schedule body", enabled: true
+                }) { _docID }
+                schedule: create_Schedule(input: {
+                    schedule_id: "schedule-trigger", task_id: "task-schedule",
+                    interval_secs: 60, enabled: true, concurrency: "serial"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !seed.has_errors(),
+        "seed schedule trigger: {:?}",
+        seed.errors
+    );
+    let trigger_doc_id = seed.data.as_ref().unwrap()["schedule"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-schedule", "general", "schedule body");
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some("schedule-trigger"),
+            TriggerKind::Schedule,
+            Some(&trigger_doc_id),
+            None,
+            None,
+            None,
+            "schedule body",
+        )
+        .await
+        .unwrap();
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID caused_by_trigger_doc_id caused_by_source_doc_id }} }}"#,
+            escape_graphql_string(&request_id),
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "load schedule request: {:?}",
+        response.errors
+    );
+    let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
+    assert_eq!(row["caused_by_trigger_doc_id"], trigger_doc_id);
+    assert!(row["caused_by_source_doc_id"].is_null());
+    let queued = crate::request_admission::load_request_for_admission_test(
+        node.as_ref(),
+        row["_docID"].as_str().unwrap(),
+    )
+    .await
+    .unwrap();
+    let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        identity,
+        authority,
+    );
+    verifier.verify_fresh(&queued, "general").await.unwrap();
 }
 
 #[tokio::test]
@@ -268,6 +383,7 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
             &task,
             Some("event-trigger"),
             TriggerKind::Event,
+            Some("event-trigger-config-doc"),
             None,
             None,
             None,
@@ -282,6 +398,7 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
             &task,
             Some("schedule-trigger"),
             TriggerKind::Schedule,
+            Some("schedule-trigger-config-doc"),
             Some("event-doc-on-schedule"),
             None,
             None,
@@ -305,6 +422,7 @@ async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
             &task,
             Some("manual-must-not-have-id"),
             TriggerKind::Manual,
+            None,
             None,
             None,
             None,

@@ -9,9 +9,9 @@ use crate::support::snapshots::{
     fetch_message_snapshots_for_session, fetch_tool_call_snapshots_for_session,
 };
 use crate::support::{
-    create_agent_session, create_request, create_response_with_content_and_status,
-    create_response_with_status, first_row, test_db, upsert_conversation, AGENT_DID, AGENT_NAME,
-    BACKEND_ID,
+    create_agent_session, create_request, create_request_for_agent_with_signed_fields,
+    create_response_with_content_and_status, create_response_with_status, first_row, test_db,
+    upsert_conversation, upsert_conversation_for_agent, AGENT_DID, AGENT_NAME, BACKEND_ID,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -49,6 +49,7 @@ struct BackgroundWakeRetryRow {
 #[tokio::test]
 async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     let db = test_db("lifecycle-background-wake-redrive").await;
+    let agent_did = db.node_identity.did().to_string();
     let metadata = serde_json::json!({
         "queue": {
             "source": "background_completion",
@@ -64,7 +65,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "failed-wake",
-                agent_did: "{AGENT_DID}",
+                agent_did: "{agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "wake-redrive-session",
                 retry_parent_request: "",
@@ -94,8 +95,9 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         "create failed wake: {:?}",
         response.errors
     );
-    upsert_conversation(
+    upsert_conversation_for_agent(
         &db.node,
+        &agent_did,
         "wake-redrive-session",
         "failed-wake",
         "continue after background completion",
@@ -104,8 +106,8 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     .await;
 
     let (first, concurrent) = tokio::join!(
-        RequestLifecycle::redrive_failed_background_wakeups(&db.node, AGENT_DID),
-        RequestLifecycle::redrive_failed_background_wakeups(&db.node, AGENT_DID),
+        RequestLifecycle::redrive_failed_background_wakeups(&db.node, &agent_did),
+        RequestLifecycle::redrive_failed_background_wakeups(&db.node, &agent_did),
     );
     let first = first.expect("first concurrent redrive");
     let concurrent = concurrent.expect("second concurrent redrive");
@@ -136,7 +138,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     assert_eq!(successor.deadline, None);
     assert_eq!(successor.valid_until, None);
 
-    let second = RequestLifecycle::redrive_failed_background_wakeups(&db.node, AGENT_DID)
+    let second = RequestLifecycle::redrive_failed_background_wakeups(&db.node, &agent_did)
         .await
         .expect("repeat redrive");
     assert_eq!(second.redriven, 0);
@@ -505,12 +507,18 @@ async fn recover_all_times_out_expired_running_tool_calls() {
 #[tokio::test]
 async fn recover_all_repairs_terminal_background_tool_notification_once() {
     let db = test_db("tool-call-repair-notification").await;
-    create_request(
+    let agent_did = db.node_identity.did().to_string();
+    create_request_for_agent_with_signed_fields(
         &db.node,
+        &agent_did,
         "tool-notification-req",
         "tool-notification-session",
         "processing",
         "2026-03-23T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
     )
     .await;
 
@@ -518,7 +526,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         db.node.clone(),
         "tool-notification-req".to_string(),
         "tool-notification-session".to_string(),
-        AGENT_DID.to_string(),
+        agent_did.clone(),
         "tool-notification-call".to_string(),
         1,
         "lookup".to_string(),
@@ -538,11 +546,11 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         "the test precondition is a terminal tool with a missing notification"
     );
 
-    let first = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let first = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(first.notifications_repaired, 1);
-    let second = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let second = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(second.notifications_repaired, 0);

@@ -270,6 +270,17 @@ theorem membership_growth_requires_current_admin_approval {s : State} {r : Reque
     · exact False.elim (hold hnew)
   · exact False.elim (hold hnew)
 
+/-- A legacy desired-row observation is not a transition and cannot grant peer admission. -/
+theorem legacy_pairing_materialization_cannot_grant_peer_admission
+    (s : State) (legacyDesiredPeers : Finset Did) (memberDid injected : Did) :
+    projectsPeerAdmission s (insert injected legacyDesiredPeers) memberDid ↔
+      projectsPeerAdmission s legacyDesiredPeers memberDid := Iff.rfl
+
+theorem current_enrollment_grants_peer_admission {s : State} {r : Request} {d : Decision}
+    (hcurrent : currentApproval s r d) :
+    peerOperationallyAuthorized s r.candidateDid := by
+  exact ⟨r, hcurrent.1, d, hcurrent.2.1, hcurrent, rfl⟩
+
 theorem empty_authorization_wellFormed : AuthorizationWellFormed ({} : State) := by
   simp [AuthorizationWellFormed]
 
@@ -324,11 +335,18 @@ theorem materializeMembership_preserves_wellFormed
   unfold materializeMembership
   split <;> exact hwf
 
-theorem materializeRoutes_preserves_wellFormed
+theorem materializeClientRoute_preserves_wellFormed
     {s : State} {r : Request} {d : Decision}
     (hwf : AuthorizationWellFormed s) :
-    AuthorizationWellFormed (materializeRoutes s r d) := by
-  unfold materializeRoutes
+    AuthorizationWellFormed (materializeClientRoute s r d) := by
+  unfold materializeClientRoute
+  split <;> exact hwf
+
+theorem recordServerRouteReceipt_preserves_wellFormed
+    {s : State} {r : Request} {d : Decision} {receipt : RouteReceipt}
+    (hwf : AuthorizationWellFormed s) :
+    AuthorizationWellFormed (recordServerRouteReceipt s r d receipt) := by
+  unfold recordServerRouteReceipt
   split <;> exact hwf
 
 theorem decideRequest_preserves_wellFormed
@@ -360,7 +378,7 @@ theorem revoke_preserves_wellFormed
   · rename_i hadmit
     apply mergeAuthorization_preserves_wellFormed hwf
     intro current hcurrent hsame hsequence
-    exact False.elim <| hadmit.2.2.2.2
+    exact False.elim <| hadmit.2.2.2.2.2
       ⟨current, hcurrent, hsame, by omega⟩
   · exact hwf
 
@@ -369,13 +387,15 @@ theorem SerialTransition.preserves_wellFormed
     {pre post : State} (step : SerialTransition pre post)
     (hwf : AuthorizationWellFormed pre) : AuthorizationWellFormed post := by
   rcases step with ⟨o, rfl⟩ | ⟨o, rfl⟩ | ⟨o, r, rfl⟩ |
-    ⟨r, d, rfl⟩ | ⟨r, d, rfl⟩ | ⟨r, d, rfl⟩ | ⟨r, revision, rfl⟩
+    ⟨r, d, rfl⟩ | ⟨r, d, rfl⟩ | ⟨r, d, rfl⟩ |
+    ⟨r, d, receipt, rfl⟩ | ⟨r, revision, rfl⟩
   · exact observeOffer_preserves_wellFormed hwf
   · exact confirmAdminPin_preserves_wellFormed hwf
   · exact acceptRequest_preserves_wellFormed hwf
   · exact decideRequest_preserves_wellFormed hwf
   · exact materializeMembership_preserves_wellFormed hwf
-  · exact materializeRoutes_preserves_wellFormed hwf
+  · exact materializeClientRoute_preserves_wellFormed hwf
+  · exact recordServerRouteReceipt_preserves_wellFormed hwf
   · exact revoke_preserves_wellFormed hwf
 
 theorem SerialReachable.preserves_wellFormed
@@ -456,17 +476,29 @@ theorem revocation_preserves_unrelated_operations
       route ∈ (revoke s r revision).appliedRoutes := by
   simp [revoke, hrevoke, hmembership, hroute, hmembershipOther, hrouteOther]
 
-theorem route_growth_is_exact {s : State} {r : Request} {d : Decision}
+theorem client_route_growth_is_exact {s : State} {r : Request} {d : Decision}
     {route : AppliedRoute}
-    (hnew : route ∈ (materializeRoutes s r d).appliedRoutes)
+    (hnew : route ∈ (materializeClientRoute s r d).appliedRoutes)
     (hold : route ∉ s.appliedRoutes) :
-    route = clientToServerRoute r d ∨ route = serverToClientRoute r d := by
-  unfold materializeRoutes at hnew
+    route = serverToClientRoute r d := by
+  unfold materializeClientRoute at hnew
   split at hnew
   · simp only [Finset.mem_insert] at hnew
-    rcases hnew with hclient | hserver | hpre
-    · exact Or.inl hclient
-    · exact Or.inr hserver
+    rcases hnew with hserver | hpre
+    · exact hserver
+    · exact False.elim (hold hpre)
+  · exact False.elim (hold hnew)
+
+theorem receipt_route_growth_is_exact {s : State} {r : Request} {d : Decision}
+    {receipt : RouteReceipt} {route : AppliedRoute}
+    (hnew : route ∈ (recordServerRouteReceipt s r d receipt).appliedRoutes)
+    (hold : route ∉ s.appliedRoutes) :
+    route = clientToServerRoute r d := by
+  unfold recordServerRouteReceipt at hnew
+  split at hnew
+  · simp only [Finset.mem_insert] at hnew
+    rcases hnew with hclient | hpre
+    · exact hclient
     · exact False.elim (hold hpre)
   · exact False.elim (hold hnew)
 
@@ -478,7 +510,7 @@ theorem enrollment_ready_refines_directional_hydration_admission
       (hydrationRequestForDirection r session direction) ∈ sessions) :
     SessionHydration.admits (projectedHydrationCatalogFor s r.networkId direction sessions)
       (hydrationRequestForDirection r session direction) := by
-  rcases hready with ⟨d, hd, hcurrent, hmembership, hclient, hserver⟩
+  rcases hready with ⟨d, hd, hcurrent, hmembership, _, hclient, hserver⟩
   have hrequest : r ∈ s.acceptedRequests := hcurrent.1
   cases direction with
   | clientToServer =>

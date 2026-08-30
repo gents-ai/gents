@@ -1,11 +1,9 @@
-# A network's control-plane root record. Mirrors the Lean `Network` entity
-# (Proofs/PeerRegistryDiscovery/NetworkMembership.lean; design spec §9): a
-# network is named by `network_id` (unique) and owned by `admin_did`.
+# The signed root of one authenticated enrollment authority. A network is
+# named by `network_id` (unique) and owned by `admin_did`.
 # `admin_sig` is the admin's signature over the network's defining fields
 # (network_id, admin_did, display_name, default_template, created_at), proving
 # the admin authored this network record.
-# `@branchable` is REQUIRED: replicates over P2P (joiners receive the signed
-# network root). DefraDB only P2P-syncs branchable collections.
+# `@branchable` is REQUIRED for exact enrollment-document delivery.
 type AgentNetwork @branchable {
     network_id: String @index(unique: true)
     admin_did: String @index

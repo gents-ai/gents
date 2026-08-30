@@ -369,11 +369,26 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
     let action = case
         .action
         .as_deref()
         .expect("legal Request transition case must carry an action");
+    let valid_until = (action == "expire")
+        .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+    let request_metadata =
+        (action == "dedupLose").then(|| coalesce_metadata(&format!("dedup-{request_id}")));
+    let doc_id = create_request_with_signed_fields(
+        &db.node,
+        &request_id,
+        &session_id,
+        "pending",
+        &created_at,
+        valid_until.as_deref(),
+        request_metadata.as_deref(),
+        None,
+        None,
+    )
+    .await;
     let mut lifecycle = request_lifecycle_for_case(
         &db,
         doc_id.clone(),
@@ -393,18 +408,20 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             let survivor_id = uuid::Uuid::new_v4().to_string();
             let survivor_created_at =
                 (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
-            let survivor_doc_id = create_request(
+            let key = format!("dedup-{request_id}");
+            let survivor_metadata = coalesce_metadata(&key);
+            let survivor_doc_id = create_request_with_signed_fields(
                 &db.node,
                 &survivor_id,
                 &session_id,
                 "pending",
                 &survivor_created_at,
+                None,
+                Some(&survivor_metadata),
+                None,
+                None,
             )
             .await;
-            let key = format!("dedup-{request_id}");
-            set_request_metadata(&db.node, &survivor_doc_id, &coalesce_metadata(&key)).await;
-            set_request_metadata(&db.node, &doc_id, &coalesce_metadata(&key)).await;
-
             gents::__test_internals::reconcile_coalesced_pending_request(
                 &db.node,
                 &session_id,
@@ -414,6 +431,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             )
             .await
             .expect("coalesce reconcile must succeed");
+            let _ = survivor_doc_id;
         }
         "admissionReject" => {
             lifecycle
@@ -454,8 +472,6 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             lifecycle.fail().await.unwrap();
         }
         "expire" => {
-            let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-            set_valid_until(&db.node, &doc_id, &past).await;
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
         }
         "interruptBeforeClaim" => {
@@ -647,21 +663,6 @@ fn coalesce_metadata(key: &str) -> String {
     .to_string()
 }
 
-async fn set_request_metadata(node: &EmbeddedNode, doc_id: &str, metadata: &str) {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    let escaped_metadata = escape_graphql_string(metadata);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                input: {{ metadata: "{escaped_metadata}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "set metadata failed: {:?}", resp.errors);
-}
-
 async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str) {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let escaped_deadline = escape_graphql_string(deadline);
@@ -806,8 +807,22 @@ async fn production_request_writers_only_reach_contracted_edges() {
             let request_id = uuid::Uuid::new_v4().to_string();
             let session_id = uuid::Uuid::new_v4().to_string();
             let created_at = chrono::Utc::now().to_rfc3339();
-            let doc_id =
-                create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+            let valid_until = (writer == "claim_after_ttl_lapse")
+                .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+            let coalesce =
+                (writer == "coalesce_pending").then(|| coalesce_metadata("conformance-key"));
+            let doc_id = create_request_with_signed_fields(
+                &db.node,
+                &request_id,
+                &session_id,
+                "pending",
+                &created_at,
+                valid_until.as_deref(),
+                coalesce.as_deref(),
+                None,
+                None,
+            )
+            .await;
             let mut lifecycle = request_lifecycle_for_case(
                 &db,
                 doc_id.clone(),
@@ -849,22 +864,20 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let survivor_id = uuid::Uuid::new_v4().to_string();
                     let survivor_created_at =
                         (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
-                    let survivor_doc_id = create_request(
+                    let survivor_metadata = coalesce_metadata("conformance-key");
+                    let survivor_doc_id = create_request_with_signed_fields(
                         &db.node,
                         &survivor_id,
                         &session_id,
                         "pending",
                         &survivor_created_at,
+                        None,
+                        Some(&survivor_metadata),
+                        None,
+                        None,
                     )
                     .await;
-                    set_request_metadata(
-                        &db.node,
-                        &survivor_doc_id,
-                        &coalesce_metadata("conformance-key"),
-                    )
-                    .await;
-                    set_request_metadata(&db.node, &doc_id, &coalesce_metadata("conformance-key"))
-                        .await;
+                    let _ = survivor_doc_id;
                 }
                 "subagent_liveness" => {
                     // An expired child of a running bridge: a live executor
@@ -916,8 +929,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 "claim_after_ttl_lapse" => {
                     // The expiry writer is reached THROUGH claim(): a pre-claim
                     // request whose TTL has lapsed terminalizes to `dead`.
-                    let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-                    set_valid_until(&db.node, &doc_id, &past).await;
                     let _ = lifecycle.claim().await;
                 }
                 "begin_execution" => {
@@ -1397,7 +1408,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "scheduled prompt body",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1460,7 +1471,7 @@ async fn scheduled_materialization_persists_trigger_lineage() {
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "scheduled prompt body with lineage",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1511,7 +1522,7 @@ async fn serial_skip_does_not_create_request() {
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "serial seed",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1605,7 +1616,7 @@ async fn latest_only_transition_to_superseded() {
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "latest seed",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1686,7 +1697,7 @@ async fn active_runtime_trigger_filters_ignore_input_required() {
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "reserved inputRequired seed",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1880,7 +1891,7 @@ async fn serial_skip_event_does_not_create_request() {
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "event serial seed",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1973,7 +1984,7 @@ async fn latest_only_event_transition_to_superseded() {
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "event latest seed",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -2633,7 +2644,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
     let db = test_db("queue-deadline-coalesce").await;
     let session_id = case.session_id.to_string();
     let parent_request_id = "queue-deadline-coalesce-parent";
-    install_background_completion_fixture(db.node.as_ref()).await;
+    install_background_completion_fixture(db.node.as_ref(), db.node_identity.did()).await;
     create_queue_request(
         db.node.as_ref(),
         parent_request_id,
@@ -2643,6 +2654,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
         "interactive",
         None,
         Some(&(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339()),
+        Some(db.node_identity.did()),
     )
     .await;
 
@@ -2658,6 +2670,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
 
     let (child_a, child_session_a) = create_background_child_bridge(
         &db.node,
+        db.node_identity.did(),
         parent_request_id,
         &session_id,
         "queue-deadline-coalesce-a",
@@ -2666,6 +2679,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
     .await;
     let (child_b, child_session_b) = create_background_child_bridge(
         &db.node,
+        db.node_identity.did(),
         parent_request_id,
         &session_id,
         "queue-deadline-coalesce-b",
@@ -2687,12 +2701,14 @@ async fn drive_background_completion_notification_creates_no_agent_request(
     )
     .await;
 
-    let first = project_background_subagent_completion(db.node.clone(), &child_a, AGENT_DID)
-        .await
-        .unwrap();
-    let second = project_background_subagent_completion(db.node.clone(), &child_b, AGENT_DID)
-        .await
-        .unwrap();
+    let first =
+        project_background_subagent_completion(db.node.clone(), &child_a, db.node_identity.did())
+            .await
+            .unwrap();
+    let second =
+        project_background_subagent_completion(db.node.clone(), &child_b, db.node_identity.did())
+            .await
+            .unwrap();
     assert!(matches!(
         first,
         BackgroundCompletionOutcome::Projected { .. }
@@ -2728,6 +2744,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
         "interactive",
         None,
         None,
+        None,
     )
     .await;
 
@@ -2745,6 +2762,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
             parent_request_id,
         )),
         None,
+        None,
     )
     .await;
     create_queue_request(
@@ -2755,6 +2773,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
         "2026-03-23T00:00:20Z",
         "scheduled",
         Some(&user_queue_metadata()),
+        None,
         None,
     )
     .await;
@@ -2807,6 +2826,7 @@ async fn drive_claim_preserves_explicit_deadline(
         "interactive",
         None,
         Some(&explicit_deadline),
+        None,
     )
     .await;
     let request = request_from_parts(
@@ -2856,6 +2876,7 @@ async fn create_queue_request(
     execution_origin: &str,
     metadata: Option<&str>,
     deadline: Option<&str>,
+    agent_did: Option<&str>,
 ) -> String {
     let lifecycle_state = match status {
         "pending" => "pending",
@@ -2871,6 +2892,7 @@ async fn create_queue_request(
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_execution_origin = escape_graphql_string(execution_origin);
+    let agent_did = escape_graphql_string(agent_did.unwrap_or(AGENT_DID));
     let metadata_field = metadata
         .map(|metadata| format!(r#", metadata: "{}""#, escape_graphql_string(metadata)))
         .unwrap_or_default();
@@ -2881,7 +2903,7 @@ async fn create_queue_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
-                agent_did: "{AGENT_DID}",
+                agent_did: "{agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
@@ -2943,7 +2965,7 @@ fn user_queue_metadata() -> String {
     .to_string()
 }
 
-async fn install_background_completion_fixture(node: &EmbeddedNode) {
+async fn install_background_completion_fixture(node: &EmbeddedNode, agent_did: &str) {
     const TOOL_SELECTION_ID: &str = "queue-deadline-tools";
     const CHILD_BEHAVIOR_ID: &str = "queue-deadline-child";
 
@@ -2951,10 +2973,10 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
         node,
         &ToolSelectionDocument {
             selection_id: TOOL_SELECTION_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.to_string(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
-                AGENT_DID,
+                agent_did,
                 CHILD_BEHAVIOR_ID,
                 None,
             )]),
@@ -2971,7 +2993,7 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
             skill_refs: Vec::new(),
             skill_excludes: Vec::new(),
             behavior_id: AGENT_NAME.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.to_string(),
             display_name: Some("Queue deadline parent".to_string()),
             description: None,
             summary: None,
@@ -2995,7 +3017,7 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
             skill_refs: Vec::new(),
             skill_excludes: Vec::new(),
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.to_string(),
             display_name: Some("Queue deadline child".to_string()),
             description: None,
             summary: None,
@@ -3017,6 +3039,7 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
 
 async fn create_background_child_bridge(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     parent_request_id: &str,
     parent_session_id: &str,
     tool_call_id: &str,
@@ -3032,7 +3055,7 @@ async fn create_background_child_bridge(
         node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        agent_did.to_string(),
         tool_call_id.to_string(),
         message_sequence,
         "spawn_subagent".to_string(),
@@ -3046,7 +3069,7 @@ async fn create_background_child_bridge(
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.clone(),
-        AGENT_DID.to_string(),
+        agent_did.to_string(),
     )
     .with_request_doc_id(Some(parent_request_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
@@ -3060,7 +3083,7 @@ async fn create_background_child_bridge(
         tool_call_id.to_string(),
         parent_tool_call_doc_id,
         0,
-        AGENT_DID.to_string(),
+        agent_did.to_string(),
         CHILD_BEHAVIOR_ID.to_string(),
         format!("prompt for {tool_call_id}"),
         Some(chrono::Utc::now() + chrono::Duration::minutes(4)),

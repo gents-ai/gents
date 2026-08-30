@@ -82,7 +82,6 @@ pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
     "EventTrigger",
     "AgentRuntime",
     "AgentNetwork",
-    "NetworkMembership",
     "PeerEndpoint",
     "PeerRegistry",
     "PeerPairingDesired",

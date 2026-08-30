@@ -7,11 +7,10 @@ use serde_json::Value;
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::{
-    content_and_metadata_with_prompt_selected_skill_ids, wait_for_terminal_response,
+    content_and_metadata_with_prompt_selected_skill_ids, ensure_local_request_signer,
+    wait_for_terminal_response,
 };
 use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
-
-const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
 pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     let output = enqueue_task_run(&args).await?;
@@ -136,6 +135,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     {
         anyhow::bail!("AgentBehavior {} is disabled", behavior_id);
     }
+    ensure_local_request_signer(args.home.as_deref(), &agent_did)?;
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let (node_scope, ctx_scope) = task_node_ctx(&agent_did, &behavior_id, &now);
@@ -157,15 +157,23 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let (content, metadata) = content_and_metadata_with_prompt_selected_skill_ids(None, &content);
-    let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
-        request_id: &request_id,
-        session_id: &session_id,
-        agent_did: &agent_did,
-        behavior_id: &behavior_id,
-        content: &content,
-        metadata: metadata.as_deref(),
-        created_at: &now,
-    });
+    let admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id.clone(),
+        agent_did.clone(),
+        agent_did.clone(),
+        behavior_id.clone(),
+        session_id.clone(),
+        content.clone(),
+        "interactive",
+        now.clone(),
+        admission,
+    );
+    create.metadata = metadata.clone();
+    create.caused_by_trigger_kind = Some("manual".to_string());
+    gents::sign_agent_request_create_as_registered_target(&mut create).await?;
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let response = access.execute(&mutation).await?;
     if let Some(errs) = response.get("errors").and_then(|v| v.as_array()) {
         if !errs.is_empty() {
@@ -216,62 +224,6 @@ pub(crate) fn resolve_task_id_for(
             "missing task id\nNext:\n  1. Pass it positionally: `gents task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`"
         ),
     }
-}
-
-struct CreateManualRequestInput<'a> {
-    request_id: &'a str,
-    session_id: &'a str,
-    agent_did: &'a str,
-    behavior_id: &'a str,
-    content: &'a str,
-    metadata: Option<&'a str>,
-    created_at: &'a str,
-}
-
-fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> String {
-    let metadata_field = input
-        .metadata
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|metadata| {
-            format!(
-                r#"
-                metadata: "{}","#,
-                escape_graphql_string(metadata)
-            )
-        })
-        .unwrap_or_default();
-    format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "{content}",{metadata_field}
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                caused_by_trigger_kind: "manual",
-                failure_reason: "",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        request_id = escape_graphql_string(input.request_id),
-        agent_did = escape_graphql_string(input.agent_did),
-        behavior_id = escape_graphql_string(input.behavior_id),
-        session_id = escape_graphql_string(input.session_id),
-        content = escape_graphql_string(input.content),
-        metadata_field = metadata_field,
-        created_at = escape_graphql_string(input.created_at),
-        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
-    )
 }
 
 async fn lookup_doc_id_by_request_id(
@@ -337,17 +289,30 @@ fn extract_doc_id(response: &Value) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn test_manual_mutation(metadata: Option<&str>) -> String {
+        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            "req-1",
+            "did:test:test",
+            "did:test:test",
+            "behavior-1",
+            "sess-1",
+            "hello Amy",
+            "interactive",
+            "2026-04-21T00:00:00Z",
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                "did:test:test",
+            ),
+        );
+        create.admission.signature = vec![0; 64];
+        create.metadata = metadata.map(ToOwned::to_owned);
+        create.caused_by_trigger_kind = Some("manual".to_string());
+        create.graphql_mutation().unwrap()
+    }
+
     #[test]
-    fn build_mutation_includes_manual_lineage_and_omits_trigger_id() {
-        let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
-            request_id: "req-1",
-            session_id: "sess-1",
-            agent_did: "did:test:test",
-            behavior_id: "behavior-1",
-            content: "hello Amy",
-            metadata: None,
-            created_at: "2026-04-21T00:00:00Z",
-        });
+    fn build_mutation_uses_signed_local_self_and_omits_trigger_id() {
+        let mutation = test_manual_mutation(None);
+        assert!(mutation.contains("admission_kind: \"local-self\""));
         assert!(mutation.contains("caused_by_trigger_kind: \"manual\""));
         assert!(
             !mutation.contains("caused_by_trigger_id:"),
@@ -361,15 +326,7 @@ mod tests {
 
     #[test]
     fn build_mutation_includes_selected_skill_metadata_when_present() {
-        let mutation = build_create_manual_request_mutation(CreateManualRequestInput {
-            request_id: "req-1",
-            session_id: "sess-1",
-            agent_did: "did:test:test",
-            behavior_id: "behavior-1",
-            content: "/vuln-scan /work",
-            metadata: Some(r#"{"selected_skill_ids":["vuln-scan"]}"#),
-            created_at: "2026-04-21T00:00:00Z",
-        });
+        let mutation = test_manual_mutation(Some(r#"{"selected_skill_ids":["vuln-scan"]}"#));
 
         assert!(mutation.contains("metadata:"));
         assert!(mutation.contains(r#"\"selected_skill_ids\":[\"vuln-scan\"]"#));

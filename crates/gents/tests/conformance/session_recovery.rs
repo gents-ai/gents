@@ -261,6 +261,8 @@ async fn seed_session_recovery_case(
             backend,
             origin,
             if state == "dead" { "Stale" } else { "" },
+            None,
+            None,
         )
         .await;
     }
@@ -294,6 +296,8 @@ async fn create_session_recovery_request(
     backend_id: &str,
     execution_origin: &str,
     failure_reason: &str,
+    retry_parent_request: Option<&str>,
+    retry_root_request: Option<&str>,
 ) {
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
@@ -303,6 +307,12 @@ async fn create_session_recovery_request(
     let backend_id = escape_graphql_string(backend_id);
     let execution_origin = escape_graphql_string(execution_origin);
     let failure_reason = escape_graphql_string(failure_reason);
+    let retry_parent_request = retry_parent_request
+        .map(escape_graphql_string)
+        .unwrap_or_default();
+    let retry_root_request = retry_root_request
+        .map(escape_graphql_string)
+        .unwrap_or_else(|| request_id.clone());
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -310,8 +320,8 @@ async fn create_session_recovery_request(
                 agent_did: "{AGENT_DID}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
+                retry_parent_request: "{retry_parent_request}",
+                retry_root_request: "{retry_root_request}",
                 superseded_by_request: "",
                 content: "session recovery contract",
                 status: "{status}",
@@ -408,13 +418,8 @@ async fn reissue_failed_request_for_contract(
         &parent.backend_id,
         &parent.execution_origin,
         "",
-    )
-    .await;
-    set_recovery_request_lineage(
-        node,
-        &pre.new_request_id,
-        &parent.request_id,
-        retry_root_request,
+        Some(&parent.request_id),
+        Some(retry_root_request),
     )
     .await;
     upsert_conversation(
@@ -427,34 +432,6 @@ async fn reissue_failed_request_for_contract(
     .await;
 
     Ok(pre.new_request_id.clone())
-}
-
-async fn set_recovery_request_lineage(
-    node: &EmbeddedNode,
-    request_id: &str,
-    retry_parent_request: &str,
-    retry_root_request: &str,
-) {
-    let request_id = escape_graphql_string(request_id);
-    let retry_parent_request = escape_graphql_string(retry_parent_request);
-    let retry_root_request = escape_graphql_string(retry_root_request);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                input: {{
-                    retry_parent_request: "{retry_parent_request}",
-                    retry_root_request: "{retry_root_request}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "set retry lineage failed: {:?}",
-        resp.errors
-    );
 }
 
 async fn assert_legal_reissue_postconditions(

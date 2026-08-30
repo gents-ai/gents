@@ -81,7 +81,7 @@ The boundary proposed below follows the seams the code already has. The load-bea
 facts:
 
 **Rust.** `crates/gents-desktop-core` has no Tauri dependency; it exposes `client`
-(`ClientCore`, store, queries, mutations, bearer pairing), `local_runtime`, and
+(`ClientCore`, store, queries, mutations, authenticated enrollment), `local_runtime`, and
 `remote_admin`, and owns identity (`PrincipalIdentity::load_or_create`), storage
 layout (`DesktopPaths`, keyed off `GENTS_DESKTOP_HOME`), schema registration
 (`ensure_runtime_schemas` + `subscribe_all_collections` inside `ClientCore::start`),
@@ -103,8 +103,8 @@ and the embedded DefraDB node. All Tauri coupling lives in
   `commands/*`, `snapshot/*`, `types/*` (view models), `cascade.rs`,
   `cause_derivation.rs` — is already Tauri-agnostic.
 - The bridge depends on `gents-desktop-core`, and directly on the `gents` runtime
-  crate (backend registry, tool-surface explain, graphql helpers) and
-  `gents-protocol` (bearer tokens).
+  crate (backend registry, tool-surface explain, GraphQL helpers) and
+  `gents-protocol` (authenticated-enrollment wire types).
 - The debug-only native-E2E commands (`desktop_native_e2e_config`,
   `desktop_native_e2e_status`) are registered unconditionally but double-gated:
   `#[cfg(debug_assertions)]` bodies plus a `GENTS_NATIVE_E2E=1` runtime check;
@@ -140,8 +140,8 @@ internals through deliberate seams (`setDesktopApiAdapterForTests`,
 `tests/run-ios-simulator-e2e.mjs` + `tests/ios/GentsUITests.swift` — drive only public
 surfaces: the Vite-served harness, the `bridge_runner` binary's JSON-ready protocol,
 `data-testid` selectors, the `com.source-inc.gents` bundle id, and the
-`native-e2e-status.json` temp-file contract. The iPhone branch added mobile bearer
-pairing, chat recovery/reconnect/interrupt routing, responsive layout, the agent
+`native-e2e-status.json` temp-file contract. The iPhone branch added mobile
+authenticated enrollment, chat recovery/reconnect/interrupt routing, responsive layout, the agent
 browser, and the native Simulator lane; all of these are contracts this design must
 keep working, and most of them already point at the seams a package boundary needs.
 
@@ -408,7 +408,7 @@ split, and hosts opt into each in their capability files:
 | `resend-control`    | request resend                                                                                                                                                                                                                        |
 | `fleet-read`        | peer status fetch (**by saved peer id only** — see below), network status                                                                                                                                                             |
 | `workspace-read`    | workspace list                                                                                                                                                                                                                        |
-| `fleet-admin`       | peer add/remove/rename, bearer pairing, P2P repair (all address-accepting flows live only here)                                                                                                                                       |
+| `fleet-admin`       | status-first enrollment, peer removal/rename, P2P repair (all address-accepting flows live only here)                                                                                                                                 |
 | `operations-read`   | operations snapshot, subagent tree, backend/MCP health lists, MCP probe                                                                                                                                                               |
 | `interrupt-read`    | interrupt-cascade preview                                                                                                                                                                                                             |
 | `interrupt-control` | interrupt request                                                                                                                                                                                                                     |
@@ -576,7 +576,7 @@ six frontend packages, loads real bridge session snapshots, and CI builds the ho
 runs its grant-composition test, and runs a native test with two concurrent
 `ClientCore` stores under distinct homes. The fixture-domain plugin is a
 `BTreeMap` persisted as JSON, not a second embedded DefraDB node, and CI does not
-drive bearer pairing, chat, and domain writes through a complete Tauri journey.
+drive authenticated enrollment, chat, and domain writes through a complete Tauri journey.
 That two-node product journey remains downstream/Amygdala integration evidence.
 
 ### Ownership split
@@ -989,7 +989,7 @@ chat-write + fleet-read + fleet-admin + operations-read` permissions (no
 | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | Minimal downstream app owns binary, identity, storage home, schema registration, extra commands | `gents-desktop-bridge::init(BridgeConfig)` + `HomePolicy`; domain plugins own their stores/schemas (co-residence contract)                | 3–4         | Fixture build + grant test; native concurrent-`ClientCore` home-isolation test. A second domain node remains downstream evidence |
 | Working chat surface: streaming, retry, interrupt, reconnect, recovery — no copied source       | `@source-inc/gents-desktop-chat` projection/components over the typed `-client` contract                                                  | 7           | Gents agent-browser/live chat lanes; fixture renders session snapshots. Downstream recovery coordinator/journey remains required |
-| Fleet pairing, health, peer management via package API                                          | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets)                                                                    | 8           | Gents `test:live:fleet` and QR/bearer journeys; fixture composes the surface. Downstream clean-install pairing remains required  |
+| Fleet enrollment, health, peer management via package API                                       | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets)                                                                    | 8           | Gents `test:live:fleet` and authenticated-enrollment journeys; fixture composes the surface. Downstream clean-install enrollment remains required |
 | Operator holds/traces/cancellation via package API                                              | `@source-inc/gents-desktop-operations` (+ `operations-read`, interrupt, and hold permission sets)                                         | 9           | `test:live:operations`/`interrupt`/`cascade` and deterministic operations scenarios                                              |
 | Own branding, semantic theme, navigation, domain routes without patching components             | Semantic tokens contract (split before extraction), `brand` slots, host-owned navigation                                                  | 6–9         | Token-override smoke, fixture-host distinct branding + domain module, visual suite                                               |
 | Gents Desktop builds and passes its checks consuming the extracted packages                     | App consumes all four packages + plugin                                                                                                   | every phase | Standing exit gates on each phase (app is the first consumer throughout)                                                         |
@@ -1022,9 +1022,10 @@ that today would let a `runtime-admin` webview aim initialization — with its
 reset/overwrite flags — at an arbitrary path.
 
 **Identity and ACP boundaries stay explicit.** Principals are minted per storage
-home by `PrincipalIdentity`; bearer pairing keeps its full verification chain
-(issuer signature, freshness, network-admin check, signed behavior binding, ticket
-peer id) inside `gents-desktop-core`, untouched by packaging. Domain plugins run
+home by `PrincipalIdentity`; enrollment keeps its full verification chain
+(fresh transport-DID authentication, durable TOFU pins, admin-signed immutable
+decisions and revisions, and generation-bound route receipts) inside
+`gents-desktop-core`, untouched by packaging. Domain plugins run
 their own clients in their own homes under their own ACP policies; the co-residence
 contract gives them **no supported API path** into the bridge's store, and the
 deferred `BridgeHandle` is the only future mechanism that would — which is precisely
@@ -1134,16 +1135,16 @@ Stated openly rather than buried as implementation detail:
 ## References
 
 Issue: [#877](https://github.com/source-inc/gents/issues/877). Base series:
-[#875](https://github.com/source-inc/gents/pull/875) (squash-merged as `1a5e23d5`,
-formerly `agent/iphone-amy-bearer-pairing`) — mobile bearer pairing with
-cryptographically verified reciprocal readiness and relaunch revalidation, chat
+[#875](https://github.com/source-inc/gents/pull/875) (squash-merged as `1a5e23d5`) —
+the predecessor mobile pairing implementation, now replaced by status-first
+authenticated enrollment with reciprocal readiness and relaunch revalidation, chat
 recovery/interrupt routing, responsive shell, agent-browser harness, native
 Simulator E2E. Downstream design: _Amygdala App Platform — Downstream Product on
 Gents_ (2026-07-26, Amygdala repository,
 `docs/superpowers/specs/2026-07-26-amygdala-app-platform-design.md`) — two
 authoritative peers, separate Kitchen client store, composition API. Key code
-anchors: `apps/gents-desktop/src-tauri/src/bridge/mod.rs` (builder + 55-command
-handler), `crates/gents-desktop-core/src/client/` (`core/bearer_pairing.rs`,
+anchors: `apps/gents-desktop/src-tauri/src/bridge/mod.rs` (builder + command
+handler), `crates/gents-desktop-core/src/client/` (`core/enrollment.rs`,
 `paths.rs`, `principal_identity.rs`, `schema.rs`),
 `apps/gents-desktop/src/lib/desktop-api.ts`, `src/lib/types/`,
 `src/hooks/useDesktopShell.ts` + `desktopShell*`,

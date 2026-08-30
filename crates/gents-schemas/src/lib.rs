@@ -110,27 +110,10 @@ pub const PEER_PAIRING_APPLIED: &str =
     include_str!("../schemas/agent/peer_pairing_applied.graphql");
 pub const PEER_REGISTRY_NAME: &str = "PeerRegistry";
 pub const PEER_REGISTRY: &str = include_str!("../schemas/agent/peer_registry.graphql");
-pub const CONSUMED_INVITE_NONCE_NAME: &str = "ConsumedInviteNonce";
-pub const CONSUMED_INVITE_NONCE: &str =
-    include_str!("../schemas/agent/consumed_invite_nonce.graphql");
-pub const RECIPROCAL_CONVERSATION_INTENT_NAME: &str = "ReciprocalConversationIntent";
-pub const RECIPROCAL_CONVERSATION_INTENT: &str =
-    include_str!("../schemas/agent/reciprocal_conversation_intent.graphql");
-pub const PAIRING_BEARER_CLAIM_NAME: &str = "PairingBearerClaim";
-pub const PAIRING_BEARER_CLAIM: &str =
-    include_str!("../schemas/agent/pairing_bearer_claim.graphql");
-pub const BEARER_PAIRING_READY_NAME: &str = "BearerPairingReady";
-pub const BEARER_PAIRING_READY: &str =
-    include_str!("../schemas/agent/bearer_pairing_ready.graphql");
 pub const AGENT_NETWORK_NAME: &str = "AgentNetwork";
 pub const AGENT_NETWORK: &str = include_str!("../schemas/agent/agent_network.graphql");
-pub const NETWORK_MEMBERSHIP_NAME: &str = "NetworkMembership";
-pub const NETWORK_MEMBERSHIP: &str = include_str!("../schemas/agent/network_membership.graphql");
 pub const PEER_ENDPOINT_NAME: &str = "PeerEndpoint";
 pub const PEER_ENDPOINT: &str = include_str!("../schemas/agent/peer_endpoint.graphql");
-pub const NETWORK_JOIN_REQUEST_NAME: &str = "NetworkJoinRequest";
-pub const NETWORK_JOIN_REQUEST: &str =
-    include_str!("../schemas/agent/network_join_request.graphql");
 pub const NETWORK_ADMIN_PIN_NAME: &str = "NetworkAdminPin";
 pub const NETWORK_ADMIN_PIN: &str = include_str!("../schemas/agent/network_admin_pin.graphql");
 pub const NETWORK_ENROLLMENT_REQUEST_NAME: &str = "NetworkEnrollmentRequest";
@@ -142,6 +125,12 @@ pub const NETWORK_ENROLLMENT_DECISION: &str =
 pub const NETWORK_AUTHORIZATION_REVISION_NAME: &str = "NetworkAuthorizationRevision";
 pub const NETWORK_AUTHORIZATION_REVISION: &str =
     include_str!("../schemas/agent/network_authorization_revision.graphql");
+pub const NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME: &str = "NetworkEnrollmentRouteReceipt";
+pub const NETWORK_ENROLLMENT_ROUTE_RECEIPT: &str =
+    include_str!("../schemas/agent/network_enrollment_route_receipt.graphql");
+pub const ENROLLMENT_OPERATOR_NONCE_NAME: &str = "EnrollmentOperatorNonce";
+pub const ENROLLMENT_OPERATOR_NONCE: &str =
+    include_str!("../schemas/agent/enrollment_operator_nonce.graphql");
 pub const PERSONA_CONFIG_REQUEST_NAME: &str = "PersonaConfigRequest";
 pub const PERSONA_CONFIG_REQUEST: &str =
     include_str!("../schemas/agent/persona_config_request.graphql");
@@ -199,18 +188,14 @@ pub const ALL: &[&str] = &[
     DATA_PLANE_PAIRING_DESIRED,
     PEER_PAIRING_APPLIED,
     PEER_REGISTRY,
-    CONSUMED_INVITE_NONCE,
-    RECIPROCAL_CONVERSATION_INTENT,
-    PAIRING_BEARER_CLAIM,
-    BEARER_PAIRING_READY,
     AGENT_NETWORK,
-    NETWORK_MEMBERSHIP,
     PEER_ENDPOINT,
-    NETWORK_JOIN_REQUEST,
     NETWORK_ADMIN_PIN,
     NETWORK_ENROLLMENT_REQUEST,
     NETWORK_ENROLLMENT_DECISION,
     NETWORK_AUTHORIZATION_REVISION,
+    NETWORK_ENROLLMENT_ROUTE_RECEIPT,
+    ENROLLMENT_OPERATOR_NONCE,
     PERSONA_CONFIG_REQUEST,
     SESSION_HYDRATION_REQUEST,
 ];
@@ -265,18 +250,14 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     DATA_PLANE_PAIRING_DESIRED_NAME,
     PEER_PAIRING_APPLIED_NAME,
     PEER_REGISTRY_NAME,
-    CONSUMED_INVITE_NONCE_NAME,
-    RECIPROCAL_CONVERSATION_INTENT_NAME,
-    PAIRING_BEARER_CLAIM_NAME,
-    BEARER_PAIRING_READY_NAME,
     AGENT_NETWORK_NAME,
-    NETWORK_MEMBERSHIP_NAME,
     PEER_ENDPOINT_NAME,
-    NETWORK_JOIN_REQUEST_NAME,
     NETWORK_ADMIN_PIN_NAME,
     NETWORK_ENROLLMENT_REQUEST_NAME,
     NETWORK_ENROLLMENT_DECISION_NAME,
     NETWORK_AUTHORIZATION_REVISION_NAME,
+    NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
+    ENROLLMENT_OPERATOR_NONCE_NAME,
     PERSONA_CONFIG_REQUEST_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
 ];
@@ -327,7 +308,8 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
 ];
 
 /// Local trust state that must never be subscribed or learned from peers.
-pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[NETWORK_ADMIN_PIN_NAME];
+pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] =
+    &[NETWORK_ADMIN_PIN_NAME, ENROLLMENT_OPERATOR_NONCE_NAME];
 
 pub fn is_local_audit_collection(name: &str) -> bool {
     LOCAL_AUDIT_COLLECTION_NAMES.contains(&name)
@@ -535,6 +517,7 @@ mod tests {
             );
         }
         assert!(AGENT_REQUEST.contains("workspace_id: String @index @immutable"));
+        assert!(AGENT_REQUEST.contains("caused_by_trigger_doc_id: String @index @immutable"));
         assert!(AGENT_REQUEST.contains("workspace_authority: String @immutable"));
         assert!(EVENT_TRIGGER.contains("workspace_authority: String"));
         assert!(CALLBACK_RESULT.contains("work_unit_id: String @index"));

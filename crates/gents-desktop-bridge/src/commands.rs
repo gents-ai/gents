@@ -25,7 +25,7 @@ pub use config::{
     save_skill_config, save_tool_selection_config,
 };
 pub use mailbox::{dismiss_mailbox, list_mailbox, start_mailbox_request};
-pub use peer::{add_peer, pair_bearer, remove_peer, rename_peer, repair_p2p};
+pub use peer::{remove_peer, rename_peer, repair_p2p};
 pub use task::{
     run_schedule_config, run_task_config, save_event_trigger_config, save_schedule_config,
     save_task_config,
