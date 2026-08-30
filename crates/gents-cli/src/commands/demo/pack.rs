@@ -4342,10 +4342,25 @@ mod tests {
                 assert!(!route_review.contains("gents graph run code-review"));
                 let recon = std::fs::read_to_string(pack.join("tasks/port-recon-task/prompt.md"))
                     .expect("recon prompt should load");
-                assert!(recon.contains("hard budget of 64 total"));
-                assert!(recon.contains("do not interleave more discovery"));
+                assert!(recon.contains("target budget of 40 total"));
+                assert!(recon.contains("Every function in a parallel tool-call"));
+                assert!(recon.contains("endpoint-probe"));
+                assert!(recon.contains("numbered list"));
+                assert!(recon.contains("do not interleave discovery"));
                 assert!(recon.contains("call `write_port_surface` exactly N times"));
                 assert!(recon.contains("N+1th write invalidates the run"));
+                let recon_behavior =
+                    read_pack_json_defaults(&pack.join("agent-behaviors/port-recon/object.json"))
+                        .expect("recon behavior should load");
+                assert_eq!(
+                    recon_behavior["inference_profile_id"],
+                    "grok-port-recon-profile"
+                );
+                let recon_profile = read_pack_json_defaults(
+                    &pack.join("inference-profiles/grok-port-recon-profile/object.json"),
+                )
+                .expect("recon profile should load");
+                assert_eq!(recon_profile["max_turns"], 30);
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
                 assert!(plan.contains("gents/{{ event.correlation }}/unit-<nn>"));
