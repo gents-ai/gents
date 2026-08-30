@@ -250,7 +250,13 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                             })?;
                         tool_selection.query_tools = merged.query_tools;
                         let expanded =
-                            crate::agent::document_view::expand_eth_tools(&record.value, view)?;
+                            crate::agent::document_view::expand_eth_tools(&record.value, view)
+                                .map_err(|error| {
+                                    BehaviorResolutionError::new(
+                                BehaviorReadinessUnavailableReason::ToolConfigurationInvalid,
+                                error,
+                            )
+                                })?;
                         tool_selection.eth_queries = expanded.queries;
                         tool_selection.eth_calls = expanded.calls;
                         (

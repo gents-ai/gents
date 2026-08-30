@@ -176,7 +176,7 @@ mod tests {
         assert_eq!(row.delivery, "push");
         assert_eq!(row.scope, "per-collection");
         let collections = row.collections.split(',').collect::<Vec<_>>();
-        assert_eq!(collections.len(), 16);
+        assert_eq!(collections.len(), 18);
         assert!(collections.contains(&"AgentRequest"));
         assert!(collections.contains(&"InferenceBackend"));
         assert!(collections.contains(&"DatastoreToolSurface"));
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(row.delivery, "push");
         assert_eq!(row.scope, "per-collection");
         let collections = row.collections.split(',').collect::<Vec<_>>();
-        assert_eq!(collections.len(), 20);
+        assert_eq!(collections.len(), 22);
         assert!(collections.contains(&"BearerPairingReady"));
         assert!(collections.contains(&"AgentDirectoryEntry"));
         assert!(collections.contains(&"PersonaConfigRequest"));

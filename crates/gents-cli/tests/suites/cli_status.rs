@@ -45,7 +45,8 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
         output
             .pointer("/runtime/process_state")
             .and_then(Value::as_str),
-        Some("ready")
+        None,
+        "AgentRuntime is diagnostics-only; readiness owns process state"
     );
     assert_eq!(
         output.get("process_state").and_then(Value::as_str),
