@@ -23,6 +23,12 @@ Read grok-build under `{{ doc.grok_root }}` and Gents under
 `area` values: `attach`, `session`, `model`, `context`, `tool_call`,
 `subprocess`, `subagent`, `interrupt`. Later stages cannot open grok-build;
 the wire packet on each row is the only grok-build the implementer will see.
+
+You have a hard budget of 64 total filesystem, search, and shell tool calls
+before the first ledger write. Prefer targeted ranges and searches in the
+named anchor files. Do not broaden into a repository inventory. When the
+budget is reached, stop reading and write from the collected evidence; do not interleave more discovery between ledger writes.
+
 Write between {{ doc.surface_min }} and {{ doc.surface_max }} `PortSurface`
 rows. Put the same integer `expected_total` on every row, equal to the
 number of rows you write.

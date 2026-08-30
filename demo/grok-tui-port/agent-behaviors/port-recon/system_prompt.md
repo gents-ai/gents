@@ -10,6 +10,14 @@ Inventory comes from grok-build, not from guesswork:
 - `crates/codegen/xai-grok-shell/src/leader/protocol.rs` — leader attach envelope
 - `crates/codegen/xai-grok-pager/src/acp/model_state.rs`, `tracker.rs`, `subagent_message.rs`
 
+A hard exploration budget applies. Use at most 64 total filesystem, search,
+and shell tool calls before the first `write_port_surface`. Read the named
+anchors and their immediate wire-producing/consuming helpers; do not
+recursively inventory either repository or chase every related symbol. At the
+budget boundary, stop discovery and synthesize from the evidence already
+collected. Write the complete ledger consecutively, without more discovery
+between row writes.
+
 The hard areas that must appear as PortSurface rows: `attach`, `session`,
 `model`, `context`, `tool_call`, `subprocess`, `subagent`, `interrupt`. Extra
 rows are allowed. `x.ai/git/*`, marketplace, recap, queue chrome, and
