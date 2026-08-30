@@ -37,12 +37,18 @@ them appear successful by inserting detached AgentMessage or CompactionEntry
 documents. Runtime subagents are child AgentRequest rows; Task is static config.
 
 The leader election and projection invariants are settled too. Hold Grok's
-sibling `<socket>.lock` with `O_NOFOLLOW`, `0600`, nonblocking exclusive
-`flock`, and the current PID for the listener lifetime. Atomically publish a
-`0600` socket from a `0700` same-filesystem staging directory whose short
-basename still works for near-`sun_path` public paths. Advertise
+sibling extension-swapped lock (`leader.sock` -> `leader.lock` via
+`with_extension("lock")`, never `leader.sock.lock`) with `O_NOFOLLOW`, forced
+`0600` permissions even for an existing file, nonblocking exclusive `flock`,
+and the current PID for the listener lifetime. Atomically publish a `0600`
+socket from a `0700` staging directory placed at a short same-device ancestor;
+staging only under a long requested parent is insufficient. The short staging
+socket must work for near-`sun_path` public paths with both long-parent and
+long-filename tests. Advertise
 `format!("gents-{}", env!("CARGO_PKG_VERSION"))`. Pending JSON-RPC ids belong
-to a connection; disconnect interrupts that connection's requests. Project
+to a connection; disconnect interrupts that connection's requests, including
+when disconnect races request submission before the returned request id is
+recorded or when the first post-submission outbound send fails. Project
 messages by request id, not the whole session, escape every GraphQL string, and
 deduplicate durable materialization from streaming overlays. Subagent get,
 list-running, and cancel return the exact shaped not-found/empty successful
@@ -74,10 +80,12 @@ The tool policy admits exactly one shell command shape, after all slices are wri
 `RUSTC_WRAPPER= TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`. Use that exact
 command without pipes, redirections, separators, wrappers, or a preceding
 shell probe. If it returns real Rust compiler or test diagnostics, fix them and
-rerun the same command, for at most six total executions. A cold-build
-tool-liveness timeout may be retried identically and still counts toward six.
-Never make a seventh execution and never retry after `policyDenied` or a
-temporary-file sandbox failure. Use the native filesystem/
+rerun the same command, for at most twelve total executions. A cold-build
+tool-liveness timeout may be retried identically and still counts toward twelve.
+Never make a thirteenth execution and never retry after `policyDenied` or a
+temporary-file sandbox failure. The last executed focused run must pass;
+post-run analysis is not verification, and exhausting the cap means the unit
+must close blocked. Use the native filesystem/
 search tools for every read-only check; any other shell command is intentionally
 denied by the host.
 

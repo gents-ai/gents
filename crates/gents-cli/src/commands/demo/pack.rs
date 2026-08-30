@@ -4915,8 +4915,10 @@ mod tests {
                 assert!(implement_prompt.contains("Do not run `cargo`, `rustc`"));
                 assert!(implement_prompt
                     .contains("`RUSTC_WRAPPER= TMPDIR=\"$PWD/target\" cargo test -p gents-cli --lib grok_shim`"));
-                assert!(implement_prompt.contains("up to six total executions"));
-                assert!(implement_prompt.contains("Never start a seventh execution"));
+                assert!(implement_prompt.contains("up to twelve total executions"));
+                assert!(implement_prompt.contains("Never start a thirteenth execution"));
+                assert!(implement_prompt.contains("with_extension(\"lock\")"));
+                assert!(implement_prompt.contains("disconnect-before-request-id"));
                 assert!(implement_prompt.contains("O_NOFOLLOW"));
                 assert!(implement_prompt.contains("sockaddr_un.sun_path"));
                 assert!(implement_prompt.contains("`x.ai/compact_conversation`"));

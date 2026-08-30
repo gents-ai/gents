@@ -38,17 +38,23 @@ redesigning it:
 The previous live implementation attempt exposed requirements that are now
 fixed acceptance criteria for this unit:
 
-- Grok elects a sibling leader with `<socket>.lock`, not by socket ownership
-  alone. Open that exact lock with `O_NOFOLLOW`, mode `0600`, take
+- Grok elects a sibling leader with the socket extension replaced by `.lock`
+  (`leader.sock` -> `leader.lock`, exactly `socket_path.with_extension("lock")`),
+  not by socket ownership alone and not by appending `.lock` to produce
+  `leader.sock.lock`. Open that exact lock with `O_NOFOLLOW`, force its mode to
+  `0600` even when the file already existed, take
   `flock(LOCK_EX | LOCK_NB)`, replace its contents with the current PID, and
   keep the open `File` alive for the entire listener task. A second shim must
   fail while the first owns the lock.
-- Publish the socket securely: create an atomic private staging directory with
-  mode `0700`, bind a deliberately short staging basename on the same
-  filesystem, chmod the socket to `0600`, and rename it into place. This must
-  work when the requested public path is near `sockaddr_un.sun_path` length;
-  include a near-limit path test. Never follow a lock symlink or expose a
-  permissive socket between bind and chmod.
+- Publish the socket securely: walk existing ancestors of the requested target
+  parent to choose a same-device ancestor where a private staging directory
+  with mode `0700` and a deliberately short socket basename fit within
+  `sockaddr_un.sun_path`; bind there, chmod the socket to `0600`, and rename it
+  atomically into place. Creating staging only beneath the requested parent is
+  insufficient because a long parent can make the staging path unbindable.
+  Include separate tests for a near-limit public path with a long parent and a
+  long filename. Never follow a lock symlink or expose a permissive socket
+  between bind and chmod.
 - The registered version is
   `format!("gents-{}", env!("CARGO_PKG_VERSION"))`; the bare string `gents` is
   not acceptable. Resolve the model name, context window, and optional behavior
@@ -57,7 +63,13 @@ fixed acceptance criteria for this unit:
 - JSON-RPC ids and pending prompts are connection-scoped. Reject a concurrent
   second prompt for one session, defer the `session/prompt` response until its
   own request terminalizes, cancel only the matching active prompt, and
-  interrupt outstanding prompts when that pager disconnects.
+  interrupt outstanding prompts when that pager disconnects. Close the
+  submission race: register the returned request id before the first fallible
+  outbound send; if the registry entry was already drained/missing/cancelled,
+  immediately interrupt that just-submitted request. Every outbound-send
+  failure after submission must also interrupt before finishing the prompt.
+  Add focused tests for disconnect-before-request-id and send-failure-after-
+  submission so no submitted request can become orphaned.
 - Every inline GraphQL value uses `gents::graphql::escape_graphql_string`.
   Project `AgentResponse` by request id (latest row), `AgentMessage` by request
   id ordered by sequence, `AgentToolCall` by request id, and child
@@ -174,12 +186,15 @@ pipe, redirection, separator, wrapper, `echo`, or preceding shell probe. Its rea
 exit status must be preserved. Do not use the shell for grep, git inspection,
 formatting, or any other check; use native tools. If it returns real source
 compiler/test diagnostics, fix every diagnostic and rerun the identical command,
-up to six total executions. A tool-liveness timeout during the initial cold
+up to twelve total executions. A tool-liveness timeout during the initial cold
 dependency build may be retried with the identical command and still counts
-toward six; do not use it as permission to change the command. If it is
+toward twelve; do not use it as permission to change the command. If it is
 `policyDenied` or reports a temporary-file sandbox failure, do not diagnose or
-retry it. Never start a seventh execution, even after fixing a test failure.
-The host/reviewer will run the full package gate outside the worker sandbox.
+retry it. Never start a thirteenth execution. The last executed focused command
+must pass; analysis-only post-run fixes are not green. If twelve executions are
+exhausted without a passing run, report the real final failure and close the
+unit blocked. The host/reviewer will run the full package gate outside the
+worker sandbox.
 
 Before the first Cargo execution, make exactly one native grep call rooted at
 `crates/gents-cli/src/commands/grok_shim` using one alternation that covers the
