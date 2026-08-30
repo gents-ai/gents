@@ -53,6 +53,12 @@ server: it binds `tokio::net::UnixListener`, reads Grok `ClientMessage`, and
 writes `ServerMessage`. Never launch Grok and never implement a
 `UnixStream::connect` client.
 
+Immediately after the scaffold is complete, make the slice-1 tracked edit:
+expand `protocol.rs` and `server.rs` with the framed async read/write helpers,
+fresh serde wire envelopes, UnixListener accept path, register/registered,
+ping/pong, disconnect, and their tests. This edit needs only the surface ledger,
+`tokio`, and `serde_json`; do not search the repository or run Cargo first.
+
 Do not run filesystem searches or shell commands before the scaffold, and do
 not use the shell to edit files. After every tracked edit, use at most 12
 individual filesystem/search/shell calls before the next tracked edit; parallel
@@ -66,6 +72,28 @@ functions count individually. Follow these slices without redesigning them:
    tools, subprocesses, and subagents, then tests
 5. the smallest `ServeArgs`/`commands::serve` launch seam, then focused and
    package tests
+
+Known Gents anchors are fixed; open these exact ranges directly when their
+slice begins instead of searching for symbols:
+
+- request options and submission:
+  `crates/gents-cli/src/request_helpers.rs:32-45,295-424`; call it as
+  `crate::create_agent_request`
+- cancellation pattern:
+  `crates/gents-cli/src/commands/codex_shim/turn/active.rs:136-146`; call
+  `gents::interrupt_request(node.as_ref(), request_id)`
+- server CLI seam: `crates/gents-cli/src/cli/args.rs:735-790`
+- embedded node creation and shim launch seam:
+  `crates/gents-cli/src/commands/serve.rs:378-410,540-565,681-770,850-870`
+- direct bounded query examples:
+  `crates/gents-cli/src/commands/codex_shim/background.rs:320-360,450-490`
+
+Do not run `cargo`, `rustc`, or another build command until slices 1 through 5
+and their tests are written. The worker shell sandbox may block clang temporary
+files; do not diagnose or retry that environment failure. When implementation
+is complete, run one focused Cargo command without piping through `tail` so its
+real exit status is preserved. The host/reviewer will run the full package gate
+outside the worker sandbox.
 
 Do not search Cargo registries, Cargo git checkouts, subscription APIs, or any
 grok-build path after recon. The ledger's `grok_wire` and evidence are the
