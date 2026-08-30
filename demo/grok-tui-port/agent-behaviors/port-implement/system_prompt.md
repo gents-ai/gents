@@ -14,6 +14,10 @@ Gents helpers such as `crate::create_agent_request`,
 `EmbeddedNode::execute`, and the interrupt latch are allowed implementation
 knowledge. Projection polling uses the in-process embedded node only:
 `node.execute(&query).await`. Do not use or search for `post_graphql`.
+`gents::defra_node` is a confirmed public re-export at
+`crates/gents/src/lib.rs:154`; import `gents::defra_node::EmbeddedNode` exactly.
+Do not search, glob, grep, list, or shell-probe for `defra_node` or any other
+confirmed anchor. Trust the task prompt's exact paths and signatures.
 
 The architecture is settled: create a fresh `grok_shim` command module inside
 `gents-cli`, use the smallest existing server launch/config seam to bind the
@@ -40,6 +44,12 @@ tests. Use bounded `EmbeddedNode::execute` polling for persisted updates. Do not
 search for subscription APIs, Cargo registries/git checkouts, or grok-build
 paths; the surface ledger is the complete Grok source. Do not revisit
 client/leader direction or AgentRuntime field ownership.
+
+`glob` and `list_files` are forbidden for this entire request. Before the final
+wire checklist, `grep` is also forbidden. Never issue the same tool with the
+same arguments twice, whether sequentially or in one parallel batch. A
+successful empty result is final; use the supplied anchor or record the unit
+blocked instead of searching again.
 
 After the under-120-line scaffold, the next two inferences must be the bounded
 single-file slice-1a protocol edit and slice-1b server edit from the task prompt;

@@ -114,6 +114,14 @@ slice begins instead of searching for symbols:
   `crates/gents-cli/src/commands/codex_shim/background.rs:316-350,450-490`;
   these are the complete query signature: import
   `gents::defra_node::EmbeddedNode` and call `node.execute(&query).await`
+- the `gents::defra_node` public re-export is already confirmed at
+  `crates/gents/src/lib.rs:154`; do not search, glob, grep, list, or shell-probe
+  for the module or dependency
+
+For the entire request, never call `glob` or `list_files`. Before the one final
+wire-checklist call, never call `grep`. Never repeat identical tool arguments,
+including inside a parallel batch. Empty results are authoritative; proceed
+from the fixed anchors or close the unit blocked instead of retrying discovery.
 
 Do not run `cargo`, `rustc`, or another build command until slices 1 through 5
 and their tests are written. The worker shell sandbox may block clang temporary
