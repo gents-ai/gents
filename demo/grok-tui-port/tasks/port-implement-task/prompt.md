@@ -45,10 +45,13 @@ scaffold edits:
 - create compileable initial `grok_shim/server.rs` and `grok_shim/acp.rs`
   modules, even if their first handlers are placeholders
 
-An incomplete scaffold is expected; build it out after the edit. Gents is the
-leader server: it binds `tokio::net::UnixListener`, reads Grok
-`ClientMessage`, and writes `ServerMessage`. Never launch Grok and never
-implement a `UnixStream::connect` client.
+The entire first scaffold must stay under 120 lines. It contains only module
+declarations, a minimal four-byte prefix encode/decode helper with one test,
+and compileable server/ACP placeholder types. Do not emit full wire enums or
+handlers yet; those belong to the numbered slices below. Gents is the leader
+server: it binds `tokio::net::UnixListener`, reads Grok `ClientMessage`, and
+writes `ServerMessage`. Never launch Grok and never implement a
+`UnixStream::connect` client.
 
 Do not run filesystem searches or shell commands before the scaffold, and do
 not use the shell to edit files. After every tracked edit, use at most 12

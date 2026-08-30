@@ -4402,7 +4402,7 @@ mod tests {
                 assert!(implement_prompt.contains("next tool batch"));
                 assert!(implement_prompt.contains("filesystem searches or shell commands"));
                 assert!(implement_prompt.contains("four-byte big-endian frame codec"));
-                assert!(implement_prompt.contains("Gents is the\nleader server"));
+                assert!(implement_prompt.contains("Gents is the leader"));
                 assert!(implement_prompt.contains("at most 12"));
                 assert!(implement_prompt.contains("Do not search Cargo registries"));
                 assert!(implement_prompt.contains("bounded `EmbeddedNode::execute` polling"));
@@ -4421,7 +4421,7 @@ mod tests {
                 )
                 .expect("implement profile should load");
                 assert_eq!(implement_profile["max_turns"], 256);
-                assert_eq!(implement_profile["max_output_tokens"], 8192);
+                assert_eq!(implement_profile["max_output_tokens"], 16384);
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
                 assert!(plan.contains("gents/{{ event.correlation }}/unit-<nn>"));

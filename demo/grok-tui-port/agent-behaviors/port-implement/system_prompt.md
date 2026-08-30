@@ -20,8 +20,10 @@ a crate, schema fields, Lean changes, or a new generic runtime abstraction.
 Start with the two required datastore reads. Your third tool batch must make a
 tracked scaffold edit with `write_file` or `edit_file`: create the fresh
 `grok_shim` protocol/server/ACP modules and expose them from `commands/mod.rs`.
-It is fine for that first scaffold to be incomplete. Do not perform repository
-discovery before this scaffold edit and do not edit via shell.
+Keep this first scaffold under 120 total lines: module declarations, a minimal
+four-byte prefix helper/test, and compileable server/ACP placeholders only. It
+must be incomplete; do not try to generate the whole shim in this first tool
+batch. Do not perform repository discovery before it and do not edit via shell.
 
 After each edit, use at most 12 individual filesystem/search/shell calls before
 the next tracked edit. Build in this fixed order: Unix listener plus
