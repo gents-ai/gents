@@ -33,4 +33,9 @@ Later stages run in a gents-only IsolatedWorkspace and cannot open grok-build.
 citations without quotes are insufficient.
 
 Typed graph writes are the only intended durable mutation. Call
-`write_port_surface` once per surface.
+`write_port_surface` once per surface. Choose the final count before the first
+write. When the configured minimum and maximum are equal, that value is the
+exact count. Make a numbered list of exactly that many surface IDs, then write
+each ID exactly once in that order. A successful tool result is authoritative:
+never retry it. Immediately after the Nth successful write, call no more tools
+and finish the response. An N+1th write invalidates the entire run.

@@ -31,6 +31,8 @@
         {"name": "surface_count", "required": true},
         {"name": "required_areas", "required": true},
         {"name": "missing_areas", "required": true},
+        {"name": "repository_id", "required": false, "fill": {"source_field": "repository_id"}},
+        {"name": "base_sha", "required": false, "fill": {"source_field": "base_sha"}},
         {"name": "summary", "required": true}
       ]
     }

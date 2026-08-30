@@ -65,8 +65,8 @@ across coordinators, implementers, and reviewers.
 Useful controls:
 
 ```bash
-export GENTS_GROK_PORT_MIN_SURFACES=8
-export GENTS_GROK_PORT_MAX_SURFACES=16
+export GENTS_GROK_PORT_MIN_SURFACES=13
+export GENTS_GROK_PORT_MAX_SURFACES=13
 export GENTS_GROK_PORT_BASE_SHA=$(git rev-parse HEAD)
 export GENTS_GROK_PORT_PR_BASE=main
 export GENTS_GROK_PORT_BRANCH=agent/grok-tui-port

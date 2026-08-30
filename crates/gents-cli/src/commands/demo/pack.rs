@@ -4379,6 +4379,23 @@ mod tests {
                     .expect("recon prompt should load");
                 assert!(recon.contains("hard budget of 64 total"));
                 assert!(recon.contains("do not interleave more discovery"));
+                assert!(recon.contains("call `write_port_surface` exactly N times"));
+                assert!(recon.contains("N+1th write invalidates the run"));
+                let makefile = std::fs::read_to_string(pack.join("../../Makefile"))
+                    .expect("repository Makefile should load");
+                assert!(makefile.contains("GROK_PORT_MIN_SURFACES ?= 13"));
+                assert!(makefile.contains("GROK_PORT_MAX_SURFACES ?= 13"));
+                let audit_io = read_pack_json_defaults(
+                    &pack
+                        .join("datastore-tool-surfaces")
+                        .join("port-recon-audit-io")
+                        .join("object.json"),
+                )
+                .expect("recon audit surface should load");
+                let audit_io = audit_io.to_string();
+                assert!(audit_io.contains("repository_id"));
+                assert!(audit_io.contains("base_sha"));
+                assert!(audit_io.contains("source_field"));
                 let final_review =
                     std::fs::read_to_string(pack.join("tasks/port-final-review-task/prompt.md"))
                         .expect("final review prompt should load");
