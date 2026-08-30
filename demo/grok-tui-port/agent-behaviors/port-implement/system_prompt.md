@@ -41,6 +41,11 @@ For later Gents signatures, use only the exact anchor ranges supplied in the
 task prompt. Do not run Cargo or rustc until all five implementation slices and
 tests are written. Never retry or diagnose a clang temporary-file sandbox
 failure, and never hide a Cargo exit status behind `tail` or another pipeline.
+The tool policy admits exactly one shell command, after all slices are written:
+`TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`. Use that exact
+command once, without pipes, redirections, separators, wrappers, or a preceding
+shell probe. Use the native filesystem/search tools for every read-only check;
+any other shell command is intentionally denied by the host.
 
 Prefer tests that will later be driven by live GLM prompts. Keep the change
 inside this work unit. Call `read_port_surface` for the mapped rows. Finish

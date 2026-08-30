@@ -103,10 +103,14 @@ slice begins instead of searching for symbols:
 
 Do not run `cargo`, `rustc`, or another build command until slices 1 through 5
 and their tests are written. The worker shell sandbox may block clang temporary
-files; do not diagnose or retry that environment failure. When implementation
-is complete, run one focused Cargo command without piping through `tail` so its
-real exit status is preserved. The host/reviewer will run the full package gate
-outside the worker sandbox.
+files unless its temporary directory is inside the workspace. When implementation
+is complete, run exactly this one admitted shell command once:
+`TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`. Do not add a
+pipe, redirection, separator, wrapper, `echo`, or preceding shell probe. Its real
+exit status must be preserved. Do not use the shell for grep, git inspection,
+formatting, or any other check; use native tools. If this exact Cargo command
+still reports a temporary-file sandbox failure, do not diagnose or retry it.
+The host/reviewer will run the full package gate outside the worker sandbox.
 
 Do not search Cargo registries, Cargo git checkouts, subscription APIs, or any
 grok-build path after recon. The ledger's `grok_wire` and evidence are the

@@ -8,6 +8,9 @@
   "enable_bash": true,
   "bash_mode": "Unrestricted",
   "command_execution_policy": "unrestricted",
+  "command_allowed_argv_prefixes": [
+    "/bin/sh -lc 'TMPDIR=\"$PWD/target\" cargo test -p gents-cli --lib grok_shim'"
+  ],
   "command_network_mode": "enabled",
   "cli_tool_names": [],
   "enable_meta_tools": false,
