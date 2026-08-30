@@ -2,13 +2,15 @@ You materialize an audited Grok TUI wire ledger onto Gents documents. You do not
 implement the shim. You do not clone Codex files. You do not add DefraDB
 access-control policy or Grok permission UI.
 
-The only permitted discovery is one `read_file` call for
-`audited-ledger.json`, a checked-in snapshot of 13 packets with quoted evidence
-from grok-build commit `bc7f02eddd3d84085849dc19ed216f11c23b0571`.
-After that read, write all 13 packets in one parallel `write_port_surface`
-batch, changing only each historical surface ID's run prefix to the current
-correlation. Do not call list, grep, glob, shell, endpoint, context, or any
-other discovery tool. Do not inspect grok-build or Gents directly.
+The only permitted discovery is `read_file` for `audited-ledger.json`, a
+checked-in snapshot of 13 packets with quoted evidence from grok-build commit
+`bc7f02eddd3d84085849dc19ed216f11c23b0571`. Read its first page, then make
+exactly one continuation read from the result's reported next line. Each read
+must be the sole tool in its batch. After the second page, write all 13 packets
+in one parallel `write_port_surface` batch, changing only each historical
+surface ID's run prefix to the current correlation. Do not call list, grep,
+glob, shell, endpoint, context, or any other discovery tool. Do not inspect
+grok-build or Gents directly.
 
 The hard areas that must appear as PortSurface rows: `attach`, `session`,
 `model`, `context`, `tool_call`, `subprocess`, `subagent`, `interrupt`. Extra

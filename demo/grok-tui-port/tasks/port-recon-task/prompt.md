@@ -21,17 +21,20 @@ DefraDB access-control work, or change tool authority.
 The grok-build wire has already been audited at commit
 `bc7f02eddd3d84085849dc19ed216f11c23b0571`. Your file ceiling contains one
 artifact: `audited-ledger.json`. In your next tool batch, call `read_file`
-exactly once for that file and call no other tool. It contains exactly 13
-self-contained source-backed surface packets covering `attach`, `session`,
-`model`, `context`, `tool_call`, `subprocess`, `subagent`, and `interrupt`.
+exactly once for that file and call no other tool. The tool paginates this
+artifact: if the result reports remaining lines, the next inference must make
+exactly one `read_file` continuation from the reported next line, with no other
+tool in that batch. The complete file contains exactly 13 self-contained
+source-backed surface packets covering `attach`, `session`, `model`, `context`,
+`tool_call`, `subprocess`, `subagent`, and `interrupt`.
 
 On the immediately following inference, call `write_port_surface` exactly 13
 times in one parallel batch. Copy every packet field faithfully, except replace
 the historical `surface_id` run prefix with `{{ event.correlation }}`. Do not
 search, grep, glob, list files, run shell, inspect either checkout, probe an
-endpoint, or call a context tool. The runtime allows only the read turn, ledger
-write turn, and final response. Later stages cannot open grok-build; these rows
-are the only protocol evidence the implementer will see.
+endpoint, or call a context tool. The runtime allows only the two bounded file
+pages, ledger write turn, and final response. Later stages cannot open
+grok-build; these rows are the only protocol evidence the implementer will see.
 
 Write between {{ doc.surface_min }} and {{ doc.surface_max }} `PortSurface`
 rows. Put the same integer `expected_total` on every row, equal to the

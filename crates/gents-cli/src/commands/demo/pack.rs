@@ -4575,11 +4575,11 @@ mod tests {
                     &pack.join("inference-profiles/grok-port-recon-profile/object.json"),
                 )
                 .expect("recon profile should load");
-                assert_eq!(recon_profile["max_turns"], 1);
+                assert_eq!(recon_profile["max_turns"], 2);
                 let sequence = &experiment["expect"]["stage_tool_sequences"][0];
                 assert_eq!(sequence["trigger_id"], "port-recon");
                 assert_eq!(sequence["boundary_tool_name"], "write_port_surface");
-                assert_eq!(sequence["max_calls_before_boundary"], 1);
+                assert_eq!(sequence["max_calls_before_boundary"], 2);
                 assert_eq!(sequence["max_calls_per_message_before_boundary"], 1);
                 assert_eq!(sequence["exact_boundary_calls"], 13);
                 assert_eq!(
