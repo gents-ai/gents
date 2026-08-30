@@ -4364,8 +4364,9 @@ mod tests {
                 let implement_prompt =
                     std::fs::read_to_string(pack.join("tasks/port-implement-task/prompt.md"))
                         .expect("implement prompt should load");
-                assert!(implement_prompt.contains("use at most 40 filesystem"));
-                assert!(implement_prompt.contains("By 48 calls"));
+                assert!(implement_prompt.contains("third tool"));
+                assert!(implement_prompt.contains("filesystem searches or shell commands"));
+                assert!(implement_prompt.contains("four-byte big-endian frame codec"));
                 assert!(implement_prompt.contains("do not change schemas, Lean proofs"));
                 assert!(implement_prompt.contains("fresh `grok_shim` module"));
                 let implement_behavior = read_pack_json_defaults(
@@ -4381,6 +4382,7 @@ mod tests {
                 )
                 .expect("implement profile should load");
                 assert_eq!(implement_profile["max_turns"], 256);
+                assert_eq!(implement_profile["max_output_tokens"], 8192);
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
                 assert!(plan.contains("gents/{{ event.correlation }}/unit-<nn>"));

@@ -14,11 +14,14 @@ The architecture is settled: create a fresh `grok_shim` command module inside
 `gents-cli`, use the smallest existing server launch/config seam to bind the
 leader socket, and keep runtime lifecycle documents runtime-owned. Do not add
 a crate, schema fields, Lean changes, or a new generic runtime abstraction.
-Before the first tracked edit, use at most 40 individual filesystem/search/
-shell calls (parallel functions count individually); after stating the file
-plan, edit immediately, and never exceed 48 such calls without a tracked edit.
-Do not revisit already-settled client/leader direction or AgentRuntime field
-ownership.
+Start with the two required datastore reads. Your third tool batch must make a
+tracked scaffold edit with `write_file` or `edit_file`: create the fresh
+`grok_shim` module and expose it from `commands/mod.rs`. It is fine for that
+first scaffold to be incomplete while you inspect the exact helper signatures.
+Do not perform repository discovery before this scaffold edit, do not edit via
+shell, and do not revisit already-settled client/leader direction or
+AgentRuntime field ownership. After the scaffold exists, inspect narrowly and
+build it out in compile-tested slices.
 
 Prefer tests that will later be driven by live GLM prompts. Keep the change
 inside this work unit. Call `read_port_surface` for the mapped rows. Finish
