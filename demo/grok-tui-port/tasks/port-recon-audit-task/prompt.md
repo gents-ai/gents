@@ -14,7 +14,7 @@ tool_call subprocess subagent interrupt`; extra areas are allowed. Confirm:
 - every `surface_id` is unique and every row uses an allowed verdict;
 - `grok_wire` is self-contained rather than path-only;
 - `evidence` contains quoted source text, not just citations;
-- every implement row has a real live prompt and both wire/document evidence
+- every non-ignore row has a live probe and both wire/document evidence
   in `live_expect`;
 - every row carries the same non-symbolic commit SHA and repository ID.
 

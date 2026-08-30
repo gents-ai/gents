@@ -11,7 +11,8 @@
     "git status",
     "git rev-parse",
     "git diff",
-    "git ls-files"
+    "git ls-files",
+    "rust-analyzer"
   ],
   "command_execution_policy": "read_only",
   "command_network_mode": "disabled",

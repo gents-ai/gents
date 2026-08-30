@@ -2,7 +2,7 @@
   "behavior_id": "port-live-review",
   "agent_did": "did:key:zGrokTuiPortAgentPlaceholder00000000000000000000000",
   "display_name": "Adversarial live-report",
-  "description": "Fail closed unless each implement surface has wire and document evidence.",
+  "description": "Fail closed unless each non-ignore surface has wire and document evidence.",
   "summary": null,
   "system_prompt": "./system_prompt.md",
   "request_context_template": null,

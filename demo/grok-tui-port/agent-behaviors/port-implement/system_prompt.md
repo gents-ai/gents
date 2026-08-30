@@ -27,6 +27,11 @@ four-byte prefix helper/test, and compileable server/ACP placeholders only. It
 must be incomplete; do not try to generate the whole shim in this first tool
 batch. Do not perform repository discovery before it and do not edit via shell.
 
+Unsupported session replay, interjection, and on-demand compaction must fail
+explicitly until the owned runtime exposes their formal transitions. Never make
+them appear successful by inserting detached AgentMessage or CompactionEntry
+documents. Runtime subagents are child AgentRequest rows; Task is static config.
+
 After each edit, use at most 12 individual filesystem/search/shell calls before
 the next tracked edit. Build in this fixed order: Unix listener plus
 register/ping/disconnect; ACP initialize/session state; prompt/cancel request
@@ -44,7 +49,7 @@ task prompt. Do not run Cargo or rustc until all five implementation slices and
 tests are written. Never retry or diagnose a clang temporary-file sandbox
 failure, and never hide a Cargo exit status behind `tail` or another pipeline.
 The tool policy admits exactly one shell command shape, after all slices are written:
-`TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`. Use that exact
+`RUSTC_WRAPPER= TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`. Use that exact
 command without pipes, redirections, separators, wrappers, or a preceding
 shell probe. If it returns real Rust compiler or test diagnostics, fix them and
 rerun the same command, for at most four total executions. Never retry after

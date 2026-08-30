@@ -5,7 +5,11 @@ implement a Gents-owned Grok leader shim in isolated git worktrees, directly rev
 each small sealed route, serial-apply accepted diffs onto the operator checkout
 (one trunk), run the bundled full **code-review** graph on the committed
 combined result, prove that exact reviewed head with live GLM turns, then open
-one GitHub PR.
+one GitHub PR. The pack embeds the bundled `code-review` package at load time.
+Its parallel scanner role uses a separate hard-bounded inference profile, while
+coordinator stages retain the larger full-review budget. Small sealed units use
+one direct reviewer, while the final combined edge starts the full four-stage
+embedded graph.
 
 This pack does not add DefraDB access-control policy and does not implement
 Grok permission UI. Threat model is reachability of the Gents server / leader
@@ -79,3 +83,38 @@ export GENTS_GROK_PORT_PROMPT='Prioritize subagents, interrupts, and model name.
 ```
 
 Every run lands under `demo/grok-tui-port/runs/<job-id>/`.
+
+## Live edge probes
+
+`grok -p` does not use leader mode. Test the framed edges independently against
+a running integrated server:
+
+```bash
+python3 demo/grok-tui-port/scripts/grok_edge_probe.py \
+  --socket /tmp/gents-grok-live.sock \
+  --graphql http://127.0.0.1:19205/api/v0/graphql \
+  --edge handshake
+python3 demo/grok-tui-port/scripts/grok_edge_probe.py \
+  --socket /tmp/gents-grok-live.sock \
+  --graphql http://127.0.0.1:19205/api/v0/graphql \
+  --edge prompt
+python3 demo/grok-tui-port/scripts/grok_edge_probe.py \
+  --socket /tmp/gents-grok-live.sock \
+  --graphql http://127.0.0.1:19205/api/v0/graphql \
+  --edge tool
+python3 demo/grok-tui-port/scripts/grok_edge_probe.py \
+  --socket /tmp/gents-grok-live.sock \
+  --graphql http://127.0.0.1:19205/api/v0/graphql \
+  --edge subprocess
+python3 demo/grok-tui-port/scripts/grok_edge_probe.py \
+  --socket /tmp/gents-grok-live.sock \
+  --graphql http://127.0.0.1:19205/api/v0/graphql \
+  --edge cancel
+```
+
+`--edge all` runs the same checks on one multi-turn session. Keep one separate
+stock `grok --leader --leader-socket <path>` PTY smoke in the final gate.
+The integrated server must use `--grok-shim-behavior-id port-live`; the shim
+derives its advertised model and context window from that bound behavior.
+Pass `--model "$GENTS_GROK_PORT_MODEL"` for a non-default pack model; the probe
+also reads that environment variable directly when the flag is omitted.

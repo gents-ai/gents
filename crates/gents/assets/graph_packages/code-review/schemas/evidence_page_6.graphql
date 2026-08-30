@@ -1,0 +1,19 @@
+type CodeReviewEvidencePage6 {
+  evidence_id: String @index(unique: true) @immutable
+  evidence_chunk_96: String @immutable
+  evidence_chunk_97: String @immutable
+  evidence_chunk_98: String @immutable
+  evidence_chunk_99: String @immutable
+  evidence_chunk_100: String @immutable
+  evidence_chunk_101: String @immutable
+  evidence_chunk_102: String @immutable
+  evidence_chunk_103: String @immutable
+  evidence_chunk_104: String @immutable
+  evidence_chunk_105: String @immutable
+  evidence_chunk_106: String @immutable
+  evidence_chunk_107: String @immutable
+  evidence_chunk_108: String @immutable
+  evidence_chunk_109: String @immutable
+  evidence_chunk_110: String @immutable
+  evidence_chunk_111: String @immutable
+}

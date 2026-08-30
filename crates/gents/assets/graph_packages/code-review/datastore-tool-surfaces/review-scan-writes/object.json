@@ -5,32 +5,682 @@
   "enabled": true,
   "entries": [
     {
+      "kind": "read",
+      "tool_name": "read_review_evidence_0",
+      "collection": "CodeReviewEvidencePage0",
+      "description": "Read immutable host evidence fields 0-15 for this review run.",
+      "fields": [
+        "evidence_chunk_0",
+        "evidence_chunk_1",
+        "evidence_chunk_2",
+        "evidence_chunk_3",
+        "evidence_chunk_4",
+        "evidence_chunk_5",
+        "evidence_chunk_6",
+        "evidence_chunk_7",
+        "evidence_chunk_8",
+        "evidence_chunk_9",
+        "evidence_chunk_10",
+        "evidence_chunk_11",
+        "evidence_chunk_12",
+        "evidence_chunk_13",
+        "evidence_chunk_14",
+        "evidence_chunk_15"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_1",
+      "collection": "CodeReviewEvidencePage1",
+      "description": "Read immutable host evidence fields 16-31 for this review run.",
+      "fields": [
+        "evidence_chunk_16",
+        "evidence_chunk_17",
+        "evidence_chunk_18",
+        "evidence_chunk_19",
+        "evidence_chunk_20",
+        "evidence_chunk_21",
+        "evidence_chunk_22",
+        "evidence_chunk_23",
+        "evidence_chunk_24",
+        "evidence_chunk_25",
+        "evidence_chunk_26",
+        "evidence_chunk_27",
+        "evidence_chunk_28",
+        "evidence_chunk_29",
+        "evidence_chunk_30",
+        "evidence_chunk_31"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_2",
+      "collection": "CodeReviewEvidencePage2",
+      "description": "Read immutable host evidence fields 32-47 for this review run.",
+      "fields": [
+        "evidence_chunk_32",
+        "evidence_chunk_33",
+        "evidence_chunk_34",
+        "evidence_chunk_35",
+        "evidence_chunk_36",
+        "evidence_chunk_37",
+        "evidence_chunk_38",
+        "evidence_chunk_39",
+        "evidence_chunk_40",
+        "evidence_chunk_41",
+        "evidence_chunk_42",
+        "evidence_chunk_43",
+        "evidence_chunk_44",
+        "evidence_chunk_45",
+        "evidence_chunk_46",
+        "evidence_chunk_47"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_3",
+      "collection": "CodeReviewEvidencePage3",
+      "description": "Read immutable host evidence fields 48-63 for this review run.",
+      "fields": [
+        "evidence_chunk_48",
+        "evidence_chunk_49",
+        "evidence_chunk_50",
+        "evidence_chunk_51",
+        "evidence_chunk_52",
+        "evidence_chunk_53",
+        "evidence_chunk_54",
+        "evidence_chunk_55",
+        "evidence_chunk_56",
+        "evidence_chunk_57",
+        "evidence_chunk_58",
+        "evidence_chunk_59",
+        "evidence_chunk_60",
+        "evidence_chunk_61",
+        "evidence_chunk_62",
+        "evidence_chunk_63"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_4",
+      "collection": "CodeReviewEvidencePage4",
+      "description": "Read immutable host evidence fields 64-79 for this review run.",
+      "fields": [
+        "evidence_chunk_64",
+        "evidence_chunk_65",
+        "evidence_chunk_66",
+        "evidence_chunk_67",
+        "evidence_chunk_68",
+        "evidence_chunk_69",
+        "evidence_chunk_70",
+        "evidence_chunk_71",
+        "evidence_chunk_72",
+        "evidence_chunk_73",
+        "evidence_chunk_74",
+        "evidence_chunk_75",
+        "evidence_chunk_76",
+        "evidence_chunk_77",
+        "evidence_chunk_78",
+        "evidence_chunk_79"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_5",
+      "collection": "CodeReviewEvidencePage5",
+      "description": "Read immutable host evidence fields 80-95 for this review run.",
+      "fields": [
+        "evidence_chunk_80",
+        "evidence_chunk_81",
+        "evidence_chunk_82",
+        "evidence_chunk_83",
+        "evidence_chunk_84",
+        "evidence_chunk_85",
+        "evidence_chunk_86",
+        "evidence_chunk_87",
+        "evidence_chunk_88",
+        "evidence_chunk_89",
+        "evidence_chunk_90",
+        "evidence_chunk_91",
+        "evidence_chunk_92",
+        "evidence_chunk_93",
+        "evidence_chunk_94",
+        "evidence_chunk_95"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_6",
+      "collection": "CodeReviewEvidencePage6",
+      "description": "Read immutable host evidence fields 96-111 for this review run.",
+      "fields": [
+        "evidence_chunk_96",
+        "evidence_chunk_97",
+        "evidence_chunk_98",
+        "evidence_chunk_99",
+        "evidence_chunk_100",
+        "evidence_chunk_101",
+        "evidence_chunk_102",
+        "evidence_chunk_103",
+        "evidence_chunk_104",
+        "evidence_chunk_105",
+        "evidence_chunk_106",
+        "evidence_chunk_107",
+        "evidence_chunk_108",
+        "evidence_chunk_109",
+        "evidence_chunk_110",
+        "evidence_chunk_111"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_7",
+      "collection": "CodeReviewEvidencePage7",
+      "description": "Read immutable host evidence fields 112-127 for this review run.",
+      "fields": [
+        "evidence_chunk_112",
+        "evidence_chunk_113",
+        "evidence_chunk_114",
+        "evidence_chunk_115",
+        "evidence_chunk_116",
+        "evidence_chunk_117",
+        "evidence_chunk_118",
+        "evidence_chunk_119",
+        "evidence_chunk_120",
+        "evidence_chunk_121",
+        "evidence_chunk_122",
+        "evidence_chunk_123",
+        "evidence_chunk_124",
+        "evidence_chunk_125",
+        "evidence_chunk_126",
+        "evidence_chunk_127"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_8",
+      "collection": "CodeReviewEvidencePage8",
+      "description": "Read immutable host evidence fields 128-143 for this review run.",
+      "fields": [
+        "evidence_chunk_128",
+        "evidence_chunk_129",
+        "evidence_chunk_130",
+        "evidence_chunk_131",
+        "evidence_chunk_132",
+        "evidence_chunk_133",
+        "evidence_chunk_134",
+        "evidence_chunk_135",
+        "evidence_chunk_136",
+        "evidence_chunk_137",
+        "evidence_chunk_138",
+        "evidence_chunk_139",
+        "evidence_chunk_140",
+        "evidence_chunk_141",
+        "evidence_chunk_142",
+        "evidence_chunk_143"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_9",
+      "collection": "CodeReviewEvidencePage9",
+      "description": "Read immutable host evidence fields 144-159 for this review run.",
+      "fields": [
+        "evidence_chunk_144",
+        "evidence_chunk_145",
+        "evidence_chunk_146",
+        "evidence_chunk_147",
+        "evidence_chunk_148",
+        "evidence_chunk_149",
+        "evidence_chunk_150",
+        "evidence_chunk_151",
+        "evidence_chunk_152",
+        "evidence_chunk_153",
+        "evidence_chunk_154",
+        "evidence_chunk_155",
+        "evidence_chunk_156",
+        "evidence_chunk_157",
+        "evidence_chunk_158",
+        "evidence_chunk_159"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_10",
+      "collection": "CodeReviewEvidencePage10",
+      "description": "Read immutable host evidence fields 160-175 for this review run.",
+      "fields": [
+        "evidence_chunk_160",
+        "evidence_chunk_161",
+        "evidence_chunk_162",
+        "evidence_chunk_163",
+        "evidence_chunk_164",
+        "evidence_chunk_165",
+        "evidence_chunk_166",
+        "evidence_chunk_167",
+        "evidence_chunk_168",
+        "evidence_chunk_169",
+        "evidence_chunk_170",
+        "evidence_chunk_171",
+        "evidence_chunk_172",
+        "evidence_chunk_173",
+        "evidence_chunk_174",
+        "evidence_chunk_175"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_11",
+      "collection": "CodeReviewEvidencePage11",
+      "description": "Read immutable host evidence fields 176-191 for this review run.",
+      "fields": [
+        "evidence_chunk_176",
+        "evidence_chunk_177",
+        "evidence_chunk_178",
+        "evidence_chunk_179",
+        "evidence_chunk_180",
+        "evidence_chunk_181",
+        "evidence_chunk_182",
+        "evidence_chunk_183",
+        "evidence_chunk_184",
+        "evidence_chunk_185",
+        "evidence_chunk_186",
+        "evidence_chunk_187",
+        "evidence_chunk_188",
+        "evidence_chunk_189",
+        "evidence_chunk_190",
+        "evidence_chunk_191"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_12",
+      "collection": "CodeReviewEvidencePage12",
+      "description": "Read immutable host evidence fields 192-207 for this review run.",
+      "fields": [
+        "evidence_chunk_192",
+        "evidence_chunk_193",
+        "evidence_chunk_194",
+        "evidence_chunk_195",
+        "evidence_chunk_196",
+        "evidence_chunk_197",
+        "evidence_chunk_198",
+        "evidence_chunk_199",
+        "evidence_chunk_200",
+        "evidence_chunk_201",
+        "evidence_chunk_202",
+        "evidence_chunk_203",
+        "evidence_chunk_204",
+        "evidence_chunk_205",
+        "evidence_chunk_206",
+        "evidence_chunk_207"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_13",
+      "collection": "CodeReviewEvidencePage13",
+      "description": "Read immutable host evidence fields 208-223 for this review run.",
+      "fields": [
+        "evidence_chunk_208",
+        "evidence_chunk_209",
+        "evidence_chunk_210",
+        "evidence_chunk_211",
+        "evidence_chunk_212",
+        "evidence_chunk_213",
+        "evidence_chunk_214",
+        "evidence_chunk_215",
+        "evidence_chunk_216",
+        "evidence_chunk_217",
+        "evidence_chunk_218",
+        "evidence_chunk_219",
+        "evidence_chunk_220",
+        "evidence_chunk_221",
+        "evidence_chunk_222",
+        "evidence_chunk_223"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_14",
+      "collection": "CodeReviewEvidencePage14",
+      "description": "Read immutable host evidence fields 224-239 for this review run.",
+      "fields": [
+        "evidence_chunk_224",
+        "evidence_chunk_225",
+        "evidence_chunk_226",
+        "evidence_chunk_227",
+        "evidence_chunk_228",
+        "evidence_chunk_229",
+        "evidence_chunk_230",
+        "evidence_chunk_231",
+        "evidence_chunk_232",
+        "evidence_chunk_233",
+        "evidence_chunk_234",
+        "evidence_chunk_235",
+        "evidence_chunk_236",
+        "evidence_chunk_237",
+        "evidence_chunk_238",
+        "evidence_chunk_239"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_15",
+      "collection": "CodeReviewEvidencePage15",
+      "description": "Read immutable host evidence fields 240-255 for this review run.",
+      "fields": [
+        "evidence_chunk_240",
+        "evidence_chunk_241",
+        "evidence_chunk_242",
+        "evidence_chunk_243",
+        "evidence_chunk_244",
+        "evidence_chunk_245",
+        "evidence_chunk_246",
+        "evidence_chunk_247",
+        "evidence_chunk_248",
+        "evidence_chunk_249",
+        "evidence_chunk_250",
+        "evidence_chunk_251",
+        "evidence_chunk_252",
+        "evidence_chunk_253",
+        "evidence_chunk_254",
+        "evidence_chunk_255"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_16",
+      "collection": "CodeReviewEvidencePage16",
+      "description": "Read immutable host evidence fields 256-271 for this review run.",
+      "fields": [
+        "evidence_chunk_256",
+        "evidence_chunk_257",
+        "evidence_chunk_258",
+        "evidence_chunk_259",
+        "evidence_chunk_260",
+        "evidence_chunk_261",
+        "evidence_chunk_262",
+        "evidence_chunk_263",
+        "evidence_chunk_264",
+        "evidence_chunk_265",
+        "evidence_chunk_266",
+        "evidence_chunk_267",
+        "evidence_chunk_268",
+        "evidence_chunk_269",
+        "evidence_chunk_270",
+        "evidence_chunk_271"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "read",
+      "tool_name": "read_review_evidence_17",
+      "collection": "CodeReviewEvidencePage17",
+      "description": "Read immutable host evidence fields 272-287 for this review run.",
+      "fields": [
+        "evidence_chunk_272",
+        "evidence_chunk_273",
+        "evidence_chunk_274",
+        "evidence_chunk_275",
+        "evidence_chunk_276",
+        "evidence_chunk_277",
+        "evidence_chunk_278",
+        "evidence_chunk_279",
+        "evidence_chunk_280",
+        "evidence_chunk_281",
+        "evidence_chunk_282",
+        "evidence_chunk_283",
+        "evidence_chunk_284",
+        "evidence_chunk_285",
+        "evidence_chunk_286",
+        "evidence_chunk_287"
+      ],
+      "filter_fields": [
+        {
+          "name": "evidence_id",
+          "required": false,
+          "fill": {
+            "source_field": "evidence_id"
+          }
+        }
+      ]
+    },
+    {
       "tool_name": "write_candidate_finding",
       "collection": "CodeReviewCandidateFinding",
       "description": "Record one evidenced Critical, Major, or Cleanup candidate for adversarial verification.",
       "fields": [
-        {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "finding_id", "required": true},
-        {"name": "area_id", "required": false, "fill": {"source_field": "area_id"}},
-        {"name": "severity", "required": true},
-        {"name": "confidence", "required": true},
-        {"name": "path", "required": true},
-        {"name": "line", "required": false},
-        {"name": "title", "required": true},
-        {"name": "detail", "required": true},
-        {"name": "evidence", "required": true}
+        {
+          "name": "run_id",
+          "required": false,
+          "fill": "correlation"
+        },
+        {
+          "name": "finding_id",
+          "required": true
+        },
+        {
+          "name": "area_id",
+          "required": false,
+          "fill": {
+            "source_field": "area_id"
+          }
+        },
+        {
+          "name": "severity",
+          "required": true
+        },
+        {
+          "name": "confidence",
+          "required": true
+        },
+        {
+          "name": "path",
+          "required": true
+        },
+        {
+          "name": "line",
+          "required": false
+        },
+        {
+          "name": "title",
+          "required": true
+        },
+        {
+          "name": "detail",
+          "required": true
+        },
+        {
+          "name": "evidence",
+          "required": true
+        }
       ]
     },
     {
       "tool_name": "write_scan_result",
       "collection": "CodeReviewScanResult",
       "description": "Signal that one review area has finished scanning.",
-      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
+      "output_obligation": {
+        "scope": "trigger",
+        "minimum_writes": 1
+      },
       "fields": [
-        {"name": "run_id", "required": false, "fill": "correlation"},
-        {"name": "area_id", "required": false, "fill": {"source_field": "area_id"}},
-        {"name": "expected_total", "required": false, "fill": {"source_field": "expected_total"}},
-        {"name": "summary", "required": true}
+        {
+          "name": "run_id",
+          "required": false,
+          "fill": "correlation"
+        },
+        {
+          "name": "area_id",
+          "required": false,
+          "fill": {
+            "source_field": "area_id"
+          }
+        },
+        {
+          "name": "expected_total",
+          "required": false,
+          "fill": {
+            "source_field": "expected_total"
+          }
+        },
+        {
+          "name": "summary",
+          "required": true
+        }
       ]
     }
   ]
