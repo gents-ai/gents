@@ -4375,6 +4375,10 @@ mod tests {
                         .expect("route review prompt should load");
                 assert!(route_review.contains("git diff {{ doc.base_sha }}"));
                 assert!(!route_review.contains("gents graph run code-review"));
+                let recon = std::fs::read_to_string(pack.join("tasks/port-recon-task/prompt.md"))
+                    .expect("recon prompt should load");
+                assert!(recon.contains("hard budget of 64 total"));
+                assert!(recon.contains("do not interleave more discovery"));
                 let final_review =
                     std::fs::read_to_string(pack.join("tasks/port-final-review-task/prompt.md"))
                         .expect("final review prompt should load");
