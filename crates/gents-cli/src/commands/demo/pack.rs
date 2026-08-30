@@ -4346,6 +4346,12 @@ mod tests {
                 assert!(recon.contains("do not interleave more discovery"));
                 assert!(recon.contains("call `write_port_surface` exactly N times"));
                 assert!(recon.contains("N+1th write invalidates the run"));
+                let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
+                    .expect("plan prompt should load");
+                assert!(plan.contains("gents/{{ event.correlation }}/unit-<nn>"));
+                assert!(plan.contains("never copy the `:`"));
+                assert!(plan.contains("separators from `work_unit_id` into a branch"));
+                assert!(!plan.contains("`gents/<work_unit_id>`"));
                 let makefile = std::fs::read_to_string(pack.join("../../Makefile"))
                     .expect("repository Makefile should load");
                 assert!(makefile.contains("GROK_PORT_MIN_SURFACES ?= 13"));

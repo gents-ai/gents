@@ -9,5 +9,6 @@ write `status=ready` for a dummy unit — that would provision a git worktree.
 
 Copy `grok_wire` and `evidence` verbatim. Implementers cannot open
 grok-build. Stamp `repository_id` and `base_sha` from the surfaces. Set
-`branch` to a unique `gents/<work_unit_id>`. Call `read_port_recon_audit`, `read_port_surface`,
+`branch` to a unique Git-ref-safe `gents/<run-id>/unit-<nn>`; never copy the
+colon-separated `work_unit_id` into a branch. Call `read_port_recon_audit`, `read_port_surface`,
 `write_port_work_unit` per unit, and `write_port_plan` once.
