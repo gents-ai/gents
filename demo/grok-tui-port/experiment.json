@@ -1,6 +1,6 @@
 {
   "name": "grok-tui-port",
-  "description": "Map the Grok TUI wire from grok-build, implement in isolated git worktrees, code-review each sealed tree, serial-apply onto one trunk, live-prove with GLM, then open a PR",
+  "description": "Map the Grok TUI wire, fan out eight path-disjoint GLM writers and sealed reviews, serial-apply, semantically converge, full-review, live-prove, then open a PR",
   "init": {
     "inference_url": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8001/v1}",
     "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
@@ -46,6 +46,7 @@
       "port-review",
       "port-integrate",
       "port-integrate-skip",
+      "port-converge",
       "port-final-review",
       "port-live",
       "port-live-review",
@@ -91,6 +92,7 @@
       "port-implement",
       "port-review",
       "port-integrate",
+      "port-converge",
       "port-final-review",
       "port-live",
       "port-live-review",
@@ -130,8 +132,12 @@
         "required_tool_names": ["write_port_integrate_result"]
       },
       {
+        "task_id": "port-converge-task",
+        "required_tool_names": ["read_grok_port_job", "read_port_integrate_result", "read_port_implementation", "read_port_surface", "write_port_convergence_report"]
+      },
+      {
         "task_id": "port-final-review-task",
-        "required_tool_names": ["read_grok_port_job", "read_port_integrate_result", "read_port_surface", "write_port_final_review_report"]
+        "required_tool_names": ["read_grok_port_job", "read_port_convergence_report", "read_port_surface", "write_port_final_review_report"]
       },
       {
         "task_id": "port-live-task",
@@ -146,27 +152,19 @@
         "required_tool_names": ["read_grok_port_job", "read_port_live_report", "read_port_final_review_report", "write_port_pull_request"]
       }
     ],
-    "stage_tool_sequences": [
-      {
-        "trigger_id": "port-recon",
-        "boundary_tool_name": "write_port_surface",
-        "max_calls_before_boundary": 2,
-        "max_calls_per_message_before_boundary": 1,
-        "exact_boundary_calls": 13,
-        "allowed_at_or_after_boundary": ["write_port_surface"]
-      }
-    ],
+    "stage_tool_sequences": [],
     "source_edges": [],
     "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
     "collection_counts": {
       "PortSurface": 1,
       "PortReconAudit": 1,
       "PortPlan": 1,
-      "PortWorkUnit": 1,
-      "PortImplementation": 1,
-      "PortReview": 1,
-      "PortUnitClosure": 1,
-      "PortIntegrateResult": 1,
+      "PortWorkUnit": 8,
+      "PortImplementation": 8,
+      "PortReview": 8,
+      "PortUnitClosure": 8,
+      "PortIntegrateResult": 8,
+      "PortConvergenceReport": 1,
       "PortFinalReviewReport": 1,
       "PortLiveResult": 1,
       "PortLiveReport": 1,
@@ -207,6 +205,11 @@
         "collection": "PortIntegrateResult",
         "correlation_field": "run_id",
         "fields": ["integrate_id", "work_unit_id", "status", "summary"]
+      },
+      {
+        "collection": "PortConvergenceReport",
+        "correlation_field": "run_id",
+        "fields": ["status", "applied_count", "expected_count", "head_sha", "tests_run", "summary"]
       },
       {
         "collection": "PortFinalReviewReport",

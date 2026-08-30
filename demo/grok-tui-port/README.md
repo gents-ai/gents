@@ -1,15 +1,13 @@
 # Grok TUI port pack
 
 Map the Grok TUI wire from `grok-build`, audit the closed protocol ledger,
-implement a Gents-owned Grok leader shim in isolated git worktrees, directly review
-each small sealed route, serial-apply accepted diffs onto the operator checkout
-(one trunk), run the bundled full **code-review** graph on the committed
-combined result, prove that exact reviewed head with live GLM turns, then open
-one GitHub PR. The pack embeds the bundled `code-review` package at load time.
-Its parallel scanner role uses a separate hard-bounded inference profile, while
-coordinator stages retain the larger full-review budget. Small sealed units use
-one direct reviewer, while the final combined edge starts the full four-stage
-embedded graph.
+fan out eight path-disjoint implementation agents in isolated git worktrees,
+directly review every sealed slice in parallel, serial-apply accepted diffs
+onto the operator checkout, and give a dedicated convergence agent ownership
+of the semantic merge and compile/test commit. The pack then runs the bundled
+full **code-review** graph, proves that exact reviewed head with live GLM turns,
+and opens one GitHub PR. Small sealed slices use one direct reviewer; the final
+combined edge starts the full multi-stage embedded graph.
 
 This pack does not add DefraDB access-control policy and does not implement
 Grok permission UI. Threat model is reachability of the Gents server / leader
@@ -24,19 +22,21 @@ ACP traffic onto Gents documents; it does not launch Grok's own leader process.
 ```text
 GrokPortJob
   -> recon (ceiling: gents + grok-build) -> PortSurface*
-  -> recon-audit -> plan -> PortWorkUnit* (status=ready only)
-  -> CallbackBinding CreateWorkspace per ready unit
+  -> recon-audit -> plan -> exactly 8 path-disjoint PortWorkUnits
+  -> CallbackBinding CreateWorkspace per unit (8-way fanout)
        IsolatedWorkspace at <gents>/.gents/workspaces/gents-ws-<id>-<branch>
   -> implement ReadWrite -> host seal -> WorkspaceReceipt kind=writer
-  -> one-route review ReadOnly on the actual sealed dirty tree
+  -> per-slice review ReadOnly on each actual sealed dirty tree (parallel)
        git diff <base_sha>; mapped wire + targeted tests
        zero material findings -> PortUnitClosure accepted
        else blocked (no same-workspace rewrite; sealed trees are read-only)
   -> serial Integrate of accepted closures
        host ApplyDiff onto the operator checkout (one trunk HEAD)
        WorkspaceReceipt kind=integrator
-  -> full bundled code-review graph on the committed combined trunk
-       bounded repair commits; pin exact green HEAD
+  -> convergence agent on all 8 applied slices
+       reconcile interfaces; fmt; focused test/check; commit exact green HEAD
+  -> full bundled code-review graph on the convergence commit
+       focused repair commits; pin exact green HEAD
   -> build that exact HEAD in a separate run-owned live home
   -> stock grok --leader live GLM probes with exact surface-ID coverage
   -> live-review fail-closed
@@ -44,9 +44,10 @@ GrokPortJob
        verify PR head is the reviewed/live-tested head, never merge
 ```
 
-There is no host action that concatenates N worktrees into a new worktree.
-One trunk is the operator `RepositoryPlacement`, advanced by serial
-integrator receipts — the same mechanism as `demo/repo-maintenance`.
+There is no synthetic merge worktree. The host advances the operator
+`RepositoryPlacement` with serial integrator receipts, then the convergence
+agent performs the semantic merge on that one trunk. This separates mechanical
+patch application from compiler-driven integration and independent review.
 
 Recon is required to emit at least `attach`, `session`, `model`, `context`,
 `tool_call`, `subprocess`, `subagent`, and `interrupt`. Each `PortSurface`
@@ -66,7 +67,8 @@ base with `GROK_PORT_BASE_SHA`. The PR head is `GROK_PORT_BRANCH`
 
 The default inference pool is workstation-1 at
 `http://100.73.235.38:8001/v1`, with one shared 32-request concurrency cap
-across coordinators, implementers, and reviewers.
+across coordinators, the eight concurrent implementers, the eight concurrent
+sealed reviewers, convergence, and the final review graph.
 
 `make grok-port` verifies its `/models` endpoint advertises
 `GLM-5.3-Flash-NVFP4` at context length 524288 before it seeds any documents.

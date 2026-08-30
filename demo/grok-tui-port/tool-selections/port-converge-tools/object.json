@@ -1,7 +1,7 @@
 {
-  "selection_id": "port-final-review-tools",
+  "selection_id": "port-converge-tools",
   "agent_did": "did:key:zGrokTuiPortAgentPlaceholder00000000000000000000000",
-  "display_name": "Final review: full graph plus focused trunk repair",
+  "display_name": "Converge: operator checkout semantic merge and gates",
   "enable_file_tools": true,
   "file_tools_mode": "ReadWrite",
   "file_tool_root": "${GENTS_GROK_PORT_GENTS_ROOT:-.}",
@@ -20,7 +20,7 @@
   "subagent_targets": [],
   "backgroundable_tool_names": ["bash_unrestricted"],
   "write_tools": [],
-  "datastore_tool_surface_ids": ["port-final-review-io"],
+  "datastore_tool_surface_ids": ["port-converge-io"],
   "subagent_spawn_enabled": false,
   "orchestration_enabled": false,
   "subagent_steering_enabled": false,

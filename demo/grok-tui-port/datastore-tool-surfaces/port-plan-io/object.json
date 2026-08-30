@@ -23,7 +23,7 @@
     {
       "tool_name": "write_port_work_unit",
       "collection": "PortWorkUnit",
-      "description": "Create one implement or shaped-stub work unit clustered from PortSurface rows.",
+      "description": "Create one path-disjoint implementation slice from PortSurface rows.",
       "output_obligation": {"scope": "trigger", "minimum_writes": 1, "expected_count_field": "expected_total"},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
