@@ -4396,6 +4396,26 @@ mod tests {
                 )
                 .expect("recon profile should load");
                 assert_eq!(recon_profile["max_turns"], 30);
+                let implement_prompt =
+                    std::fs::read_to_string(pack.join("tasks/port-implement-task/prompt.md"))
+                        .expect("implement prompt should load");
+                assert!(implement_prompt.contains("use at most 40 filesystem"));
+                assert!(implement_prompt.contains("By 48 calls"));
+                assert!(implement_prompt.contains("do not change schemas, Lean proofs"));
+                assert!(implement_prompt.contains("fresh `grok_shim` module"));
+                let implement_behavior = read_pack_json_defaults(
+                    &pack.join("agent-behaviors/port-implement/object.json"),
+                )
+                .expect("implement behavior should load");
+                assert_eq!(
+                    implement_behavior["inference_profile_id"],
+                    "grok-port-implement-profile"
+                );
+                let implement_profile = read_pack_json_defaults(
+                    &pack.join("inference-profiles/grok-port-implement-profile/object.json"),
+                )
+                .expect("implement profile should load");
+                assert_eq!(implement_profile["max_turns"], 256);
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
                 assert!(plan.contains("gents/{{ event.correlation }}/unit-<nn>"));
