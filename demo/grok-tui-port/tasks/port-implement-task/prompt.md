@@ -53,18 +53,31 @@ server: it binds `tokio::net::UnixListener`, reads Grok `ClientMessage`, and
 writes `ServerMessage`. Never launch Grok and never implement a
 `UnixStream::connect` client.
 
-Immediately after the scaffold is complete, make the slice-1 tracked edit:
-expand `protocol.rs` and `server.rs` with the framed async read/write helpers,
-fresh serde wire envelopes, UnixListener accept path, register/registered,
-ping/pong, disconnect, and their tests. This edit needs only the surface ledger,
-`tokio`, and `serde_json`; do not search the repository or run Cargo first.
+Immediately after the scaffold is complete, split slice 1 into two mandatory
+single-file tracked edits on consecutive inferences:
+
+1a. Replace only `protocol.rs` with at most 220 lines: framed async read/write
+helpers, the smallest fresh serde client/server envelopes needed for register,
+registered, ping, pong, disconnect, ACP pass-through, and focused codec/JSON
+tests. Do not write or call any other file/tool in this inference.
+1b. On the next inference, replace only `server.rs` with at most 220 lines:
+UnixListener bind/accept, register/registered, ping/pong, disconnect and focused
+duplex/listener tests using the protocol types. Do not write or call any other
+file/tool in this inference.
+
+These edits need only the surface ledger, `tokio`, `serde`, and `serde_json`;
+do not search the repository or run Cargo first. Never retry a successful
+write. If a write fails because its arguments were truncated, shorten that one
+file below its line ceiling before the bounded resample; never rewrite the old
+scaffold unchanged.
 
 Do not run filesystem searches or shell commands before the scaffold, and do
 not use the shell to edit files. After every tracked edit, use at most 12
 individual filesystem/search/shell calls before the next tracked edit; parallel
 functions count individually. Follow these slices without redesigning them:
 
-1. listener + register/registered + ping/pong + disconnect, then tests
+1. protocol framing/envelopes, then listener + register/registered +
+   ping/pong + disconnect, each as the bounded edit above, then tests
 2. ACP initialize and session/new/load state with event-id dedup, then tests
 3. session/prompt via `request_helpers::create_agent_request` and
    session/cancel via `gents::interrupt_request`, then tests

@@ -4597,6 +4597,9 @@ mod tests {
                 assert!(implement_prompt.contains("Do not search Cargo registries"));
                 assert!(implement_prompt.contains("bounded `EmbeddedNode::execute` polling"));
                 assert!(implement_prompt.contains("Immediately after the scaffold is complete"));
+                assert!(implement_prompt.contains("1a. Replace only `protocol.rs`"));
+                assert!(implement_prompt.contains("1b. On the next inference"));
+                assert!(implement_prompt.contains("at most 220 lines"));
                 assert!(implement_prompt.contains("request_helpers.rs:32-45,295-424"));
                 assert!(implement_prompt.contains("Do not run `cargo`, `rustc`"));
                 assert!(implement_prompt.contains("without piping through `tail`"));
@@ -4615,7 +4618,8 @@ mod tests {
                 )
                 .expect("implement profile should load");
                 assert_eq!(implement_profile["max_turns"], 256);
-                assert_eq!(implement_profile["max_output_tokens"], 16384);
+                assert_eq!(implement_profile["max_output_tokens"], 32768);
+                assert_eq!(implement_profile["retry_max_resample"], 2);
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
                 assert!(plan.contains("gents/{{ event.correlation }}/unit-<nn>"));
