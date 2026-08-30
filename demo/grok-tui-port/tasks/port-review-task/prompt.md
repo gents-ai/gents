@@ -29,6 +29,15 @@ incorrect lifecycle mapping, unsafe error/cancellation behavior, or absent
 tests for the route. Do not perform a broad four-lens repository review here;
 the combined committed trunk receives that review after integration.
 
+For this leader route, explicitly reject any implementation that lacks the
+held sibling lock (`O_NOFOLLOW`, `0600`, PID, nonblocking exclusive `flock`),
+atomic `0700` staging plus `0600` socket publication, or a near-`sun_path`
+test. Reject a bare/unqualified registered version, session-wide message replay,
+unescaped GraphQL interpolation, connection-global JSON-RPC ids, early prompt
+responses, disconnects that leave requests running, or `println!`/`eprintln!`.
+Verify subagent get/list-running/cancel use the audited successful shaped
+not-found/empty results rather than generic method-not-found errors.
+
 This request has a hard budget of 24 individual tool calls. First read the
 implementation and surfaces, then establish the diff, read each changed shim
 file once (a second page is allowed only when a file response is truncated),
