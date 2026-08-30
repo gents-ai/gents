@@ -4909,12 +4909,16 @@ mod tests {
                 assert!(implement_prompt.contains("Immediately after the scaffold is complete"));
                 assert!(implement_prompt.contains("1a. Replace only `protocol.rs`"));
                 assert!(implement_prompt.contains("1b. On the next inference"));
-                assert!(implement_prompt.contains("at most 220 lines"));
+                assert!(implement_prompt.contains("at most 300 lines"));
+                assert!(implement_prompt.contains("at most 420 lines"));
                 assert!(implement_prompt.contains("request_helpers.rs:32-45,295-424"));
                 assert!(implement_prompt.contains("Do not run `cargo`, `rustc`"));
                 assert!(implement_prompt
                     .contains("`RUSTC_WRAPPER= TMPDIR=\"$PWD/target\" cargo test -p gents-cli --lib grok_shim`"));
-                assert!(implement_prompt.contains("up to four total executions"));
+                assert!(implement_prompt.contains("up to six total executions"));
+                assert!(implement_prompt.contains("Never start a seventh execution"));
+                assert!(implement_prompt.contains("O_NOFOLLOW"));
+                assert!(implement_prompt.contains("sockaddr_un.sun_path"));
                 assert!(implement_prompt.contains("`x.ai/compact_conversation`"));
                 assert!(implement_prompt.contains("never make a 13th discovery call"));
                 assert!(implement_prompt.contains("do not use or search for"));

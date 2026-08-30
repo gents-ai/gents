@@ -35,6 +35,43 @@ redesigning it:
   methods return explicit errors or not-found results and never synthesize
   runtime documents; permission UI is out of scope
 
+The previous live implementation attempt exposed requirements that are now
+fixed acceptance criteria for this unit:
+
+- Grok elects a sibling leader with `<socket>.lock`, not by socket ownership
+  alone. Open that exact lock with `O_NOFOLLOW`, mode `0600`, take
+  `flock(LOCK_EX | LOCK_NB)`, replace its contents with the current PID, and
+  keep the open `File` alive for the entire listener task. A second shim must
+  fail while the first owns the lock.
+- Publish the socket securely: create an atomic private staging directory with
+  mode `0700`, bind a deliberately short staging basename on the same
+  filesystem, chmod the socket to `0600`, and rename it into place. This must
+  work when the requested public path is near `sockaddr_un.sun_path` length;
+  include a near-limit path test. Never follow a lock symlink or expose a
+  permissive socket between bind and chmod.
+- The registered version is
+  `format!("gents-{}", env!("CARGO_PKG_VERSION"))`; the bare string `gents` is
+  not acceptable. Resolve the model name, context window, and optional behavior
+  from the bound runtime configuration rather than treating the live GLM
+  defaults as universal configuration.
+- JSON-RPC ids and pending prompts are connection-scoped. Reject a concurrent
+  second prompt for one session, defer the `session/prompt` response until its
+  own request terminalizes, cancel only the matching active prompt, and
+  interrupt outstanding prompts when that pager disconnects.
+- Every inline GraphQL value uses `gents::graphql::escape_graphql_string`.
+  Project `AgentResponse` by request id (latest row), `AgentMessage` by request
+  id ordered by sequence, `AgentToolCall` by request id, and child
+  `AgentRequest` by `caused_by_parent_request_id`. Do not replay all prior
+  session messages on every prompt. Treat only `complete`, `error`, or a
+  non-empty `interrupted_at` as terminal; streaming overlays and durable
+  materialized assistant messages must not be duplicated across tool turns.
+- The no-op subagent controls are successful shaped results:
+  `x.ai/subagent/get` returns `{subagentId,outcome:{kind:"not_found"}}`,
+  `list_running` returns `{sessionId,running:[]}`, and `cancel` returns
+  `{subagentId,cancelled:false,outcome:{kind:"not_found"}}`. Terminal methods
+  remain explicit method-not-found stubs. Use `tracing`, never `println!` or
+  `eprintln!`.
+
 The first tool batch contains only the two required datastore reads above. The
 next tool batch must use `write_file` or `edit_file` to make these tracked
 scaffold edits:
@@ -58,12 +95,13 @@ writes `ServerMessage`. Never launch Grok and never implement a
 Immediately after the scaffold is complete, split slice 1 into two mandatory
 single-file tracked edits on consecutive inferences:
 
-1a. Replace only `protocol.rs` with at most 220 lines: framed async read/write
+1a. Replace only `protocol.rs` with at most 300 lines: framed async read/write
 helpers, the smallest fresh serde client/server envelopes needed for register,
 registered, ping, pong, disconnect, ACP pass-through, and focused codec/JSON
 tests. Do not write or call any other file/tool in this inference.
-1b. On the next inference, replace only `server.rs` with at most 220 lines:
-UnixListener bind/accept, register/registered, ping/pong, disconnect and focused
+1b. On the next inference, replace only `server.rs` with at most 420 lines:
+UnixListener bind/accept, sibling lock ownership, secure near-limit-path socket
+publication, register/registered, ping/pong, disconnect and focused
 duplex/listener tests using the protocol types. Do not write or call any other
 file/tool in this inference.
 
@@ -107,9 +145,13 @@ slice begins instead of searching for symbols:
 - cancellation pattern:
   `crates/gents-cli/src/commands/codex_shim/turn/active.rs:136-146`; call
   `gents::interrupt_request(node.as_ref(), request_id)`
-- server CLI seam: `crates/gents-cli/src/cli/args.rs:735-790`
+- server CLI seam: `crates/gents-cli/src/cli/args.rs:760-845`
 - embedded node creation and shim launch seam:
   `crates/gents-cli/src/commands/serve.rs:378-410,540-565,681-770,850-870`
+- bound behavior/model/context helpers which may receive only the smallest
+  visibility/re-export change needed for reuse:
+  `crates/gents-cli/src/commands/codex_shim.rs:1-80` and
+  `crates/gents-cli/src/commands/codex_shim/bound_behavior.rs:1-130`
 - direct bounded query examples:
   `crates/gents-cli/src/commands/codex_shim/background.rs:316-350,450-490`;
   these are the complete query signature: import
@@ -132,8 +174,11 @@ pipe, redirection, separator, wrapper, `echo`, or preceding shell probe. Its rea
 exit status must be preserved. Do not use the shell for grep, git inspection,
 formatting, or any other check; use native tools. If it returns real source
 compiler/test diagnostics, fix every diagnostic and rerun the identical command,
-up to four total executions. If it is `policyDenied` or reports a temporary-file
-sandbox failure, do not diagnose or retry it.
+up to six total executions. A tool-liveness timeout during the initial cold
+dependency build may be retried with the identical command and still counts
+toward six; do not use it as permission to change the command. If it is
+`policyDenied` or reports a temporary-file sandbox failure, do not diagnose or
+retry it. Never start a seventh execution, even after fixing a test failure.
 The host/reviewer will run the full package gate outside the worker sandbox.
 
 Before the first Cargo execution, make exactly one native grep call rooted at
