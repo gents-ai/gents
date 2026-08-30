@@ -14,10 +14,10 @@
     },
     {
       "kind": "read",
-      "tool_name": "read_port_integrate_result",
-      "collection": "PortIntegrateResult",
-      "description": "Load the closed serial integration ledger.",
-      "fields": ["integrate_id", "work_unit_id", "workspace_id", "status", "expected_total", "summary"],
+      "tool_name": "read_port_convergence_report",
+      "collection": "PortConvergenceReport",
+      "description": "Load the exact compiled semantic-merge head.",
+      "fields": ["status", "applied_count", "expected_count", "head_sha", "tests_run", "summary"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

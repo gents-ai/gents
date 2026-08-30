@@ -1,9 +1,9 @@
 {
   "profile_id": "grok-port-review-profile",
-  "display_name": "Bounded sealed Grok unit review profile",
+  "display_name": "Sealed Grok slice review profile",
   "context_window": ${GENTS_GROK_PORT_CONTEXT_WINDOW:-524288},
   "max_output_tokens": ${GENTS_GROK_PORT_REVIEW_MAX_OUTPUT_TOKENS:-32768},
-  "max_turns": ${GENTS_GROK_PORT_REVIEW_MAX_TURNS:-16},
+  "max_turns": ${GENTS_GROK_PORT_REVIEW_MAX_TURNS:-1000000},
   "temperature": ${GENTS_GROK_PORT_REVIEW_TEMPERATURE:-0.1},
   "top_p": ${GENTS_GROK_PORT_TOP_P:-0.95},
   "top_k": null,
