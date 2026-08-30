@@ -35,21 +35,33 @@ the socket extension for its sibling lock (`leader.sock` -> `leader.lock`, not
 lock, PID, and nonblocking exclusive `flock`. Reject staging created only under
 the requested parent: publication must use a short `0700` directory at a
 same-device ancestor, a `0600` socket, and separate near-`sun_path` tests for a
-long parent and long filename. Reject a bare/unqualified registered version,
-session-wide message replay,
+long parent and long filename. Reject if the lock guard is owned only by the
+synchronous spawn function rather than the live accept-loop lifetime, or if
+the regression test exercises `acquire_leader_lock` in isolation instead of
+the production listener spawn path. The path tests must use an explicit short
+Unix temp root and actually bind/connect; conditional skips and
+staging-selection-only fallbacks are insufficient. Verify the client sends
+`register` before the server sends `registered`, with a focused ordering test;
+proactive `registered` on accept is a material protocol inversion. Reject a
+bare/unqualified registered version, session-wide message replay,
 unescaped GraphQL interpolation, connection-global JSON-RPC ids, early prompt
 responses, disconnects that leave requests running (especially disconnect
 before the submitted request id is recorded or a failed outbound send after
-submission), or `println!`/`eprintln!`.
+submission), or a cancel-before-request-id path that interrupts but does not
+resolve `stopReason="cancelled"`, clear the registry entry, and permit the next
+prompt. Reject `println!`/`eprintln!` in any changed file, including
+`serve.rs`, not only files below `grok_shim/`.
 Verify subagent get/list-running/cancel use the audited successful shaped
 not-found/empty results rather than generic method-not-found errors.
 
 This request has a hard budget of 24 individual tool calls. First read the
 implementation and surfaces, then establish the diff, read each changed shim
 file once (a second page is allowed only when a file response is truncated),
+read the changed serve/CLI wiring needed to trace lock ownership and logging,
 and use one LSP diagnostics batch on changed Rust files. Do not search for
 definitions already established by the implementation anchors, do not inspect
-unchanged `serve.rs` diagnostics, and do not use shell grep/head/sed/find. If
+unrelated unchanged `serve.rs` diagnostics, and do not use shell
+grep/head/sed/find. If
 `tests_run` says Cargo was policy-denied, did not execute, or its last executed
 focused run failed, reject
 without attempting Cargo from this ReadOnly placement. Stop after the first
