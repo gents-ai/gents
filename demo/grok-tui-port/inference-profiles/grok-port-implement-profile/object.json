@@ -2,7 +2,7 @@
   "profile_id": "grok-port-implement-profile",
   "display_name": "Bounded Grok TUI implementation profile",
   "context_window": ${GENTS_GROK_PORT_CONTEXT_WINDOW:-524288},
-  "max_output_tokens": ${GENTS_GROK_PORT_IMPLEMENT_MAX_OUTPUT_TOKENS:-32768},
+  "max_output_tokens": ${GENTS_GROK_PORT_IMPLEMENT_MAX_OUTPUT_TOKENS:-65536},
   "max_turns": ${GENTS_GROK_PORT_IMPLEMENT_MAX_TURNS:-256},
   "temperature": ${GENTS_GROK_PORT_IMPLEMENT_TEMPERATURE:-0.2},
   "top_p": ${GENTS_GROK_PORT_TOP_P:-0.95},

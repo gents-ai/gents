@@ -4653,7 +4653,7 @@ mod tests {
                 )
                 .expect("implement profile should load");
                 assert_eq!(implement_profile["max_turns"], 256);
-                assert_eq!(implement_profile["max_output_tokens"], 32768);
+                assert_eq!(implement_profile["max_output_tokens"], 65536);
                 assert_eq!(implement_profile["retry_max_resample"], 2);
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
