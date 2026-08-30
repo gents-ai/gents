@@ -9,7 +9,7 @@
   "backend_id": "grok-port-backend-ws1",
   "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
   "tool_selection_id": "port-review-tools",
-  "inference_profile_id": "grok-port-profile",
+  "inference_profile_id": "grok-port-review-profile",
   "compaction_strategy": "StripThenSummarize",
   "compaction_threshold": ${GENTS_GROK_PORT_COMPACTION_THRESHOLD:-0.762939453125},
   "enabled": true,

@@ -7,6 +7,12 @@
   "file_tool_root": "${GENTS_GROK_PORT_GENTS_ROOT:-.}",
   "enable_bash": true,
   "bash_mode": "ReadOnly",
+  "command_allowed_argv_prefixes": [
+    "git status",
+    "git rev-parse",
+    "git diff",
+    "git ls-files"
+  ],
   "command_execution_policy": "read_only",
   "command_network_mode": "disabled",
   "cli_tool_names": [],
