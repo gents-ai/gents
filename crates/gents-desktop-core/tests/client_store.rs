@@ -55,11 +55,7 @@ fn store_indexes_conversations_and_runtimes() {
         ],
         runtimes: vec![AgentRuntimeRow {
             agent_did: "did:test:amy".to_string(),
-            process_state: Some("online".to_string()),
             reconcile_phase: None,
-            active_generation: None,
-            router_generation: None,
-            default_behavior_id: None,
             behavior_executor_capacity: None,
             behavior_executor_queue_depth: None,
             behavior_executor_status_json: None,
@@ -77,8 +73,8 @@ fn store_indexes_conversations_and_runtimes() {
     assert_eq!(
         store
             .latest_runtime("did:test:amy")
-            .and_then(|runtime| runtime.process_state.as_deref()),
-        Some("online")
+            .and_then(|runtime| runtime.updated_at.as_deref()),
+        Some("2026-04-14T00:05:00Z")
     );
 }
 

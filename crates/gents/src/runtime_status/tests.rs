@@ -17,11 +17,7 @@ use crate::lean_vocab_test::{
 
 #[derive(Debug, Deserialize)]
 struct AgentRuntimeRow {
-    process_state: String,
     reconcile_phase: String,
-    active_generation: i64,
-    router_generation: i64,
-    default_behavior_id: String,
     behavior_executor_capacity: i64,
     behavior_executor_queue_depth: i64,
     behavior_executor_status_json: String,
@@ -37,6 +33,28 @@ struct AgentBehaviorReadinessRow {
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+}
+
+#[test]
+fn agent_runtime_writer_source_cannot_serialize_readiness_authority() {
+    let source = include_str!("../runtime_status.rs");
+    for forbidden in [
+        "row.process_state",
+        "row.active_generation",
+        "row.router_generation",
+        "row.default_behavior_id",
+        "process_state: \"{process_state}\"",
+        "active_generation: {active_generation}",
+        "router_generation: {router_generation}",
+        "default_behavior_id: \"{default_behavior_id}\"",
+        "runnable_behavior_count",
+        "unavailable_behavior_count",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "AgentRuntime writer regained readiness-owned source fragment {forbidden}"
+        );
+    }
 }
 
 fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
@@ -90,11 +108,7 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
     let query = format!(
         r#"{{
             AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
-                process_state
                 reconcile_phase
-                active_generation
-                router_generation
-                default_behavior_id
                 behavior_executor_capacity
                 behavior_executor_queue_depth
                 behavior_executor_status_json
@@ -300,11 +314,16 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
         ),
     }
 
-    let row = fetch_runtime_row(node.as_ref(), &agent_did).await;
+    let readiness = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
+        &fetch_behavior_readiness_row(node.as_ref(), &agent_did)
+            .await
+            .snapshot_json,
+    )
+    .expect("decode process readiness");
     assert_eq!(
-        row.process_state, case.to,
-        "generated Process transition {} expected {} -> {} classified as {} via {:?}, got persisted process_state={}",
-        case.name, case.from, case.to, case.classification, case.action, row.process_state
+        readiness.process_state.as_str(), case.to,
+        "generated Process transition {} expected {} -> {} classified as {} via {:?}, got authoritative process_state={}",
+        case.name, case.from, case.to, case.classification, case.action, readiness.process_state.as_str()
     );
     owner.close().await.unwrap();
 }
@@ -386,7 +405,7 @@ fn runtime_reconcile_state_machine_contract_is_complete() {
 }
 
 #[tokio::test]
-async fn runtime_status_persists_process_and_reconcile_state() {
+async fn runtime_status_persists_diagnostics_while_readiness_owns_lifecycle() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -421,18 +440,28 @@ async fn runtime_status_persists_process_and_reconcile_state() {
             behavior_executor_capacities: HashMap::new(),
             behavior_executor_queue_capacities: HashMap::new(),
         })
-        .await;
-    status.publish_router_generation(1).await;
+        .await
+        .unwrap();
+    status.publish_router_generation(1).await.unwrap();
     status.set_process_state(ProcessLifecycleState::Ready).await;
 
     let row = fetch_runtime_row(node.as_ref(), "did:test:status-test").await;
-    assert_eq!(row.process_state, "ready");
     assert_eq!(row.reconcile_phase, "idle");
-    assert_eq!(row.active_generation, 1);
-    assert_eq!(row.router_generation, 1);
-    assert_eq!(row.default_behavior_id, "code");
     assert_eq!(row.last_reconcile_result, "startup");
     assert!(row.last_reconcile_error.is_empty());
+    let readiness = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
+        &fetch_behavior_readiness_row(node.as_ref(), "did:test:status-test")
+            .await
+            .snapshot_json,
+    )
+    .expect("decode authoritative readiness");
+    assert_eq!(
+        readiness.process_state,
+        gents_protocol::row::BehaviorReadinessProcessState::Ready
+    );
+    assert_eq!(readiness.active_generation, 1);
+    assert_eq!(readiness.router_generation, 1);
+    assert_eq!(readiness.default_behavior_id, "code");
 }
 
 #[tokio::test]
@@ -465,7 +494,8 @@ async fn runtime_status_persists_behavior_executor_capacity_and_queue_depth() {
             behavior_executor_capacities: HashMap::from([("general".to_string(), 3)]),
             behavior_executor_queue_capacities: HashMap::from([("general".to_string(), 4)]),
         })
-        .await;
+        .await
+        .unwrap();
 
     let row = fetch_runtime_row(node.as_ref(), "did:test:executor-status").await;
     assert_eq!(row.behavior_executor_capacity, 3);
@@ -512,7 +542,7 @@ async fn executor_metrics_do_not_republish_unchanged_behavior_readiness() {
     };
     let agent_did = "did:test:readiness-metric-owner";
     let status = RuntimeStatusHandle::new(node.clone(), agent_did);
-    status.publish_startup_snapshot(&snapshot).await;
+    status.publish_startup_snapshot(&snapshot).await.unwrap();
     let before = fetch_behavior_readiness_row(node.as_ref(), agent_did).await;
 
     tx.try_send(status_test_request("metric-only-change"))
@@ -572,21 +602,22 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         behavior_executor_queue_capacities: HashMap::new(),
     };
 
-    status.publish_startup_snapshot(&startup).await;
+    status.publish_startup_snapshot(&startup).await.unwrap();
     let status_for_snapshot = status.clone();
     let status_for_router = status.clone();
     let publish_snapshot = tokio::spawn(async move {
         status_for_snapshot.publish_applied(&applied).await;
     });
     let publish_router = tokio::spawn(async move {
-        status_for_router.publish_router_generation(2).await;
+        status_for_router
+            .publish_router_generation(2)
+            .await
+            .unwrap();
     });
     publish_snapshot.await.unwrap();
     publish_router.await.unwrap();
 
     let row = fetch_runtime_row(node.as_ref(), "did:test:status-serialize").await;
-    assert_eq!(row.active_generation, 2);
-    assert_eq!(row.router_generation, 2);
     assert_eq!(row.last_reconcile_result, "applied");
     let readiness = fetch_behavior_readiness_row(node.as_ref(), "did:test:status-serialize").await;
     let readiness: gents_protocol::row::BehaviorReadinessSnapshot =
@@ -645,23 +676,49 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         behavior_executor_queue_capacities: HashMap::new(),
     };
 
-    status.publish_startup_snapshot(&startup).await;
+    status.publish_startup_snapshot(&startup).await.unwrap();
     status
         .publish_router_generation(publish.pre_router_generation as u64)
-        .await;
+        .await
+        .unwrap();
     status.set_reconcile_phase(ReconcilePhase::Applying).await;
     status.publish_applied(&applied).await;
     let row = fetch_runtime_row(node.as_ref(), "did:test:runtime-contract").await;
     assert_eq!(row.reconcile_phase, publish.post_phase.as_str());
-    assert_eq!(row.active_generation, publish.post_active_generation as i64);
-    assert_eq!(row.router_generation, publish.post_router_generation as i64);
     assert_eq!(row.last_reconcile_result, "applied");
+    let readiness = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
+        &fetch_behavior_readiness_row(node.as_ref(), "did:test:runtime-contract")
+            .await
+            .snapshot_json,
+    )
+    .expect("decode published runtime contract readiness");
+    assert_eq!(
+        readiness.active_generation,
+        publish.post_active_generation as u64
+    );
+    assert_eq!(
+        readiness.router_generation,
+        publish.post_router_generation as u64
+    );
 
     status
         .publish_router_generation(router.post_router_generation as u64)
-        .await;
+        .await
+        .unwrap();
     let row = fetch_runtime_row(node.as_ref(), "did:test:runtime-contract").await;
     assert_eq!(row.reconcile_phase, router.post_phase.as_str());
-    assert_eq!(row.active_generation, router.post_active_generation as i64);
-    assert_eq!(row.router_generation, router.post_router_generation as i64);
+    let readiness = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
+        &fetch_behavior_readiness_row(node.as_ref(), "did:test:runtime-contract")
+            .await
+            .snapshot_json,
+    )
+    .expect("decode router-observed readiness");
+    assert_eq!(
+        readiness.active_generation,
+        router.post_active_generation as u64
+    );
+    assert_eq!(
+        readiness.router_generation,
+        router.post_router_generation as u64
+    );
 }

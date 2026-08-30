@@ -271,7 +271,11 @@ fn unknown_projection(
     }
 }
 
-fn decode_canonical_readiness_snapshot(
+/// Decode and validate the runtime-authored row without imposing admission.
+/// Operational views use this for lifecycle/generation observability while
+/// `project_behavior_readiness_summary` additionally requires Ready and an
+/// aligned router generation.
+pub fn decode_behavior_readiness_snapshot(
     row: &AgentBehaviorReadinessRow,
     expected_agent_did: &str,
 ) -> Result<BehaviorReadinessSnapshot, BehaviorReadinessUnknownReason> {
@@ -321,7 +325,7 @@ pub fn project_behavior_readiness_summary(
             BehaviorReadinessUnknownReason::ReadinessMissing,
         );
     };
-    let snapshot = match decode_canonical_readiness_snapshot(row, expected_agent_did) {
+    let snapshot = match decode_behavior_readiness_snapshot(row, expected_agent_did) {
         Ok(snapshot) => snapshot,
         Err(reason) => return ProjectedBehaviorReadinessSummary::Unknown(reason),
     };
@@ -394,7 +398,7 @@ pub fn project_behavior_readiness<'a>(
             BehaviorReadinessUnknownReason::ReadinessMissing,
         );
     };
-    let snapshot = match decode_canonical_readiness_snapshot(row, expected_agent_did) {
+    let snapshot = match decode_behavior_readiness_snapshot(row, expected_agent_did) {
         Ok(snapshot) => snapshot,
         Err(reason) => return unknown_projection(behavior_ids, reason),
     };

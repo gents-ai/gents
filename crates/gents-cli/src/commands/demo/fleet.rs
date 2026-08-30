@@ -7,6 +7,9 @@ use tokio::process::{Child, Command};
 
 use gents::agent::p2p_reconcile::{resolve_template, SOURCE_OPERATOR};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::row::{
+    decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow, BehaviorReadinessSnapshot,
+};
 
 use crate::graphql_access::post_graphql;
 
@@ -98,8 +101,8 @@ pub(super) fn spawn_server_with_args_and_env(
 
 /// `/healthz` answering only proves the node HTTP server is up; the runtime
 /// (and the schemas the p2p subcommands query, e.g. AgentNetwork before a
-/// pairings join) is ready strictly later. Gate on AgentRuntime reaching
-/// `ready` before driving CLI subcommands at this node (#990 — the pattern
+/// pairings join) is ready strictly later. Gate on authoritative behavior
+/// readiness before driving CLI subcommands at this node (#990 — the pattern
 /// from #935/#926).
 pub(super) async fn wait_runtime_ready(
     graphql: &str,
@@ -107,7 +110,7 @@ pub(super) async fn wait_runtime_ready(
     server: &mut Child,
 ) -> Result<()> {
     let query = format!(
-        r#"{{ AgentRuntime(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{ process_state }} }}"#,
+        r#"{{ AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{ agent_did snapshot_json updated_at }} }}"#,
         escape_graphql_string(agent_did)
     );
     // 180s: a second node cold-starts a full DefraDB + runtime process, and on
@@ -115,11 +118,11 @@ pub(super) async fn wait_runtime_ready(
     // minutes. Bounded and explicit — on expiry the error names the node.
     for _ in 0..360 {
         if let Ok(resp) = post_graphql(graphql, &query).await {
-            if resp
-                .pointer("/data/AgentRuntime/0/process_state")
-                .and_then(Value::as_str)
-                == Some("ready")
-            {
+            if readiness_snapshot(&resp, agent_did).is_some_and(|snapshot| {
+                snapshot.process_state.accepts_work()
+                    && snapshot.active_generation > 0
+                    && snapshot.router_generation == snapshot.active_generation
+            }) {
                 return Ok(());
             }
         }
@@ -604,14 +607,15 @@ async fn config_tools(bin: &Path, graphql: &str, did: &str, extra: &[&str]) -> R
 }
 
 async fn runtime_generation(graphql: &str) -> i64 {
-    post_graphql(graphql, "{ AgentRuntime { active_generation } }")
-        .await
-        .ok()
-        .and_then(|r| {
-            r.pointer("/data/AgentRuntime/0/active_generation")
-                .and_then(Value::as_i64)
-        })
-        .unwrap_or(0)
+    post_graphql(
+        graphql,
+        "{ AgentBehaviorReadiness(limit: 1) { agent_did snapshot_json updated_at } }",
+    )
+    .await
+    .ok()
+    .and_then(|response| readiness_snapshot_for_first_row(&response))
+    .and_then(|snapshot| i64::try_from(snapshot.active_generation).ok())
+    .unwrap_or(0)
 }
 
 async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) -> Result<()> {
@@ -620,22 +624,19 @@ async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) -> Result<(
     for _ in 0..80 {
         match post_graphql(
             graphql,
-            "{ AgentRuntime { active_generation reconcile_phase } }",
+            "{ AgentBehaviorReadiness(limit: 1) { agent_did snapshot_json updated_at } }",
         )
         .await
         {
             Ok(resp) => {
                 last = resp;
                 last_error = None;
-                let generation = last
-                    .pointer("/data/AgentRuntime/0/active_generation")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0);
-                let phase = last
-                    .pointer("/data/AgentRuntime/0/reconcile_phase")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                if generation > prev_generation && phase == "idle" {
+                if readiness_snapshot_for_first_row(&last).is_some_and(|snapshot| {
+                    i64::try_from(snapshot.active_generation)
+                        .is_ok_and(|generation| generation > prev_generation)
+                        && snapshot.process_state.accepts_work()
+                        && snapshot.router_generation == snapshot.active_generation
+                }) {
                     return Ok(());
                 }
             }
@@ -644,8 +645,27 @@ async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) -> Result<(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     bail!(
-        "timed out waiting for AgentRuntime generation to advance beyond {prev_generation} and return idle at {graphql}; last response={last}; last error={last_error:?}"
+        "timed out waiting for behavior readiness generation to advance beyond {prev_generation} and align its router at {graphql}; last response={last}; last error={last_error:?}"
     )
+}
+
+fn readiness_snapshot(
+    response: &Value,
+    expected_agent_did: &str,
+) -> Option<BehaviorReadinessSnapshot> {
+    let row = response
+        .pointer("/data/AgentBehaviorReadiness/0")
+        .cloned()
+        .and_then(|row| serde_json::from_value::<AgentBehaviorReadinessRow>(row).ok())?;
+    decode_behavior_readiness_snapshot(&row, expected_agent_did).ok()
+}
+
+fn readiness_snapshot_for_first_row(response: &Value) -> Option<BehaviorReadinessSnapshot> {
+    let row = response
+        .pointer("/data/AgentBehaviorReadiness/0")
+        .cloned()
+        .and_then(|row| serde_json::from_value::<AgentBehaviorReadinessRow>(row).ok())?;
+    decode_behavior_readiness_snapshot(&row, &row.agent_did).ok()
 }
 
 pub(super) async fn desktop(fleet: &Fleet) -> Result<()> {

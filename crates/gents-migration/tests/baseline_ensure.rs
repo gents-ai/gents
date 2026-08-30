@@ -114,7 +114,7 @@ fn default_baseline_covers_every_protocol_collection_once() {
 }
 
 #[tokio::test]
-async fn fresh_agent_runtime_baseline_has_no_duplicate_readiness_counts() {
+async fn fresh_agent_runtime_baseline_is_diagnostics_only() {
     let node = fresh_node().await;
     ensure_migrations(node.as_ref())
         .await
@@ -125,7 +125,7 @@ async fn fresh_agent_runtime_baseline_has_no_duplicate_readiness_counts() {
         .expect("AgentRuntime installed");
     assert_eq!(
         runtime.version_id,
-        "bafyreidpwzqb72kwq4f7qi4jyvmvoe53ofklzyncvmx2pgiirjvg7powce"
+        "bafyreidb7aoppwicwdsujra6iqgejtxeohiyyx4ylif6bsyllvt2sukrpe"
     );
     let field_names = runtime
         .fields
@@ -134,6 +134,11 @@ async fn fresh_agent_runtime_baseline_has_no_duplicate_readiness_counts() {
         .collect::<BTreeSet<_>>();
     assert!(!field_names.contains("runnable_behavior_count"));
     assert!(!field_names.contains("unavailable_behavior_count"));
+    assert!(!field_names.contains("process_state"));
+    assert!(!field_names.contains("active_generation"));
+    assert!(!field_names.contains("router_generation"));
+    assert!(!field_names.contains("default_behavior_id"));
+    assert!(field_names.contains("reconcile_phase"));
     assert!(field_names.contains("updated_at"));
     node.shutdown().await;
 }

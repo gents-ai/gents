@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -24,20 +25,10 @@ pub(crate) struct FleetAgent {
 
 #[derive(Debug, Deserialize)]
 struct FleetEnvelope {
-    #[serde(rename = "AgentRuntime", default)]
-    runtimes: Vec<RuntimeRow>,
+    #[serde(rename = "AgentBehaviorReadiness", default)]
+    readiness: Vec<AgentBehaviorReadinessRow>,
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<RequestRow>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RuntimeRow {
-    #[serde(default)]
-    agent_did: String,
-    #[serde(default)]
-    process_state: Option<String>,
-    #[serde(default)]
-    updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,9 +48,9 @@ pub(crate) async fn load_fleet_snapshot(graphql: &str) -> Result<FleetSnapshot> 
 
 fn fleet_query() -> &'static str {
     r#"{
-        AgentRuntime(order: { agent_did: ASC }) {
+        AgentBehaviorReadiness(order: { agent_did: ASC }) {
             agent_did
-            process_state
+            snapshot_json
             updated_at
         }
         AgentRequest(filter: { status: { _in: ["pending", "processing"] } }) {
@@ -99,17 +90,20 @@ fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) ->
     }
 
     let agents = envelope
-        .runtimes
+        .readiness
         .into_iter()
-        .filter_map(|runtime| {
-            let agent_did = runtime.agent_did.trim().to_string();
+        .filter_map(|readiness| {
+            let agent_did = readiness.agent_did.trim().to_string();
             if agent_did.is_empty() {
                 return None;
             }
             let (active, pending) = counts.get(&agent_did).copied().unwrap_or_default();
+            let process_state = decode_behavior_readiness_snapshot(&readiness, &agent_did)
+                .map(|snapshot| snapshot.process_state.as_str().to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
             Some(FleetAgent {
-                process_state: runtime.process_state.unwrap_or_default().trim().to_string(),
-                last_seen: runtime.updated_at.unwrap_or_default().trim().to_string(),
+                process_state,
+                last_seen: readiness.updated_at.trim().to_string(),
                 agent_did,
                 active,
                 pending,
@@ -126,6 +120,10 @@ fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::row::{
+        BehaviorReadinessEntry, BehaviorReadinessProcessState, BehaviorReadinessSnapshot,
+        BehaviorReadinessState, BEHAVIOR_READINESS_FORMAT_VERSION,
+    };
     use serde_json::json;
 
     fn envelope(value: Value) -> FleetEnvelope {
@@ -136,14 +134,39 @@ mod tests {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
     }
 
+    fn readiness(
+        agent_did: &str,
+        process_state: BehaviorReadinessProcessState,
+        updated_at: &str,
+    ) -> Value {
+        serde_json::to_value(AgentBehaviorReadinessRow {
+            agent_did: agent_did.to_string(),
+            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
+                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
+                process_state,
+                active_generation: 1,
+                router_generation: 1,
+                default_behavior_id: "default".to_string(),
+                behaviors: vec![BehaviorReadinessEntry {
+                    behavior_id: "default".to_string(),
+                    state: BehaviorReadinessState::Ready,
+                    reason: None,
+                }],
+            })
+            .unwrap(),
+            updated_at: updated_at.to_string(),
+        })
+        .unwrap()
+    }
+
     #[test]
     fn reshapes_runtime_rows_with_per_agent_request_counts() {
         let snapshot = build_fleet_snapshot(
             at("2026-06-02T12:00:00Z"),
             envelope(json!({
-                "AgentRuntime": [
-                    { "agent_did": "did:a", "process_state": "ready", "updated_at": "2026-06-02T11:59:00Z" },
-                    { "agent_did": "did:b", "process_state": "recovering", "updated_at": "2026-06-02T11:58:00Z" }
+                "AgentBehaviorReadiness": [
+                    readiness("did:a", BehaviorReadinessProcessState::Ready, "2026-06-02T11:59:00Z"),
+                    readiness("did:b", BehaviorReadinessProcessState::Recovering, "2026-06-02T11:58:00Z")
                 ],
                 "AgentRequest": [
                     { "agent_did": "did:a", "status": "processing" },
@@ -180,7 +203,7 @@ mod tests {
         let snapshot = build_fleet_snapshot(
             at("2026-06-02T12:00:00Z"),
             envelope(json!({
-                "AgentRuntime": [{ "agent_did": "did:idle", "process_state": "ready", "updated_at": "x" }],
+                "AgentBehaviorReadiness": [readiness("did:idle", BehaviorReadinessProcessState::Ready, "x")],
                 "AgentRequest": []
             })),
         );

@@ -13,14 +13,14 @@ use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub use crate::behavior_readiness::{
-    effective_behavior_readiness_admission, project_behavior_readiness,
-    project_behavior_readiness_source, project_behavior_readiness_summary,
-    AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
-    BehaviorReadinessProjection, BehaviorReadinessSnapshot, BehaviorReadinessSourceEntry,
-    BehaviorReadinessState, BehaviorReadinessSummary, BehaviorReadinessUnavailableReason,
-    BehaviorReadinessUnknownReason, EffectiveBehaviorReadinessAdmission,
-    ProjectedBehaviorReadiness, ProjectedBehaviorReadinessSummary,
-    BEHAVIOR_READINESS_FORMAT_VERSION,
+    decode_behavior_readiness_snapshot, effective_behavior_readiness_admission,
+    project_behavior_readiness, project_behavior_readiness_source,
+    project_behavior_readiness_summary, AgentBehaviorReadinessRow, BehaviorReadinessEntry,
+    BehaviorReadinessProcessState, BehaviorReadinessProjection, BehaviorReadinessSnapshot,
+    BehaviorReadinessSourceEntry, BehaviorReadinessState, BehaviorReadinessSummary,
+    BehaviorReadinessUnavailableReason, BehaviorReadinessUnknownReason,
+    EffectiveBehaviorReadinessAdmission, ProjectedBehaviorReadiness,
+    ProjectedBehaviorReadinessSummary, BEHAVIOR_READINESS_FORMAT_VERSION,
 };
 
 fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -141,15 +141,7 @@ pub struct AgentBehaviorRow {
 pub struct AgentRuntimeRow {
     pub agent_did: String,
     #[serde(default)]
-    pub process_state: Option<String>,
-    #[serde(default)]
     pub reconcile_phase: Option<String>,
-    #[serde(default)]
-    pub active_generation: Option<i64>,
-    #[serde(default)]
-    pub router_generation: Option<i64>,
-    #[serde(default)]
-    pub default_behavior_id: Option<String>,
     #[serde(default)]
     pub behavior_executor_capacity: Option<i64>,
     #[serde(default)]

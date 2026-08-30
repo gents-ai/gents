@@ -9,6 +9,23 @@ function behaviorLabel(deployment: DeploymentView, behaviorId: string): string {
   );
 }
 
+/** Keep an explicit selection only while the selected runtime assigns it. */
+export function selectedBehaviorIdForDeployment(
+  deployment: DeploymentView | null,
+  selectedBehaviorId: string | null,
+): string | null {
+  if (!deployment) return null;
+  if (
+    selectedBehaviorId !== null &&
+    deployment.behaviorReadiness.behaviors.some(
+      (behavior) => behavior.behaviorId === selectedBehaviorId,
+    )
+  ) {
+    return selectedBehaviorId;
+  }
+  return deployment.behaviorReadiness.defaultBehaviorId;
+}
+
 /** Select one runtime-authored readiness verdict for chat admission. */
 export function selectedBehaviorReadinessDecision(
   deployment: DeploymentView | null,

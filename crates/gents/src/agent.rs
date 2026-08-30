@@ -103,6 +103,8 @@ pub struct DocumentRuntimeOptions {
     pub startup_build_failure_observer:
         Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     pub startup_readiness: crate::startup_readiness::StartupReadinessOptions,
+    #[cfg(test)]
+    pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 
 #[derive(Clone)]
@@ -133,6 +135,8 @@ pub struct Gents {
     startup_build_failure_observer:
         Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     startup_readiness: crate::startup_readiness::StartupReadinessOptions,
+    #[cfg(test)]
+    router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
@@ -222,6 +226,8 @@ impl Gents {
             runtime_snapshot_observer: options.runtime_snapshot_observer,
             startup_build_failure_observer: options.startup_build_failure_observer,
             startup_readiness: options.startup_readiness,
+            #[cfg(test)]
+            router_dispatch_probe: options.router_dispatch_probe,
             // Capture is mandatory (#840): a provider call with no durable
             // rendered input is a log entry, not a fact record. The public
             // builder exposes only a fail-closed fault-injection hook, never an

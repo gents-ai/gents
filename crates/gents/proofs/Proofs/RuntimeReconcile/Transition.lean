@@ -183,16 +183,14 @@ theorem coherent_preserved
   | accept_request _ sessionId requestId h_can h_post =>
       cases h_post
       rcases h_can with
-        ⟨_h_unaccepted, h_fresh, _h_process_ready, _, h_router_eq, h_router_ready,
+        ⟨_h_unaccepted, h_fresh, _h_process_ready, _, h_router_eq,
           _h_dispatch, _h_unavailable⟩
       refine ⟨h_active, h_last, h_default, h_runnable, h_unavailable, h_generation_live,
         h_generation_ready, h_router_live, h_ready_live, h_live_bound, h_pending, ?_, ?_⟩
       · intro rid h_rid
         simp at h_rid
         rcases h_rid with rfl | h_old
-        · have h_live : pre.routerObservedGeneration ∈ pre.liveGenerations :=
-            h_ready_live _ h_router_ready
-          simpa [Function.update] using h_live
+        · simpa [Function.update, h_router_eq] using h_generation_live
         · have h_ne : rid ≠ requestId := by
             intro h_eq
             subst h_eq

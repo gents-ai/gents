@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinSet;
 use tracing::Instrument;
@@ -24,6 +24,17 @@ use slot::{
     behavior_executor_capacity, spawn_slot_with_capacity, spawn_slots, BehaviorSlot,
     BehaviorSlotState,
 };
+
+#[derive(Debug)]
+struct ActiveSnapshotReceiverClosed;
+
+impl std::fmt::Display for ActiveSnapshotReceiverClosed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("active runtime snapshot receiver closed")
+    }
+}
+
+impl std::error::Error for ActiveSnapshotReceiverClosed {}
 #[cfg(test)]
 use slot::{retire_slot, spawn_slot};
 
@@ -40,6 +51,7 @@ pub(super) struct GenerationSupervisor<F> {
 
 struct StagedSlots {
     slots: HashMap<String, BehaviorSlot>,
+    registered: HashSet<(String, u64)>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
 }
 
@@ -47,8 +59,13 @@ impl StagedSlots {
     fn new(failure_policy: Option<Arc<dyn SlotFailurePolicy>>) -> Self {
         Self {
             slots: HashMap::new(),
+            registered: HashSet::new(),
             failure_policy,
         }
+    }
+
+    fn record_registration(&mut self, behavior_id: String, generation: u64) {
+        self.registered.insert((behavior_id, generation));
     }
 
     fn insert(&mut self, behavior_id: String, slot: BehaviorSlot) {
@@ -64,6 +81,7 @@ impl StagedSlots {
     }
 
     async fn abort(self) {
+        let mut registered = self.registered;
         for (behavior_id, slot) in self.slots {
             let generation = slot.generation;
             let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
@@ -74,6 +92,12 @@ impl StagedSlots {
                 }
             }
             if let Some(policy) = &self.failure_policy {
+                policy.on_slot_retired(&behavior_id, generation, true).await;
+            }
+            registered.remove(&(behavior_id, generation));
+        }
+        if let Some(policy) = &self.failure_policy {
+            for (behavior_id, generation) in registered {
                 policy.on_slot_retired(&behavior_id, generation, true).await;
             }
         }
@@ -106,8 +130,17 @@ where
     ) -> Result<Self> {
         resolved_snapshot.validate_behavior_readiness_source()?;
         if let Some(policy) = &slot_failure_policy {
+            let mut registered = Vec::new();
             for behavior_id in resolved_snapshot.behaviors.keys() {
-                policy.on_slot_created(behavior_id, 1).await;
+                if let Err(error) = policy.on_slot_created(behavior_id, 1).await {
+                    for registered_behavior_id in registered {
+                        policy
+                            .on_slot_retired(registered_behavior_id, 1, true)
+                            .await;
+                    }
+                    return Err(error);
+                }
+                registered.push(behavior_id);
             }
         }
         admission_registry.reconcile(1, &resolved_snapshot.backend_admission_configs);
@@ -160,6 +193,7 @@ where
         mut proposals_rx: mpsc::Receiver<ResolvedRuntimeSnapshot>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
+        let mut fatal_error = None;
         loop {
             tokio::select! {
                 _ = shutdown.changed() => break,
@@ -173,7 +207,7 @@ where
                     let proposed_unavailable_behavior_count = proposal.unavailable_behaviors.len();
                     let proposed_default_behavior_id = proposal.default_behavior_id.clone();
 
-                    self.handle_proposal(proposal, &active_snapshot_tx, shutdown.clone())
+                    if let Err(error) = self.handle_proposal(proposal, &active_snapshot_tx, shutdown.clone())
                         .instrument(tracing::info_span!(
                             "runtime.reconcile",
                             current_generation,
@@ -182,13 +216,20 @@ where
                             proposed_unavailable_behavior_count,
                             proposed_default_behavior_id = %proposed_default_behavior_id,
                         ))
-                        .await;
+                        .await
+                    {
+                        fatal_error = Some(error);
+                        break;
+                    }
                 }
             }
         }
 
         self.shutdown_slots().await;
-        Ok(())
+        match fatal_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     async fn handle_proposal(
@@ -196,7 +237,7 @@ where
         proposal: ResolvedRuntimeSnapshot,
         active_snapshot_tx: &watch::Sender<Arc<ActiveRuntimeSnapshot>>,
         shutdown: watch::Receiver<bool>,
-    ) {
+    ) -> Result<()> {
         self.runtime_status
             .set_reconcile_phase(ReconcilePhase::Diffing)
             .await;
@@ -209,7 +250,7 @@ where
             self.runtime_status
                 .publish_noop(self.current_snapshot.as_ref())
                 .await;
-            return;
+            return Ok(());
         }
 
         let diff = diff_counts(&self.current_snapshot, &proposal);
@@ -246,6 +287,11 @@ where
                     .await;
             }
             Err(error) => {
+                let receiver_closed = error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<ActiveSnapshotReceiverClosed>()
+                        .is_some()
+                });
                 tracing::error!(
                     generation = next_generation,
                     added_behaviors = diff.added,
@@ -259,8 +305,14 @@ where
                 self.runtime_status
                     .publish_error(&format!("{error:#}"))
                     .await;
+                if receiver_closed {
+                    return Err(error).context(
+                        "runtime reconcile cannot continue without active snapshot owner",
+                    );
+                }
             }
         }
+        Ok(())
     }
 
     async fn apply_snapshot(
@@ -292,13 +344,21 @@ where
             }
         }
 
+        let mut staged = StagedSlots::new(self.slot_failure_policy.clone());
         if let Some(policy) = &self.slot_failure_policy {
             for behavior_id in &recreated_behavior_ids {
-                policy.on_slot_created(behavior_id, generation).await;
+                if let Err(error) = policy.on_slot_created(behavior_id, generation).await {
+                    staged.abort().await;
+                    return Err(error).with_context(|| {
+                        format!(
+                            "register staged behavior slot {behavior_id} generation {generation}"
+                        )
+                    });
+                }
+                staged.record_registration(behavior_id.clone(), generation);
             }
         }
 
-        let mut staged = StagedSlots::new(self.slot_failure_policy.clone());
         for behavior_id in &recreated_behavior_ids {
             let behavior = resolved_snapshot
                 .behaviors
@@ -349,6 +409,11 @@ where
             executor_capacities,
             executor_queue_capacities,
         ));
+        if active_snapshot_tx.is_closed() {
+            drop(next_snapshot);
+            staged.abort().await;
+            return Err(ActiveSnapshotReceiverClosed.into());
+        }
         // Publish the new source before changing the active dispatcher set.
         // The router observes this generation skew and stops dequeuing until
         // the active snapshot watch catches up, so no request can enter the
@@ -365,6 +430,23 @@ where
             drop(next_snapshot);
             staged.abort().await;
             return Err(error).context("publish behavior readiness before active generation");
+        }
+
+        // Source publication is deliberately ordered before the dispatcher
+        // watch. Install the matching admission generation while the router is
+        // fenced by source skew; if the sole watch owner disappears, restore
+        // the prior admission registry, retain prior supervisor ownership, and
+        // terminate reconcile so the runtime lifecycle closes admission.
+        self.admission_registry
+            .reconcile(generation, &next_snapshot.backend_admission_configs);
+        if active_snapshot_tx.send(next_snapshot.clone()).is_err() {
+            self.admission_registry.reconcile(
+                self.current_snapshot.generation,
+                &self.current_snapshot.backend_admission_configs,
+            );
+            drop(next_snapshot);
+            staged.abort().await;
+            return Err(ActiveSnapshotReceiverClosed.into());
         }
 
         let mut next_slots = HashMap::new();
@@ -393,14 +475,11 @@ where
             retired_slots.push(slot);
         }
 
-        self.admission_registry
-            .reconcile(generation, &next_snapshot.backend_admission_configs);
-
         self.current_snapshot = next_snapshot.clone();
         self.active_slots = next_slots;
-        // Transfer every retiring handle into the supervisor-owned join set
-        // before the fallible watch publication. A closed receiver must not
-        // detach executors that still own daemons or in-flight requests.
+        // Watch publication succeeded, so commit the candidate slot ownership
+        // and transfer every retiring handle into the supervisor-owned join
+        // set before reporting success.
         for slot in retired_slots {
             let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
             drop(slot.dispatcher);
@@ -412,10 +491,6 @@ where
                 }
             });
         }
-        active_snapshot_tx
-            .send(next_snapshot)
-            .map_err(|_| anyhow!("active runtime snapshot receiver closed"))?;
-
         while let Some(joined) = self.retiring_slots.try_join_next() {
             if let Err(error) = joined {
                 if !error.is_cancelled() {
@@ -434,14 +509,21 @@ where
         Ok(())
     }
 
-    async fn shutdown_slots(mut self) {
-        for slot in self.active_slots.into_values() {
+    pub(super) async fn shutdown_slots(mut self) {
+        let failure_policy = self.slot_failure_policy.clone();
+        for (behavior_id, slot) in self.active_slots {
+            let generation = slot.generation;
             let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
             drop(slot.dispatcher);
             if let Err(error) = slot.handle.await {
                 if !error.is_cancelled() {
                     tracing::error!(error = %error, "behavior slot join failed during shutdown");
                 }
+            }
+            if let Some(policy) = &failure_policy {
+                policy
+                    .on_slot_retired(&behavior_id, generation, false)
+                    .await;
             }
         }
         while let Some(joined) = self.retiring_slots.join_next().await {

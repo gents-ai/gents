@@ -20,7 +20,7 @@
 //!   successful fire.
 //! * `enabled_false_does_not_fire` — inserting a disabled Schedule + Task does
 //!   not end up classified as an active schedule in the resolved snapshot
-//!   (observed through the post-reconcile `AgentRuntime` doc).
+//!   (observed through the authoritative readiness document).
 //! * `template_render_failure_records_error_status` — the `Schedule` runtime
 //!   writeback path (`update_Schedule` with `last_status = "error"`) mirrors
 //!   what `ScheduleSource::on_result` writes on a render failure.

@@ -1,10 +1,6 @@
 type AgentRuntime @branchable {
     agent_did: String @index(unique: true)
-    process_state: String @index
     reconcile_phase: String @index
-    active_generation: Int
-    router_generation: Int
-    default_behavior_id: String @index
     behavior_executor_capacity: Int
     behavior_executor_queue_depth: Int
     behavior_executor_status_json: String

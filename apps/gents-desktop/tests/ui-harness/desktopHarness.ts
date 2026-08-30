@@ -1948,7 +1948,6 @@ function createDeployment(): DeploymentView {
       createdBy: "bombadil",
     },
     runtime: {
-      processState: "running",
       reconcilePhase: "idle",
       lastReconcileResult: "ok",
       lastReconcileError: null,

@@ -295,10 +295,10 @@ theorem accept_step_router_observed_ready_live
     pre.routerObservedGeneration = pre.active.generation ∧
       pre.routerObservedGeneration ∈ pre.readyGenerations ∧
       pre.routerObservedGeneration ∈ pre.liveGenerations := by
-  rcases h_coherent with
-    ⟨_, _, _, _, _, _, _, _, h_ready_live, _, _, _, _⟩
   simp [step?] at h_step
-  rcases h_step.1 with ⟨_, _, _, _, h_router_eq, h_router_ready, _, _⟩
+  rcases h_step.1 with ⟨_, _, _, _, h_router_eq, _, _⟩
+  have h_router_ready := coherent_aligned_router_is_ready h_coherent h_router_eq
+  rcases h_coherent with ⟨_, _, _, _, _, _, _, _, h_ready_live, _, _, _, _⟩
   exact ⟨h_router_eq, h_router_ready, h_ready_live _ h_router_ready⟩
 
 theorem accept_step_binding_coherent

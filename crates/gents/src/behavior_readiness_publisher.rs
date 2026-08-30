@@ -11,19 +11,25 @@ use gents_protocol::row::{
     BehaviorReadinessSourceEntry, BehaviorReadinessUnavailableReason,
 };
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::agent::ProcessLifecycleState;
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::session::execute_mutation_with_retry;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BehaviorAdmissionObservation {
+    process_state: BehaviorReadinessProcessState,
     source_generation: u64,
     demotions: BTreeMap<String, String>,
 }
 
 impl BehaviorAdmissionObservation {
+    pub(crate) fn process_state(&self) -> BehaviorReadinessProcessState {
+        self.process_state
+    }
+
     pub(crate) fn demotion_reason(&self, behavior_id: &str) -> Option<&str> {
         self.demotions.get(behavior_id).map(String::as_str)
     }
@@ -42,8 +48,19 @@ impl BehaviorAdmissionObservation {
         demotions: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
         Self {
+            process_state: BehaviorReadinessProcessState::Ready,
             source_generation,
             demotions: demotions.into_iter().collect(),
+        }
+    }
+}
+
+impl Default for BehaviorAdmissionObservation {
+    fn default() -> Self {
+        Self {
+            process_state: BehaviorReadinessProcessState::Uninitialized,
+            source_generation: 0,
+            demotions: BTreeMap::new(),
         }
     }
 }
@@ -52,12 +69,20 @@ impl BehaviorAdmissionObservation {
 pub(crate) struct BehaviorReadinessPublisherHandle {
     commands: mpsc::Sender<Command>,
     observation: watch::Receiver<BehaviorAdmissionObservation>,
+    cancel: CancellationToken,
+    command_timeout: Option<Duration>,
 }
 
 pub(crate) struct BehaviorReadinessPublisherOwner {
     commands: mpsc::Sender<Command>,
+    cancel: CancellationToken,
+    close_timeout: Option<Duration>,
     task: tokio::task::JoinHandle<Result<()>>,
 }
+
+const MAX_PERSIST_ATTEMPTS: usize = 5;
+const MIN_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
+const PRODUCTION_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[async_trait::async_trait]
 pub(crate) trait BehaviorReadinessWriter: Send + Sync {
@@ -103,6 +128,7 @@ struct PublisherState {
     demotions: BTreeMap<(String, u64), String>,
     persisted: Option<BehaviorReadinessSnapshot>,
     updated_at: String,
+    persist_attempt_timeout: Option<Duration>,
 }
 
 #[cfg(test)]
@@ -167,20 +193,59 @@ impl BehaviorReadinessPublisherHandle {
         node: Arc<defra_node::EmbeddedNode>,
         agent_did: impl Into<String>,
     ) -> (BehaviorReadinessPublisherOwner, Self) {
-        Self::start_with_writer(
+        Self::start_with_writer_and_timeout(
             Arc::new(DefraBehaviorReadinessWriter { node }),
             agent_did,
             Duration::from_secs(1),
+            Some(PRODUCTION_PERSIST_ATTEMPT_TIMEOUT),
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn start_with_writer(
         writer: Arc<dyn BehaviorReadinessWriter>,
         agent_did: impl Into<String>,
         retry_delay: Duration,
     ) -> (BehaviorReadinessPublisherOwner, Self) {
+        let persist_attempt_timeout = retry_delay
+            .saturating_mul(MAX_PERSIST_ATTEMPTS as u32)
+            .max(MIN_PERSIST_ATTEMPT_TIMEOUT);
+        Self::start_with_writer_and_timeout(
+            writer,
+            agent_did,
+            retry_delay,
+            Some(persist_attempt_timeout),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_with_unbounded_test_clock(
+        node: Arc<defra_node::EmbeddedNode>,
+        agent_did: impl Into<String>,
+    ) -> (BehaviorReadinessPublisherOwner, Self) {
+        Self::start_with_writer_and_timeout(
+            Arc::new(DefraBehaviorReadinessWriter { node }),
+            agent_did,
+            Duration::from_secs(1),
+            None,
+        )
+    }
+
+    fn start_with_writer_and_timeout(
+        writer: Arc<dyn BehaviorReadinessWriter>,
+        agent_did: impl Into<String>,
+        retry_delay: Duration,
+        persist_attempt_timeout: Option<Duration>,
+    ) -> (BehaviorReadinessPublisherOwner, Self) {
         let (commands, receiver) = mpsc::channel(64);
         let (observation_tx, observation) = watch::channel(BehaviorAdmissionObservation::default());
+        let cancel = CancellationToken::new();
+        let command_timeout = persist_attempt_timeout.map(|attempt_timeout| {
+            attempt_timeout
+                .saturating_add(retry_delay)
+                .saturating_mul(MAX_PERSIST_ATTEMPTS as u32)
+                .saturating_add(MIN_PERSIST_ATTEMPT_TIMEOUT)
+        });
         let task = tokio::spawn(run_publisher(
             writer,
             PublisherState {
@@ -192,19 +257,25 @@ impl BehaviorReadinessPublisherHandle {
                 demotions: BTreeMap::new(),
                 persisted: None,
                 updated_at: Utc::now().to_rfc3339(),
+                persist_attempt_timeout,
             },
             receiver,
             observation_tx,
             retry_delay,
+            cancel.clone(),
         ));
         (
             BehaviorReadinessPublisherOwner {
                 commands: commands.clone(),
+                cancel: cancel.clone(),
+                close_timeout: command_timeout,
                 task,
             },
             Self {
                 commands,
                 observation,
+                cancel,
+                command_timeout,
             },
         )
     }
@@ -215,6 +286,11 @@ impl BehaviorReadinessPublisherHandle {
 
     pub(crate) fn subscribe_observation(&self) -> watch::Receiver<BehaviorAdmissionObservation> {
         self.observation.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn command_capacity_for_test(&self) -> usize {
+        self.commands.capacity()
     }
 
     pub(crate) async fn initialize(&self, default_behavior_id: &str) -> Result<()> {
@@ -319,29 +395,86 @@ impl BehaviorReadinessPublisherHandle {
         command: impl FnOnce(oneshot::Sender<Result<T>>) -> Command,
     ) -> Result<T> {
         let (ack, result) = oneshot::channel();
-        self.commands
-            .send(command(ack))
-            .await
-            .map_err(|_| anyhow!("behavior readiness publisher stopped"))?;
-        result
-            .await
-            .map_err(|_| anyhow!("behavior readiness publisher dropped acknowledgement"))?
+        if self.cancel.is_cancelled() {
+            return Err(anyhow!("behavior readiness publisher stopped"));
+        }
+        let enqueue = async { self.commands.send(command(ack)).await };
+        let enqueue_result = match self.command_timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, enqueue).await {
+                Ok(result) => result,
+                Err(_) => {
+                    self.cancel.cancel();
+                    return Err(anyhow!(
+                        "behavior readiness publisher command enqueue timed out"
+                    ));
+                }
+            },
+            None => enqueue.await,
+        };
+        match enqueue_result {
+            Ok(()) => {}
+            Err(_) => return Err(anyhow!("behavior readiness publisher stopped")),
+        }
+        let acknowledgement = async { result.await };
+        let acknowledgement_result = match self.command_timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, acknowledgement).await {
+                Ok(result) => result,
+                Err(_) => {
+                    self.cancel.cancel();
+                    return Err(anyhow!(
+                        "behavior readiness publisher command acknowledgement timed out"
+                    ));
+                }
+            },
+            None => acknowledgement.await,
+        };
+        match acknowledgement_result {
+            Ok(result) => result,
+            Err(_) => Err(anyhow!(
+                "behavior readiness publisher dropped acknowledgement"
+            )),
+        }
     }
 }
 
 impl BehaviorReadinessPublisherOwner {
     pub(crate) async fn close(self) -> Result<()> {
         let (ack, result) = oneshot::channel();
-        self.commands
-            .send(Command::Close { ack })
-            .await
-            .map_err(|_| anyhow!("behavior readiness publisher stopped before close"))?;
-        result
-            .await
-            .map_err(|_| anyhow!("behavior readiness publisher dropped close acknowledgement"))??;
-        self.task
-            .await
-            .context("join behavior readiness publisher")?
+        let close = async {
+            self.commands
+                .send(Command::Close { ack })
+                .await
+                .map_err(|_| anyhow!("behavior readiness publisher stopped before close"))?;
+            result.await.map_err(|_| {
+                anyhow!("behavior readiness publisher dropped close acknowledgement")
+            })?
+        };
+        let close_result = match self.close_timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, close).await {
+                Ok(result) => result,
+                Err(_) => Err(anyhow!("behavior readiness publisher close timed out")),
+            },
+            None => close.await,
+        };
+        if close_result.is_err() {
+            self.cancel.cancel();
+        }
+        let mut task = self.task;
+        let joined = match self.close_timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, &mut task).await {
+                Ok(joined) => joined.context("join behavior readiness publisher")?,
+                Err(_) => {
+                    task.abort();
+                    let _ = task.await;
+                    return Err(close_result.err().unwrap_or_else(|| {
+                        anyhow!("behavior readiness publisher task shutdown timed out")
+                    }));
+                }
+            },
+            None => task.await.context("join behavior readiness publisher")?,
+        };
+        close_result?;
+        joined
     }
 }
 
@@ -351,8 +484,19 @@ async fn run_publisher(
     mut commands: mpsc::Receiver<Command>,
     observation: watch::Sender<BehaviorAdmissionObservation>,
     retry_delay: Duration,
+    cancel: CancellationToken,
 ) -> Result<()> {
-    while let Some(command) = commands.recv().await {
+    loop {
+        let command = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(()),
+            command = commands.recv() => match command {
+                Some(command) => command,
+                None => return Err(anyhow!(
+                    "behavior readiness publisher command channel closed"
+                )),
+            },
+        };
         let close = matches!(&command, Command::Close { .. });
         match command {
             Command::Initialize {
@@ -379,8 +523,15 @@ async fn run_publisher(
                     slot_generations: BTreeMap::new(),
                 });
                 let _ = ack.send(
-                    commit_candidate(&writer, &mut state, candidate, &observation, retry_delay)
-                        .await,
+                    commit_candidate(
+                        &writer,
+                        &mut state,
+                        candidate,
+                        &observation,
+                        retry_delay,
+                        &cancel,
+                    )
+                    .await,
                 );
             }
             Command::PublishSource { mut source, ack } => {
@@ -407,8 +558,15 @@ async fn run_publisher(
                         })
                 });
                 let _ = ack.send(
-                    commit_candidate(&writer, &mut state, candidate, &observation, retry_delay)
-                        .await,
+                    commit_candidate(
+                        &writer,
+                        &mut state,
+                        candidate,
+                        &observation,
+                        retry_delay,
+                        &cancel,
+                    )
+                    .await,
                 );
             }
             Command::SetProcess {
@@ -418,16 +576,30 @@ async fn run_publisher(
                 let mut candidate = state.clone();
                 candidate.process_state = process;
                 let _ = ack.send(
-                    commit_candidate(&writer, &mut state, candidate, &observation, retry_delay)
-                        .await,
+                    commit_candidate(
+                        &writer,
+                        &mut state,
+                        candidate,
+                        &observation,
+                        retry_delay,
+                        &cancel,
+                    )
+                    .await,
                 );
             }
             Command::SetRouterGeneration { generation, ack } => {
                 let mut candidate = state.clone();
                 candidate.router_generation = generation;
                 let _ = ack.send(
-                    commit_candidate(&writer, &mut state, candidate, &observation, retry_delay)
-                        .await,
+                    commit_candidate(
+                        &writer,
+                        &mut state,
+                        candidate,
+                        &observation,
+                        retry_delay,
+                        &cancel,
+                    )
+                    .await,
                 );
             }
             Command::RegisterSlot {
@@ -438,8 +610,15 @@ async fn run_publisher(
                 let mut candidate = state.clone();
                 candidate.registered_slots.insert((behavior_id, generation));
                 let _ = ack.send(
-                    commit_candidate(&writer, &mut state, candidate, &observation, retry_delay)
-                        .await,
+                    commit_candidate(
+                        &writer,
+                        &mut state,
+                        candidate,
+                        &observation,
+                        retry_delay,
+                        &cancel,
+                    )
+                    .await,
                 );
             }
             Command::MarkSlotReady {
@@ -457,9 +636,16 @@ async fn run_publisher(
                         .remove(&(behavior_id.clone(), generation));
                 }
                 let result = if applied {
-                    commit_candidate(&writer, &mut state, candidate, &observation, retry_delay)
-                        .await
-                        .map(|()| true)
+                    commit_candidate(
+                        &writer,
+                        &mut state,
+                        candidate,
+                        &observation,
+                        retry_delay,
+                        &cancel,
+                    )
+                    .await
+                    .map(|()| true)
                 } else {
                     Ok(false)
                 };
@@ -481,9 +667,16 @@ async fn run_publisher(
                         .insert((behavior_id, generation), diagnostic);
                 }
                 let result = if applied {
-                    commit_candidate(&writer, &mut state, candidate, &observation, retry_delay)
-                        .await
-                        .map(|()| true)
+                    commit_candidate(
+                        &writer,
+                        &mut state,
+                        candidate,
+                        &observation,
+                        retry_delay,
+                        &cancel,
+                    )
+                    .await
+                    .map(|()| true)
                 } else {
                     Ok(false)
                 };
@@ -505,14 +698,31 @@ async fn run_publisher(
                     let source_uses_slot = candidate.source.as_ref().is_some_and(|source| {
                         source.slot_generations.get(&behavior_id) == Some(&generation)
                     });
-                    if !source_uses_slot {
-                        candidate.demotions.remove(&(behavior_id, generation));
+                    if source_uses_slot {
+                        let source = candidate
+                            .source
+                            .as_mut()
+                            .expect("source slot mapping implies initialized source");
+                        source.slot_generations.remove(&behavior_id);
+                        if let Some(entry) = source.entries.get_mut(&behavior_id) {
+                            entry.dispatcher_present = false;
+                            entry.unavailable_reason =
+                                Some(BehaviorReadinessUnavailableReason::ExecutorStartFailed);
+                        }
                     }
+                    candidate.demotions.remove(&(behavior_id, generation));
                 }
                 let result = if applied {
-                    commit_candidate(&writer, &mut state, candidate, &observation, retry_delay)
-                        .await
-                        .map(|()| true)
+                    commit_candidate(
+                        &writer,
+                        &mut state,
+                        candidate,
+                        &observation,
+                        retry_delay,
+                        &cancel,
+                    )
+                    .await
+                    .map(|()| true)
                 } else {
                     Ok(false)
                 };
@@ -526,9 +736,6 @@ async fn run_publisher(
             return Ok(());
         }
     }
-    Err(anyhow!(
-        "behavior readiness publisher command channel closed"
-    ))
 }
 
 async fn commit_candidate(
@@ -537,8 +744,9 @@ async fn commit_candidate(
     mut candidate: PublisherState,
     observation: &watch::Sender<BehaviorAdmissionObservation>,
     retry_delay: Duration,
+    cancel: &CancellationToken,
 ) -> Result<()> {
-    let next_observation = persist_candidate(writer, &mut candidate, retry_delay).await?;
+    let next_observation = persist_candidate(writer, &mut candidate, retry_delay, cancel).await?;
     *state = candidate;
     if *observation.borrow() != next_observation {
         observation.send_replace(next_observation);
@@ -550,6 +758,7 @@ async fn persist_candidate(
     writer: &Arc<dyn BehaviorReadinessWriter>,
     state: &mut PublisherState,
     retry_delay: Duration,
+    cancel: &CancellationToken,
 ) -> Result<BehaviorAdmissionObservation> {
     let source = state
         .source
@@ -577,14 +786,28 @@ async fn persist_candidate(
     .map_err(anyhow::Error::msg)?;
     if state.persisted.as_ref() != Some(&snapshot) {
         state.updated_at = Utc::now().to_rfc3339();
-        loop {
-            match writer
-                .upsert(&state.agent_did, &snapshot, &state.updated_at)
-                .await
-            {
+        for attempt in 1..=MAX_PERSIST_ATTEMPTS {
+            let write = tokio::select! {
+                _ = cancel.cancelled() => {
+                    return Err(anyhow!("behavior readiness persistence cancelled"));
+                }
+                result = async {
+                    match state.persist_attempt_timeout {
+                        Some(timeout) => tokio::time::timeout(
+                            timeout,
+                            writer.upsert(&state.agent_did, &snapshot, &state.updated_at),
+                        )
+                        .await
+                        .map_err(|_| anyhow!("behavior readiness persistence attempt timed out"))?,
+                        None => writer.upsert(&state.agent_did, &snapshot, &state.updated_at).await,
+                    }
+                } => result,
+            };
+            match write {
                 Ok(()) => break,
                 Err(error) => {
-                    if is_fatal_behavior_readiness_write(&error) {
+                    if is_fatal_behavior_readiness_write(&error) || attempt == MAX_PERSIST_ATTEMPTS
+                    {
                         return Err(error);
                     }
                     tracing::warn!(
@@ -592,13 +815,19 @@ async fn persist_candidate(
                         error = %error,
                         "behavior readiness persistence failed; ordered owner will retry"
                     );
-                    tokio::time::sleep(retry_delay).await;
+                    tokio::select! {
+                        _ = cancel.cancelled() => {
+                            return Err(anyhow!("behavior readiness persistence cancelled"));
+                        }
+                        _ = tokio::time::sleep(retry_delay) => {}
+                    }
                 }
             }
         }
         state.persisted = Some(snapshot);
     }
     Ok(BehaviorAdmissionObservation {
+        process_state: state.process_state,
         source_generation: source.active_generation,
         demotions: source
             .slot_generations

@@ -189,6 +189,7 @@ async fn drive_streaming_response_idle_timeout_case(
     // then cross that deadline exactly once. Repeated virtual-time advances
     // while terminal persistence is running can incorrectly exhaust DefraDB's
     // own query timeout under host load.
+    tokio::time::pause();
     for _ in 0..10 {
         tokio::task::yield_now().await;
     }

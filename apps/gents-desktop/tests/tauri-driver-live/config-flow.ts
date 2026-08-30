@@ -256,7 +256,7 @@ export async function waitForConfigFlowReady(
   await waitForConfigFlowDocuments(runner, ids);
   await delay(6_500);
   await waitForDeploymentDocument(runner, (current) => {
-    expect(current.runtime?.processState).toBe("ready");
+    expect(current.behaviorReadiness.source.state).toBe("current");
     expect(current.runtime?.reconcilePhase).toBe("idle");
     expect(current.runtime?.lastReconcileResult).not.toBe("error");
   });

@@ -4,8 +4,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::{
-    project_behavior_readiness_summary, AgentBehaviorReadinessRow,
-    ProjectedBehaviorReadinessSummary,
+    decode_behavior_readiness_snapshot, project_behavior_readiness_summary,
+    AgentBehaviorReadinessRow, ProjectedBehaviorReadinessSummary,
 };
 use serde_json::{json, Value};
 
@@ -30,6 +30,9 @@ pub(crate) async fn load_runtime_status_output(
     agent_did: &str,
 ) -> Result<Value> {
     let behavior_readiness_row = load_live_behavior_readiness(graphql, agent_did).await?;
+    let lifecycle = behavior_readiness_row
+        .as_ref()
+        .and_then(|row| decode_behavior_readiness_snapshot(row, agent_did).ok());
     let (behavior_readiness, readiness_status, runnable_behavior_count, unavailable_behaviors) =
         match project_behavior_readiness_summary(behavior_readiness_row.as_ref(), agent_did) {
             ProjectedBehaviorReadinessSummary::Observed(summary) => {
@@ -66,11 +69,7 @@ pub(crate) async fn load_runtime_status_output(
                 limit: 1
             ) {{
                 agent_did
-                process_state
                 reconcile_phase
-                active_generation
-                router_generation
-                default_behavior_id
                 behavior_executor_capacity
                 behavior_executor_queue_depth
                 behavior_executor_status_json
@@ -122,11 +121,7 @@ pub(crate) async fn load_runtime_status_output(
     });
     if let Some(map) = output.as_object_mut() {
         for field in [
-            "process_state",
             "reconcile_phase",
-            "active_generation",
-            "router_generation",
-            "default_behavior_id",
             "behavior_executor_capacity",
             "behavior_executor_queue_depth",
             "last_reconcile_result",
@@ -137,6 +132,38 @@ pub(crate) async fn load_runtime_status_output(
                 field.to_string(),
                 runtime_row.get(field).cloned().unwrap_or(Value::Null),
             );
+        }
+        for (field, value) in [
+            (
+                "process_state",
+                lifecycle
+                    .as_ref()
+                    .map(|snapshot| json!(snapshot.process_state))
+                    .unwrap_or(Value::Null),
+            ),
+            (
+                "active_generation",
+                lifecycle
+                    .as_ref()
+                    .map(|snapshot| json!(snapshot.active_generation))
+                    .unwrap_or(Value::Null),
+            ),
+            (
+                "router_generation",
+                lifecycle
+                    .as_ref()
+                    .map(|snapshot| json!(snapshot.router_generation))
+                    .unwrap_or(Value::Null),
+            ),
+            (
+                "default_behavior_id",
+                lifecycle
+                    .as_ref()
+                    .map(|snapshot| json!(snapshot.default_behavior_id))
+                    .unwrap_or(Value::Null),
+            ),
+        ] {
+            map.insert(field.to_string(), value);
         }
         let behavior_executors = runtime_row
             .get("behavior_executor_status_json")

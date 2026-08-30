@@ -24,7 +24,8 @@ AgentBehavior
   -> inference_profile_id -> InferenceProfile
 
 AgentPrincipal / AgentBehavior
-  -> runtime publication -> AgentRuntime
+  -> authoritative admission -> AgentBehaviorReadiness
+  -> reconcile diagnostics -> AgentRuntime
 
 Interactive execution:
   AgentRequest -> AgentResponse
@@ -67,7 +68,8 @@ These documents expose what the runtime is doing right now.
 
 | Collection | Key fields | Meaning | Written by | Read by |
 |------------|------------|---------|------------|---------|
-| `AgentRuntime` | `agent_did`, `process_state`, `reconcile_phase`, `active_generation`, `router_generation`, `last_reconcile_result` | current runtime/reconcile state for one agent principal | runtime startup/reconcile/shutdown code | `status`, `show runtime`, debugging |
+| `AgentRuntime` | `agent_did`, `reconcile_phase`, executor capacity/queue fields, `last_reconcile_result`, `last_reconcile_error` | reconcile and executor diagnostics for one agent principal | runtime reconcile/executor instrumentation | diagnostics and metrics |
+| `AgentBehaviorReadiness` | `agent_did`, `snapshot_json`, `updated_at` | authoritative process, generation, default-behavior, and per-behavior admission state | ordered runtime readiness owner | routing, health, status, clients |
 
 ### Interactive Conversation State
 
@@ -133,7 +135,7 @@ The runtime resolves a runnable behavior by following this chain:
 5. Load `ToolSelection`
 6. Optionally load `InferenceProfile`
 7. Intersect behavior-selected tools with the operator `ToolCeiling`
-8. Publish `AgentRuntime`
+8. Publish `AgentBehaviorReadiness` and reconcile diagnostics
 
 If the backend is missing, disabled, or unhealthy, the behavior is unrunnable.
 
@@ -160,8 +162,9 @@ Live reconcile is driven by changes to configuration documents:
 - `InferenceProfile`
 - referenced `InferenceBackend`
 
-The runtime republishes `AgentRuntime` as it resolves, applies, and activates a
-new generation.
+The runtime publishes authoritative lifecycle and generation state through
+`AgentBehaviorReadiness`; `AgentRuntime` records only reconcile and executor
+diagnostics.
 
 ## Branchable vs Non-Branchable
 
@@ -245,8 +248,8 @@ Some boundaries are deliberate:
 - backend capability metadata is not stored in `InferenceBackend`; provider
   behavior is delegated to rig and deprecated manifest/import fields are
   ignored during config migration.
-- `AgentRuntime` is the runtime’s published observability surface, not desired
-  configuration.
+- `AgentBehaviorReadiness` is the sole runtime lifecycle/admission authority.
+  `AgentRuntime` is diagnostic observability only, not desired configuration.
 
 ## Where Schemas Are Registered
 

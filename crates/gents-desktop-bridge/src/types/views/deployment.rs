@@ -62,13 +62,44 @@ pub struct PairingCollectionStatusView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeView {
-    pub process_state: Option<String>,
     pub reconcile_phase: Option<String>,
     pub last_reconcile_result: Option<String>,
     pub last_reconcile_error: Option<String>,
     pub updated_at: Option<String>,
     pub behavior_executor_capacity: Option<i64>,
     pub behavior_executor_queue_depth: Option<i64>,
+}
+
+#[cfg(test)]
+mod runtime_view_tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_runtime_dto_cannot_serialize_readiness_authority() {
+        let value = serde_json::to_value(RuntimeView {
+            reconcile_phase: Some("idle".to_string()),
+            last_reconcile_result: Some("applied".to_string()),
+            last_reconcile_error: None,
+            updated_at: Some("2026-08-29T00:00:00Z".to_string()),
+            behavior_executor_capacity: Some(1),
+            behavior_executor_queue_depth: Some(0),
+        })
+        .expect("serialize diagnostic runtime view");
+        let object = value.as_object().expect("runtime view object");
+        for forbidden in [
+            "processState",
+            "activeGeneration",
+            "routerGeneration",
+            "defaultBehaviorId",
+            "runnableBehaviorCount",
+            "unavailableBehaviorCount",
+        ] {
+            assert!(
+                !object.contains_key(forbidden),
+                "forbidden field: {forbidden}"
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]

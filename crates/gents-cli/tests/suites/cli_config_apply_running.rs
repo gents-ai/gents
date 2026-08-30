@@ -176,17 +176,33 @@ async fn config_diff_bind_live_force_rebinds_concrete_manifest_to_running_runtim
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let stale_readiness = escape_graphql_string(
+        &serde_json::json!({
+            "format_version": 1,
+            "process_state": "shutdown",
+            "active_generation": 0,
+            "router_generation": 0,
+            "default_behavior_id": "general",
+            "behaviors": [{
+                "behavior_id": "general",
+                "state": "unavailable",
+                "reason": "runtime_configuration_invalid"
+            }]
+        })
+        .to_string(),
+    );
     graphql_query(
         &graphql,
         &format!(
             r#"mutation {{
-                create_AgentRuntime(input: {{
+                create_AgentBehaviorReadiness(input: {{
                     agent_did: "{}",
-                    process_state: "shutdown",
+                    snapshot_json: "{}",
                     updated_at: "2099-01-01T00:00:00Z"
                 }}) {{ _docID }}
             }}"#,
             escape_graphql_string(concrete_manifest_did),
+            stale_readiness,
         ),
     )
     .await?;

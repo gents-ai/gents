@@ -703,7 +703,7 @@ pub(crate) async fn serve_with_control(
     let runtime_configuration_probe = agent.clone();
 
     // Aborting the run task would skip run_agent's shutdown epilogue, leaving
-    // AgentRuntime at `ready` and its detached children still firing, so hold a
+    // behavior readiness at `ready` and its detached children still firing, so hold a
     // sender here and forward any external signal into it.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     match external_shutdown {

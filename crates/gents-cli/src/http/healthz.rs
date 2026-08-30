@@ -27,8 +27,8 @@ pub(crate) fn render_healthz_payload(
                 .find(|row| row.agent_did == state.agent_did);
             let readiness =
                 project_behavior_readiness_summary(local_readiness_row, &state.agent_did);
-            let runtime_ready = local_runtime.is_some()
-                && matches!(&readiness, ProjectedBehaviorReadinessSummary::Observed(_));
+            let runtime_ready =
+                matches!(&readiness, ProjectedBehaviorReadinessSummary::Observed(_));
             let runtime_degraded = match &readiness {
                 ProjectedBehaviorReadinessSummary::Observed(summary) => {
                     !summary.unavailable_behaviors.is_empty()
@@ -82,7 +82,7 @@ pub(crate) fn render_healthz_payload(
                     "runtime": {
                         "status": runtime_status,
                         "ready": runtime_ready,
-                        "count": usize::from(local_runtime.is_some()),
+                        "count": usize::from(local_readiness_row.is_some()),
                     },
                     "backends": {
                         "status": backend_status,
@@ -180,10 +180,7 @@ mod tests {
     fn ready_runtime() -> MetricsRuntimeRow {
         MetricsRuntimeRow {
             agent_did: "did:test:test".to_string(),
-            process_state: gents::ProcessLifecycleState::Ready.as_str().to_string(),
             reconcile_phase: "idle".to_string(),
-            active_generation: 1,
-            router_generation: 1,
             last_reconcile_result: "applied".to_string(),
             last_reconcile_completed_at: "2026-05-13T11:59:00Z".to_string(),
         }
@@ -308,6 +305,13 @@ mod tests {
             Some("unhealthy")
         );
         assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            payload
+                .pointer("/checks/runtime/count")
+                .and_then(Value::as_u64),
+            Some(0),
+            "diagnostic AgentRuntime rows must not create readiness inventory"
+        );
 
         let mut malformed = healthy_data();
         malformed.behavior_readiness[0].snapshot_json = "{}".to_string();
@@ -317,6 +321,31 @@ mod tests {
             Some("unhealthy")
         );
         assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn readiness_is_runtime_inventory_when_diagnostics_are_absent() {
+        let mut data = healthy_data();
+        data.agent_runtimes.clear();
+
+        let payload = render_healthz_payload(&state(), Some(&data), None);
+
+        assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            payload
+                .pointer("/checks/runtime/count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            payload
+                .get("runtimes")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0),
+            "AgentRuntime remains optional diagnostics"
+        );
     }
 
     #[test]

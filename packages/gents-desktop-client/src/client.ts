@@ -20,7 +20,7 @@ export const PACKAGE_VERSION = "0.14.0";
 // counters are gone, so this client requires the breaking 3.0 bridge.
 export const MINIMUM_BRIDGE_CONTRACT_VERSION = "3.0";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "069c6ec496e69096c001ac9a73e4745a4488493a00d26f949d08da35001832b1";
+  "3dbcd688a022f9e16e653d83039ca148ad2b89da8ede781ea0f65755dba5be18";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);

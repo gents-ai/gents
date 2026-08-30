@@ -259,4 +259,25 @@ mod tests {
         assert!(AGENT_COLLECTION_NAMES.contains(&AGENT_BEHAVIOR_READINESS_NAME));
         assert!(!BRANCHABLE_COLLECTION_NAMES.contains(&AGENT_BEHAVIOR_READINESS_NAME));
     }
+
+    #[test]
+    fn agent_runtime_schema_is_diagnostics_only() {
+        for forbidden in [
+            "process_state",
+            "active_generation",
+            "router_generation",
+            "default_behavior_id",
+            "runnable_behavior_count",
+            "unavailable_behavior_count",
+        ] {
+            assert!(
+                !AGENT_RUNTIME.lines().any(|line| {
+                    line.trim_start()
+                        .strip_prefix(forbidden)
+                        .is_some_and(|suffix| suffix.trim_start().starts_with(':'))
+                }),
+                "AgentRuntime must not redeclare readiness-owned field {forbidden}"
+            );
+        }
+    }
 }

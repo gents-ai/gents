@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle};
@@ -17,6 +17,10 @@ use super::context::BehaviorResolution;
 pub(super) struct RuntimeAdmissionGate {
     state: Arc<RwLock<bool>>,
     changed: watch::Sender<bool>,
+    #[cfg(test)]
+    entered: Arc<tokio::sync::Notify>,
+    #[cfg(test)]
+    dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 
 impl RuntimeAdmissionGate {
@@ -25,7 +29,20 @@ impl RuntimeAdmissionGate {
         Self {
             state: Arc::new(RwLock::new(false)),
             changed,
+            #[cfg(test)]
+            entered: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            dispatch_attempted: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn closed_with_dispatch_probe(
+        dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    ) -> Self {
+        let mut gate = Self::closed();
+        gate.dispatch_attempted = dispatch_attempted;
+        gate
     }
 
     pub(super) async fn open(&self) {
@@ -34,10 +51,12 @@ impl RuntimeAdmissionGate {
     }
 
     pub(super) async fn close(&self) {
-        // The write guard waits for every in-progress routing admission to
-        // leave its read-side critical section before shutdown is published.
-        *self.state.write().await = false;
+        // Announce closure before waiting for in-progress routing admissions.
+        // A router may hold the read-side lease while an executor queue is
+        // full; that blocked send selects on this watch and releases the lease
+        // so the write-side drain cannot deadlock behind it.
         self.changed.send_replace(false);
+        *self.state.write().await = false;
     }
 
     async fn wait_open(&self, shutdown: &mut watch::Receiver<bool>) -> bool {
@@ -60,16 +79,26 @@ impl RuntimeAdmissionGate {
 
     async fn enter(&self) -> Option<OwnedRwLockReadGuard<bool>> {
         let guard = self.state.clone().read_owned().await;
-        (*guard).then_some(guard)
+        if !*guard {
+            return None;
+        }
+        #[cfg(test)]
+        self.entered.notify_one();
+        Some(guard)
     }
 
-    fn subscribe(&self) -> watch::Receiver<bool> {
+    pub(super) fn subscribe(&self) -> watch::Receiver<bool> {
         self.changed.subscribe()
     }
 
     #[cfg(test)]
     pub(super) async fn is_open(&self) -> bool {
         *self.state.read().await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn wait_for_entry_for_test(&self) {
+        self.entered.notified().await;
     }
 }
 
@@ -90,19 +119,26 @@ pub(super) async fn run_router(
     }
     let watcher =
         DefraWatcher::new(node.clone(), &agent_did).with_local_deployment_id(local_deployment_id);
-    run_router_with_watcher(
+    let result = run_router_with_watcher(
         node,
         agent_did,
         watcher,
         active_snapshot_rx,
         shutdown,
-        admission_gate,
+        admission_gate.clone(),
         runtime_status,
     )
-    .await
+    .await;
+    if result.is_err() {
+        // A router failure is an admission failure. Close locally before the
+        // task reports to the runtime coordinator so no concurrent watcher can
+        // dispatch against a readiness row whose router acknowledgement failed.
+        admission_gate.close().await;
+    }
+    result
 }
 
-async fn run_router_with_watcher<W>(
+pub(super) async fn run_router_with_watcher<W>(
     node: Arc<defra_node::EmbeddedNode>,
     agent_did: String,
     mut watcher: W,
@@ -126,6 +162,7 @@ where
                 &mut active_snapshot,
                 &mut active_snapshot_rx,
                 &mut shutdown,
+                &admission_gate,
                 &mut admission_changed,
                 &mut readiness_changed,
                 Some(&runtime_status),
@@ -185,7 +222,27 @@ where
                     behavior_id = %resolution.behavior_id,
                     "dispatching request to behavior executor"
                 );
-                dispatcher.send(request).await.map_err(|_| {
+                #[cfg(test)]
+                if let Some(dispatch_attempted) = &admission_gate.dispatch_attempted {
+                    let _ = dispatch_attempted.send(());
+                }
+                let sent = tokio::select! {
+                    biased;
+                    changed = admission_changed.changed() => {
+                        if changed.is_err() || !*admission_changed.borrow_and_update() {
+                            return Ok(());
+                        }
+                        continue;
+                    }
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow_and_update() {
+                            return Ok(());
+                        }
+                        continue;
+                    }
+                    sent = dispatcher.send(request) => sent,
+                };
+                sent.map_err(|_| {
                     anyhow!(
                         "executor queue for behavior {} closed unexpectedly",
                         resolution.behavior_id
@@ -240,6 +297,7 @@ pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
     active_snapshot: &mut Arc<ActiveRuntimeSnapshot>,
     active_snapshot_rx: &mut watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     shutdown: &mut watch::Receiver<bool>,
+    admission_gate: &RuntimeAdmissionGate,
     admission_changed: &mut watch::Receiver<bool>,
     readiness_changed: &mut watch::Receiver<
         crate::behavior_readiness_publisher::BehaviorAdmissionObservation,
@@ -286,9 +344,19 @@ where
             continue;
         }
         if let Some(runtime_status) = runtime_status {
-            runtime_status
+            if let Err(error) = runtime_status
                 .publish_router_generation(routed_snapshot.generation)
-                .await;
+                .await
+                .with_context(|| {
+                    format!(
+                        "durably acknowledge router generation {}",
+                        routed_snapshot.generation
+                    )
+                })
+            {
+                admission_gate.close().await;
+                return Err(error);
+            }
         }
         if let Some(request) = pending_request.take() {
             return Ok(Some((request, routed_snapshot, readiness_observation)));

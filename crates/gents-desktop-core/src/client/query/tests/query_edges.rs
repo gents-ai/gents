@@ -50,6 +50,21 @@ fn doc_patch_support_excludes_pairing_control_collections() {
     assert!(!supports_doc_patch_collection("SessionHydrationRequest"));
 }
 
+#[test]
+fn agent_runtime_queries_cannot_reintroduce_readiness_authority() {
+    let fields = AGENT_RUNTIME_FIELDS.split_whitespace().collect::<Vec<_>>();
+    for forbidden in [
+        "process_state",
+        "active_generation",
+        "router_generation",
+        "default_behavior_id",
+        "runnable_behavior_count",
+        "unavailable_behavior_count",
+    ] {
+        assert!(!fields.contains(&forbidden), "forbidden field: {forbidden}");
+    }
+}
+
 #[tokio::test]
 async fn load_agent_runtimes_hydrates_executor_capacity_and_queue_depth() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));

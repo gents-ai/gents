@@ -12,7 +12,10 @@ use gents::{
     KeyIdentity, ToolCeiling,
 };
 use gents_desktop_core::client::ClientCore;
-use gents_protocol::row::{AgentBehaviorRow, InferenceProfileRow, ToolSelectionRow};
+use gents_protocol::row::{
+    decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow, AgentBehaviorRow,
+    InferenceProfileRow, ToolSelectionRow,
+};
 use serde_json::Value;
 use tokio::sync::watch;
 use tracing::Instrument;
@@ -383,32 +386,36 @@ async fn wait_for_runtime_process_state(
     loop {
         let query = format!(
             r#"{{
-                AgentRuntime(
+                AgentBehaviorReadiness(
                     filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
                     limit: 1
                 ) {{
-                    process_state
+                    agent_did
+                    snapshot_json
+                    updated_at
                 }}
             }}"#
         );
         let response = node.execute(&query).await;
         if response.has_errors() {
-            anyhow::bail!("AgentRuntime query failed: {:?}", response.errors);
+            anyhow::bail!("AgentBehaviorReadiness query failed: {:?}", response.errors);
         }
         let process_state = response
             .data
             .as_ref()
-            .and_then(|data| data.get("AgentRuntime"))
+            .and_then(|data| data.get("AgentBehaviorReadiness"))
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
-            .and_then(|row| row.get("process_state"))
-            .and_then(Value::as_str);
-        if process_state == Some(expected_process_state) {
+            .cloned()
+            .and_then(|row| serde_json::from_value::<AgentBehaviorReadinessRow>(row).ok())
+            .and_then(|row| decode_behavior_readiness_snapshot(&row, agent_did).ok())
+            .map(|snapshot| snapshot.process_state);
+        if process_state.map(|state| state.as_str()) == Some(expected_process_state) {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
             anyhow::bail!(
-                "timed out waiting for AgentRuntime {agent_did} to reach process_state={expected_process_state}; last={process_state:?}"
+                "timed out waiting for AgentBehaviorReadiness {agent_did} to reach process_state={expected_process_state}; last={process_state:?}"
             );
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

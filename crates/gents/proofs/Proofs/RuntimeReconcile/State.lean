@@ -202,7 +202,6 @@ def BehaviorAdmissible
   process.acceptsWork ∧
     0 < s.active.generation ∧
     s.routerObservedGeneration = s.active.generation ∧
-    s.routerObservedGeneration ∈ s.readyGenerations ∧
     behaviorId ∈ s.effectiveDispatchers ∧
     behaviorId ∉ s.effectiveUnavailable
 
@@ -312,8 +311,7 @@ def project
       if !decide process.acceptsWork then
         .unknownProcess
       else if s.active.generation = 0 ∨
-        s.routerObservedGeneration ≠ s.active.generation ∨
-        s.routerObservedGeneration ∉ s.readyGenerations then
+        s.routerObservedGeneration ≠ s.active.generation then
         .unknownStale
       else if behaviorId ∈ s.startupDemoted then
         .unavailableStartup
@@ -339,26 +337,17 @@ theorem ready_sound
   have hGeneration : s.routerObservedGeneration = s.active.generation := by
     by_contra h
     simp [project, hProcess, hZero, h] at hReady
-  have hGenerationReady : s.routerObservedGeneration ∈ s.readyGenerations := by
-    by_contra h
-    have hActiveNotReady : s.active.generation ∉ s.readyGenerations := by
-      simpa [hGeneration] using h
-    simp [project, hProcess, hZero, hGeneration, hActiveNotReady] at hReady
-  have hActiveGenerationReady : s.active.generation ∈ s.readyGenerations := by
-    simpa [hGeneration] using hGenerationReady
   have hDemoted : behaviorId ∉ s.startupDemoted := by
     intro h
-    simp [project, hProcess, hZero, hGeneration, hActiveGenerationReady, h] at hReady
+    simp [project, hProcess, hZero, hGeneration, h] at hReady
   have hActiveUnavailable : behaviorId ∉ s.active.unavailable := by
     intro h
-    simp [project, hProcess, hZero, hGeneration, hActiveGenerationReady, hDemoted, h] at hReady
+    simp [project, hProcess, hZero, hGeneration, hDemoted, h] at hReady
   have hDispatcher : behaviorId ∈ s.effectiveDispatchers := by
     by_cases h : behaviorId ∈ s.effectiveDispatchers
     · exact h
-    · simp [project, hProcess, hZero, hGeneration, hActiveGenerationReady, hDemoted,
-        hActiveUnavailable, h] at hReady
-  refine ⟨hProcess, Nat.pos_of_ne_zero hZero, hGeneration, hGenerationReady,
-    hDispatcher, ?_⟩
+    · simp [project, hProcess, hZero, hGeneration, hDemoted, hActiveUnavailable, h] at hReady
+  refine ⟨hProcess, Nat.pos_of_ne_zero hZero, hGeneration, hDispatcher, ?_⟩
   simp [effectiveUnavailable, hActiveUnavailable, hDemoted]
 
 theorem missing_or_stale_never_ready
@@ -367,8 +356,7 @@ theorem missing_or_stale_never_ready
     (hClosed : observation = .missing ∨ observation = .malformed ∨
       observation = .unsupportedVersion ∨
       ∃ process s, observation = .observed process s ∧
-        (s.active.generation = 0 ∨ s.routerObservedGeneration ≠ s.active.generation ∨
-          s.routerObservedGeneration ∉ s.readyGenerations)) :
+        (s.active.generation = 0 ∨ s.routerObservedGeneration ≠ s.active.generation)) :
     project observation behaviorId .backendTemporarilyUnavailable ≠ .ready := by
   rcases hClosed with hMissing | hMalformed | hVersion |
     ⟨process, s, hObservation, hStale⟩
@@ -376,10 +364,9 @@ theorem missing_or_stale_never_ready
   · simp [project, hMalformed]
   · simp [project, hVersion]
   · subst observation
-    rcases hStale with hZero | hGeneration | hNotReady
+    rcases hStale with hZero | hGeneration
     · cases process <;> simp [project, ProcessState.acceptsWork, hZero]
     · cases process <;> simp [project, ProcessState.acceptsWork, hGeneration]
-    · cases process <;> simp [project, ProcessState.acceptsWork, hNotReady]
 
 theorem unavailable_wins_overlap
     {process : ProcessState}
@@ -388,7 +375,7 @@ theorem unavailable_wins_overlap
     (hUnavailable : behaviorId ∈ s.effectiveUnavailable) :
     project (.observed process s) behaviorId .backendTemporarilyUnavailable ≠ .ready := by
   intro hReady
-  rcases ready_sound hReady with ⟨_, _, _, _, _, hNotUnavailable⟩
+  rcases ready_sound hReady with ⟨_, _, _, _, hNotUnavailable⟩
   exact hNotUnavailable hUnavailable
 
 theorem observed_ready_iff_admissible
@@ -401,19 +388,15 @@ theorem observed_ready_iff_admissible
   · exact ready_sound
   · intro hAdmissible
     rcases hAdmissible with
-      ⟨hProcess, hPositive, hGeneration, hGenerationReady, hDispatcher, hUnavailable⟩
+      ⟨hProcess, hPositive, hGeneration, hDispatcher, hUnavailable⟩
     have hZero : s.active.generation ≠ 0 := Nat.ne_of_gt hPositive
-    have hActiveGenerationReady : s.active.generation ∈ s.readyGenerations := by
-      simpa [hGeneration] using hGenerationReady
     have hDemoted : behaviorId ∉ s.startupDemoted := by
       intro h
       exact hUnavailable (by simp [effectiveUnavailable, h])
     have hActiveUnavailable : behaviorId ∉ s.active.unavailable := by
       intro h
       exact hUnavailable (by simp [effectiveUnavailable, h])
-    simp [project, hProcess, hZero, hGeneration, hGenerationReady,
-      hActiveGenerationReady, hDemoted,
-      hActiveUnavailable, hDispatcher]
+    simp [project, hProcess, hZero, hGeneration, hDemoted, hActiveUnavailable, hDispatcher]
 
 theorem ready_implies_runtime_admission_when_fresh
     {process : ProcessState}
@@ -445,6 +428,17 @@ def coherent (s : RuntimeState) : Prop :=
     (∀ rid, rid ∈ s.inFlight → s.requestGeneration rid ∈ s.liveGenerations) ∧
     (∀ rid, rid ∈ s.inFlight →
       s.sessionBehavior (s.requestSession rid) = some (s.requestBehavior rid))
+
+/-- `readyGenerations` is an internal transition guard, not an independent
+client-wire admission fact. In every coherent runtime state, an aligned router
+necessarily observes the active ready generation. -/
+theorem coherent_aligned_router_is_ready
+    {s : RuntimeState}
+    (hCoherent : s.coherent)
+    (hAligned : s.routerObservedGeneration = s.active.generation) :
+    s.routerObservedGeneration ∈ s.readyGenerations := by
+  rcases hCoherent with ⟨_, _, _, _, _, _, hActiveReady, _, _, _, _, _, _⟩
+  simpa [hAligned] using hActiveReady
 
 def bootState (resolved : ResolvedSnapshot) : RuntimeState :=
   { phase := .idle

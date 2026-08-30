@@ -1,6 +1,106 @@
 use super::support::*;
 use super::*;
 
+struct RejectExecutorDemotionWriter;
+
+struct RejectRouterGenerationRunWriter;
+
+#[derive(Default)]
+struct ExhaustStartupSourceWriter {
+    source_attempts: std::sync::atomic::AtomicUsize,
+    source_exhausted: tokio::sync::Notify,
+    persisted: std::sync::Mutex<Vec<BehaviorReadinessSnapshot>>,
+}
+
+#[derive(Default)]
+struct ExhaustReadyWriter {
+    ready_attempts: std::sync::atomic::AtomicUsize,
+    persisted: std::sync::Mutex<Vec<BehaviorReadinessSnapshot>>,
+}
+
+#[async_trait::async_trait]
+impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for RejectExecutorDemotionWriter {
+    async fn upsert(
+        &self,
+        _agent_did: &str,
+        snapshot: &BehaviorReadinessSnapshot,
+        _updated_at: &str,
+    ) -> anyhow::Result<()> {
+        if snapshot.behaviors.iter().any(|entry| {
+            entry.reason == Some(BehaviorReadinessUnavailableReason::ExecutorStartFailed)
+        }) {
+            return Err(crate::behavior_readiness_publisher::FatalBehaviorReadinessWrite.into());
+        }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::behavior_readiness_publisher::BehaviorReadinessWriter
+    for RejectRouterGenerationRunWriter
+{
+    async fn upsert(
+        &self,
+        _agent_did: &str,
+        snapshot: &BehaviorReadinessSnapshot,
+        _updated_at: &str,
+    ) -> anyhow::Result<()> {
+        if snapshot.router_generation > 0 {
+            return Err(crate::behavior_readiness_publisher::FatalBehaviorReadinessWrite.into());
+        }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for ExhaustStartupSourceWriter {
+    async fn upsert(
+        &self,
+        _agent_did: &str,
+        snapshot: &BehaviorReadinessSnapshot,
+        _updated_at: &str,
+    ) -> anyhow::Result<()> {
+        if snapshot.process_state == BehaviorReadinessProcessState::Recovering
+            && snapshot.active_generation > 0
+        {
+            let attempt = self
+                .source_attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            if attempt == 5 {
+                self.source_exhausted.notify_one();
+            }
+            anyhow::bail!("injected startup source persistence exhaustion");
+        }
+        self.persisted
+            .lock()
+            .expect("startup source writer mutex poisoned")
+            .push(snapshot.clone());
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for ExhaustReadyWriter {
+    async fn upsert(
+        &self,
+        _agent_did: &str,
+        snapshot: &BehaviorReadinessSnapshot,
+        _updated_at: &str,
+    ) -> anyhow::Result<()> {
+        if snapshot.process_state == BehaviorReadinessProcessState::Ready {
+            self.ready_attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            anyhow::bail!("injected Ready persistence exhaustion");
+        }
+        self.persisted
+            .lock()
+            .expect("Ready writer mutex poisoned")
+            .push(snapshot.clone());
+        Ok(())
+    }
+}
+
 async fn wait_for_request_state(
     node: &defra_node::EmbeddedNode,
     doc_id: &str,
@@ -263,6 +363,351 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
 }
 
 #[tokio::test]
+async fn demotion_persistence_failure_is_the_exact_run_agent_failure_and_never_admits() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("demotion-persistence-run-agent"));
+    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-demotion-persistence",
+        mock_endpoint.endpoint(),
+    )
+    .await;
+    let escaped_backend_id = escape_graphql_string("backend-demotion-persistence");
+    let mutation = format!(
+        r#"mutation {{
+            update_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
+                input: {{ api_key_env_var: "GENTS_TEST_DEMOTION_PERSISTENCE_UNSET" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert!(std::env::var_os("GENTS_TEST_DEMOTION_PERSISTENCE_UNSET").is_none());
+
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            retry_policy: crate::retry::RetryPolicy {
+                max_retries: 1,
+                base_delay_ms: 1,
+                max_delay_ms: 1,
+            },
+            startup_readiness: crate::startup_readiness::StartupReadinessOptions {
+                build_failure_budget: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let request_doc_id = create_agent_request(
+        node.as_ref(),
+        identity.did(),
+        "req-demotion-persistence",
+        "session-demotion-persistence",
+        "must remain pending",
+    )
+    .await;
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        super::startup::run_agent_with_readiness_writer(
+            agent,
+            shutdown_rx,
+            Arc::new(RejectExecutorDemotionWriter),
+            Duration::from_millis(1),
+        ),
+    )
+    .await
+    .expect("fatal demotion persistence must terminate run_agent boundedly")
+    .expect_err("fatal demotion persistence cannot be reported as clean shutdown");
+    assert_eq!(
+        error.root_cause().to_string(),
+        "injected fatal behavior readiness write"
+    );
+    assert!(
+        format!("{error:#}").contains("injected fatal behavior readiness write"),
+        "runtime returned the wrong failure: {error:#}"
+    );
+    wait_for_request_state(node.as_ref(), &request_doc_id, "pending").await;
+}
+
+#[tokio::test]
+async fn router_generation_persistence_failure_terminates_run_agent_before_dispatch() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("router-generation-persistence-run-agent"));
+    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-router-generation-persistence",
+        mock_endpoint.endpoint(),
+    )
+    .await;
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let request_doc_id = create_agent_request(
+        node.as_ref(),
+        identity.did(),
+        "req-router-generation-persistence",
+        "session-router-generation-persistence",
+        "must remain pending",
+    )
+    .await;
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        super::startup::run_agent_with_readiness_writer(
+            agent,
+            shutdown_rx,
+            Arc::new(RejectRouterGenerationRunWriter),
+            Duration::from_millis(1),
+        ),
+    )
+    .await
+    .expect("router-generation persistence failure must terminate run_agent")
+    .expect_err("router-generation persistence failure cannot become clean shutdown");
+    assert_eq!(
+        error.root_cause().to_string(),
+        "injected fatal behavior readiness write"
+    );
+    assert!(
+        format!("{error:#}").contains("durably acknowledge router generation"),
+        "runtime returned the wrong failure: {error:#}"
+    );
+    wait_for_request_state(node.as_ref(), &request_doc_id, "pending").await;
+}
+
+#[tokio::test]
+async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run_error() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("startup-source-persistence-exhaustion"));
+    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-startup-source-persistence",
+        mock_endpoint.endpoint(),
+    )
+    .await;
+    let observer = Arc::new(RecordingObserver::default());
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            process_state_observer: Some(observer.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let writer = Arc::new(ExhaustStartupSourceWriter::default());
+    let (slot_started_tx, mut slot_started_rx) = mpsc::unbounded_channel();
+    let (slot_shutdown_tx, mut slot_shutdown_rx) = mpsc::unbounded_channel();
+    let (slot_exited_tx, mut slot_exited_rx) = mpsc::unbounded_channel();
+    let slot_exit_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let slot_runner: super::startup::TestSlotRunner = {
+        let slot_exit_gate = slot_exit_gate.clone();
+        Arc::new(move |generation, mut shutdown| {
+            let slot_started_tx = slot_started_tx.clone();
+            let slot_shutdown_tx = slot_shutdown_tx.clone();
+            let slot_exited_tx = slot_exited_tx.clone();
+            let slot_exit_gate = slot_exit_gate.clone();
+            Box::pin(async move {
+                let _ = slot_started_tx.send(generation);
+                let _ = shutdown.changed().await;
+                let _ = slot_shutdown_tx.send(generation);
+                let permit = slot_exit_gate
+                    .acquire_owned()
+                    .await
+                    .expect("slot exit gate closed");
+                permit.forget();
+                let _ = slot_exited_tx.send(generation);
+                Ok(())
+            })
+        })
+    };
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let mut run = tokio::spawn(
+        super::startup::run_agent_with_readiness_writer_and_slot_runner(
+            agent,
+            shutdown_rx,
+            writer.clone(),
+            Duration::from_millis(1),
+            Some(slot_runner),
+        ),
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), slot_started_rx.recv())
+            .await
+            .expect("generation-one slot must start"),
+        Some(1)
+    );
+    tokio::time::timeout(Duration::from_secs(5), writer.source_exhausted.notified())
+        .await
+        .expect("startup source must exhaust all persistence attempts");
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), slot_shutdown_rx.recv())
+            .await
+            .expect("slot runner must observe owned startup shutdown"),
+        Some(1)
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut run)
+            .await
+            .is_err(),
+        "run_agent returned while its generation-one slot was still gated"
+    );
+    slot_exit_gate.add_permits(1);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), slot_exited_rx.recv())
+            .await
+            .expect("generation-one slot must report exit"),
+        Some(1)
+    );
+    let error = tokio::time::timeout(Duration::from_secs(10), run)
+        .await
+        .expect("startup source exhaustion must terminate run_agent boundedly")
+        .expect("run_agent task must join")
+        .expect_err("startup source exhaustion cannot become clean shutdown");
+    assert_eq!(
+        error.root_cause().to_string(),
+        "injected startup source persistence exhaustion"
+    );
+    assert!(
+        format!("{error:#}").contains("durably publish startup behavior readiness source"),
+        "runtime returned the wrong failure: {error:#}"
+    );
+    assert_eq!(
+        writer
+            .source_attempts
+            .load(std::sync::atomic::Ordering::SeqCst),
+        5,
+        "the ordered publisher must exhaust its bounded retry budget"
+    );
+    let persisted = writer
+        .persisted
+        .lock()
+        .expect("startup source writer mutex poisoned");
+    assert!(
+        persisted
+            .iter()
+            .all(|snapshot| snapshot.process_state != BehaviorReadinessProcessState::Ready),
+        "failed startup source publication must never persist Ready"
+    );
+    assert!(
+        persisted
+            .iter()
+            .any(|snapshot| snapshot.process_state == BehaviorReadinessProcessState::Shutdown),
+        "publisher must recover after the failed command and flush terminal Shutdown"
+    );
+    let observed = observer
+        .states
+        .lock()
+        .expect("recording observer mutex poisoned");
+    assert!(!observed.contains(&crate::agent::ProcessLifecycleState::Ready));
+}
+
+#[tokio::test]
+async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("ready-persistence-exhaustion"));
+    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-ready-persistence",
+        mock_endpoint.endpoint(),
+    )
+    .await;
+    let observer = Arc::new(RecordingObserver::default());
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            process_state_observer: Some(observer.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let writer = Arc::new(ExhaustReadyWriter::default());
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        super::startup::run_agent_with_readiness_writer(
+            agent,
+            shutdown_rx,
+            writer.clone(),
+            Duration::from_millis(1),
+        ),
+    )
+    .await
+    .expect("Ready persistence exhaustion must terminate run_agent boundedly")
+    .expect_err("Ready persistence exhaustion cannot become clean shutdown");
+    assert_eq!(
+        error.root_cause().to_string(),
+        "injected Ready persistence exhaustion"
+    );
+    assert!(
+        format!("{error:#}").contains("durably publish runtime Ready state"),
+        "runtime returned the wrong failure: {error:#}"
+    );
+    assert_eq!(
+        writer
+            .ready_attempts
+            .load(std::sync::atomic::Ordering::SeqCst),
+        5,
+        "the ordered publisher must exhaust its bounded retry budget"
+    );
+    let persisted = writer
+        .persisted
+        .lock()
+        .expect("Ready writer mutex poisoned");
+    assert!(
+        persisted
+            .iter()
+            .all(|snapshot| snapshot.process_state != BehaviorReadinessProcessState::Ready),
+        "a rejected Ready command must not change durable readiness"
+    );
+    assert!(
+        persisted
+            .iter()
+            .any(|snapshot| snapshot.process_state == BehaviorReadinessProcessState::Shutdown),
+        "terminal Shutdown must flush after Ready command exhaustion"
+    );
+    let observed = observer
+        .states
+        .lock()
+        .expect("recording observer mutex poisoned");
+    assert!(!observed.contains(&crate::agent::ProcessLifecycleState::Ready));
+}
+
+#[tokio::test]
 async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at_runtime() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -506,4 +951,65 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 
     wait_for_request_state(node.as_ref(), &first_request_doc_id, "error").await;
     wait_for_request_state(node.as_ref(), &queued_request_doc_id, "error").await;
+}
+
+#[tokio::test]
+async fn run_agent_shutdown_drains_admission_from_a_full_executor_queue() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("shutdown-full-executor-queue"));
+    let mock_endpoint = MockModelEndpoint::start_blocking_chat("default").unwrap();
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-full-executor-queue",
+        mock_endpoint.endpoint(),
+    )
+    .await;
+    let (dispatch_probe_tx, mut dispatch_probe_rx) = mpsc::unbounded_channel();
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            router_dispatch_probe: Some(dispatch_probe_tx),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+    wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
+
+    // One request is held by the blocked worker, 32 fill the bounded executor
+    // queue, and the 34th leaves the router blocked in dispatcher.send while
+    // holding an admission read lease.
+    for index in 0..34 {
+        create_agent_request(
+            node.as_ref(),
+            identity.did(),
+            &format!("req-full-executor-queue-{index}"),
+            &format!("session-full-executor-queue-{index}"),
+            "block",
+        )
+        .await;
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for _ in 0..34 {
+            dispatch_probe_rx
+                .recv()
+                .await
+                .expect("runtime dropped dispatch probe before saturating executor queue");
+        }
+    })
+    .await
+    .expect("router did not reach the full executor queue send boundary");
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("full executor queue must not deadlock admission shutdown")
+        .expect("agent task should join")
+        .expect("agent run should return ok");
 }

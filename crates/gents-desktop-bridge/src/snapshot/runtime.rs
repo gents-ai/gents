@@ -87,7 +87,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let mut runtime = store
                 .latest_runtime(&peer.agent_did)
                 .map(|row| RuntimeView {
-                    process_state: normalize_optional(row.process_state.as_deref()),
                     reconcile_phase: normalize_optional(row.reconcile_phase.as_deref()),
                     last_reconcile_result: normalize_optional(row.last_reconcile_result.as_deref()),
                     last_reconcile_error: normalize_optional(row.last_reconcile_error.as_deref()),

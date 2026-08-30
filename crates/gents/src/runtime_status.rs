@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use chrono::Utc;
 use tokio::sync::{watch, Mutex};
 use tokio::time::MissedTickBehavior;
@@ -56,11 +57,7 @@ impl ReconcileResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeStatusRow {
     agent_did: String,
-    process_state: String,
     reconcile_phase: String,
-    active_generation: i64,
-    router_generation: i64,
-    default_behavior_id: String,
     behavior_executor_capacity: i64,
     behavior_executor_queue_depth: i64,
     behavior_executor_status_json: String,
@@ -75,11 +72,7 @@ impl RuntimeStatusRow {
         let now = Utc::now().to_rfc3339();
         Self {
             agent_did,
-            process_state: ProcessLifecycleState::Uninitialized.as_str().to_string(),
             reconcile_phase: ReconcilePhase::Idle.as_str().to_string(),
-            active_generation: 0,
-            router_generation: 0,
-            default_behavior_id: String::new(),
             behavior_executor_capacity: 0,
             behavior_executor_queue_depth: 0,
             behavior_executor_status_json: "{}".to_string(),
@@ -155,22 +148,48 @@ impl RuntimeStatusHandle {
 
     #[cfg(test)]
     pub(crate) fn new(node: Arc<defra_node::EmbeddedNode>, agent_did: impl Into<String>) -> Self {
-        let (_owner, handle) = Self::start(node, agent_did);
+        let agent_did = agent_did.into();
+        let (_owner, readiness) = BehaviorReadinessPublisherHandle::start_with_unbounded_test_clock(
+            node.clone(),
+            agent_did.clone(),
+        );
+        let handle = Self {
+            node,
+            state: Arc::new(Mutex::new(RuntimeStatusRow::new(agent_did))),
+            readiness,
+        };
         handle
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_with_unbounded_test_clock(
+        node: Arc<defra_node::EmbeddedNode>,
+        agent_did: impl Into<String>,
+    ) -> (RuntimeStatusOwner, Self) {
+        let agent_did = agent_did.into();
+        let (readiness_owner, readiness) =
+            BehaviorReadinessPublisherHandle::start_with_unbounded_test_clock(
+                node.clone(),
+                agent_did.clone(),
+            );
+        (
+            RuntimeStatusOwner {
+                readiness: readiness_owner,
+            },
+            Self {
+                node,
+                state: Arc::new(Mutex::new(RuntimeStatusRow::new(agent_did))),
+                readiness,
+            },
+        )
     }
 
     pub(crate) fn readiness(&self) -> &BehaviorReadinessPublisherHandle {
         &self.readiness
     }
 
-    pub(crate) async fn process_state(&self) -> String {
-        self.state.lock().await.process_state.clone()
-    }
-
     pub(crate) async fn initialize_startup(&self, default_behavior_id: &str) -> anyhow::Result<()> {
         self.readiness.initialize(default_behavior_id).await?;
-        self.set_process_state_diagnostic(ProcessLifecycleState::Recovering)
-            .await;
         Ok(())
     }
 
@@ -178,9 +197,7 @@ impl RuntimeStatusHandle {
         &self,
         state: ProcessLifecycleState,
     ) -> anyhow::Result<()> {
-        self.readiness.set_process_state(state).await?;
-        self.set_process_state_diagnostic(state).await;
-        Ok(())
+        self.readiness.set_process_state(state).await
     }
 
     #[cfg(test)]
@@ -188,18 +205,6 @@ impl RuntimeStatusHandle {
         if let Err(error) = self.set_process_state_durable(state).await {
             tracing::error!(?state, error = %error, "behavior readiness publisher stopped");
         }
-    }
-
-    async fn set_process_state_diagnostic(&self, state: ProcessLifecycleState) {
-        let process_state = state.as_str().to_string();
-        self.update(|row| {
-            if row.process_state == process_state {
-                return false;
-            }
-            row.process_state = process_state;
-            true
-        })
-        .await;
     }
 
     pub(crate) async fn set_reconcile_phase(&self, phase: ReconcilePhase) {
@@ -214,18 +219,27 @@ impl RuntimeStatusHandle {
         .await;
     }
 
-    pub(crate) async fn publish_startup_snapshot(&self, snapshot: &ActiveRuntimeSnapshot) {
+    pub(crate) async fn publish_startup_snapshot(
+        &self,
+        snapshot: &ActiveRuntimeSnapshot,
+    ) -> anyhow::Result<()> {
         self.publish_snapshot(snapshot, ReconcileResult::Startup)
-            .await;
+            .await
     }
 
     pub(crate) async fn publish_noop(&self, snapshot: &ActiveRuntimeSnapshot) {
-        self.publish_snapshot(snapshot, ReconcileResult::Noop).await;
+        if let Err(error) = self.publish_snapshot(snapshot, ReconcileResult::Noop).await {
+            tracing::error!(error = %error, "failed to publish runtime behavior readiness source");
+        }
     }
 
     pub(crate) async fn publish_applied(&self, snapshot: &ActiveRuntimeSnapshot) {
-        self.publish_snapshot(snapshot, ReconcileResult::Applied)
-            .await;
+        if let Err(error) = self
+            .publish_snapshot(snapshot, ReconcileResult::Applied)
+            .await
+        {
+            tracing::error!(error = %error, "failed to publish runtime behavior readiness source");
+        }
     }
 
     pub(crate) async fn publish_error(&self, error: &str) {
@@ -254,20 +268,11 @@ impl RuntimeStatusHandle {
         .await;
     }
 
-    pub(crate) async fn publish_router_generation(&self, generation: u64) {
-        if let Err(error) = self.readiness.set_router_generation(generation).await {
-            tracing::error!(generation, error = %error, "failed to publish behavior readiness router generation");
-            return;
-        }
-        let generation = i64::try_from(generation).unwrap_or(i64::MAX);
-        self.update(|row| {
-            if row.router_generation == generation {
-                return false;
-            }
-            row.router_generation = generation;
-            true
-        })
-        .await;
+    pub(crate) async fn publish_router_generation(&self, generation: u64) -> anyhow::Result<()> {
+        self.readiness
+            .set_router_generation(generation)
+            .await
+            .with_context(|| format!("publish behavior readiness router generation {generation}"))
     }
 
     pub(crate) async fn publish_executor_snapshot(&self, snapshot: &ActiveRuntimeSnapshot) {
@@ -276,25 +281,17 @@ impl RuntimeStatusHandle {
             .await;
     }
 
-    async fn publish_snapshot(&self, snapshot: &ActiveRuntimeSnapshot, result: ReconcileResult) {
-        if let Err(error) = self.readiness.publish_snapshot(snapshot).await {
-            tracing::error!(error = %error, "failed to publish runtime behavior readiness source");
-            return;
-        }
+    async fn publish_snapshot(
+        &self,
+        snapshot: &ActiveRuntimeSnapshot,
+        result: ReconcileResult,
+    ) -> anyhow::Result<()> {
+        self.readiness.publish_snapshot(snapshot).await?;
         let executor_status = executor_status_fields(snapshot);
         self.update(|row| {
             let mut changed = false;
-            let generation = i64::try_from(snapshot.generation).unwrap_or(i64::MAX);
             if row.reconcile_phase != ReconcilePhase::Idle.as_str() {
                 row.reconcile_phase = ReconcilePhase::Idle.as_str().to_string();
-                changed = true;
-            }
-            if row.active_generation != generation {
-                row.active_generation = generation;
-                changed = true;
-            }
-            if row.default_behavior_id != snapshot.default_behavior_id {
-                row.default_behavior_id = snapshot.default_behavior_id.clone();
                 changed = true;
             }
             if apply_executor_status(row, &executor_status) {
@@ -316,6 +313,7 @@ impl RuntimeStatusHandle {
             changed
         })
         .await;
+        Ok(())
     }
 
     async fn update<F>(&self, mutate: F)
@@ -349,11 +347,7 @@ async fn upsert_runtime_status(
                 filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
                 add: {{
                     agent_did: "{agent_did}",
-                    process_state: "{process_state}",
                     reconcile_phase: "{reconcile_phase}",
-                    active_generation: {active_generation},
-                    router_generation: {router_generation},
-                    default_behavior_id: "{default_behavior_id}",
                     behavior_executor_capacity: {behavior_executor_capacity},
                     behavior_executor_queue_depth: {behavior_executor_queue_depth},
                     behavior_executor_status_json: "{behavior_executor_status_json}",
@@ -363,11 +357,7 @@ async fn upsert_runtime_status(
                     updated_at: "{updated_at}"
                 }},
                 update: {{
-                    process_state: "{process_state}",
                     reconcile_phase: "{reconcile_phase}",
-                    active_generation: {active_generation},
-                    router_generation: {router_generation},
-                    default_behavior_id: "{default_behavior_id}",
                     behavior_executor_capacity: {behavior_executor_capacity},
                     behavior_executor_queue_depth: {behavior_executor_queue_depth},
                     behavior_executor_status_json: "{behavior_executor_status_json}",
@@ -379,11 +369,7 @@ async fn upsert_runtime_status(
             ) {{ _docID }}
         }}"#,
         agent_did = escape_graphql_string(&row.agent_did),
-        process_state = escape_graphql_string(&row.process_state),
         reconcile_phase = escape_graphql_string(&row.reconcile_phase),
-        active_generation = row.active_generation,
-        router_generation = row.router_generation,
-        default_behavior_id = escape_graphql_string(&row.default_behavior_id),
         behavior_executor_capacity = row.behavior_executor_capacity,
         behavior_executor_queue_depth = row.behavior_executor_queue_depth,
         behavior_executor_status_json = escape_graphql_string(&row.behavior_executor_status_json),

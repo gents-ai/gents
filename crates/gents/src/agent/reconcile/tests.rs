@@ -697,7 +697,6 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
 #[derive(Debug, serde::Deserialize)]
 struct RuntimeStatusRow {
     reconcile_phase: String,
-    active_generation: i64,
     last_reconcile_result: String,
     last_reconcile_error: String,
 }
@@ -711,7 +710,6 @@ async fn fetch_runtime_status(
         r#"{{
             AgentRuntime(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, limit: 1) {{
                 reconcile_phase
-                active_generation
                 last_reconcile_result
                 last_reconcile_error
             }}
@@ -853,10 +851,6 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
     );
     let status = fetch_runtime_status(node.as_ref(), agent_did).await;
     assert_eq!(status.reconcile_phase, publish.post_phase.as_str());
-    assert_eq!(
-        status.active_generation,
-        publish.post_active_generation as i64
-    );
     assert_eq!(status.last_reconcile_result, "applied");
     assert!(status.last_reconcile_error.is_empty());
 
@@ -982,7 +976,6 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         failed_status.reconcile_phase,
         apply_failed.post_phase.as_str()
     );
-    assert_eq!(failed_status.active_generation, 0);
     assert_eq!(failed_status.last_reconcile_result, "error");
     assert!(!failed_status.last_reconcile_error.is_empty());
 
@@ -994,7 +987,6 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     assert_eq!(active_rx.borrow().generation, 2);
     let recovered_status = fetch_runtime_status(node.as_ref(), agent_did).await;
     assert_eq!(recovered_status.reconcile_phase, "idle");
-    assert_eq!(recovered_status.active_generation, 2);
     assert_eq!(recovered_status.last_reconcile_result, "applied");
     assert!(recovered_status.last_reconcile_error.is_empty());
 
@@ -1028,6 +1020,27 @@ impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for FailGenera
     }
 }
 
+struct GateGenerationSourceWriter {
+    attempted: Arc<Notify>,
+    release: Arc<Semaphore>,
+}
+
+#[async_trait::async_trait]
+impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for GateGenerationSourceWriter {
+    async fn upsert(
+        &self,
+        _agent_did: &str,
+        snapshot: &gents_protocol::row::BehaviorReadinessSnapshot,
+        _updated_at: &str,
+    ) -> Result<()> {
+        if snapshot.active_generation == 2 {
+            self.attempted.notify_one();
+            self.release.acquire().await.unwrap().forget();
+        }
+        Ok(())
+    }
+}
+
 struct PublisherBackedSlotFailurePolicy {
     runtime_status: RuntimeStatusHandle,
 }
@@ -1038,20 +1051,21 @@ impl SlotFailurePolicy for PublisherBackedSlotFailurePolicy {
         1
     }
 
-    async fn on_slot_created(&self, behavior_id: &str, generation: u64) {
+    async fn on_slot_created(&self, behavior_id: &str, generation: u64) -> Result<()> {
         self.runtime_status
             .readiness()
             .register_slot(behavior_id, generation)
             .await
-            .expect("register test slot standing");
+            .context("register test slot standing")?;
+        Ok(())
     }
 
-    async fn try_demote(&self, behavior_id: &str, generation: u64, error: &str) -> bool {
+    async fn try_demote(&self, behavior_id: &str, generation: u64, error: &str) -> Result<bool> {
         self.runtime_status
             .readiness()
             .demote_slot(behavior_id, generation, error.to_string())
             .await
-            .expect("demote test slot")
+            .context("demote test slot")
     }
 
     async fn on_slot_retired(&self, behavior_id: &str, generation: u64, _recreated: bool) {
@@ -1061,6 +1075,121 @@ impl SlotFailurePolicy for PublisherBackedSlotFailurePolicy {
             .await
             .expect("retire test slot");
     }
+}
+
+struct FailSecondRegistrationPolicy {
+    registrations: AtomicUsize,
+    retired: StdMutex<Vec<(String, u64)>>,
+}
+
+#[async_trait::async_trait]
+impl SlotFailurePolicy for FailSecondRegistrationPolicy {
+    fn build_failure_budget(&self) -> u32 {
+        1
+    }
+
+    async fn on_slot_created(&self, _behavior_id: &str, _generation: u64) -> Result<()> {
+        if self.registrations.fetch_add(1, Ordering::SeqCst) == 1 {
+            anyhow::bail!("injected slot registration failure");
+        }
+        Ok(())
+    }
+
+    async fn try_demote(&self, _behavior_id: &str, _generation: u64, _error: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    async fn on_slot_retired(&self, behavior_id: &str, generation: u64, _recreated: bool) {
+        self.retired
+            .lock()
+            .unwrap()
+            .push((behavior_id.to_string(), generation));
+    }
+}
+
+#[tokio::test]
+async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let initial = Arc::new(
+        PendingAgentBehavior::new("general")
+            .build_with_identity_for_test(test_identity("register-failure-initial")),
+    );
+    let mut changed = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("register-failure-changed"));
+    changed.system_prompt = "changed".to_string();
+    let added = Arc::new(
+        PendingAgentBehavior::new("second")
+            .build_with_identity_for_test(test_identity("register-failure-second")),
+    );
+    let initial_snapshot = snapshot_for_behaviors(node.as_ref(), "general", vec![initial]).await;
+    let replacement_snapshot =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(changed), added]).await;
+    let started_generations = Arc::new(StdMutex::new(Vec::new()));
+    let runner = {
+        let started_generations = started_generations.clone();
+        move |_behavior: Arc<AgentBehavior>,
+              _tool_surface: Arc<ToolSurface>,
+              _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              generation: u64,
+              mut shutdown: watch::Receiver<bool>| {
+            started_generations.lock().unwrap().push(generation);
+            async move {
+                let _ = shutdown.changed().await;
+                Ok(())
+            }
+        }
+    };
+    let (runtime_status_owner, runtime_status) =
+        RuntimeStatusHandle::start(node.clone(), "did:test:registration-failure");
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut supervisor = GenerationSupervisor::bootstrap(
+        initial_snapshot,
+        crate::admission::AdmissionRegistry::new(node),
+        crate::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 2,
+        },
+        runner,
+        runtime_status,
+        shutdown_rx.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    let policy = Arc::new(FailSecondRegistrationPolicy {
+        registrations: AtomicUsize::new(0),
+        retired: StdMutex::new(Vec::new()),
+    });
+    supervisor.slot_failure_policy = Some(policy.clone());
+    let (active_tx, _active_rx) = watch::channel(supervisor.current_snapshot());
+
+    let error = supervisor
+        .apply_snapshot(replacement_snapshot, 2, &active_tx, shutdown_rx)
+        .await
+        .expect_err("second slot registration must reject the generation");
+    assert!(error.to_string().contains("register staged behavior slot"));
+    assert_eq!(supervisor.current_snapshot.generation, 1);
+    assert_eq!(supervisor.active_slots["general"].generation, 1);
+    assert_eq!(policy.registrations.load(Ordering::SeqCst), 2);
+    assert_eq!(policy.retired.lock().unwrap().len(), 1);
+    assert!(
+        !started_generations.lock().unwrap().contains(&2),
+        "registration is validated before any candidate executor starts"
+    );
+
+    shutdown_tx.send_replace(true);
+    supervisor.shutdown_slots().await;
+    assert!(
+        policy
+            .retired
+            .lock()
+            .unwrap()
+            .contains(&("general".to_string(), 1)),
+        "supervisor shutdown must retire the active generation standing"
+    );
+    runtime_status_owner.close().await.unwrap();
 }
 
 #[tokio::test]
@@ -1218,8 +1347,17 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
 async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let (runtime_status_owner, runtime_status) =
-        RuntimeStatusHandle::start(node.clone(), "did:test:closed-active-watch");
+    let source_attempted = Arc::new(Notify::new());
+    let source_release = Arc::new(Semaphore::new(0));
+    let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        "did:test:closed-active-watch",
+        Arc::new(GateGenerationSourceWriter {
+            attempted: source_attempted.clone(),
+            release: source_release.clone(),
+        }),
+        Duration::from_millis(1),
+    );
     let initial = Arc::new(
         PendingAgentBehavior::new("general")
             .build_with_identity_for_test(test_identity("closed-watch-initial")),
@@ -1233,10 +1371,12 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     let exited = Arc::new(AtomicUsize::new(0));
     let generation_one_exit = Arc::new(Semaphore::new(0));
     let generation_two_exit = Arc::new(Semaphore::new(0));
+    let generation_two_waiting_exit = Arc::new(Notify::new());
     let runner = {
         let exited = exited.clone();
         let generation_one_exit = generation_one_exit.clone();
         let generation_two_exit = generation_two_exit.clone();
+        let generation_two_waiting_exit = generation_two_waiting_exit.clone();
         move |_behavior: Arc<AgentBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
@@ -1245,6 +1385,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
             let exited = exited.clone();
             let generation_one_exit = generation_one_exit.clone();
             let generation_two_exit = generation_two_exit.clone();
+            let generation_two_waiting_exit = generation_two_waiting_exit.clone();
             async move {
                 loop {
                     let should_exit = tokio::select! {
@@ -1255,6 +1396,9 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
                         } => message.is_none(),
                     };
                     if should_exit {
+                        if generation == 2 {
+                            generation_two_waiting_exit.notify_one();
+                        }
                         let permit = if generation == 1 {
                             generation_one_exit.acquire().await.unwrap()
                         } else {
@@ -1269,7 +1413,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
         }
     };
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let mut supervisor = GenerationSupervisor::bootstrap(
+    let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
         crate::admission::AdmissionRegistry::new(node),
         crate::retry::RetryPolicy {
@@ -1285,13 +1429,28 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     .await
     .unwrap();
     let (active_tx, active_rx) = watch::channel(supervisor.current_snapshot());
-    drop(active_rx);
 
-    let error = supervisor
-        .apply_snapshot(replacement_snapshot, 2, &active_tx, shutdown_rx)
-        .await
-        .expect_err("closed active snapshot receiver must reject publication");
+    let apply = tokio::spawn(async move {
+        let mut supervisor = supervisor;
+        let result = supervisor
+            .apply_snapshot(replacement_snapshot, 2, &active_tx, shutdown_rx)
+            .await;
+        (supervisor, result)
+    });
+    source_attempted.notified().await;
+    drop(active_rx);
+    source_release.add_permits(1);
+    generation_two_waiting_exit.notified().await;
+    assert!(
+        !apply.is_finished(),
+        "closed watch rollback must retain the staged generation until it joins"
+    );
+    generation_two_exit.add_permits(1);
+    let (supervisor, result) = apply.await.unwrap();
+    let error = result.expect_err("closed active snapshot receiver must reject publication");
     assert!(error.to_string().contains("receiver closed"));
+    assert_eq!(supervisor.current_snapshot.generation, 1);
+    assert_eq!(supervisor.active_slots["general"].generation, 1);
     shutdown_tx.send_replace(true);
     let mut shutdown_task = tokio::spawn(async move { supervisor.shutdown_slots().await });
     assert!(
@@ -1300,14 +1459,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
             .is_err(),
         "shutdown detached the blocked slot owners"
     );
-    generation_two_exit.add_permits(1);
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while exited.load(Ordering::SeqCst) < 1 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("replacement generation should consume its exit permit");
+    assert_eq!(exited.load(Ordering::SeqCst), 1);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), &mut shutdown_task)
             .await
@@ -1532,11 +1684,18 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         fn build_failure_budget(&self) -> u32 {
             3
         }
-        async fn on_slot_created(&self, _behavior_id: &str, _generation: u64) {}
+        async fn on_slot_created(&self, _behavior_id: &str, _generation: u64) -> Result<()> {
+            Ok(())
+        }
 
-        async fn try_demote(&self, _behavior_id: &str, _generation: u64, _error: &str) -> bool {
+        async fn try_demote(
+            &self,
+            _behavior_id: &str,
+            _generation: u64,
+            _error: &str,
+        ) -> Result<bool> {
             self.demote_calls.fetch_add(1, Ordering::SeqCst);
-            false
+            Ok(false)
         }
         async fn on_slot_retired(&self, behavior_id: &str, _generation: u64, recreated: bool) {
             self.retired

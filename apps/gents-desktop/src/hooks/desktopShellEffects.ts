@@ -15,6 +15,7 @@ import {
   shouldAutoRestartP2P,
   timingConfig,
 } from "./desktopShellRuntime";
+import { selectedBehaviorIdForDeployment } from "../lib/behaviorReadiness";
 import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
 
 type DesktopShellEffectsArgs = {
@@ -241,10 +242,13 @@ export function useDesktopShellEffects({
     }
 
     const defaultBehaviorId = selectedDeployment.behaviorReadiness.defaultBehaviorId;
-    const effectiveBehaviorId = selectedBehaviorId ?? defaultBehaviorId;
+    const effectiveBehaviorId = selectedBehaviorIdForDeployment(
+      selectedDeployment,
+      selectedBehaviorId,
+    );
 
-    if (!selectedBehaviorId && defaultBehaviorId) {
-      setSelectedBehaviorId(defaultBehaviorId);
+    if (selectedBehaviorId !== effectiveBehaviorId) {
+      setSelectedBehaviorId(effectiveBehaviorId);
     }
 
     if (

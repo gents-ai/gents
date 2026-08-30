@@ -7,7 +7,10 @@ import type {
   DeploymentView,
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
-import { selectedBehaviorReadinessDecision } from "../src/lib/behaviorReadiness";
+import {
+  selectedBehaviorIdForDeployment,
+  selectedBehaviorReadinessDecision,
+} from "../src/lib/behaviorReadiness";
 
 function deployment(
   status: BehaviorReadinessStatusView,
@@ -125,6 +128,14 @@ describe("selectedBehaviorReadinessDecision", () => {
       behaviorId: null,
       reason: "behavior_not_assigned",
     });
+  });
+
+  it("replaces an agent-scoped selection that the next deployment does not assign", () => {
+    const nextAgent = deployment({ state: "ready", behaviorId: "default" });
+    expect(selectedBehaviorIdForDeployment(nextAgent, "previous-agent-behavior")).toBe(
+      "default",
+    );
+    expect(selectedBehaviorIdForDeployment(nextAgent, "default")).toBe("default");
   });
 
   it.each([

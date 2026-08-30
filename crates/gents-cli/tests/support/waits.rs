@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
+use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow};
 use serde_json::Value;
 
 use super::fs::read_runtime_state_json;
@@ -20,7 +21,9 @@ pub async fn wait_for_runtime_ready(
             &format!(
                 r#"{{
                     AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
+                        agent_did
                         snapshot_json
+                        updated_at
                     }}
                 }}"#,
                 escape_graphql_string(agent_did),
@@ -30,26 +33,22 @@ pub async fn wait_for_runtime_ready(
         match response {
             Ok(response) => {
                 if let Ok(row) = first_graphql_row(&response, "AgentBehaviorReadiness") {
-                    let snapshot = row
-                        .get("snapshot_json")
-                        .and_then(Value::as_str)
-                        .and_then(|snapshot| serde_json::from_str::<Value>(snapshot).ok());
-                    if snapshot.as_ref().is_some_and(|snapshot| {
-                        snapshot.get("process_state").and_then(Value::as_str) == Some("ready")
-                            && snapshot
-                                .get("active_generation")
-                                .and_then(Value::as_u64)
-                                .is_some_and(|generation| {
-                                    generation > 0
-                                        && snapshot.get("router_generation").and_then(Value::as_u64)
-                                            == Some(generation)
-                                })
-                    }) {
-                        return Ok(());
+                    if let Ok(row) =
+                        serde_json::from_value::<AgentBehaviorReadinessRow>(row.clone())
+                    {
+                        if let Ok(snapshot) = decode_behavior_readiness_snapshot(&row, agent_did) {
+                            if snapshot.process_state
+                                == gents_protocol::row::BehaviorReadinessProcessState::Ready
+                                && snapshot.active_generation > 0
+                                && snapshot.router_generation == snapshot.active_generation
+                            {
+                                return Ok(());
+                            }
+                        }
                     }
                 }
             }
-            Err(error) if agent_runtime_schema_is_starting(&error) => {}
+            Err(error) if runtime_schema_is_starting(&error) => {}
             Err(error) => return Err(error),
         }
 
@@ -107,7 +106,6 @@ pub async fn wait_for_runtime_quiescence(
     quiet_period: Duration,
 ) -> Result<i64> {
     let deadline = Instant::now() + Duration::from_secs(45);
-    let runtime_doc_id = wait_for_runtime_doc_id(graphql, agent_did).await?;
     let mut last_generation = None;
     let mut last_change_at = None;
     let mut last_runtime_row = None::<Value>;
@@ -117,38 +115,45 @@ pub async fn wait_for_runtime_quiescence(
             graphql,
             &format!(
                 r#"{{
-                    AgentRuntime(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
+                    AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
+                        agent_did
+                        snapshot_json
+                        updated_at
+                    }}
+                    AgentRuntime(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
                         reconcile_phase
-                        active_generation
-                        router_generation
                         last_reconcile_result
                     }}
                 }}"#,
-                escape_graphql_string(&runtime_doc_id),
+                escape_graphql_string(agent_did),
+                escape_graphql_string(agent_did),
             ),
         )
         .await?;
-        if let Ok(row) = first_graphql_row(&response, "AgentRuntime") {
-            last_runtime_row = Some(row.clone());
-            let generation = row
-                .get("active_generation")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let router_generation = row
-                .get("router_generation")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let phase = row
+        if let (Ok(readiness_row), Ok(runtime_row)) = (
+            first_graphql_row(&response, "AgentBehaviorReadiness"),
+            first_graphql_row(&response, "AgentRuntime"),
+        ) {
+            last_runtime_row = Some(serde_json::json!({
+                "readiness": readiness_row,
+                "diagnostic": runtime_row,
+            }));
+            let decoded_row =
+                serde_json::from_value::<AgentBehaviorReadinessRow>(readiness_row.clone())?;
+            let readiness = decode_behavior_readiness_snapshot(&decoded_row, agent_did)
+                .map_err(|reason| anyhow!("invalid behavior readiness: {reason:?}"))?;
+            let generation = i64::try_from(readiness.active_generation).unwrap_or(i64::MAX);
+            let phase = runtime_row
                 .get("reconcile_phase")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let result = row
+            let result = runtime_row
                 .get("last_reconcile_result")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
 
             if generation >= minimum_generation
-                && router_generation >= minimum_generation
+                && readiness.router_generation == readiness.active_generation
                 && phase == "idle"
                 && matches!(result, "startup" | "applied" | "noop")
             {
@@ -174,7 +179,7 @@ pub async fn wait_for_runtime_quiescence(
 
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for AgentRuntime quiescence at generation >= {minimum_generation} for {agent_did}; last_runtime_row={}",
+                "timed out waiting for authoritative runtime quiescence at generation >= {minimum_generation} for {agent_did}; last_runtime_row={}",
                 last_runtime_row
                     .map(|row| row.to_string())
                     .unwrap_or_else(|| "null".to_string())
@@ -184,42 +189,10 @@ pub async fn wait_for_runtime_quiescence(
     }
 }
 
-pub async fn wait_for_runtime_doc_id(graphql: &str, agent_did: &str) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        let response = graphql_query(
-            graphql,
-            &format!(
-                r#"{{
-                    AgentRuntime(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{
-                        _docID
-                    }}
-                }}"#,
-                escape_graphql_string(agent_did),
-            ),
-        )
-        .await;
-        match response {
-            Ok(response) => {
-                if let Ok(row) = first_graphql_row(&response, "AgentRuntime") {
-                    if let Some(doc_id) = row.get("_docID").and_then(Value::as_str) {
-                        return Ok(doc_id.to_string());
-                    }
-                }
-            }
-            Err(error) if agent_runtime_schema_is_starting(&error) => {}
-            Err(error) => return Err(error),
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for AgentRuntime _docID for {agent_did}");
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
-fn agent_runtime_schema_is_starting(error: &anyhow::Error) -> bool {
+fn runtime_schema_is_starting(error: &anyhow::Error) -> bool {
     let message = error.to_string();
-    message.contains("Cannot query field") && message.contains("AgentRuntime")
+    message.contains("Cannot query field")
+        && (message.contains("AgentRuntime") || message.contains("AgentBehaviorReadiness"))
 }
 
 pub async fn wait_for_request(

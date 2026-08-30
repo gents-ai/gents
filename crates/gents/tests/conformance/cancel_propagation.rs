@@ -539,14 +539,15 @@ async fn runtime_diagnostic(node: &EmbeddedNode, agent_did: &str) -> String {
     let agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
+            AgentBehaviorReadiness(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                limit: 1
+            ) {{ snapshot_json updated_at }}
             AgentRuntime(
                 filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
                 limit: 1
             ) {{
-                process_state
                 reconcile_phase
-                active_generation
-                router_generation
                 last_reconcile_result
                 last_reconcile_error
             }}
