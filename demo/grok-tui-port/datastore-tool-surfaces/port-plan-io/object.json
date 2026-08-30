@@ -9,7 +9,7 @@
       "tool_name": "read_port_recon_audit",
       "collection": "PortReconAudit",
       "description": "Load the closed-ledger acceptance decision.",
-      "fields": ["status", "surface_count", "required_areas", "missing_areas", "summary"],
+      "fields": ["status", "surface_count", "required_areas", "missing_areas", "repository_id", "base_sha", "summary"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

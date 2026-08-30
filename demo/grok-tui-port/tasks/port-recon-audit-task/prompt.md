@@ -20,4 +20,5 @@ tool_call subprocess subagent interrupt`; extra areas are allowed. Confirm:
 
 Call `write_port_recon_audit` exactly once. Use `status=accepted` only if all
 checks pass; otherwise `status=rejected` and enumerate missing/invalid content
-in `missing_areas` and `summary`. Do not supply `run_id`.
+in `missing_areas` and `summary`. Do not supply `run_id`, `repository_id`, or
+`base_sha`; the runtime copies repository/base authority from the closed group.

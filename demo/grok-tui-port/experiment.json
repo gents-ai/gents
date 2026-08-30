@@ -19,8 +19,8 @@
       "gents_root": "${GENTS_GROK_PORT_GENTS_ROOT:-.}",
       "grok_root": "${GENTS_GROK_PORT_GROK_ROOT:-/Users/johnzampolin/go/src/github.com/xai-org/grok-build}",
       "ceiling": "${GENTS_GROK_PORT_CEILING:-/Users/johnzampolin/go/src/github.com}",
-      "surface_min": "${GENTS_GROK_PORT_MIN_SURFACES:-8}",
-      "surface_max": "${GENTS_GROK_PORT_MAX_SURFACES:-16}",
+      "surface_min": "${GENTS_GROK_PORT_MIN_SURFACES:-13}",
+      "surface_max": "${GENTS_GROK_PORT_MAX_SURFACES:-13}",
       "live_model": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
       "live_endpoint": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8001/v1}",
       "orchestrator_home": "${GENTS_GROK_PORT_ORCHESTRATOR_HOME:-.gents/grok-port-home}",
@@ -165,7 +165,7 @@
       {
         "collection": "PortReconAudit",
         "correlation_field": "run_id",
-        "fields": ["status", "surface_count", "required_areas", "missing_areas", "summary"]
+        "fields": ["status", "surface_count", "required_areas", "missing_areas", "repository_id", "base_sha", "summary"]
       },
       {
         "collection": "PortPlan",

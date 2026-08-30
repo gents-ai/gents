@@ -33,6 +33,13 @@ Write between {{ doc.surface_min }} and {{ doc.surface_max }} `PortSurface`
 rows. Put the same integer `expected_total` on every row, equal to the
 number of rows you write.
 
+Before the first write, choose N once. If the bounds are equal, N is exactly
+that shared value. Make a numbered list of exactly N unique surface IDs, then
+call `write_port_surface` exactly N times in that order. Treat every successful
+tool result as final. Do not retry, replace, extend, or add an extra surface.
+After the Nth successful write, call no more tools and finish immediately; an
+N+1th write invalidates the run.
+
 Call `write_port_surface` once per surface with:
 
 - `surface_id`: `{{ event.correlation }}:<area>:<short-slug>`
