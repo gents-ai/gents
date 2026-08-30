@@ -29,12 +29,18 @@ incorrect lifecycle mapping, unsafe error/cancellation behavior, or absent
 tests for the route. Do not perform a broad four-lens repository review here;
 the combined committed trunk receives that review after integration.
 
-For this leader route, explicitly reject any implementation that lacks the
-held sibling lock (`O_NOFOLLOW`, `0600`, PID, nonblocking exclusive `flock`),
-atomic `0700` staging plus `0600` socket publication, or a near-`sun_path`
-test. Reject a bare/unqualified registered version, session-wide message replay,
+For this leader route, explicitly reject any implementation that does not swap
+the socket extension for its sibling lock (`leader.sock` -> `leader.lock`, not
+`leader.sock.lock`) or lacks `O_NOFOLLOW`, forced `0600` mode on an existing
+lock, PID, and nonblocking exclusive `flock`. Reject staging created only under
+the requested parent: publication must use a short `0700` directory at a
+same-device ancestor, a `0600` socket, and separate near-`sun_path` tests for a
+long parent and long filename. Reject a bare/unqualified registered version,
+session-wide message replay,
 unescaped GraphQL interpolation, connection-global JSON-RPC ids, early prompt
-responses, disconnects that leave requests running, or `println!`/`eprintln!`.
+responses, disconnects that leave requests running (especially disconnect
+before the submitted request id is recorded or a failed outbound send after
+submission), or `println!`/`eprintln!`.
 Verify subagent get/list-running/cancel use the audited successful shaped
 not-found/empty results rather than generic method-not-found errors.
 
@@ -44,7 +50,8 @@ file once (a second page is allowed only when a file response is truncated),
 and use one LSP diagnostics batch on changed Rust files. Do not search for
 definitions already established by the implementation anchors, do not inspect
 unchanged `serve.rs` diagnostics, and do not use shell grep/head/sed/find. If
-`tests_run` says Cargo was policy-denied, did not execute, or failed, reject
+`tests_run` says Cargo was policy-denied, did not execute, or its last executed
+focused run failed, reject
 without attempting Cargo from this ReadOnly placement. Stop after the first
 material blocker set; do not spend turns disproving irrelevant diagnostics.
 
