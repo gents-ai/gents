@@ -47,6 +47,11 @@ struct PackManifest {
     /// state from a previous run.
     #[serde(default)]
     bundled_graph_packages: Vec<String>,
+    /// Optional package-specific inference bindings. Every declared role in
+    /// the named package inherits this backend/profile/model instead of the
+    /// bootstrap behavior's defaults, unless that role has an override.
+    #[serde(default)]
+    bundled_graph_bindings: BTreeMap<String, PackGraphBinding>,
 }
 
 fn default_timeout() -> u64 {
@@ -107,6 +112,10 @@ struct PackInit {
     backend_preset: Option<String>,
     #[serde(default)]
     openai_wire_api: Option<String>,
+    /// Initial backend concurrency. Pack-owned backends can still override
+    /// this, but bundled graphs must not accidentally inherit a tiny default.
+    #[serde(default)]
+    max_concurrent: Option<i64>,
     /// `gents init --tool-root`. Required for readonly/write/yolo when not
     /// inferable. Relative paths resolve against the process cwd.
     #[serde(default)]
@@ -120,6 +129,24 @@ struct PackInit {
     /// Packs use this to fail fast when invoked from the wrong checkout.
     #[serde(default)]
     tool_root_markers: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct PackGraphBinding {
+    backend_id: String,
+    profile_id: String,
+    model_name: String,
+    /// Optional tighter bindings for individual logical package roles. Roles
+    /// not listed here inherit the package-level binding above.
+    #[serde(default)]
+    role_overrides: BTreeMap<String, PackGraphRoleBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct PackGraphRoleBinding {
+    backend_id: String,
+    profile_id: String,
+    model_name: String,
 }
 
 fn default_tool_package() -> String {
@@ -687,8 +714,47 @@ fn validate_manifest(manifest: &PackManifest) -> Result<()> {
         if !graph_packages.insert(package) {
             bail!("bundled_graph_packages contains duplicate {package}");
         }
-        gents::graph_package::load_bundled_graph_package(package)
+        let package_asset = gents::graph_package::load_bundled_graph_package(package)
             .with_context(|| format!("loading bundled graph dependency {package}"))?;
+        let Some(binding) = manifest.bundled_graph_bindings.get(package) else {
+            continue;
+        };
+        for (field, value) in [
+            ("backend_id", &binding.backend_id),
+            ("profile_id", &binding.profile_id),
+            ("model_name", &binding.model_name),
+        ] {
+            if value.trim().is_empty() {
+                bail!("bundled_graph_bindings[{package}].{field} must not be empty");
+            }
+        }
+        let declared_roles = package_asset
+            .manifest
+            .roles
+            .iter()
+            .map(|role| role.name.as_str())
+            .collect::<BTreeSet<_>>();
+        for (role, override_binding) in &binding.role_overrides {
+            if !declared_roles.contains(role.as_str()) {
+                bail!("bundled_graph_bindings[{package}].role_overrides names unknown role {role}");
+            }
+            for (field, value) in [
+                ("backend_id", &override_binding.backend_id),
+                ("profile_id", &override_binding.profile_id),
+                ("model_name", &override_binding.model_name),
+            ] {
+                if value.trim().is_empty() {
+                    bail!(
+                        "bundled_graph_bindings[{package}].role_overrides[{role}].{field} must not be empty"
+                    );
+                }
+            }
+        }
+    }
+    for package in manifest.bundled_graph_bindings.keys() {
+        if !graph_packages.contains(package.as_str()) {
+            bail!("bundled_graph_bindings names package {package} that is not bundled");
+        }
     }
     let mut result_collections = BTreeSet::new();
     for result in &manifest.expect.result_documents {
@@ -835,10 +901,93 @@ async fn install_bundled_graph_dependencies(
     graphql: &str,
     agent_did: &str,
     packages: &[String],
+    bindings: &BTreeMap<String, PackGraphBinding>,
+    timeout: Duration,
 ) -> Result<()> {
     for package in packages {
         tracing::info!(%package, "installing bundled graph dependency");
-        let args = vec![
+        let explicit_binding = bindings.get(package);
+        let mut binding_path = None;
+        if let Some(binding) = explicit_binding {
+            let query = format!(
+                r#"{{
+                  HostDeployment(order: {{ created_at: ASC }}, limit: 8) {{ deployment_id }}
+                  InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 2) {{ backend_id enabled }}
+                  InferenceProfile(filter: {{ profile_id: {{ _eq: "{}" }} }}, limit: 2) {{ profile_id }}
+                }}"#,
+                escape_graphql_string(&binding.backend_id),
+                escape_graphql_string(&binding.profile_id),
+            );
+            let response = wait_for_unique_graphql_rows(
+                graphql,
+                &query,
+                &["HostDeployment", "InferenceBackend", "InferenceProfile"],
+                "bundled graph binding targets",
+                timeout,
+            )
+            .await?;
+            let deployment_id = response
+                .pointer("/data/HostDeployment/0/deployment_id")
+                .and_then(Value::as_str)
+                .context("bundled graph binding has no unambiguous HostDeployment")?;
+            let package_asset = gents::graph_package::load_bundled_graph_package(package)?;
+            for override_binding in binding.role_overrides.values() {
+                let override_query = format!(
+                    r#"{{
+                      InferenceBackend(filter: {{ backend_id: {{ _eq: "{}" }} }}, limit: 2) {{ backend_id enabled }}
+                      InferenceProfile(filter: {{ profile_id: {{ _eq: "{}" }} }}, limit: 2) {{ profile_id }}
+                    }}"#,
+                    escape_graphql_string(&override_binding.backend_id),
+                    escape_graphql_string(&override_binding.profile_id),
+                );
+                wait_for_unique_graphql_rows(
+                    graphql,
+                    &override_query,
+                    &["InferenceBackend", "InferenceProfile"],
+                    "bundled graph role override targets",
+                    timeout,
+                )
+                .await?;
+            }
+            let explicit = gents::graph_package::GraphPackageInstallBindings {
+                owner_did: agent_did.to_string(),
+                roles: package_asset
+                    .manifest
+                    .roles
+                    .iter()
+                    .map(|declared| {
+                        let (backend_id, profile_id, model_name) = binding
+                            .role_overrides
+                            .get(&declared.name)
+                            .map(|role| (&role.backend_id, &role.profile_id, &role.model_name))
+                            .unwrap_or((
+                                &binding.backend_id,
+                                &binding.profile_id,
+                                &binding.model_name,
+                            ));
+                        (
+                            declared.name.clone(),
+                            gents::graph_pipeline::PackageRoleBinding {
+                                principal_did: agent_did.to_string(),
+                                deployment_id: deployment_id.to_string(),
+                                backend_id: Some(backend_id.clone()),
+                                profile_id: Some(profile_id.clone()),
+                                model_name: Some(model_name.clone()),
+                            },
+                        )
+                    })
+                    .collect(),
+            };
+            let path = home.join(format!("bundled-graph-bindings-{package}.json"));
+            std::fs::write(
+                &path,
+                serde_json::to_vec_pretty(&explicit)
+                    .context("serializing bundled graph bindings")?,
+            )
+            .with_context(|| format!("writing bundled graph bindings {}", path.display()))?;
+            binding_path = Some(path);
+        }
+        let mut args = vec![
             "graph".to_string(),
             "install".to_string(),
             package.clone(),
@@ -851,6 +1000,10 @@ async fn install_bundled_graph_dependencies(
             "--output".to_string(),
             "json".to_string(),
         ];
+        if let Some(path) = binding_path.as_ref() {
+            args.push("--bindings".to_string());
+            args.push(path_arg(path));
+        }
         run_cli_json(bin, &args)
             .await
             .with_context(|| format!("installing bundled graph dependency {package}"))?;
@@ -1087,6 +1240,10 @@ fn pack_init_cli_args(
         init_args.push("--api-key-env-var".into());
         init_args.push(api_key_env_var.into());
     }
+    if let Some(max_concurrent) = manifest.init.max_concurrent {
+        init_args.push("--max-concurrent".into());
+        init_args.push(max_concurrent.to_string());
+    }
     init_args
 }
 
@@ -1109,17 +1266,23 @@ fn has_correlated_request(response: &Value) -> bool {
         .is_some_and(|rows| !rows.is_empty())
 }
 
-async fn wait_until<F, Fut>(label: &str, deadline: Duration, mut probe: F) -> Result<()>
+async fn wait_until_value<T, F, Fut, P>(
+    label: &str,
+    deadline: Duration,
+    mut probe: F,
+    ready: P,
+) -> Result<T>
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<bool>>,
+    Fut: std::future::Future<Output = Result<T>>,
+    P: Fn(&T) -> bool,
 {
     let started = Instant::now();
     let mut last = None::<String>;
     while started.elapsed() < deadline {
         match probe().await {
-            Ok(true) => return Ok(()),
-            Ok(false) => {}
+            Ok(value) if ready(&value) => return Ok(value),
+            Ok(_) => {}
             Err(error) => last = Some(error.to_string()),
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
@@ -1128,6 +1291,39 @@ where
         Some(error) => bail!("{label} timed out after {}s: {error}", deadline.as_secs()),
         None => bail!("{label} timed out after {}s", deadline.as_secs()),
     }
+}
+
+async fn wait_until<F, Fut>(label: &str, deadline: Duration, probe: F) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<bool>>,
+{
+    wait_until_value(label, deadline, probe, |ready| *ready)
+        .await
+        .map(|_| ())
+}
+
+async fn wait_for_unique_graphql_rows(
+    graphql: &str,
+    query: &str,
+    fields: &[&str],
+    label: &str,
+    deadline: Duration,
+) -> Result<Value> {
+    wait_until_value(
+        label,
+        deadline,
+        || post_graphql(graphql, query),
+        |response| {
+            fields.iter().all(|field| {
+                response
+                    .pointer(&format!("/data/{field}"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| rows.len() == 1)
+            })
+        },
+    )
+    .await
 }
 
 async fn wait_http_ok(url: &str, deadline: Duration) -> Result<()> {
@@ -2941,6 +3137,8 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             &graphql,
             &agent_did,
             &manifest.bundled_graph_packages,
+            &manifest.bundled_graph_bindings,
+            Duration::from_secs(manifest.await_timeout_secs),
         )
         .await?;
         println!(
@@ -3407,6 +3605,7 @@ mod tests {
                 api_key_env_var: None,
                 backend_preset: None,
                 openai_wire_api: None,
+                max_concurrent: None,
                 tool_root: None,
                 tool_root_env_var: None,
                 tool_root_markers: Vec::new(),
@@ -3442,6 +3641,7 @@ mod tests {
             await_timeout_secs: 1,
             scan: None,
             bundled_graph_packages: Vec::new(),
+            bundled_graph_bindings: BTreeMap::new(),
         };
 
         let error = validate_manifest(&manifest).expect_err("unsigned source edges must fail");
@@ -4487,6 +4687,31 @@ mod tests {
                 assert!(!pack.join("event_triggers/port-revise").exists());
                 assert!(!pack.join("tasks/port-revise-task").exists());
                 assert_eq!(experiment["bundled_graph_packages"], json!(["code-review"]));
+                assert_eq!(experiment["init"]["max_concurrent"], 32);
+                assert_eq!(
+                    experiment["bundled_graph_bindings"]["code-review"]["backend_id"],
+                    "grok-port-backend-ws1"
+                );
+                assert_eq!(
+                    experiment["bundled_graph_bindings"]["code-review"]["profile_id"],
+                    "grok-port-code-review-profile"
+                );
+                assert_eq!(
+                    experiment["bundled_graph_bindings"]["code-review"]["role_overrides"]
+                        ["reviewer"]["profile_id"],
+                    "grok-port-code-review-scan-profile"
+                );
+                let scan_profile = read_pack_json_defaults(
+                    &pack.join("inference-profiles/grok-port-code-review-scan-profile/object.json"),
+                )
+                .expect("code-review scan profile should load");
+                assert_eq!(scan_profile["max_turns"], 28);
+                assert_eq!(scan_profile["reasoning_effort"], "none");
+                let coordinator_profile = read_pack_json_defaults(
+                    &pack.join("inference-profiles/grok-port-code-review-profile/object.json"),
+                )
+                .expect("code-review coordinator profile should load");
+                assert_eq!(coordinator_profile["reasoning_effort"], "none");
                 let backend_dirs = std::fs::read_dir(pack.join("inference-backends"))
                     .expect("grok backend directory should load")
                     .collect::<Result<Vec<_>, _>>()
@@ -4524,6 +4749,7 @@ mod tests {
                 .expect("port-integrate-skip trigger should load");
                 assert_eq!(skip_trigger["source_collection"], "PortUnitClosure");
                 assert_eq!(skip_trigger["filter"], "{ status: { _eq: \"blocked\" } }");
+                assert_eq!(skip_trigger["workspace_authority"], "readOnly");
                 let route_review =
                     std::fs::read_to_string(pack.join("tasks/port-review-task/prompt.md"))
                         .expect("route review prompt should load");
@@ -4578,6 +4804,39 @@ mod tests {
                         .len(),
                     13
                 );
+                let audited_surfaces = audited_ledger["surfaces"]
+                    .as_array()
+                    .expect("audited surfaces should be an array");
+                assert_eq!(
+                    audited_surfaces
+                        .iter()
+                        .filter(|surface| surface["verdict"] != "ignore")
+                        .count(),
+                    12
+                );
+                assert!(audited_surfaces.iter().any(|surface| {
+                    surface["surface_id"]
+                        .as_str()
+                        .is_some_and(|id| id.ends_with(":context:compaction"))
+                        && surface["verdict"] == "shaped-stub"
+                }));
+                assert!(audited_surfaces.iter().any(|surface| {
+                    surface["surface_id"]
+                        .as_str()
+                        .is_some_and(|id| id.ends_with(":interrupt:interject"))
+                        && surface["verdict"] == "shaped-stub"
+                }));
+                let stream_wire = audited_surfaces
+                    .iter()
+                    .find(|surface| {
+                        surface["surface_id"]
+                            .as_str()
+                            .is_some_and(|id| id.ends_with(":session:stream-chunks"))
+                    })
+                    .and_then(|surface| surface["grok_wire"].as_str())
+                    .expect("stream surface wire");
+                assert!(stream_wire.contains(r#""content":{"type":"text""#));
+                assert!(stream_wire.contains("not contentBlock"));
                 let recon_behavior =
                     read_pack_json_defaults(&pack.join("agent-behaviors/port-recon/object.json"))
                         .expect("recon behavior should load");
@@ -4619,7 +4878,7 @@ mod tests {
                 assert!(implement_prompt.contains("request_helpers.rs:32-45,295-424"));
                 assert!(implement_prompt.contains("Do not run `cargo`, `rustc`"));
                 assert!(implement_prompt
-                    .contains("`TMPDIR=\"$PWD/target\" cargo test -p gents-cli --lib grok_shim`"));
+                    .contains("`RUSTC_WRAPPER= TMPDIR=\"$PWD/target\" cargo test -p gents-cli --lib grok_shim`"));
                 assert!(implement_prompt.contains("up to four total executions"));
                 assert!(implement_prompt.contains("`x.ai/compact_conversation`"));
                 assert!(implement_prompt.contains("never make a 13th discovery call"));
@@ -4673,7 +4932,20 @@ mod tests {
                     std::fs::read_to_string(pack.join("tasks/port-final-review-task/prompt.md"))
                         .expect("final review prompt should load");
                 assert!(final_review.contains("gents graph run code-review"));
+                assert!(final_review.contains("embedded by this pack"));
                 assert!(final_review.contains("At most two full rounds"));
+                let live_prompt =
+                    std::fs::read_to_string(pack.join("tasks/port-live-task/prompt.md"))
+                        .expect("live prompt should load");
+                assert!(live_prompt.contains("grok_edge_probe.py"));
+                assert!(live_prompt.contains("handshake,\nprompt, tool, subprocess, and cancel"));
+                assert!(live_prompt.contains("`grok -p`\nbypasses leader mode"));
+                assert!(live_prompt.contains("`implement` or\n`shaped-stub`"));
+                let edge_probe = std::fs::read_to_string(pack.join("scripts/grok_edge_probe.py"))
+                    .expect("live edge probe should load");
+                for edge in ["handshake", "prompt", "tool", "subprocess", "cancel", "all"] {
+                    assert!(edge_probe.contains(&format!("\"{edge}\"")));
+                }
                 let publish =
                     std::fs::read_to_string(pack.join("tasks/port-publish-task/prompt.md"))
                         .expect("publish prompt should load");
@@ -5046,6 +5318,7 @@ mod tests {
                 api_key_env_var: None,
                 backend_preset: None,
                 openai_wire_api: None,
+                max_concurrent: None,
                 tool_package: "readonly".into(),
                 tool_root: None,
                 tool_root_env_var: None,
@@ -5077,6 +5350,7 @@ mod tests {
             await_timeout_secs: 1,
             scan: None,
             bundled_graph_packages: Vec::new(),
+            bundled_graph_bindings: BTreeMap::new(),
         };
         let error = validate_manifest(&manifest).expect_err("readonly needs tool_root");
         assert!(error.to_string().contains("tool_root"), "{error}");

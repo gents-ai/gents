@@ -18,6 +18,7 @@ use gents::graph_pipeline::{
 };
 use gents::run_timeline::{RunActivityRows, TimelineInferenceCallRow, TimelineToolCallRow};
 use gents::run_timeline_fetch::load_run_activity_rows;
+use gents_protocol::graphql::graphql_input_literal;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -27,6 +28,17 @@ use crate::cli::{
     GraphRunArgs, GraphScopeArgs, GraphToggleArgs, GraphWatchArgs,
 };
 use crate::{print_json, resolve_agent_did, resolve_config_access};
+
+const CODE_REVIEW_EVIDENCE_MAX_BYTES: usize = 512 * 1024;
+// Datastore query results cap each projected string field at 2,000 bytes.
+// Keep every immutable field below that ceiling, then expose sixteen fields
+// per read so the fixed reads still deliver the complete 512 KiB packet.
+const CODE_REVIEW_EVIDENCE_CHUNKS: usize = 288;
+const CODE_REVIEW_EVIDENCE_CHUNKS_PER_READ: usize = 16;
+const CODE_REVIEW_EVIDENCE_READS: usize =
+    CODE_REVIEW_EVIDENCE_CHUNKS / CODE_REVIEW_EVIDENCE_CHUNKS_PER_READ;
+const CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES: usize =
+    CODE_REVIEW_EVIDENCE_MAX_BYTES.div_ceil(CODE_REVIEW_EVIDENCE_CHUNKS) + 3;
 
 pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
     match command {
@@ -162,6 +174,146 @@ fn resolve_repository(
     Ok((canonical, base_sha, head_sha))
 }
 
+fn truncate_at_utf8_boundary(value: &str, max_bytes: usize) -> &str {
+    let mut end = value.len().min(max_bytes);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+struct CodeReviewEvidence {
+    summary: String,
+    chunks: Vec<String>,
+}
+
+fn split_evidence_packet(packet: &str) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        CODE_REVIEW_EVIDENCE_CHUNKS.is_multiple_of(CODE_REVIEW_EVIDENCE_CHUNKS_PER_READ),
+        "code-review evidence chunks must divide evenly across fixed reads"
+    );
+    let mut chunks = Vec::with_capacity(CODE_REVIEW_EVIDENCE_CHUNKS);
+    let mut start = 0;
+    for index in 1..=CODE_REVIEW_EVIDENCE_CHUNKS {
+        let mut end = if index == CODE_REVIEW_EVIDENCE_CHUNKS {
+            packet.len()
+        } else {
+            packet.len() * index / CODE_REVIEW_EVIDENCE_CHUNKS
+        };
+        while end < packet.len() && !packet.is_char_boundary(end) {
+            end += 1;
+        }
+        chunks.push(packet[start..end].to_owned());
+        start = end;
+    }
+    anyhow::ensure!(
+        chunks
+            .iter()
+            .all(|chunk| chunk.len() <= CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES),
+        "code-review evidence exceeded its per-chunk byte ceiling"
+    );
+    Ok(chunks)
+}
+
+fn code_review_evidence_page_inputs(
+    evidence_id: &str,
+    chunks: &[String],
+) -> Result<Vec<(String, Value)>> {
+    anyhow::ensure!(
+        chunks.len() == CODE_REVIEW_EVIDENCE_CHUNKS,
+        "code-review evidence must contain exactly {CODE_REVIEW_EVIDENCE_CHUNKS} chunks"
+    );
+    let mut pages = Vec::with_capacity(CODE_REVIEW_EVIDENCE_READS);
+    for page in 0..CODE_REVIEW_EVIDENCE_READS {
+        let first = page * CODE_REVIEW_EVIDENCE_CHUNKS_PER_READ;
+        let mut input = serde_json::Map::new();
+        input.insert(
+            "evidence_id".to_owned(),
+            Value::String(evidence_id.to_owned()),
+        );
+        for chunk in first..first + CODE_REVIEW_EVIDENCE_CHUNKS_PER_READ {
+            input.insert(
+                format!("evidence_chunk_{chunk}"),
+                Value::String(chunks[chunk].clone()),
+            );
+        }
+        pages.push((
+            format!("CodeReviewEvidencePage{page}"),
+            Value::Object(input),
+        ));
+    }
+    Ok(pages)
+}
+
+async fn persist_code_review_evidence_pages(
+    access: &ConfigAccess,
+    evidence_id: &str,
+    chunks: &[String],
+) -> Result<()> {
+    let pages = code_review_evidence_page_inputs(evidence_id, chunks)?;
+    let txn = access.begin_apply_txn().await?;
+    let result = async {
+        for (page, (collection, input)) in pages.iter().enumerate() {
+            let mutation = format!(
+                "mutation {{ create_{collection}(input: {}) {{ _docID }} }}",
+                graphql_input_literal(input)?
+            );
+            txn.execute(&mutation).await.with_context(|| {
+                format!("persisting immutable code-review evidence page {page}")
+            })?;
+        }
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    match result {
+        Ok(()) => txn
+            .commit()
+            .await
+            .context("committing immutable code-review evidence pages"),
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
+}
+
+/// Build immutable, host-owned review evidence. Recon sees only the compact
+/// changed-file summary. Scanner-only typed reads expose the full bounded patch
+/// in chunks that remain below the durable tool-result truncation ceiling.
+fn code_review_evidence(repo: &Path, base: &str, head: &str) -> Result<CodeReviewEvidence> {
+    let changed = git_output(repo, &["diff", "--name-status", base, head, "--"])?;
+    let stat = git_output(repo, &["diff", "--stat", base, head, "--"])?;
+    let patch = git_output(
+        repo,
+        &["diff", "--no-ext-diff", "--unified=12", base, head, "--"],
+    )?;
+    let summary = format!(
+        "PINNED BASE: {base}\nPINNED HEAD: {head}\n\nCHANGED FILES:\n{changed}\n\nDIFF STAT:\n{stat}"
+    );
+    let header = format!("{summary}\n\nBOUNDED PATCH:\n");
+    if header.len() >= CODE_REVIEW_EVIDENCE_MAX_BYTES {
+        anyhow::bail!("code-review evidence header exceeds its host-side byte ceiling");
+    }
+    let remaining = CODE_REVIEW_EVIDENCE_MAX_BYTES - header.len();
+    let packet = if patch.len() <= remaining {
+        format!("{header}{patch}")
+    } else {
+        let marker = format!(
+            "\n\n[HOST EVIDENCE TRUNCATED: patch was {} bytes; changed-file ledger above is complete]\n",
+            patch.len()
+        );
+        let patch_budget = remaining.saturating_sub(marker.len());
+        format!(
+            "{header}{}{marker}",
+            truncate_at_utf8_boundary(&patch, patch_budget)
+        )
+    };
+    Ok(CodeReviewEvidence {
+        summary,
+        chunks: split_evidence_packet(&packet)?,
+    })
+}
+
 async fn run(args: GraphRunArgs) -> Result<()> {
     let (access, actor) = access_and_actor(&args.scope).await?;
     let ConfigAccess::Graphql(endpoint) = &access else {
@@ -216,6 +368,7 @@ async fn run(args: GraphRunArgs) -> Result<()> {
             let deployment_id = deployments.into_iter().next().expect("one deployment");
             let (repository_path, base_ref, head_ref) =
                 resolve_repository(&args.repo, &args.base, &args.head)?;
+            let evidence = code_review_evidence(&repository_path, &base_ref, &head_ref)?;
             let workspace = gents::workspace::provision_read_only_workspace(
                 &access,
                 &repository_path,
@@ -224,22 +377,25 @@ async fn run(args: GraphRunArgs) -> Result<()> {
                 &actor,
             )
             .await?;
-            (
-                "review",
-                json!({
-                    "repository_path": ".",
-                    "base_ref": base_ref,
-                    "head_ref": head_ref,
-                    "workspace_id": workspace.workspace.workspace_id,
-                    "workspace_authority": "readOnly",
-                    "workspace_owner_deployment_id": workspace.workspace.owner_deployment_id,
-                    "lens_count": "4",
-                    "lens_min": "4",
-                    "lens_max": "4",
-                    "pr_number": "",
-                    "focus": args.focus.unwrap_or_else(|| "Review the diff for material correctness, safety, durability, and maintainability defects.".to_owned()),
-                }),
-            )
+            let evidence_id = uuid::Uuid::new_v4().to_string();
+            persist_code_review_evidence_pages(&access, &evidence_id, &evidence.chunks).await?;
+            let input = json!({
+                "repository_path": ".",
+                "base_ref": base_ref,
+                "head_ref": head_ref,
+                "workspace_id": workspace.workspace.workspace_id,
+                "workspace_authority": "readOnly",
+                "workspace_owner_deployment_id": workspace.workspace.owner_deployment_id,
+                "lens_count": "4",
+                "lens_min": "4",
+                "lens_max": "4",
+                "pr_number": "",
+                "evidence_id": evidence_id,
+                "evidence_summary": evidence.summary,
+                "evidence_chunk_count": CODE_REVIEW_EVIDENCE_CHUNKS.to_string(),
+                "focus": args.focus.unwrap_or_else(|| "Review the diff for material correctness, safety, durability, and maintainability defects.".to_owned()),
+            });
+            ("review", input)
         }
         "web-deep-research" => {
             if !(2..=8).contains(&args.investigator_count) {
@@ -883,5 +1039,48 @@ mod tests {
             usage_detail(&summary),
             "~8.9m input estimated · output unavailable · 1 completed call unreported"
         );
+    }
+
+    #[test]
+    fn evidence_truncation_preserves_utf8_boundaries() {
+        let value = format!("{}é", "a".repeat(8));
+        assert_eq!(truncate_at_utf8_boundary(&value, 9), "aaaaaaaa");
+        assert_eq!(truncate_at_utf8_boundary(&value, 10), value);
+    }
+
+    #[test]
+    fn evidence_chunks_are_fixed_bounded_and_utf8_safe() {
+        let value = format!("{}é", "a".repeat(CODE_REVIEW_EVIDENCE_MAX_BYTES - 2));
+        let chunks = split_evidence_packet(&value).unwrap();
+        assert_eq!(chunks.len(), CODE_REVIEW_EVIDENCE_CHUNKS);
+        assert_eq!(chunks.concat(), value);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.len() <= CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES));
+        assert!(CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES < 2_000);
+        assert_eq!(
+            CODE_REVIEW_EVIDENCE_CHUNKS_PER_READ * CODE_REVIEW_EVIDENCE_READS,
+            chunks.len()
+        );
+
+        let pages = code_review_evidence_page_inputs("evidence-1", &chunks).unwrap();
+        assert_eq!(pages.len(), CODE_REVIEW_EVIDENCE_READS);
+        let mut reconstructed = Vec::new();
+        for (page, (collection, input)) in pages.iter().enumerate() {
+            assert_eq!(collection, &format!("CodeReviewEvidencePage{page}"));
+            let input = input.as_object().unwrap();
+            assert_eq!(input.len(), CODE_REVIEW_EVIDENCE_CHUNKS_PER_READ + 1);
+            assert_eq!(input["evidence_id"], "evidence-1");
+            let first = page * CODE_REVIEW_EVIDENCE_CHUNKS_PER_READ;
+            for chunk in first..first + CODE_REVIEW_EVIDENCE_CHUNKS_PER_READ {
+                reconstructed.push(
+                    input[&format!("evidence_chunk_{chunk}")]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+        }
+        assert_eq!(reconstructed.concat(), value);
     }
 }

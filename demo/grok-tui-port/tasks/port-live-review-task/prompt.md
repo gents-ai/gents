@@ -4,8 +4,9 @@ Run {{ event.correlation }} closed its live probe ledger.
 
 Call `read_port_final_review_report`, `read_port_surface`, and
 `read_port_live_result` for the complete ledgers. Build the exact set of
-`verdict=implement` surface IDs. Reject duplicate, missing, or extra probe
-surface IDs; a green review with zero implement surfaces must have the single
+surface IDs whose verdict is `implement` or `shaped-stub`. Reject duplicate,
+missing, or extra probe surface IDs; a green review with zero non-ignore
+surfaces must have the single
 blocked `surface_id=none` sentinel. Count a `passed`
 row as failed when `grok_wire_observed` or `gents_docs_observed` is empty or
 does not match that surface's `live_expect`.

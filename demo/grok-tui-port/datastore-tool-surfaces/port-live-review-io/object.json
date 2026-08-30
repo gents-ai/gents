@@ -16,7 +16,7 @@
       "kind": "read",
       "tool_name": "read_port_surface",
       "collection": "PortSurface",
-      "description": "Load the exact implement surface IDs and expectations.",
+      "description": "Load the exact non-ignore surface IDs and expectations.",
       "fields": ["surface_id", "verdict", "live_prompt", "live_expect"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },

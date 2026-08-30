@@ -24,7 +24,7 @@
       "kind": "read",
       "tool_name": "read_port_surface",
       "collection": "PortSurface",
-      "description": "Load implement surfaces and their live prompts.",
+      "description": "Load implement and shaped-stub surfaces and their live probes.",
       "fields": ["surface_id", "area", "verdict", "grok_wire", "gents_docs", "live_prompt", "live_expect", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },

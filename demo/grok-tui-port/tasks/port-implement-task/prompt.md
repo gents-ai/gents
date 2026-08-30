@@ -29,10 +29,11 @@ redesigning it:
 - `AgentRuntime` and lifecycle/session/tool documents remain runtime-owned:
   read and project them, and let normal request execution materialize them;
   do not change schemas, Lean proofs, or runtime lifecycle transitions
-- cover the wire codec, register/initialize/session/prompt/cancel path, event
-  dedup, model/context metadata, and tool/subprocess/subagent projections with
-  focused tests; shaped-stub commands remain record-only and permission UI is
-  out of scope
+- cover the wire codec, register/initialize/session-new/prompt/cancel path,
+  model/context metadata, and tool/subprocess/subagent projections with focused
+  tests; unsupported load/interjection/compaction/terminal/subagent-control
+  methods return explicit errors or not-found results and never synthesize
+  runtime documents; permission UI is out of scope
 
 The first tool batch contains only the two required datastore reads above. The
 next tool batch must use `write_file` or `edit_file` to make these tracked
@@ -83,11 +84,14 @@ without redesigning them:
 
 1. protocol framing/envelopes, then listener + register/registered +
    ping/pong + disconnect, each as the bounded edit above, then tests
-2. ACP initialize and session/new/load state with event-id dedup, then tests
+2. ACP initialize and session/new state, model/mode changes, monotonic event-id
+   emission, and explicit session/load unsupported behavior, then tests
 3. session/prompt via `request_helpers::create_agent_request` and
    session/cancel via `gents::interrupt_request`, then tests
 4. bounded in-process `EmbeddedNode::execute` polling and projections for
-   model/context, tools, subprocesses, and subagents, then tests. Import
+   model/context, tools, subprocesses, and child `AgentRequest` subagents, then
+   tests. Never use static `Task` rows as runtime subagent state, and never
+   create fake AgentMessage or CompactionEntry rows for unsupported controls. Import
    `gents::defra_node::EmbeddedNode`, accept the node by reference/`Arc`, and
    call exactly `node.execute(&query).await`; do not use or search for
    `post_graphql`, an HTTP GraphQL endpoint, or another query helper
@@ -115,7 +119,7 @@ Do not run `cargo`, `rustc`, or another build command until slices 1 through 5
 and their tests are written. The worker shell sandbox may block clang temporary
 files unless its temporary directory is inside the workspace. When implementation
 is complete, run this exact admitted shell command:
-`TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`. Do not add a
+`RUSTC_WRAPPER= TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`. Do not add a
 pipe, redirection, separator, wrapper, `echo`, or preceding shell probe. Its real
 exit status must be preserved. Do not use the shell for grep, git inspection,
 formatting, or any other check; use native tools. If it returns real source
@@ -128,8 +132,9 @@ Before the first Cargo execution, make exactly one native grep call rooted at
 `crates/gents-cli/src/commands/grok_shim` using one alternation that covers the
 entire list below. This is the only native grep call allowed during the request.
 Close this wire checklist with focused tests: `session/set_model`, `session/set_mode`,
-`x.ai/models/update`, `x.ai/compact_conversation`, `x.ai/interject`,
-`x.ai/session/interjection`, `session/cancel`, `available_commands_update`,
+`x.ai/models/update`, explicit errors for `x.ai/compact_conversation` and
+`x.ai/interject` (and no success `x.ai/session/interjection`), `session/cancel`,
+`available_commands_update`,
 `subagent_spawned`, `subagent_progress`, `subagent_finished`, and the shaped
 stub `terminal/create`, `terminal/output`, `terminal/wait_for_exit`,
 `terminal/kill`, and `terminal/release`. The permission gate remains the one

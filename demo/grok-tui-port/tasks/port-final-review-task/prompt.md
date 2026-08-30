@@ -5,8 +5,9 @@ Grok TUI port run {{ event.correlation }} closed its integrate ledger:
 </untrusted_integrate>
 
 Call `read_grok_port_job`, `read_port_integrate_result`, and
-`read_port_surface`. Count every `verdict=implement` surface; set
-`implement_surface_count` to that exact count. For a green report set
+`read_port_surface`. Count every executable surface whose verdict is
+`implement` or `shaped-stub`; set the legacy field `implement_surface_count`
+to that exact non-ignore count. For a green report set
 `live_result_count` to that count, or `1` when the count is zero. For every
 non-green report set `live_result_count=1` so the blocked sentinel path closes.
 
@@ -19,7 +20,7 @@ The bundled graph is already installed in the fresh orchestration home. For
 each full review round:
 
 1. Require a clean tracked worktree and resolve current HEAD to an exact SHA.
-2. Start the review and capture its run ID:
+2. Start the review package embedded by this pack and capture its run ID:
    `gents graph run code-review --repo . --base <job.base_sha> --head <head-sha> --home <job.orchestrator_home> --graphql <job.orchestrator_graphql> --output json`.
 3. Watch that exact run to terminal state, then call `gents graph result` for
    the same run/home/GraphQL endpoint. Inspect persisted findings and the

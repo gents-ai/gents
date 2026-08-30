@@ -9,7 +9,8 @@
     "tool_root_env_var": "GENTS_GROK_PORT_CEILING",
     "tool_root_markers": ["source-inc/gents/Cargo.toml", "xai-org/grok-build/Cargo.toml"],
     "backend_preset": "vllm",
-    "openai_wire_api": "chat-completions"
+    "openai_wire_api": "chat-completions",
+    "max_concurrent": ${GENTS_GROK_PORT_MAX_CONCURRENT_1:-32}
   },
   "seed": {
     "collection": "GrokPortJob",
@@ -230,5 +231,19 @@
     ]
   },
   "await_timeout_secs": ${GENTS_GROK_PORT_AWAIT_TIMEOUT_SECS:-86400},
-  "bundled_graph_packages": ["code-review"]
+  "bundled_graph_packages": ["code-review"],
+  "bundled_graph_bindings": {
+    "code-review": {
+      "backend_id": "grok-port-backend-ws1",
+      "profile_id": "grok-port-code-review-profile",
+      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
+      "role_overrides": {
+        "reviewer": {
+          "backend_id": "grok-port-backend-ws1",
+          "profile_id": "grok-port-code-review-scan-profile",
+          "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}"
+        }
+      }
+    }
+  }
 }

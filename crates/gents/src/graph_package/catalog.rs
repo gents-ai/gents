@@ -269,6 +269,7 @@ mod tests {
     use super::*;
     use crate::document_config::{SurfaceToolDecl, WriteToolFieldFill};
     use crate::graph_pipeline::{compile_graph, CompilerPolicy, StageCapability};
+    use serde_json::{json, Value};
 
     #[test]
     fn bundled_catalog_is_read_only_complete_and_compiler_valid() {
@@ -666,6 +667,125 @@ mod tests {
                 Some(WriteToolFieldFill::SourceField("area_id".to_owned())),
                 "{tool_name}"
             );
+        }
+    }
+
+    #[test]
+    fn code_review_evidence_handoff_is_compact_and_correlation_scoped() {
+        let package = load_bundled_graph_package("code-review").unwrap();
+        let surface: BundledToolSurface = serde_json::from_str(
+            package
+                .asset_text("datastore-tool-surfaces/review-recon-writes/object.json")
+                .unwrap(),
+        )
+        .unwrap();
+        let SurfaceToolDecl::Create(entry) = &surface.entries[0] else {
+            panic!("review recon writer must be a create tool");
+        };
+        let repository_path = entry
+            .fields
+            .iter()
+            .find(|field| field.name == "repository_path")
+            .unwrap();
+        assert!(!repository_path.required);
+        assert_eq!(
+            repository_path.fill,
+            Some(WriteToolFieldFill::SourceField(
+                "repository_path".to_owned()
+            ))
+        );
+        let evidence_id = entry
+            .fields
+            .iter()
+            .find(|field| field.name == "evidence_id")
+            .unwrap();
+        assert!(!evidence_id.required);
+        assert_eq!(
+            evidence_id.fill,
+            Some(WriteToolFieldFill::SourceField("evidence_id".to_owned()))
+        );
+        assert!(entry.fields.iter().all(|field| field.name != "evidence"));
+        let expected_total = entry
+            .fields
+            .iter()
+            .find(|field| field.name == "expected_total")
+            .unwrap();
+        assert!(expected_total.required);
+        assert_eq!(expected_total.fill, None);
+        let recon_prompt = package
+            .asset_text("tasks/review-recon-task/prompt.md")
+            .unwrap();
+        assert!(recon_prompt.contains("{{ doc.evidence_summary }}"));
+        assert!(!recon_prompt.contains("{{ doc.evidence }}"));
+        let scan_prompt = package
+            .asset_text("tasks/review-scan-task/prompt.md")
+            .unwrap();
+        assert!(!scan_prompt.contains("{{ doc.evidence }}"));
+
+        let scan_surface: BundledToolSurface = serde_json::from_str(
+            package
+                .asset_text("datastore-tool-surfaces/review-scan-writes/object.json")
+                .unwrap(),
+        )
+        .unwrap();
+        for index in 0..18 {
+            let tool_name = format!("read_review_evidence_{index}");
+            let tool = scan_surface
+                .entries
+                .iter()
+                .find(|entry| entry.tool_name() == tool_name)
+                .unwrap();
+            let SurfaceToolDecl::Query(tool) = tool else {
+                panic!("{tool_name} must be a query tool");
+            };
+            assert_eq!(tool.collection, format!("CodeReviewEvidencePage{index}"));
+            let first_chunk = index * 16;
+            let expected_fields = (first_chunk..first_chunk + 16)
+                .map(|chunk| format!("evidence_chunk_{chunk}"))
+                .collect::<Vec<_>>();
+            assert_eq!(tool.fields, expected_fields);
+            assert_eq!(tool.filter_fields.len(), 1);
+            assert_eq!(tool.filter_fields[0].name, "evidence_id");
+            assert_eq!(
+                tool.filter_fields[0].fill,
+                Some(WriteToolFieldFill::SourceField("evidence_id".to_owned()))
+            );
+
+            let schema_path = format!("schemas/evidence_page_{index}.graphql");
+            let schema = package.asset_text(&schema_path).unwrap();
+            assert!(
+                schema.starts_with(&format!("type CodeReviewEvidencePage{index} {{")),
+                "{schema_path}"
+            );
+            let schema_fields = schema
+                .lines()
+                .map(str::trim)
+                .filter(|line| line.contains(':'))
+                .map(|line| line.split(':').next().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            let mut expected_schema_fields = vec!["evidence_id".to_owned()];
+            expected_schema_fields.extend(expected_fields.iter().cloned());
+            assert_eq!(schema_fields, expected_schema_fields, "{schema_path}");
+        }
+        assert!(scan_prompt.contains("read_review_evidence_0"));
+        assert!(scan_prompt.contains("read_review_evidence_17"));
+        assert!(scan_prompt.contains("evidence_chunk_287"));
+    }
+
+    #[test]
+    fn code_review_generation_stages_cannot_loop_on_repository_tools() {
+        let package = load_bundled_graph_package("code-review").unwrap();
+        for asset in [
+            "tool-selections/review-recon-tools/object.json",
+            "tool-selections/review-scan-tools/object.json",
+        ] {
+            let selection: Value =
+                serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
+            assert_eq!(selection["enable_file_tools"], false, "{asset}");
+            assert_eq!(selection["enable_bash"], false, "{asset}");
+            assert_eq!(selection["enable_lsp"], false, "{asset}");
+            assert_eq!(selection["enable_context_budget"], false, "{asset}");
+            assert_eq!(selection["backgroundable_tool_names"], json!([]), "{asset}");
         }
     }
 }
