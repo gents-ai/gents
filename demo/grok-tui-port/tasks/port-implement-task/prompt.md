@@ -23,8 +23,9 @@ redesigning it:
   `grok --leader --leader-socket <path>` connects as the pager client
 - implement the 4-byte big-endian leader framing and Grok ACP JSON-RPC/session
   handling from the surface ledger, using fresh Grok wire types
-- reuse existing Gents request submission, document query/projection, and
-  `interrupt_request` helpers; do not copy Codex shim modules
+- reuse existing Gents request submission, in-process embedded-node document
+  query/projection, and `interrupt_request` helpers; do not copy Codex shim
+  modules and do not use an HTTP GraphQL helper
 - `AgentRuntime` and lifecycle/session/tool documents remain runtime-owned:
   read and project them, and let normal request execution materialize them;
   do not change schemas, Lean proofs, or runtime lifecycle transitions
@@ -72,17 +73,24 @@ file below its line ceiling before the bounded resample; never rewrite the old
 scaffold unchanged.
 
 Do not run filesystem searches or shell commands before the scaffold, and do
-not use the shell to edit files. After every tracked edit, use at most 12
-individual filesystem/search/shell calls before the next tracked edit; parallel
-functions count individually. Follow these slices without redesigning them:
+not use the shell to edit files. Native grep is forbidden until the single
+final wire-checklist call described below. After every tracked edit, use at most 12
+individual filesystem/search/shell calls before the next tracked edit;
+parallel functions count individually. If 12 calls have not established a
+signature, write the best compilable slice from the fixed anchors or record the
+unit blocked and finish; never make a 13th discovery call. Follow these slices
+without redesigning them:
 
 1. protocol framing/envelopes, then listener + register/registered +
    ping/pong + disconnect, each as the bounded edit above, then tests
 2. ACP initialize and session/new/load state with event-id dedup, then tests
 3. session/prompt via `request_helpers::create_agent_request` and
    session/cancel via `gents::interrupt_request`, then tests
-4. bounded `EmbeddedNode::execute` polling and projections for model/context,
-   tools, subprocesses, and subagents, then tests
+4. bounded in-process `EmbeddedNode::execute` polling and projections for
+   model/context, tools, subprocesses, and subagents, then tests. Import
+   `gents::defra_node::EmbeddedNode`, accept the node by reference/`Arc`, and
+   call exactly `node.execute(&query).await`; do not use or search for
+   `post_graphql`, an HTTP GraphQL endpoint, or another query helper
 5. the smallest `ServeArgs`/`commands::serve` launch seam, then focused and
    package tests
 
@@ -99,7 +107,9 @@ slice begins instead of searching for symbols:
 - embedded node creation and shim launch seam:
   `crates/gents-cli/src/commands/serve.rs:378-410,540-565,681-770,850-870`
 - direct bounded query examples:
-  `crates/gents-cli/src/commands/codex_shim/background.rs:320-360,450-490`
+  `crates/gents-cli/src/commands/codex_shim/background.rs:316-350,450-490`;
+  these are the complete query signature: import
+  `gents::defra_node::EmbeddedNode` and call `node.execute(&query).await`
 
 Do not run `cargo`, `rustc`, or another build command until slices 1 through 5
 and their tests are written. The worker shell sandbox may block clang temporary
@@ -114,8 +124,10 @@ up to four total executions. If it is `policyDenied` or reports a temporary-file
 sandbox failure, do not diagnose or retry it.
 The host/reviewer will run the full package gate outside the worker sandbox.
 
-Before the first Cargo execution, use native grep on the fresh shim and close
-this wire checklist with focused tests: `session/set_model`, `session/set_mode`,
+Before the first Cargo execution, make exactly one native grep call rooted at
+`crates/gents-cli/src/commands/grok_shim` using one alternation that covers the
+entire list below. This is the only native grep call allowed during the request.
+Close this wire checklist with focused tests: `session/set_model`, `session/set_mode`,
 `x.ai/models/update`, `x.ai/compact_conversation`, `x.ai/interject`,
 `x.ai/session/interjection`, `session/cancel`, `available_commands_update`,
 `subagent_spawned`, `subagent_progress`, `subagent_finished`, and the shaped

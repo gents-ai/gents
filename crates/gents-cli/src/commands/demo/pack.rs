@@ -4609,7 +4609,9 @@ mod tests {
                 assert!(implement_prompt.contains("Gents is the leader"));
                 assert!(implement_prompt.contains("at most 12"));
                 assert!(implement_prompt.contains("Do not search Cargo registries"));
-                assert!(implement_prompt.contains("bounded `EmbeddedNode::execute` polling"));
+                assert!(
+                    implement_prompt.contains("bounded in-process `EmbeddedNode::execute` polling")
+                );
                 assert!(implement_prompt.contains("Immediately after the scaffold is complete"));
                 assert!(implement_prompt.contains("1a. Replace only `protocol.rs`"));
                 assert!(implement_prompt.contains("1b. On the next inference"));
@@ -4620,6 +4622,10 @@ mod tests {
                     .contains("`TMPDIR=\"$PWD/target\" cargo test -p gents-cli --lib grok_shim`"));
                 assert!(implement_prompt.contains("up to four total executions"));
                 assert!(implement_prompt.contains("`x.ai/compact_conversation`"));
+                assert!(implement_prompt.contains("never make a 13th discovery call"));
+                assert!(implement_prompt.contains("do not use or search for"));
+                assert!(implement_prompt.contains("`post_graphql`"));
+                assert!(implement_prompt.contains("only native grep call allowed"));
                 assert!(implement_prompt.contains("do not change schemas, Lean proofs"));
                 assert!(implement_prompt.contains("fresh `grok_shim` module"));
                 let implement_behavior = read_pack_json_defaults(

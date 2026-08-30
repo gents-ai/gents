@@ -10,8 +10,10 @@ launch a Grok leader subprocess and do not implement the opposite client
 direction. Gents owns inference, tools, identity, and persistence. The TUI is
 a keyboard. Do not add DefraDB access-control policy or Grok permission RPCs.
 Do not clone Codex shim files. Target the Grok wire names on the work unit.
-Gents helpers such as `create_agent_request`, `EmbeddedNode::execute`, and the
-interrupt latch are allowed implementation knowledge.
+Gents helpers such as `crate::create_agent_request`,
+`EmbeddedNode::execute`, and the interrupt latch are allowed implementation
+knowledge. Projection polling uses the in-process embedded node only:
+`node.execute(&query).await`. Do not use or search for `post_graphql`.
 
 The architecture is settled: create a fresh `grok_shim` command module inside
 `gents-cli`, use the smallest existing server launch/config seam to bind the
@@ -49,6 +51,10 @@ rerun the same command, for at most four total executions. Never retry after
 `policyDenied` or a temporary-file sandbox failure. Use the native filesystem/
 search tools for every read-only check; any other shell command is intentionally
 denied by the host.
+
+Do not call native grep until the final wire checklist. At that point make
+exactly one grep call rooted at the fresh `grok_shim` module with one alternation
+covering every required wire name. Do not grep any existing repository path.
 
 Prefer tests that will later be driven by live GLM prompts. Keep the change
 inside this work unit. Call `read_port_surface` for the mapped rows. Finish
