@@ -4367,6 +4367,11 @@ mod tests {
                 assert!(plan.contains("never copy the `:`"));
                 assert!(plan.contains("separators from `work_unit_id` into a branch"));
                 assert!(!plan.contains("`gents/<work_unit_id>`"));
+                assert!(plan.contains("Create exactly one executable work unit"));
+                assert!(plan.contains("work_unit_count=1"));
+                assert!(plan.contains("expected_total`: `1`"));
+                assert!(plan.contains("overlapping skeleton files"));
+                assert!(!plan.contains("Do not mix `implement` and `shaped-stub`"));
                 let makefile = std::fs::read_to_string(pack.join("../../Makefile"))
                     .expect("repository Makefile should load");
                 assert!(makefile.contains("GROK_PORT_MIN_SURFACES ?= 13"));
