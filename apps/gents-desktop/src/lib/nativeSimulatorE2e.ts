@@ -94,6 +94,9 @@ async function runNativeSimulatorE2e() {
     await reportStatus({ stage: "starting" });
     await waitForText("Fleet Dashboard", 30_000);
     await reportStatus({ stage: "shell-interactive" });
+    if (document.querySelector('[data-testid="fleet-connect-local"]')) {
+      throw new Error("Mobile shell exposed unsupported local runtime setup");
+    }
 
     let pairedThisRun = false;
     const deploymentControl = await waitForOptional(

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FleetHostDashboard } from "../src/components/fleet/FleetHostDashboard";
 import type {
@@ -43,6 +43,16 @@ const enrollmentRequest: EnrollmentRequestView = {
   ownerAgent: "did:key:z6MkAmy",
   state: "pending",
 };
+
+const originalUserAgent = navigator.userAgent;
+
+afterEach(() => {
+  delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
+  Object.defineProperty(navigator, "userAgent", {
+    configurable: true,
+    value: originalUserAgent,
+  });
+});
 
 describe("FleetHostDashboard add connection flow", () => {
   it("connects the local runtime from the fleet empty state", async () => {
@@ -118,6 +128,36 @@ describe("FleetHostDashboard add connection flow", () => {
         "awaiting server approval",
       );
     });
+  });
+
+  it("offers only authenticated enrollment in the mobile Tauri shell", () => {
+    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X)",
+    });
+
+    render(
+      <FleetHostDashboard
+        addingPeer={false}
+        bootstrap={bootstrap}
+        deployments={[]}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onRequestStatusEnrollment={vi.fn()}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+        {...inferenceProps}
+      />,
+    );
+
+    expect(screen.queryByTestId("fleet-connect-local")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Connect your agent" })).toBeVisible();
+    expect(screen.getByText("Connect agent")).toBeVisible();
   });
 
   it("contains and renders a rejected enrollment request", async () => {
