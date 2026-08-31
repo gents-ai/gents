@@ -124,7 +124,10 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let healthy = run_cli_json(&home_dir, &["diagnose"])?;
+    // Keep the live assertions on the live access path. Auto-discovery intentionally
+    // falls back to local storage when its endpoint probe fails, but the server owns
+    // that store exclusively for the duration of this phase.
+    let healthy = run_cli_json(&home_dir, &["diagnose", "--graphql", &graphql])?;
     assert_eq!(
         healthy
             .pointer("/checks/runtime_behavior_readiness/required")
@@ -151,7 +154,7 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
         ),
     )
     .await?;
-    let malformed = run_cli_json(&home_dir, &["diagnose"])?;
+    let malformed = run_cli_json(&home_dir, &["diagnose", "--graphql", &graphql])?;
     assert_eq!(
         malformed.get("status").and_then(Value::as_str),
         Some("degraded")
