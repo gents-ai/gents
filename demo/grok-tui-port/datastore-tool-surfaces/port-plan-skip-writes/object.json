@@ -12,6 +12,7 @@
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "work_unit_id", "required": true},
+        {"name": "logical_unit_id", "required": true},
         {"name": "implementation_id", "required": true},
         {"name": "workspace_id", "required": true},
         {"name": "status", "required": true},
@@ -28,9 +29,13 @@
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "integrate_id", "required": true},
         {"name": "work_unit_id", "required": true},
+        {"name": "logical_unit_id", "required": true},
         {"name": "workspace_id", "required": true},
         {"name": "status", "required": true},
+        {"name": "attempt", "required": true},
         {"name": "expected_total", "required": true},
+        {"name": "head_sha", "required": true},
+        {"name": "seal_hash", "required": true},
         {"name": "summary", "required": true}
       ]
     }

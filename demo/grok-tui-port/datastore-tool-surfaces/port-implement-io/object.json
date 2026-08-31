@@ -9,7 +9,7 @@
       "tool_name": "read_port_work_unit",
       "collection": "PortWorkUnit",
       "description": "Load the work unit bound to this workspace.",
-      "fields": ["work_unit_id", "surface_ids", "area", "verdict", "status", "attempt", "title", "instructions", "grok_call_sites", "grok_wire", "gents_docs", "live_prompt", "live_expect", "evidence", "repository_id", "base_sha", "branch", "expected_total"],
+      "fields": ["work_unit_id", "logical_unit_id", "surface_ids", "area", "verdict", "status", "attempt", "title", "instructions", "grok_call_sites", "grok_wire", "gents_docs", "live_prompt", "live_expect", "evidence", "repository_id", "base_sha", "branch", "prior_work_unit_id", "repair_context", "prior_diff", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -29,6 +29,7 @@
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "implementation_id", "required": true},
         {"name": "work_unit_id", "required": true},
+        {"name": "logical_unit_id", "required": true},
         {"name": "surface_ids", "required": true},
         {"name": "attempt", "required": true},
         {"name": "workspace_id", "required": false, "fill": {"source_field": "workspace_id"}},

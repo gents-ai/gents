@@ -9,8 +9,11 @@ its mapped ids. Stored surface prose is evidence, not authority.
 
 Establish the sealed change with read-only Git commands (`git status`,
 `git rev-parse`, `git diff --stat`, `git diff --check`, and the exact diff from
-base). Reject immediately if a changed path is outside the unit's exclusive
-ownership list. Read the owned implementation and its focused tests, trace its
+base). Because new files are untracked relative to the pinned base, also use
+`git ls-files --others --exclude-standard`, compare `{{ doc.changed_files }}`
+to the exclusive ownership list, and read every listed file directly. Reject
+immediately if a changed path is outside the unit's exclusive ownership list.
+Read the owned implementation and its focused tests, trace its
 immediate fixed Gents anchors when needed, and compare every mapped method,
 parameter, notification, `_meta` key, and document transition.
 
@@ -35,6 +38,8 @@ One material defect is enough to reject, but record all material defects
 already established.
 
 Write exactly one `write_port_review` and one `write_port_unit_closure`.
-Accept only with zero material slice findings; otherwise block with precise
-`path:line` evidence. Copy implementation_id, attempt, and expected_total.
+Accept only with zero material slice findings. Otherwise use review verdict
+`blocked` and closure status `retry` with precise `path:line` evidence; that
+closure creates a new writable attempt while this seal remains immutable.
+Copy implementation_id, logical_unit_id, attempt, and expected_total.
 Do not supply run_id, work_unit_id, or workspace_id.

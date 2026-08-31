@@ -17,7 +17,7 @@
       "tool_name": "read_port_integrate_result",
       "collection": "PortIntegrateResult",
       "description": "Load the complete serial integration ledger.",
-      "fields": ["integrate_id", "work_unit_id", "workspace_id", "status", "expected_total", "summary"],
+      "fields": ["integrate_id", "work_unit_id", "logical_unit_id", "workspace_id", "status", "attempt", "expected_total", "head_sha", "seal_hash", "summary"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -25,7 +25,7 @@
       "tool_name": "read_port_implementation",
       "collection": "PortImplementation",
       "description": "Load exact slice paths, tests, and contract notes.",
-      "fields": ["implementation_id", "work_unit_id", "surface_ids", "changed_paths", "tests_run", "summary", "expected_total"],
+      "fields": ["implementation_id", "work_unit_id", "logical_unit_id", "surface_ids", "attempt", "changed_paths", "tests_run", "summary", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

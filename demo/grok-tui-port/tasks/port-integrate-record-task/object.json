@@ -1,0 +1,9 @@
+{
+  "task_id": "port-integrate-record-task",
+  "name": "port-integrate-record-task",
+  "description": "Record an applied slice from its host integrator receipt",
+  "behavior_id": "port-integrate-record",
+  "prompt_template": "./prompt.md",
+  "enabled": true,
+  "output_schema_ref": null
+}

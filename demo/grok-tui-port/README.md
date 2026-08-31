@@ -3,7 +3,8 @@
 Map the Grok TUI wire from `grok-build`, audit the closed protocol ledger,
 fan out eight path-disjoint implementation agents in isolated git worktrees,
 directly review every sealed slice in parallel, serial-apply accepted diffs
-onto the operator checkout, and give a dedicated convergence agent ownership
+onto the operator checkout, retry rejected attempts in fresh workspaces, and
+give a dedicated convergence agent ownership
 of the semantic merge and compile/test commit. The pack then runs the bundled
 full **code-review** graph, proves that exact reviewed head with live GLM turns,
 and opens one GitHub PR. Small sealed slices use one direct reviewer; the final
@@ -27,12 +28,15 @@ GrokPortJob
        IsolatedWorkspace at <gents>/.gents/workspaces/gents-ws-<id>-<branch>
   -> implement ReadWrite -> host seal -> WorkspaceReceipt kind=writer
   -> per-slice review ReadOnly on each actual sealed dirty tree (parallel)
-       git diff <base_sha>; mapped wire + targeted tests
+       receipt changed-files + direct untracked-file reads; mapped wire + tests
        zero material findings -> PortUnitClosure accepted
-       else blocked (no same-workspace rewrite; sealed trees are read-only)
+       findings -> PortUnitClosure retry
+         preserve review + sealed diff -> new PortWorkUnit attempt
+         -> new host worktree -> implement -> seal -> independent review
   -> serial Integrate of accepted closures
        host ApplyDiff onto the operator checkout (one trunk HEAD)
        WorkspaceReceipt kind=integrator
+       only that durable receipt -> PortIntegrateResult applied
   -> convergence agent on all 8 applied slices
        reconcile interfaces; fmt; focused test/check; commit exact green HEAD
   -> full bundled code-review graph on the convergence commit
@@ -48,6 +52,9 @@ There is no synthetic merge worktree. The host advances the operator
 `RepositoryPlacement` with serial integrator receipts, then the convergence
 agent performs the semantic merge on that one trunk. This separates mechanical
 patch application from compiler-driven integration and independent review.
+Attempt identity is separate from logical-unit identity: failed seals remain
+immutable audit evidence, while only one host-confirmed integration can close
+each of the eight logical slots. There is no arbitrary attempt ceiling.
 
 Recon is required to emit at least `attach`, `session`, `model`, `context`,
 `tool_call`, `subprocess`, `subagent`, and `interrupt`. Each `PortSurface`

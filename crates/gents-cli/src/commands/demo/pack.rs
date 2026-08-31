@@ -4714,7 +4714,8 @@ mod tests {
                 .as_array()
                 .expect("trigger_ids");
             if pack_name == "grok-tui-port" {
-                assert!(trigger_ids.iter().any(|id| id == "port-integrate-skip"));
+                assert!(trigger_ids.iter().any(|id| id == "port-retry"));
+                assert!(trigger_ids.iter().any(|id| id == "port-integrate-record"));
                 assert!(trigger_ids.iter().any(|id| id == "port-recon-audit"));
                 assert!(trigger_ids.iter().any(|id| id == "port-final-review"));
                 assert!(trigger_ids.iter().any(|id| id == "port-converge"));
@@ -4772,25 +4773,45 @@ mod tests {
                     "accepted"
                 );
                 assert_eq!(
-                    experiment["expect"]["trigger_request_count_sources"]["port-integrate-skip"]
+                    experiment["expect"]["trigger_request_count_sources"]["port-retry"]
                         ["match_value"],
-                    "blocked"
+                    "retry"
                 );
-                let skip_trigger = read_pack_json_defaults(
+                assert_eq!(
+                    experiment["expect"]["trigger_request_count_sources"]["port-integrate-record"]
+                        ["match_value"],
+                    "integrator"
+                );
+                let retry_trigger = read_pack_json_defaults(
                     &pack
                         .join("event_triggers")
-                        .join("port-integrate-skip")
+                        .join("port-retry")
                         .join("object.json"),
                 )
-                .expect("port-integrate-skip trigger should load");
-                assert_eq!(skip_trigger["source_collection"], "PortUnitClosure");
-                assert_eq!(skip_trigger["filter"], "{ status: { _eq: \"blocked\" } }");
-                assert_eq!(skip_trigger["workspace_authority"], "readOnly");
+                .expect("port-retry trigger should load");
+                assert_eq!(retry_trigger["source_collection"], "PortUnitClosure");
+                assert_eq!(retry_trigger["filter"], "{ status: { _eq: \"retry\" } }");
+                assert!(retry_trigger.get("workspace_authority").is_none());
+                let integrate_record_trigger = read_pack_json_defaults(
+                    &pack
+                        .join("event_triggers")
+                        .join("port-integrate-record")
+                        .join("object.json"),
+                )
+                .expect("port-integrate-record trigger should load");
+                assert_eq!(
+                    integrate_record_trigger["source_collection"],
+                    "WorkspaceReceipt"
+                );
+                assert_eq!(
+                    integrate_record_trigger["filter"],
+                    "{ kind: { _eq: \"integrator\" } }"
+                );
                 let route_review =
                     std::fs::read_to_string(pack.join("tasks/port-review-task/prompt.md"))
                         .expect("route review prompt should load");
                 assert!(route_review.contains("exact diff from\nbase"));
-                assert!(route_review.contains("exclusive\nownership list"));
+                assert!(route_review.contains("exclusive ownership list"));
                 assert!(route_review.contains("Cargo deferred by parallel-slice contract"));
                 assert!(route_review.contains("Do not run Cargo"));
                 assert!(!route_review.contains("gents graph run code-review"));
@@ -4927,12 +4948,15 @@ mod tests {
                 assert!(plan.contains("expected_total=8"));
                 assert!(plan.contains("work_unit_count=8"));
                 assert!(plan.contains("deliberate attach duplication"));
-                assert_eq!(experiment["expect"]["collection_counts"]["PortWorkUnit"], 8);
-                assert_eq!(
-                    experiment["expect"]["collection_counts"]["PortImplementation"],
-                    8
-                );
-                assert_eq!(experiment["expect"]["collection_counts"]["PortReview"], 8);
+                assert!(experiment["expect"]["collection_counts"]
+                    .get("PortWorkUnit")
+                    .is_none());
+                assert!(experiment["expect"]["collection_counts"]
+                    .get("PortImplementation")
+                    .is_none());
+                assert!(experiment["expect"]["collection_counts"]
+                    .get("PortReview")
+                    .is_none());
                 assert_eq!(
                     experiment["expect"]["collection_counts"]["PortIntegrateResult"],
                     8
@@ -4962,7 +4986,8 @@ mod tests {
                 let convergence =
                     std::fs::read_to_string(pack.join("tasks/port-converge-task/prompt.md"))
                         .expect("convergence prompt should load");
-                assert!(convergence.contains("exactly eight distinct integration rows"));
+                assert!(convergence.contains("exactly eight integration rows"));
+                assert!(convergence.contains("distinct `logical_unit_id` values"));
                 assert!(convergence.contains("semantic merge\nagent"));
                 assert!(convergence.contains("cargo test -p gents-cli --lib grok_shim"));
                 assert!(convergence.contains("cargo check -p gents-cli --all-targets"));
