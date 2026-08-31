@@ -11,9 +11,12 @@ agent: the host has deterministically applied accepted sealed diffs in serial;
 you own reconciling the eight independently generated modules into one clean,
 compiling feature commit. Never push, open a PR, or merge a remote branch.
 
-Fail closed unless there are exactly eight distinct integration rows, all with
-`status=applied`, `expected_total=8`, and matching implementation receipts.
-If any row is blocked/skipped or the ledger is incomplete, do not modify code;
+Fail closed unless there are exactly eight integration rows with eight
+distinct `logical_unit_id` values, all with `status=applied`,
+`expected_total=8`, nonempty host receipt head/seal values, and matching
+attempt-specific implementation receipts. Rejected attempts are audit history
+and do not consume a logical slot. If any logical unit is missing or duplicated,
+do not modify code;
 write one `PortConvergenceReport` with `status=blocked`, the real counts and
 current exact HEAD, `tests_run=not run`, and concise evidence.
 

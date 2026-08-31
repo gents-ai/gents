@@ -1,6 +1,7 @@
 type PortWorkUnit {
   run_id: String @index @immutable
   work_unit_id: String @index(unique: true) @immutable
+  logical_unit_id: String @index @immutable
   surface_ids: String @immutable
   area: String @immutable
   verdict: String @immutable
@@ -17,6 +18,9 @@ type PortWorkUnit {
   repository_id: String @immutable
   base_sha: String @immutable
   branch: String @immutable
+  prior_work_unit_id: String @immutable
+  repair_context: String @immutable
+  prior_diff: String @immutable
   caused_by_correlation: String @immutable
   expected_total: String @immutable
 }

@@ -1,6 +1,6 @@
 {
   "name": "grok-tui-port",
-  "description": "Map the Grok TUI wire, fan out eight path-disjoint GLM writers and sealed reviews, serial-apply, semantically converge, full-review, live-prove, then open a PR",
+  "description": "Map the Grok TUI wire, fan out eight path-disjoint GLM writers, retry rejected seals in fresh workspaces, record host-confirmed serial integration, semantically converge, full-review, live-prove, then open a PR",
   "init": {
     "inference_url": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8001/v1}",
     "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
@@ -44,8 +44,9 @@
       "port-plan-skip",
       "port-implement",
       "port-review",
+      "port-retry",
       "port-integrate",
-      "port-integrate-skip",
+      "port-integrate-record",
       "port-converge",
       "port-final-review",
       "port-live",
@@ -77,11 +78,17 @@
         "match_field": "status",
         "match_value": "accepted"
       },
-      "port-integrate-skip": {
+      "port-retry": {
         "collection": "PortUnitClosure",
         "correlation_field": "run_id",
         "match_field": "status",
-        "match_value": "blocked"
+        "match_value": "retry"
+      },
+      "port-integrate-record": {
+        "collection": "WorkspaceReceipt",
+        "correlation_field": "caused_by_correlation",
+        "match_field": "kind",
+        "match_value": "integrator"
       }
     },
     "signed_provenance": true,
@@ -91,7 +98,8 @@
       "port-plan",
       "port-implement",
       "port-review",
-      "port-integrate",
+      "port-retry",
+      "port-integrate-record",
       "port-converge",
       "port-final-review",
       "port-live",
@@ -124,12 +132,12 @@
         "required_tool_names": ["read_port_surface", "read_port_implementation", "write_port_review", "write_port_unit_closure"]
       },
       {
-        "task_id": "port-integrate-task",
-        "required_tool_names": ["write_port_integrate_result"]
+        "task_id": "port-retry-task",
+        "required_tool_names": ["read_port_work_unit", "read_port_review", "write_port_work_unit"]
       },
       {
-        "task_id": "port-integrate-skip-task",
-        "required_tool_names": ["write_port_integrate_result"]
+        "task_id": "port-integrate-record-task",
+        "required_tool_names": ["read_port_work_unit", "read_port_implementation", "write_port_integrate_result"]
       },
       {
         "task_id": "port-converge-task",
@@ -159,10 +167,6 @@
       "PortSurface": 1,
       "PortReconAudit": 1,
       "PortPlan": 1,
-      "PortWorkUnit": 8,
-      "PortImplementation": 8,
-      "PortReview": 8,
-      "PortUnitClosure": 8,
       "PortIntegrateResult": 8,
       "PortConvergenceReport": 1,
       "PortFinalReviewReport": 1,
@@ -189,22 +193,22 @@
       {
         "collection": "PortWorkUnit",
         "correlation_field": "run_id",
-        "fields": ["work_unit_id", "surface_ids", "area", "verdict", "status", "title", "live_prompt", "expected_total"]
+        "fields": ["work_unit_id", "logical_unit_id", "surface_ids", "area", "verdict", "status", "attempt", "title", "prior_work_unit_id", "repair_context", "expected_total"]
       },
       {
         "collection": "PortReview",
         "correlation_field": "run_id",
-        "fields": ["review_id", "work_unit_id", "implementation_id", "attempt", "verdict", "evidence", "notes"]
+        "fields": ["review_id", "work_unit_id", "logical_unit_id", "implementation_id", "attempt", "verdict", "evidence", "notes"]
       },
       {
         "collection": "PortUnitClosure",
         "correlation_field": "run_id",
-        "fields": ["work_unit_id", "implementation_id", "status", "attempt", "expected_total"]
+        "fields": ["work_unit_id", "logical_unit_id", "implementation_id", "status", "attempt", "expected_total"]
       },
       {
         "collection": "PortIntegrateResult",
         "correlation_field": "run_id",
-        "fields": ["integrate_id", "work_unit_id", "status", "summary"]
+        "fields": ["integrate_id", "work_unit_id", "logical_unit_id", "status", "attempt", "head_sha", "seal_hash", "summary"]
       },
       {
         "collection": "PortConvergenceReport",

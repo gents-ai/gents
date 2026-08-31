@@ -3,6 +3,7 @@ Run {{ event.correlation }} accepted sealed workspace
 (implementation `{{ doc.implementation_id }}`).
 
 This request is Integrate-bound. Do not git commit, git add, or mutate trunk.
-Inspect the sealed tree if needed, then call `write_port_integrate_result`
-once with unique `integrate_id`, `status=applied`, and a short `summary`.
-Do not supply `run_id`, `work_unit_id`, `workspace_id`, or `expected_total`.
+Inspect the sealed tree if needed, then finish with a short textual
+acknowledgement. Do not write an integration result: the host applies the
+sealed diff only after this request succeeds, and a separate receipt-triggered
+stage records `applied` after that host action has durably succeeded.

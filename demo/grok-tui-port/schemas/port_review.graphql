@@ -2,6 +2,7 @@ type PortReview {
   run_id: String @index @immutable
   review_id: String @index(unique: true) @immutable
   work_unit_id: String @immutable
+  logical_unit_id: String @index @immutable
   implementation_id: String @immutable
   workspace_id: String @immutable
   attempt: String @immutable
