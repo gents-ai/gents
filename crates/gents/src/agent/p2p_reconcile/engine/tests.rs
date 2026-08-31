@@ -328,6 +328,46 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
 }
 
 #[test]
+fn enrolled_client_outbound_route_preserves_directional_authority() {
+    let signed_endpoint = EnrollmentEndpointEntry {
+        peer_id: "runtime-peer".to_string(),
+        agent_did: "did:key:runtime".to_string(),
+        address: "/ip4/127.0.0.1/tcp/4001/p2p/runtime-peer".to_string(),
+        desired_id: "runtime-peer:client-to-runtime".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
+    };
+    let desired = data_plane_desired_from_pairing_row(
+        PairingStateRow {
+            peer_id: Some("runtime-peer:client-to-runtime".to_string()),
+            agent_did: Some("did:key:phone".to_string()),
+            replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
+            template: Some("client".to_string()),
+            ..Default::default()
+        },
+        &signed_endpoint,
+        "did:key:phone",
+    )
+    .expect("client data-plane desired")
+    .expect("some client data-plane layer");
+
+    assert!(desired.replicator_collections.contains("AgentRequest"));
+    assert!(!desired.replicator_collections.contains("AgentBehavior"));
+    let encoded = serde_json::to_string(
+        desired
+            .replicator_filter
+            .get("AgentRequest")
+            .expect("request filter"),
+    )
+    .unwrap();
+    assert!(encoded.contains("requester_did"));
+    assert!(encoded.contains("did:key:phone"));
+    assert!(encoded.contains("agent_did"));
+    assert!(encoded.contains("did:key:runtime"));
+}
+
+#[test]
 fn protocol_collection_in_app_data_plane_is_rejected_without_stalling_control_pairing() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-app".to_string(),

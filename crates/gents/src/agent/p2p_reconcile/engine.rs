@@ -1284,6 +1284,19 @@ fn data_plane_desired_from_pairing_row(
         resolve_template(DEFAULT_PAIRING_TEMPLATE)
             .expect("default pairing template is in the catalog")
     });
+    // Runtime enrollment rows historically use the unsuffixed member peer as
+    // their return-route key. Desktop-owned routes carry an explicit suffix,
+    // and that direction must survive enrollment materialization: it decides
+    // both which collections may leave this node and which DID owns each side
+    // of the requester/agent filter.
+    let client_route_direction = if template.scope == Scope::ClientRoute {
+        row.peer_id
+            .as_deref()
+            .and_then(|route_id| super::policy::client_route_direction(route_id).ok())
+            .unwrap_or(super::policy::PairingDirection::RuntimeToClient)
+    } else {
+        super::policy::PairingDirection::RuntimeToClient
+    };
     let peer_did = signed_endpoint.agent_did.trim();
     if data_plane_scope_requires_signed_peer_did(&template.scope) && peer_did.is_empty() {
         anyhow::bail!(
@@ -1322,8 +1335,12 @@ fn data_plane_desired_from_pairing_row(
             };
             (row_cols.clone(), row_cols)
         } else {
-            let cols = template
-                .collections
+            let collections = if template.scope == Scope::ClientRoute {
+                super::policy::client_route_collections(client_route_direction)
+            } else {
+                template.collections
+            };
+            let cols = collections
                 .iter()
                 .map(|&c| c.to_string())
                 .collect::<BTreeSet<_>>();
@@ -1334,8 +1351,13 @@ fn data_plane_desired_from_pairing_row(
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
-    let replicator_filter =
-        data_plane_scope_filter(&template.scope, &filter_collections, peer_did, self_did);
+    let replicator_filter = data_plane_scope_filter(
+        &template.scope,
+        &filter_collections,
+        peer_did,
+        self_did,
+        client_route_direction,
+    );
 
     Ok(Some(PairingDesired {
         collections: subscription_collections,
@@ -1373,6 +1395,7 @@ fn data_plane_scope_filter(
     collections: &[&str],
     signed_peer_did: &str,
     local_did: &str,
+    client_route_direction: super::policy::PairingDirection,
 ) -> PairingFilters {
     match scope {
         Scope::PeerDid { field } => collections
@@ -1394,12 +1417,18 @@ fn data_plane_scope_filter(
                 )
             })
             .collect(),
-        Scope::ClientRoute => super::policy::resolve_template_filters(
-            resolve_template(super::templates::CLIENT_TEMPLATE).expect("client template"),
-            super::policy::PairingDirection::RuntimeToClient,
-            signed_peer_did,
-            local_did,
-        ),
+        Scope::ClientRoute => {
+            let (requester_did, owner_agent_did) = match client_route_direction {
+                super::policy::PairingDirection::ClientToRuntime => (local_did, signed_peer_did),
+                super::policy::PairingDirection::RuntimeToClient => (signed_peer_did, local_did),
+            };
+            super::policy::resolve_template_filters(
+                resolve_template(super::templates::CLIENT_TEMPLATE).expect("client template"),
+                client_route_direction,
+                requester_did,
+                owner_agent_did,
+            )
+        }
     }
 }
 

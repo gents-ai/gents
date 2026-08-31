@@ -204,7 +204,8 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());
     let core =
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
+            .await?;
     let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
     let agent_did = "did:test:amy";
     persist_local_route(&core, agent_did).await?;
@@ -265,6 +266,25 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         hydration_request_status(&core, &request_key).await?,
         Some("rejected".to_string()),
         "passive focus must not rewrite a terminal request"
+    );
+
+    let peer_id_before_restart = core.local_peer_id().to_string();
+    core.shutdown().await?;
+    drop(core);
+    let core =
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
+    assert_eq!(
+        core.local_peer_id(),
+        peer_id_before_restart,
+        "durable hydration request keys require a stable client peer identity"
+    );
+    assert_eq!(
+        core.session_hydration_progress(session_id, agent_did)
+            .await?
+            .phase
+            .as_str(),
+        "failed",
+        "a restarted client must reload the rejected hydration state"
     );
 
     let failed_progress = core

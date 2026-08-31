@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_p2p_adapter::{P2PError, P2POperations as P2POps, P2pDocumentRequest, TransportPeerId};
+use defra_p2p_adapter::{
+    P2PError, P2POperations as P2POps, P2pDocumentRequest, ReplicationFilter, TransportPeerId,
+};
 use gents::agent::p2p_reconcile::enrollment::{
     AuthorizationRevision as PureRevision, AuthorizationRevisionKind as PureRevisionKind,
     DurableEnrollmentDocuments, EnrollmentDecision as PureDecision,
@@ -22,7 +24,7 @@ use gents_protocol::enrollment::{
 use gents_protocol::network_token::EndpointRecord;
 use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -196,20 +198,7 @@ impl ClientCore {
                 (request, document_id)
             }
         };
-        timeout(
-            P2P_OPERATION_TIMEOUT,
-            self.p2p.push_documents_to_peer(
-                &offer.server_peer,
-                vec![P2pDocumentRequest {
-                    collection: "NetworkEnrollmentRequest".to_string(),
-                    doc_id: document_id,
-                }],
-            ),
-        )
-        .await
-        .context("timed out pushing enrollment request to server")?
-        .map_err(map_p2p_error)
-        .context("pushing enrollment request to server")?;
+        push_enrollment_request(&self.p2p, &offer, &request.request_id, &document_id).await?;
 
         Ok(EnrollmentRequestResult {
             request_id: request.request_id,
@@ -346,6 +335,98 @@ impl ClientCore {
             "persisted enrollment request signature is invalid"
         );
         Ok(Some((request, doc_id)))
+    }
+}
+
+async fn push_enrollment_request(
+    p2p: &Arc<dyn P2POps>,
+    offer: &gents_protocol::enrollment::EnrollmentOfferRecord,
+    request_id: &str,
+    document_id: &str,
+) -> Result<()> {
+    const COLLECTION: &str = "NetworkEnrollmentRequest";
+
+    // DefraDB's explicit document replay is intentionally guarded by a live
+    // replicator. Before approval there is no authority-backed data route yet,
+    // so install the smallest possible bootstrap route: one authenticated
+    // server and one immutable enrollment request. It is removed before this
+    // operation returns; the signed enrollment reconciler owns every durable
+    // route after approval.
+    let mut conditions = Map::new();
+    conditions.insert("request_id".to_string(), json!({ "_eq": request_id }));
+    let filters = BTreeMap::from([(
+        COLLECTION.to_string(),
+        ReplicationFilter::predicate(conditions),
+    )]);
+    let collections = vec![COLLECTION.to_string()];
+    let install = timeout(
+        P2P_OPERATION_TIMEOUT,
+        p2p.add_replicator(
+            collections.clone(),
+            Some(&offer.server_ticket),
+            filters,
+            Vec::new(),
+            Some(&offer.admin_did),
+        ),
+    )
+    .await;
+    let install_error = match install {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(
+            map_p2p_error(error).context("installing authenticated enrollment bootstrap route"),
+        ),
+        Err(_) => Some(anyhow::anyhow!(
+            "timed out installing authenticated enrollment bootstrap route"
+        )),
+    };
+
+    let delivery_error = if install_error.is_none() {
+        match timeout(
+            P2P_OPERATION_TIMEOUT,
+            p2p.push_documents_to_peer(
+                &offer.server_peer,
+                vec![P2pDocumentRequest {
+                    collection: COLLECTION.to_string(),
+                    doc_id: document_id.to_string(),
+                }],
+            ),
+        )
+        .await
+        {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => {
+                Some(map_p2p_error(error).context("pushing enrollment request to server"))
+            }
+            Err(_) => Some(anyhow::anyhow!(
+                "timed out pushing enrollment request to server"
+            )),
+        }
+    } else {
+        None
+    };
+
+    let cleanup_error = match timeout(
+        P2P_OPERATION_TIMEOUT,
+        p2p.remove_replicator(collections, Some(&offer.server_ticket)),
+    )
+    .await
+    {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => {
+            Some(map_p2p_error(error).context("removing authenticated enrollment bootstrap route"))
+        }
+        Err(_) => Some(anyhow::anyhow!(
+            "timed out removing authenticated enrollment bootstrap route"
+        )),
+    };
+
+    match (install_error.or(delivery_error), cleanup_error) {
+        (None, None) => Ok(()),
+        (Some(operation), None) => Err(operation),
+        (None, Some(cleanup)) => Err(cleanup),
+        (Some(operation), Some(cleanup)) => Err(operation.context(format!(
+            "enrollment bootstrap route cleanup also failed: {cleanup:#}"
+        ))),
     }
 }
 

@@ -92,6 +92,8 @@ pub mod provider_context_reduction;
 pub(crate) mod registry;
 pub mod rendered_request;
 mod request_admission;
+#[doc(hidden)]
+pub use request_admission::final_claim_admission_disposition;
 pub use request_admission::{
     sign_agent_request_create, sign_agent_request_create_as_registered_target,
 };

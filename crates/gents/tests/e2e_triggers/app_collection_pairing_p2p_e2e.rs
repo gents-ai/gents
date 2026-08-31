@@ -26,6 +26,8 @@ const EXTERNAL_ID: &str = "change-app-1";
 const PROMPT_TEMPLATE: &str = "fired for {{ doc.external_id }}";
 const NETWORK_ID: &str = "net-app-collection-pairing";
 const NETWORK_NAME: &str = "App Collection Pairing Net";
+const HYDRATION_NETWORK_ID: &str = "net-enrollment-session-hydration";
+const HYDRATION_SESSION_ID: &str = "session-enrollment-hydration";
 
 async fn register_change_proposed_schema(node: &EmbeddedNode) {
     // @branchable is REQUIRED — DefraDB only P2P-syncs branchable collections.
@@ -999,4 +1001,389 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     handle_b.await.unwrap().unwrap();
     db_a.node.shutdown().await;
     db_b.node.shutdown().await;
+}
+
+#[derive(Debug, Deserialize)]
+struct HydrationStatusRow {
+    status: Option<String>,
+    served_doc_count: Option<i64>,
+    status_detail: Option<String>,
+}
+
+async fn seed_preexisting_hydration_history(
+    node: &EmbeddedNode,
+    requester_did: &str,
+    agent_did: &str,
+    behavior_id: &str,
+) {
+    let requester_did = escape_graphql_string(requester_did);
+    let agent_did = escape_graphql_string(agent_did);
+    let behavior_id = escape_graphql_string(behavior_id);
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mutation = format!(
+        r#"mutation {{
+            session: create_AgentSession(input: {{
+                session_id: "{HYDRATION_SESSION_ID}",
+                requester_did: "{requester_did}",
+                agent_did: "{agent_did}",
+                agent_name: "hydration-runtime",
+                behavior_id: "{behavior_id}",
+                started: "{now}",
+                status: "active"
+            }}) {{ _docID }}
+            message: create_AgentMessage(input: {{
+                message_key: "{HYDRATION_SESSION_ID}:1",
+                requester_did: "{requester_did}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                session_id: "{HYDRATION_SESSION_ID}",
+                sequence: 1,
+                role: "assistant",
+                content: "pre-existing authenticated hydration history",
+                timestamp: "{now}"
+            }}) {{ _docID }}
+        }}"#,
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "seed pre-existing hydration history: {:?}",
+        response.errors
+    );
+}
+
+async fn create_session_hydration_request(
+    node: &EmbeddedNode,
+    peer_id: &str,
+    requester_did: &str,
+    agent_did: &str,
+) -> String {
+    let request_key = format!("{peer_id}:{HYDRATION_SESSION_ID}");
+    let request_key_gql = escape_graphql_string(&request_key);
+    let requester_did = escape_graphql_string(requester_did);
+    let agent_did = escape_graphql_string(agent_did);
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_SessionHydrationRequest(input: {{
+                    request_key: "{request_key_gql}",
+                    requester_did: "{requester_did}",
+                    agent_did: "{agent_did}",
+                    session_id: "{HYDRATION_SESSION_ID}",
+                    created_at: "{now}",
+                    status: "pending",
+                    status_detail: "",
+                    served_doc_count: 0
+                }}) {{ _docID }}
+            }}"#,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create session hydration request: {:?}",
+        response.errors
+    );
+    request_key
+}
+
+async fn hydration_status(node: &EmbeddedNode, request_key: &str) -> Option<HydrationStatusRow> {
+    let request_key = escape_graphql_string(request_key);
+    let response = node
+        .execute(&format!(
+            r#"{{ SessionHydrationRequest(
+                filter: {{ request_key: {{ _eq: "{request_key}" }} }}, limit: 1
+            ) {{ status served_doc_count status_detail }} }}"#,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query hydration status: {:?}",
+        response.errors
+    );
+    crate::support::first_optional_row(&response, "SessionHydrationRequest")
+}
+
+async fn wait_for_hydrated_history(
+    node: &EmbeddedNode,
+    request_key: &str,
+    requester_did: &str,
+    agent_did: &str,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    let requester_did = escape_graphql_string(requester_did);
+    let agent_did = escape_graphql_string(agent_did);
+    loop {
+        let status = hydration_status(node, request_key).await;
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentMessage(filter: {{
+                    requester_did: {{ _eq: "{requester_did}" }},
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    session_id: {{ _eq: "{HYDRATION_SESSION_ID}" }}
+                }}) {{ content }} }}"#,
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "query hydrated history: {:?}",
+            response.errors
+        );
+        let message_present = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentMessage"))
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    row.get("content").and_then(Value::as_str)
+                        == Some("pre-existing authenticated hydration history")
+                })
+            });
+        if status.as_ref().is_some_and(|row| {
+            row.status.as_deref() == Some("served")
+                && row.served_doc_count.is_some_and(|count| count >= 1)
+        }) && message_present
+        {
+            return;
+        }
+        let last = format!("status={status:?}, message_present={message_present}");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for authenticated session hydration; last={last}"
+        );
+        if let Some(detail) = status
+            .as_ref()
+            .filter(|row| row.status.as_deref() == Some("rejected"))
+            .and_then(|row| row.status_detail.as_deref())
+        {
+            panic!("authenticated session hydration rejected: {detail}");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_enrollment_desired(node: &EmbeddedNode, peer_id: &str, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    let peer_id = escape_graphql_string(peer_id);
+    loop {
+        let response = node
+            .execute(&format!(
+                r#"{{ PeerPairingDesired(filter: {{
+                    peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }}
+                }}) {{ peer_id source }} }}"#,
+            ))
+            .await;
+        let ready = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("PeerPairingDesired"))
+            .and_then(Value::as_array)
+            .is_some_and(|rows| rows.len() == 1);
+        if ready {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for enrollment-owned hydration route; errors={:?}",
+            response.errors
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn install_control_only_authenticated_hydration_route(
+    server: &EmbeddedNode,
+    client: &EmbeddedNode,
+    client_peer: &str,
+    client_addr: &str,
+    requester_did: &str,
+    agent_did: &str,
+) {
+    use gents::agent::p2p_reconcile::{
+        resolve_template, resolve_template_filters, PairingDirection, CLIENT_COLLECTIONS,
+        CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
+    };
+
+    let server_addr = server
+        .p2p()
+        .expect("server P2P")
+        .shareable_address()
+        .await
+        .expect("server address lookup")
+        .expect("server shareable address");
+    let client_p2p = client.p2p().expect("client P2P");
+    let server_p2p = server.p2p().expect("server P2P");
+    client_p2p
+        .connect_peer(&server_addr)
+        .await
+        .expect("connect hydration client to server");
+    client_p2p
+        .add_collections(
+            CLIENT_COLLECTIONS
+                .iter()
+                .map(|collection| (*collection).to_string())
+                .collect(),
+        )
+        .await
+        .expect("subscribe hydration receiver collections");
+    server_p2p
+        .add_collections(vec!["SessionHydrationRequest".to_string()])
+        .await
+        .expect("subscribe hydration control collection");
+    client_p2p
+        .add_replicator(
+            CLIENT_TO_RUNTIME_COLLECTIONS
+                .iter()
+                .map(|collection| (*collection).to_string())
+                .collect(),
+            Some(&server_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("install client hydration control route");
+    server_p2p
+        .add_replicator(
+            vec!["SessionHydrationRequest".to_string()],
+            Some(client_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("install hydration status return route");
+
+    let template = resolve_template(CLIENT_TEMPLATE).expect("client template");
+    let filters = resolve_template_filters(
+        template,
+        PairingDirection::ClientToRuntime,
+        requester_did,
+        agent_did,
+    );
+    let filters = escape_graphql_string(&serde_json::to_string(&filters).expect("pairing filters"));
+    let client_peer = escape_graphql_string(client_peer);
+    let client_addr = escape_graphql_string(client_addr);
+    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let response = server
+        .execute(&format!(
+            r#"mutation {{ create_PeerPairingApplied(input: {{
+                peer_id: "{client_peer}",
+                collections: ["SessionHydrationRequest"],
+                replicator_addresses: ["{client_addr}"],
+                replicator_filter: "{filters}",
+                created_at: "{now}",
+                updated_at: "{now}"
+            }}) {{ _docID }} }}"#,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "record control-only authenticated hydration route: {:?}",
+        response.errors
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticated_enrollment_hydrates_preexisting_session_history() {
+    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
+
+    let server = test_p2p_db("enrollment-session-hydration-server").await;
+    let client = test_p2p_db("enrollment-session-hydration-client").await;
+    let server_identity = server.node_identity.clone();
+    let client_identity = client.node_identity.clone();
+    let server_did = server_identity.did().to_string();
+    let client_did = client_identity.did().to_string();
+
+    seed_preexisting_hydration_history(
+        server.node.as_ref(),
+        &client_did,
+        &server_did,
+        "behavior-enrollment-hydration",
+    )
+    .await;
+
+    let (_server_peer, _server_addr) = wait_for_peer_identity(server.node.as_ref()).await;
+    let (client_peer, client_addr) = wait_for_peer_identity(client.node.as_ref()).await;
+    authorize_enrollment_peer(
+        server.node.clone(),
+        HYDRATION_NETWORK_ID,
+        "Enrollment Session Hydration",
+        server_identity.clone(),
+        client_identity.clone(),
+        &client_peer,
+        &client_addr,
+    )
+    .await;
+
+    let (authority_owner, authority) = gents::agent::p2p_reconcile::enrollment_authority_channel();
+    let enrollment_cancel = tokio_util::sync::CancellationToken::new();
+    let enrollment_handle = tokio::spawn(gents::agent::p2p_reconcile::run_enrollment_reconciler(
+        server.node.clone(),
+        server_identity,
+        authority_owner,
+        enrollment_cancel.clone(),
+    ));
+    wait_for_enrollment_desired(server.node.as_ref(), &client_peer, Duration::from_secs(30)).await;
+    install_control_only_authenticated_hydration_route(
+        server.node.as_ref(),
+        client.node.as_ref(),
+        &client_peer,
+        &client_addr,
+        &client_did,
+        &server_did,
+    )
+    .await;
+
+    let before = client
+        .node
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{HYDRATION_SESSION_ID}" }} }}) {{ _docID }} }}"#,
+        ))
+        .await;
+    assert!(
+        before
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentMessage"))
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "pre-existing history must not arrive before an explicit hydration request: {:?}",
+        before.data
+    );
+
+    let hydration_cancel = tokio_util::sync::CancellationToken::new();
+    let hydration_handle = tokio::spawn(
+        gents::agent::p2p_reconcile::run_session_hydration_reconciler(
+            server.node.clone(),
+            authority,
+            hydration_cancel.clone(),
+        ),
+    );
+
+    let request_key = create_session_hydration_request(
+        client.node.as_ref(),
+        &client_peer,
+        &client_did,
+        &server_did,
+    )
+    .await;
+    wait_for_hydrated_history(
+        client.node.as_ref(),
+        &request_key,
+        &client_did,
+        &server_did,
+        Duration::from_secs(60),
+    )
+    .await;
+
+    hydration_cancel.cancel();
+    enrollment_cancel.cancel();
+    hydration_handle.await.unwrap().unwrap();
+    enrollment_handle.await.unwrap().unwrap();
+    server.node.shutdown().await;
+    client.node.shutdown().await;
 }

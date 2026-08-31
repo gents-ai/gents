@@ -10,8 +10,9 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_admission::{
-    validate_signing_fields, AgentRequestAdmissionKind, AgentRequestAdmissionRecord,
-    AgentRequestSigningFields, RuntimeInternalSourceKind,
+    project_agent_request_admission_disposition, validate_signing_fields,
+    AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
+    AgentRequestAdmissionRecord, AgentRequestSigningFields, RuntimeInternalSourceKind,
 };
 use serde::Deserialize;
 
@@ -58,6 +59,77 @@ impl std::error::Error for AgentRequestAdmissionError {
 
 type AdmissionResult<T> = std::result::Result<T, AgentRequestAdmissionError>;
 
+/// Runtime-owned final claim projection. The conformance suite calls this same
+/// seam so the Lean-generated admission matrix fences the decision used by the
+/// durable verifier rather than only a protocol-local copy.
+pub fn final_claim_admission_disposition(
+    observation_available: bool,
+    observation: AgentRequestAdmissionObservation,
+) -> AgentRequestAdmissionDisposition {
+    project_agent_request_admission_disposition(observation_available, observation)
+}
+
+fn base_admission_observation(
+    kind: AgentRequestAdmissionKind,
+    runtime_source_kind: RuntimeInternalSourceKind,
+) -> AgentRequestAdmissionObservation {
+    AgentRequestAdmissionObservation {
+        kind,
+        signature_valid: false,
+        signed_fields_match: false,
+        branch_fields_exact: false,
+        pending_deadline_absent: false,
+        signer_matches_requester: false,
+        requester_matches_target: false,
+        signer_matches_target: false,
+        signer_matches_issuer: false,
+        requester_matches_issuer: false,
+        current_approval: false,
+        exact_generation: false,
+        authorization_fresh: false,
+        runtime_evidence_present: false,
+        runtime_source_kind,
+        target_runtime_attestation_valid: false,
+        source_binding_current: false,
+        trigger_config_document_binding_current: false,
+        source_document_binding_current: false,
+        source_tool_call_binding_current: false,
+        target_policy_allows: false,
+        bridge_author_binding_current: false,
+        bridge_author_authorization_fresh: false,
+        target_cross_deployment_policy_allows: false,
+    }
+}
+
+fn require_admitted_observation(
+    observation: AgentRequestAdmissionObservation,
+    denied: Option<anyhow::Error>,
+) -> AdmissionResult<()> {
+    match final_claim_admission_disposition(true, observation) {
+        AgentRequestAdmissionDisposition::Admit => Ok(()),
+        AgentRequestAdmissionDisposition::Deny => Err(AgentRequestAdmissionError::denied(
+            denied.unwrap_or_else(|| anyhow::anyhow!(admission_denial_reason(&observation))),
+        )),
+        AgentRequestAdmissionDisposition::Retry => Err(AgentRequestAdmissionError::unavailable(
+            anyhow::anyhow!("AgentRequest admission observation is unavailable"),
+        )),
+    }
+}
+
+fn admission_denial_reason(observation: &AgentRequestAdmissionObservation) -> &'static str {
+    if !observation.pending_deadline_absent {
+        "pending AgentRequest carries a caller-authored execution deadline"
+    } else if !observation.signed_fields_match {
+        "fresh durable AgentRequest does not match the queued request"
+    } else if !observation.branch_fields_exact {
+        "AgentRequest admission branch fields are invalid"
+    } else if !observation.signature_valid {
+        "AgentRequest admission signature is invalid"
+    } else {
+        "fresh AgentRequest admission evidence was denied"
+    }
+}
+
 fn deny_if(condition: bool, message: &'static str) -> AdmissionResult<()> {
     if condition {
         Ok(())
@@ -77,29 +149,9 @@ pub(crate) async fn verify_fresh_local_self_request(
     target_behavior_id: &str,
 ) -> AdmissionResult<AgentRequest> {
     let row = load_signed_request(node, &request.doc_id).await?;
-    deny_if(
-        row.request_id == request.request_id && row.agent_did == request.agent_did,
-        "local-self request identity changed before claim",
-    )?;
-    require_pending_deadline_absent(row.deadline.as_deref())
-        .map_err(AgentRequestAdmissionError::denied)?;
-    validate_signing_fields(&row.signing_fields()).map_err(AgentRequestAdmissionError::denied)?;
-    deny_if(
-        row.behavior_id.as_deref() == Some(target_behavior_id),
-        "local-self request behavior changed before claim",
-    )?;
     let admission = row
         .admission()
         .map_err(AgentRequestAdmissionError::denied)?;
-    admission
-        .validate_canonical_fields()
-        .map_err(AgentRequestAdmissionError::denied)?;
-    deny_if(
-        admission.kind == AgentRequestAdmissionKind::LocalSelf
-            && admission.signer_did == row.agent_did
-            && row.requester_did.as_deref() == Some(row.agent_did.as_str()),
-        "local-self request principal does not exactly own the target agent",
-    )?;
     let verified = identity
         .verify(
             &admission.signer_did,
@@ -109,7 +161,21 @@ pub(crate) async fn verify_fresh_local_self_request(
         .await
         .context("verify local-self AgentRequest signature")
         .map_err(AgentRequestAdmissionError::denied)?;
-    deny_if(verified, "AgentRequest admission signature is invalid")?;
+    let mut observation =
+        base_admission_observation(admission.kind, RuntimeInternalSourceKind::LocalControl);
+    observation.signature_valid = verified;
+    observation.signed_fields_match = row.request_id == request.request_id
+        && row.agent_did == request.agent_did
+        && row.behavior_id.as_deref() == Some(target_behavior_id)
+        && validate_signing_fields(&row.signing_fields()).is_ok();
+    observation.branch_fields_exact =
+        admission.validate_canonical_fields().is_ok() && admission.validate_branch_fields().is_ok();
+    observation.pending_deadline_absent = row.deadline.is_none();
+    observation.signer_matches_requester =
+        row.requester_did.as_deref() == Some(admission.signer_did.as_str());
+    observation.requester_matches_target =
+        row.requester_did.as_deref() == Some(row.agent_did.as_str());
+    require_admitted_observation(observation, None)?;
     row.into_agent_request(request.doc_id.clone())
         .map_err(AgentRequestAdmissionError::denied)
 }
@@ -225,27 +291,8 @@ impl AgentRequestAdmissionVerifier {
         now: chrono::DateTime<Utc>,
     ) -> AdmissionResult<AgentRequest> {
         let row = load_signed_request(self.node.as_ref(), &request.doc_id).await?;
-        deny_if(
-            row.request_id == request.request_id,
-            "request identity changed before claim",
-        )?;
-        deny_if(
-            row.agent_did == request.agent_did,
-            "request target changed before claim",
-        )?;
-        require_pending_deadline_absent(row.deadline.as_deref())
-            .map_err(AgentRequestAdmissionError::denied)?;
-        validate_signing_fields(&row.signing_fields())
-            .map_err(AgentRequestAdmissionError::denied)?;
-        deny_if(
-            row.behavior_id.as_deref() == Some(target_behavior_id),
-            "request behavior changed or no longer belongs to this executor",
-        )?;
         let admission = row
             .admission()
-            .map_err(AgentRequestAdmissionError::denied)?;
-        admission
-            .validate_canonical_fields()
             .map_err(AgentRequestAdmissionError::denied)?;
         let payload = admission.signing_payload(&row.signing_fields());
         let signature_valid = self
@@ -254,99 +301,156 @@ impl AgentRequestAdmissionVerifier {
             .await
             .context("verify AgentRequest admission signature")
             .map_err(AgentRequestAdmissionError::denied)?;
-        deny_if(
-            signature_valid,
-            "AgentRequest admission signature is invalid",
-        )?;
+        let runtime_source_kind = admission
+            .runtime_source_kind
+            .unwrap_or(RuntimeInternalSourceKind::LocalControl);
+        let mut observation = base_admission_observation(admission.kind, runtime_source_kind);
+        observation.signature_valid = signature_valid;
+        observation.signed_fields_match = row.request_id == request.request_id
+            && row.agent_did == request.agent_did
+            && row.behavior_id.as_deref() == Some(target_behavior_id)
+            && validate_signing_fields(&row.signing_fields()).is_ok();
+        observation.branch_fields_exact = admission.validate_canonical_fields().is_ok()
+            && admission.validate_branch_fields().is_ok();
+        observation.pending_deadline_absent = row.deadline.is_none();
+        if !observation.signature_valid
+            || !observation.signed_fields_match
+            || !observation.branch_fields_exact
+            || !observation.pending_deadline_absent
+        {
+            require_admitted_observation(observation, None)?;
+            unreachable!("negative common admission evidence cannot be admitted");
+        }
+        let mut denied = None;
         match admission.kind {
-            AgentRequestAdmissionKind::Omitted => {
-                return Err(AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                    "AgentRequest admission is omitted"
-                )));
-            }
+            AgentRequestAdmissionKind::Omitted => {}
             AgentRequestAdmissionKind::LocalSelf => {
-                deny_if(
-                    row.requester_did.as_deref() == Some(row.agent_did.as_str())
-                        && admission.signer_did == row.agent_did,
-                    "local-self request principal does not exactly own the target agent",
-                )?;
+                observation.signer_matches_requester =
+                    row.requester_did.as_deref() == Some(admission.signer_did.as_str());
+                observation.requester_matches_target =
+                    row.requester_did.as_deref() == Some(row.agent_did.as_str());
             }
             AgentRequestAdmissionKind::Enrollment => {
-                let requester = nonempty(row.requester_did.as_deref()).ok_or_else(|| {
-                    AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                        "enrollment request has no requester DID"
-                    ))
-                })?;
-                deny_if(
-                    admission.signer_did == requester,
-                    "enrollment signer is not requester",
-                )?;
-                let current = self
-                    .enrollment
-                    .fresh_member_authorization(requester)
-                    .await
-                    .context("fresh enrollment request admission projection")
-                    .map_err(AgentRequestAdmissionError::unavailable)?
-                    .ok_or_else(|| {
-                        AgentRequestAdmissionError::denied(anyhow::anyhow!(
+                let requester = nonempty(row.requester_did.as_deref());
+                observation.signer_matches_requester = requester == Some(&admission.signer_did);
+                if !observation.signer_matches_requester {
+                    denied = Some(anyhow::anyhow!("enrollment signer is not requester"));
+                }
+                if let Some(requester) = requester {
+                    let current = self
+                        .enrollment
+                        .fresh_member_authorization(requester)
+                        .await
+                        .context("fresh enrollment request admission projection")
+                        .map_err(AgentRequestAdmissionError::unavailable)?;
+                    if let Some(current) = current {
+                        observation.current_approval = current.owner_agent == row.agent_did;
+                        observation.exact_generation = admission.enrollment_request_id.as_deref()
+                            == Some(current.request_id.as_str())
+                            && admission.enrollment_request_digest.as_deref()
+                                == Some(current.request_digest.as_str())
+                            && admission.enrollment_admin_did.as_deref()
+                                == Some(current.admin_did.as_str())
+                            && admission.enrollment_authorization_sequence
+                                == Some(current.authorization_sequence)
+                            && admission.enrollment_authorization_expires_at.as_deref()
+                                == Some(current.authorization_expires_at.as_str());
+                        match chrono::DateTime::parse_from_rfc3339(
+                            &current.authorization_expires_at,
+                        ) {
+                            Ok(expires) => observation.authorization_fresh = now < expires,
+                            Err(error) => {
+                                denied = Some(
+                                    anyhow::Error::new(error)
+                                        .context("parse enrollment request authorization expiry"),
+                                );
+                            }
+                        }
+                        if !observation.current_approval {
+                            denied = Some(anyhow::anyhow!("enrollment target agent mismatch"));
+                        } else if !observation.exact_generation {
+                            denied = Some(anyhow::anyhow!(
+                                "request carries a stale or mixed enrollment generation"
+                            ));
+                        } else if !observation.authorization_fresh && denied.is_none() {
+                            denied =
+                                Some(anyhow::anyhow!("enrollment authorization lease expired"));
+                        }
+                    } else if denied.is_none() {
+                        denied = Some(anyhow::anyhow!(
                             "requester has no current enrollment authorization"
-                        ))
-                    })?;
-                deny_if(
-                    current.owner_agent == row.agent_did,
-                    "enrollment target agent mismatch",
-                )?;
-                deny_if(
-                    admission.enrollment_request_id.as_deref() == Some(current.request_id.as_str())
-                        && admission.enrollment_request_digest.as_deref()
-                            == Some(current.request_digest.as_str())
-                        && admission.enrollment_admin_did.as_deref()
-                            == Some(current.admin_did.as_str())
-                        && admission.enrollment_authorization_sequence
-                            == Some(current.authorization_sequence)
-                        && admission.enrollment_authorization_expires_at.as_deref()
-                            == Some(current.authorization_expires_at.as_str()),
-                    "request carries a stale or mixed enrollment generation",
-                )?;
-                let expires =
-                    chrono::DateTime::parse_from_rfc3339(&current.authorization_expires_at)
-                        .context("parse enrollment request authorization expiry")
-                        .map_err(AgentRequestAdmissionError::denied)?
-                        .with_timezone(&Utc);
-                deny_if(now < expires, "enrollment authorization lease expired")?;
+                        ));
+                    }
+                } else if denied.is_none() {
+                    denied = Some(anyhow::anyhow!("enrollment request has no requester DID"));
+                }
             }
             AgentRequestAdmissionKind::RuntimeInternal => {
-                deny_if(
-                    admission.runtime_issuer_did.as_deref() == Some(row.agent_did.as_str())
-                        && admission.signer_did == row.agent_did
-                        && row.requester_did.as_deref() == Some(row.agent_did.as_str()),
-                    "runtime-internal request lacks target-runtime attestation",
-                )?;
-                let source = admission
-                    .runtime_source_request_id
-                    .as_deref()
-                    .ok_or_else(|| {
-                        AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                            "runtime-internal request has no source binding"
-                        ))
-                    })?;
-                let source_kind = admission.runtime_source_kind.ok_or_else(|| {
-                    AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                        "runtime-internal request has no explicit source kind"
-                    ))
-                })?;
-                verify_runtime_source_binding(
-                    self.node.as_ref(),
-                    self.peer_admission.as_ref(),
-                    &row,
-                    source,
-                    source_kind,
-                    admission.runtime_bridge_author_did.as_deref(),
-                    target_behavior_id,
-                )
-                .await?;
+                let issuer = admission.runtime_issuer_did.as_deref();
+                let source = admission.runtime_source_request_id.as_deref();
+                observation.runtime_evidence_present =
+                    issuer.is_some() && source.is_some() && admission.runtime_source_kind.is_some();
+                observation.signer_matches_issuer = issuer == Some(&admission.signer_did);
+                observation.requester_matches_issuer = row.requester_did.as_deref() == issuer;
+                observation.signer_matches_target = admission.signer_did == row.agent_did;
+                observation.requester_matches_target =
+                    row.requester_did.as_deref() == Some(row.agent_did.as_str());
+                observation.target_runtime_attestation_valid =
+                    issuer == Some(row.agent_did.as_str());
+                if !observation.runtime_evidence_present
+                    || !observation.signer_matches_issuer
+                    || !observation.requester_matches_issuer
+                    || !observation.signer_matches_target
+                    || !observation.requester_matches_target
+                    || !observation.target_runtime_attestation_valid
+                {
+                    require_admitted_observation(observation, None)?;
+                    unreachable!("invalid runtime attestation cannot be admitted");
+                }
+                if let (Some(source), Some(source_kind)) = (source, admission.runtime_source_kind) {
+                    match verify_runtime_source_binding(
+                        self.node.as_ref(),
+                        self.peer_admission.as_ref(),
+                        &row,
+                        source,
+                        source_kind,
+                        admission.runtime_bridge_author_did.as_deref(),
+                        target_behavior_id,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            observation.source_binding_current = true;
+                            match source_kind {
+                                RuntimeInternalSourceKind::LocalChild => {
+                                    observation.source_document_binding_current = true;
+                                    observation.source_tool_call_binding_current = true;
+                                    observation.target_policy_allows = true;
+                                }
+                                RuntimeInternalSourceKind::CrossDeploymentChild => {
+                                    observation.source_tool_call_binding_current = true;
+                                    observation.bridge_author_binding_current = true;
+                                    observation.bridge_author_authorization_fresh = true;
+                                    observation.target_cross_deployment_policy_allows = true;
+                                }
+                                RuntimeInternalSourceKind::LocalControl => {
+                                    observation.source_document_binding_current = true;
+                                }
+                                RuntimeInternalSourceKind::AutomatedTrigger => {
+                                    observation.trigger_config_document_binding_current = true;
+                                    observation.target_policy_allows = true;
+                                }
+                            }
+                        }
+                        Err(AgentRequestAdmissionError::Denied(error)) => denied = Some(error),
+                        Err(error @ AgentRequestAdmissionError::Unavailable(_)) => {
+                            return Err(error)
+                        }
+                    }
+                }
             }
         }
+        require_admitted_observation(observation, denied)?;
         row.into_agent_request(request.doc_id.clone())
             .map_err(AgentRequestAdmissionError::denied)
     }
@@ -918,6 +1022,7 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+#[cfg(test)]
 fn require_pending_deadline_absent(deadline: Option<&str>) -> Result<()> {
     anyhow::ensure!(
         deadline.is_none(),

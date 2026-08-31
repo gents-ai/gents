@@ -112,9 +112,11 @@ async function runNativeSimulatorE2e() {
     }
     if (pairedThisRun) {
       await waitFor(
-        () => findPairingReadyStatus(config.agentLabel),
+        () =>
+          findPairingReadyStatus(config.agentLabel) ??
+          findAgentChatButton(config.agentLabel),
         300_000,
-        `${config.agentLabel} signed pairing readiness`,
+        `${config.agentLabel} signed pairing readiness or enabled chat control`,
       );
     }
 
@@ -241,17 +243,14 @@ async function pairAgent(config: NativeE2eConfig) {
   );
   submit.click();
 
-  const requestStatus = await waitFor(
-    () => document.querySelector<HTMLElement>('[data-testid="fleet-import-status"]'),
+  const requestId = await waitFor(
+    () =>
+      document
+        .querySelector<HTMLElement>('[data-testid="fleet-import-status"]')
+        ?.textContent?.match(/Enrollment request (\S+) sent/)?.[1] ?? null,
     30_000,
-    "enrollment request status",
+    "enrollment request ID",
   );
-  const requestId = requestStatus.textContent?.match(
-    /Enrollment request (\S+) sent/,
-  )?.[1];
-  if (!requestId) {
-    throw new Error("Enrollment request status did not include its request ID");
-  }
   await reportStatus({ stage: "enrollment-pending", detail: requestId });
 }
 

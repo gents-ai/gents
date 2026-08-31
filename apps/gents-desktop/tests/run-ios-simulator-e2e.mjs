@@ -127,18 +127,30 @@ function enrollmentServerAddress() {
   return address;
 }
 
-function approveEnrollment(settings, requestId) {
+async function approveEnrollment(settings, requestId) {
   process.stdout.write(`Approving authenticated enrollment ${requestId}…\n`);
-  const result = runIssuer(settings, [
-    "p2p",
-    "enrollment",
-    "approve",
-    requestId,
-    "--home",
-    settings.home,
-  ]);
-  if (result.status !== 0) {
-    throw new Error(`Could not approve E2E enrollment: ${issuerFailureDetail(result)}`);
+  const deadline = Date.now() + 30_000;
+  while (true) {
+    const result = runIssuer(settings, [
+      "p2p",
+      "enrollment",
+      "approve",
+      requestId,
+      "--home",
+      settings.home,
+    ]);
+    if (result.status === 0) {
+      return;
+    }
+
+    const detail = issuerFailureDetail(result);
+    if (
+      !detail.includes(`no fresh pending enrollment request ${requestId}`) ||
+      Date.now() >= deadline
+    ) {
+      throw new Error(`Could not approve E2E enrollment: ${detail}`);
+    }
+    await delay(500);
   }
 }
 
@@ -233,7 +245,7 @@ async function waitForScenario({
           throw new Error("Native app omitted the pending enrollment request ID");
         }
         if (!approvedRequestIds.has(requestId)) {
-          approveEnrollment(enrollmentOperator, requestId);
+          await approveEnrollment(enrollmentOperator, requestId);
           approvedRequestIds.add(requestId);
         }
       }
@@ -377,7 +389,7 @@ const serverAddress = enrollmentServerAddress();
       ...process.env,
       SIMCTL_CHILD_GENTS_NATIVE_E2E: "1",
       SIMCTL_CHILD_GENTS_E2E_AGENT_LABEL:
-        process.env.GENTS_E2E_AGENT_LABEL?.trim() || "iPhone E2E",
+        process.env.GENTS_E2E_AGENT_LABEL?.trim() || "Enrolled Agent",
       SIMCTL_CHILD_GENTS_E2E_SERVER_ADDRESS: serverAddress,
       SIMCTL_CHILD_GENTS_E2E_PROMPT:
         process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,

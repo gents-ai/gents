@@ -7,8 +7,8 @@ use gents::agent::p2p_reconcile::enrollment::{
     EnrollmentRouteDirection, EnrollmentRouteReceipt, EnrollmentState, NetworkAdminPin,
 };
 use gents_protocol::request_admission::{
-    project_agent_request_admission, project_agent_request_admission_disposition,
-    AgentRequestAdmissionKind, AgentRequestAdmissionObservation, RuntimeInternalSourceKind,
+    AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
+    RuntimeInternalSourceKind,
 };
 
 use crate::lean_vocab_test::{
@@ -57,11 +57,13 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             bridge_author_authorization_fresh: case.bridge_author_authorization_fresh,
             target_cross_deployment_policy_allows: case.target_cross_deployment_policy_allows,
         };
-        let actual = project_agent_request_admission(observation);
+        let actual = gents::final_claim_admission_disposition(true, observation)
+            == AgentRequestAdmissionDisposition::Admit;
         assert_eq!(actual, case.expected_admitted, "{}", case.name);
+        let actual_disposition =
+            gents::final_claim_admission_disposition(case.observation_available, observation);
         assert_eq!(
-            project_agent_request_admission_disposition(case.observation_available, observation)
-                .as_str(),
+            actual_disposition.as_str(),
             case.expected_disposition,
             "{}",
             case.name
