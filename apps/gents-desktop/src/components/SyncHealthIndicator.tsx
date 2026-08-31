@@ -66,7 +66,7 @@ export function SyncHealthIndicator({
             <dd>{diagnostics.lastError ?? "—"}</dd>
           </div>
           <div>
-            <dt>Pairing retries</dt>
+            <dt>Collection sync retries</dt>
             <dd>{diagnostics.pairingRetryCount}</dd>
           </div>
           <div>

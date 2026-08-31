@@ -101,7 +101,7 @@ async function runNativeSimulatorE2e() {
       15_000,
     );
     if (!deploymentControl) {
-      await reportStatus({ stage: "pairing" });
+      await reportStatus({ stage: "enrollment" });
       await pairAgent(config);
       pairedThisRun = true;
       await waitFor(
@@ -116,7 +116,7 @@ async function runNativeSimulatorE2e() {
           findPairingReadyStatus(config.agentLabel) ??
           findAgentChatButton(config.agentLabel),
         300_000,
-        `${config.agentLabel} signed pairing readiness or enabled chat control`,
+        `${config.agentLabel} signed enrollment readiness or enabled chat control`,
       );
     }
 
@@ -124,7 +124,7 @@ async function runNativeSimulatorE2e() {
     const currentChatButton = await waitFor(
       () => findAgentChatButton(config.agentLabel),
       300_000,
-      `${config.agentLabel} enabled chat control after signed pairing readiness`,
+      `${config.agentLabel} enabled chat control after signed enrollment readiness`,
     );
     currentChatButton.click();
     await waitFor(
@@ -138,7 +138,7 @@ async function runNativeSimulatorE2e() {
       const conversationCount = conversationRowCount(document);
       if (conversationCount > 0) {
         throw new Error(
-          `Requester-scoped pairing leaked ${conversationCount} pre-existing conversation(s)`,
+          `Requester-scoped enrollment leaked ${conversationCount} pre-existing conversation(s)`,
         );
       }
     }

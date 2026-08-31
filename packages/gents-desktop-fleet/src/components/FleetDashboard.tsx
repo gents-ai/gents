@@ -101,7 +101,7 @@ export function FleetDashboard({
             <p className="muted">
               {localRuntimeSetup
                 ? "Optionally create an agent on this machine, or skip local setup and connect a remote agent."
-                : "Pair with a remote agent using its signed connection details."}
+                : "Enroll with a remote agent using its authenticated server offer."}
             </p>
           </div>
           {localRuntimeSetup}

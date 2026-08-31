@@ -51,9 +51,9 @@ export function deploymentStatus(deployment: DeploymentView): {
 
   if (!deployment.pairingReady) {
     return {
-      title: `${title} | awaiting signed reciprocal readiness`,
+      title: `${title} | awaiting signed enrollment route and behavior readiness`,
       tone: "yellow",
-      label: "Pairing",
+      label: "Preparing",
       lastError,
     };
   }
