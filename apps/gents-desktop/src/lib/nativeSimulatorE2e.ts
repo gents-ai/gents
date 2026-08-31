@@ -203,6 +203,21 @@ async function runNativeSimulatorE2e() {
       `${config.agentLabel} terminal turn state`,
     );
 
+    await reportStatus({ stage: "waiting-hydration" });
+    await waitFor(
+      () => {
+        const status = document.querySelector<HTMLElement>(
+          '[data-testid="session-hydration-status"]',
+        );
+        if (status?.dataset.hydrationPhase === "failed") {
+          throw new Error(status.textContent?.trim() || "Session hydration failed");
+        }
+        return status?.dataset.hydrationPhase === "complete" ? status : null;
+      },
+      180_000,
+      `${config.agentLabel} completed session hydration`,
+    );
+
     await reportStatus({ stage: "passed" });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

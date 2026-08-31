@@ -152,6 +152,67 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn initial_session_hydration_waits_for_existing_or_terminal_session_evidence() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    let requester_did = gents::graphql::escape_graphql_string(core.principal().did());
+    let agent_did = "did:test:amy";
+    let session_id = "brand-new-session";
+    persist_local_route(&core, agent_did).await?;
+
+    core.ensure_session_hydration_started(session_id, agent_did)
+        .await?;
+    assert_eq!(
+        core.session_hydration_progress(session_id, agent_did)
+            .await?
+            .phase
+            .as_str(),
+        "idle",
+        "an empty compose surface is not an existing session to hydrate"
+    );
+
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "pending-local-request"
+                    requester_did: "{requester_did}"
+                    agent_did: "{agent_did}"
+                    behavior_id: "default"
+                    session_id: "{session_id}"
+                    content: "hello"
+                    status: "pending"
+                    lifecycle_state: "pending"
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed pending request: {:?}",
+        response.errors
+    );
+    core.ensure_session_hydration_started(session_id, agent_did)
+        .await?;
+    assert_eq!(
+        core.session_hydration_progress(session_id, agent_did)
+            .await?
+            .phase
+            .as_str(),
+        "idle",
+        "hydration must wait while the runtime is creating the session"
+    );
+
+    core.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn durable_served_hydration_row_drives_exact_session_progress() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(

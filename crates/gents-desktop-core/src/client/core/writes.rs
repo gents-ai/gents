@@ -1614,6 +1614,16 @@ impl ClientCore {
         if !should_start_session_hydration_request(&progress, &session_id, &agent_did) {
             return Ok(());
         }
+        let evidence = load_local_hydration_start_evidence(
+            self.node.as_ref(),
+            self.principal.did(),
+            &session_id,
+            &agent_did,
+        )
+        .await?;
+        if !hydration_start_evidence_is_ready(&progress, &evidence) {
+            return Ok(());
+        }
         self.request_session_hydration(&session_id, &agent_did)
             .await
     }
@@ -1742,6 +1752,17 @@ struct HydrationDocIdRow {
     doc_id: Option<String>,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LocalHydrationStartEvidence {
+    owned_session_present: bool,
+    nonterminal_request_present: bool,
+}
+
+#[derive(Deserialize)]
+struct HydrationLifecycleRow {
+    lifecycle_state: Option<String>,
+}
+
 fn should_start_session_hydration_request(
     progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
     session_id: &str,
@@ -1751,6 +1772,47 @@ fn should_start_session_hydration_request(
     progress.session_id == session_id
         && progress.agent_did == agent_did
         && progress.phase == ClientHydrationPhase::Idle
+}
+
+fn hydration_start_evidence_is_ready(
+    progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+    evidence: &LocalHydrationStartEvidence,
+) -> bool {
+    (evidence.owned_session_present || progress.merged_count > 0)
+        && !evidence.nonterminal_request_present
+}
+
+async fn load_local_hydration_start_evidence(
+    node: &EmbeddedNode,
+    requester_did: &str,
+    session_id: &str,
+    agent_did: &str,
+) -> Result<LocalHydrationStartEvidence> {
+    let requester_did = gents::graphql::escape_graphql_string(requester_did);
+    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let agent_did = gents::graphql::escape_graphql_string(agent_did);
+    let scope = format!(
+        "requester_did: {{ _eq: \"{requester_did}\" }}, agent_did: {{ _eq: \"{agent_did}\" }}, session_id: {{ _eq: \"{session_id}\" }}"
+    );
+    let response = node
+        .execute(&format!(
+            r#"{{
+                AgentSession(filter: {{ {scope} }}, limit: 1) {{ _docID }}
+                AgentRequest(filter: {{ {scope} }}) {{ lifecycle_state }}
+            }}"#
+        ))
+        .await;
+    gents::graphql::ensure_no_errors(&response, "query local hydration start evidence")?;
+    let owned_session_present =
+        !gents::graphql::rows::<HydrationDocIdRow>(&response, "AgentSession")?.is_empty();
+    let nonterminal_request_present =
+        gents::graphql::rows::<HydrationLifecycleRow>(&response, "AgentRequest")?
+            .iter()
+            .any(|row| !is_terminal_lifecycle_state(row.lifecycle_state.as_deref()));
+    Ok(LocalHydrationStartEvidence {
+        owned_session_present,
+        nonterminal_request_present,
+    })
 }
 
 async fn load_local_hydration_count(
@@ -2036,6 +2098,34 @@ mod delete_source_tests {
             &idle,
             "session-1",
             "did:agent",
+        ));
+        assert!(!hydration_start_evidence_is_ready(
+            &idle,
+            &LocalHydrationStartEvidence::default(),
+        ));
+        assert!(hydration_start_evidence_is_ready(
+            &ClientHydrationProgress {
+                merged_count: 1,
+                ..idle.clone()
+            },
+            &LocalHydrationStartEvidence::default(),
+        ));
+        assert!(hydration_start_evidence_is_ready(
+            &idle,
+            &LocalHydrationStartEvidence {
+                owned_session_present: true,
+                nonterminal_request_present: false,
+            },
+        ));
+        assert!(!hydration_start_evidence_is_ready(
+            &ClientHydrationProgress {
+                merged_count: 1,
+                ..idle
+            },
+            &LocalHydrationStartEvidence {
+                owned_session_present: true,
+                nonterminal_request_present: true,
+            },
         ));
     }
 
