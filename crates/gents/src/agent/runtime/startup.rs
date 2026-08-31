@@ -1518,6 +1518,10 @@ mod run_agent_teardown_tests {
 
     use super::*;
 
+    // This is a deadlock guard, not a teardown latency SLO. The full test
+    // suite runs many embedded DefraDB nodes concurrently on shared runners.
+    const DEADLOCK_GUARD: Duration = Duration::from_secs(30);
+
     struct StuckAfterInitializeWriter {
         attempts: mpsc::UnboundedSender<()>,
         writes: AtomicUsize,
@@ -1589,7 +1593,7 @@ mod run_agent_teardown_tests {
         assert!(!admission_gate.is_open().await);
 
         let error = tokio::time::timeout(
-            Duration::from_secs(4),
+            DEADLOCK_GUARD,
             finish_run_agent(
                 Err(anyhow::anyhow!("sentinel runtime body failure")),
                 owner,

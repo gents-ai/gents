@@ -19,6 +19,10 @@ use crate::support::fixtures::test_identity;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
 
+// This guards against a wedged startup, not startup latency. The package-wide
+// suite runs many embedded DefraDB nodes concurrently on shared CI runners.
+const STARTUP_DEADLOCK_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Clone, Debug)]
 struct BuildFailure {
     behavior_id: String,
@@ -200,7 +204,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
     tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+        STARTUP_DEADLOCK_GUARD,
         observer.wait_for(ProcessLifecycleState::Ready),
     )
     .await

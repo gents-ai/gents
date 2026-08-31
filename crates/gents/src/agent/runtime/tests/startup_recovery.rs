@@ -1,6 +1,11 @@
 use super::support::*;
 use super::*;
 
+// These timeouts detect deadlocks; they are not startup latency assertions.
+// Leave enough wall-clock headroom for the package-wide suite, which runs many
+// embedded DefraDB nodes concurrently on shared CI runners.
+const STARTUP_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
+
 struct RejectExecutorDemotionWriter;
 
 struct RejectRouterGenerationRunWriter;
@@ -418,7 +423,7 @@ async fn demotion_persistence_failure_is_the_exact_run_agent_failure_and_never_a
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let error = tokio::time::timeout(
-        Duration::from_secs(10),
+        STARTUP_DEADLOCK_GUARD,
         super::startup::run_agent_with_readiness_writer(
             agent,
             shutdown_rx,
@@ -474,7 +479,7 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let error = tokio::time::timeout(
-        Duration::from_secs(10),
+        STARTUP_DEADLOCK_GUARD,
         super::startup::run_agent_with_readiness_writer(
             agent,
             shutdown_rx,
@@ -559,16 +564,16 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
         ),
     );
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), slot_started_rx.recv())
+        tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_started_rx.recv())
             .await
             .expect("generation-one slot must start"),
         Some(1)
     );
-    tokio::time::timeout(Duration::from_secs(5), writer.source_exhausted.notified())
+    tokio::time::timeout(STARTUP_DEADLOCK_GUARD, writer.source_exhausted.notified())
         .await
         .expect("startup source must exhaust all persistence attempts");
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), slot_shutdown_rx.recv())
+        tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_shutdown_rx.recv())
             .await
             .expect("slot runner must observe owned startup shutdown"),
         Some(1)
@@ -581,12 +586,12 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
     );
     slot_exit_gate.add_permits(1);
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), slot_exited_rx.recv())
+        tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_exited_rx.recv())
             .await
             .expect("generation-one slot must report exit"),
         Some(1)
     );
-    let error = tokio::time::timeout(Duration::from_secs(10), run)
+    let error = tokio::time::timeout(STARTUP_DEADLOCK_GUARD, run)
         .await
         .expect("startup source exhaustion must terminate run_agent boundedly")
         .expect("run_agent task must join")
@@ -658,7 +663,7 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let error = tokio::time::timeout(
-        Duration::from_secs(10),
+        STARTUP_DEADLOCK_GUARD,
         super::startup::run_agent_with_readiness_writer(
             agent,
             shutdown_rx,
