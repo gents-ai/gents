@@ -223,11 +223,6 @@ async fn prepare_pairing_peer(
                 break;
             }
         }
-        if endpoints.is_empty() {
-            // Additive compatibility for pre-Iroh and synthetic pairings.
-            // A valid dialable endpoint always wins over this opaque key.
-            active_before = peer_already_active(admin, &peer_id).await;
-        }
         if !endpoint_changed && active_before {
             tracing::debug!(peer_id = %peer_id, "pairing peer already connected; skipping redial");
         } else {

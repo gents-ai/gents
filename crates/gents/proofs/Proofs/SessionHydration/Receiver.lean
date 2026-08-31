@@ -3,14 +3,15 @@ import Proofs.SessionHydration.State
 /-!
 # Receiver-side hydration progress
 
-The server writes `served_doc_count` after delivery is accepted. The client
-must not treat that write as completion: it counts unique locally merged
-transcript documents and may only complete when that count covers the
-server's denominator. Empty served sessions (`servedCount = 0`) complete
-immediately.
+The server commits the exact identities of the transcript documents it served.
+The client may complete only when every identity in that manifest exists in its
+locally merged set. Counts remain a UI projection; equal counts are not proof of
+document identity. An empty served manifest completes immediately.
 -/
 
 namespace SessionHydration
+
+abbrev DocumentKey := String
 
 inductive ClientPhase where
   | idle
@@ -24,18 +25,25 @@ structure ClientProgress where
   session : String := ""
   agent : String := ""
   phase : ClientPhase := .idle
-  mergedCount : Nat := 0
-  servedCount : Option Nat := none
+  mergedDocuments : Finset DocumentKey := ∅
+  servedDocuments : Option (Finset DocumentKey) := none
   deriving DecidableEq
 
-def canComplete (mergedCount : Nat) (servedCount : Option Nat) : Bool :=
-  match servedCount with
-  | some n => decide (mergedCount ≥ n)
+def ClientProgress.mergedCount (progress : ClientProgress) : Nat :=
+  progress.mergedDocuments.card
+
+def ClientProgress.servedCount (progress : ClientProgress) : Option Nat :=
+  progress.servedDocuments.map Finset.card
+
+def canComplete (merged : Finset DocumentKey)
+    (served : Option (Finset DocumentKey)) : Bool :=
+  match served with
+  | some expected => decide (expected ⊆ merged)
   | none => false
 
-def mergeServed (prev next : Option Nat) : Option Nat :=
+def mergeServed (prev next : Option (Finset DocumentKey)) : Option (Finset DocumentKey) :=
   match next with
-  | some n => some n
+  | some documents => some documents
   | none => prev
 
 def progressFor (prev : ClientProgress) (session agent : String) : ClientProgress :=
@@ -55,86 +63,92 @@ theorem canRetry_iff (prev : ClientProgress) (session agent : String) :
       prev.session = session ∧ prev.agent = agent ∧ prev.phase = .failed := by
   simp [canRetry]
 
-def observeCore (prev : ClientProgress) (merged : Nat) (served : Option Nat)
-    (failed : Bool) : ClientProgress :=
+def observeCore (prev : ClientProgress) (merged : Finset DocumentKey)
+    (served : Option (Finset DocumentKey)) (failed : Bool) : ClientProgress :=
   if failed || decide (prev.phase = .failed) then
-    { phase := .failed, mergedCount := merged, servedCount := served }
+    { phase := .failed, mergedDocuments := merged, servedDocuments := served }
   else if canComplete merged served then
-    { phase := .complete, mergedCount := merged, servedCount := served }
+    { phase := .complete, mergedDocuments := merged, servedDocuments := served }
   else if served.isSome || decide (prev.phase = .serving) ||
-      (decide (prev.phase = .requested) && decide (merged > 0)) then
-    { phase := .serving, mergedCount := merged, servedCount := served }
+      (decide (prev.phase = .requested) && decide (merged.card > 0)) then
+    { phase := .serving, mergedDocuments := merged, servedDocuments := served }
   else if decide (prev.phase = .requested) then
-    { phase := .requested, mergedCount := merged, servedCount := served }
+    { phase := .requested, mergedDocuments := merged, servedDocuments := served }
   else
-    { phase := .idle, mergedCount := merged, servedCount := served }
+    { phase := .idle, mergedDocuments := merged, servedDocuments := served }
 
-def observe (prev : ClientProgress) (mergedCount : Nat) (servedCount : Option Nat)
-    (failed : Bool) (session agent : String) : ClientProgress :=
+def observe (prev : ClientProgress) (mergedDocuments : Finset DocumentKey)
+    (servedDocuments : Option (Finset DocumentKey)) (failed : Bool)
+    (session agent : String) : ClientProgress :=
   let base := progressFor prev session agent
   { observeCore base
-      (max base.mergedCount mergedCount)
-      (mergeServed base.servedCount servedCount)
+      (base.mergedDocuments ∪ mergedDocuments)
+      (mergeServed base.servedDocuments servedDocuments)
       failed with session, agent }
 
 /-- Durable control-row state for one exact session/agent target. -/
 inductive DurableRequest where
   | missing
   | pending
-  | served (count : Nat)
-  | rejected (count : Option Nat)
-  deriving DecidableEq, Repr
+  | served (documents : Finset DocumentKey)
+  | rejected (documents : Option (Finset DocumentKey))
+  deriving DecidableEq
 
 /-- Projecting a snapshot is a pure query over one durable control row plus
-the locally merged count. It retains no process-wide receiver state. -/
-def projectDurable (request : DurableRequest) (mergedCount : Nat)
+the locally merged set. It retains no process-wide receiver state. -/
+def projectDurable (request : DurableRequest) (mergedDocuments : Finset DocumentKey)
     (session agent : String) : ClientProgress :=
   match request with
-  | .missing => observe { session, agent } mergedCount none false session agent
-  | .pending => observe (beginRequest session agent) mergedCount none false session agent
-  | .served count =>
-      observe (beginRequest session agent) mergedCount (some count) false session agent
-  | .rejected count =>
-      observe (beginRequest session agent) mergedCount count true session agent
+  | .missing => observe { session, agent } mergedDocuments none false session agent
+  | .pending => observe (beginRequest session agent) mergedDocuments none false session agent
+  | .served documents =>
+      observe (beginRequest session agent) mergedDocuments (some documents) false session agent
+  | .rejected documents =>
+      observe (beginRequest session agent) mergedDocuments documents true session agent
 
-theorem projectDurable_exact_target (request : DurableRequest) (mergedCount : Nat)
-    (session agent : String) :
-    (projectDurable request mergedCount session agent).session = session ∧
-      (projectDurable request mergedCount session agent).agent = agent := by
+theorem projectDurable_exact_target (request : DurableRequest)
+    (mergedDocuments : Finset DocumentKey) (session agent : String) :
+    (projectDurable request mergedDocuments session agent).session = session ∧
+      (projectDurable request mergedDocuments session agent).agent = agent := by
   cases request <;> simp [projectDurable, observe]
 
-theorem projectDurable_rejected_failed (count : Option Nat) (mergedCount : Nat)
-    (session agent : String) :
-    (projectDurable (.rejected count) mergedCount session agent).phase = .failed := by
+theorem projectDurable_rejected_failed (documents : Option (Finset DocumentKey))
+    (mergedDocuments : Finset DocumentKey) (session agent : String) :
+    (projectDurable (.rejected documents) mergedDocuments session agent).phase = .failed := by
   simp [projectDurable, observe, observeCore]
 
-theorem observeCore_mergedCount (prev : ClientProgress) (merged : Nat)
-    (served : Option Nat) (failed : Bool) :
-    (observeCore prev merged served failed).mergedCount = merged := by
+theorem observeCore_mergedDocuments (prev : ClientProgress)
+    (merged : Finset DocumentKey) (served : Option (Finset DocumentKey)) (failed : Bool) :
+    (observeCore prev merged served failed).mergedDocuments = merged := by
   unfold observeCore
   split_ifs <;> rfl
 
-theorem observe_mergedCount (prev : ClientProgress) (mergedCount : Nat)
-    (servedCount : Option Nat) (failed : Bool) (session agent : String) :
-    (observe prev mergedCount servedCount failed session agent).mergedCount =
-      max (progressFor prev session agent).mergedCount mergedCount := by
+theorem observe_mergedDocuments (prev : ClientProgress)
+    (mergedDocuments : Finset DocumentKey)
+    (servedDocuments : Option (Finset DocumentKey)) (failed : Bool)
+    (session agent : String) :
+    (observe prev mergedDocuments servedDocuments failed session agent).mergedDocuments =
+      (progressFor prev session agent).mergedDocuments ∪ mergedDocuments := by
   unfold observe
-  exact observeCore_mergedCount _ _ _ _
+  exact observeCore_mergedDocuments _ _ _ _
 
-theorem observe_merged_monotone (prev : ClientProgress) (mergedCount : Nat)
-    (servedCount : Option Nat) (failed : Bool) (session agent : String)
-    (hsession : prev.session = session) (hagent : prev.agent = agent) :
-    prev.mergedCount ≤
-      (observe prev mergedCount servedCount failed session agent).mergedCount := by
-  rw [observe_mergedCount]
+theorem observe_merged_monotone (prev : ClientProgress)
+    (mergedDocuments : Finset DocumentKey)
+    (servedDocuments : Option (Finset DocumentKey)) (failed : Bool)
+    (session agent : String) (hsession : prev.session = session)
+    (hagent : prev.agent = agent) :
+    prev.mergedDocuments ⊆
+      (observe prev mergedDocuments servedDocuments failed session agent).mergedDocuments := by
+  rw [observe_mergedDocuments]
   simp [progressFor, hsession, hagent]
 
-theorem observe_complete_iff (prev : ClientProgress) (mergedCount : Nat)
-    (servedCount : Option Nat) (session agent : String)
+theorem observe_complete_iff (prev : ClientProgress)
+    (mergedDocuments : Finset DocumentKey)
+    (servedDocuments : Option (Finset DocumentKey)) (session agent : String)
     (hprev : (progressFor prev session agent).phase ≠ .failed) :
-    (observe prev mergedCount servedCount false session agent).phase = .complete ↔
-      canComplete (max (progressFor prev session agent).mergedCount mergedCount)
-        (mergeServed (progressFor prev session agent).servedCount servedCount) = true := by
+    (observe prev mergedDocuments servedDocuments false session agent).phase = .complete ↔
+      canComplete ((progressFor prev session agent).mergedDocuments ∪ mergedDocuments)
+        (mergeServed (progressFor prev session agent).servedDocuments servedDocuments) = true := by
   unfold observe observeCore
   have hnf : decide ((progressFor prev session agent).phase = .failed) = false :=
     decide_eq_false_iff_not.mpr hprev
@@ -142,37 +156,45 @@ theorem observe_complete_iff (prev : ClientProgress) (mergedCount : Nat)
   split_ifs <;> simp_all
 
 theorem observe_cannot_complete_without_server (prev : ClientProgress)
-    (mergedCount : Nat) (session agent : String)
+    (mergedDocuments : Finset DocumentKey) (session agent : String)
     (hprev : (progressFor prev session agent).phase ≠ .failed)
-    (hserved : mergeServed (progressFor prev session agent).servedCount none = none) :
-    (observe prev mergedCount none false session agent).phase ≠ .complete := by
+    (hserved : mergeServed (progressFor prev session agent).servedDocuments none = none) :
+    (observe prev mergedDocuments none false session agent).phase ≠ .complete := by
   intro hcomplete
   have hiff :=
-    (observe_complete_iff prev mergedCount none session agent hprev).mp hcomplete
+    (observe_complete_iff prev mergedDocuments none session agent hprev).mp hcomplete
   unfold canComplete at hiff
   simp [hserved] at hiff
 
+/-- Equal cardinality cannot substitute for exact document identity. -/
+theorem equal_count_substitution_fails_closed
+    (merged served : Finset DocumentKey) (_ : merged.card = served.card)
+    (hmissing : ¬ served ⊆ merged) :
+    canComplete merged (some served) = false := by
+  simp [canComplete, hmissing]
+
 /-- Locally present transcript rows are not evidence that a hydration request
 was started. Only `beginRequest` may move an idle receiver into an in-flight
-phase when the server has not supplied a denominator. -/
+phase when the server has not supplied a manifest. -/
 theorem observe_idle_without_server_stays_idle (prev : ClientProgress)
-    (mergedCount : Nat) (session agent : String)
+    (mergedDocuments : Finset DocumentKey) (session agent : String)
     (hidle : (progressFor prev session agent).phase = .idle)
-    (hserved : (progressFor prev session agent).servedCount = none) :
-    (observe prev mergedCount none false session agent).phase = .idle := by
+    (hserved : (progressFor prev session agent).servedDocuments = none) :
+    (observe prev mergedDocuments none false session agent).phase = .idle := by
   unfold observe observeCore
   simp [hidle, hserved, mergeServed, canComplete]
 
 /-- A failed receiver is terminal under passive observation. Restarting the
 same target requires the explicit `beginRequest` transition. -/
 theorem observe_failed_without_begin_stays_failed (prev : ClientProgress)
-    (mergedCount : Nat) (servedCount : Option Nat) (session agent : String)
+    (mergedDocuments : Finset DocumentKey)
+    (servedDocuments : Option (Finset DocumentKey)) (session agent : String)
     (hfailed : (progressFor prev session agent).phase = .failed) :
-    (observe prev mergedCount servedCount false session agent).phase = .failed := by
+    (observe prev mergedDocuments servedDocuments false session agent).phase = .failed := by
   unfold observe observeCore
   simp [hfailed]
 
-/-- Focusing a different session/agent starts from an idle, zero-count receiver state. -/
+/-- Focusing a different session/agent starts from an idle empty receiver state. -/
 theorem progressFor_other_target_resets (prev : ClientProgress) (session agent : String)
     (hdifferent : prev.session ≠ session ∨ prev.agent ≠ agent) :
     progressFor prev session agent = { session, agent } := by
@@ -182,11 +204,11 @@ theorem progressFor_other_target_resets (prev : ClientProgress) (session agent :
     exact False.elim (hdifferent.elim (fun h => h hsame.1) (fun h => h hsame.2))
   · rfl
 
-/-- Retrying clears a prior terminal receiver state and its old denominator. -/
+/-- Retrying clears a prior terminal receiver state and its old manifest. -/
 theorem beginRequest_resets_terminal (session agent : String) :
     (beginRequest session agent).phase = .requested ∧
-    (beginRequest session agent).mergedCount = 0 ∧
-    (beginRequest session agent).servedCount = none := by
+    (beginRequest session agent).mergedDocuments = ∅ ∧
+    (beginRequest session agent).servedDocuments = none := by
   simp [beginRequest]
 
 end SessionHydration

@@ -34,7 +34,11 @@ pub(crate) async fn load_runtime_status_output(
         .as_ref()
         .and_then(|row| decode_behavior_readiness_snapshot(row, agent_did).ok());
     let (behavior_readiness, readiness_status, runnable_behavior_count, unavailable_behaviors) =
-        match project_behavior_readiness_summary(behavior_readiness_row.as_ref(), agent_did) {
+        match project_behavior_readiness_summary(
+            behavior_readiness_row.as_ref(),
+            agent_did,
+            chrono::Utc::now(),
+        ) {
             ProjectedBehaviorReadinessSummary::Observed(summary) => {
                 let unavailable = summary
                     .unavailable_behaviors

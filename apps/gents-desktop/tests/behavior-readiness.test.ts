@@ -92,6 +92,7 @@ describe("selectedBehaviorReadinessDecision", () => {
     "readiness_missing",
     "readiness_malformed",
     "readiness_version_unsupported",
+    "readiness_stale",
     "process_not_ready",
     "router_generation_stale",
     "behavior_not_assigned",

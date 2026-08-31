@@ -106,8 +106,15 @@ structure SessionHydrationProgressCase where
   prevServed : Option Nat
   merged : Nat
   served : Option Nat
+  servedMatches : Bool := true
   failed : Bool
   beginRequest : Bool
+
+def hydrationDocumentKeys (stem : String) (count : Nat) : Finset String :=
+  ((List.range count).map fun index => stem ++ toString index).toFinset
+
+def hydrationManifest (count : Option Nat) (isExact : Bool) : Option (Finset String) :=
+  count.map fun value => hydrationDocumentKeys (if isExact then "doc-" else "foreign-") value
 
 def parsePhase (name : String) : SessionHydration.ClientPhase :=
   match name with
@@ -121,11 +128,13 @@ def progressPrev (w : SessionHydrationProgressCase) : SessionHydration.ClientPro
   { session := w.prevSession
   , agent := w.prevAgent
   , phase := parsePhase w.prevPhase
-  , mergedCount := w.prevMerged
-  , servedCount := w.prevServed }
+  , mergedDocuments := hydrationDocumentKeys "doc-" w.prevMerged
+  , servedDocuments := hydrationManifest w.prevServed true }
 
 def progressObserved (w : SessionHydrationProgressCase) : SessionHydration.ClientProgress :=
-  SessionHydration.observe (progressPrev w) w.merged w.served w.failed w.session w.agent
+  SessionHydration.observe (progressPrev w)
+    (hydrationDocumentKeys "doc-" w.merged)
+    (hydrationManifest w.served w.servedMatches) w.failed w.session w.agent
 
 def sessionHydrationProgressCases : List SessionHydrationProgressCase :=
   [ { name := "open_requests"
@@ -158,6 +167,12 @@ def sessionHydrationProgressCases : List SessionHydrationProgressCase :=
     , session := "session-1", agent := "agent-1"
     , prevPhase := "serving", prevMerged := 2, prevServed := some 5
     , merged := 4, served := some 5, failed := false, beginRequest := false }
+  , { name := "equal_count_wrong_documents_cannot_complete"
+    , prevSession := "session-1", prevAgent := "agent-1"
+    , session := "session-1", agent := "agent-1"
+    , prevPhase := "serving", prevMerged := 0, prevServed := none
+    , merged := 5, served := some 5, servedMatches := false
+    , failed := false, beginRequest := false }
   , { name := "failure_is_observed"
     , prevSession := "session-1", prevAgent := "agent-1"
     , session := "session-1", agent := "agent-1"
@@ -203,7 +218,9 @@ def phaseString : SessionHydration.ClientPhase → String
 
 def sessionHydrationProgressCaseJson (w : SessionHydrationProgressCase) : String :=
   let next := if w.beginRequest then SessionHydration.beginRequest w.session w.agent
-    else SessionHydration.observe (progressPrev w) w.merged w.served w.failed w.session w.agent
+    else SessionHydration.observe (progressPrev w)
+      (hydrationDocumentKeys "doc-" w.merged)
+      (hydrationManifest w.served w.servedMatches) w.failed w.session w.agent
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
     ++ "\"prev_session\":" ++ jsonString w.prevSession ++ ","
@@ -215,6 +232,7 @@ def sessionHydrationProgressCaseJson (w : SessionHydrationProgressCase) : String
     ++ "\"prev_served\":" ++ optionNatString w.prevServed ++ ","
     ++ "\"merged\":" ++ toString w.merged ++ ","
     ++ "\"served\":" ++ optionNatString w.served ++ ","
+    ++ "\"served_matches\":" ++ boolString w.servedMatches ++ ","
     ++ "\"failed\":" ++ boolString w.failed ++ ","
     ++ "\"begin_request\":" ++ boolString w.beginRequest ++ ","
     ++ "\"expected_phase\":" ++ jsonString (phaseString next.phase) ++ ","
@@ -233,12 +251,13 @@ structure SessionHydrationDurableCase where
   status : String
   merged : Nat
   served : Option Nat
+  servedMatches : Bool := true
 
 def durableRequest (w : SessionHydrationDurableCase) : SessionHydration.DurableRequest :=
   match w.status with
   | "pending" => .pending
-  | "served" => .served (w.served.getD 0)
-  | "rejected" => .rejected w.served
+  | "served" => .served ((hydrationManifest w.served w.servedMatches).getD ∅)
+  | "rejected" => .rejected (hydrationManifest w.served w.servedMatches)
   | _ => .missing
 
 def sessionHydrationDurableCases : List SessionHydrationDurableCase :=
@@ -252,6 +271,8 @@ def sessionHydrationDurableCases : List SessionHydrationDurableCase :=
       served := some 5 }
   , { name := "served_completes_at_coverage", status := "served", merged := 5,
       served := some 5 }
+  , { name := "served_equal_count_wrong_documents_waits", status := "served", merged := 5,
+      served := some 5, servedMatches := false }
   , { name := "empty_served_completes", status := "served", merged := 0,
       served := some 0 }
   , { name := "rejected_is_failed", status := "rejected", merged := 2,
@@ -260,12 +281,14 @@ def sessionHydrationDurableCases : List SessionHydrationDurableCase :=
 
 def sessionHydrationDurableCaseJson (w : SessionHydrationDurableCase) : String :=
   let next := SessionHydration.projectDurable
-    (durableRequest w) w.merged "session-exact" "agent-exact"
+    (durableRequest w) (hydrationDocumentKeys "doc-" w.merged)
+      "session-exact" "agent-exact"
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
     ++ "\"status\":" ++ jsonString w.status ++ ","
     ++ "\"merged\":" ++ toString w.merged ++ ","
     ++ "\"served\":" ++ optionNatString w.served ++ ","
+    ++ "\"served_matches\":" ++ boolString w.servedMatches ++ ","
     ++ "\"expected_phase\":" ++ jsonString (phaseString next.phase) ++ ","
     ++ "\"expected_merged\":" ++ toString next.mergedCount
     ++ "}"

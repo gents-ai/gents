@@ -3941,6 +3941,7 @@ dependencies = [
  "defra-p2p-adapter",
  "dirs 5.0.1",
  "events",
+ "futures",
  "gents",
  "gents-lean-contract",
  "gents-migration",

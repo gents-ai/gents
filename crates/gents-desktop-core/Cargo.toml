@@ -19,6 +19,7 @@ defra-node = { workspace = true, features = ["p2p", "lark"] }
 defra-p2p-adapter.workspace = true
 dirs.workspace = true
 events.workspace = true
+futures = "0.3"
 identity.workspace = true
 p2p.workspace = true
 reqwest.workspace = true

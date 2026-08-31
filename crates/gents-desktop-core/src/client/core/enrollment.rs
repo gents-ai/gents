@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -6,6 +6,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use defra_p2p_adapter::{
     P2PError, P2POperations as P2POps, P2pDocumentRequest, ReplicationFilter, TransportPeerId,
 };
+use futures::{stream, StreamExt};
 use gents::agent::p2p_reconcile::enrollment::{
     AuthorizationRevision as PureRevision, AuthorizationRevisionKind as PureRevisionKind,
     DurableEnrollmentDocuments, EnrollmentDecision as PureDecision,
@@ -538,6 +539,7 @@ struct ApprovedStatusEnrollment {
     request_digest: String,
     authorization_sequence: u64,
     authorization_expires_at: String,
+    decided_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -563,13 +565,30 @@ impl EnrollmentAuthorizationGeneration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum EnrollmentAuthorityOutcome {
     Current(ApprovedStatusEnrollment),
-    Unavailable {
-        approval: ApprovedStatusEnrollment,
-        reason: String,
-    },
-    Conflicted {
-        reason: String,
-    },
+    Conflicted { reason: String },
+}
+
+fn prioritized_current_approvals(
+    outcomes: &BTreeMap<String, EnrollmentAuthorityOutcome>,
+    known_peers: &BTreeSet<String>,
+) -> Vec<(String, ApprovedStatusEnrollment)> {
+    let mut approvals = outcomes
+        .iter()
+        .filter_map(|(peer_id, outcome)| match outcome {
+            EnrollmentAuthorityOutcome::Current(approval) => {
+                Some((peer_id.clone(), approval.clone()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    approvals.sort_by(|(left_peer, left), (right_peer, right)| {
+        known_peers
+            .contains(left_peer)
+            .cmp(&known_peers.contains(right_peer))
+            .then_with(|| right.decided_at.cmp(&left.decided_at))
+            .then_with(|| left_peer.cmp(right_peer))
+    });
+    approvals
 }
 
 pub(super) fn enrollment_record_lacks_current_authority(
@@ -590,23 +609,28 @@ pub(super) async fn reconcile_status_enrollment_approvals(
     sync_state: &ClientSyncStateOwner,
     route_manager: &Arc<ClientRouteManager>,
 ) -> Result<BTreeMap<String, EnrollmentAuthorizationGeneration>> {
-    let mut outcomes =
+    let outcomes =
         load_status_enrollment_approvals(node.as_ref(), principal.as_ref(), local_peer_id).await?;
-    let peers = outcomes.keys().cloned().collect::<Vec<_>>();
-    for peer_id in peers {
-        let Some(EnrollmentAuthorityOutcome::Current(approval)) = outcomes.get(&peer_id).cloned()
-        else {
-            continue;
-        };
-        if let Err(error) = authenticate_enrolled_server(p2p, &approval).await {
-            mark_authority_unavailable(&mut outcomes, &peer_id, approval, format!("{error:#}"));
-        }
-    }
+    let known_peers = sync_state
+        .records()
+        .into_iter()
+        .map(|record| record.peer_id)
+        .collect::<BTreeSet<_>>();
+    let approvals = prioritized_current_approvals(&outcomes, &known_peers);
+    let mut authentications = stream::iter(approvals)
+        .map(|(peer_id, approval)| {
+            let p2p = Arc::clone(p2p);
+            async move {
+                let result = authenticate_enrolled_server(&p2p, &approval).await;
+                (peer_id, approval, result)
+            }
+        })
+        .buffer_unordered(8);
 
     // Absence from the complete scoped observation means the prior grant is
-    // no longer current (denied/revoked/superseded). Unavailable/conflicted
-    // peers remain present but closed so transient or hostile state in peer A
-    // cannot erase peer B or lose A's retry identity.
+    // no longer current (denied/revoked/superseded). Conflicted peers remain
+    // present but closed so hostile state in peer A cannot erase peer B or
+    // lose A's retry identity.
     for existing in sync_state.records().into_iter().filter(|record| {
         record.source.as_deref() == Some("enrollment") && !outcomes.contains_key(&record.peer_id)
     }) {
@@ -618,56 +642,59 @@ pub(super) async fn reconcile_status_enrollment_approvals(
         }
     }
 
-    let mut current_authority = BTreeMap::new();
-    for (peer_id, outcome) in outcomes {
+    for (peer_id, outcome) in &outcomes {
         match outcome {
-            EnrollmentAuthorityOutcome::Current(approval) => {
-                let generation = EnrollmentAuthorizationGeneration {
-                    request_digest: approval.request_digest.clone(),
-                    sequence: approval.authorization_sequence,
-                    expires_at: approval.authorization_expires_at.clone(),
-                };
-                let current = sync_state
-                    .records()
-                    .into_iter()
-                    .find(|record| record.peer_id == approval.server_peer);
-                let applied = async {
-                    let record = sync_state
-                        .upsert_enrollment_peer(
-                            &approval.server_peer,
-                            "Enrolled Agent",
-                            &approval.server_ticket,
-                            &approval.owner_agent,
-                            &approval.network_id,
-                            &approval.request_id,
-                            &approval.request_digest,
-                            &approval.admin_did,
-                            approval.authorization_sequence,
-                            &approval.authorization_expires_at,
-                        )
-                        .await?;
-                    if current.as_ref() != Some(&record) || !record.pairing_ready {
-                        route_manager.configure_enrollment_peer(&record).await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                }
-                .await;
-                match applied {
-                    Ok(()) => {
-                        current_authority.insert(peer_id, generation);
-                    }
-                    Err(error) => {
-                        tracing::warn!(peer_id, error = %error, "enrollment route activation failed closed for one peer");
-                        demote_enrollment_peer(sync_state, &peer_id).await;
-                    }
-                }
-            }
-            EnrollmentAuthorityOutcome::Unavailable { approval, reason } => {
-                tracing::warn!(peer_id, request_id = %approval.request_digest, reason, "enrollment peer is temporarily unavailable");
-                demote_enrollment_peer(sync_state, &peer_id).await;
-            }
+            EnrollmentAuthorityOutcome::Current(_) => {}
             EnrollmentAuthorityOutcome::Conflicted { reason } => {
                 tracing::warn!(peer_id, reason, "enrollment peer authority is conflicted");
+                demote_enrollment_peer(sync_state, peer_id).await;
+            }
+        }
+    }
+
+    let mut current_authority = BTreeMap::new();
+    while let Some((peer_id, approval, authentication)) = authentications.next().await {
+        if let Err(error) = authentication {
+            tracing::warn!(peer_id, request_id = %approval.request_digest, error = %error, "enrollment peer is temporarily unavailable");
+            demote_enrollment_peer(sync_state, &peer_id).await;
+            continue;
+        }
+        let generation = EnrollmentAuthorizationGeneration {
+            request_digest: approval.request_digest.clone(),
+            sequence: approval.authorization_sequence,
+            expires_at: approval.authorization_expires_at.clone(),
+        };
+        let current = sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.peer_id == approval.server_peer);
+        let applied = async {
+            let record = sync_state
+                .upsert_enrollment_peer(
+                    &approval.server_peer,
+                    "Enrolled Agent",
+                    &approval.server_ticket,
+                    &approval.owner_agent,
+                    &approval.network_id,
+                    &approval.request_id,
+                    &approval.request_digest,
+                    &approval.admin_did,
+                    approval.authorization_sequence,
+                    &approval.authorization_expires_at,
+                )
+                .await?;
+            if current.as_ref() != Some(&record) || !record.pairing_ready {
+                route_manager.configure_enrollment_peer(&record).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        match applied {
+            Ok(()) => {
+                current_authority.insert(peer_id, generation);
+            }
+            Err(error) => {
+                tracing::warn!(peer_id, error = %error, "enrollment route activation failed closed for one peer");
                 demote_enrollment_peer(sync_state, &peer_id).await;
             }
         }
@@ -675,36 +702,24 @@ pub(super) async fn reconcile_status_enrollment_approvals(
     Ok(current_authority)
 }
 
-fn mark_authority_unavailable(
-    outcomes: &mut BTreeMap<String, EnrollmentAuthorityOutcome>,
-    peer_id: &str,
-    approval: ApprovedStatusEnrollment,
-    reason: String,
-) {
-    outcomes.insert(
-        peer_id.to_string(),
-        EnrollmentAuthorityOutcome::Unavailable { approval, reason },
-    );
-}
-
 async fn authenticate_enrolled_server(
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
     approval: &ApprovedStatusEnrollment,
 ) -> Result<()> {
-    timeout(
-        P2P_OPERATION_TIMEOUT,
-        p2p.connect_peer(&approval.server_ticket),
-    )
+    timeout(P2P_OPERATION_TIMEOUT, async {
+        p2p.connect_peer(&approval.server_ticket)
+            .await
+            .map_err(map_p2p_error)?;
+        let peer = TransportPeerId::new(approval.server_peer.clone()).map_err(map_p2p_error)?;
+        let resolved = p2p
+            .resolve_peer_identity(&peer)
+            .await
+            .map_err(map_p2p_error)?
+            .context("enrolled server has no authenticated transport identity")?;
+        validate_authenticated_server_did(&approval.admin_did, &resolved.to_string())
+    })
     .await
-    .context("timed out reconnecting to enrolled server")?
-    .map_err(map_p2p_error)?;
-    let peer = TransportPeerId::new(approval.server_peer.clone()).map_err(map_p2p_error)?;
-    let resolved = timeout(P2P_OPERATION_TIMEOUT, p2p.resolve_peer_identity(&peer))
-        .await
-        .context("timed out re-authenticating enrolled server")?
-        .map_err(map_p2p_error)?
-        .context("enrolled server has no authenticated transport identity")?;
-    validate_authenticated_server_did(&approval.admin_did, &resolved.to_string())
+    .context("timed out re-authenticating enrolled server")?
 }
 
 async fn demote_enrollment_peer(sync_state: &ClientSyncStateOwner, peer_id: &str) {
@@ -1321,6 +1336,7 @@ async fn project_desktop_approval(
                 request_digest: request.request_digest,
                 authorization_sequence: decision.authorization_sequence,
                 authorization_expires_at: decision.authorization_expires_at,
+                decided_at: decision.decided_at,
             }));
         }
     }
@@ -1732,7 +1748,40 @@ mod tests {
             request_digest: format!("digest-{server_peer}-{owner_agent}"),
             authorization_sequence: 1,
             authorization_expires_at: "2026-09-29T00:00:00Z".into(),
+            decided_at: "2026-08-29T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn enrollment_authentication_prioritizes_newest_unknown_peer() {
+        let mut old_unknown = approval("peer-old", "agent-old");
+        old_unknown.decided_at = "2026-08-29T00:00:01Z".into();
+        let mut active = approval("peer-active", "agent-active");
+        active.decided_at = "2026-08-29T00:00:03Z".into();
+        let mut known = approval("peer-known", "agent-known");
+        known.decided_at = "2026-08-29T00:00:04Z".into();
+        let outcomes = BTreeMap::from([
+            (
+                old_unknown.server_peer.clone(),
+                EnrollmentAuthorityOutcome::Current(old_unknown),
+            ),
+            (
+                active.server_peer.clone(),
+                EnrollmentAuthorityOutcome::Current(active),
+            ),
+            (
+                known.server_peer.clone(),
+                EnrollmentAuthorityOutcome::Current(known),
+            ),
+        ]);
+
+        let ordered =
+            prioritized_current_approvals(&outcomes, &BTreeSet::from(["peer-known".to_string()]))
+                .into_iter()
+                .map(|(peer_id, _)| peer_id)
+                .collect::<Vec<_>>();
+
+        assert_eq!(ordered, vec!["peer-active", "peer-old", "peer-known"]);
     }
 
     #[test]
@@ -1824,18 +1873,6 @@ mod tests {
         assert!(matches!(
             outcomes.get("peer-a"),
             Some(EnrollmentAuthorityOutcome::Conflicted { .. })
-        ));
-        assert!(matches!(
-            outcomes.get("peer-b"),
-            Some(EnrollmentAuthorityOutcome::Current(_))
-        ));
-
-        let mut outcomes = outcomes;
-        let approval_a = approval("peer-a", "agent-a");
-        mark_authority_unavailable(&mut outcomes, "peer-a", approval_a, "offline".into());
-        assert!(matches!(
-            outcomes.get("peer-a"),
-            Some(EnrollmentAuthorityOutcome::Unavailable { .. })
         ));
         assert!(matches!(
             outcomes.get("peer-b"),

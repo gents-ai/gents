@@ -54,6 +54,33 @@ impl BehaviorReadinessWriter for ControlledWriter {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn unchanged_readiness_is_republished_as_a_heartbeat() {
+    let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
+    let writer = Arc::new(ControlledWriter {
+        plans: std::sync::Mutex::new(VecDeque::from([WritePlan::Success, WritePlan::Success])),
+        attempts: attempts_tx,
+        release: Semaphore::new(0),
+        persisted: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let (owner, publisher) = BehaviorReadinessPublisherHandle::start_with_writer(
+        writer,
+        "did:test:heartbeat-readiness-writer",
+        Duration::from_millis(1),
+    );
+    publisher.initialize("general").await.unwrap();
+    assert_eq!(
+        attempts_rx.recv().await,
+        Some(BehaviorReadinessProcessState::Recovering)
+    );
+    tokio::time::advance(READINESS_HEARTBEAT_INTERVAL).await;
+    assert_eq!(
+        attempts_rx.recv().await,
+        Some(BehaviorReadinessProcessState::Recovering)
+    );
+    owner.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn persistence_retry_is_bounded_and_leaves_committed_state_unchanged() {
     let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();

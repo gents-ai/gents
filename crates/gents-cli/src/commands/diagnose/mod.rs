@@ -67,41 +67,43 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let live_runtime = graphql_reachable && runtime_row.get("agent_did").is_some();
     let readiness_row = crate::commands::status::load_behavior_readiness(&access, &agent_did).await;
     let (runtime_behavior_readiness, runtime_behavior_readiness_check) = match readiness_row {
-        Ok(row) => match project_behavior_readiness_summary(row.as_ref(), &agent_did) {
-            ProjectedBehaviorReadinessSummary::Observed(summary) => {
-                let unavailable = summary
-                    .unavailable_behaviors
-                    .iter()
-                    .map(|(behavior_id, reason)| {
-                        json!({
-                            "behavior_id": behavior_id,
-                            "reason": reason,
-                            "message": reason.public_message(),
+        Ok(row) => {
+            match project_behavior_readiness_summary(row.as_ref(), &agent_did, chrono::Utc::now()) {
+                ProjectedBehaviorReadinessSummary::Observed(summary) => {
+                    let unavailable = summary
+                        .unavailable_behaviors
+                        .iter()
+                        .map(|(behavior_id, reason)| {
+                            json!({
+                                "behavior_id": behavior_id,
+                                "reason": reason,
+                                "message": reason.public_message(),
+                            })
                         })
-                    })
-                    .collect::<Vec<_>>();
-                let observed_ready = unavailable.is_empty();
-                (
-                    serde_json::to_value(&summary.snapshot).unwrap_or(Value::Null),
+                        .collect::<Vec<_>>();
+                    let observed_ready = unavailable.is_empty();
+                    (
+                        serde_json::to_value(&summary.snapshot).unwrap_or(Value::Null),
+                        json!({
+                            "ok": !live_runtime || observed_ready,
+                            "required": live_runtime,
+                            "status": if observed_ready { "ready" } else { "degraded" },
+                            "ready_behavior_count": summary.ready_count,
+                            "unavailable_behaviors": unavailable,
+                        }),
+                    )
+                }
+                ProjectedBehaviorReadinessSummary::Unknown(reason) => (
+                    json!({ "state": "unknown", "reason": reason }),
                     json!({
-                        "ok": !live_runtime || observed_ready,
+                        "ok": !live_runtime,
                         "required": live_runtime,
-                        "status": if observed_ready { "ready" } else { "degraded" },
-                        "ready_behavior_count": summary.ready_count,
-                        "unavailable_behaviors": unavailable,
+                        "status": "unknown",
+                        "reason": reason,
                     }),
-                )
+                ),
             }
-            ProjectedBehaviorReadinessSummary::Unknown(reason) => (
-                json!({ "state": "unknown", "reason": reason }),
-                json!({
-                    "ok": !live_runtime,
-                    "required": live_runtime,
-                    "status": "unknown",
-                    "reason": reason,
-                }),
-            ),
-        },
+        }
         Err(error) => (
             json!({ "state": "unknown", "error": error.to_string() }),
             json!({

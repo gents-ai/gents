@@ -280,15 +280,26 @@ impl AgentRequestAdmissionVerifier {
         request: &AgentRequest,
         target_behavior_id: &str,
     ) -> AdmissionResult<AgentRequest> {
-        self.verify_fresh_at(request, target_behavior_id, Utc::now())
+        self.verify_fresh_with_observation(request, target_behavior_id, None)
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn verify_fresh_at(
         &self,
         request: &AgentRequest,
         target_behavior_id: &str,
-        now: chrono::DateTime<Utc>,
+        observed_at: chrono::DateTime<Utc>,
+    ) -> AdmissionResult<AgentRequest> {
+        self.verify_fresh_with_observation(request, target_behavior_id, Some(observed_at))
+            .await
+    }
+
+    async fn verify_fresh_with_observation(
+        &self,
+        request: &AgentRequest,
+        target_behavior_id: &str,
+        test_observed_at: Option<chrono::DateTime<Utc>>,
     ) -> AdmissionResult<AgentRequest> {
         let row = load_signed_request(self.node.as_ref(), &request.doc_id).await?;
         let admission = row
@@ -323,7 +334,6 @@ impl AgentRequestAdmissionVerifier {
         }
         let mut denied = None;
         match admission.kind {
-            AgentRequestAdmissionKind::Omitted => {}
             AgentRequestAdmissionKind::LocalSelf => {
                 observation.signer_matches_requester =
                     row.requester_did.as_deref() == Some(admission.signer_did.as_str());
@@ -344,6 +354,9 @@ impl AgentRequestAdmissionVerifier {
                         .context("fresh enrollment request admission projection")
                         .map_err(AgentRequestAdmissionError::unavailable)?;
                     if let Some(current) = current {
+                        // Production always samples after the async authority
+                        // reload. Tests may inject this final observation only.
+                        let observed_at = test_observed_at.unwrap_or_else(Utc::now);
                         observation.current_approval = current.owner_agent == row.agent_did;
                         observation.exact_generation = admission.enrollment_request_id.as_deref()
                             == Some(current.request_id.as_str())
@@ -358,7 +371,7 @@ impl AgentRequestAdmissionVerifier {
                         match chrono::DateTime::parse_from_rfc3339(
                             &current.authorization_expires_at,
                         ) {
-                            Ok(expires) => observation.authorization_fresh = now < expires,
+                            Ok(expires) => observation.authorization_fresh = observed_at < expires,
                             Err(error) => {
                                 denied = Some(
                                     anyhow::Error::new(error)

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{SecondsFormat, Utc};
 use defra_node::{EmbeddedNode, EventName};
 use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -72,13 +72,13 @@ enum EnrollmentAuthorityCommand {
 
 #[async_trait]
 trait EnrollmentProjectionReader: Send + Sync {
-    async fn load_authority_projection(&self, now: DateTime<Utc>) -> Result<EnrollmentProjection>;
+    async fn load_authority_projection(&self) -> Result<EnrollmentProjection>;
 }
 
 #[async_trait]
 impl EnrollmentProjectionReader for GraphqlEnrollmentStore {
-    async fn load_authority_projection(&self, now: DateTime<Utc>) -> Result<EnrollmentProjection> {
-        self.load_projection(now).await
+    async fn load_authority_projection(&self) -> Result<EnrollmentProjection> {
+        self.load_projection().await
     }
 }
 
@@ -362,7 +362,7 @@ async fn handle_authority_command(
             member_peer,
             ack,
         } => {
-            let result = match store.load_authority_projection(Utc::now()).await {
+            let result = match store.load_authority_projection().await {
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_authorization_fence(&projection, &member_did, &member_peer)
@@ -375,7 +375,7 @@ async fn handle_authority_command(
             let _ = ack.send(result);
         }
         EnrollmentAuthorityCommand::FreshMemberAdmission { member_did, ack } => {
-            let result = match store.load_authority_projection(Utc::now()).await {
+            let result = match store.load_authority_projection().await {
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     if projection.conflict.is_some() {
@@ -395,7 +395,7 @@ async fn handle_authority_command(
             let _ = ack.send(result);
         }
         EnrollmentAuthorityCommand::FreshPeerAuthorization { member_peer, ack } => {
-            let result = match store.load_authority_projection(Utc::now()).await {
+            let result = match store.load_authority_projection().await {
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_peer_authorization_fence(&projection, &member_peer)
@@ -408,7 +408,7 @@ async fn handle_authority_command(
             let _ = ack.send(result);
         }
         EnrollmentAuthorityCommand::FreshMemberAuthorization { member_did, ack } => {
-            let result = match store.load_authority_projection(Utc::now()).await {
+            let result = match store.load_authority_projection().await {
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
                     exact_member_authorization_fence(&projection, &member_did)
@@ -523,7 +523,7 @@ async fn sweep_enrollment(
     owner: &EnrollmentAuthorityOwner,
     delivered: &mut BTreeSet<String>,
 ) {
-    let projection = match store.load_projection(Utc::now()).await {
+    let projection = match store.load_projection().await {
         Ok(projection) => projection,
         Err(error) => {
             owner.publish_failed(&error);
@@ -758,7 +758,7 @@ async fn reconcile_data_plane(
         // sweep projection was loaded. Reload through the authority store at
         // the write boundary and compare the complete signed generation; a
         // time-only check cannot fence those transitions.
-        let fresh_projection = match store.load_projection(Utc::now()).await {
+        let fresh_projection = match store.load_projection().await {
             Ok(projection) => projection,
             Err(error) => {
                 // Authority read failure is fail closed. Remove every row this
@@ -953,10 +953,7 @@ mod tests {
 
     #[async_trait]
     impl EnrollmentProjectionReader for ScriptedProjectionReader {
-        async fn load_authority_projection(
-            &self,
-            _now: DateTime<Utc>,
-        ) -> Result<EnrollmentProjection> {
+        async fn load_authority_projection(&self) -> Result<EnrollmentProjection> {
             match self
                 .steps
                 .lock()

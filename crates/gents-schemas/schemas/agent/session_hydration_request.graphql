@@ -16,5 +16,9 @@ type SessionHydrationRequest @branchable {
     status: String @index
     status_detail: String
     served_doc_count: Int
+    # Canonical sorted JSON array of exact {collection, doc_id} identities.
+    served_manifest_json: String
     processed_at: DateTime
+    outcome_signer_did: String
+    outcome_signature: String
 }

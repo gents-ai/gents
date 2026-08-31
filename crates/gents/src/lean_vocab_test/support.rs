@@ -464,6 +464,7 @@ pub(crate) struct LeanSessionHydrationProgressCase {
     pub(crate) prev_served: Option<usize>,
     pub(crate) merged: usize,
     pub(crate) served: Option<usize>,
+    pub(crate) served_matches: bool,
     pub(crate) failed: bool,
     pub(crate) begin_request: bool,
     pub(crate) expected_phase: String,
@@ -478,6 +479,7 @@ pub(crate) struct LeanSessionHydrationDurableCase {
     pub(crate) status: String,
     pub(crate) merged: usize,
     pub(crate) served: Option<usize>,
+    pub(crate) served_matches: bool,
     pub(crate) expected_phase: String,
     pub(crate) expected_merged: usize,
 }

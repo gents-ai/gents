@@ -82,7 +82,7 @@ impl EnrollmentDecisionService {
             command.query == EnrollmentOperatorQuery::Pending,
             "unsupported enrollment operator query"
         );
-        let projection = self.store.load_projection(Utc::now()).await?;
+        let projection = self.store.load_projection().await?;
         anyhow::ensure!(
             projection.conflict.is_none(),
             "enrollment root authority is conflicted"

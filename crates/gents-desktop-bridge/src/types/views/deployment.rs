@@ -122,6 +122,7 @@ pub enum BehaviorReadinessUnknownReasonView {
     ReadinessMissing,
     ReadinessMalformed,
     ReadinessVersionUnsupported,
+    ReadinessStale,
     ProcessNotReady,
     RouterGenerationStale,
     BehaviorNotAssigned,

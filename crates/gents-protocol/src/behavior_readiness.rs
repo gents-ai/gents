@@ -8,9 +8,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const BEHAVIOR_READINESS_FORMAT_VERSION: u32 = 1;
+pub const BEHAVIOR_READINESS_MAX_AGE_SECONDS: i64 = 45;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BehaviorReadinessProcessState {
@@ -215,6 +217,7 @@ pub enum BehaviorReadinessUnknownReason {
     ReadinessMissing,
     ReadinessMalformed,
     ReadinessVersionUnsupported,
+    ReadinessStale,
     ProcessNotReady,
     RouterGenerationStale,
     BehaviorNotAssigned,
@@ -319,6 +322,7 @@ pub fn decode_behavior_readiness_snapshot(
 pub fn project_behavior_readiness_summary(
     row: Option<&AgentBehaviorReadinessRow>,
     expected_agent_did: &str,
+    observed_at: DateTime<Utc>,
 ) -> ProjectedBehaviorReadinessSummary {
     let Some(row) = row else {
         return ProjectedBehaviorReadinessSummary::Unknown(
@@ -329,6 +333,11 @@ pub fn project_behavior_readiness_summary(
         Ok(snapshot) => snapshot,
         Err(reason) => return ProjectedBehaviorReadinessSummary::Unknown(reason),
     };
+    if !readiness_row_is_fresh(row, observed_at) {
+        return ProjectedBehaviorReadinessSummary::Unknown(
+            BehaviorReadinessUnknownReason::ReadinessStale,
+        );
+    }
     if !snapshot.process_state.accepts_work() {
         return ProjectedBehaviorReadinessSummary::Unknown(
             BehaviorReadinessUnknownReason::ProcessNotReady,
@@ -368,6 +377,7 @@ pub fn project_behavior_readiness<'a>(
     expected_agent_did: &str,
     configured_behavior_ids: impl IntoIterator<Item = &'a str>,
     configured_default_behavior_id: Option<&str>,
+    observed_at: DateTime<Utc>,
 ) -> BehaviorReadinessProjection {
     let mut behavior_ids = BTreeSet::new();
     let mut configured_ids_malformed = false;
@@ -402,6 +412,9 @@ pub fn project_behavior_readiness<'a>(
         Ok(snapshot) => snapshot,
         Err(reason) => return unknown_projection(behavior_ids, reason),
     };
+    if !readiness_row_is_fresh(row, observed_at) {
+        return unknown_projection(behavior_ids, BehaviorReadinessUnknownReason::ReadinessStale);
+    }
 
     let entries = snapshot
         .behaviors
@@ -453,6 +466,17 @@ pub fn project_behavior_readiness<'a>(
         unknown_reason: global_unknown,
         behaviors,
     }
+}
+
+fn readiness_row_is_fresh(row: &AgentBehaviorReadinessRow, observed_at: DateTime<Utc>) -> bool {
+    DateTime::parse_from_rfc3339(&row.updated_at)
+        .ok()
+        .map(|updated_at| updated_at.with_timezone(&Utc))
+        .is_some_and(|updated_at| {
+            updated_at <= observed_at
+                && observed_at.signed_duration_since(updated_at).num_seconds()
+                    <= BEHAVIOR_READINESS_MAX_AGE_SECONDS
+        })
 }
 
 #[cfg(test)]

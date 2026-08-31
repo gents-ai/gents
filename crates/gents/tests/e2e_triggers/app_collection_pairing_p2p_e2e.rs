@@ -1323,7 +1323,7 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
     let enrollment_cancel = tokio_util::sync::CancellationToken::new();
     let enrollment_handle = tokio::spawn(gents::agent::p2p_reconcile::run_enrollment_reconciler(
         server.node.clone(),
-        server_identity,
+        server_identity.clone(),
         authority_owner,
         enrollment_cancel.clone(),
     ));
@@ -1360,6 +1360,7 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
         gents::agent::p2p_reconcile::run_session_hydration_reconciler(
             server.node.clone(),
             authority,
+            server_identity,
             hydration_cancel.clone(),
         ),
     );

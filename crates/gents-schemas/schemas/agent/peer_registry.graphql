@@ -6,7 +6,6 @@ type PeerRegistry @branchable {
     display_name: String
     status: String
     network_id: String @index
-    invited_by: String
     registered_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
 }

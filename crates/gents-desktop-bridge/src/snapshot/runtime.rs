@@ -599,6 +599,7 @@ pub(crate) fn project_behavior_readiness<'a>(
         expected_agent_did,
         configured_behavior_ids,
         configured_default_behavior_id,
+        Utc::now(),
     );
     BehaviorReadinessView {
         source: match projection.unknown_reason {
@@ -689,6 +690,7 @@ impl From<BehaviorReadinessUnknownReason> for BehaviorReadinessUnknownReasonView
             BehaviorReadinessUnknownReason::ReadinessVersionUnsupported => {
                 Self::ReadinessVersionUnsupported
             }
+            BehaviorReadinessUnknownReason::ReadinessStale => Self::ReadinessStale,
             BehaviorReadinessUnknownReason::ProcessNotReady => Self::ProcessNotReady,
             BehaviorReadinessUnknownReason::RouterGenerationStale => Self::RouterGenerationStale,
             BehaviorReadinessUnknownReason::BehaviorNotAssigned => Self::BehaviorNotAssigned,

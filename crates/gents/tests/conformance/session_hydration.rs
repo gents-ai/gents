@@ -5,7 +5,8 @@ use std::collections::BTreeSet;
 use gents::agent::p2p_reconcile::session_hydration::{
     begin_hydration_request, can_retry_hydration, decide_hydration, observe_hydration_progress,
     AppliedPairingRoute, ClientHydrationPhase, ClientHydrationProgress, HydrationCatalog,
-    HydrationDocument, HydrationRequest, HydrationVerdict, SessionOwner, VerifiedActiveMembership,
+    HydrationDocument, HydrationRequest, HydrationVerdict, SessionHydrationDocumentKey,
+    SessionOwner, VerifiedActiveMembership,
 };
 
 use crate::lean_vocab_test::{
@@ -23,6 +24,16 @@ fn request() -> HydrationRequest {
     .expect("valid hydration key")
 }
 
+fn hydration_keys(count: usize, exact: bool) -> BTreeSet<SessionHydrationDocumentKey> {
+    let stem = if exact { "doc-" } else { "foreign-" };
+    (0..count)
+        .map(|index| SessionHydrationDocumentKey {
+            collection: "AgentMessage".into(),
+            doc_id: format!("{stem}{index}"),
+        })
+        .collect()
+}
+
 #[test]
 fn generated_session_hydration_durable_cases_match_storage_projection() {
     use gents::agent::p2p_reconcile::session_hydration::{
@@ -34,14 +45,20 @@ fn generated_session_hydration_durable_cases_match_storage_projection() {
     for case in cases {
         let request = match case.status.as_str() {
             "pending" => ClientHydrationRequestState::Pending,
-            "served" => ClientHydrationRequestState::Served(case.served.unwrap_or(0)),
-            "rejected" => ClientHydrationRequestState::Rejected(case.served),
+            "served" => ClientHydrationRequestState::Served(hydration_keys(
+                case.served.unwrap_or(0),
+                case.served_matches,
+            )),
+            "rejected" => ClientHydrationRequestState::Rejected(
+                case.served
+                    .map(|count| hydration_keys(count, case.served_matches)),
+            ),
             _ => ClientHydrationRequestState::Missing,
         };
         let progress = project_durable_hydration_progress(
             "session-exact",
             "agent-exact",
-            case.merged,
+            hydration_keys(case.merged, true),
             request,
         );
         assert_eq!(progress.session_id, "session-exact", "{}", case.name);
@@ -229,13 +246,16 @@ fn generated_session_hydration_progress_cases_match_observe() {
             phase: ClientHydrationPhase::parse(&case.prev_phase),
             merged_count: case.prev_merged,
             served_count: case.prev_served,
+            merged_documents: hydration_keys(case.prev_merged, true),
+            served_documents: case.prev_served.map(|count| hydration_keys(count, true)),
         };
         let observed = observe_hydration_progress(
             &prev,
             &case.session,
             &case.agent,
-            case.merged,
-            case.served,
+            hydration_keys(case.merged, true),
+            case.served
+                .map(|count| hydration_keys(count, case.served_matches)),
             case.failed,
         );
         assert_eq!(
@@ -270,9 +290,10 @@ fn generated_session_hydration_progress_cases_match_observe() {
         }
         if case.expected_complete {
             assert!(
-                next.served_count
-                    .is_some_and(|served| next.merged_count >= served),
-                "{} completed without covering served_doc_count",
+                next.served_documents
+                    .as_ref()
+                    .is_some_and(|served| served.is_subset(&next.merged_documents)),
+                "{} completed without covering the exact served manifest",
                 case.name
             );
         }

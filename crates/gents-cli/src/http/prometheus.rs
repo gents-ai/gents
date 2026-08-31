@@ -456,7 +456,7 @@ fn push_behavior_readiness_metrics(
 ) {
     let readiness = rows.iter().find(|row| row.agent_did == agent_did);
     let (ready, unavailable, observed) =
-        match project_behavior_readiness_summary(readiness, agent_did) {
+        match project_behavior_readiness_summary(readiness, agent_did, chrono::Utc::now()) {
             ProjectedBehaviorReadinessSummary::Observed(summary) => (
                 i64::try_from(summary.ready_count).unwrap_or(i64::MAX),
                 i64::try_from(summary.unavailable_behaviors.len()).unwrap_or(i64::MAX),

@@ -25,8 +25,11 @@ pub(crate) fn render_healthz_payload(
                 .behavior_readiness
                 .iter()
                 .find(|row| row.agent_did == state.agent_did);
-            let readiness =
-                project_behavior_readiness_summary(local_readiness_row, &state.agent_did);
+            let readiness = project_behavior_readiness_summary(
+                local_readiness_row,
+                &state.agent_did,
+                chrono::Utc::now(),
+            );
             let runtime_ready =
                 matches!(&readiness, ProjectedBehaviorReadinessSummary::Observed(_));
             let runtime_degraded = match &readiness {

@@ -16,7 +16,3 @@ need to share with gents:
 The crate intentionally has no runtime dependencies. Consumers that only need
 the collection contract should depend on this crate instead of
 `gents-protocol`.
-
-`PeerRegistry.invited_by` is retained only to preserve the existing DefraDB
-schema lineage. Current runtime code neither reads nor writes it; removing it
-requires an explicit schema migration rather than an in-place edit.

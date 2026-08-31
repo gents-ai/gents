@@ -106,9 +106,7 @@ fn legacy_invite_metadata_is_wire_only_and_reciprocal_timing_does_not_return() {
     assert!(!intervals.contains("GENTS_RECIPROCAL_STALE_MS"));
     assert!(!intervals.contains("reciprocal_stale_after"));
     assert!(!registry_writer.contains("invited_by"));
-    // Keep the optional field in the wire schema until a deliberate schema
-    // migration removes it; changing it in-place creates unknown DefraDB lineage.
-    assert!(registry_schema.contains("invited_by"));
+    assert!(!registry_schema.contains("invited_by"));
 }
 
 #[test]

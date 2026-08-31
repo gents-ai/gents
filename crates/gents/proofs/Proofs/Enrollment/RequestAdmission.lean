@@ -12,7 +12,6 @@ every immutable request semantic and every admission-generation field.
 namespace Enrollment
 
 inductive AgentRequestAdmissionKind where
-  | omitted
   | enrollment
   | localSelf
   | runtimeInternal
@@ -72,7 +71,6 @@ def agentRequestAdmissionFields
     (request : AgentRequestSemantics) (admission : AgentRequestAdmission) : CanonicalFields :=
   agentRequestSemanticFields request ++ textFieldsToBytes
     [ match admission.kind with
-      | .omitted => "omitted"
       | .enrollment => "enrollment"
       | .localSelf => "local-self"
       | .runtimeInternal => "runtime-internal"
@@ -185,7 +183,6 @@ def agentRequestAdmissible
   branchFieldsExact = true ∧
   pendingDeadlineAbsent = true ∧
   match admission.kind with
-  | .omitted => False
   | .enrollment =>
       match enrollmentRequest, decision with
       | some enrolledRequest, some approval =>
@@ -233,7 +230,6 @@ def projectAgentRequestAdmission (observation : AgentRequestAdmissionObservation
   observation.signatureValid && observation.signedFieldsMatch && observation.branchFieldsExact &&
   observation.pendingDeadlineAbsent &&
   match observation.kind with
-  | .omitted => false
   | .enrollment =>
       observation.signerMatchesRequester && observation.currentApproval &&
       observation.exactGeneration && observation.authorizationFresh
@@ -286,16 +282,6 @@ theorem available_negative_admission_observation_denies
     (hdeny : projectAgentRequestAdmission observation = false) :
     projectAgentRequestAdmissionDisposition true observation = .deny := by
   simp [projectAgentRequestAdmissionDisposition, hdeny]
-
-theorem omitted_request_fails_closed
-    (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
-    (enrollmentRequest : Option Request) (decision : Option Decision) (fresh : Bool)
-    (runtimeEvidence : Option RuntimeInternalEvidence)
-    (branchFieldsExact pendingDeadlineAbsent : Bool)
-    (hkind : admission.kind = .omitted) :
-    ¬ agentRequestAdmissible s request admission enrollmentRequest decision fresh runtimeEvidence
-      branchFieldsExact pendingDeadlineAbsent := by
-  simp [agentRequestAdmissible, hkind]
 
 theorem enrollment_requires_current_exact_generation
     {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}

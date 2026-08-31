@@ -283,6 +283,9 @@ fn generated_behavior_readiness_cases_drive_the_production_projector() {
             "did:test:lean-readiness",
             ["20"],
             Some("20"),
+            chrono::DateTime::parse_from_rfc3339("2026-08-28T00:00:10Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
         );
         let projected = projection
             .behaviors

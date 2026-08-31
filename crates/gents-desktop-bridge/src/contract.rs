@@ -35,7 +35,7 @@ pub const CONTRACT_VERSION: &str = "4.0";
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "ca9ff3b1c6a7a121b75d68ed134d6d4d76136116d3b89b74ed3ebdce331afc2b";
+    "7a0203eda69c7fedd3f50f89b48af64e7aac23c86a92718742dc9417d8c6bc7a";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -492,7 +492,7 @@ mod tests {
             .filter(|set_id| {
                 !matches!(
                     set_id.as_str(),
-                    "full" | "native-e2e" | "core" | "client-lifecycle"
+                    "full" | "native-e2e" | "core" | "client-lifecycle" | "runtime-admin"
                 )
             })
             .cloned()
@@ -500,7 +500,7 @@ mod tests {
         expected_full_references.insert("default".to_string());
         assert_eq!(
             full_references, expected_full_references,
-            "production full bundle must compose default plus every production set exactly once"
+            "cross-platform full bundle must exclude desktop-only runtime administration"
         );
 
         let sets_by_id = permission_file
@@ -530,12 +530,12 @@ mod tests {
         }
         let expected_production_commands = inventory
             .iter()
-            .filter(|(_, set)| set.as_str() != "native-e2e")
+            .filter(|(_, set)| !matches!(set.as_str(), "native-e2e" | "runtime-admin"))
             .map(|(command, _)| command.clone())
             .collect::<BTreeSet<_>>();
         assert_eq!(
             expanded_full_commands, expected_production_commands,
-            "production full bundle must expand to every production command and exclude native-e2e"
+            "cross-platform full bundle must exclude native-e2e and desktop-only runtime commands"
         );
     }
 

@@ -10,5 +10,6 @@ pub mod rendered_request;
 pub mod request_admission;
 pub mod row;
 pub mod schemas;
+pub mod session_hydration;
 pub mod timeline;
 pub mod transcript;

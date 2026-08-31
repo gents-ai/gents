@@ -159,10 +159,9 @@ pub fn compute_owned_pairing_diff(
             .get(r)
             .is_some_and(|carried| carried != desired_replicator_collections);
         let live_filter_changed = if actual.replicator_filters_unobserved.contains(r) {
-            // Older remotes may omit Filters entirely. Applied identity can
-            // prevent churn, but absence of evidence must not be treated as
-            // evidence that the scoped filter is installed.
-            false
+            // The current protocol requires filter observability. Missing
+            // evidence can never certify a scoped route.
+            !desired.replicator_filter.is_empty()
         } else {
             actual
                 .replicator_filters

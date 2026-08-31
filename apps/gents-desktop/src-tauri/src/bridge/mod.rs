@@ -37,18 +37,7 @@ pub fn run() {
     install_runtime();
 
     let builder = tauri::Builder::default()
-        .plugin(init(BridgeConfig {
-            home: HomePolicy::Default,
-            bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
-                agent_home: AgentHomePolicy::Default,
-            },
-            app_meta: AppMeta {
-                app_name: "Gents".into(),
-                app_version: env!("CARGO_PKG_VERSION").into(),
-            },
-            snapshot_grants: SnapshotGrants::all(),
-            managed_server: ManagedServerPolicy::Allowed,
-        }))
+        .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder.setup(setup_tray).on_window_event(|window, event| {
@@ -66,6 +55,56 @@ pub fn run() {
     builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn platform_bridge_config() -> BridgeConfig {
+    BridgeConfig {
+        home: HomePolicy::Default,
+        bootstrap: platform_bootstrap_policy(),
+        app_meta: AppMeta {
+            app_name: "Gents".into(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+        },
+        snapshot_grants: SnapshotGrants::all(),
+        managed_server: platform_managed_server_policy(),
+    }
+}
+
+#[cfg(desktop)]
+fn platform_bootstrap_policy() -> BootstrapPolicy {
+    BootstrapPolicy::LocalRuntimeAllowed {
+        agent_home: AgentHomePolicy::Default,
+    }
+}
+
+#[cfg(mobile)]
+fn platform_bootstrap_policy() -> BootstrapPolicy {
+    BootstrapPolicy::PairedRemoteOnly
+}
+
+#[cfg(desktop)]
+fn platform_managed_server_policy() -> ManagedServerPolicy {
+    ManagedServerPolicy::Allowed
+}
+
+#[cfg(mobile)]
+fn platform_managed_server_policy() -> ManagedServerPolicy {
+    ManagedServerPolicy::Disabled
+}
+
+#[cfg(all(test, desktop))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_build_explicitly_owns_local_runtime_authority() {
+        let config = platform_bridge_config();
+        assert!(matches!(
+            config.bootstrap,
+            BootstrapPolicy::LocalRuntimeAllowed { .. }
+        ));
+        assert_eq!(config.managed_server, ManagedServerPolicy::Allowed);
+    }
 }
 
 #[cfg(desktop)]

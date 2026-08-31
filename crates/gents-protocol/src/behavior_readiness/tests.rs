@@ -19,8 +19,21 @@ fn readiness_snapshot(behaviors: Vec<BehaviorReadinessEntry>) -> BehaviorReadine
     }
 }
 
+fn observed_at() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-08-28T00:00:10Z")
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
 fn projected_unknown(row: &AgentBehaviorReadinessRow) -> Option<BehaviorReadinessUnknownReason> {
-    project_behavior_readiness(Some(row), "did:test:agent", ["a", "b"], Some("a")).unknown_reason
+    project_behavior_readiness(
+        Some(row),
+        "did:test:agent",
+        ["a", "b"],
+        Some("a"),
+        observed_at(),
+    )
+    .unknown_reason
 }
 
 #[test]
@@ -50,6 +63,24 @@ fn source_projection_is_sorted_and_unavailability_wins() {
     assert_eq!(
         snapshot.behaviors[1].state,
         BehaviorReadinessState::Unavailable
+    );
+}
+
+#[test]
+fn ready_snapshot_expires_without_a_runtime_heartbeat() {
+    let snapshot = readiness_snapshot(vec![BehaviorReadinessEntry {
+        behavior_id: "a".to_string(),
+        state: BehaviorReadinessState::Ready,
+        reason: None,
+    }]);
+    let row = readiness_row("did:test:agent", serde_json::to_string(&snapshot).unwrap());
+    let stale_at = DateTime::parse_from_rfc3339("2026-08-28T00:00:46Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    assert_eq!(
+        project_behavior_readiness(Some(&row), "did:test:agent", ["a"], Some("a"), stale_at)
+            .unknown_reason,
+        Some(BehaviorReadinessUnknownReason::ReadinessStale)
     );
 }
 
@@ -109,8 +140,14 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
         Some(BehaviorReadinessUnknownReason::ReadinessMalformed)
     );
     assert_eq!(
-        project_behavior_readiness(Some(&canonical), "did:test:agent", [" a"], Some("a"))
-            .unknown_reason,
+        project_behavior_readiness(
+            Some(&canonical),
+            "did:test:agent",
+            [" a"],
+            Some("a"),
+            observed_at(),
+        )
+        .unknown_reason,
         Some(BehaviorReadinessUnknownReason::ReadinessMalformed)
     );
 
@@ -155,13 +192,17 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
         r#"{"format_version":1,"process_state":"ready","active_generation":4,"router_generation":4,"default_behavior_id":"a","behaviors":[{"behavior_id":"a","state":"ready","reason":null}],"extra":true}"#.to_string(),
     );
     assert_eq!(
-        project_behavior_readiness_summary(Some(&with_unknown_top_level_field), "did:test:agent"),
+        project_behavior_readiness_summary(
+            Some(&with_unknown_top_level_field),
+            "did:test:agent",
+            observed_at(),
+        ),
         ProjectedBehaviorReadinessSummary::Unknown(
             BehaviorReadinessUnknownReason::ReadinessMalformed
         )
     );
     assert!(matches!(
-        project_behavior_readiness_summary(Some(&canonical), "did:test:agent"),
+        project_behavior_readiness_summary(Some(&canonical), "did:test:agent", observed_at()),
         ProjectedBehaviorReadinessSummary::Observed(BehaviorReadinessSummary {
             ready_count: 1,
             unavailable_behaviors: ref unavailable,
@@ -173,8 +214,13 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
 #[test]
 fn malformed_configured_id_preserves_all_canonical_ids_independent_of_order() {
     for configured in [vec!["bad ", "a", "b"], vec!["a", "bad ", "b"]] {
-        let projection =
-            project_behavior_readiness(None, "did:test:agent", configured, Some("default"));
+        let projection = project_behavior_readiness(
+            None,
+            "did:test:agent",
+            configured,
+            Some("default"),
+            observed_at(),
+        );
         assert_eq!(
             projection.unknown_reason,
             Some(BehaviorReadinessUnknownReason::ReadinessMalformed)

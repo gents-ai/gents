@@ -100,7 +100,7 @@ async fn wait_for_live_behavior_readiness(
             match crate::commands::status::load_live_behavior_readiness(graphql_url, agent_did)
                 .await
             {
-                Ok(row) => match project_behavior_readiness_summary(row.as_ref(), agent_did) {
+                Ok(row) => match project_behavior_readiness_summary(row.as_ref(), agent_did, chrono::Utc::now()) {
                     ProjectedBehaviorReadinessSummary::Observed(summary)
                         if fence.is_none_or(|fence| fence.matches(&summary)) =>
                     {

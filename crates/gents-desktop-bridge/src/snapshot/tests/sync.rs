@@ -25,6 +25,7 @@ fn serving_progress() -> ClientHydrationProgress {
         phase: ClientHydrationPhase::Serving,
         merged_count: 4,
         served_count: Some(11),
+        ..ClientHydrationProgress::default()
     }
 }
 

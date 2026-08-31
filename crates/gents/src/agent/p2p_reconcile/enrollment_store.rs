@@ -185,7 +185,7 @@ impl GraphqlEnrollmentStore {
         lease: Duration,
     ) -> Result<EnrollmentDecisionOutcome> {
         let _guard = self.decision_lock.lock().await;
-        let projection = self.load_projection(Utc::now()).await?;
+        let projection = self.load_projection().await?;
         anyhow::ensure!(
             projection.conflict.is_none(),
             "enrollment authority is conflicted: {}",
@@ -393,7 +393,7 @@ impl GraphqlEnrollmentStore {
     /// tombstone. Exact replay is idempotent; authority history is never deleted.
     pub async fn revoke_request(&self, request_id: &str) -> Result<EnrollmentDecisionOutcome> {
         let guard = self.decision_lock.lock().await;
-        let projection = self.load_projection(Utc::now()).await?;
+        let projection = self.load_projection().await?;
         anyhow::ensure!(
             projection.conflict.is_none(),
             "enrollment authority is conflicted: {}",
@@ -484,7 +484,7 @@ impl GraphqlEnrollmentStore {
                 )?
             }
             Err(commit_error) => {
-                let recovered = self.load_projection(Utc::now()).await?;
+                let recovered = self.load_projection().await?;
                 recovered
                     .revoked
                     .iter()
@@ -566,7 +566,7 @@ impl GraphqlEnrollmentStore {
         decision: &EnrollmentDecisionRecord,
         revision: Option<&AuthorizationRevisionRecord>,
     ) -> Result<(String, Option<String>)> {
-        let projection = self.load_projection(Utc::now()).await?;
+        let projection = self.load_projection().await?;
         match revision {
             Some(revision) => {
                 let active = projection
@@ -600,7 +600,7 @@ impl GraphqlEnrollmentStore {
         if let Some(doc_id) = &active.route_receipt_doc_id {
             return Ok(doc_id.clone());
         }
-        let current = self.load_projection(applied_at).await?;
+        let current = self.load_projection().await?;
         anyhow::ensure!(
             current.active.iter().any(|candidate| {
                 candidate.request == active.request
@@ -651,7 +651,7 @@ impl GraphqlEnrollmentStore {
                 )
             }
             Err(commit_error) => {
-                let projection = self.load_projection(Utc::now()).await?;
+                let projection = self.load_projection().await?;
                 projection
                     .active
                     .iter()
@@ -675,7 +675,7 @@ impl GraphqlEnrollmentStore {
     ) -> bool {
         // Delivery is a capability handoff. Reload immediately before push so
         // an earlier active sweep can never race a durable revocation/new max.
-        let current = match self.load_projection(Utc::now()).await {
+        let current = match self.load_projection().await {
             Ok(projection) => projection,
             Err(error) => {
                 tracing::warn!(error = %error, request_id = %request.request_id,
@@ -721,8 +721,9 @@ impl GraphqlEnrollmentStore {
     }
 
     /// Load every authority row once and project it without relying on row order.
-    pub async fn load_projection(&self, now: DateTime<Utc>) -> Result<EnrollmentProjection> {
+    pub async fn load_projection(&self) -> Result<EnrollmentProjection> {
         let response = self.node.execute(ENROLLMENT_DOCUMENT_QUERY).await;
+        let now = Utc::now();
         ensure_no_errors(&response, "query authenticated enrollment documents")?;
         let raw_network_rows = rows::<Value>(&response, "AgentNetwork")?;
         let network_id = raw_network_rows

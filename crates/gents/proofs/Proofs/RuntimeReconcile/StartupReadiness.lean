@@ -256,4 +256,26 @@ theorem demotion_persists_when_unchanged (standing : BehaviorStanding) :
 theorem change_restores_the_budget (standing : BehaviorStanding) :
     acrossGeneration true standing = seeded := rfl
 
+/- A durable Ready row is only an observation lease. A client must see a
+runtime heartbeat no further than `maxAge` behind its current clock. -/
+def observationFresh (publishedAt observedAt maxAge : Nat) : Bool :=
+  decide (publishedAt ≤ observedAt ∧ observedAt - publishedAt ≤ maxAge)
+
+theorem future_readiness_fails_closed (publishedAt observedAt maxAge : Nat)
+    (hFuture : observedAt < publishedAt) :
+    observationFresh publishedAt observedAt maxAge = false := by
+  simp [observationFresh, Nat.not_le.mpr hFuture]
+
+theorem expired_readiness_fails_closed (publishedAt observedAt maxAge : Nat)
+    (hPublished : publishedAt ≤ observedAt)
+    (hExpired : maxAge < observedAt - publishedAt) :
+    observationFresh publishedAt observedAt maxAge = false := by
+  simp [observationFresh, hPublished, Nat.not_le.mpr hExpired]
+
+theorem current_readiness_is_fresh (publishedAt observedAt maxAge : Nat)
+    (hPublished : publishedAt ≤ observedAt)
+    (hCurrent : observedAt - publishedAt ≤ maxAge) :
+    observationFresh publishedAt observedAt maxAge = true := by
+  simp [observationFresh, hPublished, hCurrent]
+
 end RuntimeReconcile.StartupReadiness

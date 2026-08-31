@@ -13,7 +13,6 @@ const REQUEST_SIGNATURE_DOMAIN: &str = "gents-agent-request-admission-v1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentRequestAdmissionKind {
-    Omitted,
     Enrollment,
     LocalSelf,
     RuntimeInternal,
@@ -22,7 +21,6 @@ pub enum AgentRequestAdmissionKind {
 impl AgentRequestAdmissionKind {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Omitted => "omitted",
             Self::Enrollment => "enrollment",
             Self::LocalSelf => "local-self",
             Self::RuntimeInternal => "runtime-internal",
@@ -35,7 +33,6 @@ impl TryFrom<&str> for AgentRequestAdmissionKind {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "omitted" => Ok(Self::Omitted),
             "enrollment" => Ok(Self::Enrollment),
             "local-self" => Ok(Self::LocalSelf),
             "runtime-internal" => Ok(Self::RuntimeInternal),
@@ -133,7 +130,6 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
         return false;
     }
     match observation.kind {
-        AgentRequestAdmissionKind::Omitted => false,
         AgentRequestAdmissionKind::Enrollment => {
             observation.signer_matches_requester
                 && observation.current_approval
@@ -516,7 +512,6 @@ impl AgentRequestAdmissionRecord {
             && self.runtime_source_kind.is_none()
             && self.runtime_bridge_author_did.is_none();
         match self.kind {
-            AgentRequestAdmissionKind::Omitted => Err("request admission kind is omitted"),
             AgentRequestAdmissionKind::Enrollment if enrollment_present && runtime_absent => Ok(()),
             AgentRequestAdmissionKind::LocalSelf if enrollment_absent && runtime_absent => Ok(()),
             AgentRequestAdmissionKind::RuntimeInternal
@@ -1195,10 +1190,6 @@ mod tests {
         changed!("workspace_seal_hash", |v: &mut AgentRequestCreate| v
             .workspace_seal_hash =
             Some("seal".into()));
-        changed!("admission_kind", |v: &mut AgentRequestCreate| v
-            .admission
-            .kind =
-            AgentRequestAdmissionKind::Omitted);
         changed!("admission_signer", |v: &mut AgentRequestCreate| v
             .admission
             .signer_did

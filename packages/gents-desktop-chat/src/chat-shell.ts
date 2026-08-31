@@ -235,6 +235,8 @@ function behaviorReadinessHint(decision: Exclude<BehaviorReadinessDecision, { ki
         return "Runtime readiness is invalid";
       case "readiness_version_unsupported":
         return "Runtime readiness uses an unsupported format";
+      case "readiness_stale":
+        return "Runtime stopped reporting readiness; reconnect or restart it";
       case "process_not_ready":
         return "Runtime is not ready";
       case "router_generation_stale":

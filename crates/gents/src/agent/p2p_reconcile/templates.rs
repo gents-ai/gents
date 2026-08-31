@@ -216,27 +216,8 @@ pub(super) fn conjunctive_string_eq<'a>(
 ///
 pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 
-/// Decode the persisted actuator filter format.
-///
-/// The single-equality compatibility arm below is wire-shape compatibility
-/// only. It cannot admit or authorize a route; callers must first establish
-/// current enrollment ownership independently.
 pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
-    let mut value: Value = serde_json::from_str(raw)?;
-    if let Some(filters) = value.as_object_mut() {
-        for filter in filters.values_mut() {
-            let legacy = filter.as_object().and_then(|object| {
-                Some((
-                    object.get("field")?.as_str()?.to_string(),
-                    object.get("value")?.as_str()?.to_string(),
-                ))
-            });
-            if let Some((field, value)) = legacy {
-                *filter = serde_json::to_value(equality_filter(field, value))?;
-            }
-        }
-    }
-    serde_json::from_value(value)
+    serde_json::from_str(raw)
 }
 
 // ---------------------------------------------------------------------------
@@ -758,19 +739,6 @@ mod tests {
         .collect();
 
         assert!(to_replication_filters(&filters).is_err());
-    }
-
-    #[test]
-    fn legacy_filter_wire_shape_decodes_without_claiming_authority() {
-        let filters = decode_pairing_filters(
-            r#"{"AgentRequest":{"field":"requester_did","value":"did:key:phone"}}"#,
-        )
-        .expect("legacy filters");
-
-        assert_eq!(
-            filters.get("AgentRequest").and_then(single_string_eq),
-            Some(("requester_did", "did:key:phone"))
-        );
     }
 
     #[test]

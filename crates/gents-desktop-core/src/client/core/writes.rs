@@ -1,4 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -6,10 +6,15 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use gents::identity::AgentIdentity;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+};
+use gents_protocol::session_hydration::{
+    decode_manifest_json, SessionHydrationDocumentKey, SessionHydrationReceipt,
+    SESSION_HYDRATION_RECEIPT_VERSION,
 };
 use serde::Deserialize;
 
@@ -1691,6 +1696,9 @@ impl ClientCore {
                         status: "pending",
                         status_detail: "",
                         served_doc_count: 0,
+                        served_manifest_json: "",
+                        outcome_signer_did: "",
+                        outcome_signature: "",
                         processed_at: null
                     }}
                 ) {{ _docID }}
@@ -1708,7 +1716,7 @@ impl ClientCore {
         session_id: &str,
         agent_did: &str,
     ) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress> {
-        let merged = load_local_hydration_count(
+        let merged = load_local_hydration_documents(
             self.node.as_ref(),
             self.principal.did(),
             session_id,
@@ -1718,8 +1726,10 @@ impl ClientCore {
         let request = load_hydration_server_state(
             self.node.as_ref(),
             self.local_peer_id(),
+            self.principal.did(),
             session_id,
             agent_did,
+            &self.principal,
         )
         .await?;
         Ok(
@@ -1815,16 +1825,16 @@ async fn load_local_hydration_start_evidence(
     })
 }
 
-async fn load_local_hydration_count(
+async fn load_local_hydration_documents(
     node: &EmbeddedNode,
     requester_did: &str,
     session_id: &str,
     agent_did: &str,
-) -> Result<usize> {
+) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
     let query = local_hydration_query(requester_did, session_id, agent_did);
     let response = node.execute(&query).await;
     gents::graphql::ensure_no_errors(&response, "query local session hydration documents")?;
-    local_hydration_count_from_response(&response)
+    local_hydration_documents_from_response(&response)
 }
 
 fn local_hydration_query(requester_did: &str, session_id: &str, agent_did: &str) -> String {
@@ -1846,9 +1856,9 @@ fn local_hydration_query(requester_did: &str, session_id: &str, agent_did: &str)
     )
 }
 
-fn local_hydration_count_from_response(response: &defra_node::QueryResponse) -> Result<usize> {
-    use std::collections::BTreeSet;
-
+fn local_hydration_documents_from_response(
+    response: &defra_node::QueryResponse,
+) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
     let mut ids = BTreeSet::new();
     for collection in [
         "AgentRequest",
@@ -1860,24 +1870,32 @@ fn local_hydration_count_from_response(response: &defra_node::QueryResponse) -> 
     ] {
         for row in gents::graphql::rows::<HydrationDocIdRow>(response, collection)? {
             if let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) {
-                ids.insert((collection.to_string(), doc_id));
+                ids.insert(SessionHydrationDocumentKey {
+                    collection: collection.to_string(),
+                    doc_id,
+                });
             }
         }
     }
-    Ok(ids.len())
+    Ok(ids)
 }
 
 async fn load_hydration_server_state(
     node: &EmbeddedNode,
     peer_id: &str,
+    requester_did: &str,
     session_id: &str,
     agent_did: &str,
+    principal: &super::super::principal_identity::PrincipalIdentity,
 ) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState> {
     use gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
-    let request_key = gents::graphql::escape_graphql_string(&format!("{peer_id}:{session_id}"));
+    let expected_request_key = format!("{peer_id}:{session_id}");
+    let request_key = gents::graphql::escape_graphql_string(&expected_request_key);
     let query = format!(
         r#"{{ SessionHydrationRequest(filter: {{ request_key: {{ _eq: "{request_key}" }} }}) {{
-            agent_did status served_doc_count
+            request_key requester_did agent_did session_id status status_detail
+            served_doc_count served_manifest_json processed_at
+            outcome_signer_did outcome_signature
         }} }}"#
     );
     let response = node.execute(&query).await;
@@ -1896,26 +1914,84 @@ async fn load_hydration_server_state(
     let Some(row) = rows.first() else {
         return Ok(ClientHydrationRequestState::Missing);
     };
-    if row.get("agent_did").and_then(|value| value.as_str()) != Some(agent_did) {
-        bail!("session hydration request belongs to a different agent");
+    for (field, expected) in [
+        ("request_key", expected_request_key.as_str()),
+        ("requester_did", requester_did),
+        ("agent_did", agent_did),
+        ("session_id", session_id),
+    ] {
+        if row.get(field).and_then(|value| value.as_str()) != Some(expected) {
+            bail!("session hydration request {field} does not match the selected target");
+        }
     }
     let status = row
         .get("status")
         .and_then(|value| value.as_str())
         .unwrap_or_default();
-    let served = row
+    if status == "pending" {
+        return Ok(ClientHydrationRequestState::Pending);
+    }
+    if !matches!(status, "served" | "rejected") {
+        bail!("unknown session hydration request status {status:?}");
+    }
+    let served_count = row
         .get("served_doc_count")
         .and_then(|value| value.as_i64())
         .map(usize::try_from)
         .transpose()
         .context("session hydration served_doc_count must be non-negative")?;
+    let manifest = decode_manifest_json(
+        row.get("served_manifest_json")
+            .and_then(|value| value.as_str())
+            .context("terminal hydration request is missing served_manifest_json")?,
+    )?;
+    if served_count != Some(manifest.len()) {
+        bail!("session hydration served_doc_count does not match signed manifest");
+    }
+    let signature = bs58::decode(
+        row.get("outcome_signature")
+            .and_then(|value| value.as_str())
+            .context("terminal hydration request is missing outcome_signature")?,
+    )
+    .into_vec()
+    .context("decode session hydration receipt signature")?;
+    let receipt = SessionHydrationReceipt {
+        version: SESSION_HYDRATION_RECEIPT_VERSION,
+        request_key: expected_request_key,
+        requester_did: requester_did.to_string(),
+        agent_did: agent_did.to_string(),
+        session_id: session_id.to_string(),
+        status: status.to_string(),
+        status_detail: row
+            .get("status_detail")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        served_manifest: manifest,
+        processed_at: row
+            .get("processed_at")
+            .and_then(|value| value.as_str())
+            .context("terminal hydration request is missing processed_at")?
+            .to_string(),
+        signer_did: row
+            .get("outcome_signer_did")
+            .and_then(|value| value.as_str())
+            .context("terminal hydration request is missing outcome_signer_did")?
+            .to_string(),
+        signature,
+    };
+    receipt.validate_shape()?;
+    if !principal
+        .verify(agent_did, &receipt.signing_payload()?, &receipt.signature)
+        .await?
+    {
+        bail!("session hydration receipt signature is invalid");
+    }
+    let documents = receipt.served_manifest.into_iter().collect::<BTreeSet<_>>();
     match status {
-        "pending" => Ok(ClientHydrationRequestState::Pending),
-        "served" => Ok(ClientHydrationRequestState::Served(served.context(
-            "served session hydration request is missing served_doc_count",
-        )?)),
-        "rejected" => Ok(ClientHydrationRequestState::Rejected(served)),
-        other => bail!("unknown session hydration request status {other:?}"),
+        "served" => Ok(ClientHydrationRequestState::Served(documents)),
+        "rejected" => Ok(ClientHydrationRequestState::Rejected(Some(documents))),
+        _ => unreachable!(),
     }
 }
 
@@ -2041,7 +2117,12 @@ mod delete_source_tests {
             "CompactionEntry": [{ "_docID": "compaction-1" }]
         }));
 
-        assert_eq!(local_hydration_count_from_response(&response).unwrap(), 6);
+        assert_eq!(
+            local_hydration_documents_from_response(&response)
+                .unwrap()
+                .len(),
+            6
+        );
     }
 
     #[test]
@@ -2056,6 +2137,7 @@ mod delete_source_tests {
             phase: ClientHydrationPhase::Serving,
             merged_count: 3,
             served_count: Some(8),
+            ..ClientHydrationProgress::default()
         };
         assert!(!should_start_session_hydration_request(
             &serving,

@@ -605,7 +605,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PEER_REGISTRY_NAME,
         gents_protocol::schemas::PEER_REGISTRY,
-        "bafyreieyihzl6ibujs4jzxji64gmpff7jcyqqjpdfxz6my6dcswafjwhla"
+        "bafyreianm22jl7ecpu6kl55wnvadusazbky7hz3dsrgl2jzhzknlj4ivba"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_NETWORK_NAME,
@@ -655,7 +655,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST,
-        "bafyreifuhe35hisrqxfuejsqf2y66rhgl26enmtwgjjmy4tapwcwmrerku"
+        "bafyreicmpatd7phppn77232g3pmarwsf6h55vw3rqxv3ymqzyalqub7sum"
     ),
 ];
 

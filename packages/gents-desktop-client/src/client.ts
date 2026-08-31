@@ -18,7 +18,7 @@ export const PACKAGE_VERSION = "0.14.0";
 // client requires the breaking 4.0 bridge.
 export const MINIMUM_BRIDGE_CONTRACT_VERSION = "4.0";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "ca9ff3b1c6a7a121b75d68ed134d6d4d76136116d3b89b74ed3ebdce331afc2b";
+  "7a0203eda69c7fedd3f50f89b48af64e7aac23c86a92718742dc9417d8c6bc7a";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);

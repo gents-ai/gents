@@ -197,7 +197,6 @@ identifier = "full"
 description = "Full Gents Desktop production surface (excludes native-e2e)"
 permissions = [
   "default",
-  "runtime-admin",
   "session-read",
   "session-control",
   "trace-read",

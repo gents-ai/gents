@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-runtime-admin",
+  "description": "Desktop-only local runtime provisioning and managed server lifecycle",
+  "windows": ["main"],
+  "platforms": ["macOS", "windows", "linux"],
+  "permissions": ["gents-desktop-bridge:runtime-admin"]
+}

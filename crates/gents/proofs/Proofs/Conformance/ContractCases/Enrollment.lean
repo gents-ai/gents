@@ -7,7 +7,6 @@ namespace Conformance.ContractCases
 open Enrollment
 
 private def requestAdmissionKindName : AgentRequestAdmissionKind → String
-  | .omitted => "omitted"
   | .enrollment => "enrollment"
   | .localSelf => "local-self"
   | .runtimeInternal => "runtime-internal"
@@ -93,7 +92,6 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
       { requestAdmissionBase .enrollment with exactGeneration := false }
   , requestAdmissionCase "forged-enrollment-signature"
       { requestAdmissionBase .enrollment with signatureValid := false }
-  , requestAdmissionCase "omitted-admission" (requestAdmissionBase .omitted)
   , requestAdmissionCase "valid-signed-local-self" (requestAdmissionBase .localSelf)
   , requestAdmissionCase "forged-local-self"
       { requestAdmissionBase .localSelf with signerMatchesRequester := false }

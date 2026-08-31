@@ -851,12 +851,14 @@ async fn run_agent_owned(
 
     let hydration_node = agent.node.clone();
     let hydration_enrollment = enrollment_handle.clone();
+    let hydration_identity = agent.principal_arc().identity.clone();
     let hydration_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::SessionHydrationReconcile(
             crate::agent::p2p_reconcile::run_session_hydration_reconciler(
                 hydration_node,
                 hydration_enrollment,
+                hydration_identity,
                 hydration_cancel,
             )
             .await,

@@ -16,6 +16,13 @@ fn set(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| value.to_string()).collect()
 }
 
+const TEST_TRANSPORT_PEER_ID: &str =
+    "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
+const TEST_TRANSPORT_ADDRESS_A: &str =
+    "127.0.0.1:56091/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
+const TEST_TRANSPORT_ADDRESS_B: &str =
+    "127.0.0.1:56092/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
+
 fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     let mut filters = PairingFilters::new();
     filters.insert(
@@ -991,7 +998,7 @@ async fn owned_teardown_removes_endpoint_despite_collection_drift() {
 #[tokio::test]
 async fn cancellation_preempts_in_flight_pairing_sweep_admin_wait() {
     let store = MockStore::with_desired(Some(PairingDesired {
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         ..Default::default()
     }));
     let started = Arc::new(tokio::sync::Notify::new());
@@ -1249,7 +1256,7 @@ async fn read_failure_noops_without_remote_reads() {
 async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
     let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
     let desired = PairingDesired {
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["subagent-host"]),
@@ -1258,22 +1265,22 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
     let store = MockStore {
         desired: Mutex::new(Err("transient desired read".into())),
         applied: Mutex::new(PairingApplied {
-            replicator_addresses: set(&["addr1"]),
+            replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
             replicator_filter: filter,
             ..Default::default()
         }),
         ..Default::default()
     };
     let admin = MockAdmin {
-        active: Mutex::new(vec!["peer-a".into()]),
+        active: Mutex::new(vec![TEST_TRANSPORT_PEER_ID.into()]),
         ..Default::default()
     };
     admin.replicators.lock().unwrap().insert(
-        "addr1".into(),
+        TEST_TRANSPORT_ADDRESS_A.into(),
         RemoteReplicator {
-            id: Some("id-addr1".into()),
+            id: Some("id-current-endpoint".into()),
             collections: vec![mock_collection_id("AgentRequest")],
-            address: Some("addr1".into()),
+            address: Some(TEST_TRANSPORT_ADDRESS_A.into()),
             filters: Some(Default::default()),
         },
     );
@@ -1306,8 +1313,8 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
     assert_eq!(
         *admin.emitted.lock().unwrap(),
         vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
+            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
+            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
         ],
         "the deferred startup replay must fire on the first healthy sweep"
     );
@@ -1541,25 +1548,29 @@ async fn reconnect_force_replays_converged_subagent_replicator() {
 async fn inbound_reconnect_force_replays_without_owner_redial() {
     let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
     let store = MockStore::with_desired(Some(PairingDesired {
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["subagent-host"]),
         ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: filter.clone(),
         ..Default::default()
     };
     let admin = MockAdmin::default();
-    admin.active.lock().unwrap().push("peer-a".into());
+    admin
+        .active
+        .lock()
+        .unwrap()
+        .push(TEST_TRANSPORT_PEER_ID.into());
     admin.replicators.lock().unwrap().insert(
-        "addr1".into(),
+        TEST_TRANSPORT_ADDRESS_A.into(),
         RemoteReplicator {
-            id: Some("id-addr1".into()),
+            id: Some("id-current-endpoint".into()),
             collections: vec![mock_collection_id("AgentRequest")],
-            address: Some("addr1".into()),
+            address: Some(TEST_TRANSPORT_ADDRESS_A.into()),
             filters: Some(mock_live_filters(&filter)),
         },
     );
@@ -1569,12 +1580,12 @@ async fn inbound_reconnect_force_replays_without_owner_redial() {
         .expect("inbound reconnect replay tick");
 
     assert!(admin.connects.lock().unwrap().is_empty());
-    assert_eq!(outcome.replayed_replicators, vec!["addr1"]);
+    assert_eq!(outcome.replayed_replicators, vec![TEST_TRANSPORT_ADDRESS_A]);
     assert_eq!(
         *admin.emitted.lock().unwrap(),
         vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
+            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
+            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
         ]
     );
 }
@@ -1593,28 +1604,28 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
     // collection, and a scoped filter (identity change ⇒ reinstall).
     let store = MockStore::with_desired(Some(PairingDesired {
         collections: set(&["AgentNetwork", "AgentRequest"]),
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: conversation_filter.clone(),
         ..Default::default()
     }));
     // Control-plane pairing already applied: unfiltered replicator on addr1.
     *store.applied.lock().unwrap() = PairingApplied {
         collections: set(&["AgentNetwork"]),
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: PairingFilters::new(),
     };
     let admin = MockAdmin {
-        active: Mutex::new(vec!["peer-a".into()]),
+        active: Mutex::new(vec![TEST_TRANSPORT_PEER_ID.into()]),
         fail_connect: true,
         ..Default::default()
     };
     *admin.collections.lock().unwrap() = set(&[&mock_collection_id("AgentNetwork")]);
     admin.replicators.lock().unwrap().insert(
-        "addr1".into(),
+        TEST_TRANSPORT_ADDRESS_A.into(),
         RemoteReplicator {
-            id: Some("id-addr1".into()),
+            id: Some("id-current-endpoint".into()),
             collections: vec!["AgentNetwork".into()],
-            address: Some("addr1".into()),
+            address: Some(TEST_TRANSPORT_ADDRESS_A.into()),
             filters: Some(Default::default()),
         },
     );
@@ -1631,8 +1642,8 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
         outcome.ops_applied,
         vec![
             DiffOp::InstallCollection("AgentRequest".into()),
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
+            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
+            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
         ]
     );
     // Applied records the conversation filter — this is what surfaces as
@@ -1758,11 +1769,8 @@ async fn matching_applied_repairs_restored_unfiltered_stale_address() {
     assert_eq!(repaired.filters.as_ref(), Some(&mock_live_filters(&filter)));
 }
 
-/// Older remote-admin responses did not expose `Filters`. Unknown visibility
-/// must neither certify a scoped route nor cause reinstall on every sweep once
-/// durable applied identity already matches desired.
 #[tokio::test]
-async fn omitted_live_filters_fail_closed_without_reinstall_churn() {
+async fn omitted_live_filters_force_current_protocol_repair() {
     let filter = one_filter("AgentRequest", "agent_did", "did:key:mandrake");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&["addr1"]),
@@ -1786,18 +1794,13 @@ async fn omitted_live_filters_fail_closed_without_reinstall_churn() {
         },
     );
 
-    for _ in 0..2 {
-        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
-            .await
-            .expect("compatibility reconcile tick");
-        assert!(outcome.ops_applied.is_empty());
-        assert!(
-            !outcome.live_route_matches,
-            "unknown scoped filter must not earn route readiness"
-        );
-    }
-    assert!(admin.emitted.lock().unwrap().is_empty());
-    assert!(admin.recorded_filters.lock().unwrap().is_empty());
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("current-protocol reconcile tick");
+    assert!(!outcome.ops_applied.is_empty());
+    assert!(outcome.live_route_matches);
+    assert!(!admin.emitted.lock().unwrap().is_empty());
+    assert!(!admin.recorded_filters.lock().unwrap().is_empty());
 }
 
 /// Current DefraDB HTTP responses omit `Filters` only for an empty effective
@@ -1995,17 +1998,17 @@ async fn applied_state_persist_collapses_duplicates_and_recovers_a_missing_row()
 #[tokio::test]
 async fn stale_applied_endpoint_absent_from_actual_is_torn_down_once() {
     let desired = PairingDesired {
-        replicator_addresses: set(&["addr2"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_B]),
         replicator_collections: set(&["AgentRequest"]),
         ..Default::default()
     };
     let store = MockStore::with_desired(Some(desired));
     *store.applied.lock().unwrap() = PairingApplied {
-        replicator_addresses: set(&["addr1", "addr2"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A, TEST_TRANSPORT_ADDRESS_B]),
         ..Default::default()
     };
     let admin = MockAdmin {
-        active: Mutex::new(vec!["peer-a".into()]),
+        active: Mutex::new(vec![TEST_TRANSPORT_PEER_ID.into()]),
         ..Default::default()
     };
     let first = reconcile_peer_tick(&admin, &store, "peer-a")
@@ -2018,19 +2021,22 @@ async fn stale_applied_endpoint_absent_from_actual_is_torn_down_once() {
     assert_eq!(
         first.ops_applied,
         vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr2".into()),
+            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
+            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_B.into()),
         ]
     );
     assert!(second.ops_applied.is_empty());
-    assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr2"]]);
+    assert_eq!(
+        *admin.connects.lock().unwrap(),
+        vec![vec![TEST_TRANSPORT_ADDRESS_B.to_string()]]
+    );
     assert_eq!(
         *admin.deleted_replicator_collections.lock().unwrap(),
         vec![vec!["AgentRequest".to_string()]]
     );
     assert_eq!(
         store.applied.lock().unwrap().replicator_addresses,
-        set(&["addr2"])
+        set(&[TEST_TRANSPORT_ADDRESS_B])
     );
 }
 
