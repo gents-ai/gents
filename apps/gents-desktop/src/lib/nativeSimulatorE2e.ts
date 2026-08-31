@@ -7,7 +7,6 @@ import {
   findAgentDeploymentControl,
   findAssistantResponseMarker,
   findNewChatButton,
-  findPairingReadyStatus,
   isConversationTurnSettled,
 } from "./nativeSimulatorE2eDom";
 
@@ -17,7 +16,6 @@ export {
   findAgentDeploymentControl,
   findAssistantResponseMarker,
   findNewChatButton,
-  findPairingReadyStatus,
   isConversationTurnSettled,
 } from "./nativeSimulatorE2eDom";
 
@@ -98,31 +96,19 @@ async function runNativeSimulatorE2e() {
       throw new Error("Mobile shell exposed unsupported local runtime setup");
     }
 
-    let pairedThisRun = false;
     const deploymentControl = await waitForOptional(
       () => findAgentDeploymentControl(config.agentLabel),
       15_000,
     );
     if (!deploymentControl) {
       await reportStatus({ stage: "enrollment" });
-      await pairAgent(config);
-      pairedThisRun = true;
+      await enrollAgent(config);
       await waitFor(
         () => findAgentDeploymentControl(config.agentLabel),
         300_000,
         `${config.agentLabel} deployment`,
       );
     }
-    if (pairedThisRun) {
-      await waitFor(
-        () =>
-          findPairingReadyStatus(config.agentLabel) ??
-          findAgentChatButton(config.agentLabel),
-        300_000,
-        `${config.agentLabel} signed enrollment readiness or enabled chat control`,
-      );
-    }
-
     await reportStatus({ stage: "waiting-ready" });
     const currentChatButton = await waitFor(
       () => findAgentChatButton(config.agentLabel),
@@ -228,7 +214,7 @@ async function runNativeSimulatorE2e() {
   }
 }
 
-async function pairAgent(config: NativeE2eConfig) {
+async function enrollAgent(config: NativeE2eConfig) {
   const disclosure = await waitFor(
     () =>
       document.querySelector<HTMLElement>(
@@ -308,11 +294,11 @@ async function waitFor<T>(
     if (value) {
       return value;
     }
-    const pairingError = document.querySelector<HTMLElement>(
-      '[data-testid="fleet-pair-status"].fleet-inline-error',
+    const enrollmentError = document.querySelector<HTMLElement>(
+      '[data-testid="fleet-import-status"].fleet-inline-error',
     );
-    if (pairingError?.textContent?.trim()) {
-      throw new Error(pairingError.textContent.trim());
+    if (enrollmentError?.textContent?.trim()) {
+      throw new Error(enrollmentError.textContent.trim());
     }
     const globalError = document.querySelector<HTMLElement>(
       '[data-testid="error-banner"] .error-banner-message',

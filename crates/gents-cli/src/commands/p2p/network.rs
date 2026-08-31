@@ -88,7 +88,6 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         display_name: display_name.clone(),
         status: "online".to_string(),
         network_id: network_id.clone(),
-        invited_by: None,
     };
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Full);
@@ -633,7 +632,6 @@ mod tests {
             display_name: Some("my-node".to_string()),
             status: "online".to_string(),
             network_id: "default".to_string(),
-            invited_by: None,
         };
         let now = "2026-06-13T00:00:00Z";
         let mutation = registry_upsert_mutation(&entry, now, UpsertKind::Full);

@@ -97,6 +97,21 @@ fn operator_nonce_is_local_only_and_never_broad_synced() {
 }
 
 #[test]
+fn legacy_invite_metadata_is_wire_only_and_reciprocal_timing_does_not_return() {
+    let intervals = include_str!("../../src/agent/p2p_reconcile/intervals.rs");
+    let registry_writer = include_str!("../../src/agent/p2p_reconcile/registry.rs");
+    let registry_schema =
+        include_str!("../../../gents-schemas/schemas/agent/peer_registry.graphql");
+
+    assert!(!intervals.contains("GENTS_RECIPROCAL_STALE_MS"));
+    assert!(!intervals.contains("reciprocal_stale_after"));
+    assert!(!registry_writer.contains("invited_by"));
+    // Keep the optional field in the wire schema until a deliberate schema
+    // migration removes it; changing it in-place creates unknown DefraDB lineage.
+    assert!(registry_schema.contains("invited_by"));
+}
+
+#[test]
 fn production_pending_request_writers_use_the_signed_canonical_builder() {
     let writers = [
         include_str!("../../src/lifecycle/materialize.rs"),

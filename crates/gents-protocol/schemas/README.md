@@ -195,7 +195,8 @@ including:
 - `Schedule`
 - `EventTrigger`
 - `EventTriggerGroupState`
-- the network membership, pairing, peer registry, and remote configuration ledgers
+- the enrollment authorization, applied-route, peer-registry, and remote
+  configuration ledgers
 
 These are the documents where preserving observable history matters most.
 

@@ -1,5 +1,5 @@
 @layer fleet {
-  .fleet-pairing {
+  .fleet-enrollment {
     display: grid;
     gap: var(--space-5);
   }
@@ -13,17 +13,17 @@
     background: rgb(var(--color-accent-rgb) / 0.06);
   }
 
-  .fleet-pairing-copy {
+  .fleet-enrollment-copy {
     grid-column: 1 / -1;
     display: grid;
     gap: var(--space-2);
   }
 
-  .fleet-pairing-copy h3 {
+  .fleet-enrollment-copy h3 {
     margin: 0;
   }
 
-  .fleet-pairing-copy p {
+  .fleet-enrollment-copy p {
     margin: 0;
     max-width: 68ch;
   }

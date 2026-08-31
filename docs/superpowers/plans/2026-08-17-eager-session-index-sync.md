@@ -1,5 +1,10 @@
 # Eager Session-Index Sync (#1141) Implementation Plan
 
+> Historical implementation plan. The current client route is materialized
+> only from authenticated enrollment (#1312–#1313). References below to legacy
+> network collections or caller-authored pairing rows are retained solely as
+> implementation history.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A freshly paired client renders the full session list (AgentConversation + AgentSession) with no transcript-plane replication and no env gate.

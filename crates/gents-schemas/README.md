@@ -11,8 +11,12 @@ need to share with gents:
 - requests, rendered provider requests, responses, sessions, conversations,
   messages, tool calls, and tool results
 - compaction, Codex thread projection, projection ACP bindings, tasks,
-  schedules, event triggers, and peer pairing desired state
+  schedules, event triggers, and enrollment-owned peer route desired state
 
 The crate intentionally has no runtime dependencies. Consumers that only need
 the collection contract should depend on this crate instead of
 `gents-protocol`.
+
+`PeerRegistry.invited_by` is retained only to preserve the existing DefraDB
+schema lineage. Current runtime code neither reads nor writes it; removing it
+requires an explicit schema migration rather than an in-place edit.

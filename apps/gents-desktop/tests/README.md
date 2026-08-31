@@ -32,11 +32,11 @@ The desktop test stack has three layers:
   path, but refuses to fall back to the mock endpoint. Use this when validating
   a real inference provider or the `live-smoke.yml` manual workflow inputs.
 - `npm run test:ui:ios:e2e` builds the real Tauri app for an iPhone Simulator,
-  mints a fresh signed invite on the isolated local `iphone-e2e` node, pairs
-  through the rendered UI, sends a fixed prompt, and waits for its response
-  through a debug-only in-app driver. The runner detects an unexpected native
-  app exit and retains screenshots under the printed temporary artifact
-  directory.
+  requests authenticated enrollment from an isolated issuer, waits for explicit
+  operator approval and signed readiness, sends a fixed prompt, and requires a
+  terminal hydrated response through a debug-only in-app driver. The runner
+  detects an unexpected native app exit and retains screenshots under the
+  printed temporary artifact directory.
 - `npm run perf:mobile -- --runs=5` measures deterministic mobile interaction
   fixtures at an iPhone viewport. It writes JSON plus Markdown under
   `test-results/mobile-performance/`; only bounded row, payload, and refresh
@@ -65,7 +65,7 @@ coverage until the live browser project reaches parity.
 
 The native iPhone run requires Xcode, XcodeGen, an available iPhone Simulator,
 and a running P2P-enabled issuer at `~/.gents/iphone-e2e`. It resets the app by
-default so pairing and first-message behavior are tested from a clean install:
+default so enrollment and first-message behavior are tested from a clean install:
 
 ```bash
 npm run test:ui:ios:e2e
@@ -77,7 +77,8 @@ npm run test:ui:ios:e2e -- --runs=3 --measure \
 Set `GENTS_IOS_SIMULATOR_ID` to choose a device.
 `GENTS_E2E_ISSUER_GENTS` and `GENTS_E2E_ISSUER_HOME` override the local issuer;
 setting `GENTS_E2E_ISSUER_SSH` explicitly uses a remote issuer. `--keep-data`
-reuses an existing pairing. The runner never prints the single-use invite.
+reuses an existing enrollment and client store. The runner never prints signed
+enrollment material.
 Measurement mode records correlated application boundaries, observer counters
 (including response in-place versus copy-on-write merges), simulator RSS, and
 process CPU samples as JSON and Markdown. Reset-data and

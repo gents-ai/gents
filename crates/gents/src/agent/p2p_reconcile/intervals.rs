@@ -48,12 +48,6 @@ pub fn stale_after() -> Duration {
         .unwrap_or_else(|| heartbeat_interval() * DEFAULT_STALE_MULTIPLE)
 }
 
-pub const DEFAULT_RECIPROCAL_STALE: Duration = Duration::from_secs(24 * 60 * 60);
-
-pub fn reciprocal_stale_after() -> Duration {
-    env_ms("GENTS_RECIPROCAL_STALE_MS").unwrap_or(DEFAULT_RECIPROCAL_STALE)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,7 +58,6 @@ mod tests {
         "GENTS_PAIRING_SWEEP_MS",
         "GENTS_ENDPOINT_HEARTBEAT_MS",
         "GENTS_REGISTRY_STALE_MS",
-        "GENTS_RECIPROCAL_STALE_MS",
     ];
 
     fn env_lock() -> &'static Mutex<()> {
@@ -114,7 +107,6 @@ mod tests {
         assert_eq!(endpoint_interval(), Duration::from_secs(30));
         assert_eq!(lease_renewal_interval(), Duration::from_secs(30));
         assert_eq!(stale_after(), Duration::from_secs(90));
-        assert_eq!(reciprocal_stale_after(), Duration::from_secs(24 * 60 * 60));
     }
 
     #[test]
@@ -124,7 +116,6 @@ mod tests {
         std::env::set_var("GENTS_PAIRING_SWEEP_MS", "500");
         std::env::set_var("GENTS_ENDPOINT_HEARTBEAT_MS", "750");
         std::env::set_var("GENTS_REGISTRY_STALE_MS", "2500");
-        std::env::set_var("GENTS_RECIPROCAL_STALE_MS", "4500");
 
         assert_eq!(heartbeat_interval(), Duration::from_millis(1250));
         assert_eq!(sweep_interval(), Duration::from_millis(500));
@@ -134,7 +125,6 @@ mod tests {
             Duration::from_millis(2500) / DEFAULT_STALE_MULTIPLE
         );
         assert_eq!(stale_after(), Duration::from_millis(2500));
-        assert_eq!(reciprocal_stale_after(), Duration::from_millis(4500));
     }
 
     #[test]

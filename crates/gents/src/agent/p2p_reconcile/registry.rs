@@ -75,7 +75,6 @@ pub struct RegistryEntry {
     pub display_name: Option<String>,
     pub status: String,
     pub network_id: String,
-    pub invited_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +97,6 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
     let display_name = graphql_nullable_string_literal(entry.display_name.as_deref());
     let status = escape_graphql_string(&entry.status);
     let network_id = escape_graphql_string(&entry.network_id);
-    let invited_by = graphql_nullable_string_literal(entry.invited_by.as_deref());
     let now = escape_graphql_string(now);
 
     let update_block = match kind {
@@ -110,7 +108,6 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
                     display_name: {display_name},
                     status: "{status}",
                     network_id: "{network_id}",
-                    invited_by: {invited_by},
                     updated_at: "{now}"
                 }}"#
         ),
@@ -136,7 +133,6 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
                     display_name: {display_name},
                     status: "{status}",
                     network_id: "{network_id}",
-                    invited_by: {invited_by},
                     registered_at: "{now}",
                     updated_at: "{now}"
                 }},
@@ -269,7 +265,6 @@ async fn tick_registry(
         display_name: None,
         status: status.to_string(),
         network_id: network_id.to_string(),
-        invited_by: None,
     };
     let observed_at = Instant::now();
     let Some(publish_reason) =
@@ -339,7 +334,6 @@ mod tests {
             display_name: None,
             status: status.into(),
             network_id: "default".into(),
-            invited_by: None,
         }
     }
 
@@ -405,7 +399,6 @@ mod tests {
                 display_name: Some("amy".into()),
                 status: "online".into(),
                 network_id: "default".into(),
-                invited_by: None,
             },
             "2026-06-13T00:00:00Z",
             UpsertKind::Full,
@@ -429,7 +422,6 @@ mod tests {
             display_name: Some("should-not-appear-in-update".into()),
             status: "online".into(),
             network_id: "default".into(),
-            invited_by: None,
         };
         let m = registry_upsert_mutation(&entry, "2026-06-13T01:00:00Z", UpsertKind::Heartbeat);
 
@@ -470,7 +462,6 @@ mod tests {
             display_name: Some("my-node".into()),
             status: "online".into(),
             network_id: "default".into(),
-            invited_by: None,
         };
         let m = registry_upsert_mutation(&entry, "2026-06-13T01:00:00Z", UpsertKind::Full);
 

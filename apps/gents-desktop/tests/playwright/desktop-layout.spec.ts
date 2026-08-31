@@ -215,7 +215,7 @@ test.describe("desktop responsive layout guardrails", () => {
     await expectNoPageHorizontalOverflow(page);
   });
 
-  test("keyboard viewport resize reveals the focused pairing address", async ({
+  test("keyboard viewport resize reveals the focused enrollment address", async ({
     page,
   }) => {
     test.skip(

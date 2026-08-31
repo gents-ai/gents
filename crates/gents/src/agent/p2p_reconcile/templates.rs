@@ -216,6 +216,11 @@ pub(super) fn conjunctive_string_eq<'a>(
 ///
 pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 
+/// Decode the persisted actuator filter format.
+///
+/// The single-equality compatibility arm below is wire-shape compatibility
+/// only. It cannot admit or authorize a route; callers must first establish
+/// current enrollment ownership independently.
 pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
     let mut value: Value = serde_json::from_str(raw)?;
     if let Some(filters) = value.as_object_mut() {
@@ -756,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_pairing_filter_decodes() {
+    fn legacy_filter_wire_shape_decodes_without_claiming_authority() {
         let filters = decode_pairing_filters(
             r#"{"AgentRequest":{"field":"requester_did","value":"did:key:phone"}}"#,
         )

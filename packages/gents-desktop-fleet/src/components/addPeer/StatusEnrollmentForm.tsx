@@ -24,7 +24,7 @@ export function StatusEnrollmentForm({
         void discovery.connectFromStatus();
       }}
     >
-      <div className="fleet-pairing-copy">
+      <div className="fleet-enrollment-copy">
         <p className="eyebrow">Recommended</p>
         <h3>Connect by server address</h3>
         <p className="muted">

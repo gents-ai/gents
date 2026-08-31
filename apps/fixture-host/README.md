@@ -16,7 +16,7 @@ Minimal downstream Tauri host for [reusable desktop packages](../../docs/reusabl
 
 This is a package/plugin composition fixture, not a complete Amygdala simulation.
 The domain plugin is not a second DefraDB node, and CI does not automate a
-pairing/chat/domain journey through the Tauri webview. Native two-store home
+enrollment/chat/domain journey through the Tauri webview. Native two-store home
 isolation is covered separately by `home_isolation`.
 
 ## Dev

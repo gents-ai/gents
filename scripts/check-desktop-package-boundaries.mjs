@@ -350,7 +350,7 @@ const fleetLayoutPartials = filesUnder(
 if (
   !fleetBaseStyles.includes("./styles/layout.css") ||
   !fleetLayoutStyles.includes('./layout/dashboard.css"') ||
-  !fleetLayoutStyles.includes('./layout/pairing.css"') ||
+  !fleetLayoutStyles.includes('./layout/enrollment.css"') ||
   !fleetLayoutStyles.includes('./layout/responsive.css"') ||
   !fleetLayoutStyles.includes('./layout/responsive-table.css"') ||
   !fleetLayoutPartials.includes(".fleet-dashboard")
@@ -571,7 +571,7 @@ for (const [path, maximumLines] of [
   ["packages/gents-desktop-fleet/styles/layout.css", 20],
   ["packages/gents-desktop-fleet/styles/layout/dashboard.css", 180],
   ["packages/gents-desktop-fleet/styles/layout/network.css", 120],
-  ["packages/gents-desktop-fleet/styles/layout/pairing.css", 230],
+  ["packages/gents-desktop-fleet/styles/layout/enrollment.css", 230],
   ["packages/gents-desktop-fleet/styles/layout/responsive.css", 100],
   ["packages/gents-desktop-fleet/styles/layout/responsive-table.css", 100],
   ["packages/gents-desktop-operations/styles/backend-health.css", 20],

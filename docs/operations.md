@@ -1,7 +1,7 @@
 # Operations
 
 Operational reference beyond the [getting-started walkthrough](demo.md):
-desktop pairing, multi-runtime bring-up, and the operations API.
+desktop enrollment, multi-runtime bring-up, and the operations API.
 
 ## Container image
 
@@ -46,7 +46,7 @@ Build and install the desktop binaries:
 scripts/install-local.sh
 ```
 
-Pair and launch (with a `gents server` already running):
+Enroll and launch (with a `gents server` already running):
 
 ```bash
 gents-desktop init
@@ -65,7 +65,7 @@ gents-desktop init --status-endpoint http://agent-host:9191/status
 
 The discovery URL is used to read connection metadata; the saved deployment
 stores the runtime's P2P address and GraphQL endpoint. The desktop app
-completes the P2P pairing and replication bootstrap when it launches. For the
+completes the enrollment-owned P2P replication bootstrap when it launches. For the
 replicated chat demo, leave the desktop app open and wait for the status bar
 to show `replication: subscriptions armed` before sending prompts you expect
 to render in the UI.
@@ -87,7 +87,7 @@ node all use that directory when the variable is set.
 ## P2P defaults and pinning
 
 The standard server path always starts the IROH P2P transport for local
-desktop pairing. It binds to localhost on an ephemeral P2P port by default,
+desktop replication. It binds to localhost on an ephemeral P2P port by default,
 with relay and discovery disabled.
 
 To pin the local P2P socket:
@@ -153,7 +153,7 @@ both modeled route legs and the client must verify the runtime's signed,
 generation-bound route receipt. Revocation or a higher authorization generation
 retracts readiness until the new routes are applied.
 
-Inspect desired pairing rows and live connectivity from either runtime:
+Inspect enrollment-owned desired pairing rows and live connectivity from either runtime:
 
 ```bash
 gents p2p pairings list --home /tmp/amy --output table

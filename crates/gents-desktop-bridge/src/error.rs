@@ -127,7 +127,6 @@ impl BridgeErrorCode {
         }
         if contains_pairing_word(&lower)
             || lower.contains("bearer")
-            || lower.contains("invite")
             || lower.contains("ticket")
             || lower.contains("network-admin")
             || lower.contains("network admin")

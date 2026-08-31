@@ -28,7 +28,7 @@ gents codex     # launch Codex against the Gents app-server shim
 off it: letting the agent change things (`init --write` / `--yolo`, and what
 each preset guarantees), pointing `init` at other OpenAI-compatible backends,
 verifying the signed binary, building from source, and the fallback `chat`
-REPL. Desktop app, fleet bring-up, and P2P pairing:
+REPL. Desktop app, fleet bring-up, and authenticated enrollment:
 [docs/operations.md](docs/operations.md).
 Operators performing the breaking product cutover should use the single
 [Gents cutover runbook](docs/gents-cutover.md).
@@ -142,7 +142,7 @@ Agent frameworks bolt persistence, identity, and coordination onto a loop. Gents
 - **Runtime** (`crates/gents`) — the agent loop, lifecycles, tool execution, triggers/schedules, compaction, recovery. The core; everything else supports it.
 - **Protocol** (`crates/gents-protocol`) — schemas, the persisted message vocabulary, and the turn-observation protocol shared by every peer.
 - **CLI** (`crates/gents-cli`) — init/serve/chat, plus declarative config apply/diff: agent manifests in, documents out.
-- **Desktop** (`apps/gents-desktop`, `crates/gents-desktop*`) — an observer UI over the same documents, paired via P2P.
+- **Desktop** (`apps/gents-desktop`, `crates/gents-desktop*`) — an observer UI enrolled with runtimes and synchronized over P2P.
 - **Proofs** (`crates/gents/proofs`) — the Lean models the runtime conforms to.
 
 Subagents are requests: a parent's tool call spawns a child request — possibly on another deployment — and the child's terminal state projects back onto the parent's transcript. Automation is the same shape: Tasks, Schedules, and EventTriggers materialize requests with lineage stamped on every one.

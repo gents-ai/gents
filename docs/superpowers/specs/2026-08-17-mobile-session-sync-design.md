@@ -1,5 +1,10 @@
 # Mobile session sync — design
 
+> Authority update (2026-08-31): authenticated enrollment, signed route
+> receipts, and current authorization now own this transport. Older
+> pairing/membership language below records the design as originally shipped;
+> it is not a compatibility path.
+
 **Milestone:** [Mobile session sync](https://github.com/source-inc/gents/milestones/9) — #1141 → #1142 → #1143 → #1144, with #1145/#1146 independent.
 **Status:** shipped on current `main` plus the `mobile-session-sync/00`–`04` productization stack (2026-08-27). The original 2026-08-17 session approval still holds; the reductions below are the durable record of what actually landed.
 

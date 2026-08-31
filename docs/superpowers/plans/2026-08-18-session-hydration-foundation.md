@@ -1,5 +1,10 @@
 # Session Hydration Foundation (#1142) Implementation Plan
 
+> Historical implementation plan. Current hydration admission derives exact
+> applied routes and current authorization from authenticated enrollment
+> (#1312–#1313); older pairing/membership wording below is not an alternate
+> authority path.
+
 **Goal:** Define the tenant-safe, idempotent `SessionHydrationRequest` lifecycle and register its client-authored control collection without inventing a second P2P delivery path.
 
 **Architecture:** Follow the foundation flow: model admission, document selection, terminality, crash re-drive, pairing non-interference, and receiver progress in Lean; fence the executable decisions in Rust; register the branchable schema in the shared catalog, client-authored migration fence, and `machine` template; then run the server sweep through DefraDB's existing peer-targeted document pusher. The client requests hydration on focus and declares completion only after its exact local seven-collection document count reaches the server's selected-document count.

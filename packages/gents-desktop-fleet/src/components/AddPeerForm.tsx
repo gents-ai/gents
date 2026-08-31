@@ -23,7 +23,7 @@ export function AddPeerForm({
   const busy = disabled || addingPeer || discovery.fetchingStatus;
 
   return (
-    <div className="fleet-pairing">
+    <div className="fleet-enrollment">
       <StatusEnrollmentForm
         addingPeer={addingPeer}
         busy={busy}

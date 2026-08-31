@@ -2,6 +2,12 @@
 
 _Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877)._
 
+> **Current authority terminology:** users request authenticated **enrollment**;
+> an operator approves or denies that immutable request. `Pairing`,
+> `PairedRemoteOnly`, and `PeerPairing*` below name the lower-level P2P transport
+> policy/actuator, or quote the pre-enrollment baseline recorded by this design.
+> They are not alternate admission paths.
+
 **Implementation status (PR #878, honest):**
 
 | Phase                | Status                 | Notes                                                                                              |
@@ -30,9 +36,8 @@ session polling/restart coordinator in `useDesktopShell` and passes package
 components data + callbacks. Each `DesktopClient` now owns a full
 transport-bound `client.api`; operations providers and fleet package-owned reads
 accept that adapter, while the global API seam remains only for compatibility.
-Package CSS is semantic-token-only but preserves the existing class names to
-keep the extraction behavior-identical; a future collision-hardening release
-may prefix them. Live-lane verification of the serde camelCase fix is fenced by
+Package CSS is semantic-token-only and fleet-owned classes use the `fleet-`
+prefix. Live-lane verification of the serde camelCase fix is fenced by
 a wire-format assertion in `test:live:chat` (`itemKey` must arrive camelCase over
 real IPC). External Amygdala authentication/Cargo-fetch
 and the first real tag publish remain release-environment evidence, not changes
@@ -57,7 +62,7 @@ reusing Gents chat, fleet, and operator behavior through versioned dependencies.
 The motivating downstream is **Amygdala**, a separately branded household-operations
 app (see the Amygdala App Platform design, 2026-07-26, in the Amygdala repository).
 Its kitchen-inventory domain stays out of Gents; the extension seam it needs lives
-here. Amygdala's architecture pairs with two authoritative peers — a Kitchen Gents
+here. Amygdala's architecture enrolls with two authoritative peers — a Kitchen Gents
 runtime for chat and `kitchen-mcp` for inventory collections — and its v1 keeps the
 Kitchen domain in a **separate client store** under the Amygdala home. The v1 contract
 supports that model (§ Domain storage and co-resident plugins), but the in-tree
@@ -66,7 +71,7 @@ itself becomes the first-party consumer of every extracted seam, so the package
 boundary is exercised on every CI run.
 
 Related docs: [gents.md](gents.md) (platform architecture),
-[operations.md](operations.md) (pairing and desktop operation),
+[operations.md](operations.md) (enrollment and desktop operation),
 [../apps/gents-desktop/README.md](../apps/gents-desktop/README.md) (desktop app),
 [../apps/gents-desktop/tests/AGENT_BROWSER.md](../apps/gents-desktop/tests/AGENT_BROWSER.md)
 (semantic browser harness), [../crates/gents/proofs/README.md](../crates/gents/proofs/README.md)
@@ -207,7 +212,7 @@ Six published packages plus the private apps, managed as npm workspaces:
 @source-inc/gents-desktop-client     transport, shared store, canonical types
         ▲   ▲   ▲
         │   │   └── @source-inc/gents-desktop-chat        chat state + components
-        │   └────── @source-inc/gents-desktop-fleet       discovery/pairing/health/peers
+        │   └────── @source-inc/gents-desktop-fleet       discovery/enrollment/health/peers
         └────────── @source-inc/gents-desktop-operations  holds, traces, health panels
                           ▲
                           │ (all packages consumed by)
@@ -300,7 +305,7 @@ pub struct BridgeConfig {
     /// Host-side ceiling on LOCAL RUNTIME provisioning — and only that.
     /// desktop_client_start performs client-store bootstrap in the resolved
     /// home (create dirs, mint/load the principal identity, open the embedded
-    /// node), which clean-install pairing requires; it never provisions or
+    /// node), which clean-install enrollment requires; it never provisions or
     /// attaches a local Gents runtime. Local-runtime provisioning goes
     /// exclusively through desktop_init_local_standard (permission set
     /// `runtime-admin`); LocalRuntimeAllowed permits that command,
@@ -491,7 +496,7 @@ Three refinements keep the projection honest without forcing broad grants:
   read grant. Under the plugin it is re-keyed to a **saved peer id**; the native
   side resolves the address from the peer directory. The invariant, stated
   precisely: **read-only commands never accept arbitrary addresses**. Admin flows
-  necessarily do — adding a peer or pairing takes an address by nature — which is
+  necessarily do — requesting enrollment takes an address by nature — which is
   exactly why those commands live in `fleet-admin`, a grant a host extends only to
   surfaces that administer the fleet.
 
@@ -503,7 +508,7 @@ following a package's documented install must never hit permission-denied:
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `-client`     | `default` (`core` + `client-lifecycle`, which covers the restart/backoff loop's shutdown-then-start)                                                                                                                                                                                                                                                                                                                                             |
 | `-chat`       | `default` + `session-read` + `chat-write` + `resend-control` (retry) + `interrupt-read` (cascade preview for the cancel dialog) + `interrupt-control` (interrupt is part of the promised chat UX). **Never the hold sets** — enumerating or approving held tool executions is not a chat capability                                                                                                                                              |
-| `-fleet`      | `default` + `fleet-read`; add `fleet-admin` for the pairing surfaces (`AddPeerForm`, QR pairing). The local-runtime onboarding affordance ("Connect Local Agent", today inside `FleetDashboard`) is extracted as an **opt-in subcomponent** with its own declared requirement of `runtime-admin` + `BootstrapPolicy::LocalRuntimeAllowed`; the base fleet profile never includes `runtime-admin`, and paired-remote hosts simply don't render it |
+| `-fleet`      | `default` + `fleet-read`; add `fleet-admin` for the authenticated enrollment surface (`AddPeerForm`). The local-runtime onboarding affordance ("Connect Local Agent", today inside `FleetDashboard`) is extracted as an **opt-in subcomponent** with its own declared requirement of `runtime-admin` + `BootstrapPolicy::LocalRuntimeAllowed`; the base fleet profile never includes `runtime-admin`, and mobile or paired-remote hosts do not render it |
 | `-operations` | `default` + `operations-read` + `interrupt-read` + `interrupt-control` + `holds-read` + `holds-control` + `trace-read` (`RequestTracePanel` timelines) + `resend-control` (backgrounded-tools resume) + `workspace-read` (`WorkspaceTreePanel`)                                                                                                                                                                                                  |
 
 The app-private config workspace (not packaged in v1) uses `config-read` +
@@ -954,7 +959,7 @@ chat-write + fleet-read + fleet-admin + operations-read` permissions (no
 8. **`@source-inc/gents-desktop-fleet`.** Same shape; `BrandLockup` stays in-app via
    `brand` slot; the fixture host consumes the package surface. Delivered evidence:
    package tests/build and the existing Gents Desktop pairing/fleet lanes. An
-   automated fixture clean-install pairing journey remains downstream evidence.
+   automated fixture clean-install enrollment journey remains downstream evidence.
 9. **`@source-inc/gents-desktop-operations`.** Focused holds, health, trace, and
    workspace panels. Background and subagent presentation moved into the chat
    timeline so hosts do not have to compose a second tool-state UI.
@@ -973,8 +978,9 @@ chat-write + fleet-read + fleet-admin + operations-read` permissions (no
   `bridge_runner` after phase 3. Because it never imported app internals, its JSONL
   protocol, semantic targeting, and viewport presets are unchanged — and the fixture
   app reuses it wholesale by pointing it at a different harness entry.
-- **`test:ui:ios:e2e`**: the mint-invite → clean-install → pair → chat → stability
-  flow is untouched; the bundle id and app-bundle path become parameters (defaulting
+- **`test:ui:ios:e2e`**: the clean-install → authenticated enrollment → operator
+  approval → readiness → chat → terminal hydration flow remains the native fence;
+  the bundle id and app-bundle path become parameters (defaulting
   to Gents values), the build step adds `--features native-e2e` plus the E2E
   capability overlay, and the `native-e2e-status.json` contract and staged status
   reporting stay. The XCUITest
@@ -1137,7 +1143,8 @@ Stated openly rather than buried as implementation detail:
 Issue: [#877](https://github.com/source-inc/gents/issues/877). Base series:
 [#875](https://github.com/source-inc/gents/pull/875) (squash-merged as `1a5e23d5`) —
 the predecessor mobile pairing implementation, now replaced by status-first
-authenticated enrollment with reciprocal readiness and relaunch revalidation, chat
+authenticated enrollment with signed route receipts, authoritative behavior
+readiness and relaunch revalidation, chat
 recovery/interrupt routing, responsive shell, agent-browser harness, native
 Simulator E2E. Downstream design: _Amygdala App Platform — Downstream Product on
 Gents_ (2026-07-26, Amygdala repository,

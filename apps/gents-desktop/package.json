@@ -69,7 +69,6 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
-    "fflate": "^0.8.2",
     "jsdom": "^26.1.0",
     "prettier": "^3.8.3",
     "typescript": "~5.8.3",

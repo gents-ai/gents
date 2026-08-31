@@ -132,7 +132,7 @@ export function App() {
       <h1 data-testid="fixture-title">Indigo Relay Fixture Host</h1>
       <p>
         Downstream shell: own bundle id, <code>AppDataDir</code> home,
-        paired-remote bootstrap (no runtime-admin), co-resident file-backed
+        enrolled-remote bootstrap (no runtime-admin), co-resident file-backed
         domain plugin.
       </p>
 

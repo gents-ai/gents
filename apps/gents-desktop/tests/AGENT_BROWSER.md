@@ -101,7 +101,7 @@ request lifecycle, and provider-shaped streaming response.
 
 Chromium still stands in for the iOS `WKWebView`. Use
 `npm run test:ui:ios:e2e` for the native lane: a debug-only in-app driver takes
-the real app through clean-install pairing, chat creation, prompt submission,
+the real app through clean-install authenticated enrollment, chat creation, prompt submission,
 and the fleet agent's replicated response. That lane covers WebKit and native
 lifecycle behavior, detects an unexpected app exit, and retains screenshots.
 Physical-device networking remains the final release check.

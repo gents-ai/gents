@@ -60,10 +60,10 @@ final class GentsUITests: XCTestCase {
 
         var agent = try findVisualText(agentLabel, exact: true)
         if agent == nil {
-            try pairAgent(serverAddress: enrollmentServerAddress(from: environment))
+            try enrollAgent(serverAddress: enrollmentServerAddress(from: environment))
             agent = try waitForVisualText(agentLabel, exact: true, timeout: 120)
         }
-        tap(try XCTUnwrap(agent, "\(agentLabel) did not appear after pairing"))
+        tap(try XCTUnwrap(agent, "\(agentLabel) did not appear after enrollment"))
 
         let composer = try waitForVisualText("Message the selected agent", timeout: 30)
         tap(composer)
@@ -78,7 +78,7 @@ final class GentsUITests: XCTestCase {
         add(attachment)
     }
 
-    private func pairAgent(serverAddress: String) throws {
+    private func enrollAgent(serverAddress: String) throws {
         if let disclosure = try findVisualText("Connect a remote agent") {
             tap(disclosure)
         } else {

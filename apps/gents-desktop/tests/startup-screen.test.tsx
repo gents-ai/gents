@@ -75,7 +75,7 @@ function bridge(
 }
 
 describe("desktop startup screen", () => {
-  it("never flashes pairing while saved connections load and start", async () => {
+  it("never flashes enrollment while saved connections load and start", async () => {
     const initial = deferred<DesktopClientSnapshot>();
     const started = deferred<DesktopClientSnapshot>();
     const startDesktopClient = vi.fn(() => started.promise);
@@ -110,7 +110,7 @@ describe("desktop startup screen", () => {
     expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();
   });
 
-  it("shows pairing only after configuration is confirmed empty", async () => {
+  it("shows enrollment only after configuration is confirmed empty", async () => {
     const initial = deferred<DesktopClientSnapshot>();
     const startDesktopClient = vi.fn(async () => snapshot(false, true));
     render(
