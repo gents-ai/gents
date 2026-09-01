@@ -14,10 +14,8 @@ default = [
     "defra-node/http",
     "defra-node/p2p",
     "defra-node/wasmtime-runtime",
-    "lark",
 ]
 agent-memory = []
-lark = ["defra-node/lark"]
 # Gates the e2e_live test binary out of default builds: every test in it is
 # live-inference-gated, so default runs paid a ~160MB link to execute nothing.
 live-e2e = []
@@ -107,7 +105,7 @@ windows-sys = { version = "0.61.2", features = [
 [dev-dependencies]
 acp.workspace = true
 axum = "0.8"
-defra-node = { workspace = true, features = ["redb"] }
+defra-node.workspace = true
 proptest = "1"
 tar = "0.4"
 zstd = "0.13"

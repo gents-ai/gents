@@ -6,6 +6,48 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.15.0 - 2026-09-01
+
+### Breaking changes
+
+- Advance the Rust and npm desktop package train together to 0.15.0 and the
+  desktop bridge contract from 1.5 to 4.0.
+- Replace the retired Lark/RocksDB storage backends with Regolith through the
+  DefraDB v0.19.0 cutover. Existing legacy data directories are rejected at
+  startup; reset runtime state, or use Gents v0.14.0 to export data first.
+- Remove legacy bearer pairing, local mobile-runtime request creation, and
+  unsigned authority paths. Enrollment, routing, readiness, and mobile
+  requests now require authenticated runtime-owned state (#1310-#1313).
+
+### Mobile authority and hydration
+
+- Bind enrollment signatures, leases, revocation, replay protection, and
+  generation changes to the final authority boundary, and prevent offline or
+  accumulated authorizations from starving an active enrollment (#1312).
+- Make the runtime the sole readiness authority and require requester-bound,
+  terminally complete two-node hydration with explicit ordering and counts
+  before the desktop projects success (#1310, #1311).
+- Tag and authenticate every request source, remove the mobile local-runtime
+  path, and replace compatibility pairing UI with status-based enrollment
+  controls and actionable hold diagnostics (#1313).
+
+### Runtime, research, and reliability
+
+- Add the web deep-research graph pack, external dependency projection, live
+  qualification harness, and the open-source research gateway integration
+  (#1277, #1294, #1296).
+- Harden Ethereum wallet submission and mobile first-run, idle hydration, and
+  viewport ownership behavior (#1282, #1283, #1297, #1309).
+- Evaluate readiness freshness against an injected observation clock so stale
+  state still fails closed without making deterministic CLI tests wall-clock
+  dependent (#1317).
+
+### Dependencies
+
+- Upgrade every DefraDB crate to the v0.19.0 tag (`03e1035f`), adopt Regolith
+  as the sole durable backend, require transport-routable gossip origins, and
+  enable verified post-merge rebroadcast for Gents' multi-hop deployments.
+
 ## 0.14.0 - 2026-08-28
 
 ### Bridge contract
@@ -280,6 +322,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 | Tag        | Bridge crate | npm packages | contract_version | Notes                                         |
 | ---------- | ------------ | ------------ | ---------------- | --------------------------------------------- |
+| v0.15.0    | 0.15.0       | 0.15.0       | 4.0              | Authenticated mobile authority; Regolith; DefraDB v0.19.0 |
 | v0.14.0    | 0.14.0       | 0.14.0       | 1.5              | Mobile sync health, graph review, clarity refactors; DefraDB `81ff3cee` |
 | v0.13.0    | 0.13.0       | 0.13.0       | 1.3              | Hydration, bounded mobile transcripts, graph pipeline; DefraDB `54b629b1` |
 | v0.12.0    | 0.12.0       | 0.12.0       | 0.9              | Mobile pairing convergence; eager session index; DefraDB `f928b300` |

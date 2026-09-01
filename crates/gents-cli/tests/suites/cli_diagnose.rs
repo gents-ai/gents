@@ -141,20 +141,37 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
         Some(true)
     );
 
+    // Exercise malformed live state under an unowned identity. Mutating the
+    // real row races the authoritative publisher, which may repair it before
+    // the diagnose subprocess reads it.
+    let malformed_agent_did = format!("did:key:malformed-diagnose-{}", Uuid::new_v4().simple());
     graphql_query(
         &graphql,
         &format!(
             r#"mutation {{
-                update_AgentBehaviorReadiness(
-                    filter: {{ agent_did: {{ _eq: "{}" }} }},
-                    input: {{ snapshot_json: "{{}}" }}
-                ) {{ _docID }}
+                create_AgentRuntime(input: {{
+                    agent_did: "{agent_did}",
+                    reconcile_phase: "ready"
+                }}) {{ _docID }}
+                create_AgentBehaviorReadiness(input: {{
+                    agent_did: "{agent_did}",
+                    snapshot_json: "{{}}"
+                }}) {{ _docID }}
             }}"#,
-            escape_graphql_string(&agent_did),
+            agent_did = escape_graphql_string(&malformed_agent_did),
         ),
     )
     .await?;
-    let malformed = run_cli_json(&home_dir, &["diagnose", "--graphql", &graphql])?;
+    let malformed = run_cli_json(
+        &home_dir,
+        &[
+            "diagnose",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &malformed_agent_did,
+        ],
+    )?;
     assert_eq!(
         malformed.get("status").and_then(Value::as_str),
         Some("degraded")
@@ -236,9 +253,8 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-diagnose-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
-    let init = run_init_json(
+    run_init_json(
         &home_dir,
         &[
             "--agent-name",
@@ -248,8 +264,7 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let mut serve = spawn_server_with_env(
+    let (_serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         port,
         &[
@@ -264,8 +279,13 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
         ],
         &[],
     )?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    assert!(
+        readiness
+            .get("p2p_peer_id")
+            .and_then(Value::as_str)
+            .is_some_and(|peer_id| !peer_id.is_empty()),
+        "server readiness did not establish unrelated local P2P state: {readiness}"
+    );
 
     let output = run_cli_json(
         &home_dir,

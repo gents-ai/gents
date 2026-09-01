@@ -467,11 +467,9 @@ mod tests {
         let tempdir = tempfile::tempdir()?;
         let node = EmbeddedNode::builder()
             .data_path(tempdir.path().join("data"))
-            // Explicit backend, matching this crate's convention
-            // (`persistent_node_builder`): the builder's default is Redb,
-            // whose defra-node feature is only transitively enabled — the CI
-            // cli shard builds without it.
-            .with_storage_backend(StorageBackend::Lark)
+            // Pin the sole durable backend explicitly so this test cannot
+            // silently drift if another backend is introduced later.
+            .with_storage_backend(StorageBackend::Regolith)
             .build()
             .await
             .expect("embedded node boots");

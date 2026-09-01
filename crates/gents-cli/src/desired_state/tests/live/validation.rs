@@ -7,7 +7,7 @@ async fn live_validate_rejects_invalid_event_trigger_collection_identifier() -> 
     let tempdir = tempfile::tempdir()?;
     let node = EmbeddedNode::builder()
         .data_path(tempdir.path().join("data"))
-        .with_storage_backend(StorageBackend::Lark)
+        .with_storage_backend(StorageBackend::Regolith)
         .build()
         .await?;
     ensure_runtime_schemas(&node).await?;
@@ -49,7 +49,7 @@ async fn live_validate_does_not_resolve_remote_subagent_target() -> Result<()> {
     let data_dir = tempdir.path().join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
-        .with_storage_backend(StorageBackend::Lark)
+        .with_storage_backend(StorageBackend::Regolith)
         .build()
         .await?;
     ensure_runtime_schemas(&node).await?;
@@ -79,7 +79,7 @@ async fn live_validate_passes_for_known_subagent_target() -> Result<()> {
     let data_dir = tempdir.path().join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
-        .with_storage_backend(StorageBackend::Lark)
+        .with_storage_backend(StorageBackend::Regolith)
         .build()
         .await?;
     ensure_runtime_schemas(&node).await?;

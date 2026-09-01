@@ -309,7 +309,7 @@
     "desktop://managed-server-updated",
     "desktop://managed-server-tray-stop"
   ],
-  "packageVersion": "0.14.0",
+  "packageVersion": "0.15.0",
   "permissionSets": [
     {
       "kind": "bundle",

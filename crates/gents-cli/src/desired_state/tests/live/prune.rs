@@ -28,7 +28,7 @@ async fn diff_prune_detects_and_deletes_live_only_inference_backends() -> Result
     let tempdir = tempfile::tempdir()?;
     let node = EmbeddedNode::builder()
         .data_path(tempdir.path().join("data"))
-        .with_storage_backend(StorageBackend::Lark)
+        .with_storage_backend(StorageBackend::Regolith)
         .build()
         .await?;
     ensure_runtime_schemas(&node).await?;
@@ -128,7 +128,7 @@ async fn prune_spares_backends_referenced_by_other_agents() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let node = EmbeddedNode::builder()
         .data_path(tempdir.path().join("data"))
-        .with_storage_backend(StorageBackend::Lark)
+        .with_storage_backend(StorageBackend::Regolith)
         .build()
         .await?;
     ensure_runtime_schemas(&node).await?;

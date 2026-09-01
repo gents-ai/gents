@@ -296,7 +296,7 @@ async fn enable_default_subagents_before_server(
     let data_dir = home_dir.join(".gents").join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
-        .with_storage_backend(StorageBackend::Lark)
+        .with_storage_backend(StorageBackend::Regolith)
         .build()
         .await
         .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
@@ -322,7 +322,7 @@ async fn open_local_node(home_dir: &std::path::Path) -> Result<Arc<EmbeddedNode>
     Ok(Arc::new(
         EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::Lark)
+            .with_storage_backend(StorageBackend::Regolith)
             .build()
             .await
             .with_context(|| format!("opening embedded node at {}", data_dir.display()))?,

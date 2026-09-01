@@ -388,6 +388,7 @@ mod tests {
                 rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
                 max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
                 max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+                rebroadcast_on_merge: false,
             });
         if let Some(did) = node_identity_did {
             builder = builder.with_node_identity_did(did);

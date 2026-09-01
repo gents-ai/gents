@@ -348,6 +348,7 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
                 rate_limit_rate: admission.rate_limit_rate,
                 max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
                 max_pending_dags: admission.max_pending_dags,
+                rebroadcast_on_merge: false,
             })
             .build()
             .await

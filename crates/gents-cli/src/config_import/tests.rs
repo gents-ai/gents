@@ -212,7 +212,7 @@ async fn generic_override_recreates_a_tombstoned_tool_selection() -> Result<()> 
     let tempdir = tempfile::tempdir()?;
     let node = EmbeddedNode::builder()
         .data_path(tempdir.path().join("data"))
-        .with_storage_backend(StorageBackend::Lark)
+        .with_storage_backend(StorageBackend::Regolith)
         .build()
         .await?;
     ensure_runtime_schemas(&node).await?;

@@ -12,7 +12,7 @@ async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
     let data_dir = tempdir.path().join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
-        .with_storage_backend(StorageBackend::Lark)
+        .with_storage_backend(StorageBackend::Regolith)
         .build()
         .await?;
     ensure_runtime_schemas(&node).await?;
@@ -210,7 +210,7 @@ async fn behavior_description_and_summary_persist_and_apply_is_idempotent() -> R
     let data_dir = tempdir.path().join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
-        .with_storage_backend(StorageBackend::Lark)
+        .with_storage_backend(StorageBackend::Regolith)
         .build()
         .await?;
     ensure_runtime_schemas(&node).await?;
