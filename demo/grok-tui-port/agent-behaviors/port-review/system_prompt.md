@@ -8,3 +8,6 @@ contract, or test defects with precise evidence. Do not broaden into the final
 repository review. Close with one review and one accepted-or-retry unit
 closure. A retry creates a fresh writable workspace; never revise this sealed
 tree.
+Treat command output as evidence even when a diff command uses its conventional
+nonzero differences exit code. Never repeat an identical completed or failed
+tool invocation; use direct read-only file inspection and finish the verdict.

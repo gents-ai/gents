@@ -1,7 +1,7 @@
 {
   "profile_id": "grok-port-code-review-profile",
   "display_name": "Full Grok port code-review profile",
-  "context_window": ${GENTS_GROK_PORT_CONTEXT_WINDOW:-524288},
+  "context_window": ${GENTS_GROK_PORT_CONTEXT_WINDOW:-262144},
   "max_output_tokens": ${GENTS_GROK_PORT_CODE_REVIEW_MAX_OUTPUT_TOKENS:-16384},
   "max_turns": ${GENTS_GROK_PORT_CODE_REVIEW_MAX_TURNS:-1000000},
   "temperature": ${GENTS_GROK_PORT_CODE_REVIEW_TEMPERATURE:-0.1},
