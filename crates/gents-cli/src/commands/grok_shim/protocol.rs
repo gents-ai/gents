@@ -954,9 +954,9 @@ mod tests {
         let raw = br#"{"type":"register","client_type":"pager","mode":"stdio","capabilities":{"yolo_mode":true,"auto_mode":false,"default_model":"GLM-5.3-NVFP4","client_version":"grok 1.2.3","code_nav_enabled":true,"terminal":false,"fs_read":true,"fs_write":true,"status_line":false}}"#;
         let envelope = decode_frame::<ClientEnvelope>(raw).unwrap();
         let ClientEnvelope::Register {
-            client_type,
+            ref client_type,
             mode,
-            capabilities,
+            ref capabilities,
         } = envelope
         else {
             panic!("expected a register envelope");
@@ -1386,14 +1386,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn frame_encode_decode_helpers_round_trip() {
+    #[tokio::test]
+    async fn frame_encode_decode_helpers_round_trip() {
+        // `encode_frame`/`decode_frame` are payload-only codecs: the 4-byte
+        // length prefix belongs to `write_frame`, which layers framing on top.
         let envelope = ServerEnvelope::registered(3, true);
-        let bytes = encode_frame(&envelope).unwrap();
-        let prefix = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        assert_eq!(prefix as usize, bytes.len() - FRAME_PREFIX_BYTES);
-        let decoded: ServerEnvelope = decode_frame(&bytes[4..]).unwrap();
+        let payload = encode_frame(&envelope).unwrap();
+        assert!(!payload.starts_with(&(payload.len() as u32).to_be_bytes()[..]));
+        let decoded: ServerEnvelope = decode_frame(&payload).unwrap();
         assert_eq!(decoded, envelope);
+
+        // The framed path round-trips the same value with a real prefix.
+        let (mut writer, mut reader) = tokio::io::duplex(8192);
+        write_frame_as(&mut writer, &envelope).await.unwrap();
+        let framed: ServerEnvelope = read_frame_as(&mut reader).await.unwrap();
+        assert_eq!(framed, envelope);
     }
 
     #[test]

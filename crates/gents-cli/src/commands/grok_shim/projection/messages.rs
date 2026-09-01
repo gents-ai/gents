@@ -45,12 +45,9 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use gents_protocol::message::{AssistantContent, Message, UserContent};
-use gents_protocol::transcript::{decode_persisted_message, extract_message_reasoning};
+use gents_protocol::transcript::decode_persisted_message;
 use serde::Deserialize;
 use serde_json::{json, Value};
-
-/// Wire name of the `session/update` notification carrying a message update.
-pub(super) const MESSAGE_UPDATE_METHOD: &str = "session/update";
 
 /// `sessionUpdate` discriminators emitted by this leaf.
 pub(super) const AGENT_MESSAGE_CHUNK: &str = "agent_message_chunk";
@@ -109,6 +106,20 @@ pub(super) struct MessageProjection {
     /// Ordered streaming updates: `user_message_chunk` echoes precede
     /// assistant output, and assistant rows project in `sequence` order.
     pub updates: Vec<MessageUpdate>,
+    /// Durable chronology key per update, aligned 1:1 with `updates`: the
+    /// row's `sequence` in the shared transcript sequence space (the same
+    /// space `AgentToolCall.message_sequence` allocates from). `None` when
+    /// the row carries no sequence — such updates sort after every
+    /// positioned event of the family.
+    pub chronology: Vec<Option<i64>>,
+    /// Durable chunk identity per update, aligned 1:1 with `updates`:
+    /// `"{message_key}:{update kind}:{per-row ordinal of that kind}"`. The
+    /// live projection poll deduplicates streamed chunks by these keys, so
+    /// two distinct rows carrying identical text both stream *and* one row's
+    /// reasoning thought and body text are distinct chunks. An entry is
+    /// empty only if the aligned update's row could not be identified (never
+    /// happens today: every update comes from a decoded row).
+    pub update_keys: Vec<String>,
     /// Cumulative token count for `_meta.totalTokens`, from the latest
     /// `AgentResponse.token_count` (u64, never fabricated). Zero when the
     /// request has no response row yet.
@@ -202,6 +213,8 @@ pub(super) async fn project_messages(
     };
 
     let mut updates = Vec::new();
+    let mut update_keys = Vec::new();
+    let mut chronology = Vec::new();
     for row in &rows {
         // Defense-in-depth re-check of the request scoping: the query filter
         // already guarantees it, but a widened filter must not leak other
@@ -209,7 +222,33 @@ pub(super) async fn project_messages(
         if row.request_id.as_deref().and_then(nonempty) != Some(request_id) {
             continue;
         }
+        let before = updates.len();
         project_row(row, &mut updates);
+        // One durable identity per update that row produced, aligned 1:1
+        // with `updates` so the live poll can dedupe by durable identity.
+        // The identity is chunk-level — `message_key` plus the update kind
+        // plus the per-row ordinal of that kind — because one row can emit
+        // more than one chunk (a reasoning thought plus its body text): a
+        // row-level key would let the thought mark the body text as already
+        // streamed and silently drop it. The kind plus ordinal keeps two
+        // distinct rows with identical text emitting both times while still
+        // distinguishing a row's thought from its text.
+        let mut kinds_seen: std::collections::BTreeMap<&'static str, u64> =
+            std::collections::BTreeMap::new();
+        for update in &updates[before..] {
+            let ordinal = {
+                let counter = kinds_seen.entry(update.session_update_kind()).or_default();
+                *counter += 1;
+                *counter
+            };
+            update_keys.push(format!(
+                "{}:{}:{}",
+                row.message_key,
+                update.session_update_kind(),
+                ordinal
+            ));
+            chronology.push(row.sequence);
+        }
     }
 
     let total_tokens = response_row
@@ -225,6 +264,8 @@ pub(super) async fn project_messages(
 
     Ok(MessageProjection {
         updates,
+        update_keys,
+        chronology,
         total_tokens,
         terminal,
         stop_reason,
@@ -265,16 +306,11 @@ fn project_row(row: &MessageRow, updates: &mut Vec<MessageUpdate>) {
                     }
                 }
             }
-            for item in content {
-                if let AssistantContent::Text(text) = item {
-                    if let Some(text) = streamable_owned(&text.text) {
-                        updates.push(MessageUpdate::AgentMessageChunk { text });
-                    }
-                }
-            }
             // #492: the durable reasoning copy may live only in
             // `AgentMessage.reasoning` when the response tail was cleared on
             // finalize; project it so a finished row still shows its thought.
+            // It streams before the body text, matching the established
+            // thought-before-text contract for every assistant row.
             if content
                 .iter()
                 .all(|item| !matches!(item, AssistantContent::Reasoning(_)))
@@ -284,6 +320,13 @@ fn project_row(row: &MessageRow, updates: &mut Vec<MessageUpdate>) {
                         updates,
                         MessageUpdate::AgentThoughtChunk { text: reasoning },
                     );
+                }
+            }
+            for item in content {
+                if let AssistantContent::Text(text) = item {
+                    if let Some(text) = streamable_owned(&text.text) {
+                        updates.push(MessageUpdate::AgentMessageChunk { text });
+                    }
                 }
             }
         }
@@ -334,10 +377,6 @@ fn reasoning_texts(reasoning: &gents_protocol::message::Reasoning) -> Vec<String
 fn nonempty(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)
-}
-
-fn nonempty_owned(value: &str) -> Option<String> {
-    nonempty(value).map(ToOwned::to_owned)
 }
 
 /// Streamable chunk text: verbatim (never trimmed) but whitespace-only
@@ -656,7 +695,9 @@ mod tests {
     #[test]
     fn durable_reasoning_field_streams_when_envelope_has_no_reasoning() {
         // #492: the reasoning copy may live only in AgentMessage.reasoning
-        // after the response tail was cleared on finalize.
+        // after the response tail was cleared on finalize. The fallback
+        // streams before the body text, matching the thought-before-text
+        // contract every other assistant row follows.
         let mut row = message_row(
             "assistant",
             1,
@@ -868,6 +909,7 @@ mod tests {
 
     #[test]
     fn extract_message_reasoning_helper_still_applies_to_decoded_envelopes() {
+        use gents_protocol::transcript::extract_message_reasoning;
         let message = Message::Assistant {
             id: None,
             content: vec![
@@ -880,5 +922,81 @@ mod tests {
             Some("why"),
             "the transcript helper reads the same decoded envelope this leaf streams"
         );
+    }
+
+    /// Chunk identity is chunk-level, not row-level: one row's reasoning
+    /// thought and body text get distinct keys (a row-level key would let
+    /// the thought mark the text as already streamed), while two distinct
+    /// rows with identical text both keep their own keys.
+    #[test]
+    fn update_keys_distinguish_a_rows_thought_from_its_text() {
+        let blob = serde_json::to_string(&Message::Assistant {
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(gents_protocol::message::Reasoning::new("why")),
+                AssistantContent::text("what"),
+            ],
+        })
+        .expect("serialize assistant message");
+        let mut updates = Vec::new();
+        project_row(&message_row("assistant", 1, &blob), &mut updates);
+        assert_eq!(
+            updates,
+            vec![
+                MessageUpdate::AgentThoughtChunk {
+                    text: "why".to_string()
+                },
+                MessageUpdate::AgentMessageChunk {
+                    text: "what".to_string()
+                },
+            ]
+        );
+        // Rebuild the keys exactly as `project_messages` does so the
+        // identity scheme itself is what is asserted here.
+        let row = message_row("assistant", 1, &blob);
+        let mut keys = Vec::new();
+        let mut kinds_seen: std::collections::BTreeMap<&'static str, u64> =
+            std::collections::BTreeMap::new();
+        for update in &updates {
+            let counter = kinds_seen.entry(update.session_update_kind()).or_default();
+            *counter += 1;
+            keys.push(format!(
+                "{}:{}:{}",
+                row.message_key,
+                update.session_update_kind(),
+                *counter
+            ));
+        }
+        assert_eq!(
+            keys,
+            vec![
+                "sess:1:agent_thought_chunk:1".to_string(),
+                "sess:1:agent_message_chunk:1".to_string(),
+            ],
+            "the thought and the text of one row must have distinct chunk identities"
+        );
+
+        // Two distinct rows carrying identical text keep distinct keys too.
+        let same_text = serde_json::to_string(&Message::assistant("twin"))
+            .expect("serialize assistant message");
+        let mut first = Vec::new();
+        let mut second = Vec::new();
+        let row_one = message_row("assistant", 1, &same_text);
+        let row_two = message_row("assistant", 2, &same_text);
+        project_row(&row_one, &mut first);
+        project_row(&row_two, &mut second);
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        let key_one = format!(
+            "{}:{}:1",
+            row_one.message_key,
+            first[0].session_update_kind()
+        );
+        let key_two = format!(
+            "{}:{}:1",
+            row_two.message_key,
+            second[0].session_update_kind()
+        );
+        assert_ne!(key_one, key_two);
     }
 }

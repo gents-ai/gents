@@ -26,12 +26,27 @@ and clean up only that PID when probes finish.
 
 Run `demo/grok-tui-port/scripts/grok_edge_probe.py` against `live_socket` and
 `live_graphql`, passing `--model live_model`, one edge at a time: handshake,
-prompt, tool, subprocess, and cancel. The probe must pass its wire and document
-assertions, including the subprocess command and output on both the Grok wire
-and the persisted AgentToolCall. Also launch stock interactive
-`grok --leader --leader-socket <live_socket>` in a PTY, submit one short prompt,
-wait for the terminal response/idle state, and only then exit it. `grok -p`
-bypasses leader mode and is never evidence for this port.
+prompt, tool, subprocess, subagent, and cancel. The probe must pass its wire and
+document assertions, including the subprocess command and output on both the
+Grok wire and the persisted AgentToolCall. The subagent edge must also prove the
+foreground spawn contract end to end: the parent's early standard-rail
+`task`-titled tool_call carrying `meta.subagentBackground: false` (the
+pager-local foreground wait marker), the exact live extension-rail
+`x.ai/session_notification` spawned/progress/finished lifecycle for the
+`port-live-worker` target, the child-session identity, the exact
+`subagent_finished` DTO (snake_case variant fields under the camelCase
+`sessionId/update/_meta` envelope: required `subagent_id`,
+`child_session_id`, `status`, `tool_calls`, `turns`, `duration_ms`,
+`tokens_used`, `will_wake` with `will_wake: false` for the foreground
+child, optional `error`/`output`, never `parent_session_id`), the terminal
+`tool_call_update` reusing the same
+toolCallId, and — via `live_graphql` — the durable parent/child AgentRequest
+linkage (`caused_by_parent_request_id`) plus the persisted child
+AgentToolCall/AgentMessage rows for the spawned child session. Also launch
+stock interactive `grok --leader --leader-socket <live_socket>` in a PTY,
+submit one short prompt, wait for the terminal response/idle state, and only
+then exit it. `grok -p` bypasses leader mode and is never evidence for this
+port.
 
 Map those observed edges to every surface whose verdict is `implement` or
 `shaped-stub`. A shaped stub passes only when its explicit error/not-found

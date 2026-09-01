@@ -26,7 +26,17 @@
 //! Cancel/disconnect may fire before the request id is even known — in that
 //! window they drain the pending entry, resolve the connected prompt with
 //! `stopReason="cancelled"`, and cancel any future submission of that prompt,
-//! so the session immediately accepts the next prompt.
+//! so the session immediately accepts the next prompt. Submission failures
+//! are classified in the same critical section that observes connection
+//! closure and the pending entry, so a disconnect that has already published
+//! its closed+drained state always resolves `stopReason="cancelled"` — even
+//! before the disconnect has published the drained entry's cancel-before-id
+//! latch. While `submit_request` is awaited, only an explicit cancel or a
+//! disconnect can remove the pending entry (every other removal happens in
+//! the submitter's own task after the request id is known), so a submission
+//! failure that observes its entry already removed also resolves
+//! `stopReason="cancelled"` — even before the cancel has published the
+//! drained entry's latch.
 //!
 //! One pending prompt per session: a second `session/prompt` for the same
 //! session while one is live is rejected and does not disturb the live turn.
@@ -37,9 +47,14 @@
 //! (`node.execute(&query).await`) with every interpolated value escaped by
 //! `gents::graphql::escape_graphql_string`; no HTTP GraphQL helper is used
 //! except the `create_agent_request` seam, which takes the bound GraphQL
-//! endpoint. The turn does not stream durable `AgentMessage`/`AgentToolCall`
-//! projection — that is owned by the projection leaves — so nothing here
-//! replays a session or duplicates durable materialization.
+//! endpoint. The turn streams durable `AgentMessage`/`AgentToolCall`/
+//! subagent projection live: each watch cycle runs the projection engine's
+//! request-scoped poll and sends every novel `session/update` through the
+//! sender (deterministic tools → subagents → messages order), with a final
+//! flush before the deferred response. The payload shapes are owned by the
+//! projection leaves; the turn only polls, dedupes by durable identity
+//! (advancing the request-local cursor only after a successful send), and
+//! delivers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,18 +64,15 @@ use anyhow::{Context as _, Result};
 use defra_node::EmbeddedNode;
 use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex};
+
+use super::projection::ProjectionEngine;
+use super::projection::RequestCursor;
+use super::projection::{AsyncSendLine, SessionUpdateChannel};
+use super::server::AcpOutbound;
 
 /// JSON-RPC method names on the Grok pager wire.
-pub(super) const SESSION_PROMPT_METHOD: &str = "session/prompt";
-pub(super) const SESSION_CANCEL_METHOD: &str = "session/cancel";
 pub(super) const SESSION_UPDATE_METHOD: &str = "session/update";
-
-/// JSON-RPC error codes used for prompt-shaped failures.
-pub(super) const JSONRPC_INVALID_REQUEST: i64 = -32600;
-pub(super) const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
-pub(super) const JSONRPC_INVALID_PARAMS: i64 = -32602;
-pub(super) const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 
 /// Poll cadence for watching the durable request terminalize. The embedded
 /// node exposes no subscription seam to the shim, so terminalization is
@@ -85,6 +97,9 @@ pub(super) struct PromptBlock {
 
 impl PromptBlock {
     /// The `meta.bash.command` stamp of the bash variant, when present.
+    /// Test observation helper: the echo loop forwards the whole block
+    /// verbatim and never discriminates by bash meta.
+    #[cfg(test)]
     pub(super) fn bash_command(&self) -> Option<String> {
         let meta = self.meta.as_ref()?;
         let command = meta
@@ -94,7 +109,9 @@ impl PromptBlock {
         (!command.is_empty()).then(|| command.to_string())
     }
 
-    /// Whether this block carries non-empty `skillTokenRanges`.
+    /// Whether this block carries non-empty `skillTokenRanges`. Test
+    /// observation helper: the echo loop forwards block meta verbatim.
+    #[cfg(test)]
     pub(super) fn has_skill_token_ranges(&self) -> bool {
         self.meta
             .as_ref()
@@ -128,6 +145,9 @@ pub(super) struct CancelNotification {
 
 impl CancelNotification {
     /// Build the audited `_meta` payload the pager sends with a cancel.
+    /// Test observation helper: the cancel handler reads the notification
+    /// fields directly and never re-serializes the meta.
+    #[cfg(test)]
     pub(super) fn meta(&self) -> Value {
         let mut meta = json!({
             "cancelSubagents": self.cancel_subagents,
@@ -168,80 +188,122 @@ impl StopReason {
     }
 }
 
-/// A notification the turn projected to the connected client.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct ProjectedNotification {
-    /// Serialized JSON-RPC line, exactly as written to the outbound channel.
-    pub line: String,
-}
-
 /// How a turn sends notifications to the connected client.
 ///
 /// Cloning shares the underlying channel/buffer, which lets a caller keep a
-/// copy while a spawned task drives one turn.
+/// copy while a spawned task drives one turn. Every variant carries the
+/// connection's common session-update send path: all three `session/update`
+/// families (set-mode updates, the user echo, and the durable projected
+/// updates) allocate and enqueue their event ids through it, so per-session
+/// allocation order equals enqueue order.
 #[derive(Clone)]
 pub(super) enum PromptSender {
-    /// Sends one JSON-RPC notification line to the live client. The sender
-    /// is fallible: a closed channel must interrupt the submitted request.
-    Line {
-        connection_id: u64,
-        outbound_tx: mpsc::UnboundedSender<String>,
-    },
+    /// Sends one JSON-RPC notification line to the live client through the
+    /// connection's [`AcpOutbound`]. The sender is fallible: a closed
+    /// channel must interrupt the submitted request. Live turns send every
+    /// notification through this handle as it is produced — the user echo,
+    /// then each novel durable projection line — so the pager sees the turn
+    /// stream in real time; only the deferred `session/prompt` response is
+    /// written by the dispatcher after the turn resolves.
+    Live { outbound: AcpOutbound },
     /// Collects serialized notification lines in memory (tests, headless
     /// capture). The buffer never fails, so a test can simulate a send
-    /// failure only through the Line variant.
-    Buffer {
-        buffer: Arc<Mutex<Vec<String>>>,
-    },
+    /// failure only through the Live variant.
+    Buffer { buffer: Arc<Mutex<Vec<String>>> },
 }
 
 impl PromptSender {
-    /// Serialize and send one `session/update` notification with the audited
-    /// payload shape. This is the first fallible outbound send after the
-    /// request id is registered.
-    async fn send_user_message_chunk(
-        &self,
-        session_id: &str,
-        prompt_id: &str,
-        block: &PromptBlock,
-        prompt_index: usize,
-    ) -> Result<()> {
-        let params = json!({
-            "sessionId": session_id,
-            "update": {
-                "sessionUpdate": "user_message_chunk",
-                "content": {
-                    "type": "text",
-                    "text": block.text,
-                    "meta": {
-                        "promptIndex": prompt_index,
-                        "hideFromScrollback": false,
-                    },
-                },
-            },
-            "_meta": {
-                "promptId": prompt_id,
-                "isReplay": false,
-            },
-        });
-        let line = serde_json::to_string(&json!({
-            "jsonrpc": "2.0",
-            "method": SESSION_UPDATE_METHOD,
-            "params": params,
-        }))
-        .context("serialize user_message_chunk session/update")?;
+    /// Send one already-serialized JSON-RPC line. The first fallible send
+    /// after the request id is registered; a failure here must interrupt
+    /// the submitted request.
+    pub(super) async fn send_line(&self, line: String) -> Result<()> {
         match self {
-            PromptSender::Line {
-                connection_id,
-                outbound_tx,
-            } => outbound_tx
-                .send(line.clone())
-                .with_context(|| format!("connection {connection_id} outbound closed")),
+            PromptSender::Live { outbound } => outbound.send(line),
             PromptSender::Buffer { buffer } => {
                 buffer.lock().await.push(line);
                 Ok(())
             }
         }
+    }
+
+    /// Drain every notification line collected so far. A `Buffer` yields
+    /// its lines (the headless/test path converts them into dispatch
+    /// notifications); a `Live` sender yields nothing — every line was
+    /// already delivered to the client as it was produced.
+    pub(super) async fn take_lines(&self) -> Vec<String> {
+        match self {
+            PromptSender::Live { .. } => Vec::new(),
+            PromptSender::Buffer { buffer } => {
+                let mut buffer = buffer.lock().await;
+                std::mem::take(&mut *buffer)
+            }
+        }
+    }
+
+    /// Send the synthetic `user_message_chunk` echo of one prompt block
+    /// through the connection's common session-update send path: the
+    /// per-session send lock is held across reserve → stamp → send → commit,
+    /// so a failed echo does not consume an id and the echo shares the
+    /// pager's `"{sessionId}-{counter}"` dedup space with the projected
+    /// updates. `totalTokens` is the session-cumulative usage read under the
+    /// same lock (zero before any projected observation has applied).
+    pub(super) async fn send_user_message_chunk(
+        &self,
+        session_updates: &SessionUpdateChannel,
+        session_id: &str,
+        prompt_id: &str,
+        block: &PromptBlock,
+        prompt_index: usize,
+    ) -> Result<()> {
+        let session_id = session_id.to_string();
+        let prompt_id = prompt_id.to_string();
+        let block = block.clone();
+        let session_for_lock = session_id.clone();
+        session_updates
+            .send(
+                &session_for_lock,
+                move |event_id, total_tokens| {
+                    let meta = json!({
+                        "promptId": prompt_id,
+                        "isReplay": false,
+                        "eventId": event_id,
+                        "totalTokens": total_tokens,
+                    });
+                    let params = json!({
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "user_message_chunk",
+                            "content": {
+                                "type": "text",
+                                "text": block.text,
+                                "meta": {
+                                    "promptIndex": prompt_index,
+                                    "hideFromScrollback": false,
+                                },
+                            },
+                        },
+                        "_meta": meta,
+                    });
+                    Ok(json!({
+                        "jsonrpc": "2.0",
+                        "method": SESSION_UPDATE_METHOD,
+                        "params": params,
+                    }))
+                },
+                PromptSenderLine(self),
+            )
+            .await
+            .map(|_| ())
+    }
+}
+
+/// Adapter that lets a borrowed [`PromptSender`] drive the common send
+/// path's enqueue step.
+pub(super) struct PromptSenderLine<'a>(pub(super) &'a PromptSender);
+
+impl AsyncSendLine for PromptSenderLine<'_> {
+    async fn send_line(&self, line: String) -> Result<()> {
+        self.0.send_line(line).await
     }
 }
 
@@ -301,12 +363,70 @@ impl PendingPrompt {
     }
 }
 
+/// Connection-scoped turn state under a single mutex: the irreversible
+/// `closed` latch set by disconnect, and the connection's pending prompts.
+/// The latch is checked in the same critical section as insertion, so no
+/// prompt task spawned before a disconnect can insert (and therefore submit)
+/// after the disconnect drained. There is no reopen: a `TurnManager` belongs
+/// to exactly one connection lifetime.
+#[derive(Default)]
+struct ConnectionState {
+    closed: bool,
+    entries: HashMap<(String, String), PendingPrompt>,
+}
+
+impl ConnectionState {
+    fn is_closed(&self) -> bool {
+        self.closed
+    }
+}
+
 /// Owns the connection-scoped pending prompts and exposes the prompt, cancel,
 /// and disconnect operations.
 pub(super) struct TurnManager {
     node: Arc<EmbeddedNode>,
     config: TurnManagerConfig,
-    pending: Mutex<HashMap<(String, String), PendingPrompt>>,
+    state: Mutex<ConnectionState>,
+    #[cfg(test)]
+    insertion_gate: Mutex<Option<InsertionGate>>,
+    #[cfg(test)]
+    disconnect_gate: Mutex<Option<DisconnectGate>>,
+    #[cfg(test)]
+    cancel_drain_gate: Mutex<Option<CancelDrainGate>>,
+}
+
+/// Deterministic test seam: when armed, `handle_prompt` parks immediately
+/// before the insertion critical section until the gate is opened.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+struct InsertionGate {
+    arrived: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+/// Deterministic test seam: when armed, `handle_disconnect` parks
+/// after publishing its closed+drained state and before it latches the
+/// drained entries, so a concurrently failing submission can be observed in
+/// the exact window where the disconnect has not published the
+/// cancel-before-id latch yet.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+struct DisconnectGate {
+    arrived: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+/// Deterministic test seam: when armed, `drain_entry` (explicit
+/// `session/cancel` path) parks after removing the pending entry from the
+/// connection state but before it latches the removed entry's
+/// `cancel_before_id`, so a concurrently failing submission can be observed
+/// in the exact race window where the entry is gone and the latch is not
+/// published yet.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+struct CancelDrainGate {
+    arrived: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
 }
 
 impl TurnManager {
@@ -314,7 +434,13 @@ impl TurnManager {
         TurnManager {
             node,
             config,
-            pending: Mutex::new(HashMap::new()),
+            state: Mutex::new(ConnectionState::default()),
+            #[cfg(test)]
+            insertion_gate: Mutex::new(None),
+            #[cfg(test)]
+            disconnect_gate: Mutex::new(None),
+            #[cfg(test)]
+            cancel_drain_gate: Mutex::new(None),
         }
     }
 
@@ -322,10 +448,20 @@ impl TurnManager {
     ///
     /// Returns the deferred `session/prompt` result value (`stopReason`).
     /// The ACP service wraps it in the JSON-RPC response envelope.
+    ///
+    /// `projections` is the connection's projection engine; it is passed per
+    /// prompt (rather than held by the manager) so the assembly slice
+    /// constructs the `TurnManager` and `ProjectionEngine` independently and
+    /// the two are joined exactly where the live turn needs them. A
+    /// `Buffer`-sender headless turn still runs the same projection pass —
+    /// the poll is what streams novel durable events, and the sender only
+    /// decides where they go — so there is no code path that skips
+    /// projection semantics.
     pub(super) async fn handle_prompt(
         &self,
         request: PromptRequest,
         sender: &PromptSender,
+        projections: &ProjectionEngine,
     ) -> Result<Value> {
         if request.prompt.is_empty() {
             anyhow::bail!("session/prompt requires at least one prompt block");
@@ -337,15 +473,33 @@ impl TurnManager {
         let key = (request.session_id.clone(), prompt_id.clone());
         let (response_tx, response_rx) = oneshot::channel::<Result<Value>>();
         let cancel_before_id = Arc::new(Mutex::new(CancelBeforeIdLatch::default()));
+        #[cfg(test)]
         {
-            let mut pending = self.pending.lock().await;
-            if pending
+            // Test seam: park deterministically right before the insertion
+            // critical section so a concurrent disconnect can be observed in
+            // the exact race window that used to leak requests.
+            let gate = self.insertion_gate.lock().await.clone();
+            if let Some(gate) = gate {
+                gate.arrived.notify_one();
+                gate.release.notified().await;
+            }
+        }
+        {
+            let mut state = self.state.lock().await;
+            if state.is_closed() {
+                // The connection already disconnected. Reject before any
+                // durable submission: the disconnected connection must never
+                // mint another request.
+                anyhow::bail!("connection already disconnected");
+            }
+            if state
+                .entries
                 .keys()
                 .any(|(session, _)| session == &request.session_id)
             {
                 anyhow::bail!("session already has a live prompt");
             }
-            pending.insert(
+            state.entries.insert(
                 key.clone(),
                 PendingPrompt {
                     response_tx: Some(response_tx),
@@ -360,30 +514,51 @@ impl TurnManager {
         // registered on the pending entry *before* the first fallible
         // outbound send (the user echo below), so a send failure after
         // submission interrupts the request rather than leaking it.
+        tracing::debug!(session_id = %request.session_id, prompt_id = %prompt_id, "Grok shim submitting prompt request");
         let submission = self.submit_request(&request, &prompt_id).await;
         let request_id = match submission {
             Ok(request_id) => {
                 {
-                    let mut pending = self.pending.lock().await;
-                    if let Some(entry) = pending.get_mut(&key) {
+                    let mut state = self.state.lock().await;
+                    if let Some(entry) = state.entries.get_mut(&key) {
                         entry.request_id = Some(request_id.clone());
                     }
                 }
                 request_id
             }
             Err(error) => {
-                // Submission failed before any request id existed. If
-                // cancel/disconnect drained the entry during the race window,
-                // resolve cancelled; otherwise surface the submission error.
-                let cancelled_before_id = cancel_before_id.lock().await.is_cancelled();
-                self.remove_pending(&key).await;
+                // Submission failed before any request id existed. The
+                // classification must linearize with connection closure:
+                // observe `closed` and remove/check the entry in the same
+                // critical section, then combine that with the explicit
+                // cancel-before-id latch. A disconnect that has already
+                // published its closed+drained state must always resolve
+                // cancelled — even when it has not published the drained
+                // entry's latch yet — and so must an explicit cancel: while
+                // `submit_request` is awaited, only cancel or disconnect can
+                // remove this entry (every other removal runs in the
+                // submitter's own task after the request id is known), so a
+                // missing entry means the turn was cancelled. Ordinary
+                // non-disconnect GraphQL failures (state open, entry present,
+                // latch unset) stay surfaced as errors.
+                let (entry_was_present, state_closed) = {
+                    let mut state = self.state.lock().await;
+                    let entry_was_present = state.entries.remove(&key).is_some();
+                    (entry_was_present, state.is_closed())
+                };
+                let cancelled_by_latch = cancel_before_id.lock().await.is_cancelled();
+                let cancelled_by_disconnect = state_closed && !entry_was_present;
+                let cancelled_by_drain = !entry_was_present;
                 drop(response_rx);
-                if cancelled_before_id {
+                if cancelled_by_disconnect || cancelled_by_drain || cancelled_by_latch {
                     tracing::info!(
                         %error,
                         session_id = %request.session_id,
                         prompt_id = %prompt_id,
-                        "Grok shim prompt submission failed after cancel-before-id; resolving cancelled"
+                        state_closed,
+                        entry_was_present,
+                        cancelled_by_latch,
+                        "Grok shim prompt submission failed into a cancelled/disconnected turn; resolving cancelled"
                     );
                     return Ok(json!({"stopReason": StopReason::Cancelled.wire_name()}));
                 }
@@ -401,8 +576,8 @@ impl TurnManager {
         // cancel/disconnect drained the entry in the meantime, or the send
         // itself fails, interrupt immediately and resolve cancelled.
         let drained_during_submission = {
-            let pending = self.pending.lock().await;
-            pending.get(&key).is_none_or(|entry| entry.drained)
+            let state = self.state.lock().await;
+            state.entries.get(&key).is_none_or(|entry| entry.drained)
         };
         if drained_during_submission {
             self.interrupt_submitted(&request_id).await;
@@ -416,12 +591,25 @@ impl TurnManager {
             return Ok(json!({"stopReason": StopReason::Cancelled.wire_name()}));
         }
         for (index, block) in request.prompt.iter().enumerate() {
+            // The echo rides the connection's common session-update send
+            // path: the per-session lock, the reserve/send/commit envelope,
+            // and the shared event-id space are all owned by that path, so
+            // a failed echo never consumes an id and can never reorder
+            // against a concurrent session update on the same session.
             if let Err(error) = sender
-                .send_user_message_chunk(&request.session_id, &prompt_id, block, index)
+                .send_user_message_chunk(
+                    projections.session_updates(),
+                    &request.session_id,
+                    &prompt_id,
+                    block,
+                    index,
+                )
                 .await
             {
                 // Send failure after submission: interrupt the durable
-                // request, drain the entry, and surface the failure.
+                // request, drain the entry, and surface the failure. The
+                // common send path already rolled the reservation back, so
+                // the failed echo consumed no event id.
                 self.interrupt_and_drain(&key, &request_id).await;
                 drop(response_rx);
                 tracing::warn!(
@@ -436,9 +624,20 @@ impl TurnManager {
         }
 
         // Deferred response: watch the durable request until it terminalizes
-        // or the pending entry is drained by cancel/disconnect.
+        // or the pending entry is drained by cancel/disconnect. Each watch
+        // cycle runs the durable projection pass first, so novel
+        // tool/subagent/message updates stream live and the final pass
+        // precedes the terminal response.
         let outcome = self
-            .watch_terminal(&key, &request_id, response_rx)
+            .watch_terminal(
+                &key,
+                &request_id,
+                &request.session_id,
+                &prompt_id,
+                sender,
+                projections,
+                response_rx,
+            )
             .await?;
         Ok(json!({"stopReason": outcome.wire_name()}))
     }
@@ -453,8 +652,9 @@ impl TurnManager {
         );
         let target_prompt_id = notification.prompt_id.clone();
         let keys: Vec<(String, String)> = {
-            let pending = self.pending.lock().await;
-            pending
+            let state = self.state.lock().await;
+            state
+                .entries
                 .keys()
                 .filter(|(session, _)| session == &notification.session_id)
                 .filter(|(_, prompt_id)| {
@@ -466,9 +666,7 @@ impl TurnManager {
                 .collect()
         };
         for key in keys {
-            let request_id = self
-                .drain_entry(&key, StopReason::Cancelled)
-                .await;
+            let request_id = self.drain_entry(&key, StopReason::Cancelled).await;
             if let Some(request_id) = request_id {
                 self.interrupt_submitted(&request_id).await;
                 if notification.cancel_subagents {
@@ -479,27 +677,49 @@ impl TurnManager {
         Ok(())
     }
 
-    /// Handle connection teardown: drain every pending prompt and interrupt
-    /// their submitted requests. No response is ever sent (the channel is
-    /// gone); the deferred response is resolved so a concurrently awaited
-    /// prompt future observes the drain.
+    /// Handle connection teardown: atomically latch `closed` and drain every
+    /// pending prompt under the same lock, then interrupt their submitted
+    /// requests outside it. No response is ever sent (the channel is gone);
+    /// the deferred response is resolved so a concurrently awaited prompt
+    /// future observes the drain. The latch makes duplicate/concurrent
+    /// disconnects idempotent: the second one finds no entries (the first
+    /// already drained them) and a closed state, so it does nothing, and any
+    /// prompt that arrives after the first disconnect is rejected before it
+    /// can insert or submit a durable request.
     pub(super) async fn handle_disconnect(&self) -> Result<()> {
-        let mut pending = self.pending.lock().await;
-        let drained: Vec<((String, String), Arc<Mutex<CancelBeforeIdLatch>>, Option<String>)> =
-            pending
-                .drain()
-                .map(|(key, mut entry)| {
-                    entry.resolve(Ok(json!({
-                        "stopReason": StopReason::Cancelled.wire_name(),
-                    })));
-                    (
-                        key,
-                        entry.cancel_before_id.clone(),
-                        entry.request_id.clone(),
-                    )
-                })
-                .collect();
-        drop(pending);
+        let mut state = self.state.lock().await;
+        state.closed = true;
+        let drained: Vec<(
+            (String, String),
+            Arc<Mutex<CancelBeforeIdLatch>>,
+            Option<String>,
+        )> = std::mem::take(&mut state.entries)
+            .into_iter()
+            .map(|(key, mut entry)| {
+                entry.resolve(Ok(json!({
+                    "stopReason": StopReason::Cancelled.wire_name(),
+                })));
+                (
+                    key,
+                    entry.cancel_before_id.clone(),
+                    entry.request_id.clone(),
+                )
+            })
+            .collect();
+        drop(state);
+        #[cfg(test)]
+        {
+            // Test seam: park deterministically after the closed+drained
+            // state is published but before the drained entries are
+            // latched, so a concurrent submission failure can be observed
+            // in the exact window where the disconnect has not published
+            // the cancel-before-id latch yet.
+            let gate = self.disconnect_gate.lock().await.clone();
+            if let Some(gate) = gate {
+                gate.arrived.notify_one();
+                gate.release.notified().await;
+            }
+        }
         for ((_session_id, prompt_id), latch, request_id) in drained {
             // Latch the cancel-before-id window for submitters that are still
             // inside `create_agent_request` and have not registered a request
@@ -524,13 +744,22 @@ impl TurnManager {
     /// stop reason and return the submitted request id (if any) so the caller
     /// can interrupt it. A cancel that fires before the request id is known
     /// still latches `cancel_before_id`, which the submitter observes.
-    async fn drain_entry(
-        &self,
-        key: &(String, String),
-        stop_reason: StopReason,
-    ) -> Option<String> {
-        let entry = self.pending.lock().await.remove(key);
+    async fn drain_entry(&self, key: &(String, String), stop_reason: StopReason) -> Option<String> {
+        let entry = self.state.lock().await.entries.remove(key);
         let mut entry = entry?;
+        #[cfg(test)]
+        {
+            // Test seam: park deterministically after the entry is removed
+            // from the connection state but before its cancel-before-id
+            // latch is set, so a concurrently failing submission can be
+            // observed in the exact race window where the entry is gone and
+            // the latch is not published yet.
+            let gate = self.cancel_drain_gate.lock().await.clone();
+            if let Some(gate) = gate {
+                gate.arrived.notify_one();
+                gate.release.notified().await;
+            }
+        }
         let _first_cancel = entry.cancel_before_id.lock().await.cancel();
         entry.resolve(Ok(json!({
             "stopReason": stop_reason.wire_name(),
@@ -542,13 +771,6 @@ impl TurnManager {
     async fn interrupt_and_drain(&self, key: &(String, String), request_id: &str) {
         self.drain_entry(key, StopReason::Cancelled).await;
         self.interrupt_submitted(request_id).await;
-    }
-
-    async fn remove_pending(&self, key: &(String, String)) {
-        let entry = self.pending.lock().await.remove(key);
-        if let Some(mut entry) = entry {
-            entry.resolve(Err(anyhow::anyhow!("pending prompt removed")));
-        }
     }
 
     async fn interrupt_submitted(&self, request_id: &str) {
@@ -619,11 +841,7 @@ impl TurnManager {
     /// Submit the durable Gents request for the prompt and return its request
     /// id. The caller registers the id on the pending entry before the first
     /// fallible outbound send.
-    async fn submit_request(
-        &self,
-        request: &PromptRequest,
-        prompt_id: &str,
-    ) -> Result<String> {
+    async fn submit_request(&self, request: &PromptRequest, prompt_id: &str) -> Result<String> {
         let content = prompt_text(request);
         let mut metadata = json!({
             "promptId": prompt_id,
@@ -653,12 +871,36 @@ impl TurnManager {
     /// Watch the durable request until it terminalizes or the pending entry
     /// is drained by cancel/disconnect. The drain resolves `response_rx`
     /// first, so the watch returns `cancelled` without another poll.
+    ///
+    /// Each cycle first polls the request's terminal state, then runs the
+    /// durable projection pass and streams every novel event live (tools,
+    /// then subagents, then messages), and only then sleeps. When the
+    /// request has terminalized, the final projection pass still runs —
+    /// and its sends complete — before the pending entry is removed and the
+    /// terminal `stopReason` response is produced, so the pager observes
+    /// the full stream strictly before the response.
+    ///
+    /// Every failure after submission (a send failure on the outbound, a
+    /// projection query error, or a terminal query error) interrupts the
+    /// submitted request and drains the pending entry, so no submitted
+    /// request is ever leaked by a failed turn.
+    #[allow(clippy::too_many_arguments)]
     async fn watch_terminal(
         &self,
         key: &(String, String),
         request_id: &str,
+        session_id: &str,
+        prompt_id: &str,
+        sender: &PromptSender,
+        projections: &ProjectionEngine,
         mut response_rx: oneshot::Receiver<Result<Value>>,
     ) -> Result<StopReason> {
+        let mut cursor = RequestCursor::new();
+        // Request-local token-observation high-water: one per pending
+        // request, so sequential requests accumulate per-request deltas into
+        // the session total without double-counting and a retry-replaced
+        // (smaller) observation can never decrease it.
+        let mut token_high_water = 0u64;
         loop {
             // A cancel/disconnect that drained the entry resolves the
             // response before (or between) terminalization polls.
@@ -672,10 +914,59 @@ impl TurnManager {
                     .unwrap_or(StopReason::Cancelled.wire_name());
                 return Ok(stop_reason_from_wire(stop_reason));
             }
-            if let Some(stop_reason) = self.request_stop_reason(request_id).await? {
-                // Terminalized: remove the pending entry. The response value
-                // is built by the caller from the returned stop reason.
-                self.pending.lock().await.remove(key);
+            let terminal = match self.request_stop_reason(request_id).await {
+                Ok(terminal) => terminal,
+                Err(error) => {
+                    // A terminal query failure after submission must not
+                    // leak the submitted request.
+                    self.interrupt_and_drain(key, request_id).await;
+                    drop(response_rx);
+                    tracing::warn!(
+                        %error,
+                        session_id,
+                        prompt_id,
+                        request_id,
+                        "Grok shim terminal query failed; interrupted submitted request"
+                    );
+                    return Err(error);
+                }
+            };
+            // The projection pass runs every cycle, including the terminal
+            // one: novel durable events stream live, and the final pass
+            // flushes everything before the response below.
+            match self
+                .stream_projection_updates(
+                    session_id,
+                    request_id,
+                    prompt_id,
+                    sender,
+                    projections,
+                    &mut token_high_water,
+                    &mut cursor,
+                )
+                .await
+            {
+                Ok(()) => {}
+                Err(error) => {
+                    // A send failure or projection query failure after
+                    // submission must not leak the submitted request.
+                    self.interrupt_and_drain(key, request_id).await;
+                    drop(response_rx);
+                    tracing::warn!(
+                        %error,
+                        session_id,
+                        prompt_id,
+                        request_id,
+                        "Grok shim live projection failed; interrupted submitted request"
+                    );
+                    return Err(error);
+                }
+            }
+            if let Some(stop_reason) = terminal {
+                // Terminalized: the final projection pass above already
+                // flushed the stream. Remove the pending entry; the response
+                // value is built by the caller from the returned stop reason.
+                self.state.lock().await.entries.remove(key);
                 return Ok(stop_reason);
             }
             tokio::select! {
@@ -694,6 +985,54 @@ impl TurnManager {
                 }
             }
         }
+    }
+
+    /// Run one durable projection pass and stream every novel event through
+    /// the connection's common session-update send path. Each send holds the
+    /// session's send lock across reserve → stamp → send → commit, so the
+    /// event id is consumed only by a successful enqueue. The cursor
+    /// likewise advances only after each line was successfully sent, so a
+    /// send failure replays the same events on the next poll and never
+    /// duplicates an id.
+    async fn stream_projection_updates(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        prompt_id: &str,
+        sender: &PromptSender,
+        projections: &ProjectionEngine,
+        token_high_water: &mut u64,
+        cursor: &mut RequestCursor,
+    ) -> Result<()> {
+        let events = projections
+            .project_request_updates(session_id, request_id, token_high_water, cursor)
+            .await?;
+        for event in events {
+            let session_for_lock = session_id.to_string();
+            let session_id = session_id.to_string();
+            let prompt_id = prompt_id.to_string();
+            let payload = event.payload;
+            let advance = event.advance;
+            let notification = move |event_id: &str, total_tokens: u64| {
+                let meta = super::projection::stamp_update_meta(
+                    event_id,
+                    total_tokens,
+                    Some(&prompt_id),
+                    None,
+                );
+                Ok(super::projection::session_update_notification(
+                    &session_id,
+                    payload,
+                    meta,
+                ))
+            };
+            projections
+                .session_updates()
+                .send(&session_for_lock, notification, PromptSenderLine(sender))
+                .await?;
+            cursor.record(advance);
+        }
+        Ok(())
     }
 
     /// Query the durable request's terminal state and project a `stopReason`.
@@ -954,6 +1293,7 @@ pub(super) fn parse_cancel_notification(params: &Value) -> Result<CancelNotifica
 
 #[cfg(test)]
 mod tests {
+    use super::super::projection::ProjectionSequencer;
     use super::*;
 
     fn text_block(text: &str) -> Value {
@@ -1111,7 +1451,10 @@ mod tests {
             stop_reason_from_rows("superseded", None, Some("2026-01-01T00:00:00Z")),
             Some(StopReason::Cancelled)
         );
-        assert_eq!(stop_reason_from_rows("superseded", None, None), Some(StopReason::Error));
+        assert_eq!(
+            stop_reason_from_rows("superseded", None, None),
+            Some(StopReason::Error)
+        );
     }
 
     #[test]
@@ -1165,10 +1508,16 @@ mod tests {
     #[test]
     fn terminal_lifecycle_states_are_audited() {
         for state in ["completed", "failed", "superseded", "dead", "interrupted"] {
-            assert!(is_terminal_lifecycle_state(state), "{state} must be terminal");
+            assert!(
+                is_terminal_lifecycle_state(state),
+                "{state} must be terminal"
+            );
         }
         for state in ["pending", "processing", "queued", ""] {
-            assert!(!is_terminal_lifecycle_state(state), "{state} must not be terminal");
+            assert!(
+                !is_terminal_lifecycle_state(state),
+                "{state} must not be terminal"
+            );
         }
     }
 
@@ -1211,8 +1560,10 @@ mod tests {
         let sender = PromptSender::Buffer {
             buffer: buffer.clone(),
         };
+        let session_updates = SessionUpdateChannel::new(Arc::new(ProjectionSequencer::new()));
         sender
             .send_user_message_chunk(
+                &session_updates,
                 "session-1",
                 "prompt-1",
                 &PromptBlock {
@@ -1246,20 +1597,31 @@ mod tests {
         );
         assert_eq!(value["params"]["_meta"]["promptId"], json!("prompt-1"));
         assert_eq!(value["params"]["_meta"]["isReplay"], json!(false));
+        // The echo reports the session-cumulative tokens (zero on the first
+        // turn, before any projected observation has applied).
+        assert_eq!(value["params"]["_meta"]["totalTokens"], json!(0));
+        // The echo shares the pager's eventId dedup space with the projected
+        // updates.
+        assert_eq!(value["params"]["_meta"]["eventId"], json!("session-1-1"));
     }
 
     /// A closed outbound channel makes the user echo send fail, which is the
-    /// send-failure-after-submission path: the caller must interrupt.
+    /// send-failure-after-submission path: the caller must interrupt. The
+    /// failed send consumes neither the event id nor the session's counter,
+    /// so the next successful sender receives the same expected next id.
     #[tokio::test]
     async fn closed_outbound_channel_fails_the_echo_send() {
-        let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel::<String>();
-        drop(_outbound_rx);
-        let sender = PromptSender::Line {
-            connection_id: 1,
-            outbound_tx,
+        let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::commands::grok_shim::protocol::ServerEnvelope,
+        >();
+        drop(frames_rx);
+        let sender = PromptSender::Live {
+            outbound: AcpOutbound::for_frames(frames_tx),
         };
+        let session_updates = SessionUpdateChannel::new(Arc::new(ProjectionSequencer::new()));
         let result = sender
             .send_user_message_chunk(
+                &session_updates,
                 "session-1",
                 "prompt-1",
                 &PromptBlock {
@@ -1271,6 +1633,46 @@ mod tests {
             )
             .await;
         assert!(result.is_err(), "closed channel must fail the send");
+        assert_eq!(
+            session_updates.sequencer().event_counter("session-1"),
+            0,
+            "the failed send must roll the reservation back"
+        );
+
+        // A fresh sender on the same session draws the id the failed send
+        // would have taken: no id was consumed, no gap was left.
+        let (fresh_tx, mut fresh_rx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::commands::grok_shim::protocol::ServerEnvelope,
+        >();
+        let fresh = PromptSender::Live {
+            outbound: AcpOutbound::for_frames(fresh_tx),
+        };
+        fresh
+            .send_user_message_chunk(
+                &session_updates,
+                "session-1",
+                "prompt-1",
+                &PromptBlock {
+                    kind: "text".to_string(),
+                    text: "hello".to_string(),
+                    meta: None,
+                },
+                0,
+            )
+            .await
+            .expect("fresh sender delivers");
+        let envelope = fresh_rx.try_recv().expect("fresh line");
+        let payload = match envelope {
+            crate::commands::grok_shim::protocol::ServerEnvelope::Acp { payload } => payload,
+            other => panic!("expected an ACP envelope, got {other:?}"),
+        };
+        let notification: Value = serde_json::from_str(&payload).expect("notification json");
+        assert_eq!(
+            notification["params"]["_meta"]["eventId"],
+            json!("session-1-1"),
+            "the next successful send must receive the same expected next id"
+        );
+        assert_eq!(session_updates.sequencer().event_counter("session-1"), 1);
     }
 
     /// The wire-escape helper is applied to every interpolated GraphQL value:
@@ -1280,9 +1682,7 @@ mod tests {
     fn terminal_query_escapes_interpolated_values() {
         let request_id = "req-\"quoted\"\\slash";
         let escaped = escape_graphql_string(request_id);
-        let query = format!(
-            r#"AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }})"#
-        );
+        let query = format!(r#"AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }})"#);
         assert!(!query.contains(r#""req-""#), "raw quote must be escaped");
         assert!(query.contains(&escaped));
     }
@@ -1325,13 +1725,17 @@ mod tests {
     /// `create_AgentRequest` mutation has arrived and then parks until the
     /// test releases it, so a cancel/disconnect can deterministically land
     /// inside the before-request-id window. The gate disarms itself after
-    /// the first gated submission so later submissions pass through.
+    /// the first gated submission so later submissions pass through. When
+    /// `submission_fail` is armed, the released gated submission returns a
+    /// non-retryable GraphQL error response instead of forwarding to the
+    /// node, so a submission failure can be produced deterministically.
     #[derive(Clone)]
     struct MockGraphqlState {
         node: Arc<EmbeddedNode>,
         gate_armed: Option<Arc<std::sync::atomic::AtomicBool>>,
-        submission_arrived: Option<tokio::sync::Notify>,
+        submission_arrived: Option<Arc<tokio::sync::Notify>>,
         submission_release: Option<Arc<tokio::sync::Notify>>,
+        submission_fail: Option<Arc<std::sync::atomic::AtomicBool>>,
     }
 
     /// A mock GraphQL endpoint that forwards mutations to the embedded node
@@ -1347,13 +1751,17 @@ mod tests {
             .unwrap_or_default()
             .to_string();
         let is_create_request = query.contains("create_AgentRequest");
+        tracing::debug!(
+            target: "grok_shim::mock",
+            query_len = query.len(),
+            is_create_request,
+            "mock handler forwarding query"
+        );
         if is_create_request {
             let first_gated_submission = state
                 .gate_armed
                 .as_ref()
-                .is_some_and(|armed| {
-                    !armed.swap(false, std::sync::atomic::Ordering::SeqCst)
-                });
+                .is_some_and(|armed| armed.swap(false, std::sync::atomic::Ordering::SeqCst));
             if first_gated_submission {
                 if let Some(arrived) = state.submission_arrived.as_ref() {
                     // notify_one stores a permit when no test waiter is
@@ -1362,6 +1770,15 @@ mod tests {
                 }
                 if let Some(release) = state.submission_release.as_ref() {
                     release.notified().await;
+                }
+                if let Some(fail) = state.submission_fail.as_ref() {
+                    if fail.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        // A non-retryable GraphQL error response: the same
+                        // class an ordinary failed mutation produces.
+                        return Json(json!({
+                            "errors": [{"message": "injected submission failure"}],
+                        }));
+                    }
                 }
             }
         }
@@ -1379,13 +1796,29 @@ mod tests {
     /// `create_AgentRequest`: the returned `Notify` fires when the submission
     /// mutation arrives, and the endpoint parks the mutation until
     /// `submission_release` is notified. Later submissions pass through.
+    /// `submission_fail` optionally makes the released gated submission
+    /// return a non-retryable GraphQL error response instead of forwarding.
     async fn spawn_gated_mock_graphql(
         node: Arc<EmbeddedNode>,
         submission_gate: Option<(
-            tokio::sync::Notify,
+            Arc<tokio::sync::Notify>,
             Arc<tokio::sync::Notify>,
             Arc<std::sync::atomic::AtomicBool>,
         )>,
+    ) -> String {
+        spawn_gated_mock_graphql_with_failure(node, submission_gate, None).await
+    }
+
+    /// The gated mock endpoint with an optional one-shot submission-failure
+    /// injection for the released gated submission.
+    async fn spawn_gated_mock_graphql_with_failure(
+        node: Arc<EmbeddedNode>,
+        submission_gate: Option<(
+            Arc<tokio::sync::Notify>,
+            Arc<tokio::sync::Notify>,
+            Arc<std::sync::atomic::AtomicBool>,
+        )>,
+        submission_fail: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> String {
         let (submission_arrived, submission_release, gate_armed) = match submission_gate {
             Some((arrived, release, armed)) => (Some(arrived), Some(release), Some(armed)),
@@ -1396,6 +1829,7 @@ mod tests {
             gate_armed,
             submission_arrived,
             submission_release,
+            submission_fail,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1438,21 +1872,33 @@ mod tests {
         }
     }
 
+    /// A projection engine over the same embedded node the turn manager
+    /// uses, with a plain test bound context.
+    fn test_engine(node: Arc<EmbeddedNode>) -> Arc<ProjectionEngine> {
+        Arc::new(ProjectionEngine::new(
+            node,
+            super::super::projection::BoundModelContext::new(
+                "GLM-5.3-NVFP4".to_string(),
+                "GLM-5.3-NVFP4".to_string(),
+                262_144,
+            ),
+        ))
+    }
+
     fn buffer_sender() -> (Arc<Mutex<Vec<String>>>, PromptSender) {
         let buffer = Arc::new(Mutex::new(Vec::new()));
-        (
-            buffer.clone(),
-            PromptSender::Buffer {
-                buffer,
-            },
-        )
+        (buffer.clone(), PromptSender::Buffer { buffer })
     }
 
     /// Terminalize a request durably in one atomic mutation: the given
     /// lifecycle state plus a response row carrying the audited fields, as
     /// the runtime does. A single mutation avoids the watch observing a
     /// transient intermediate state between two writes.
-    async fn terminalize_request(node: &Arc<EmbeddedNode>, request_id: &str, lifecycle_state: &str) {
+    async fn terminalize_request(
+        node: &Arc<EmbeddedNode>,
+        request_id: &str,
+        lifecycle_state: &str,
+    ) {
         let escaped = escape_graphql_string(request_id);
         let escaped_state = escape_graphql_string(lifecycle_state);
         let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
@@ -1483,12 +1929,194 @@ mod tests {
         ensure_no_errors(&response, "test terminalize request").expect("terminalize");
     }
 
+    /// Seed one durable `AgentMessage` assistant row for the request, the
+    /// way the runtime materializes a finished assistant turn: a role-tagged
+    /// persisted envelope decoded by the message leaf.
+    async fn seed_assistant_message(
+        node: &Arc<EmbeddedNode>,
+        request_id: &str,
+        sequence: i64,
+        text: &str,
+    ) {
+        let message = serde_json::to_string(&gents_protocol::message::Message::assistant(text))
+            .expect("serialize assistant message");
+        seed_message_row(node, request_id, sequence, "assistant", &message).await;
+    }
+
+    /// Seed one durable `AgentMessage` row with an explicit serialized
+    /// content blob and role.
+    async fn seed_message_row(
+        node: &Arc<EmbeddedNode>,
+        request_id: &str,
+        sequence: i64,
+        role: &str,
+        content: &str,
+    ) {
+        let escaped_request = escape_graphql_string(request_id);
+        let escaped_content = escape_graphql_string(content);
+        let escaped_role = escape_graphql_string(role);
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "{escaped_request}:{sequence}"
+                    session_id: "session-1"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    request_id: "{escaped_request}"
+                    sequence: {sequence}
+                    role: "{escaped_role}"
+                    content: "{escaped_content}"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&mutation).await;
+        ensure_no_errors(&response, "test seed message").expect("seed message");
+    }
+
+    /// Seed one durable `AgentToolCall` row for the request with the given
+    /// authoritative lifecycle state.
+    async fn seed_tool_call(
+        node: &Arc<EmbeddedNode>,
+        request_id: &str,
+        tool_call_id: &str,
+        tool_name: &str,
+        lifecycle_state: &str,
+        result: &str,
+    ) {
+        let escaped_request = escape_graphql_string(request_id);
+        let escaped_id = escape_graphql_string(tool_call_id);
+        let escaped_name = escape_graphql_string(tool_name);
+        let escaped_state = escape_graphql_string(lifecycle_state);
+        let escaped_result = escape_graphql_string(result);
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "session-1:{escaped_id}"
+                    request_id: "{escaped_request}"
+                    session_id: "session-1"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    tool_call_id: "{escaped_id}"
+                    tool_name: "{escaped_name}"
+                    lifecycle_state: "{escaped_state}"
+                    result: "{escaped_result}"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&mutation).await;
+        ensure_no_errors(&response, "test seed tool call").expect("seed tool call");
+    }
+
+    /// Seed one runtime child `AgentRequest` row linked to the parent
+    /// request, the durable shape the subagent projection observes.
+    async fn seed_child_request(
+        node: &Arc<EmbeddedNode>,
+        parent_request_id: &str,
+        child_request_id: &str,
+        lifecycle_state: &str,
+    ) {
+        let escaped_parent = escape_graphql_string(parent_request_id);
+        let escaped_child = escape_graphql_string(child_request_id);
+        let escaped_state = escape_graphql_string(lifecycle_state);
+        let now = chrono::Utc::now().to_rfc3339();
+        let escaped_now = escape_graphql_string(&now);
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{escaped_child}"
+                    agent_did: "did:test:grok-shim"
+                    session_id: "session-1-child"
+                    caused_by_parent_request_id: "{escaped_parent}"
+                    content: "child work"
+                    status: "pending"
+                    lifecycle_state: "{escaped_state}"
+                    backend_id: ""
+                    execution_origin: "interactive"
+                    failure_reason: ""
+                    created_at: "{escaped_now}"
+                    retry_count: 0
+                    max_retries: 3
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&mutation).await;
+        ensure_no_errors(&response, "test seed child request").expect("seed child request");
+    }
+
+    /// Transition a seeded tool call to its terminal completed state with a
+    /// recorded result, the way the runtime finalizes a tool call.
+    async fn complete_tool_call(node: &Arc<EmbeddedNode>, tool_call_id: &str, result: &str) {
+        let escaped_id = escape_graphql_string(tool_call_id);
+        let escaped_state = escape_graphql_string("completed");
+        let escaped_result = escape_graphql_string(result);
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ tool_call_id: {{ _eq: "{escaped_id}" }} }},
+                    input: {{
+                        lifecycle_state: "{escaped_state}"
+                        result: "{escaped_result}"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&mutation).await;
+        ensure_no_errors(&response, "test complete tool call").expect("complete tool call");
+    }
+
+    /// Transition a seeded child request to its terminal completed state,
+    /// the durable edge the subagent projection finishes on.
+    async fn complete_child_request(node: &Arc<EmbeddedNode>, child_request_id: &str) {
+        let escaped_child = escape_graphql_string(child_request_id);
+        let escaped_state = escape_graphql_string("completed");
+        let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{escaped_child}" }} }},
+                    input: {{
+                        lifecycle_state: "{escaped_state}"
+                        terminalized_at: "{now}"
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&mutation).await;
+        ensure_no_errors(&response, "test complete child request").expect("complete child request");
+    }
+
+    /// The parsed `session/update` notification values in a buffer of
+    /// serialized lines.
+    async fn parse_buffered_updates(buffer: &Arc<Mutex<Vec<String>>>) -> Vec<Value> {
+        let lines = buffer.lock().await.clone();
+        lines
+            .iter()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect()
+    }
+
+    /// The `sessionUpdate` discriminators of the buffered notifications, in
+    /// order, for ordering assertions.
+    async fn buffered_update_kinds(buffer: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        parse_buffered_updates(buffer)
+            .await
+            .iter()
+            .map(|value| {
+                value["params"]["update"]["sessionUpdate"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
+    }
+
     /// A prompt that terminalizes normally resolves `stopReason=end_turn`.
     #[tokio::test]
     async fn prompt_resolves_end_turn_after_terminalization() {
         let (_tempdir, node) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
         let manager = TurnManager::new(node.clone(), test_config(graphql));
+        let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
         let prompt = parse_prompt_request(
@@ -1526,12 +2154,336 @@ mod tests {
             }
         });
 
-        let result = tokio::time::timeout(Duration::from_secs(30), manager.handle_prompt(prompt, &sender))
-            .await
-            .expect("prompt should resolve within timeout")
-            .expect("prompt should succeed");
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            manager.handle_prompt(prompt, &sender, &engine),
+        )
+        .await
+        .expect("prompt should resolve within timeout")
+        .expect("prompt should succeed");
         assert_eq!(result["stopReason"], json!("end_turn"));
         handle.await.expect("terminalize task");
+    }
+
+    /// A live turn streams every novel durable projection update before the
+    /// deferred response: the tool call registers, the subagent lifecycle
+    /// appears, and the assistant message chunk streams — each exactly once,
+    /// in tools → subagents → messages order within a poll — with no
+    /// duplicates even though the watch polls many times.
+    #[tokio::test]
+    async fn live_turn_streams_tool_subagent_and_message_updates_once_each() {
+        let (_tempdir, node) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let engine = test_engine(node.clone());
+        let (buffer, sender) = buffer_sender();
+
+        let prompt = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1",
+                "prompt": [text_block("hello")],
+                "_meta": {"promptId": "prompt-1"},
+            }),
+            Some(json!(1)),
+        )
+        .unwrap();
+
+        // Seeding task: wait for the submitted request row, then materialize
+        // the turn's durable output in stages so at least one poll observes
+        // the intermediate (non-terminal) state, and finish with a
+        // terminalization.
+        let node_for_seed = node.clone();
+        let seed_handle = tokio::spawn(async move {
+            let request_id = wait_for_pending_request(&node_for_seed).await;
+            // Stage 1: an in-flight tool call and a running child request —
+            // observed by at least one non-terminal poll.
+            seed_tool_call(
+                &node_for_seed,
+                &request_id,
+                "call-1",
+                "read_file",
+                "running",
+                "",
+            )
+            .await;
+            seed_child_request(&node_for_seed, &request_id, "child-1", "processing").await;
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            // Stage 2: the terminal tool status, the finished child, the
+            // assistant output, and the request's terminal state.
+            complete_tool_call(&node_for_seed, "call-1", "file contents").await;
+            complete_child_request(&node_for_seed, "child-1").await;
+            seed_assistant_message(&node_for_seed, &request_id, 1, "the answer").await;
+            terminalize_request(&node_for_seed, &request_id, "completed").await;
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            manager.handle_prompt(prompt, &sender, &engine),
+        )
+        .await
+        .expect("prompt should resolve within timeout")
+        .expect("prompt should succeed");
+        assert_eq!(result["stopReason"], json!("end_turn"));
+        seed_handle.await.expect("seed task");
+
+        let kinds = buffered_update_kinds(&buffer).await;
+        // The user echo always streams first.
+        assert_eq!(
+            kinds.first().map(String::as_str),
+            Some("user_message_chunk")
+        );
+        // Every projection family streamed: tool call (base registration,
+        // status revision, commands), subagent (spawned, progress,
+        // finished), and the assistant message chunk.
+        for expected in [
+            "tool_call",
+            "tool_call_update",
+            "available_commands_update",
+            "subagent_spawned",
+            "subagent_progress",
+            "subagent_finished",
+            "agent_message_chunk",
+        ] {
+            assert!(
+                kinds.iter().any(|kind| kind == expected),
+                "expected a {expected} notification, got: {kinds:?}"
+            );
+        }
+        // No duplicates: each projected event streamed exactly once.
+        for kind in [
+            "tool_call",
+            "available_commands_update",
+            "subagent_spawned",
+            "subagent_finished",
+            "agent_message_chunk",
+        ] {
+            let count = kinds.iter().filter(|k| k == &kind).count();
+            assert_eq!(count, 1, "{kind} must stream exactly once, got {count}");
+        }
+        // The tool status revision is the only tool_call_update.
+        assert_eq!(
+            kinds.iter().filter(|k| k == &"tool_call_update").count(),
+            1,
+            "exactly one tool status revision"
+        );
+
+        // Every notification is well-formed and carries the turn's promptId.
+        let updates = parse_buffered_updates(&buffer).await;
+        assert!(
+            updates.len() >= 8,
+            "expected the full stream, got {updates:?}"
+        );
+        for update in &updates {
+            assert_eq!(update["method"], "session/update");
+            assert_eq!(update["params"]["sessionId"], "session-1");
+            assert_eq!(update["params"]["_meta"]["promptId"], "prompt-1");
+            assert!(
+                update["params"]["_meta"]["eventId"].as_str().is_some(),
+                "every notification carries an eventId"
+            );
+        }
+    }
+
+    /// Distinct durable rows with identical text both stream: the message
+    /// dedup is by durable row key, never by content.
+    #[tokio::test]
+    async fn identical_text_distinct_rows_both_stream() {
+        let (_tempdir, node) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = TurnManager::new(node.clone(), test_config(graphql));
+        let engine = test_engine(node.clone());
+        let (buffer, sender) = buffer_sender();
+
+        let prompt = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1",
+                "prompt": [text_block("hello")],
+                "_meta": {"promptId": "prompt-1"},
+            }),
+            Some(json!(1)),
+        )
+        .unwrap();
+
+        let node_for_seed = node.clone();
+        let seed_handle = tokio::spawn(async move {
+            let request_id = wait_for_pending_request(&node_for_seed).await;
+            // Two distinct assistant rows carrying the same text.
+            seed_assistant_message(&node_for_seed, &request_id, 1, "same text").await;
+            seed_assistant_message(&node_for_seed, &request_id, 2, "same text").await;
+            terminalize_request(&node_for_seed, &request_id, "completed").await;
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            manager.handle_prompt(prompt, &sender, &engine),
+        )
+        .await
+        .expect("prompt should resolve within timeout")
+        .expect("prompt should succeed");
+        assert_eq!(result["stopReason"], json!("end_turn"));
+        seed_handle.await.expect("seed task");
+
+        let updates = parse_buffered_updates(&buffer).await;
+        let chunks: Vec<&str> = updates
+            .iter()
+            .filter(|update| update["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+            .filter_map(|update| update["params"]["update"]["content"]["text"].as_str())
+            .collect();
+        assert_eq!(
+            chunks,
+            vec!["same text", "same text"],
+            "both distinct rows must stream even with identical text"
+        );
+    }
+
+    /// An outbound that closes after submission (mid-turn) interrupts the
+    /// submitted request and drains the pending entry, so the session
+    /// accepts the next prompt immediately.
+    #[tokio::test]
+    async fn outbound_close_after_submission_interrupts_and_drains() {
+        let (_tempdir, node) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let engine = test_engine(node.clone());
+        let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::commands::grok_shim::protocol::ServerEnvelope,
+        >();
+        let sender = PromptSender::Live {
+            outbound: AcpOutbound::for_frames(frames_tx),
+        };
+
+        let prompt = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1",
+                "prompt": [text_block("hello")],
+                "_meta": {"promptId": "prompt-1"},
+            }),
+            Some(json!(1)),
+        )
+        .unwrap();
+
+        // Close the outbound only after the user echo was delivered, and
+        // concurrently materialize a durable tool row so a later poll has a
+        // novel event to send: that projection send then fails against the
+        // closed outbound, which must interrupt the request and drain the
+        // entry.
+        let mut frames_rx = frames_rx;
+        let closer = tokio::spawn(async move {
+            // Wait for the echo frame, then close the channel.
+            let _ = frames_rx.recv().await;
+            drop(frames_rx);
+        });
+        let node_for_seed = node.clone();
+        let seed_handle = tokio::spawn(async move {
+            let request_id = wait_for_pending_request(&node_for_seed).await;
+            seed_tool_call(
+                &node_for_seed,
+                &request_id,
+                "call-1",
+                "read_file",
+                "running",
+                "",
+            )
+            .await;
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            manager.handle_prompt(prompt, &sender, &engine),
+        )
+        .await
+        .expect("prompt should resolve within timeout");
+        assert!(result.is_err(), "a closed outbound must fail the turn");
+        closer.await.expect("closer task");
+        seed_handle.await.expect("seed task");
+
+        // The submitted request was interrupted.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let query = r#"{ AgentRequest { request_id interrupt_requested_at } }"#;
+        let response = node.execute(query).await;
+        ensure_no_errors(&response, "test request query").expect("query");
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            rows.iter().any(|row| row
+                .get("interrupt_requested_at")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())),
+            "the submitted request must be interrupted after the mid-turn send failure"
+        );
+
+        // The pending entry was drained: the session accepts a new prompt
+        // (it terminalizes immediately through the mock endpoint's real
+        // submission and a terminalizer).
+        let second = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1",
+                "prompt": [text_block("again")],
+                "_meta": {"promptId": "prompt-2"},
+            }),
+            Some(json!(2)),
+        )
+        .unwrap();
+        let node_for_terminalize = node.clone();
+        let terminalize_handle = tokio::spawn(async move {
+            loop {
+                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { request_id } }"#;
+                let response = node_for_terminalize.execute(query).await;
+                let rows = response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("AgentRequest"))
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                for row in &rows {
+                    let request_id = row.get("request_id").and_then(Value::as_str).unwrap();
+                    terminalize_request(&node_for_terminalize, request_id, "interrupted").await;
+                }
+                if rows.is_empty() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+        });
+        let (buffer2, sender2) = buffer_sender();
+        let second_result = tokio::time::timeout(
+            Duration::from_secs(30),
+            manager.handle_prompt(second, &sender2, &engine),
+        )
+        .await
+        .expect("second prompt should resolve within timeout")
+        .expect("second prompt must be accepted after the drain");
+        drop(buffer2);
+        terminalize_handle.abort();
+        assert_eq!(second_result["stopReason"], json!("cancelled"));
+    }
+
+    /// Wait for the first pending `AgentRequest` row and return its id.
+    async fn wait_for_pending_request(node: &Arc<EmbeddedNode>) -> String {
+        loop {
+            let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { request_id } }"#;
+            let response = node.execute(query).await;
+            let rows = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentRequest"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(row) = rows.first() {
+                return row
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .unwrap()
+                    .to_string();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     /// Cancel before the request id is registered: the entry is drained, the
@@ -1542,15 +2494,20 @@ mod tests {
     #[tokio::test]
     async fn cancel_before_request_id_resolves_cancelled_and_permits_reuse() {
         let (_tempdir, node) = test_node().await;
-        let submission_arrived = tokio::sync::Notify::new();
+        let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let graphql = spawn_gated_mock_graphql(
             node.clone(),
-            Some((submission_arrived, submission_release.clone(), gate_armed)),
+            Some((
+                submission_arrived.clone(),
+                submission_release.clone(),
+                gate_armed,
+            )),
         )
         .await;
         let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
         let prompt = parse_prompt_request(
@@ -1568,7 +2525,8 @@ mod tests {
         let prompt_handle = tokio::spawn({
             let manager = manager.clone();
             let sender = sender.clone();
-            async move { manager.handle_prompt(prompt, &sender).await }
+            let engine = engine.clone();
+            async move { manager.handle_prompt(prompt, &sender, &engine).await }
         });
 
         // Deterministically wait for the submission mutation to arrive: the
@@ -1626,7 +2584,7 @@ mod tests {
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                for row in rows {
+                for row in &rows {
                     let request_id = row.get("request_id").and_then(Value::as_str).unwrap();
                     terminalize_request(&node_for_terminalize, request_id, "interrupted").await;
                 }
@@ -1635,10 +2593,13 @@ mod tests {
                 }
             }
         });
-        let result = tokio::time::timeout(Duration::from_secs(30), manager.handle_prompt(second, &sender))
-            .await
-            .expect("second prompt should resolve within timeout")
-            .expect("second prompt should succeed");
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            manager.handle_prompt(second, &sender, &engine),
+        )
+        .await
+        .expect("second prompt should resolve within timeout")
+        .expect("second prompt should succeed");
         assert_eq!(result["stopReason"], json!("cancelled"));
         terminalize_handle.abort();
     }
@@ -1650,15 +2611,20 @@ mod tests {
     #[tokio::test]
     async fn disconnect_before_request_id_resolves_cancelled() {
         let (_tempdir, node) = test_node().await;
-        let submission_arrived = tokio::sync::Notify::new();
+        let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let graphql = spawn_gated_mock_graphql(
             node.clone(),
-            Some((submission_arrived, submission_release.clone(), gate_armed)),
+            Some((
+                submission_arrived.clone(),
+                submission_release.clone(),
+                gate_armed,
+            )),
         )
         .await;
         let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
         let prompt = parse_prompt_request(
@@ -1676,7 +2642,8 @@ mod tests {
         let prompt_handle = tokio::spawn({
             let manager = manager.clone();
             let sender = sender.clone();
-            async move { manager.handle_prompt(prompt, &sender).await }
+            let engine = engine.clone();
+            async move { manager.handle_prompt(prompt, &sender, &engine).await }
         });
 
         // Deterministically wait for the submission mutation to arrive.
@@ -1702,6 +2669,485 @@ mod tests {
         assert_eq!(result["stopReason"], json!("cancelled"));
     }
 
+    /// The disconnect-vs-submission-error linearization regression. A prompt
+    /// whose submission is parked inside `create_agent_request` (and will
+    /// fail when released) is drained by a disconnect that parks at the
+    /// disconnect seam *after* publishing closed+drained state but *before*
+    /// latching the drained entry's cancel-before-id. Releasing the
+    /// submission into failure in that window must resolve the prompt with
+    /// `stopReason=cancelled` — never the GraphQL error — because the
+    /// submission-error classification linearizes with the closed latch.
+    /// Releasing the disconnect afterwards verifies the empty-entry/closed
+    /// terminal state. Fully deterministic: no sleeps.
+    #[tokio::test]
+    async fn disconnect_parked_before_latch_with_finishing_submission_failure_resolves_cancelled() {
+        let (_tempdir, node) = test_node().await;
+        let submission_arrived = Arc::new(tokio::sync::Notify::new());
+        let submission_release = Arc::new(tokio::sync::Notify::new());
+        let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let submission_fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let graphql = spawn_gated_mock_graphql_with_failure(
+            node.clone(),
+            Some((
+                submission_arrived.clone(),
+                submission_release.clone(),
+                gate_armed,
+            )),
+            Some(submission_fail),
+        )
+        .await;
+        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let engine = test_engine(node.clone());
+        let (_buffer, sender) = buffer_sender();
+
+        let prompt = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1",
+                "prompt": [text_block("hello")],
+                "_meta": {"promptId": "prompt-1"},
+            }),
+            Some(json!(1)),
+        )
+        .unwrap();
+
+        // Run the prompt; it parks inside the gated submission with its
+        // pending entry inserted and no request id registered yet.
+        let prompt_handle = tokio::spawn({
+            let manager = manager.clone();
+            let sender = sender.clone();
+            let engine = engine.clone();
+            async move { manager.handle_prompt(prompt, &sender, &engine).await }
+        });
+
+        // Deterministically wait for the submission mutation to arrive: the
+        // submitter is now inside create_agent_request, strictly before the
+        // request id is registered.
+        tokio::time::timeout(Duration::from_secs(30), submission_arrived.notified())
+            .await
+            .expect("submission should arrive at the gated endpoint");
+
+        // Arm the disconnect seam and run the disconnect: it atomically
+        // latches closed and drains the entry, then parks before it would
+        // latch the drained entry's cancel-before-id.
+        let gate = DisconnectGate {
+            arrived: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+        };
+        *manager.disconnect_gate.lock().await = Some(gate.clone());
+        let manager_for_disconnect = manager.clone();
+        let disconnect_handle = tokio::spawn(async move {
+            manager_for_disconnect
+                .handle_disconnect()
+                .await
+                .expect("disconnect should succeed")
+        });
+
+        tokio::time::timeout(Duration::from_secs(30), gate.arrived.notified())
+            .await
+            .expect("disconnect should park at the seam");
+
+        // The closed+drained state is published, but the drained entry's
+        // cancel-before-id latch is NOT: this is the exact race window. A
+        // plain observer would see the latch as false.
+        {
+            let state = manager.state.lock().await;
+            assert!(state.closed, "the disconnect has published closed");
+            assert!(
+                state.entries.is_empty(),
+                "the disconnect has drained the entry table"
+            );
+        }
+
+        // Release the parked submission *while the disconnect is parked at
+        // the seam*: the endpoint answers with a GraphQL error, and the
+        // failing submission must still resolve cancelled.
+        submission_release.notify_one();
+        let result = tokio::time::timeout(Duration::from_secs(30), prompt_handle)
+            .await
+            .expect("prompt should resolve within timeout")
+            .expect("prompt task")
+            .expect("submission failure in the closed-drained window must resolve cancelled");
+        assert_eq!(
+            result["stopReason"],
+            json!("cancelled"),
+            "the disconnect's required stopReason wins over the GraphQL error"
+        );
+
+        // Release the disconnect: it latches the (already-consumed) drained
+        // entry and finishes as a no-op interrupt pass.
+        gate.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(30), disconnect_handle)
+            .await
+            .expect("disconnect should resolve within timeout")
+            .expect("disconnect task");
+
+        // Terminal state: empty entries, closed connection.
+        {
+            let state = manager.state.lock().await;
+            assert!(state.entries.is_empty());
+            assert!(state.closed);
+        }
+
+        // Zero durable requests: the failed submission never minted an
+        // AgentRequest, and the turn leaked nothing.
+        let query = r#"{ AgentRequest { request_id } }"#;
+        let response = node.execute(query).await;
+        ensure_no_errors(&response, "test request query").expect("query");
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            rows.is_empty(),
+            "a submission failed into a closed connection must not mint an AgentRequest, got {rows:?}"
+        );
+    }
+
+    /// The explicit-cancel-vs-submission-error linearization regression. A
+    /// prompt whose submission is parked inside `create_agent_request` (and
+    /// will fail when released) is drained by an explicit `session/cancel`
+    /// that parks at the cancel-drain seam *after* removing the pending
+    /// entry from the connection state but *before* latching the removed
+    /// entry's cancel-before-id. Releasing the submission into failure in
+    /// that window must resolve the prompt with `stopReason=cancelled` —
+    /// never the GraphQL error — because the submission-error classification
+    /// treats a missing entry as cancellation (only cancel/disconnect can
+    /// remove it while `submit_request` is awaited). Releasing the cancel
+    /// afterwards verifies the empty pending table and zero durable
+    /// `AgentRequest` rows. Fully deterministic: no sleeps.
+    #[tokio::test]
+    async fn cancel_parked_before_latch_with_finishing_submission_failure_resolves_cancelled() {
+        let (_tempdir, node) = test_node().await;
+        let submission_arrived = Arc::new(tokio::sync::Notify::new());
+        let submission_release = Arc::new(tokio::sync::Notify::new());
+        let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let submission_fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let graphql = spawn_gated_mock_graphql_with_failure(
+            node.clone(),
+            Some((
+                submission_arrived.clone(),
+                submission_release.clone(),
+                gate_armed,
+            )),
+            Some(submission_fail),
+        )
+        .await;
+        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let engine = test_engine(node.clone());
+        let (_buffer, sender) = buffer_sender();
+
+        let prompt = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1",
+                "prompt": [text_block("hello")],
+                "_meta": {"promptId": "prompt-1"},
+            }),
+            Some(json!(1)),
+        )
+        .unwrap();
+
+        // Run the prompt; it parks inside the gated submission with its
+        // pending entry inserted and no request id registered yet.
+        let prompt_handle = tokio::spawn({
+            let manager = manager.clone();
+            let sender = sender.clone();
+            let engine = engine.clone();
+            async move { manager.handle_prompt(prompt, &sender, &engine).await }
+        });
+
+        // Deterministically wait for the submission mutation to arrive: the
+        // submitter is now inside create_agent_request, strictly before the
+        // request id is registered.
+        tokio::time::timeout(Duration::from_secs(30), submission_arrived.notified())
+            .await
+            .expect("submission should arrive at the gated endpoint");
+
+        // Arm the cancel-drain seam and run the explicit cancel: it removes
+        // the pending entry under the connection lock, then parks before it
+        // would latch the removed entry's cancel-before-id.
+        let gate = CancelDrainGate {
+            arrived: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+        };
+        *manager.cancel_drain_gate.lock().await = Some(gate.clone());
+        let cancel = parse_cancel_notification(&json!({
+            "sessionId": "session-1",
+            "_meta": {"cancelSubagents": true, "promptId": "prompt-1"},
+        }))
+        .unwrap();
+        let manager_for_cancel = manager.clone();
+        let cancel_handle = tokio::spawn(async move {
+            manager_for_cancel
+                .handle_cancel(cancel)
+                .await
+                .expect("cancel should succeed")
+        });
+
+        tokio::time::timeout(Duration::from_secs(30), gate.arrived.notified())
+            .await
+            .expect("cancel should park at the seam");
+
+        // The entry is removed, the connection is still open, and the drained
+        // entry's cancel-before-id latch is NOT published: this is the exact
+        // race window. A plain three-way observer would see every
+        // cancellation marker as false.
+        {
+            let state = manager.state.lock().await;
+            assert!(
+                !state.closed,
+                "an explicit cancel leaves the connection open"
+            );
+            assert!(
+                state.entries.is_empty(),
+                "the cancel has removed the pending entry"
+            );
+        }
+
+        // Release the parked submission *while the cancel is parked at the
+        // seam*: the endpoint answers with a GraphQL error, and the failing
+        // submission must still resolve cancelled.
+        submission_release.notify_one();
+        let result = tokio::time::timeout(Duration::from_secs(30), prompt_handle)
+            .await
+            .expect("prompt should resolve within timeout")
+            .expect("prompt task")
+            .expect("submission failure in the cancel-drain window must resolve cancelled");
+        assert_eq!(
+            result["stopReason"],
+            json!("cancelled"),
+            "the explicit cancel's required stopReason wins over the GraphQL error"
+        );
+
+        // Release the cancel: it latches the (already-consumed) removed
+        // entry's cancel-before-id and finishes with no request id to
+        // interrupt.
+        gate.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(30), cancel_handle)
+            .await
+            .expect("cancel should resolve within timeout")
+            .expect("cancel task");
+
+        // Terminal state: no pending entry, connection still open.
+        {
+            let state = manager.state.lock().await;
+            assert!(state.entries.is_empty());
+            assert!(!state.closed);
+        }
+
+        // Zero durable requests: the failed submission never minted an
+        // AgentRequest, and the cancelled turn leaked nothing.
+        let query = r#"{ AgentRequest { request_id } }"#;
+        let response = node.execute(query).await;
+        ensure_no_errors(&response, "test request query").expect("query");
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            rows.is_empty(),
+            "a submission failed into a cancelled turn must not mint an AgentRequest, got {rows:?}"
+        );
+    }
+
+    /// The deterministic post-disconnect insertion regression. A prompt task
+    /// is gated immediately before the insertion critical section — the exact
+    /// race window where the production bug leaked a durable request — then
+    /// the connection disconnects while the prompt is gated. Releasing the
+    /// gate must reject the prompt before any durable submission: it errors,
+    /// no pending entry exists, and zero `AgentRequest` documents were
+    /// created. A duplicate disconnect stays idempotent.
+    #[tokio::test]
+    async fn prompt_gated_before_insertion_is_rejected_after_disconnect() {
+        let (_tempdir, node) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let engine = test_engine(node.clone());
+        let (_buffer, sender) = buffer_sender();
+
+        let prompt = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1",
+                "prompt": [text_block("hello")],
+                "_meta": {"promptId": "prompt-1"},
+            }),
+            Some(json!(1)),
+        )
+        .unwrap();
+
+        // Arm the insertion gate: the spawned prompt parks immediately before
+        // it touches the connection state, so the disconnect below can run
+        // while the prompt is still queued.
+        let gate = InsertionGate {
+            arrived: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+        };
+        *manager.insertion_gate.lock().await = Some(gate.clone());
+
+        let manager_for_prompt = manager.clone();
+        let sender_for_prompt = sender.clone();
+        let engine_for_prompt = engine.clone();
+        let prompt_handle = tokio::spawn(async move {
+            manager_for_prompt
+                .handle_prompt(prompt, &sender_for_prompt, &engine_for_prompt)
+                .await
+        });
+
+        // Deterministically wait for the prompt to park at the gate.
+        tokio::time::timeout(Duration::from_secs(30), gate.arrived.notified())
+            .await
+            .expect("prompt should arrive at the insertion gate");
+
+        // Disconnect while the prompt is gated: the closed latch is set and
+        // the (empty) entry table is drained under one lock.
+        manager
+            .handle_disconnect()
+            .await
+            .expect("disconnect should succeed");
+
+        // Release the gate; the prompt must observe the closed latch in the
+        // same critical section as insertion and reject.
+        gate.release.notify_one();
+        let result = tokio::time::timeout(Duration::from_secs(30), prompt_handle)
+            .await
+            .expect("prompt should resolve within timeout")
+            .expect("prompt task");
+        let error = result.expect_err("a prompt gated across disconnect must be rejected");
+        assert!(
+            error.to_string().contains("already disconnected"),
+            "rejection must name the closed connection, got: {error:#}"
+        );
+
+        // No pending entry was inserted.
+        {
+            let state = manager.state.lock().await;
+            assert!(
+                state.entries.is_empty(),
+                "no entry may be inserted after the closed latch"
+            );
+            assert!(state.closed, "the connection stays closed");
+        }
+
+        // Zero durable requests: the rejection happened strictly before
+        // `create_agent_request`.
+        let query = r#"{ AgentRequest { request_id } }"#;
+        let response = node.execute(query).await;
+        ensure_no_errors(&response, "test request query").expect("query");
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            rows.is_empty(),
+            "a prompt rejected by the closed latch must never create an AgentRequest, got {rows:?}"
+        );
+
+        // Duplicate disconnect stays idempotent: it succeeds and changes
+        // nothing.
+        manager
+            .handle_disconnect()
+            .await
+            .expect("duplicate disconnect should succeed");
+        {
+            let state = manager.state.lock().await;
+            assert!(state.entries.is_empty());
+            assert!(state.closed);
+        }
+    }
+
+    /// The ordinary already-pending drain: a prompt whose entry is already
+    /// inserted (parked inside `create_agent_request` via the gated mock
+    /// endpoint) is drained atomically by disconnect, the entry table is
+    /// empty immediately, and a second duplicate disconnect is a no-op.
+    #[tokio::test]
+    async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_a_noop() {
+        let (_tempdir, node) = test_node().await;
+        let submission_arrived = Arc::new(tokio::sync::Notify::new());
+        let submission_release = Arc::new(tokio::sync::Notify::new());
+        let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let graphql = spawn_gated_mock_graphql(
+            node.clone(),
+            Some((
+                submission_arrived.clone(),
+                submission_release.clone(),
+                gate_armed,
+            )),
+        )
+        .await;
+        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let engine = test_engine(node.clone());
+        let (_buffer, sender) = buffer_sender();
+
+        let prompt = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1",
+                "prompt": [text_block("hello")],
+                "_meta": {"promptId": "prompt-1"},
+            }),
+            Some(json!(1)),
+        )
+        .unwrap();
+
+        let prompt_handle = tokio::spawn({
+            let manager = manager.clone();
+            let sender = sender.clone();
+            let engine = engine.clone();
+            async move { manager.handle_prompt(prompt, &sender, &engine).await }
+        });
+
+        tokio::time::timeout(Duration::from_secs(30), submission_arrived.notified())
+            .await
+            .expect("submission should arrive at the gated endpoint");
+
+        // The entry is live and pending; disconnect drains it under the same
+        // lock that latches closed.
+        {
+            let state = manager.state.lock().await;
+            assert_eq!(state.entries.len(), 1, "the prompt entry must be pending");
+        }
+        manager
+            .handle_disconnect()
+            .await
+            .expect("disconnect should succeed");
+        {
+            let state = manager.state.lock().await;
+            assert!(
+                state.entries.is_empty(),
+                "disconnect must drain every entry"
+            );
+            assert!(state.closed);
+        }
+
+        // Duplicate disconnect: idempotent no-op.
+        manager
+            .handle_disconnect()
+            .await
+            .expect("duplicate disconnect should succeed");
+        {
+            let state = manager.state.lock().await;
+            assert!(state.entries.is_empty());
+            assert!(state.closed);
+        }
+
+        // Release the parked submission: the submitter observes the
+        // cancel-before-id latch and resolves cancelled.
+        submission_release.notify_one();
+        let result = tokio::time::timeout(Duration::from_secs(30), prompt_handle)
+            .await
+            .expect("prompt should resolve within timeout")
+            .expect("prompt task")
+            .expect("the drained prompt must resolve cancelled, not error");
+        assert_eq!(result["stopReason"], json!("cancelled"));
+    }
+
     /// Send failure after submission: the user echo fails against a closed
     /// outbound channel, so the submitted request must be interrupted and the
     /// prompt surface the send failure.
@@ -1710,11 +3156,15 @@ mod tests {
         let (_tempdir, node) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
         let manager = TurnManager::new(node.clone(), test_config(graphql));
-        let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel::<String>();
-        drop(_outbound_rx);
-        let sender = PromptSender::Line {
-            connection_id: 1,
-            outbound_tx,
+        let engine = test_engine(node.clone());
+        let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::commands::grok_shim::protocol::ServerEnvelope,
+        >();
+        // Closing the receiver makes every outbound send fail: the user echo
+        // fails immediately after submission.
+        drop(frames_rx);
+        let sender = PromptSender::Live {
+            outbound: AcpOutbound::for_frames(frames_tx),
         };
 
         let prompt = parse_prompt_request(
@@ -1727,10 +3177,16 @@ mod tests {
         )
         .unwrap();
 
-        let result = tokio::time::timeout(Duration::from_secs(30), manager.handle_prompt(prompt, &sender))
-            .await
-            .expect("prompt should resolve within timeout");
-        assert!(result.is_err(), "closed outbound must surface a send failure");
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            manager.handle_prompt(prompt, &sender, &engine),
+        )
+        .await
+        .expect("prompt should resolve within timeout");
+        assert!(
+            result.is_err(),
+            "closed outbound must surface a send failure"
+        );
 
         // The submitted request must have been interrupted: its durable row
         // carries a non-empty interrupt_requested_at.
@@ -1761,6 +3217,7 @@ mod tests {
         let (_tempdir, node) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
         let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let projections = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
 
         let first = parse_prompt_request(
@@ -1776,8 +3233,11 @@ mod tests {
         // yet, so it stays pending for the whole rejection check below.
         let manager_for_first = manager.clone();
         let sender_for_first = sender.clone();
+        let engine_for_first = projections.clone();
         let first_handle = tokio::spawn(async move {
-            manager_for_first.handle_prompt(first, &sender_for_first).await
+            manager_for_first
+                .handle_prompt(first, &sender_for_first, &engine_for_first)
+                .await
         });
 
         // The first prompt's user echo is sent only after its request id was
@@ -1807,7 +3267,7 @@ mod tests {
         )
         .unwrap();
         let rejection = manager
-            .handle_prompt(second, &sender)
+            .handle_prompt(second, &sender, &projections)
             .await
             .expect_err("second prompt for a live session must be rejected");
         assert!(

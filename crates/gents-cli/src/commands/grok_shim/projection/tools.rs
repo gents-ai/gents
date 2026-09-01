@@ -10,16 +10,16 @@
 //!
 //! Ordering rules mirrored from `xai-grok-pager/src/acp/tracker.rs`:
 //!
-//! - suppressed tool families (`todo`, `bg-plumbing`, `task`, `goal`,
+//! - suppressed tool families (`todo`, `bg-plumbing`, `goal`,
 //!   `scheduler`, `workflow`) are never rendered as scrollback blocks;
-//! - however, family suppression is applied **after** blocking-wait
-//!   registration. A `task` tool whose meta does not carry
-//!   `subagentBackground: true` registers a blocking subagent wait instead
-//!   of a scrollback block; the same is true for any spawn row that
-//!   recorded a `child_request_id`. Suppression removes the *rendered*
-//!   block, never the *wait*.
+//! - `task`/`Task`/`tasks`/`spawn_subagent` are deliberately **not**
+//!   suppressed: they emit an ordinary standard ACP `tool_call` plus a
+//!   same-id terminal `tool_call_update` (title = the durable tool name,
+//!   kind `other`), and the pager handles title recognition, waiting, and
+//!   suppression on its side;
 //! - `send_subagent_message` is recognized by canonical tool meta
-//!   (`{"version": <TOOL_META_VERSION>, "kind": "ActiveAgentMessage"}`) or
+//!   (the `x.ai/tool` envelope carrying
+//!   `{"version": <TOOL_META_VERSION>, "kind": "ActiveAgentMessage"}`) or
 //!   the title `send_subagent_message`, with rawInput
 //!   `{"subagent_id", "text"}`;
 //! - `available_commands_update` carries meta `{"tools": [...]}`;
@@ -30,9 +30,11 @@
 //! `terminal/wait_for_exit`, `terminal/kill`, and `terminal/release` remain
 //! explicit shaped unsupported results: the shim registers
 //! `clientTerminal: false`, so shell work runs agent-side and reaches the
-//! client purely as execute-kind tool_call events. The pager-style
-//! not-supported error is reproduced verbatim. No permission document is
-//! ever created by this leaf.
+//! client purely as execute-kind tool_call events. `terminal/wait_for_exit`
+//! answers with the pager's exact `METHOD_NOT_FOUND` error
+//! (`wait_for_exit_not_supported("pager")`); the other terminal methods
+//! answer with ordinary shaped method-not-found errors of the shim's own
+//! wording. No permission document is ever created by this leaf.
 //!
 //! All queries go through the in-process embedded node (`node.execute`) with
 //! every interpolated value passed through `escape_graphql_string`; no HTTP
@@ -40,7 +42,6 @@
 //! `AgentToolCall` query and one `AgentToolResult` query per request id,
 //! with no graph walks beyond the rows of the request being projected.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -49,22 +50,23 @@ use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-/// Wire name of the `session/update` notification carrying a tool update.
-pub(super) const TOOL_UPDATE_METHOD: &str = "session/update";
-
-/// Pager-style not-supported stub for terminal ACP client methods. The
-/// reference pager answers `terminal/wait_for_exit` with exactly this
-/// not-supported error; the shim reproduces it for every terminal method.
-pub(super) const TERMINAL_NOT_SUPPORTED_MESSAGE: &str =
-    "terminal is not supported by this client (pager)";
-
 /// JSON-RPC error code the pager uses for a client method the client does
 /// not implement (method not supported by the connection).
-pub(super) const JSONRPC_METHOD_NOT_SUPPORTED: i64 = -32601;
+pub(crate) const JSONRPC_METHOD_NOT_SUPPORTED: i64 = -32601;
 
-/// Canonical tool meta key the pager recognizes for
-/// `send_subagent_message`.
-pub(super) const TOOL_META_KEY: &str = "x/grok tool meta";
+/// The exact message the reference pager answers `terminal/wait_for_exit`
+/// with: `xai-grok-pager/src/acp/mod.rs::wait_for_exit_not_supported("pager")`
+/// builds a `METHOD_NOT_FOUND` error whose message is
+/// `"{context} does not handle WaitForTerminalExit"`. The shim reproduces
+/// that error exactly, because the pager's adapter falls back to polling
+/// when it sees it.
+pub(crate) const PAGER_WAIT_FOR_EXIT_MESSAGE: &str = "pager does not handle WaitForTerminalExit";
+
+/// Canonical tool meta envelope key the pager recognizes: the `meta` field
+/// of a `tool_call` carries an envelope object whose `x.ai/tool` entry holds
+/// the canonical tool meta (`version`/`kind`), with a `subagentBackground`
+/// boolean sibling merged from the row's persisted `await_mode`.
+pub(super) const TOOL_META_KEY: &str = "x.ai/tool";
 
 /// Canonical tool meta version marker.
 pub(super) const TOOL_META_VERSION: u64 = 1;
@@ -151,9 +153,13 @@ impl ToolCallStatus {
     }
 }
 
-/// One durable `AgentToolCall` row scoped to the projected request.
+/// One durable `AgentToolCall` row scoped to the projected request. `_docID`
+/// is the document identity the spill association joins on: the
+/// `AgentToolResult` audit row references it as `tool_call_doc_id`.
 #[derive(Clone, Debug, Deserialize)]
-struct ToolCallRow {
+pub(super) struct ToolCallRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     tool_call_key: String,
     #[serde(default)]
     tool_call_id: Option<String>,
@@ -173,6 +179,19 @@ struct ToolCallRow {
     selected_tool_name: Option<String>,
     #[serde(default)]
     tool_failure_class: Option<String>,
+    /// Persisted await mode of the call, when the runtime recorded one.
+    /// The exact value `background` marks a background subagent spawn
+    /// (`subagentBackground: true` in the projected meta envelope);
+    /// anything else — including `None` — is foreground.
+    #[serde(default)]
+    await_mode: Option<String>,
+    /// Durable transcript position of the assistant turn this call belongs
+    /// to. The runtime stamps it from the session hook's transcript turn
+    /// sequence, the same sequence space `AgentMessage.sequence` allocates
+    /// from, which makes it the cross-family chronology key for the
+    /// projection engine's merged emission order.
+    #[serde(default)]
+    message_sequence: Option<i64>,
 }
 
 /// One durable `AgentToolResult` conversation audit row for the projected
@@ -180,15 +199,14 @@ struct ToolCallRow {
 /// `tool_call_doc_id` and carries `output_text`; oversized outputs spill
 /// here from their `AgentToolCall`.
 #[derive(Clone, Debug, Deserialize)]
-struct ToolResultRow {
+pub(super) struct ToolResultRow {
     tool_call_doc_id: String,
-    #[serde(default)]
-    tool_name: Option<String>,
     #[serde(default)]
     output_text: Option<String>,
 }
 
 const TOOL_CALL_FIELDS: &str = r#"
+    _docID
     tool_call_key
     tool_call_id
     tool_name
@@ -199,11 +217,12 @@ const TOOL_CALL_FIELDS: &str = r#"
     result
     selected_tool_name
     tool_failure_class
+    await_mode
+    message_sequence
 "#;
 
 const TOOL_RESULT_FIELDS: &str = r#"
     tool_call_doc_id
-    tool_name
     output_text
 "#;
 
@@ -214,25 +233,13 @@ pub(super) struct ToolProjection {
     /// Tracker-shaped `tool_call` / `tool_call_update` notifications in
     /// emission order.
     pub updates: Vec<ToolUpdate>,
-    /// Blocking subagent waits keyed by the wait's `toolCallId`. These are
-    /// the spawn rows the pager must block on (a suppressed-family `task`
-    /// tool without `subagentBackground: true`, or any spawn row that
-    /// recorded a `child_request_id`) — they register **before** family
-    /// suppression drops the rendered block.
-    pub subagent_waits: BTreeMap<String, SubagentWait>,
-}
-
-/// A blocking subagent wait registered by a spawn tool call. The pager
-/// renders a blocking Subagent wait for these rows instead of a scrollback
-/// block, and clears them on turn finalization.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct SubagentWait {
-    /// The `toolCallId` the pager keys the wait by.
-    pub tool_call_id: String,
-    /// The child `AgentRequest` id the spawn row recorded, when present.
-    pub child_request_id: Option<String>,
-    /// The durable tool name of the spawn row.
-    pub tool_name: String,
+    /// Durable chronology key per update, aligned 1:1 with `updates`: the
+    /// row's `message_sequence` (the shared transcript sequence space) for
+    /// per-call events, and `None` for the trailing
+    /// `available_commands_update` (which is positionless bookkeeping and
+    /// stays last in its family). The projection engine merges families by
+    /// this key; `None` sorts after every positioned event of the family.
+    pub chronology: Vec<Option<i64>>,
 }
 
 /// A single projected tool update, already split by kind so the caller (the
@@ -250,31 +257,14 @@ pub(super) enum ToolUpdate {
 }
 
 impl ToolUpdate {
-    /// The `sessionUpdate` discriminator for this update.
+    /// The `sessionUpdate` discriminator for this update. Test observation
+    /// helper: the projection engine discriminates by matching the enum.
+    #[cfg(test)]
     pub fn session_update_kind(&self) -> &'static str {
         match self {
             ToolUpdate::ToolCall(_) => "tool_call",
             ToolUpdate::ToolCallUpdate(_) => "tool_call_update",
             ToolUpdate::AvailableCommands(_) => "available_commands_update",
-        }
-    }
-
-    /// The `toolCallId` this update belongs to, when it carries one.
-    pub fn tool_call_id(&self) -> Option<&str> {
-        match self {
-            ToolUpdate::ToolCall(update) => Some(&update.tool_call_id),
-            ToolUpdate::ToolCallUpdate(update) => Some(&update.tool_call_id),
-            ToolUpdate::AvailableCommands(_) => None,
-        }
-    }
-
-    /// Render the Grok pager payload for this update. Field names match
-    /// `xai-grok-pager/src/acp/tracker.rs` exactly.
-    pub fn to_payload(&self) -> Value {
-        match self {
-            ToolUpdate::ToolCall(update) => update.to_payload(),
-            ToolUpdate::ToolCallUpdate(update) => update.to_payload(),
-            ToolUpdate::AvailableCommands(update) => update.to_payload(),
         }
     }
 }
@@ -294,7 +284,8 @@ pub(super) struct ToolCallUpdate {
 
 impl ToolCallUpdate {
     /// True when canonical tool meta recognizes this call as an active agent
-    /// message (`send_subagent_message`).
+    /// message (`send_subagent_message`). Test observation helper.
+    #[cfg(test)]
     pub fn is_active_agent_message(&self) -> bool {
         is_active_agent_message_meta(self.meta.as_ref())
             || self.title == SEND_SUBAGENT_MESSAGE_TITLE
@@ -339,6 +330,9 @@ pub(super) struct ToolCallFieldsUpdate {
 }
 
 impl ToolCallFieldsUpdate {
+    /// Render the `tool_call_update` payload. Test observation helper: the
+    /// projection engine renders the update directly from the cursor diff.
+    #[cfg(test)]
     pub fn to_payload(&self) -> Value {
         json!({
             "sessionUpdate": "tool_call_update",
@@ -369,15 +363,15 @@ impl AvailableCommandsUpdate {
 // Suppressed tool families and canonical meta
 // ---------------------------------------------------------------------------
 
-/// The tool families the pager never renders as scrollback blocks. Family
-/// suppression is applied *after* blocking-wait registration: a suppressed
-/// `task` tool without `subagentBackground: true` still registers its
-/// subagent wait.
+/// The tool families the pager never renders as scrollback blocks. The
+/// `task` family (`task`/`Task`/`tasks`/`spawn_subagent`) is deliberately
+/// **not** suppressed: those rows emit an ordinary standard ACP
+/// `tool_call` plus a same-id terminal `tool_call_update`, and the pager
+/// handles title recognition, waiting, and suppression on its side.
 pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "todo" | "todos" => Some("todo"),
         "bg-plumbing" | "background_plumbing" => Some("bg-plumbing"),
-        "task" | "tasks" => Some("task"),
         "goal" | "goals" => Some("goal"),
         "scheduler" => Some("scheduler"),
         "workflow" | "workflows" => Some("workflow"),
@@ -386,70 +380,21 @@ pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
 }
 
 /// True when canonical tool meta recognizes the call as an active agent
-/// message (`send_subagent_message`): a JSON object carrying
+/// message (`send_subagent_message`): the `meta` envelope's `x.ai/tool`
+/// entry is a JSON object carrying
 /// `version == TOOL_META_VERSION` and `kind == ActiveAgentMessage`.
 pub(super) fn is_active_agent_message_meta(meta: Option<&Value>) -> bool {
     let Some(meta) = meta else {
         return false;
     };
-    let Some(object) = meta.as_object() else {
+    let Some(tool_meta) = meta.get(TOOL_META_KEY) else {
+        return false;
+    };
+    let Some(object) = tool_meta.as_object() else {
         return false;
     };
     object.get("version").and_then(Value::as_u64) == Some(TOOL_META_VERSION)
-        && object.get("kind").and_then(Value::as_str)
-            == Some(TOOL_META_KIND_ACTIVE_AGENT_MESSAGE)
-}
-
-/// True when the row's recorded meta carries `subagentBackground: true`.
-fn is_subagent_background(meta: Option<&Value>) -> bool {
-    meta.and_then(|meta| meta.get("subagentBackground"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
-/// True when the row is a spawn row: a durable `child_request_id` was
-/// recorded, or the tool name is a recognized spawn verb.
-fn is_spawn_row(row: &ToolCallRow) -> bool {
-    row.child_request_id
-        .as_deref()
-        .and_then(nonempty)
-        .is_some()
-        || matches!(
-            row.tool_name.as_deref().and_then(nonempty),
-            Some("spawn_subagent") | Some("launch_subagent") | Some("task")
-        )
-}
-
-/// The blocking subagent wait a spawn row registers, when it should. A
-/// `task` tool whose meta does not carry `subagentBackground: true`
-/// registers a blocking wait; so does any spawn row that recorded a
-/// `child_request_id`. Registration happens before family suppression so a
-/// suppressed `task` tool still blocks.
-fn subagent_wait_for(row: &ToolCallRow, tool_call_id: &str, meta: Option<&Value>) -> Option<SubagentWait> {
-    if !is_spawn_row(row) {
-        return None;
-    }
-    let tool_name = row
-        .tool_name
-        .as_deref()
-        .and_then(nonempty)
-        .unwrap_or_default()
-        .to_string();
-    // A background subagent (`subagentBackground: true`) is tracked by the
-    // subagent projection as a spawned/progress/finished lifecycle instead
-    // of a blocking wait, so it does not register here.
-    if is_subagent_background(meta) {
-        return None;
-    }
-    Some(SubagentWait {
-        tool_call_id: tool_call_id.to_string(),
-        child_request_id: row
-            .child_request_id
-            .as_deref()
-            .and_then(nonempty)
-            .map(ToOwned::to_owned),
-        tool_name,
-    })
+        && object.get("kind").and_then(Value::as_str) == Some(TOOL_META_KIND_ACTIVE_AGENT_MESSAGE)
 }
 
 // ---------------------------------------------------------------------------
@@ -484,12 +429,43 @@ pub(super) async fn project_tools(
     Ok(projection)
 }
 
+/// The durable chronology sort key of one tool call row:
+/// `(message_sequence, stable identity)`. Rows with a `message_sequence`
+/// sort before rows without one (a missing sequence falls back to
+/// `i64::MAX`), and equal sequences break by the durable stable
+/// identity: `tool_call_id`, then `tool_call_key`, then `_docID` — each
+/// when non-empty, in that order. The fallback keeps every row keyed by
+/// *some* durable identity, so the projected wire order never depends on
+/// the query's iteration order, storage layout, or hash-map placement.
+fn tool_call_row_sort_key(row: &ToolCallRow) -> (i64, String) {
+    (
+        row.message_sequence.unwrap_or(i64::MAX),
+        row.stable_identity().to_string(),
+    )
+}
+
+/// Sort decoded `AgentToolCall` rows into the deterministic durable
+/// chronology order (sequence, then stable identity). The query's
+/// iteration order and any equal-`started_at`/equal-time ties it
+/// produces never leak into the projected wire order: this stable sort
+/// is the single ordering authority for the family.
+fn sort_tool_call_rows(rows: &mut [ToolCallRow]) {
+    rows.sort_by(|a, b| tool_call_row_sort_key(a).cmp(&tool_call_row_sort_key(b)));
+}
+
 /// Pure projection over decoded rows; unit-testable without a node.
 pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow]) -> ToolProjection {
     let mut updates: Vec<ToolUpdate> = Vec::new();
-    let mut subagent_waits: BTreeMap<String, SubagentWait> = BTreeMap::new();
+    let mut chronology: Vec<Option<i64>> = Vec::new();
 
-    for row in rows {
+    // Deterministic durable chronology first: sequence, then the row's
+    // stable durable identity. Without this, two rows with the same
+    // `message_sequence` (and rows without one) would emit in whatever
+    // order the query iterated them, which is not a wire contract.
+    let mut ordered = rows.to_vec();
+    sort_tool_call_rows(&mut ordered);
+
+    for row in &ordered {
         let Some(tool_call_id) = row.tool_call_key_tool_call_id() else {
             continue;
         };
@@ -500,25 +476,17 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
             .unwrap_or_default();
         let args = row.args.as_deref().and_then(nonempty).unwrap_or("");
         let result_text = effective_result_text(row, results);
-        let meta = tool_meta_from_args(args);
-        // `subagentBackground` lives in the tool's recorded args object
-        // (the Gents analogue of the pager's tool meta), not in the
-        // canonical `x/grok tool meta` key.
-        let args_object = serde_json::from_str::<Value>(args).ok();
+        // The `meta` envelope: the canonical `x.ai/tool` entry decoded from
+        // the recorded args, with a `subagentBackground` boolean sibling
+        // merged from the row's persisted `await_mode` (the exact value
+        // `background` => true; anything else, including absent, => false).
+        let meta = tool_meta_envelope(args, row.await_mode.as_deref());
 
-        // 1. Blocking subagent waits register BEFORE family suppression. A
-        //    canonical `task` tool (suppressed family) without
-        //    `subagentBackground: true`, or any spawn row that recorded a
-        //    `child_request_id`, must still appear in `subagent_waits` — the
-        //    pager blocks on it instead of rendering a scrollback block.
-        if let Some(wait) =
-            subagent_wait_for(row, &tool_call_id, args_object.as_ref())
-        {
-            subagent_waits.insert(tool_call_id.clone(), wait);
-        }
-
-        // 2. Family suppression only drops the *rendered* block; the wait
-        //    registered above survives.
+        // Family suppression drops the rendered block. The `task` family is
+        // deliberately not suppressed here: those rows emit an ordinary
+        // standard ACP `tool_call` plus a same-id terminal
+        // `tool_call_update`, and the pager handles title recognition,
+        // waiting, and suppression on its side.
         if suppressed_tool_family(tool_name).is_some() {
             continue;
         }
@@ -540,6 +508,7 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
             raw_output,
             meta: meta.clone(),
         }));
+        chronology.push(row.message_sequence);
 
         // A terminal first observation still emits the base `tool_call`
         // (a fast call may first be observed already completed); a later
@@ -551,6 +520,7 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
                     "status": status.wire_name(),
                 }),
             }));
+            chronology.push(row.message_sequence);
         }
     }
 
@@ -558,11 +528,14 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
         updates.push(ToolUpdate::AvailableCommands(AvailableCommandsUpdate {
             tools: available_commands(&rows),
         }));
+        // The available-commands bookkeeping is positionless: it sorts after
+        // every positioned tool event of the family.
+        chronology.push(None);
     }
 
     ToolProjection {
         updates,
-        subagent_waits,
+        chronology,
     }
 }
 
@@ -583,30 +556,45 @@ impl ToolCallRow {
             }
         })
     }
+
+    /// The durable stable identity of this row for deterministic ordering
+    /// ties: the first non-empty of `tool_call_id`, `tool_call_key`, and
+    /// `_docID`. At least one is always non-empty for a decodable row
+    /// (`tool_call_key` is the schema's unique index), so equal-sequence
+    /// rows always order by a durable value, never by query iteration
+    /// order.
+    fn stable_identity(&self) -> &str {
+        self.tool_call_id
+            .as_deref()
+            .and_then(nonempty)
+            .or_else(|| nonempty(&self.tool_call_key))
+            .or_else(|| nonempty(&self.doc_id))
+            .unwrap_or("")
+    }
 }
 
 /// The effective result text for one tool row: the call row's own `result`
-/// when present, otherwise the spilled `output_text` of the audit row
-/// recorded for the same session and tool name (the audit collection is
-/// conversation-scoped, so the match is narrowed by tool name and only used
-/// as an output source, never as a status override).
+/// when present, otherwise the spilled `output_text` of the audit row joined
+/// by `tool_call_doc_id` — the audit row names the exact `AgentToolCall`
+/// document it spilled for, so two same-name calls never borrow each other's
+/// output. The association is only ever an output source, never a status
+/// override.
 fn effective_result_text<'a>(row: &'a ToolCallRow, results: &'a [ToolResultRow]) -> &'a str {
     if let Some(result) = row.result.as_deref().and_then(nonempty) {
         return result;
     }
-    let tool_name = row.tool_name.as_deref().and_then(nonempty);
-    results
-        .iter()
-        .find(|result| {
-            tool_name.is_some_and(|name| result.tool_name.as_deref() == Some(name))
-                && result
-                    .output_text
-                    .as_deref()
-                    .and_then(nonempty)
-                    .is_some()
+    let doc_id = nonempty(&row.doc_id);
+    doc_id
+        .and_then(|doc_id| {
+            results
+                .iter()
+                .find(|result| {
+                    result.tool_call_doc_id == doc_id
+                        && result.output_text.as_deref().and_then(nonempty).is_some()
+                })
+                .and_then(|result| result.output_text.as_deref())
+                .and_then(nonempty)
         })
-        .and_then(|result| result.output_text.as_deref())
-        .and_then(nonempty)
         .unwrap_or("")
 }
 
@@ -741,6 +729,33 @@ fn raw_output_value(result_text: &str) -> Option<Value> {
     Some(json!({ "output": trimmed }))
 }
 
+/// Decode the canonical tool meta envelope for a tool call. The recorded
+/// args may carry the canonical meta under the `x.ai/tool` key; the
+/// projected `meta` is the full envelope object — the `x.ai/tool` entry
+/// verbatim plus a `subagentBackground` boolean sibling merged from the
+/// row's persisted `await_mode` (the exact value `background` => true;
+/// anything else, including absent, => false). Rows with neither a
+/// canonical meta entry nor a persisted await mode project no `meta` at
+/// all.
+fn tool_meta_envelope(args: &str, await_mode: Option<&str>) -> Option<Value> {
+    let tool_meta = tool_meta_from_args(args);
+    let background = matches!(await_mode, Some("background"));
+    match (tool_meta, background) {
+        (None, false) => None,
+        (Some(tool_meta), false) => Some(json!({
+            TOOL_META_KEY: tool_meta,
+        })),
+        (tool_meta, true) => {
+            let mut envelope = Map::new();
+            if let Some(tool_meta) = tool_meta {
+                envelope.insert(TOOL_META_KEY.to_string(), tool_meta);
+            }
+            envelope.insert("subagentBackground".to_string(), Value::Bool(true));
+            Some(Value::Object(envelope))
+        }
+    }
+}
+
 /// Decode the canonical tool meta recorded in the row's args, when present.
 fn tool_meta_from_args(args: &str) -> Option<Value> {
     let trimmed = args.trim();
@@ -775,15 +790,33 @@ fn nonempty(value: &str) -> Option<&str> {
 // Terminal ACP client method stubs
 // ---------------------------------------------------------------------------
 
-/// The pager-style not-supported JSON-RPC error value for a terminal ACP
-/// client method. The pager answers `terminal/wait_for_exit` with
-/// `wait_for_exit_not_supported("pager")`; the shim reproduces that shape
-/// for every terminal method because it registers `clientTerminal: false`
-/// and never routes terminal work to the client.
-pub(super) fn terminal_not_supported_error(method: &str) -> Value {
+/// The exact not-supported JSON-RPC error value the reference pager answers
+/// `terminal/wait_for_exit` with:
+/// `xai-grok-pager/src/acp/mod.rs::wait_for_exit_not_supported("pager")`
+/// returns a `METHOD_NOT_FOUND` error with the message
+/// `"pager does not handle WaitForTerminalExit"`. The pager's adapter
+/// recognizes this failure and falls back to polling, so the shim answers
+/// the method with the same code and message verbatim.
+pub(crate) fn wait_for_exit_not_supported() -> Value {
     json!({
         "code": JSONRPC_METHOD_NOT_SUPPORTED,
-        "message": format!("{method}: {TERMINAL_NOT_SUPPORTED_MESSAGE}"),
+        "message": PAGER_WAIT_FOR_EXIT_MESSAGE,
+    })
+}
+
+/// The shaped method-not-found error value for a terminal ACP client method
+/// other than `terminal/wait_for_exit` (`terminal/create`, `terminal/output`,
+/// `terminal/kill`, `terminal/release`). The shim registers
+/// `clientTerminal: false` and never routes terminal work to the client, so
+/// these stay explicit on the wire. The wording is the shim's own — only
+/// `terminal/wait_for_exit` reproduces the pager's exact message.
+pub(crate) fn terminal_not_supported_error(method: &str) -> Value {
+    json!({
+        "code": JSONRPC_METHOD_NOT_SUPPORTED,
+        "message": format!(
+            "{method}: terminal methods are not supported by the Gents Grok shim; the \
+             connection registers clientTerminal=false and shell work runs agent-side"
+        ),
     })
 }
 
@@ -792,14 +825,18 @@ pub(super) fn terminal_not_supported_error(method: &str) -> Value {
 /// Returns `Err(not_supported_error)` for the five known terminal methods
 /// (`terminal/create`, `terminal/output`, `terminal/wait_for_exit`,
 /// `terminal/kill`, `terminal/release`) so the ACP service can surface the
-/// pager-style not-supported error, and `Ok(())` never: the shim does not
-/// implement a client terminal, does not synthesize terminal documents, and
-/// does not create permission documents. Unknown methods are routed through
-/// the caller's generic method-not-found handling.
-pub(super) fn handle_terminal_client_method(method: &str) -> std::result::Result<(), Value> {
+/// shaped error, and `Ok(())` never: the shim does not implement a client
+/// terminal, does not synthesize terminal documents, and does not create
+/// permission documents. `terminal/wait_for_exit` carries the pager's exact
+/// `METHOD_NOT_FOUND` error; the other four carry the shim's shaped
+/// method-not-found wording. Unknown methods are routed through the caller's
+/// generic method-not-found handling.
+pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result<(), Value> {
     match method {
-        "terminal/create" | "terminal/output" | "terminal/wait_for_exit" | "terminal/kill"
-        | "terminal/release" => Err(terminal_not_supported_error(method)),
+        "terminal/wait_for_exit" => Err(wait_for_exit_not_supported()),
+        "terminal/create" | "terminal/output" | "terminal/kill" | "terminal/release" => {
+            Err(terminal_not_supported_error(method))
+        }
         other => Err(json!({
             "code": JSONRPC_METHOD_NOT_SUPPORTED,
             "message": format!(
@@ -889,6 +926,7 @@ mod tests {
 
     fn tool_row(tool_name: &str, lifecycle_state: Option<&str>) -> ToolCallRow {
         ToolCallRow {
+            doc_id: format!("doc-{tool_name}"),
             tool_call_key: format!("session-1:call-{tool_name}"),
             tool_call_id: Some(format!("call-{tool_name}")),
             tool_name: Some(tool_name.to_string()),
@@ -899,6 +937,8 @@ mod tests {
             result: Some("gents-subprocess-probe".to_string()),
             selected_tool_name: None,
             tool_failure_class: None,
+            await_mode: None,
+            message_sequence: None,
         }
     }
 
@@ -917,10 +957,16 @@ mod tests {
 
     #[test]
     fn kind_mapping_covers_durable_tool_names() {
-        assert_eq!(ToolCallKind::from_tool_name("read_file"), ToolCallKind::Read);
+        assert_eq!(
+            ToolCallKind::from_tool_name("read_file"),
+            ToolCallKind::Read
+        );
         assert_eq!(ToolCallKind::from_tool_name("bash"), ToolCallKind::Execute);
         assert_eq!(ToolCallKind::from_tool_name("grep"), ToolCallKind::Search);
-        assert_eq!(ToolCallKind::from_tool_name("unknown_tool"), ToolCallKind::Other);
+        assert_eq!(
+            ToolCallKind::from_tool_name("unknown_tool"),
+            ToolCallKind::Other
+        );
     }
 
     #[test]
@@ -992,64 +1038,79 @@ mod tests {
     }
 
     #[test]
-    fn suppressed_families_never_render_but_task_registers_blocking_wait() {
-        // THE attempt-1 defect: a canonical `task` tool (suppressed family)
-        // with meta lacking `subagentBackground: true` must register a
-        // blocking subagent wait BEFORE family suppression drops the
-        // rendered block.
-        let mut row = tool_row("task", Some("running"));
+    fn task_family_rows_render_ordinary_tool_calls_and_terminal_updates() {
+        // The `task` family is deliberately NOT suppressed: `task`, `Task`,
+        // `tasks`, and `spawn_subagent` rows emit an ordinary standard ACP
+        // `tool_call` plus a same-id terminal `tool_call_update` (title =
+        // the durable tool name, kind `other`); the pager handles title
+        // recognition, waiting, and suppression on its side.
+        for name in ["task", "Task", "tasks", "spawn_subagent"] {
+            let mut row = tool_row(name, Some("completed"));
+            row.args = Some(r#"{"description":"scout the repo"}"#.to_string());
+            row.result = None;
+            let projection = project_tool_rows(&[row], &[]);
+            let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
+                panic!("{name} must render an ordinary tool_call");
+            };
+            assert_eq!(call.tool_call_id, format!("call-{name}"), "{name}");
+            assert_eq!(call.title, name, "{name} keeps its durable tool name");
+            assert_eq!(call.kind, ToolCallKind::Other, "{name}");
+            assert_eq!(call.status, ToolCallStatus::Completed, "{name}");
+            // The same-id terminal update follows the base.
+            let ToolUpdate::ToolCallUpdate(update) = &projection.updates[1] else {
+                panic!("{name} must emit a same-id terminal tool_call_update");
+            };
+            assert_eq!(update.tool_call_id, format!("call-{name}"), "{name}");
+            assert_eq!(update.fields["status"], "completed", "{name}");
+        }
+    }
+
+    #[test]
+    fn foreground_spawn_row_meta_is_absent_without_await_mode() {
+        // A spawn row with no persisted `await_mode` is foreground: the
+        // meta envelope carries no `subagentBackground` key at all (the
+        // pager reads a missing key as false), and no canonical meta entry
+        // means no `meta` field on the wire.
+        let mut row = tool_row("spawn_subagent", Some("running"));
         row.args = Some(r#"{"description":"scout the repo"}"#.to_string());
         row.result = None;
         let projection = project_tool_rows(&[row], &[]);
-        assert!(
-            projection
-                .updates
-                .iter()
-                .all(|update| update.session_update_kind() != "tool_call"),
-            "suppressed task family must not render a scrollback block"
-        );
-        let wait = projection
-            .subagent_waits
-            .get("call-task")
-            .expect("task tool without subagentBackground must register a blocking wait");
-        assert_eq!(wait.tool_name, "task");
+        let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
+            panic!("spawn_subagent must render a tool_call");
+        };
+        assert!(call.meta.is_none());
+        let payload = call.to_payload();
+        assert!(payload.get("meta").is_none());
     }
 
     #[test]
-    fn task_with_subagent_background_true_does_not_block() {
-        let mut row = tool_row("task", Some("running"));
-        row.args = Some(r#"{"subagentBackground":true}"#.to_string());
-        row.result = None;
-        let projection = project_tool_rows(&[row], &[]);
-        assert!(projection.subagent_waits.is_empty());
-    }
-
-    #[test]
-    fn spawn_row_with_child_request_id_registers_wait_even_when_named_run_subagent() {
-        let mut row = tool_row("run_subagent", Some("running"));
-        row.child_request_id = Some("child-request-1".to_string());
-        row.result = None;
-        let projection = project_tool_rows(&[row], &[]);
-        let wait = projection
-            .subagent_waits
-            .get("call-run_subagent")
-            .expect("spawn row with child_request_id must register a wait");
-        assert_eq!(wait.child_request_id.as_deref(), Some("child-request-1"));
-    }
-
-    #[test]
-    fn spawn_subagent_named_row_registers_wait() {
+    fn background_await_mode_merges_subagent_background_true_into_meta() {
+        // The exact persisted value `background` => `subagentBackground:
+        // true` in the meta envelope; anything else stays foreground.
         let mut row = tool_row("spawn_subagent", Some("running"));
+        row.args = Some(r#"{"description":"scout the repo"}"#.to_string());
         row.result = None;
+        row.await_mode = Some("background".to_string());
         let projection = project_tool_rows(&[row], &[]);
-        assert!(projection.subagent_waits.contains_key("call-spawn_subagent"));
-    }
+        let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
+            panic!("spawn_subagent must render a tool_call");
+        };
+        let meta = call.meta.as_ref().expect("background row carries meta");
+        assert_eq!(meta["subagentBackground"], true);
+        let payload = call.to_payload();
+        assert_eq!(payload["meta"]["subagentBackground"], true);
 
-    #[test]
-    fn non_spawn_rows_register_no_wait() {
-        let row = tool_row("read_file", Some("running"));
-        let projection = project_tool_rows(&[row], &[]);
-        assert!(projection.subagent_waits.is_empty());
+        // A non-`background` await mode is foreground: no
+        // `subagentBackground` key, no meta envelope.
+        let mut foreground = tool_row("spawn_subagent", Some("running"));
+        foreground.args = Some(r#"{"description":"scout the repo"}"#.to_string());
+        foreground.result = None;
+        foreground.await_mode = Some("foreground".to_string());
+        let projection = project_tool_rows(&[foreground], &[]);
+        let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
+            panic!("foreground spawn_subagent must render a tool_call");
+        };
+        assert!(call.meta.is_none());
     }
 
     #[test]
@@ -1069,19 +1130,21 @@ mod tests {
 
     #[test]
     fn send_subagent_message_is_recognized_by_canonical_meta() {
-        let meta = json!({
+        let tool_meta = json!({
             "version": TOOL_META_VERSION,
             "kind": TOOL_META_KIND_ACTIVE_AGENT_MESSAGE,
         });
-        assert!(is_active_agent_message_meta(Some(&meta)));
+        let envelope = json!({ TOOL_META_KEY: tool_meta });
+        assert!(is_active_agent_message_meta(Some(&envelope)));
         assert!(!is_active_agent_message_meta(None));
         assert!(!is_active_agent_message_meta(Some(&json!({"version": 2}))));
+        assert!(!is_active_agent_message_meta(Some(&json!({
+            TOOL_META_KEY: {"version": 2},
+        }))));
         let mut row = tool_row("send_subagent_message", Some("running"));
-        row.args = Some(
-            format!(
-                r#"{{"subagent_id":"sub-1","text":"hi","{TOOL_META_KEY}":{meta}}}"#
-            ),
-        );
+        row.args = Some(format!(
+            r#"{{"subagent_id":"sub-1","text":"hi","{TOOL_META_KEY}":{tool_meta}}}"#
+        ));
         row.result = None;
         let projection = project_tool_rows(&[row], &[]);
         let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
@@ -1124,7 +1187,8 @@ mod tests {
             .iter()
             .find(|update| update.session_update_kind() == "available_commands_update")
             .cloned()
-            .expect("available_commands_update should be emitted") else {
+            .expect("available_commands_update should be emitted")
+        else {
             unreachable!("already checked the kind");
         };
         assert_eq!(update.tools, vec!["bash", "read_file"]);
@@ -1137,7 +1201,7 @@ mod tests {
     fn empty_rows_project_nothing() {
         let projection = project_tool_rows(&[], &[]);
         assert!(projection.updates.is_empty());
-        assert!(projection.subagent_waits.is_empty());
+        assert!(projection.chronology.is_empty());
     }
 
     #[test]
@@ -1168,8 +1232,7 @@ mod tests {
         row.status = Some("success".to_string());
         row.result = None;
         let results = vec![ToolResultRow {
-            tool_call_doc_id: "doc-1".to_string(),
-            tool_name: Some("bash".to_string()),
+            tool_call_doc_id: "doc-bash".to_string(),
             output_text: Some("spilled oversized output".to_string()),
         }];
         let projection = project_tool_rows(&[row], &results);
@@ -1187,6 +1250,66 @@ mod tests {
                 .and_then(Value::as_str),
             Some("spilled oversized output")
         );
+    }
+
+    #[test]
+    fn spilled_results_join_by_tool_call_doc_id_not_tool_name() {
+        // Two same-name calls in one request, each with its own distinct
+        // spilled audit row. The spill association is the audit row's
+        // `tool_call_doc_id` → the call row's `_docID`, so neither call may
+        // borrow the other's output by matching on tool name.
+        let mut first = tool_row("bash", Some("completed"));
+        first.result = None;
+        let mut second = tool_row("bash", Some("completed"));
+        second.doc_id = "doc-bash-second".to_string();
+        second.tool_call_key = "session-1:call-bash-second".to_string();
+        second.tool_call_id = Some("call-bash-second".to_string());
+        second.result = None;
+
+        // Deliberately ordered so a naive first-same-tool_name match would
+        // hand both calls the first spill.
+        let results = vec![
+            ToolResultRow {
+                tool_call_doc_id: "doc-bash-second".to_string(),
+                output_text: Some("second spilled output".to_string()),
+            },
+            ToolResultRow {
+                tool_call_doc_id: "doc-bash".to_string(),
+                output_text: Some("first spilled output".to_string()),
+            },
+        ];
+
+        let projection = project_tool_rows(&[first, second], &results);
+        let output_for = |tool_call_id: &str| {
+            projection
+                .updates
+                .iter()
+                .find_map(|update| match update {
+                    ToolUpdate::ToolCall(call) if call.tool_call_id == tool_call_id => call
+                        .raw_output
+                        .as_ref()
+                        .and_then(|output| output.get("output"))
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(output_for("call-bash"), "first spilled output");
+        assert_eq!(output_for("call-bash-second"), "second spilled output");
+
+        // And a call whose `_docID` has no audit row gets no borrowed
+        // output, even when a same-name spill exists.
+        let mut orphan = tool_row("bash", Some("completed"));
+        orphan.doc_id = "doc-bash-orphan".to_string();
+        orphan.tool_call_key = "session-1:call-bash-orphan".to_string();
+        orphan.tool_call_id = Some("call-bash-orphan".to_string());
+        orphan.result = None;
+        let projection = project_tool_rows(&[orphan], &results);
+        let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
+            panic!("first update should be a tool_call");
+        };
+        assert_eq!(call.raw_output, None);
     }
 
     #[test]
@@ -1221,6 +1344,9 @@ mod tests {
             "raw value must not appear unescaped: {query}"
         );
         assert!(query.contains("AgentToolCall"));
+        // The spill association joins on the call document's identity, so the
+        // query must select `_docID` alongside the projection fields.
+        assert!(query.contains("_docID"), "{query}");
 
         let results = tool_results_query(r#"request-"quoted\"-id"#);
         assert!(
@@ -1231,24 +1357,381 @@ mod tests {
     }
 
     #[test]
-    fn terminal_methods_answer_pager_style_not_supported() {
+    fn wait_for_exit_answers_the_pagers_exact_method_not_found_error() {
+        // The reference pager answers `terminal/wait_for_exit` with
+        // `wait_for_exit_not_supported("pager")`: a `METHOD_NOT_FOUND` error
+        // whose message is exactly "pager does not handle
+        // WaitForTerminalExit". The shim reproduces it verbatim so the
+        // adapter's poll fallback keeps working.
+        let error = handle_terminal_client_method("terminal/wait_for_exit")
+            .expect_err("wait_for_exit must be unsupported");
+        assert_eq!(error["code"], JSONRPC_METHOD_NOT_SUPPORTED);
+        assert_eq!(
+            error["message"],
+            "pager does not handle WaitForTerminalExit"
+        );
+        assert_eq!(error["message"], PAGER_WAIT_FOR_EXIT_MESSAGE);
+        // The shim's own generic method-not-found wording never leaks into
+        // the pager-exact answer.
+        assert!(!error["message"]
+            .as_str()
+            .expect("message")
+            .contains("is not supported by the Gents Grok shim"));
+    }
+
+    #[test]
+    fn other_terminal_methods_answer_shaped_method_not_found() {
+        // The other known terminal methods are also unsupported (the
+        // connection registers clientTerminal=false), but their messages are
+        // the shim's own shaped wording — only wait_for_exit reproduces the
+        // pager's exact message.
         for method in [
             "terminal/create",
             "terminal/output",
-            "terminal/wait_for_exit",
             "terminal/kill",
             "terminal/release",
         ] {
             let error = handle_terminal_client_method(method)
                 .expect_err("terminal methods must be unsupported");
             assert_eq!(error["code"], JSONRPC_METHOD_NOT_SUPPORTED);
-            assert_eq!(
-                error["message"],
-                format!("{method}: {TERMINAL_NOT_SUPPORTED_MESSAGE}")
+            let message = error["message"].as_str().expect("message");
+            assert!(
+                message.contains(&format!("{method}: ")),
+                "{method} must be named in the shaped error: {message}"
+            );
+            assert!(
+                message.contains("clientTerminal=false"),
+                "{method} must explain the agent-side terminal routing: {message}"
             );
         }
         let unknown = handle_terminal_client_method("terminal/invent")
             .expect_err("unknown terminal methods are also rejected");
         assert_eq!(unknown["code"], JSONRPC_METHOD_NOT_SUPPORTED);
+    }
+
+    /// A sequenced tool call row for the deterministic chronology tests:
+    /// same-shape rows whose only differences are the durable sequence and
+    /// the stable identity, so the assertions isolate the sort.
+    fn sequenced_tool_row(
+        tool_call_id: &str,
+        tool_name: &str,
+        message_sequence: Option<i64>,
+    ) -> ToolCallRow {
+        let mut row = tool_row(tool_name, Some("completed"));
+        row.tool_call_id = Some(tool_call_id.to_string());
+        row.tool_call_key = format!("session-1:{tool_call_id}");
+        row.message_sequence = message_sequence;
+        row
+    }
+
+    /// The projected `tool_call_id`s (the pager-visible stable identity) of
+    /// a projection's base `tool_call` registrations, in emission order.
+    fn projected_call_ids(projection: &ToolProjection) -> Vec<String> {
+        projection
+            .updates
+            .iter()
+            .filter_map(|update| match update {
+                ToolUpdate::ToolCall(call) => Some(call.tool_call_id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn decoded_rows_sort_by_sequence_then_stable_identity_regardless_of_input_order() {
+        // Two rows share `message_sequence: 5` and arrive in *reverse*
+        // stable-identity order (the "later" call first), a third carries a
+        // lower sequence and a fourth a higher one, and one row has no
+        // sequence at all. The projection must emit the positioned rows in
+        // sequence order, break the equal-sequence tie by the stable
+        // identity (tool_call_id), and place the sequenceless row after
+        // every positioned one — never in the input order.
+        let rows = vec![
+            sequenced_tool_row("call-z-late", "bash", Some(5)),
+            sequenced_tool_row("call-a-first", "grep", Some(5)),
+            sequenced_tool_row("call-m-later", "read_file", Some(9)),
+            sequenced_tool_row("call-b-early", "edit", Some(2)),
+            sequenced_tool_row("call-x-unsequenced", "fetch", None),
+        ];
+        let projection = project_tool_rows(&rows, &[]);
+        assert_eq!(
+            projected_call_ids(&projection),
+            vec![
+                "call-b-early".to_string(),
+                "call-a-first".to_string(),
+                "call-z-late".to_string(),
+                "call-m-later".to_string(),
+                "call-x-unsequenced".to_string(),
+            ],
+            "wire order must follow (sequence, stable identity), not input order"
+        );
+
+        // The same rows in a different input order project to the exact same
+        // wire order: the sort is a function of the rows alone.
+        let mut reversed = rows.clone();
+        reversed.reverse();
+        assert_eq!(
+            projected_call_ids(&project_tool_rows(&reversed, &[])),
+            projected_call_ids(&projection),
+            "reversing the decoded input order must not change the wire order"
+        );
+    }
+
+    #[test]
+    fn stable_identity_falls_back_to_key_then_doc_id() {
+        // A row without `tool_call_id` breaks its sequence tie by the
+        // `tool_call_key`; a row with only `_docID` breaks by that.
+        let mut by_key = sequenced_tool_row("call-z", "bash", Some(1));
+        by_key.tool_call_id = None;
+        by_key.tool_call_key = "session-1:call-z".to_string();
+        let mut by_doc = sequenced_tool_row("call-y", "bash", Some(1));
+        by_doc.tool_call_id = None;
+        by_doc.tool_call_key = String::new();
+        by_doc.doc_id = "doc-call-y".to_string();
+        assert_eq!(by_key.stable_identity(), "session-1:call-z");
+        assert_eq!(by_doc.stable_identity(), "doc-call-y");
+        assert_eq!(
+            tool_call_row_sort_key(&by_key),
+            (1, "session-1:call-z".to_string())
+        );
+        assert_eq!(
+            tool_call_row_sort_key(&by_doc),
+            (1, "doc-call-y".to_string())
+        );
+    }
+
+    #[test]
+    fn equal_sequence_rows_keep_base_and_update_semantics_and_result_join() {
+        // Two same-sequence `bash` calls with distinct stable identities and
+        // distinct results: each keeps its own base registration, the
+        // terminal-status `tool_call_update` follows its own base (same
+        // chronology), and the exact-result join is preserved — the spill
+        // audit row for doc-b never leaks into call a.
+        let mut call_a = sequenced_tool_row("call-a", "bash", Some(4));
+        call_a.doc_id = "doc-a".to_string();
+        call_a.result = None;
+        let mut call_b = sequenced_tool_row("call-b", "bash", Some(4));
+        call_b.doc_id = "doc-b".to_string();
+        call_b.result = None;
+        let results = vec![
+            ToolResultRow {
+                tool_call_doc_id: "doc-b".to_string(),
+                output_text: Some("output for b".to_string()),
+            },
+            ToolResultRow {
+                tool_call_doc_id: "doc-a".to_string(),
+                output_text: Some("output for a".to_string()),
+            },
+        ];
+        let projection = project_tool_rows(&[call_b, call_a], &results);
+        // Emission: base a, update a, base b, update b, commands. The update
+        // interleaves inside the projection stream (the merged engine sort
+        // re-groups by family later); what matters here is the identity
+        // pairing and the per-call result join.
+        let pairs: Vec<(String, &str)> = projection
+            .updates
+            .iter()
+            .filter_map(|update| match update {
+                ToolUpdate::ToolCall(call) => Some((
+                    call.tool_call_id.clone(),
+                    call.raw_output.as_ref()?.get("output")?.as_str()?,
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("call-a".to_string(), "output for a"),
+                ("call-b".to_string(), "output for b"),
+            ],
+            "each same-sequence call joins its own spilled result, in stable order"
+        );
+    }
+
+    /// Start an embedded node with the runtime schemas, the production
+    /// shape the exact spill-association regression runs against.
+    async fn embedded_node() -> (tempfile::TempDir, Arc<EmbeddedNode>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                // The staging `TempDir` guard stays in scope (`dir`) for the
+                // test's lifetime, so the node's storage directory is
+                // deleted when the test ends — never abandoned or leaked.
+                .data_path(dir.path().join("node"))
+                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        gents::schema::ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("runtime schemas");
+        (dir, node)
+    }
+
+    /// The embedded-node exact spill-association regression: two same-name
+    /// `AgentToolCall` rows plus two `AgentToolResult` audit rows, with
+    /// **crossed** creation/query order and distinct `tool_call_doc_id`
+    /// references and outputs. The full production path — query, deserialize,
+    /// projection — must hand each pager `toolCallId` only its exact durable
+    /// result in `rawOutput`, never the other call's spill by tool-name
+    /// matching or query-iteration accident.
+    #[tokio::test]
+    async fn embedded_exact_spill_association_survives_query_deserialize_projection() {
+        let (_dir, node) = embedded_node().await;
+        let session_id = "s-embedded-spill";
+        let request_id = "req-embedded-spill";
+
+        // Seed the second call's row first (crossed creation order), with
+        // an explicit `created_at` earlier than the first call's so the
+        // results query's `created_at: ASC` iteration crosses the two
+        // calls' identities. Both calls share the tool name `bash`.
+        let seed_calls = r#"mutation {
+            second: create_AgentToolCall(input: {
+                    tool_call_key: "s-embedded-spill:call-spill-second"
+                    request_id: "req-embedded-spill"
+                    session_id: "s-embedded-spill"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    tool_call_id: "call-spill-second"
+                    tool_name: "bash"
+                    lifecycle_state: "completed"
+                    status: "completed"
+                    result: ""
+                    message_sequence: 4
+                    started_at: "2026-08-31T22:46:45Z"
+            }) { _docID }
+            first: create_AgentToolCall(input: {
+                    tool_call_key: "s-embedded-spill:call-spill-first"
+                    request_id: "req-embedded-spill"
+                    session_id: "s-embedded-spill"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    tool_call_id: "call-spill-first"
+                    tool_name: "bash"
+                    lifecycle_state: "completed"
+                    status: "completed"
+                    result: ""
+                    message_sequence: 4
+                    started_at: "2026-08-31T22:46:46Z"
+            }) { _docID }
+        }"#
+        .to_string();
+        let response = node.execute(&seed_calls).await;
+        assert!(
+            !response.has_errors(),
+            "seed calls failed: {:?}",
+            response.errors
+        );
+
+        // Capture each call row's `_docID` — the durable identity the spill
+        // audit rows must reference by `tool_call_doc_id`.
+        let lookup = r#"query {
+            AgentToolCall(
+                filter: { request_id: { _eq: "req-embedded-spill" } }
+            ) { _docID tool_call_id }
+        }"#
+        .to_string();
+        let response = node.execute(&lookup).await;
+        assert!(
+            !response.has_errors(),
+            "lookup failed: {:?}",
+            response.errors
+        );
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let doc_id_for = |tool_call_id: &str| -> String {
+            rows.iter()
+                .find(|row| row.get("tool_call_id").and_then(Value::as_str) == Some(tool_call_id))
+                .and_then(|row| row.get("_docID"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("no doc id for {tool_call_id}"))
+                .to_string()
+        };
+        let doc_first = doc_id_for("call-spill-first");
+        let doc_second = doc_id_for("call-spill-second");
+        assert_ne!(doc_first, doc_second, "the two calls are distinct docs");
+
+        // Seed the audit rows in crossed order relative to the call
+        // creation: the FIRST call's spill is created later, so both the
+        // creation order and the results query's `created_at: ASC`
+        // iteration would hand a naive join the wrong row.
+        let escaped_doc_first = escape_graphql_string(&doc_first);
+        let escaped_doc_second = escape_graphql_string(&doc_second);
+        let seed_results = format!(
+            r#"mutation {{
+                spill_second: create_AgentToolResult(input: {{
+                    tool_call_doc_id: "{escaped_doc_second}"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    session_id: "s-embedded-spill"
+                    tool_name: "bash"
+                    tool_input: ""
+                    output_text: "durable output for the second call"
+                    truncated: true
+                    created_at: "2026-08-31T22:46:47Z"
+                }}) {{ _docID }}
+                spill_first: create_AgentToolResult(input: {{
+                    tool_call_doc_id: "{escaped_doc_first}"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    session_id: "s-embedded-spill"
+                    tool_name: "bash"
+                    tool_input: ""
+                    output_text: "durable output for the first call"
+                    truncated: true
+                    created_at: "2026-08-31T22:46:48Z"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&seed_results).await;
+        assert!(
+            !response.has_errors(),
+            "seed results failed: {:?}",
+            response.errors
+        );
+
+        // The actual production path: query + deserialize + projection.
+        let projection = project_tools(&node, request_id, session_id)
+            .await
+            .expect("tool projection");
+        let output_for = |tool_call_id: &str| -> Option<String> {
+            projection.updates.iter().find_map(|update| match update {
+                ToolUpdate::ToolCall(call) if call.tool_call_id == tool_call_id => call
+                    .raw_output
+                    .as_ref()
+                    .and_then(|output| output.get("output"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            output_for("call-spill-first").as_deref(),
+            Some("durable output for the first call"),
+            "the first pager toolCallId must receive exactly its own durable result"
+        );
+        assert_eq!(
+            output_for("call-spill-second").as_deref(),
+            Some("durable output for the second call"),
+            "the second pager toolCallId must receive exactly its own durable result"
+        );
+        // No other spill ever leaks into either call, and no third tool_call
+        // registration exists to borrow one.
+        let call_ids = projected_call_ids(&projection);
+        assert_eq!(
+            call_ids,
+            vec![
+                "call-spill-first".to_string(),
+                "call-spill-second".to_string()
+            ],
+            "the two same-sequence calls emit in stable-identity order"
+        );
     }
 }

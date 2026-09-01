@@ -907,8 +907,10 @@ pub(crate) async fn serve_with_control(
     if let Some(socket_path) = grok_shim_socket_path.as_ref() {
         match bind_grok_shim(GrokShimBindArgs {
             node: node.clone(),
+            graphql: graphql_url.clone(),
             behavior_id: args.grok_shim_behavior_id.clone(),
             agent_did: identity.did().to_string(),
+            agent_name: agent_name.clone(),
             socket_path: socket_path.clone(),
         })
         .await
@@ -1550,14 +1552,11 @@ mod grok_shim_tests {
     #[test]
     fn grok_shim_socket_flags_require_the_shim_flag() {
         // The socket path and behavior override only make sense with the shim.
-        assert!(Cli::try_parse_from([
-            "gents", "server", "--grok-shim-socket-path", "/tmp/g.sock"
-        ])
-        .is_err());
-        assert!(Cli::try_parse_from([
-            "gents", "server", "--grok-shim-behavior-id", "b"
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from(["gents", "server", "--grok-shim-socket-path", "/tmp/g.sock"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["gents", "server", "--grok-shim-behavior-id", "b"]).is_err());
     }
 
     #[test]
