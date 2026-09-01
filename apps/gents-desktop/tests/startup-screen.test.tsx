@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import App from "../src/App";
+import { StartupScreen } from "../src/components/StartupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 function deferred<T>() {
@@ -75,6 +76,123 @@ function bridge(
 }
 
 describe("desktop startup screen", () => {
+  it("names hosted-agent restoration instead of misreporting a configuration read", async () => {
+    const status = deferred<{
+      state: "disabled";
+      autoStart: false;
+      agentName: null;
+      agentDid: null;
+      graphql: null;
+      error: null;
+    }>();
+    const base = bridge(
+      vi.fn(async () => snapshot(false, false)),
+      vi.fn(async () => snapshot(false, true)),
+    );
+    render(
+      <App
+        bridge={{
+          ...base,
+          supportsManagedServer: true,
+          api: {
+            ...base.api,
+            managedServerStatus: vi.fn(() => status.promise),
+            startManagedServer: vi.fn(),
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "Checking the hosted agent",
+    );
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "Restore hosted agentWorking",
+    );
+    expect(base.api.fetchDesktopSnapshot).not.toHaveBeenCalled();
+
+    status.resolve({
+      state: "disabled",
+      autoStart: false,
+      agentName: null,
+      agentDid: null,
+      graphql: null,
+      error: null,
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps hosted-agent restoration failure in the startup retry flow", async () => {
+    const base = bridge(
+      vi.fn(async () => snapshot(false, false)),
+      vi.fn(async () => snapshot(false, true)),
+    );
+    const managedServerStatus = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("hosted agent unavailable"))
+      .mockResolvedValueOnce({
+        state: "disabled",
+        autoStart: false,
+        agentName: null,
+        agentDid: null,
+        graphql: null,
+        error: null,
+      });
+    render(
+      <App
+        bridge={{
+          ...base,
+          supportsManagedServer: true,
+          api: {
+            ...base.api,
+            managedServerStatus,
+            startManagedServer: vi.fn(),
+          },
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("startup-retry")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "hosted agent unavailable",
+    );
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "The hosted agent could not be restored",
+    );
+
+    await userEvent.click(screen.getByTestId("startup-retry"));
+    await waitFor(() => {
+      expect(screen.getByTestId("fleet-empty")).toBeInTheDocument();
+    });
+    expect(managedServerStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not invent a synchronization phase while client startup is pending", () => {
+    vi.useFakeTimers();
+    const { unmount } = render(
+      <StartupScreen
+        error={null}
+        onRetry={vi.fn(async () => undefined)}
+        phase="starting-client"
+      />,
+    );
+
+    act(() => vi.advanceTimersByTime(5_000));
+
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "Starting the secure client",
+    );
+    expect(screen.getByTestId("startup-screen")).not.toHaveTextContent(
+      "Synchronize agent state",
+    );
+    unmount();
+    vi.useRealTimers();
+  });
+
   it("never flashes enrollment while saved connections load and start", async () => {
     const initial = deferred<DesktopClientSnapshot>();
     const started = deferred<DesktopClientSnapshot>();
@@ -151,6 +269,9 @@ describe("desktop startup screen", () => {
     });
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
       "configuration unavailable",
+    );
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "Saved connections could not be read",
     );
 
     await userEvent.click(screen.getByTestId("startup-retry"));

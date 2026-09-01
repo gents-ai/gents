@@ -212,7 +212,7 @@ export async function expectNoPageHorizontalOverflow(page: Page) {
             ".chat-header",
             ".chat-title-block",
             ".chat-status",
-            ".session-hydration-status",
+            ".conversation-loading-status",
             ".composer-panel",
             ".fleet-header",
             ".config-header",

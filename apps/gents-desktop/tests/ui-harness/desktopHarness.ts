@@ -154,6 +154,7 @@ export function createDesktopUiHarness(
   if (scenario === "backend-unavailable") {
     deployment = {
       ...deployment,
+      source: "local-standard",
       behaviorReadiness: {
         ...deployment.behaviorReadiness,
         behaviors: deployment.behaviorReadiness.behaviors.map((behavior) => ({
@@ -415,6 +416,7 @@ export function createDesktopUiHarness(
         agentDid: AGENT_DID,
         phase: "requested",
         mergedCount: 1,
+        coveredCount: 1,
         servedCount: null,
       },
     });
@@ -937,6 +939,7 @@ export function createDesktopUiHarness(
         ...session.hydration,
         phase: "requested" as const,
         mergedCount: session.timelineItems.length,
+        coveredCount: session.timelineItems.length,
         servedCount: null,
       };
       sessions.set(sessionId, { ...session, hydration });
@@ -1689,6 +1692,8 @@ export function createDesktopUiHarness(
       agentDid: AGENT_DID,
       phase,
       mergedCount,
+      coveredCount:
+        servedCount == null ? mergedCount : Math.min(mergedCount, servedCount),
       servedCount,
     };
   }

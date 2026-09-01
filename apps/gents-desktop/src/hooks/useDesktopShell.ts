@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
@@ -14,6 +14,7 @@ import type {
   DesktopApiAdapter,
   DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
+import { projectConversationLoadingStatus } from "../lib/loadingStatus";
 
 export { setDesktopShellTimingConfigForTests };
 export type { DesktopStartupPhase } from "./useDesktopClientLifecycle";
@@ -21,9 +22,14 @@ export type { DesktopStartupPhase } from "./useDesktopClientLifecycle";
 export type DesktopShellBridge = {
   api: DesktopApiAdapter;
   listenToUpdates: DesktopClientUpdatedListenerFactory;
+  supportsManagedServer?: boolean;
 };
 
-export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
+export function useDesktopShell({
+  api,
+  listenToUpdates,
+  supportsManagedServer = false,
+}: DesktopShellBridge) {
   const selectedSessionIdRef = useRef<string | null>(null);
   const selectedAgentDidRef = useRef<string | null>(null);
   const selectedTrackedRequestIdRef = useRef<string | null>(null);
@@ -36,6 +42,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   const [error, setError] = useState<string | null>(null);
   const {
     session,
+    sessionLoad,
     setSession,
     refreshSession,
     retrySessionHydration,
@@ -68,6 +75,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     restartDesktopClient,
   } = useDesktopClientLifecycle({
     api,
+    supportsManagedServer,
     refreshSession,
     selectedSessionIdRef,
     setError,
@@ -105,6 +113,11 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     selectedDeployment?.conversations.find(
       (conversation) => conversation.sessionId === selectedSessionId,
     ) ?? null;
+  const selectedSessionSnapshot =
+    session?.sessionId === selectedSessionId &&
+    (!selectedAgentDid || !session.agentDid || session.agentDid === selectedAgentDid)
+      ? session
+      : null;
   const behaviorOptions = selectedDeployment?.behaviors ?? [];
   const runtimeHealth = snapshot?.client?.p2pHealth ?? null;
   const {
@@ -126,9 +139,28 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     selectedDeployment,
     selectedSessionId,
     sending,
-    session,
+    session: selectedSessionSnapshot,
   });
   const canSendMessage = shellProjection.sendStatus.kind === "ready";
+  const conversationLoadingStatus = useMemo(
+    () =>
+      projectConversationLoadingStatus({
+        selectedSessionId,
+        selectedAgentDid,
+        session: selectedSessionSnapshot,
+        sessionLoad,
+        deployment: selectedDeployment,
+        behaviorReadiness,
+      }),
+    [
+      behaviorReadiness,
+      selectedAgentDid,
+      selectedDeployment,
+      selectedSessionId,
+      selectedSessionSnapshot,
+      sessionLoad,
+    ],
+  );
   selectedAgentDidRef.current = selectedAgentDid;
   selectedSessionIdRef.current = selectedSessionId;
   selectedTrackedRequestIdRef.current = selectedTrackedRequestId;
@@ -255,7 +287,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     selectedDeployment,
     selectedSessionId,
     pendingMailboxCauseId,
-    session,
+    session: selectedSessionSnapshot,
     setDraft,
     setError,
     setLocalWorkflow,
@@ -292,7 +324,9 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
 
   return {
     snapshot,
-    session,
+    session: selectedSessionSnapshot,
+    sessionLoad,
+    conversationLoadingStatus,
     optimisticPendingTurn,
     startupPhase,
     loading,
@@ -317,6 +351,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     selectedConversation,
     behaviorOptions,
     runtimeHealth,
+    behaviorReadiness,
     canSendMessage,
     chatWorkflow: shellProjection.workflow,
     activeRequestId: shellProjection.activeRequestId,

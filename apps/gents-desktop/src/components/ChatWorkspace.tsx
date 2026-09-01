@@ -20,7 +20,8 @@ import {
 } from "@source-inc/gents-desktop-chat";
 import { effectiveBehaviorSkills } from "@source-inc/gents-desktop-chat";
 import { HoldsPanel } from "@source-inc/gents-desktop-operations";
-import { SessionHydrationStatus } from "./SessionHydrationStatus";
+import type { ConversationLoadingStatus as ConversationLoadingStatusView } from "../lib/loadingStatus";
+import { ConversationLoadingStatus } from "./ConversationLoadingStatus";
 
 export type ChatWorkspaceProps = {
   api?: DesktopApiAdapter;
@@ -43,13 +44,18 @@ export type ChatWorkspaceProps = {
   interruptVisible: boolean;
   sending: boolean;
   turnState: string | null;
+  conversationLoadingStatus?: ConversationLoadingStatusView | null;
   onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
   onDraftChange: (value: string) => void;
   onConfigureInference?: () => void;
+  onReconnect?: () => void | Promise<unknown>;
+  onConversationReconnect?: () => void | Promise<unknown>;
+  reconnecting?: boolean;
   onSend: (event: FormEvent) => void;
   onRetryMessage?: (requestId: string) => void | Promise<void>;
   onLoadOlderTimeline?: () => Promise<boolean>;
   onRetryHydration?: () => void | Promise<unknown>;
+  onRetryConversation?: () => void | Promise<unknown>;
   onOpenMobileNavigation?: () => void;
   onInterruptAccepted?: () => void | Promise<void>;
 };
@@ -98,13 +104,18 @@ export function ActiveChatWorkspace({
   interruptVisible,
   sending,
   turnState,
+  conversationLoadingStatus = null,
   onRenameConversationTitle,
   onDraftChange,
   onConfigureInference,
+  onReconnect,
+  onConversationReconnect,
+  reconnecting = false,
   onSend,
   onRetryMessage,
   onLoadOlderTimeline,
   onRetryHydration,
+  onRetryConversation,
   onOpenMobileNavigation,
   onInterruptAccepted,
 }: ActiveChatWorkspaceProps) {
@@ -125,6 +136,11 @@ export function ActiveChatWorkspace({
     () => effectiveBehaviorSkills(selectedDeployment.skills ?? [], activeBehavior),
     [activeBehavior, selectedDeployment.skills],
   );
+  const visibleSession =
+    session?.sessionId === selectedSessionId &&
+    (!session.agentDid || session.agentDid === selectedDeployment.agentDid)
+      ? session
+      : null;
 
   const [cascade, setCascade] = useState<null | { rootRequestId: string }>(null);
   const [interruptResultBanner, setInterruptResultBanner] = useState<{
@@ -185,7 +201,7 @@ export function ActiveChatWorkspace({
       <ChatHeader
         behaviorLabel={behaviorLabel}
         configuredPeerCount={configuredPeerCount}
-        context={session?.context ?? null}
+        context={visibleSession?.context ?? null}
         dialedPeerCount={dialedPeerCount}
         onOpenMobileNavigation={onOpenMobileNavigation}
         runtimeHealth={runtimeHealth}
@@ -196,15 +212,16 @@ export function ActiveChatWorkspace({
 
       <section className="chat-workspace">
         <div className="chat-main">
-          <SessionHydrationStatus
-            agentDid={session?.agentDid ?? selectedDeployment.agentDid}
-            hydration={session?.hydration}
-            onRetry={onRetryHydration}
-            sessionId={selectedSessionId}
+          <ConversationLoadingStatus
+            status={conversationLoadingStatus}
+            onConfigureInference={onConfigureInference}
+            onReconnect={onConversationReconnect ?? onReconnect}
+            onRetryHydration={onRetryHydration}
+            onRetryLocal={onRetryConversation}
           />
           <ChatTranscriptPanel
             selectedSessionId={selectedSessionId}
-            session={session}
+            session={visibleSession}
             optimisticPendingTurn={optimisticPendingTurn}
             onRetryMessage={onRetryMessage}
             retryUnavailableHint={retryUnavailableHint}
@@ -231,7 +248,17 @@ export function ActiveChatWorkspace({
             sending={sending}
             turnState={turnState}
             onDraftChange={onDraftChange}
-            onConfigureInference={onConfigureInference}
+            onConfigureInference={
+              conversationLoadingStatus?.action === "configureInference"
+                ? undefined
+                : onConfigureInference
+            }
+            onReconnect={
+              conversationLoadingStatus?.action === "reconnect"
+                ? undefined
+                : onReconnect
+            }
+            reconnecting={reconnecting}
             onInterruptClick={onInterruptClick}
             onSend={onSend}
             skills={activeBehaviorSkills}

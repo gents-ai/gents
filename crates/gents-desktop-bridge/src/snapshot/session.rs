@@ -15,9 +15,9 @@ use super::super::cause_derivation::{
 use super::super::types::{
     normalize_optional, turn_state_label, CommandDenialView, DerivedCancelCauseView,
     DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView, ResponseView,
-    RetryEligibilityView, SessionCompactionView, SessionContextView, SessionLiveDeltaView,
-    SessionLiveTextPatchView, SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
-    ToolResultView,
+    RetryEligibilityView, SessionCompactionView, SessionContextView, SessionHydrationView,
+    SessionLiveDeltaView, SessionLiveTextPatchView, SessionProjectionRevisionView,
+    SessionTimelinePageView, ToolCallView, ToolResultView,
 };
 use super::timeline::{build_rendered_timeline, has_materialized_user_owner};
 use super::{request_matches_agent, source_matches_agent};
@@ -156,6 +156,21 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
     include_live_tail: bool,
 ) -> Option<DesktopSessionSnapshot> {
     let (store, projection_revision) = core.store().snapshot_with_revision();
+    let hydration = match agent_did {
+        Some(agent_did) => match core.session_hydration_progress(session_id, agent_did).await {
+            Ok(progress) => Some(super::to_hydration_view(&progress)),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    session_id,
+                    agent_did,
+                    "loading session-keyed hydration progress failed"
+                );
+                None
+            }
+        },
+        None => None,
+    };
     let request_ids = agent_did.map_or_else(
         || store.requests_for_session(session_id),
         |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
@@ -193,6 +208,20 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         session_id,
         preferred_request_id,
     );
+    if snapshot.is_none() {
+        snapshot = hydration
+            .as_ref()
+            .filter(|hydration| hydration.phase != "idle")
+            .map(|hydration| {
+                build_hydration_only_session_snapshot(
+                    store.as_ref(),
+                    session_id,
+                    agent_did.expect("hydration progress is keyed by an agent DID"),
+                    hydration.clone(),
+                    context_totals_exact,
+                )
+            });
+    }
     if let Some(snapshot) = snapshot.as_mut() {
         match loaded_context {
             Some(context) => attach_last_request_context(
@@ -208,23 +237,84 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
             store_version: projection_revision.store_version,
             reconcile_version: projection_revision.reconcile_version,
         });
-        snapshot.hydration = match agent_did {
-            Some(agent_did) => match core.session_hydration_progress(session_id, agent_did).await {
-                Ok(progress) => Some(super::to_hydration_view(&progress)),
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        session_id,
-                        agent_did,
-                        "loading session-keyed hydration progress failed"
-                    );
-                    None
-                }
-            },
-            None => None,
-        };
+        snapshot.hydration = hydration;
     }
     snapshot
+}
+
+fn build_hydration_only_session_snapshot(
+    store: &ClientStore,
+    session_id: &str,
+    agent_did: &str,
+    hydration: SessionHydrationView,
+    context_totals_exact: bool,
+) -> DesktopSessionSnapshot {
+    DesktopSessionSnapshot {
+        session_id: session_id.to_string(),
+        agent_did: Some(agent_did.to_string()),
+        behavior_id: None,
+        title: None,
+        preview_text: None,
+        status: None,
+        goal: None,
+        turn_state: None,
+        latest_request_id: None,
+        retry_eligibility: project_retry_eligibility(None),
+        latest_response: None,
+        active_response_overlay: None,
+        pending_turn: None,
+        context: build_session_context_from_stores(
+            store,
+            store,
+            Some(agent_did),
+            None,
+            session_id,
+            context_totals_exact,
+        ),
+        timeline_items: Vec::new(),
+        hydration: Some(hydration),
+        timeline_page: None,
+        projection_revision: None,
+        messages: Vec::new(),
+        tool_calls: Vec::new(),
+        tool_results: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod hydration_only_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_exact_requester_and_reports_no_unobserved_history() {
+        let snapshot = build_hydration_only_session_snapshot(
+            &ClientStore::default(),
+            "session-1",
+            "did:test:requester",
+            SessionHydrationView {
+                session_id: "session-1".to_string(),
+                agent_did: "did:test:requester".to_string(),
+                phase: "requested".to_string(),
+                merged_count: 0,
+                covered_count: 0,
+                served_count: None,
+            },
+            true,
+        );
+
+        assert_eq!(snapshot.session_id, "session-1");
+        assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:requester"));
+        assert_eq!(
+            snapshot.hydration.as_ref().map(|view| view.phase.as_str()),
+            Some("requested")
+        );
+        assert!(snapshot.timeline_items.is_empty());
+        assert_eq!(snapshot.context.durable_message_count, 0);
+        assert_eq!(
+            snapshot.retry_eligibility.denial_reason.as_deref(),
+            Some("requestNotObserved")
+        );
+    }
 }
 
 #[cfg(test)]

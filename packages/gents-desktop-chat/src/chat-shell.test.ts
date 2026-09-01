@@ -186,9 +186,7 @@ function runLeanCommand(proofsDir: string, args: string[]): Promise<string> {
     });
     child.on("error", (error) => {
       reject(
-        new Error(
-          `failed to run ${command} in ${proofsDir}: ${error.message}`,
-        ),
+        new Error(`failed to run ${command} in ${proofsDir}: ${error.message}`),
       );
     });
     child.on("close", (status) => {
@@ -386,7 +384,7 @@ describe("projectChatShell", () => {
     expect(projection.sendStatus).toEqual({
       kind: "disabled",
       reason: "behaviorUnavailable",
-      hint: "Behavior “General” is temporarily unavailable",
+      hint: "Inference backend for “General” is temporarily unavailable",
     });
     expect(projection.nonEmptyContentSendStatus).toEqual(projection.sendStatus);
   });
@@ -408,7 +406,7 @@ describe("projectChatShell", () => {
     expect(projection.sendStatus).toEqual({
       kind: "disabled",
       reason: "routeNotReady",
-      hint: "Agent route is not ready",
+      hint: "Secure route to the agent is not ready",
     });
   });
 

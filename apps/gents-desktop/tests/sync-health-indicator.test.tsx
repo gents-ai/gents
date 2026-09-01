@@ -53,9 +53,7 @@ describe("SyncHealthIndicator", () => {
         })}
       />,
     );
-    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent(
-      "Offline since",
-    );
+    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent("Offline for");
 
     rerender(
       <SyncHealthIndicator

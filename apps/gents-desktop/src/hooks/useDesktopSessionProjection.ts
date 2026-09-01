@@ -19,6 +19,7 @@ import {
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
 } from "./desktopTimelinePaging";
+import type { SessionLoadState } from "../lib/loadingStatus";
 
 type SessionProjectionOptions = {
   api: DesktopApiAdapter;
@@ -41,6 +42,13 @@ export function useDesktopSessionProjection({
   const refreshSeq = useRef(0);
   const sessionRef = useRef<DesktopSessionSnapshot | null>(null);
   const [session, setSessionState] = useState<DesktopSessionSnapshot | null>(null);
+  const [sessionLoad, setSessionLoad] = useState<SessionLoadState>({
+    phase: "idle",
+    sessionId: null,
+    agentDid: null,
+    found: null,
+    error: null,
+  });
 
   const setSession = useCallback(
     (next: SetStateAction<DesktopSessionSnapshot | null>) => {
@@ -58,25 +66,60 @@ export function useDesktopSessionProjection({
     const currentRefresh = refreshSeq.current + 1;
     refreshSeq.current = currentRefresh;
     if (!nextSessionId) {
-      if (refreshSeq.current === currentRefresh) setSession(null);
+      if (refreshSeq.current === currentRefresh) {
+        setSession(null);
+        setSessionLoad({
+          phase: "idle",
+          sessionId: null,
+          agentDid: null,
+          found: null,
+          error: null,
+        });
+      }
       return null;
     }
+    const agentDid =
+      agentDidOverride === undefined ? selectedAgentDidRef.current : agentDidOverride;
+    setSessionLoad({
+      phase: "loading",
+      sessionId: nextSessionId,
+      agentDid,
+      found: null,
+      error: null,
+    });
     try {
       const next = await api.fetchSessionSnapshot(
         nextSessionId,
-        agentDidOverride === undefined ? selectedAgentDidRef.current : agentDidOverride,
+        agentDid,
         selectedTrackedRequestIdRef.current,
         { limit: SESSION_TIMELINE_PAGE_SIZE },
       );
       const stillCurrent =
         refreshSeq.current === currentRefresh &&
         selectedSessionIdRef.current === nextSessionId &&
+        (!agentDid || selectedAgentDidRef.current === agentDid) &&
         (!next || next.sessionId === nextSessionId);
       if (!stillCurrent) return null;
       setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
+      setSessionLoad({
+        phase: "loaded",
+        sessionId: nextSessionId,
+        agentDid,
+        found: next !== null,
+        error: null,
+      });
       return next;
     } catch (error) {
-      if (refreshSeq.current === currentRefresh) setError(String(error));
+      if (refreshSeq.current === currentRefresh) {
+        const message = String(error);
+        setSessionLoad({
+          phase: "failed",
+          sessionId: nextSessionId,
+          agentDid,
+          found: null,
+          error: message,
+        });
+      }
       return null;
     }
   }
@@ -157,6 +200,7 @@ export function useDesktopSessionProjection({
 
   return {
     session,
+    sessionLoad,
     setSession,
     refreshSession,
     retrySessionHydration,

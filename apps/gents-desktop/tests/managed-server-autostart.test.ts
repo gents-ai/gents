@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  restoreManagedServer,
-  shouldAutoStartDesktopClient,
-} from "../src/hooks/desktopShellEffects";
+import { shouldAutoStartDesktopClient } from "../src/hooks/desktopShellEffects";
+import { restoreManagedServer } from "../src/hooks/managedServerLifecycle";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 function apiWithManagedServer(

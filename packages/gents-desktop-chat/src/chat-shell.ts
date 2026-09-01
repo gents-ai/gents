@@ -198,11 +198,11 @@ function blocked(
 function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
   switch (reason) {
     case "clientOffline":
-      return "Client offline";
+      return "Secure client is not running";
     case "agentNotSelected":
       return "Select an agent before sending";
     case "routeNotReady":
-      return "Agent route is not ready";
+      return "Secure route to the agent is not ready";
     case "behaviorUnavailable":
       return "The selected behavior is unavailable";
     case "composerEmpty":
@@ -226,21 +226,23 @@ function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
   }
 }
 
-function behaviorReadinessHint(decision: Exclude<BehaviorReadinessDecision, { kind: "ready" }>) {
+export function behaviorReadinessHint(
+  decision: Exclude<BehaviorReadinessDecision, { kind: "ready" }>,
+) {
   if (decision.kind === "unknown") {
     switch (decision.reason) {
       case "readiness_missing":
-        return "Runtime readiness is not available yet";
+        return "Waiting for the agent to report readiness";
       case "readiness_malformed":
-        return "Runtime readiness is invalid";
+        return "The agent reported invalid readiness data";
       case "readiness_version_unsupported":
-        return "Runtime readiness uses an unsupported format";
+        return "The agent uses an incompatible readiness format";
       case "readiness_stale":
-        return "Runtime stopped reporting readiness; reconnect or restart it";
+        return "The agent stopped reporting readiness; reconnect it or restart its runtime";
       case "process_not_ready":
-        return "Runtime is not ready";
+        return "The agent runtime is still starting";
       case "router_generation_stale":
-        return "Runtime is still applying its latest configuration";
+        return "The agent is still applying its latest configuration";
       case "behavior_not_assigned":
         return "Behavior is not assigned to this runtime";
     }
@@ -256,7 +258,7 @@ function behaviorReadinessHint(decision: Exclude<BehaviorReadinessDecision, { ki
     case "backend_disabled":
       return `Behavior “${decision.behaviorLabel}” has a disabled inference backend`;
     case "backend_temporarily_unavailable":
-      return `Behavior “${decision.behaviorLabel}” is temporarily unavailable`;
+      return `Inference backend for “${decision.behaviorLabel}” is temporarily unavailable`;
     case "credentials_required":
       return `Behavior “${decision.behaviorLabel}” requires inference credentials`;
     case "inference_profile_invalid":

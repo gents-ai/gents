@@ -35,6 +35,19 @@ def ClientProgress.mergedCount (progress : ClientProgress) : Nat :=
 def ClientProgress.servedCount (progress : ClientProgress) : Option Nat :=
   progress.servedDocuments.map Finset.card
 
+/-- Documents in the signed server manifest that the receiver has actually
+observed. Unlike `mergedCount`, this is a valid numerator for `servedCount`. -/
+def ClientProgress.coveredCount (progress : ClientProgress) : Nat :=
+  match progress.servedDocuments with
+  | some served => (progress.mergedDocuments ∩ served).card
+  | none => progress.mergedDocuments.card
+
+theorem coveredCount_le_servedCount (progress : ClientProgress)
+    (served : Finset DocumentKey) (hserved : progress.servedDocuments = some served) :
+    progress.coveredCount ≤ served.card := by
+  simp only [ClientProgress.coveredCount, hserved]
+  exact Finset.card_le_card (Finset.inter_subset_right)
+
 def canComplete (merged : Finset DocumentKey)
     (served : Option (Finset DocumentKey)) : Bool :=
   match served with

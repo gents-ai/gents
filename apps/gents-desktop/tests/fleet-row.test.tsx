@@ -117,6 +117,19 @@ describe("FleetRow", () => {
     expect(onSetupInference).toHaveBeenCalledWith(missingInference);
   });
 
+  it("does not infer missing backend setup from redacted enrolled-agent config", () => {
+    const onSetupInference = vi.fn();
+    renderRow(
+      { onSetupInference },
+      { ...deployment, source: "enrollment", inferenceBackends: [] },
+    );
+
+    expect(
+      screen.queryByTestId("fleet-inference-setup-peer-1"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("host-managed")).toBeInTheDocument();
+  });
+
   it("claims the local init.json tool ceiling only for local-runtime rows", () => {
     const bootstrap = { initToolCeiling: "readonly" };
     renderRow(

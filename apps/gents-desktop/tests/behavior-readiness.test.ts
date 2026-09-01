@@ -8,6 +8,8 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import {
+  behaviorReadinessCanConfigureInference,
+  behaviorReadinessCanReconnect,
   selectedBehaviorIdForDeployment,
   selectedBehaviorReadinessDecision,
 } from "../src/lib/behaviorReadiness";
@@ -54,6 +56,51 @@ function unavailable(reason: BehaviorUnavailableReasonView): DeploymentView {
 }
 
 describe("selectedBehaviorReadinessDecision", () => {
+  it.each([
+    "backend_not_configured",
+    "backend_disabled",
+    "backend_temporarily_unavailable",
+    "credentials_required",
+    "inference_profile_invalid",
+  ] satisfies BehaviorUnavailableReasonView[])(
+    "offers inference configuration for %s",
+    (reason) => {
+      expect(
+        behaviorReadinessCanConfigureInference(
+          selectedBehaviorReadinessDecision(unavailable(reason), null),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("does not mislabel missing readiness or non-inference failures", () => {
+    const missing = deployment(
+      { state: "ready", behaviorId: "default" },
+      { sourceReason: "readiness_missing" },
+    );
+    expect(
+      behaviorReadinessCanConfigureInference(
+        selectedBehaviorReadinessDecision(missing, null),
+      ),
+    ).toBe(false);
+    expect(
+      behaviorReadinessCanConfigureInference(
+        selectedBehaviorReadinessDecision(
+          unavailable("tool_surface_unavailable"),
+          null,
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      behaviorReadinessCanReconnect(selectedBehaviorReadinessDecision(missing, null)),
+    ).toBe(true);
+    expect(
+      behaviorReadinessCanReconnect(
+        selectedBehaviorReadinessDecision(unavailable("backend_disabled"), null),
+      ),
+    ).toBe(false);
+  });
+
   it("uses runtime readiness as the sole behavior authority", () => {
     const remote = deployment({ state: "ready", behaviorId: "default" });
     expect(remote.inferenceBackends).toEqual([]);

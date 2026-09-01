@@ -54,6 +54,7 @@ pub(crate) fn to_hydration_view(progress: &ClientHydrationProgress) -> SessionHy
         agent_did: progress.agent_did.clone(),
         phase: progress.phase.as_str().to_string(),
         merged_count: progress.merged_count,
+        covered_count: progress.covered_count,
         served_count: progress.served_count,
     }
 }

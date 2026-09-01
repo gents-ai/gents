@@ -15,6 +15,7 @@ function hydration(
     agentDid: "did:test:agent",
     phase: "serving",
     mergedCount: 4,
+    coveredCount: 4,
     servedCount: 11,
     ...overrides,
   };
@@ -67,11 +68,25 @@ describe("sessionHydrationLabel", () => {
       "Fetching session history · 4 of 11",
     );
     expect(
-      sessionHydrationLabel(hydration({ servedCount: null, mergedCount: 3 })),
+      sessionHydrationLabel(
+        hydration({ mergedCount: 124, coveredCount: 47, servedCount: 47 }),
+      ),
+    ).toBe("Fetching session history · 47 of 47");
+    expect(
+      sessionHydrationLabel(
+        hydration({ servedCount: null, mergedCount: 3, coveredCount: 3 }),
+      ),
     ).toBe("Fetching session history · 3 documents so far");
     expect(
-      sessionHydrationLabel(hydration({ phase: "complete", mergedCount: 11 })),
-    ).toBe("Session history loaded · 11 of 11");
+      sessionHydrationLabel(
+        hydration({
+          phase: "complete",
+          mergedCount: 124,
+          coveredCount: 47,
+          servedCount: 47,
+        }),
+      ),
+    ).toBe("Session history loaded · 47 of 47");
     expect(sessionHydrationLabel(hydration({ phase: "failed" }))).toBe(
       "Couldn't fetch the rest of this session",
     );

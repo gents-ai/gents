@@ -157,6 +157,11 @@ def sessionHydrationProgressCases : List SessionHydrationProgressCase :=
     , session := "session-1", agent := "agent-1"
     , prevPhase := "serving", prevMerged := 2, prevServed := some 5
     , merged := 5, served := some 5, failed := false, beginRequest := false }
+  , { name := "complete_with_additional_local_documents"
+    , prevSession := "session-1", prevAgent := "agent-1"
+    , session := "session-1", agent := "agent-1"
+    , prevPhase := "serving", prevMerged := 2, prevServed := some 5
+    , merged := 8, served := some 5, failed := false, beginRequest := false }
   , { name := "empty_session_completes"
     , prevSession := "session-1", prevAgent := "agent-1"
     , session := "session-1", agent := "agent-1"
@@ -237,6 +242,7 @@ def sessionHydrationProgressCaseJson (w : SessionHydrationProgressCase) : String
     ++ "\"begin_request\":" ++ boolString w.beginRequest ++ ","
     ++ "\"expected_phase\":" ++ jsonString (phaseString next.phase) ++ ","
     ++ "\"expected_merged\":" ++ toString next.mergedCount ++ ","
+    ++ "\"expected_covered\":" ++ toString next.coveredCount ++ ","
     ++ "\"expected_retry_admit\":" ++
       boolString (SessionHydration.canRetry (progressObserved w) w.session w.agent) ++ ","
     ++ "\"expected_complete\":" ++
@@ -271,6 +277,8 @@ def sessionHydrationDurableCases : List SessionHydrationDurableCase :=
       served := some 5 }
   , { name := "served_completes_at_coverage", status := "served", merged := 5,
       served := some 5 }
+  , { name := "served_completes_with_additional_local_rows", status := "served", merged := 8,
+      served := some 5 }
   , { name := "served_equal_count_wrong_documents_waits", status := "served", merged := 5,
       served := some 5, servedMatches := false }
   , { name := "empty_served_completes", status := "served", merged := 0,
@@ -290,7 +298,8 @@ def sessionHydrationDurableCaseJson (w : SessionHydrationDurableCase) : String :
     ++ "\"served\":" ++ optionNatString w.served ++ ","
     ++ "\"served_matches\":" ++ boolString w.servedMatches ++ ","
     ++ "\"expected_phase\":" ++ jsonString (phaseString next.phase) ++ ","
-    ++ "\"expected_merged\":" ++ toString next.mergedCount
+    ++ "\"expected_merged\":" ++ toString next.mergedCount ++ ","
+    ++ "\"expected_covered\":" ++ toString next.coveredCount
     ++ "}"
 
 def sessionHydrationDurableCasesJson : String :=

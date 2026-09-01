@@ -18,6 +18,7 @@ test.describe("desktop UI harness", () => {
     page,
   }) => {
     await gotoHarness(page, "backend-unavailable");
+    await page.getByTestId("inference-wizard-close").click();
     await openChat(page);
 
     await expect(page.getByTestId("composer-status")).toHaveText(

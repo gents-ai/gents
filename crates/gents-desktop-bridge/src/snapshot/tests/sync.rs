@@ -24,6 +24,7 @@ fn serving_progress() -> ClientHydrationProgress {
         agent_did: "did:test:agent".into(),
         phase: ClientHydrationPhase::Serving,
         merged_count: 4,
+        covered_count: 3,
         served_count: Some(11),
         ..ClientHydrationProgress::default()
     }
@@ -49,6 +50,7 @@ fn hydration_view_copies_receiver_counts_exactly() {
     assert_eq!(view.agent_did, "did:test:agent");
     assert_eq!(view.phase, "serving");
     assert_eq!(view.merged_count, 4);
+    assert_eq!(view.covered_count, 3);
     assert_eq!(view.served_count, Some(11));
 }
 

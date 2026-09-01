@@ -36,7 +36,7 @@ describe("syncHealthLabel", () => {
         }),
         now,
       ),
-    ).toBe("Sync stalled since 10m ago");
+    ).toBe("Sync stalled for 10m");
     expect(
       syncHealthLabel(
         health({
@@ -45,11 +45,11 @@ describe("syncHealthLabel", () => {
         }),
         now,
       ),
-    ).toBe("Offline since 2h ago");
+    ).toBe("Offline for 2h");
     expect(syncHealthLabel(health({ state: "failed" }), now)).toBe("Sync failed");
     expect(syncHealthState(null)).toBeNull();
     expect(syncHealthState(health({ state: "future-state" }))).toBeNull();
-    expect(formatElapsedSince("2026-08-27T11:59:20Z", now)).toBe("40s ago");
+    expect(formatElapsedSince("2026-08-27T11:59:20Z", now)).toBe("40s");
   });
 });
 

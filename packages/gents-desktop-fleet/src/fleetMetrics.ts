@@ -58,6 +58,31 @@ export function deploymentStatus(deployment: DeploymentView): {
     };
   }
 
+  if (readinessSource?.state !== "current") {
+    const reason =
+      readinessSource?.state === "unknown"
+        ? readinessSource.reason
+        : "readiness_missing";
+    if (
+      reason === "readiness_malformed" ||
+      reason === "readiness_version_unsupported"
+    ) {
+      return {
+        title,
+        tone: "red",
+        label: "Runtime incompatible",
+        lastError,
+      };
+    }
+    return {
+      title,
+      tone: "yellow",
+      label:
+        reason === "readiness_stale" ? "Runtime stale" : "Waiting for runtime",
+      lastError,
+    };
+  }
+
   if (reconcile !== "idle" && reconcile !== "unknown") {
     return { title, tone: "yellow", label: "Syncing", lastError };
   }
@@ -66,6 +91,11 @@ export function deploymentStatus(deployment: DeploymentView): {
 }
 
 export function inferenceBackendTitle(deployment: DeploymentView) {
+  if (deployment.source === "enrollment") {
+    return deployment.behaviorReadiness?.source.state === "current"
+      ? "Backend details stay on the agent host; this runtime reports authoritative behavior readiness"
+      : "Backend details stay on the agent host; runtime readiness is currently unavailable";
+  }
   const labels = (deployment.inferenceBackends ?? [])
     .filter((backend) => backend.enabled !== false)
     .map((backend) => backend.name ?? backend.backendId);
@@ -75,6 +105,9 @@ export function inferenceBackendTitle(deployment: DeploymentView) {
 }
 
 export function needsInferenceSetup(deployment: DeploymentView): boolean {
+  // Enrolled clients do not receive non-branchable backend documents and
+  // cannot configure them locally. Runtime-authored readiness is authoritative.
+  if (deployment.source === "enrollment") return false;
   return !deployment.inferenceBackends.some(
     (backend) => backend.enabled !== false && backend.models.length > 0,
   );

@@ -67,3 +67,37 @@ export function selectedBehaviorReadinessDecision(
     reason: status.reason,
   };
 }
+
+/** Offer backend configuration only when the runtime names an inference
+ * configuration failure. Missing or stale readiness is a transport/runtime
+ * recovery problem and must not masquerade as a backend setup problem. */
+export function behaviorReadinessCanConfigureInference(
+  decision: BehaviorReadinessDecision,
+): boolean {
+  return behaviorReadinessIsInferenceFailure(decision);
+}
+
+/** Classify inference only from an explicit runtime-authored backend verdict. */
+export function behaviorReadinessIsInferenceFailure(
+  decision: BehaviorReadinessDecision,
+): boolean {
+  if (decision.kind !== "unavailable") return false;
+  return (
+    decision.reason === "backend_not_configured" ||
+    decision.reason === "backend_disabled" ||
+    decision.reason === "backend_temporarily_unavailable" ||
+    decision.reason === "credentials_required" ||
+    decision.reason === "inference_profile_invalid"
+  );
+}
+
+/** A P2P redial can refresh missing or stale runtime-authored readiness. Other
+ * unknown states require the runtime to finish starting or applying config. */
+export function behaviorReadinessCanReconnect(
+  decision: BehaviorReadinessDecision,
+): boolean {
+  return (
+    decision.kind === "unknown" &&
+    (decision.reason === "readiness_missing" || decision.reason === "readiness_stale")
+  );
+}

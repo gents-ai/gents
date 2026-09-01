@@ -37,14 +37,14 @@ export function syncHealthLabel(
       syncHealth?.offlineSince ?? syncHealth?.since,
       now,
     );
-    return since ? `Offline since ${since}` : STATE_LABEL.offline;
+    return since ? `Offline for ${since}` : STATE_LABEL.offline;
   }
   if (state === "stalled") {
     const since = formatElapsedSince(
       syncHealth?.stalledSince ?? syncHealth?.since,
       now,
     );
-    return since ? `Sync stalled since ${since}` : STATE_LABEL.stalled;
+    return since ? `Sync stalled for ${since}` : STATE_LABEL.stalled;
   }
   return STATE_LABEL[state];
 }
@@ -58,13 +58,13 @@ export function formatElapsedSince(
   if (Number.isNaN(then)) return iso;
   const elapsedMs = Math.max(0, now - then);
   const seconds = Math.floor(elapsedMs / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
+  if (hours < 48) return `${hours}h`;
   const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return `${days}d`;
 }
 
 export function syncHealthDiagnostics(

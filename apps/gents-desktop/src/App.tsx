@@ -21,6 +21,12 @@ import { StartupScreen } from "./components/StartupScreen";
 import { useDesktopShell, type DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
+import {
+  behaviorReadinessCanConfigureInference,
+  behaviorReadinessCanReconnect,
+} from "./lib/behaviorReadiness";
+import { isLocalRuntimeSource } from "@source-inc/gents-desktop-fleet";
+import { isMobileTauriShell } from "./lib/shellPlatform";
 import "./App.css";
 
 function App({ bridge }: { bridge?: DesktopShellBridge } = {}) {
@@ -38,6 +44,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     return {
       api: client.api,
       listenToUpdates: (handler) => client.transport.listenClientUpdated(handler),
+      supportsManagedServer: !isMobileTauriShell(),
     };
   }, []);
   const bridge = explicitBridge ?? defaultBridge;
@@ -212,6 +219,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
         {shell.startupPhase !== "ready" ? (
           <StartupScreen
             error={shell.error}
+            managedServerSupported={bridge.supportsManagedServer === true}
             onRetry={shell.onRetryStartup}
             phase={shell.startupPhase}
           />
@@ -328,6 +336,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                   shell.snapshot?.client?.approxSerializedBytes ?? 0
                 }
                 canSend={shell.canSendMessage}
+                conversationLoadingStatus={shell.conversationLoadingStatus}
                 configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
                 dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
                 draft={shell.draft}
@@ -335,15 +344,32 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 onDraftChange={shell.setDraft}
                 onConfigureInference={
                   shell.sendStatus.kind === "disabled" &&
-                  shell.sendStatus.reason === "behaviorUnavailable"
+                  shell.sendStatus.reason === "behaviorUnavailable" &&
+                  isLocalRuntimeSource(shell.selectedDeployment?.source) &&
+                  behaviorReadinessCanConfigureInference(shell.behaviorReadiness)
                     ? () => openConfig(shell.selectedDeployment?.agentDid, "backends")
                     : undefined
                 }
+                onReconnect={
+                  shell.sendStatus.kind === "disabled" &&
+                  (shell.sendStatus.reason === "routeNotReady" ||
+                    (shell.sendStatus.reason === "behaviorUnavailable" &&
+                      behaviorReadinessCanReconnect(shell.behaviorReadiness)))
+                    ? shell.onRepairP2P
+                    : undefined
+                }
+                onConversationReconnect={
+                  shell.snapshot?.client ? shell.onRepairP2P : undefined
+                }
+                reconnecting={shell.repairingP2P}
                 onRenameConversationTitle={shell.onRenameConversationTitle}
                 onSend={shell.onSendMessage}
                 onRetryMessage={shell.onRetryMessage}
                 onRetryHydration={() =>
                   shell.retrySessionHydration(shell.selectedSessionId)
+                }
+                onRetryConversation={() =>
+                  shell.refreshSession(shell.selectedSessionId)
                 }
                 onLoadOlderTimeline={shell.loadOlderSessionTimeline}
                 rowCount={shell.snapshot?.client?.rowCount ?? 0}

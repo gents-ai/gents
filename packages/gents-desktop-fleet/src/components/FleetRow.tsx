@@ -55,6 +55,7 @@ export function FleetRow({
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const status = deploymentStatus(deployment);
   const localRuntime = isLocalRuntimeSource(deployment.source);
+  const remoteRuntime = deployment.source === "enrollment";
   const chatReady = deployment.pairingReady;
 
   function commitRename() {
@@ -204,9 +205,15 @@ export function FleetRow({
       <td>
         <div className="fleet-inference-cell">
           <Metric
-            label={backendCount === 1 ? "backend" : "backends"}
+            label={
+              remoteRuntime
+                ? "host-managed"
+                : backendCount === 1
+                  ? "backend"
+                  : "backends"
+            }
             title={inferenceBackendTitle(deployment)}
-            value={backendCount}
+            value={remoteRuntime ? "—" : backendCount}
           />
           {inferenceSetupNeeded ? (
             onSetupInference ? (
@@ -300,7 +307,7 @@ function Metric({
 }: {
   label?: string;
   title?: string;
-  value: number;
+  value: number | string;
 }) {
   return (
     <span className="fleet-metric" title={title}>
