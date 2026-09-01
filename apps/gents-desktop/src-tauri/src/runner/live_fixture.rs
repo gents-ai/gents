@@ -372,6 +372,7 @@ impl LiveBridgeFixture {
             agent_home_exists: self.agent_home.exists(),
             desktop_home_exists: self.desktop_paths.root().exists(),
             peer_directory_exists: self.desktop_paths.peer_directory_path().exists(),
+            client_state_exists: self.desktop_paths.client_state_exists(),
             saved_peers: self.bootstrap_saved_peers.clone(),
         }
     }

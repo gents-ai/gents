@@ -26,6 +26,7 @@ export type ChatComposerProps = {
   sending: boolean;
   turnState: string | null;
   onDraftChange: (value: string) => void;
+  onConfigureInference?: () => void;
   onInterruptClick: () => void;
   onSend: (event: FormEvent) => void;
   skills?: SkillView[];
@@ -49,6 +50,7 @@ export function ChatComposer({
   sending,
   turnState,
   onDraftChange,
+  onConfigureInference,
   onInterruptClick,
   onSend,
   skills = [],
@@ -198,6 +200,16 @@ export function ChatComposer({
               : "⏎ send · ⇧⏎ new line")}
         </div>
         <div className="composer-actions">
+          {onConfigureInference ? (
+            <button
+              className="ghost-button"
+              data-testid="composer-configure-inference"
+              onClick={onConfigureInference}
+              type="button"
+            >
+              Configure inference
+            </button>
+          ) : null}
           <CancelButton
             activeRequestId={activeRequestId}
             forceVisible={interruptVisible}

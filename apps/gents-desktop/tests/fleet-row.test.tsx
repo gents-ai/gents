@@ -77,6 +77,21 @@ describe("FleetRow", () => {
     expect(props.onOpenChat).not.toHaveBeenCalled();
   });
 
+  it("exposes and commits an explicit saved-label rename", () => {
+    const onRenamePeer = vi.fn();
+    renderRow({ onRenamePeer });
+
+    const rename = screen.getByTestId("fleet-rename-peer-1");
+    expect(rename).toHaveAccessibleName("Rename Local Agent");
+    expect(rename.parentElement).toHaveClass("fleet-agent-cell");
+    fireEvent.click(rename);
+    const input = screen.getByTestId("fleet-rename-input-peer-1");
+    fireEvent.change(input, { target: { value: "Amy" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onRenamePeer).toHaveBeenCalledWith("peer-1", "Amy");
+  });
+
   it("shows the deployment's own runtime heartbeat as Last update", () => {
     renderRow(
       {},

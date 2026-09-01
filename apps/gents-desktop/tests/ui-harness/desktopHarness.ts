@@ -540,6 +540,7 @@ export function createDesktopUiHarness(
         agentHomeExists: true,
         desktopHomeExists: true,
         peerDirectoryExists: true,
+        clientStateExists: true,
         savedPeers:
           scenario === "empty-fleet"
             ? []
@@ -868,7 +869,8 @@ export function createDesktopUiHarness(
         requestId: "enrollment-request-harness",
         networkId: "network-harness",
         adminDid: AGENT_DID,
-        serverPeer: deployment.peerId,
+        serverPeer: "peer-enrollment-pending",
+        serverLabel: "Bombadil UI Agent",
         ownerAgent: AGENT_DID,
         state: "pending_approval",
       };

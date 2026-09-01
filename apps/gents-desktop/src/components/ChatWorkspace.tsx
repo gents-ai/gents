@@ -45,6 +45,7 @@ export type ChatWorkspaceProps = {
   turnState: string | null;
   onRenameConversationTitle: (sessionId: string, title: string) => void | Promise<void>;
   onDraftChange: (value: string) => void;
+  onConfigureInference?: () => void;
   onSend: (event: FormEvent) => void;
   onRetryMessage?: (requestId: string) => void | Promise<void>;
   onLoadOlderTimeline?: () => Promise<boolean>;
@@ -99,6 +100,7 @@ export function ActiveChatWorkspace({
   turnState,
   onRenameConversationTitle,
   onDraftChange,
+  onConfigureInference,
   onSend,
   onRetryMessage,
   onLoadOlderTimeline,
@@ -229,6 +231,7 @@ export function ActiveChatWorkspace({
             sending={sending}
             turnState={turnState}
             onDraftChange={onDraftChange}
+            onConfigureInference={onConfigureInference}
             onInterruptClick={onInterruptClick}
             onSend={onSend}
             skills={activeBehaviorSkills}

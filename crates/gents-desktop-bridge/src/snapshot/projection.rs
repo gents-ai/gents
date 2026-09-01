@@ -254,6 +254,7 @@ mod tests {
                 agent_home_exists: true,
                 desktop_home_exists: true,
                 peer_directory_exists: true,
+                client_state_exists: true,
                 saved_peers: vec![SavedPeerView {
                     peer_id: "peer_1".into(),
                     label: "Remote".into(),

@@ -56,8 +56,8 @@
       display: none;
     }
 
-    .fleet-table .fleet-rename {
-      display: none;
+    .fleet-table .fleet-row-icon {
+      opacity: 1;
     }
   }
 }

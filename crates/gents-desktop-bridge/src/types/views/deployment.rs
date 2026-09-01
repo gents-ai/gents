@@ -605,6 +605,9 @@ pub struct EnrollmentRequestView {
     pub network_id: String,
     pub admin_did: String,
     pub server_peer: String,
+    /// Presentation-only label advertised by the authenticated status endpoint.
+    /// It is never used for enrollment authority or route selection.
+    pub server_label: Option<String>,
     pub owner_agent: String,
     pub state: String,
 }
@@ -616,6 +619,7 @@ impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentReq
             network_id: result.network_id,
             admin_did: result.admin_did,
             server_peer: result.server_peer,
+            server_label: None,
             owner_agent: result.owner_agent,
             state: result.state,
         }
@@ -651,6 +655,7 @@ mod peer_remove_response_tests {
                 agent_home_exists: true,
                 desktop_home_exists: true,
                 peer_directory_exists: true,
+                client_state_exists: true,
                 saved_peers: Vec::new(),
             },
             client: None,

@@ -27,6 +27,7 @@ pub struct DesktopBootstrapSummary {
     pub agent_home_exists: bool,
     pub desktop_home_exists: bool,
     pub peer_directory_exists: bool,
+    pub client_state_exists: bool,
     pub saved_peers: Vec<SavedPeerView>,
 }
 

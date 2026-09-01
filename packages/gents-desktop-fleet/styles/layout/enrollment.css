@@ -40,6 +40,31 @@
     font-size: var(--text-sm);
   }
 
+  .fleet-enrollment-pending {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-5);
+    padding: var(--space-5);
+    border: 1px solid rgb(var(--color-accent-rgb) / 0.32);
+    border-radius: var(--radius-lg);
+    background: rgb(var(--color-accent-rgb) / 0.08);
+  }
+
+  .fleet-enrollment-pending > div {
+    display: grid;
+    min-width: 0;
+    gap: var(--space-2);
+  }
+
+  .fleet-enrollment-pending p {
+    margin: 0;
+  }
+
+  .fleet-enrollment-pending .mono {
+    overflow-wrap: anywhere;
+  }
+
   .fleet-inline-error {
     grid-column: 1 / -1;
     margin: 0;
@@ -71,5 +96,12 @@
   .fleet-empty-copy h2 {
     margin: 0;
     font-size: var(--text-2xl);
+  }
+
+  @media (max-width: 760px) {
+    .fleet-enrollment-pending {
+      align-items: stretch;
+      flex-direction: column;
+    }
   }
 }

@@ -336,7 +336,10 @@ export function shouldAutoStartDesktopClient(
   snapshot: DesktopClientSnapshot,
   localServerAvailable: boolean | null,
 ): boolean {
-  return snapshot.bootstrap.savedPeers.some(
-    (peer) => peer.source !== "local-standard" || localServerAvailable !== false,
+  return (
+    snapshot.bootstrap.clientStateExists ||
+    snapshot.bootstrap.savedPeers.some(
+      (peer) => peer.source !== "local-standard" || localServerAvailable !== false,
+    )
   );
 }

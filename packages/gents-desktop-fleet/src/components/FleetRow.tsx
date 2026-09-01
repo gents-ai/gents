@@ -161,21 +161,9 @@ export function FleetRow({
                 title={`Open ${deployment.label} details`}
                 type="button"
               >
-                {deployment.agentPrincipal.displayName ?? deployment.label}
+                {deployment.label}
               </button>
             )}
-            {onRenamePeer && editingLabel == null ? (
-              <button
-                aria-label={`Rename ${deployment.label}`}
-                className="ghost-button fleet-row-icon fleet-rename"
-                data-testid={`fleet-rename-${deployment.peerId}`}
-                onClick={() => setEditingLabel(deployment.label)}
-                title="Rename deployment (saved label)"
-                type="button"
-              >
-                <PencilIcon />
-              </button>
-            ) : null}
             <span
               className="muted fleet-agent-summary"
               data-testid={`fleet-summary-${deployment.peerId}`}
@@ -193,6 +181,18 @@ export function FleetRow({
               </span>
             ) : null}
           </div>
+          {onRenamePeer && editingLabel == null ? (
+            <button
+              aria-label={`Rename ${deployment.label}`}
+              className="ghost-button fleet-row-icon fleet-rename"
+              data-testid={`fleet-rename-${deployment.peerId}`}
+              onClick={() => setEditingLabel(deployment.label)}
+              title="Rename deployment (saved label)"
+              type="button"
+            >
+              <PencilIcon />
+            </button>
+          ) : null}
         </div>
       </td>
       <td>

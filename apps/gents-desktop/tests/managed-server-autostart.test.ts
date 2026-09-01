@@ -109,4 +109,19 @@ describe("managed server launch restoration", () => {
       ),
     ).toBe(true);
   });
+
+  it("restarts persisted client state before the first enrollment peer materializes", () => {
+    expect(
+      shouldAutoStartDesktopClient(
+        {
+          bootstrap: {
+            clientStateExists: true,
+            savedPeers: [],
+          },
+          client: null,
+        } as never,
+        false,
+      ),
+    ).toBe(true);
+  });
 });

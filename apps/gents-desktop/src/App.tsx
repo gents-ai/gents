@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { listen } from "@tauri-apps/api/event";
 import { ChatWorkspace } from "./components/ChatWorkspace";
 import { ConfigWorkspace } from "./components/ConfigWorkspace";
+import type { ConfigTab } from "./components/config-workspace/model";
 import { useConfigNavigationController } from "./components/config/ConfigNavigationGuard";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FleetHostDashboard } from "./components/fleet/FleetHostDashboard";
@@ -70,6 +71,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     "navigation",
   );
   const [configReturnView, setConfigReturnView] = useState<"fleet" | "chat">("fleet");
+  const [configInitialTab, setConfigInitialTab] = useState<ConfigTab>("behavior");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const configNavigation = useConfigNavigationController();
   const requestConfigNavigation = configNavigation.requestNavigation;
@@ -162,12 +164,13 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     });
   }
 
-  function openConfig(agentDid?: string) {
+  function openConfig(agentDid?: string, initialTab: ConfigTab = "behavior") {
     shell.clearPendingMailboxCause();
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
     setConfigReturnView(workspaceView === "fleet" ? "fleet" : "chat");
+    setConfigInitialTab(initialTab);
     setWorkspaceView("config");
   }
 
@@ -330,6 +333,12 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 draft={shell.draft}
                 interruptVisible={shell.interruptVisible}
                 onDraftChange={shell.setDraft}
+                onConfigureInference={
+                  shell.sendStatus.kind === "disabled" &&
+                  shell.sendStatus.reason === "behaviorUnavailable"
+                    ? () => openConfig(shell.selectedDeployment?.agentDid, "backends")
+                    : undefined
+                }
                 onRenameConversationTitle={shell.onRenameConversationTitle}
                 onSend={shell.onSendMessage}
                 onRetryMessage={shell.onRetryMessage}
@@ -371,6 +380,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           <section className="config-page">
             <ConfigWorkspace
               api={bridge.api}
+              initialTab={configInitialTab}
               backLabel={
                 configReturnView === "fleet" ? "Back to Fleet" : "Back to Chat"
               }

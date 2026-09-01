@@ -342,7 +342,10 @@ impl PeerDirectory {
             record.pairing_ready = false;
         }
         record.peer_id = peer_id.to_string();
-        record.label = label.to_string();
+        // The enrollment label seeds a new record only. Once saved, the label is
+        // user-owned presentation state and must survive authority refreshes.
+        // Reapplying the enrollment fallback here made every successful status
+        // sweep undo a manual rename.
         record.addr = addr.to_string();
         record.agent_did = agent_did.to_string();
         record.source = Some("enrollment".to_string());
@@ -825,6 +828,54 @@ mod tests {
         drop(directory);
         let reloaded = load_peer_records(&path).await.unwrap();
         assert_eq!(reloaded, vec![rotated]);
+    }
+
+    #[tokio::test]
+    async fn enrollment_refresh_preserves_the_saved_user_label() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let enrolled = directory
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Enrolled Agent",
+                "iroh://ticket",
+                "did:key:agent",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                7,
+                "2099-09-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        let mut renamed = enrolled.clone();
+        renamed.label = "Mandrake".to_string();
+        directory
+            .replace_if_matches(&enrolled, renamed)
+            .await
+            .unwrap()
+            .expect("enrollment record remains current");
+
+        let refreshed = directory
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Enrolled Agent",
+                "iroh://rotated-ticket",
+                "did:key:agent",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                7,
+                "2099-09-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(refreshed.label, "Mandrake");
+        assert_eq!(load_peer_records(&path).await.unwrap()[0].label, "Mandrake");
     }
 
     #[tokio::test]

@@ -146,6 +146,7 @@ async fn build_bootstrap_summary_raw(
         agent_home_exists,
         desktop_home_exists: desktop_paths.root().exists(),
         peer_directory_exists: desktop_paths.peer_directory_path().exists(),
+        client_state_exists: desktop_paths.client_state_exists(),
         saved_peers: peer_records
             .iter()
             .map(|peer| SavedPeerView {

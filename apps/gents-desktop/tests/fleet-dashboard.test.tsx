@@ -32,6 +32,7 @@ const bootstrap: BootstrapSummary = {
   agentHomeExists: true,
   desktopHomeExists: true,
   peerDirectoryExists: false,
+  clientStateExists: false,
   savedPeers: [],
 };
 
@@ -40,6 +41,7 @@ const enrollmentRequest: EnrollmentRequestView = {
   networkId: "network-amy",
   adminDid: "did:key:z6MkAmy",
   serverPeer: "server-peer-amy",
+  serverLabel: "Amy",
   ownerAgent: "did:key:z6MkAmy",
   state: "pending",
 };
@@ -55,6 +57,34 @@ afterEach(() => {
 });
 
 describe("FleetHostDashboard add connection flow", () => {
+  it("keeps the second-agent address enabled during background snapshot refreshes", () => {
+    const props = {
+      addingPeer: false,
+      bootstrap,
+      deployments: [deployment],
+      p2pHealth: null,
+      repairingP2P: false,
+      starting: false,
+      onRequestStatusEnrollment: vi.fn(),
+      onInitLocalRuntime: vi.fn(),
+      onOpenChat: vi.fn(),
+      onOpenConfig: vi.fn(),
+      onRepairP2P: vi.fn(),
+      ...inferenceProps,
+    };
+    const { rerender } = render(<FleetHostDashboard {...props} loading={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Agent" }));
+    const address = screen.getByTestId("fleet-add-server-address");
+    address.focus();
+    expect(address).toHaveFocus();
+
+    rerender(<FleetHostDashboard {...props} loading />);
+
+    expect(address).not.toBeDisabled();
+    expect(address).toHaveFocus();
+  });
+
   it("connects the local runtime from the fleet empty state", async () => {
     const onInitLocalRuntime = vi.fn(async () => undefined);
     const onStartManagedServer = vi.fn(async () => undefined);
@@ -124,9 +154,63 @@ describe("FleetHostDashboard add connection flow", () => {
 
     await waitFor(() => {
       expect(onRequestStatusEnrollment).toHaveBeenCalledWith("http://127.0.0.1:9181");
-      expect(screen.getByTestId("fleet-import-status")).toHaveTextContent(
-        "awaiting server approval",
+      expect(screen.getByTestId("fleet-enrollment-pending")).toHaveTextContent(
+        "Waiting for Amy approval",
       );
+    });
+    expect(screen.queryByTestId("fleet-add-server-address")).not.toBeInTheDocument();
+  });
+
+  it("renames a completed enrollment from its authenticated server label", async () => {
+    const onRenamePeer = vi.fn(async () => undefined);
+    const request = {
+      ...enrollmentRequest,
+      serverPeer: "peer-mandrake",
+      serverLabel: "mandrake",
+    };
+    const shared = {
+      addingPeer: false,
+      bootstrap,
+      loading: false,
+      p2pHealth: null,
+      repairingP2P: false,
+      starting: false,
+      onRequestStatusEnrollment: vi.fn(async () => request),
+      onInitLocalRuntime: vi.fn(),
+      onOpenChat: vi.fn(),
+      onOpenConfig: vi.fn(),
+      onRepairP2P: vi.fn(),
+      onRenamePeer,
+      ...inferenceProps,
+    };
+    const { rerender } = render(
+      <FleetHostDashboard {...shared} deployments={[deployment]} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Agent" }));
+    fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
+      target: { value: "http://mandrake:9511" },
+    });
+    fireEvent.click(screen.getByTestId("fleet-fetch-status"));
+    await screen.findByTestId("fleet-enrollment-pending");
+
+    rerender(
+      <FleetHostDashboard
+        {...shared}
+        deployments={[
+          {
+            ...deployment,
+            peerId: "peer-mandrake",
+            label: "Enrolled Agent",
+            pairingReady: true,
+          },
+        ]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onRenamePeer).toHaveBeenCalledWith("peer-mandrake", "mandrake");
+      expect(screen.queryByTestId("fleet-enrollment-pending")).not.toBeInTheDocument();
     });
   });
 

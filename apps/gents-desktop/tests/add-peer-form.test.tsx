@@ -9,6 +9,7 @@ const enrollmentRequest: EnrollmentRequestView = {
   networkId: "network-amy",
   adminDid: "did:key:z6MkAmy",
   serverPeer: "server-peer-amy",
+  serverLabel: "Amy",
   ownerAgent: "did:key:z6MkAmy",
   state: "pending",
 };

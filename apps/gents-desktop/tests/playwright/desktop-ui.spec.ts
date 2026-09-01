@@ -25,6 +25,12 @@ test.describe("desktop UI harness", () => {
     );
     await expect(page.getByTestId("composer-input")).toBeEditable();
     await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
+    await page.getByRole("button", { name: "Configure inference" }).click();
+    await expect(page.getByTestId("config-tab-backends")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.getByTestId("backend-endpoint")).toBeVisible();
   });
 
   test("mobile conversation pins the title and composer to the viewport", async ({

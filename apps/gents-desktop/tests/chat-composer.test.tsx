@@ -9,6 +9,7 @@ function renderComposer(
     interruptVisible?: boolean;
     turnState?: string | null;
     sendHint?: string | null;
+    onConfigureInference?: () => void;
   } = {},
 ) {
   return render(
@@ -26,6 +27,7 @@ function renderComposer(
       sending={false}
       turnState={overrides.turnState ?? null}
       onDraftChange={vi.fn()}
+      onConfigureInference={overrides.onConfigureInference}
       onInterruptClick={vi.fn()}
       onSend={vi.fn()}
     />,
@@ -66,6 +68,17 @@ describe("ChatComposer chrome", () => {
     expect(screen.getByTestId("composer-status")).toHaveTextContent(
       "Connect an agent first",
     );
+  });
+
+  it("offers a direct inference configuration recovery action", () => {
+    const onConfigureInference = vi.fn();
+    renderComposer({
+      sendHint: "Behavior backend is unavailable",
+      onConfigureInference,
+    });
+
+    screen.getByTestId("composer-configure-inference").click();
+    expect(onConfigureInference).toHaveBeenCalledOnce();
   });
 
   it("no longer renders store internals or permanent behavior chrome", () => {

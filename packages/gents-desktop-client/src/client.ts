@@ -15,10 +15,10 @@ export type DesktopBridgeContract = GeneratedBridgeContract;
 export const PACKAGE_VERSION = "0.15.0";
 // Runtime-authored behavior readiness is required and the duplicate runtime
 // counters are gone and status pairing is authenticated enrollment, so this
-// client requires the breaking 4.0 bridge.
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "4.0";
+// client requires the 4.1 bootstrap contract.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "4.1";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "7a0203eda69c7fedd3f50f89b48af64e7aac23c86a92718742dc9417d8c6bc7a";
+  "678fe63aacd18eb393d62e8235c611005b26275293ef03c79fc4b9795a3c80db";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);

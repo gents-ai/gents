@@ -66,7 +66,9 @@ export function useDesktopClientLifecycle({
         setError(null);
         if (resolvingConfiguration) {
           setStartupPhase(
-            next.client || next.bootstrap.savedPeers.length === 0
+            next.client ||
+              (!next.bootstrap.clientStateExists &&
+                next.bootstrap.savedPeers.length === 0)
               ? "ready"
               : "starting-client",
           );
