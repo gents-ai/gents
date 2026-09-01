@@ -13,12 +13,11 @@ import type {
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.15.0";
-// Runtime-authored behavior readiness is required and the duplicate runtime
-// counters are gone and status pairing is authenticated enrollment, so this
-// client requires the 4.1 bootstrap contract.
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "4.1";
+// Exact hydration coverage is part of the authoritative session-loading
+// projection, so this client requires the 4.2 bridge contract.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "4.2";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "678fe63aacd18eb393d62e8235c611005b26275293ef03c79fc4b9795a3c80db";
+  "187954fdf3363b27b6cded2459265ff5c7198b0756ab9c3289f0a7b1a5f94bff";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);
