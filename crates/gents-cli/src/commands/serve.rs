@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
+use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
 use crate::{
@@ -880,6 +881,41 @@ pub(crate) async fn serve_with_control(
             }
         };
 
+    // The Grok TUI leader socket is opt-in: stock Grok attaches to it as the
+    // pager client. Binding resolves the bound behavior/model/context from the
+    // same in-process node before the socket is published, so a misconfigured
+    // home fails fast instead of serving a fabricated model catalog.
+    let grok_shim_socket_path = args
+        .grok_shim
+        .then(|| resolve_grok_shim_socket_path(args.grok_shim_socket_path.as_deref()));
+    let mut grok_shim_handle = None;
+    if let Some(socket_path) = grok_shim_socket_path.as_ref() {
+        match bind_grok_shim(GrokShimBindArgs {
+            node: node.clone(),
+            behavior_id: args.grok_shim_behavior_id.clone(),
+            agent_did: identity.did().to_string(),
+            socket_path: socket_path.clone(),
+        })
+        .await
+        {
+            Ok(handle) => grok_shim_handle = Some(handle),
+            Err(error) => {
+                tracing::error!(
+                    socket = %socket_path.display(),
+                    error = %format!("{error:#}"),
+                    "Grok TUI endpoint disabled: the leader could not bind"
+                );
+            }
+        }
+    }
+    let grok_shim_output = grok_shim_socket_path.as_ref().map(|socket_path| {
+        let bound = grok_shim_handle.is_some();
+        json!({
+            "socket": socket_path,
+            "bound": bound,
+        })
+    });
+
     // Optional pack apply against the same in-process node (schemas/ first,
     // then desired-state). Uses Local access so collection registration works
     // without a separate home open / remote schema API.
@@ -1049,6 +1085,7 @@ pub(crate) async fn serve_with_control(
         "p2p_listen_addresses": p2p_status.get("p2p_listen_addresses").cloned().unwrap_or_else(|| json!([])),
         "p2p_admission": p2p_status.get("p2p_admission").cloned().unwrap_or(Value::Null),
         "codex_shim": codex_shim_output,
+        "grok_shim": grok_shim_output,
         "apply_root": pack_apply,
     });
     if let Some(ready) = ready {
@@ -1087,6 +1124,13 @@ pub(crate) async fn serve_with_control(
     } else {
         eprintln!("gents server is running local-only. Press Ctrl-C to stop.");
     }
+
+    // Hold the Grok leader for the lifetime of this function. `LeaderHandle`
+    // owns shutdown and the listener task (shared shim contract), so dropping
+    // it at return stops the listener and releases the exclusive leader lock;
+    // the leader is deliberately not a second join the operator has to reason
+    // about.
+    let _grok_leader = grok_shim_handle;
 
     if let Some(handle) = codex_shim_handle.as_mut() {
         tokio::select! {
@@ -1443,6 +1487,100 @@ fn display_shim_host(host: IpAddr) -> String {
         format!("[{host_text}]")
     } else {
         host_text
+    }
+}
+
+/// Resolve the Grok TUI leader socket path.
+///
+/// An explicit `--grok-shim-socket-path` wins. Otherwise the leader binds
+/// under `$XDG_RUNTIME_DIR/gents/grok.sock`, falling back to
+/// `/tmp/gents-grok.sock` when no runtime dir is set (the same
+/// platform-neutral default the leader server's tests use as a short root).
+pub(crate) fn resolve_grok_shim_socket_path(explicit: Option<&Path>) -> PathBuf {
+    if let Some(path) = explicit {
+        return path.to_path_buf();
+    }
+    match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(runtime_dir) if !runtime_dir.is_empty() => {
+            PathBuf::from(runtime_dir).join("gents").join("grok.sock")
+        }
+        _ => PathBuf::from("/tmp/gents-grok.sock"),
+    }
+}
+
+#[cfg(test)]
+mod grok_shim_tests {
+    use super::*;
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    fn parse_server(extra: &[&str]) -> ServeArgs {
+        let mut argv = vec!["gents", "server"];
+        argv.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(argv).expect("server should parse");
+        match cli.command {
+            Command::Server(args) => args,
+            _ => panic!("expected `server`"),
+        }
+    }
+
+    #[test]
+    fn grok_shim_flags_default_off() {
+        let args = parse_server(&[]);
+        assert!(!args.grok_shim);
+        assert!(args.grok_shim_socket_path.is_none());
+        assert!(args.grok_shim_behavior_id.is_none());
+    }
+
+    #[test]
+    fn grok_shim_socket_flags_require_the_shim_flag() {
+        // The socket path and behavior override only make sense with the shim.
+        assert!(Cli::try_parse_from([
+            "gents", "server", "--grok-shim-socket-path", "/tmp/g.sock"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "gents", "server", "--grok-shim-behavior-id", "b"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn grok_shim_flags_parse_with_the_shim_flag() {
+        let args = parse_server(&[
+            "--grok-shim",
+            "--grok-shim-socket-path",
+            "/tmp/leader.sock",
+            "--grok-shim-behavior-id",
+            "behavior-a",
+        ]);
+        assert!(args.grok_shim);
+        assert_eq!(
+            args.grok_shim_socket_path.as_deref(),
+            Some(Path::new("/tmp/leader.sock"))
+        );
+        assert_eq!(args.grok_shim_behavior_id.as_deref(), Some("behavior-a"));
+    }
+
+    #[test]
+    fn explicit_socket_path_wins_over_the_runtime_dir_default() {
+        assert_eq!(
+            resolve_grok_shim_socket_path(Some(Path::new("/tmp/custom.sock"))),
+            PathBuf::from("/tmp/custom.sock")
+        );
+    }
+
+    #[test]
+    fn socket_path_falls_back_to_tmp_without_a_runtime_dir() {
+        // `XDG_RUNTIME_DIR` is not guaranteed in a test process; assert the
+        // fallback shape only when the variable is actually unset so the test
+        // never depends on the host environment.
+        if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+            assert_eq!(
+                resolve_grok_shim_socket_path(None),
+                PathBuf::from("/tmp/gents-grok.sock")
+            );
+        }
     }
 }
 
