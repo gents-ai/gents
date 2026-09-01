@@ -19,10 +19,9 @@
 //! All queries go through the in-process embedded node (`node.execute`) with
 //! every interpolated value passed through `escape_graphql_string`; no HTTP
 //! GraphQL helper is used. Projection is bounded and request-id-scoped: one
-//! query per child request id, plus one response query, with no graph walks
+//! child-request query, one spawn-tool query, one child-response query, and
+//! one child-tool query per projected parent request, with no graph walks
 //! beyond the direct children of the request being projected.
-
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -115,8 +114,6 @@ struct ChildRequestRow {
     #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
     failure_reason: Option<String>,
     #[serde(default)]
     interrupt_requested_at: Option<String>,
@@ -125,11 +122,7 @@ struct ChildRequestRow {
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
-    subagent_depth: Option<i64>,
-    #[serde(default)]
     caused_by_parent_request_id: Option<String>,
-    #[serde(default)]
-    caused_by_parent_tool_call_id: Option<String>,
     #[serde(default)]
     metadata: Option<String>,
 }
@@ -140,15 +133,9 @@ struct ChildRequestRow {
 struct ChildResponseRow {
     request_id: String,
     #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
     token_count: Option<i64>,
     #[serde(default)]
     error_message: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    completed_at: Option<String>,
     #[serde(default)]
     interrupted_at: Option<String>,
 }
@@ -160,11 +147,18 @@ struct SpawnToolRow {
     request_id: String,
     tool_call_id: String,
     #[serde(default)]
-    tool_name: Option<String>,
-    #[serde(default)]
     child_request_id: Option<String>,
     #[serde(default)]
     args: Option<String>,
+}
+
+/// An `AgentToolCall` row executed by a child request; the durable source of
+/// the progress/finished tool counts, tool names, and error count.
+#[derive(Clone, Debug, Deserialize)]
+struct ChildToolRow {
+    request_id: String,
+    #[serde(default)]
+    tool_name: Option<String>,
     #[serde(default)]
     lifecycle_state: Option<String>,
 }
@@ -175,33 +169,31 @@ const CHILD_REQUEST_FIELDS: &str = r#"
     behavior_id
     content
     lifecycle_state
-    status
     failure_reason
     interrupt_requested_at
     terminalized_at
     created_at
-    subagent_depth
     caused_by_parent_request_id
-    caused_by_parent_tool_call_id
     metadata
 "#;
 
 const CHILD_RESPONSE_FIELDS: &str = r#"
     request_id
-    status
     token_count
     error_message
-    created_at
-    completed_at
     interrupted_at
 "#;
 
 const SPAWN_TOOL_FIELDS: &str = r#"
     request_id
     tool_call_id
-    tool_name
     child_request_id
     args
+"#;
+
+const CHILD_TOOL_FIELDS: &str = r#"
+    request_id
+    tool_name
     lifecycle_state
 "#;
 
@@ -305,15 +297,16 @@ impl SubagentUpdate {
 ///
 /// Bounded and request-id-scoped: the query set is exactly
 /// 1. one `AgentRequest` query for children of this request id,
-/// 2. one `AgentResponse` query for those child request ids,
-/// 3. one `AgentToolCall` query for the spawn rows of this request id.
+/// 2. one `AgentToolCall` query for the spawn rows of this request id,
+/// 3. one `AgentResponse` query for those child request ids,
+/// 4. one `AgentToolCall` query for the tool rows of those child request ids.
 ///
 /// Returns at most one `spawned` plus one terminal `finished` update per
 /// child, plus one `progress` update per still-running child. It never
 /// replays the session or duplicates durable materialization: the projection
 /// is read-only and every payload is a fresh notification value.
 pub(super) async fn project_subagents(
-    node: &Arc<EmbeddedNode>,
+    node: &EmbeddedNode,
     parent_request_id: &str,
     parent_session_id: &str,
     context_window_tokens: u64,
@@ -332,18 +325,23 @@ pub(super) async fn project_subagents(
     ensure_no_errors(&spawn_response, "grok shim subagent spawn tool query")?;
     let spawn_tools = decode_spawn_rows(&spawn_response);
 
+    let child_request_ids = children.iter().map(|child| child.request_id.as_str());
+
     let response_response = node
-        .execute(&child_responses_query(
-            children.iter().map(|child| child.request_id.as_str()),
-        ))
+        .execute(&child_responses_query(child_request_ids.clone()))
         .await;
     ensure_no_errors(&response_response, "grok shim subagent response query")?;
     let child_responses = decode_response_rows(&response_response);
+
+    let tools_response = node.execute(&child_tools_query(child_request_ids)).await;
+    ensure_no_errors(&tools_response, "grok shim subagent child tool query")?;
+    let child_tools = decode_child_tool_rows(&tools_response);
 
     let updates = project_child_rows(
         &children,
         &spawn_tools,
         &child_responses,
+        &child_tools,
         parent_request_id,
         parent_session_id,
         context_window_tokens,
@@ -355,6 +353,7 @@ fn project_child_rows(
     children: &[ChildRequestRow],
     spawn_tools: &[SpawnToolRow],
     child_responses: &[ChildResponseRow],
+    child_tools: &[ChildToolRow],
     parent_request_id: &str,
     parent_session_id: &str,
     context_window_tokens: u64,
@@ -383,6 +382,10 @@ fn project_child_rows(
         let child_response = child_responses
             .iter()
             .find(|response| response.request_id == child.request_id);
+        let child_tools = child_tools
+            .iter()
+            .filter(|tool| tool.request_id == child.request_id)
+            .collect::<Vec<_>>();
 
         let subagent_id = subagent_id_for(child, spawn_tool);
         let subagent_type = child
@@ -407,6 +410,7 @@ fn project_child_rows(
             let progress = progress_update(
                 child,
                 child_response,
+                &child_tools,
                 &subagent_id,
                 parent_session_id,
                 context_window_tokens,
@@ -414,9 +418,13 @@ fn project_child_rows(
             updates.push(SubagentUpdate::Progress(progress));
         }
 
-        if let Some(finished) =
-            finished_update(child, child_response, &subagent_id, parent_session_id)
-        {
+        if let Some(finished) = finished_update(
+            child,
+            child_response,
+            &child_tools,
+            &subagent_id,
+            parent_session_id,
+        ) {
             updates.push(SubagentUpdate::Finished(finished));
         }
     }
@@ -454,6 +462,7 @@ impl ChildRequestRow {
 fn progress_update(
     child: &ChildRequestRow,
     child_response: Option<&ChildResponseRow>,
+    child_tools: &[&ChildToolRow],
     subagent_id: &str,
     parent_session_id: &str,
     context_window_tokens: u64,
@@ -476,22 +485,19 @@ fn progress_update(
             child.terminalized_at.as_deref(),
         ),
         turn_count: 1,
-        tool_call_count: 0,
+        tool_call_count: u32::try_from(child_tools.len()).unwrap_or(u32::MAX),
         tokens_used,
         context_window_tokens,
         context_usage_pct: context_usage_pct(tokens_used, context_window_tokens),
-        tools_used: Vec::new(),
-        error_count: if child.failure_reason.as_deref().and_then(nonempty).is_some() {
-            1
-        } else {
-            0
-        },
+        tools_used: distinct_tool_names(child_tools),
+        error_count: child_tool_error_count(child_tools, child),
     }
 }
 
 fn finished_update(
     child: &ChildRequestRow,
     child_response: Option<&ChildResponseRow>,
+    child_tools: &[&ChildToolRow],
     subagent_id: &str,
     parent_session_id: &str,
 ) -> Option<SubagentFinishedUpdate> {
@@ -538,13 +544,44 @@ fn finished_update(
         child_session_id: child.session_id.clone(),
         status,
         error,
-        tool_calls: 0,
+        tool_calls: u32::try_from(child_tools.len()).unwrap_or(u32::MAX),
         turns: 1,
         duration_ms: elapsed_millis(
             child.created_at.as_deref(),
             child.terminalized_at.as_deref(),
         ),
     })
+}
+
+/// Distinct, insertion-ordered tool names the child actually executed, as
+/// recorded on durable `AgentToolCall` rows.
+fn distinct_tool_names(child_tools: &[&ChildToolRow]) -> Vec<String> {
+    let mut names = Vec::new();
+    for tool in child_tools {
+        let Some(name) = tool.tool_name.as_deref().and_then(nonempty) else {
+            continue;
+        };
+        if !names.iter().any(|seen: &String| seen == name) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+/// Errors observed on the child's own tool calls, plus the child request's
+/// own failure reason when present.
+fn child_tool_error_count(child_tools: &[&ChildToolRow], child: &ChildRequestRow) -> u32 {
+    let failed_tools = child_tools
+        .iter()
+        .filter(|tool| {
+            tool.lifecycle_state
+                .as_deref()
+                .and_then(nonempty)
+                .is_some_and(|state| state == "failed")
+        })
+        .count();
+    let request_failure = usize::from(child.failure_reason.as_deref().and_then(nonempty).is_some());
+    u32::try_from(failed_tools + request_failure).unwrap_or(u32::MAX)
 }
 
 /// The subagent id the pager addresses. The durable spawn tool call id is the
@@ -594,11 +631,7 @@ fn truncate_description(text: &str) -> String {
     if trimmed.chars().count() <= MAX_DESCRIPTION_CHARS {
         return trimmed.to_string();
     }
-    trimmed
-        .char_indices()
-        .take_while(|(index, _)| *index < MAX_DESCRIPTION_CHARS)
-        .map(|(_, character)| character)
-        .collect()
+    trimmed.chars().take(MAX_DESCRIPTION_CHARS).collect()
 }
 
 /// Fallback context window when the bound configuration did not supply one;
@@ -750,6 +783,17 @@ fn child_responses_query<'a>(request_ids: impl IntoIterator<Item = &'a str>) -> 
     )
 }
 
+fn child_tools_query<'a>(request_ids: impl IntoIterator<Item = &'a str>) -> String {
+    let ids = graphql_string_list(request_ids);
+    format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ request_id: {{ _in: [{ids}] }} }}
+            ) {{ {CHILD_TOOL_FIELDS} }}
+        }}"#
+    )
+}
+
 fn graphql_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
     values
         .into_iter()
@@ -826,6 +870,28 @@ fn decode_response_rows(response: &defra_node::QueryResponse) -> Vec<ChildRespon
         .collect()
 }
 
+fn decode_child_tool_rows(response: &defra_node::QueryResponse) -> Vec<ChildToolRow> {
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|row| match serde_json::from_value::<ChildToolRow>(row) {
+            Ok(row) => Some(row),
+            Err(error) => {
+                tracing::debug!(
+                    %error,
+                    "grok shim skipped an undecodable child AgentToolCall row"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
 fn nonempty(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)
@@ -844,14 +910,11 @@ mod tests {
                       one in five words."
                 .to_string(),
             lifecycle_state: lifecycle_state.map(ToOwned::to_owned),
-            status: None,
             failure_reason: None,
             interrupt_requested_at: None,
             terminalized_at: None,
             created_at: Some("2026-08-31T22:46:45Z".to_string()),
-            subagent_depth: Some(1),
             caused_by_parent_request_id: Some("parent-request".to_string()),
-            caused_by_parent_tool_call_id: Some("call-1".to_string()),
             metadata: None,
         }
     }
@@ -859,11 +922,8 @@ mod tests {
     fn response_row(request_id: &str, token_count: Option<i64>) -> ChildResponseRow {
         ChildResponseRow {
             request_id: request_id.to_string(),
-            status: Some("complete".to_string()),
             token_count,
             error_message: None,
-            created_at: Some("2026-08-31T22:46:47Z".to_string()),
-            completed_at: Some("2026-08-31T22:46:47Z".to_string()),
             interrupted_at: None,
         }
     }
@@ -983,6 +1043,7 @@ mod tests {
             &children,
             &[],
             &[],
+            &[],
             "parent-request",
             "parent-session",
             262_144,
@@ -1005,6 +1066,7 @@ mod tests {
             &children,
             &[],
             &responses,
+            &[],
             "parent-request",
             "parent-session",
             262_144,
@@ -1027,6 +1089,7 @@ mod tests {
             &[child],
             &[],
             &[],
+            &[],
             "parent-request",
             "parent-session",
             262_144,
@@ -1047,6 +1110,7 @@ mod tests {
             &children,
             &[],
             &[response],
+            &[],
             "parent-request",
             "parent-session",
             262_144,
@@ -1065,6 +1129,7 @@ mod tests {
             &children,
             &[],
             &[],
+            &[],
             "parent-request",
             "parent-session",
             262_144,
@@ -1080,6 +1145,7 @@ mod tests {
         child.failure_reason = Some("provider error".to_string());
         let updates = project_child_rows(
             &[child],
+            &[],
             &[],
             &[],
             "parent-request",
@@ -1102,6 +1168,7 @@ mod tests {
             &[child],
             &[],
             &[],
+            &[],
             "parent-request",
             "parent-session",
             262_144,
@@ -1115,14 +1182,13 @@ mod tests {
         let spawn_tools = vec![SpawnToolRow {
             request_id: "parent-request".to_string(),
             tool_call_id: "call-9".to_string(),
-            tool_name: Some("spawn_subagent".to_string()),
             child_request_id: Some("child-1".to_string()),
             args: Some(r#"{"name":"repo scout"}"#.to_string()),
-            lifecycle_state: Some("completed".to_string()),
         }];
         let updates = project_child_rows(
             &children,
             &spawn_tools,
+            &[],
             &[],
             "parent-request",
             "parent-session",
@@ -1140,6 +1206,7 @@ mod tests {
         let children = vec![child_row("child-1", Some("running"))];
         let updates = project_child_rows(
             &children,
+            &[],
             &[],
             &[],
             "parent-request",
@@ -1160,6 +1227,7 @@ mod tests {
             &[child],
             &[],
             &[],
+            &[],
             "parent-request",
             "parent-session",
             262_144,
@@ -1178,6 +1246,7 @@ mod tests {
             &[untyped],
             &[],
             &[],
+            &[],
             "parent-request",
             "parent-session",
             262_144,
@@ -1194,6 +1263,10 @@ mod tests {
         assert_eq!(truncate_description(&description).chars().count(), 120);
         assert_eq!(truncate_description("  short  "), "short");
         assert_eq!(truncate_description(""), "");
+        // Exactly at the limit is preserved verbatim, and the truncation is a
+        // character count, not a byte count.
+        assert_eq!(truncate_description(&"å".repeat(120)), "å".repeat(120));
+        assert_eq!(truncate_description(&"å".repeat(121)).chars().count(), 120);
     }
 
     #[test]
@@ -1207,8 +1280,15 @@ mod tests {
     #[test]
     fn zero_context_window_falls_back_to_catalog_default() {
         let children = vec![child_row("child-1", Some("running"))];
-        let updates =
-            project_child_rows(&children, &[], &[], "parent-request", "parent-session", 0);
+        let updates = project_child_rows(
+            &children,
+            &[],
+            &[],
+            &[],
+            "parent-request",
+            "parent-session",
+            0,
+        );
         let SubagentUpdate::Progress(progress) = &updates[1] else {
             panic!("second update should be progress");
         };
@@ -1240,6 +1320,41 @@ mod tests {
 
         let responses = child_responses_query(["req-a", "req-b"]);
         assert!(responses.contains(r#""req-a", "req-b""#));
+
+        // Quotes and backslashes in list members are escaped too: the raw
+        // member text never reaches the query verbatim.
+        let hostile = r#"req"a\b"#;
+        let escaped_list = child_responses_query([hostile]);
+        assert!(
+            escaped_list.contains(r#""req\"a\\b""#),
+            "escaped member missing: {escaped_list}"
+        );
+        assert!(
+            !escaped_list.contains(r#""req"a\b""#),
+            "raw member must not appear unescaped: {escaped_list}"
+        );
+
+        let tools = spawn_tools_query(r#"parent-'quoted"-id"#);
+        assert!(
+            !tools.contains(r#""parent-'quoted"-id""#),
+            "raw value must not appear unescaped: {tools}"
+        );
+        assert!(
+            tools.contains(r#"child_request_id: { _ne: "" }"#),
+            "{tools}"
+        );
+    }
+
+    #[test]
+    fn child_query_is_scoped_to_the_parent_request_and_orders_by_creation() {
+        let query = child_requests_query("parent-request");
+        assert!(
+            query.contains(r#"caused_by_parent_request_id: { _eq: "parent-request" }"#),
+            "{query}"
+        );
+        assert!(query.contains("order: { created_at: ASC }"), "{query}");
+        assert!(query.contains("AgentRequest("), "{query}");
+        assert!(!query.to_lowercase().contains("task("), "{query}");
     }
 
     #[test]
@@ -1301,11 +1416,87 @@ mod tests {
             &children,
             &[],
             &[],
+            &[],
             "parent-request",
             "parent-session",
             262_144,
         );
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[1].session_update_kind(), "subagent_progress");
+    }
+
+    #[test]
+    fn child_tool_rows_feed_counts_names_and_errors() {
+        let children = vec![child_row("child-1", Some("running"))];
+        let child_tools = vec![
+            ChildToolRow {
+                request_id: "child-1".to_string(),
+                tool_name: Some("read_file".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+            },
+            ChildToolRow {
+                request_id: "child-1".to_string(),
+                tool_name: Some("read_file".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+            },
+            ChildToolRow {
+                request_id: "child-1".to_string(),
+                tool_name: Some("bash".to_string()),
+                lifecycle_state: Some("failed".to_string()),
+            },
+            // Belongs to a different child request: must not be counted.
+            ChildToolRow {
+                request_id: "child-2".to_string(),
+                tool_name: Some("grep".to_string()),
+                lifecycle_state: Some("failed".to_string()),
+            },
+        ];
+        let borrowed: Vec<&ChildToolRow> = child_tools.iter().collect();
+        let updates = project_child_rows(
+            &children,
+            &[],
+            &[],
+            &borrowed,
+            "parent-request",
+            "parent-session",
+            262_144,
+        );
+        assert_eq!(updates.len(), 2);
+        let SubagentUpdate::Progress(progress) = &updates[1] else {
+            panic!("second update should be progress");
+        };
+        assert_eq!(progress.tool_call_count, 3);
+        assert_eq!(progress.tools_used, vec!["read_file", "bash"]);
+        assert_eq!(progress.error_count, 1);
+
+        // A terminal child reports the same counts on subagent_finished.
+        let mut finished_child = child_row("child-1", Some("complete"));
+        finished_child.request_id = "child-1".to_string();
+        let updates = project_child_rows(
+            &[finished_child],
+            &[],
+            &[],
+            &borrowed,
+            "parent-request",
+            "parent-session",
+            262_144,
+        );
+        let SubagentUpdate::Finished(finished) = &updates[1] else {
+            panic!("second update should be finished");
+        };
+        assert_eq!(finished.tool_calls, 3);
+    }
+
+    #[test]
+    fn child_tool_query_is_scoped_to_child_request_ids() {
+        let query = child_tools_query(["child-1", "child-2"]);
+        assert!(query.contains("AgentToolCall("), "{query}");
+        assert!(
+            query.contains(r#"request_id: { _in: ["child-1", "child-2"] }"#),
+            "{query}"
+        );
+        assert!(query.contains("tool_name"), "{query}");
+        assert!(query.contains("lifecycle_state"), "{query}");
+        assert!(!query.to_lowercase().contains("task("), "{query}");
     }
 }
