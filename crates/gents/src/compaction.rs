@@ -395,8 +395,8 @@ pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity
 }
 
 pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
-    history::normalize_assistant_content_order(history::drop_unpaired_tool_calls(
-        history::drop_orphaned_tool_results(messages),
+    history::strip_idless_reasoning(history::normalize_assistant_content_order(
+        history::drop_unpaired_tool_calls(history::drop_orphaned_tool_results(messages)),
     ))
 }
 
@@ -429,10 +429,12 @@ fn provider_view_with_sources(
         })
         .collect();
     let (stripped, activity) = history::strip_tool_results_sourced(sourced);
-    let sanitized = history::normalize_assistant_content_order_sourced(
-        history::drop_unpaired_tool_calls_sourced(history::drop_orphaned_tool_results_sourced(
-            stripped,
-        )),
+    let sanitized = history::strip_idless_reasoning_sourced(
+        history::normalize_assistant_content_order_sourced(
+            history::drop_unpaired_tool_calls_sourced(history::drop_orphaned_tool_results_sourced(
+                stripped,
+            )),
+        ),
     );
     (sanitized, activity)
 }

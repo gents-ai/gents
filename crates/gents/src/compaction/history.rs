@@ -309,6 +309,54 @@ pub(super) fn normalize_assistant_content_order_sourced(
         .collect()
 }
 
+/// Drop OpenAI Responses reasoning items that lack a provider id.
+///
+/// Durable history may keep `Reasoning { id: None }` after a mid-stream
+/// failure (`persist_partial_turn`). Responses conversion rejects those
+/// items before HTTP (`An OpenAI-generated ID is required…`). The provider
+/// boundary therefore strips them; empty assistant rows that remain are
+/// dropped so the next turn is not bricked.
+pub(super) fn strip_idless_reasoning(messages: Vec<Message>) -> Vec<Message> {
+    messages_only(strip_idless_reasoning_sourced(source_messages(messages)))
+}
+
+pub(super) fn strip_idless_reasoning_sourced(
+    messages: Vec<SourcedMessage>,
+) -> Vec<SourcedMessage> {
+    messages
+        .into_iter()
+        .filter_map(|sourced| {
+            let SourcedMessage {
+                source_index,
+                message,
+            } = sourced;
+            let message = match message {
+                Message::Assistant { id, content } => {
+                    let content: Vec<AssistantContent> = content
+                        .into_iter()
+                        .filter(|item| match item {
+                            AssistantContent::Reasoning(reasoning) => reasoning
+                                .id
+                                .as_ref()
+                                .is_some_and(|value| !value.trim().is_empty()),
+                            _ => true,
+                        })
+                        .collect();
+                    if content.is_empty() {
+                        return None;
+                    }
+                    Message::Assistant { id, content }
+                }
+                other => other,
+            };
+            Some(SourcedMessage {
+                source_index,
+                message,
+            })
+        })
+        .collect()
+}
+
 pub(super) fn pretruncate_tool_results(messages: Vec<Message>, max_chars: usize) -> Vec<Message> {
     messages
         .into_iter()
