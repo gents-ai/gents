@@ -454,9 +454,18 @@ fn push_behavior_readiness_metrics(
     agent_did: &str,
     rows: &[AgentBehaviorReadinessRow],
 ) {
+    push_behavior_readiness_metrics_at(lines, agent_did, rows, chrono::Utc::now());
+}
+
+fn push_behavior_readiness_metrics_at(
+    lines: &mut Vec<String>,
+    agent_did: &str,
+    rows: &[AgentBehaviorReadinessRow],
+    observed_at: chrono::DateTime<chrono::Utc>,
+) {
     let readiness = rows.iter().find(|row| row.agent_did == agent_did);
     let (ready, unavailable, observed) =
-        match project_behavior_readiness_summary(readiness, agent_did, chrono::Utc::now()) {
+        match project_behavior_readiness_summary(readiness, agent_did, observed_at) {
             ProjectedBehaviorReadinessSummary::Observed(summary) => (
                 i64::try_from(summary.ready_count).unwrap_or(i64::MAX),
                 i64::try_from(summary.unavailable_behaviors.len()).unwrap_or(i64::MAX),
@@ -1428,14 +1437,21 @@ mod tests {
         }
     }
 
+    fn readiness_observed_at() -> chrono::DateTime<chrono::Utc> {
+        "2026-08-29T00:00:30Z"
+            .parse()
+            .expect("fixed metrics observation timestamp must parse")
+    }
+
     #[test]
     fn behavior_readiness_metrics_distinguish_observed_from_unknown() {
         let runtime = metrics_runtime("did:test:metrics");
         let mut lines = Vec::new();
-        push_behavior_readiness_metrics(
+        push_behavior_readiness_metrics_at(
             &mut lines,
             &runtime.agent_did,
             &[metrics_readiness("did:test:metrics")],
+            readiness_observed_at(),
         );
         let rendered = lines.join("\n");
         assert!(rendered
@@ -1452,9 +1468,18 @@ mod tests {
                 snapshot_json: "{}".to_string(),
                 ..metrics_readiness("did:test:metrics")
             }],
+            vec![AgentBehaviorReadinessRow {
+                updated_at: "2026-08-28T23:59:00Z".to_string(),
+                ..metrics_readiness("did:test:metrics")
+            }],
         ] {
             let mut lines = Vec::new();
-            push_behavior_readiness_metrics(&mut lines, &runtime.agent_did, &rows);
+            push_behavior_readiness_metrics_at(
+                &mut lines,
+                &runtime.agent_did,
+                &rows,
+                readiness_observed_at(),
+            );
             let rendered = lines.join("\n");
             assert!(rendered
                 .contains(r#"gents_runtime_runnable_behaviors{agent_did="did:test:metrics"} 0"#));
