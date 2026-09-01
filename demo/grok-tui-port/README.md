@@ -118,12 +118,48 @@ python3 demo/grok-tui-port/scripts/grok_edge_probe.py \
 python3 demo/grok-tui-port/scripts/grok_edge_probe.py \
   --socket /tmp/gents-grok-live.sock \
   --graphql http://127.0.0.1:19205/api/v0/graphql \
+  --edge subagent
+python3 demo/grok-tui-port/scripts/grok_edge_probe.py \
+  --socket /tmp/gents-grok-live.sock \
+  --graphql http://127.0.0.1:19205/api/v0/graphql \
   --edge cancel
 ```
+
+Subagent lifecycle (extension rail `x.ai/session_notification`, camelCase
+`sessionId`/`update`/`_meta` envelope, snake_case variant fields under the
+`sessionUpdate` tag): the finished DTO's exact serde schema requires
+`subagent_id`, `child_session_id`, `status` (exactly one of
+`completed|failed|cancelled`), `tool_calls`, `turns`, `duration_ms`,
+`tokens_used`, `will_wake`; `error`/`output` are optional (absent, null, or
+string); `parent_session_id` is absent; `subagent_id == child_session_id`.
+The schema validator is outcome-neutral — a well-formed `failed` or
+`cancelled` DTO is still an exact DTO. The live foreground success edge
+then separately requires `status == "completed"` and `will_wake: false`,
+so a valid failed DTO is recognized as well-formed but still fails that
+edge. The probe also validates the exact spawned DTO (required
+`sessionUpdate`, `subagent_id`, `parent_session_id`, `child_session_id`,
+`subagent_type`, `description`; serde-option extras
+`parent_prompt_id`, `effective_context_source`, `context_normalized`
+(false is omitted on the wire), `capability_mode`, `persona`, `role`,
+`model`, `resumed_from`, `workflow_run_id`) and the exact all-required
+progress DTO (`duration_ms`, `turn_count`, `tool_call_count`,
+`tokens_used`, `context_window_tokens`, `context_usage_pct` bounded to
+[0, 100], `tools_used`, `error_count`), rejecting legacy camelCase names
+and unknown extras. An inline fixture self-test calls these same real
+validators before the live envelopes are trusted. Client request/result
+methods (`x.ai/subagent/get`, `x.ai/subagent/cancel`,
+`x.ai/subagent/list_running`) keep their separately audited camelCase DTO
+shapes. The worker target `port-live-worker` is
+no-shell/no-file/no-subagent; its parent target `port-live-tools` is
+foreground-only (`subagent_default_await_mode: "foreground"`,
+`subagent_background_enabled: false`).
 
 `--edge all` runs the same checks on one multi-turn session. Keep one separate
 stock `grok --leader --leader-socket <path>` PTY smoke in the final gate.
 The integrated server must use `--grok-shim-behavior-id port-live`; the shim
 derives its advertised model and context window from that bound behavior.
 Pass `--model "$GENTS_GROK_PORT_MODEL"` for a non-default pack model; the probe
-also reads that environment variable directly when the flag is omitted.
+also reads that environment variable directly when the flag is omitted. The
+same applies to the context window: the probe's standalone default is 262144,
+and `--context-window` (or `GENTS_GROK_PORT_CONTEXT_WINDOW`, read directly
+when the flag is omitted) overrides it for a non-default pack profile.

@@ -27,6 +27,12 @@
 //! * Registration order is enforced: the first frame on a connection must be a
 //!   valid `register` envelope; `registered` is written only after it
 //!   validates, with `leader_binary_version = gents-<CARGO_PKG_VERSION>`.
+//! * Delegates are constructed per registered connection: the leader holds an
+//!   [`AcpDelegateFactory`] and only calls it after a `register` frame
+//!   validates, passing the assigned client id plus the registration's
+//!   mode/capabilities. A connection that fails registration constructs zero
+//!   delegates, and `on_disconnect` runs only on the delegate that connection
+//!   constructed.
 //! * `ping` is answered with `pong`, `acp` frames are dispatched to the
 //!   [`AcpDelegate`] with a connection-scoped outbound handle, unsupported
 //!   `control` commands answer a method-not-found error envelope, and
@@ -80,7 +86,7 @@
 
 use std::fs::{File, OpenOptions, Permissions};
 use std::io::Write;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -90,23 +96,19 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::unix::OwnedReadHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{JoinHandle, JoinSet};
 use uuid::Uuid;
 
 use super::protocol::{
-    read_frame, write_frame, ClientCapabilities, ClientEnvelope, LeaderCapabilities,
-    ServerEnvelope, LEADER_PROTOCOL_VERSION,
+    read_client_envelope, write_server_envelope, ClientCapabilities, ClientEnvelope,
+    LeaderCapabilities, RegisterMode, ServerEnvelope, ShutdownReason, LEADER_PROTOCOL_VERSION,
 };
 
 /// Tracing target for every log line this module emits.
 const LOG_TARGET: &str = "gents_cli::commands::grok_shim::server";
-
-/// Reason string announced in `shutting_down` for a stop requested through
-/// [`LeaderHandle::shutdown`].
-const SHUTDOWN_REASON_MANUAL: &str = "manual";
 
 /// Envelope error code for a frame that violates the leader protocol.
 const ENVELOPE_ERROR_INVALID_REQUEST: i32 = -32600;
@@ -122,6 +124,11 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 
 /// Mode of the private staging ancestor directory.
 const STAGING_DIR_MODE: u32 = 0o700;
+
+/// Mode of every socket-parent directory the shim creates itself. Existing
+/// directories are never chmodmed to this mode; it applies only to components
+/// that did not exist and are created by [`ensure_socket_parent`].
+const SOCKET_PARENT_DIR_MODE: u32 = 0o700;
 
 /// Name of the socket *inside* the staging directory. A single character keeps
 /// the bind path short even when the published path is near the `sun_path`
@@ -173,6 +180,16 @@ pub(crate) struct AcpOutbound {
 }
 
 impl AcpOutbound {
+    /// Wrap a raw frame sender.
+    ///
+    /// Production connections get their handle from the leader's
+    /// per-connection channel; tests (and any other embedder that already owns
+    /// a channel) can build one directly.
+    #[cfg(test)]
+    pub(crate) fn for_frames(frames: mpsc::UnboundedSender<ServerEnvelope>) -> Self {
+        Self { frames }
+    }
+
     /// Queue one ACP JSON-RPC line for the pager client.
     pub(crate) fn send(&self, payload: impl Into<String>) -> Result<()> {
         self.frames
@@ -199,21 +216,53 @@ pub(crate) trait AcpDelegate: Send + Sync + 'static {
         outbound: AcpOutbound,
     ) -> BoxFuture<'a, Result<()>>;
 
-    /// Observe the registering client's capabilities. The ACP service derives
-    /// the `yoloMode` / `autoMode` / `clientTerminal` injection for
-    /// `session/new` from them.
-    fn on_client_capabilities<'a>(
-        &'a self,
-        capabilities: &'a ClientCapabilities,
-    ) -> BoxFuture<'a, ()> {
-        Box::pin(async {})
-    }
-
     /// The connection went away (disconnect, EOF, protocol violation, or
     /// leader shutdown). The ACP service drains and interrupts its
     /// connection-scoped pending turns.
     fn on_disconnect(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {})
+    }
+}
+
+/// A validated `register` frame: the registered client's identity for
+/// delegate construction.
+#[derive(Debug, Clone)]
+pub(crate) struct Registration {
+    /// `client_type` from the register frame (validated non-empty).
+    pub(crate) client_type: String,
+    /// Registration mode: interactive stdio pager or headless client.
+    pub(crate) mode: RegisterMode,
+    /// Capabilities the client advertised on register.
+    pub(crate) capabilities: ClientCapabilities,
+}
+
+/// Constructs one [`AcpDelegate`] per *registered* connection.
+///
+/// The leader never shares a delegate across connections: the factory is
+/// invoked only after a `register` frame validates, with the connection's
+/// generated `client_id` plus the registration's mode/capabilities, and the
+/// returned `Arc<dyn AcpDelegate>` is used for that connection alone — its
+/// `on_client_capabilities` has already been applied at construction time by
+/// the factory, and its `on_disconnect` runs only for that connection. A
+/// connection that fails registration constructs zero delegates.
+pub(crate) trait AcpDelegateFactory: Send + Sync + 'static {
+    fn create_delegate<'a>(
+        &'a self,
+        client_id: u64,
+        registration: &'a Registration,
+    ) -> BoxFuture<'a, Result<Arc<dyn AcpDelegate>>>;
+}
+
+impl<F> AcpDelegateFactory for F
+where
+    F: Fn(u64, &Registration) -> Result<Arc<dyn AcpDelegate>> + Send + Sync + 'static,
+{
+    fn create_delegate<'a>(
+        &'a self,
+        client_id: u64,
+        registration: &'a Registration,
+    ) -> BoxFuture<'a, Result<Arc<dyn AcpDelegate>>> {
+        Box::pin(async move { self(client_id, registration) })
     }
 }
 
@@ -328,13 +377,10 @@ impl Drop for LeaderHandle {
 /// with the runtime reactor, and the accept loop is a spawned task.
 pub(crate) fn spawn_leader(
     config: LeaderServerConfig,
-    delegate: Arc<dyn AcpDelegate>,
+    factory: Arc<dyn AcpDelegateFactory>,
 ) -> Result<LeaderHandle> {
     let socket_path = config.socket_path.clone();
-    if socket_path
-        .file_name()
-        .is_none_or(|name| name.is_empty())
-    {
+    if socket_path.file_name().is_none_or(|name| name.is_empty()) {
         bail!(
             "the grok shim leader socket path {} must name a socket file",
             socket_path.display()
@@ -379,7 +425,7 @@ pub(crate) fn spawn_leader(
         // lock is held for exactly the spawned listener lifetime.
         lock,
         socket_path.clone(),
-        delegate,
+        factory,
         lifecycle_tx,
         shutdown_rx,
         shutdown_delay_ms,
@@ -402,7 +448,7 @@ async fn accept_loop(
     listener: UnixListener,
     lock: LeaderLock,
     socket_path: PathBuf,
-    delegate: Arc<dyn AcpDelegate>,
+    factory: Arc<dyn AcpDelegateFactory>,
     lifecycle: broadcast::Sender<ServerEnvelope>,
     mut shutdown: watch::Receiver<bool>,
     shutdown_delay_ms: u64,
@@ -428,7 +474,7 @@ async fn accept_loop(
                         connections.spawn(handle_connection(
                             stream,
                             client_id,
-                            delegate.clone(),
+                            factory.clone(),
                             lifecycle_rx,
                         ));
                     }
@@ -448,16 +494,14 @@ async fn accept_loop(
 
     // Announce the stop to every live connection, then stop accepting.
     let _ = lifecycle.send(ServerEnvelope::ShuttingDown {
-        reason: SHUTDOWN_REASON_MANUAL.to_string(),
+        reason: ShutdownReason::Manual,
         delay_ms: shutdown_delay_ms,
     });
     let _ = lifecycle.send(ServerEnvelope::Shutdown);
 
     if shutdown_delay_ms > 0 {
         let grace = Duration::from_millis(shutdown_delay_ms).min(MAX_SHUTDOWN_GRACE);
-        let drain = async {
-            while connections.join_next().await.is_some() {}
-        };
+        let drain = async { while connections.join_next().await.is_some() {} };
         if tokio::time::timeout(grace, drain).await.is_err() {
             tracing::debug!(
                 target: LOG_TARGET,
@@ -509,17 +553,10 @@ fn remove_published_socket(socket_path: &Path) {
 // Per-connection handling
 // ---------------------------------------------------------------------------
 
-/// A validated `register` frame.
-struct Registration {
-    client_type: String,
-    mode: String,
-    capabilities: ClientCapabilities,
-}
-
 async fn handle_connection(
     stream: UnixStream,
     client_id: u64,
-    delegate: Arc<dyn AcpDelegate>,
+    factory: Arc<dyn AcpDelegateFactory>,
     mut lifecycle: broadcast::Receiver<ServerEnvelope>,
 ) {
     let (mut reader, writer) = stream.into_split();
@@ -527,7 +564,7 @@ async fn handle_connection(
     let writer_task = tokio::spawn(async move {
         let mut writer = writer;
         while let Some(envelope) = frames_rx.recv().await {
-            if let Err(error) = write_frame(&mut writer, &envelope).await {
+            if let Err(error) = write_server_envelope(&mut writer, &envelope).await {
                 tracing::debug!(
                     target: LOG_TARGET,
                     %error,
@@ -539,18 +576,37 @@ async fn handle_connection(
     });
 
     // Phase 1: the first frame must be a valid register; `registered` is only
-    // written after it validates.
+    // written after it validates, and the connection's delegate is only
+    // constructed after the register frame validates.
     let registration = match register_client(&mut reader, &frames_tx, &mut lifecycle).await {
         Ok(registration) => registration,
         Err(()) => {
             // register_client already logged the cause and, where the protocol
-            // demands it, wrote the error envelope.
-            delegate.on_disconnect().await;
+            // demands it, wrote the error envelope. No delegate was ever
+            // constructed for this connection, so there is nothing to notify.
             drop(frames_tx);
             let _ = tokio::time::timeout(MAX_SHUTDOWN_GRACE, writer_task).await;
             return;
         }
     };
+
+    let delegate: Arc<dyn AcpDelegate> =
+        match factory.create_delegate(client_id, &registration).await {
+            Ok(delegate) => delegate,
+            Err(error) => {
+                // The factory is the seam for per-connection state; failing to
+                // construct it must not leak a half-registered connection.
+                tracing::error!(
+                    target: LOG_TARGET,
+                    client_id,
+                    %error,
+                    "grok shim leader could not construct an ACP delegate for a connection"
+                );
+                drop(frames_tx);
+                let _ = tokio::time::timeout(MAX_SHUTDOWN_GRACE, writer_task).await;
+                return;
+            }
+        };
 
     let _ = frames_tx.send(ServerEnvelope::Registered {
         client_id,
@@ -563,15 +619,12 @@ async fn handle_connection(
         target: LOG_TARGET,
         client_id,
         client_type = %registration.client_type,
-        mode = %registration.mode,
+        mode = registration.mode.wire_name(),
         yolo_mode = registration.capabilities.yolo_mode,
         auto_mode = registration.capabilities.auto_mode,
         terminal = registration.capabilities.terminal,
         "grok shim leader registered a pager client"
     );
-    delegate
-        .on_client_capabilities(&registration.capabilities)
-        .await;
 
     // Phase 2: serve frames. Each ACP frame is dispatched on its own task so
     // a long-running prompt cannot block reading the cancel that stops it.
@@ -601,12 +654,12 @@ async fn handle_connection(
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
-            frame = read_frame::<_, ClientEnvelope>(&mut reader) => {
+            frame = read_client_envelope(&mut reader) => {
                 match frame {
-                    Ok(Some(ClientEnvelope::Ping)) => {
+                    Ok(ClientEnvelope::Ping) => {
                         let _ = frames_tx.send(ServerEnvelope::Pong);
                     }
-                    Ok(Some(ClientEnvelope::Acp { payload })) => {
+                    Ok(ClientEnvelope::Acp { payload }) => {
                         spawn_acp_dispatch(
                             &mut acp_tasks,
                             delegate.clone(),
@@ -614,7 +667,7 @@ async fn handle_connection(
                             payload,
                         );
                     }
-                    Ok(Some(ClientEnvelope::Control { request_id, command })) => {
+                    Ok(ClientEnvelope::Control { request_id, command }) => {
                         tracing::warn!(
                             target: LOG_TARGET,
                             client_id,
@@ -630,14 +683,14 @@ async fn handle_connection(
                             ),
                         });
                     }
-                    Ok(Some(ClientEnvelope::Register { .. })) => {
+                    Ok(ClientEnvelope::Register { .. }) => {
                         protocol_violation(
                             &frames_tx,
                             "register is only valid as the first frame on a connection",
                         );
                         break;
                     }
-                    Ok(Some(ClientEnvelope::Disconnect)) => {
+                    Ok(ClientEnvelope::Disconnect) => {
                         tracing::debug!(
                             target: LOG_TARGET,
                             client_id,
@@ -645,7 +698,7 @@ async fn handle_connection(
                         );
                         break;
                     }
-                    Ok(None) => break,
+                    Err(error) if error.is_connection_closed() => break,
                     Err(error) => {
                         tracing::debug!(
                             target: LOG_TARGET,
@@ -668,10 +721,11 @@ async fn handle_connection(
     // so in-flight handlers observe the drained turn table, then let the
     // queued frames flush before the writer is dropped.
     delegate.on_disconnect().await;
-    let drain = async {
-        while acp_tasks.join_next().await.is_some() {}
-    };
-    if tokio::time::timeout(MAX_SHUTDOWN_GRACE, drain).await.is_err() {
+    let drain = async { while acp_tasks.join_next().await.is_some() {} };
+    if tokio::time::timeout(MAX_SHUTDOWN_GRACE, drain)
+        .await
+        .is_err()
+    {
         tracing::warn!(
             target: LOG_TARGET,
             client_id,
@@ -697,19 +751,19 @@ async fn register_client(
                 // The leader is stopping before this client registered.
                 return Err(());
             }
-            frame = read_frame::<_, ClientEnvelope>(reader) => frame,
+            frame = read_client_envelope(reader) => frame,
         };
         match frame {
-            Ok(Some(ClientEnvelope::Register {
+            Ok(ClientEnvelope::Register {
                 client_type,
                 mode,
                 capabilities,
-            })) => {
+            }) => {
                 if let Err(reason) = validate_register(&client_type, &mode) {
                     tracing::warn!(
                         target: LOG_TARGET,
                         client_type = %client_type,
-                        mode = %mode,
+                        mode = %mode.wire_name(),
                         reason = %format!("{reason:#}"),
                         "grok shim leader rejected an invalid register frame"
                     );
@@ -725,14 +779,14 @@ async fn register_client(
                     capabilities,
                 });
             }
-            Ok(Some(_)) => {
+            Ok(_) => {
                 protocol_violation(
                     frames,
                     "the first frame on a leader connection must be register",
                 );
                 return Err(());
             }
-            Ok(None) => {
+            Err(error) if error.is_connection_closed() => {
                 tracing::debug!(
                     target: LOG_TARGET,
                     "grok shim leader connection closed before register"
@@ -750,14 +804,9 @@ async fn register_client(
     }
 }
 
-fn validate_register(client_type: &str, mode: &str) -> Result<()> {
+fn validate_register(client_type: &str, _mode: &RegisterMode) -> Result<()> {
     if client_type.trim().is_empty() {
         bail!("register requires a non-empty client_type");
-    }
-    if !matches!(mode, "stdio" | "headless") {
-        bail!(
-            "register mode {mode:?} is not one of \"stdio\" or \"headless\""
-        );
     }
     Ok(())
 }
@@ -836,6 +885,93 @@ fn leader_capabilities() -> LeaderCapabilities {
 }
 
 // ---------------------------------------------------------------------------
+// Socket-parent creation
+// ---------------------------------------------------------------------------
+
+/// Ensure every component of `parent` exists as a plain directory.
+///
+/// This deliberately does *not* use `create_dir_all`: that primitive walks the
+/// path through symlinks (`mkdir(2)` on each prefix follows symlinked
+/// components), so a symlink planted anywhere in the chain would redirect
+/// where the socket and its sibling lock file actually land. Instead the path
+/// is walked component by component:
+///
+/// * an existing directory component is accepted exactly as it is — its mode
+///   is left untouched, so the shim never chmods an operator-owned parent,
+///   `/tmp`, `/var`, or an `XDG_RUNTIME_DIR`;
+/// * an existing symlink component is rejected even when it points to a
+///   directory (`symlink_metadata` never follows the link);
+/// * any other existing component (a regular file, a socket, ...) is
+///   rejected;
+/// * a missing component is created with mode `0700` *from creation*
+///   (`DirBuilderExt::mode`, which passes the mode to `mkdir(2)` so the
+///   directory is never even momentarily group/world-readable), and verified
+///   with `symlink_metadata` before the walk descends into it.
+fn ensure_socket_parent(parent: &Path) -> Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(SOCKET_PARENT_DIR_MODE);
+    let mut current = PathBuf::new();
+    for component in parent.components() {
+        use std::path::Component;
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            _ => current.push(component.as_os_str()),
+        }
+        // Lstat the candidate: never follows a symlink component.
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                let file_type = metadata.file_type();
+                if file_type.is_symlink() {
+                    bail!(
+                        "refusing the grok shim socket parent {}: {} is a symlink",
+                        parent.display(),
+                        current.display()
+                    );
+                }
+                if !file_type.is_dir() {
+                    bail!(
+                        "refusing the grok shim socket parent {}: {} exists and is not a directory",
+                        parent.display(),
+                        current.display()
+                    );
+                }
+                // An existing directory is accepted with whatever mode it has.
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "inspecting the grok shim socket parent component {}",
+                        current.display()
+                    )
+                });
+            }
+        }
+        // The component is missing: create it 0700 from creation.
+        builder.create(&current).with_context(|| {
+            format!("creating the grok shim socket parent {}", current.display())
+        })?;
+        let created = std::fs::symlink_metadata(&current).with_context(|| {
+            format!(
+                "verifying the newly created grok shim socket parent {}",
+                current.display()
+            )
+        })?;
+        if created.file_type().is_symlink() || !created.file_type().is_dir() {
+            bail!(
+                "the grok shim socket parent component {} was created but is not a plain directory",
+                current.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Exclusive leader lock
 // ---------------------------------------------------------------------------
 
@@ -856,6 +992,19 @@ struct LeaderLock {
 impl LeaderLock {
     fn acquire(socket_path: &Path) -> Result<Self> {
         let path = socket_path.with_extension("lock");
+        // The lock file lives beside the published socket, and a spawn may
+        // target a socket path whose parent chain does not exist yet (the
+        // atomic publication step creates it). Create the parent here — with
+        // the symlink-rejecting, no-chmod walk — so the election file always
+        // sits next to the socket it elects for.
+        if let Some(parent) = path.parent() {
+            ensure_socket_parent(parent).with_context(|| {
+                format!(
+                    "creating the grok shim leader lock parent {}",
+                    parent.display()
+                )
+            })?;
+        }
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -864,12 +1013,10 @@ impl LeaderLock {
             .mode(PRIVATE_FILE_MODE)
             .custom_flags(O_NOFOLLOW)
             .open(&path)
-            .with_context(|| {
-                format!("opening the grok shim leader lock {}", path.display())
-            })?;
+            .with_context(|| format!("opening the grok shim leader lock {}", path.display()))?;
         force_private_mode(&file, &path)?;
         if let Err(error) = file.try_lock() {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
+            if matches!(error, std::fs::TryLockError::WouldBlock) {
                 let holder = read_holder_pid(&path);
                 return Err(anyhow!(
                     "another grok leader already holds {} (last recorded holder pid: {})",
@@ -885,9 +1032,8 @@ impl LeaderLock {
             ));
         }
         let mut file = file;
-        write_holder_pid(&mut file).with_context(|| {
-            format!("recording the leader pid in {}", path.display())
-        })?;
+        write_holder_pid(&mut file)
+            .with_context(|| format!("recording the leader pid in {}", path.display()))?;
         Ok(Self { path, file })
     }
 
@@ -937,7 +1083,10 @@ fn force_private_mode(file: &File, path: &Path) -> Result<()> {
     let current = file
         .metadata()
         .with_context(|| {
-            format!("reading the mode of the grok shim leader lock {}", path.display())
+            format!(
+                "reading the mode of the grok shim leader lock {}",
+                path.display()
+            )
         })?
         .permissions()
         .mode();
@@ -946,12 +1095,18 @@ fn force_private_mode(file: &File, path: &Path) -> Result<()> {
     }
     file.set_permissions(Permissions::from_mode(PRIVATE_FILE_MODE))
         .with_context(|| {
-            format!("forcing mode 0600 on the grok shim leader lock {}", path.display())
+            format!(
+                "forcing mode 0600 on the grok shim leader lock {}",
+                path.display()
+            )
         })?;
     let forced = file
         .metadata()
         .with_context(|| {
-            format!("re-reading the mode of the grok shim leader lock {}", path.display())
+            format!(
+                "re-reading the mode of the grok shim leader lock {}",
+                path.display()
+            )
         })?
         .permissions()
         .mode();
@@ -973,11 +1128,7 @@ fn file_identity(file: &File) -> Option<(u64, u64)> {
 /// PID recorded in the lock file, for the "another leader holds the lock"
 /// diagnostic. Path-based read: it is only used in a log message.
 fn read_holder_pid(lock_path: &Path) -> Option<u32> {
-    std::fs::read_to_string(lock_path)
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
+    std::fs::read_to_string(lock_path).ok()?.trim().parse().ok()
 }
 
 fn write_holder_pid(file: &mut File) -> Result<()> {
@@ -1008,7 +1159,10 @@ fn remove_stale_socket(socket_path: &Path) -> Result<()> {
                 );
             }
             std::fs::remove_file(socket_path).with_context(|| {
-                format!("removing the stale grok shim socket {}", socket_path.display())
+                format!(
+                    "removing the stale grok shim socket {}",
+                    socket_path.display()
+                )
             })?;
             tracing::debug!(
                 target: LOG_TARGET,
@@ -1019,7 +1173,10 @@ fn remove_stale_socket(socket_path: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(error).with_context(|| {
-                format!("inspecting the grok shim socket path {}", socket_path.display())
+                format!(
+                    "inspecting the grok shim socket path {}",
+                    socket_path.display()
+                )
             });
         }
     }
@@ -1043,7 +1200,10 @@ fn publish_listener(socket_path: &Path) -> Result<UnixListener> {
             socket_path.display()
         )
     })?;
-    std::fs::create_dir_all(parent).with_context(|| {
+    // Walk the parent chain one component at a time: existing directories are
+    // accepted with their own mode (never chmodmed), symlinks and non-directory
+    // components are refused, and only missing components are created 0700.
+    ensure_socket_parent(parent).with_context(|| {
         format!(
             "creating the grok shim leader socket parent {}",
             parent.display()
@@ -1073,20 +1233,30 @@ fn bind_and_publish(staging_dir: &Path, socket_path: &Path) -> Result<UnixListen
     if let Err(error) = std::fs::rename(&staged_socket, socket_path) {
         let _ = std::fs::remove_file(&staged_socket);
         return Err(error).with_context(|| {
-            format!("publishing the grok shim socket at {}", socket_path.display())
+            format!(
+                "publishing the grok shim socket at {}",
+                socket_path.display()
+            )
         });
     }
     Ok(listener)
 }
 
 fn force_socket_mode(socket: &Path) -> Result<()> {
-    std::fs::set_permissions(socket, Permissions::from_mode(PRIVATE_FILE_MODE))
-        .with_context(|| {
-            format!("forcing mode 0600 on the grok shim socket {}", socket.display())
-        })?;
+    std::fs::set_permissions(socket, Permissions::from_mode(PRIVATE_FILE_MODE)).with_context(
+        || {
+            format!(
+                "forcing mode 0600 on the grok shim socket {}",
+                socket.display()
+            )
+        },
+    )?;
     let mode = std::fs::metadata(socket)
         .with_context(|| {
-            format!("reading the mode of the grok shim socket {}", socket.display())
+            format!(
+                "reading the mode of the grok shim socket {}",
+                socket.display()
+            )
         })?
         .permissions()
         .mode();
@@ -1116,17 +1286,37 @@ impl StagingDir {
     /// device.
     fn create(final_parent: &Path) -> Result<Self> {
         let mut last_error: Option<std::io::Error> = None;
+        // Create the staging directory atomically private: the mode rides
+        // the `mkdir(2)` call itself (`DirBuilderExt::mode`), so the
+        // directory is never even momentarily group/world-readable — unlike
+        // a create-then-chmod sequence, where a umask-derived 0755 window
+        // exists between the two syscalls.
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(STAGING_DIR_MODE);
         for ancestor in staging_candidate_ancestors(final_parent) {
             for _ in 0..STAGING_ATTEMPTS {
                 let candidate = ancestor.join(staging_dir_name());
-                match std::fs::create_dir(&candidate) {
+                match builder.create(&candidate) {
                     Ok(()) => {
-                        if let Err(error) =
-                            std::fs::set_permissions(&candidate, Permissions::from_mode(STAGING_DIR_MODE))
-                        {
-                            last_error = Some(error);
+                        // Verify the mode actually applied: a filesystem
+                        // that ignored the request must not be published
+                        // through.
+                        let mode = std::fs::metadata(&candidate)
+                            .with_context(|| {
+                                format!(
+                                    "inspecting the grok shim staging ancestor {}",
+                                    candidate.display()
+                                )
+                            })?
+                            .permissions()
+                            .mode();
+                        if mode & 0o777 != STAGING_DIR_MODE {
                             let _ = std::fs::remove_dir(&candidate);
-                            break;
+                            bail!(
+                                "the grok shim staging ancestor {} is mode {:o} instead of 0700",
+                                candidate.display(),
+                                mode & 0o777
+                            );
                         }
                         tracing::debug!(
                             target: LOG_TARGET,
@@ -1201,29 +1391,48 @@ mod tests {
     use std::sync::Mutex;
     use tokio::time::{sleep, timeout, Instant};
 
+    use crate::commands::grok_shim::protocol::{read_server_envelope, write_client_envelope};
+    use tokio::net::unix::OwnedWriteHalf;
+
     const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Test double for the ACP delegate: records payloads, capabilities, and
     /// disconnects, echoes every ACP payload back, and can push one deferred
-    /// payload after `handle_acp` returns.
-    #[derive(Default)]
+    /// payload after `handle_acp` returns. Each instance records its assigned
+    /// client id, so tests can prove two registrations get two distinct
+    /// delegate instances.
     struct RecordingDelegate {
         late_push: bool,
         payloads: Mutex<Vec<String>>,
         capabilities: Mutex<Option<(bool, bool, bool, Option<String>)>>,
+        client_ids: Mutex<Vec<u64>>,
         disconnects: AtomicUsize,
+        /// Monotonic instance id, unique per constructed delegate.
+        instance_id: u64,
     }
 
     impl RecordingDelegate {
-        fn with_late_push() -> Arc<Self> {
+        fn new(late_push: bool, instance_id: u64) -> Arc<Self> {
             Arc::new(Self {
-                late_push: true,
-                ..Default::default()
+                late_push,
+                payloads: Mutex::new(Vec::new()),
+                capabilities: Mutex::new(None),
+                client_ids: Mutex::new(Vec::new()),
+                disconnects: AtomicUsize::new(0),
+                instance_id,
             })
+        }
+
+        fn with_late_push() -> Arc<Self> {
+            Self::new(true, 0)
         }
 
         fn disconnect_count(&self) -> usize {
             self.disconnects.load(Ordering::SeqCst)
+        }
+
+        fn recorded_client_ids(&self) -> Vec<u64> {
+            self.client_ids.lock().expect("client id log").clone()
         }
     }
 
@@ -1257,23 +1466,97 @@ mod tests {
             })
         }
 
-        fn on_client_capabilities<'a>(
-            &'a self,
-            capabilities: &'a ClientCapabilities,
-        ) -> BoxFuture<'a, ()> {
-            Box::pin(async move {
-                *self.capabilities.lock().expect("capability log") = Some((
-                    capabilities.yolo_mode,
-                    capabilities.auto_mode,
-                    capabilities.terminal,
-                    capabilities.client_version.clone(),
-                ));
-            })
-        }
-
         fn on_disconnect(&self) -> BoxFuture<'_, ()> {
             Box::pin(async move {
                 self.disconnects.fetch_add(1, Ordering::SeqCst);
+            })
+        }
+    }
+
+    /// A recording factory: constructs a fresh [`RecordingDelegate`] per
+    /// registered connection and records both the construction count and the
+    /// per-connection client ids / capabilities it observed. The instance id
+    /// is unique per constructed delegate, which is exactly the property the
+    /// leader must preserve: no two registered connections share a delegate.
+    #[derive(Default)]
+    struct RecordingFactory {
+        /// Construct late-push delegates (one deferred ACP push after
+        /// `handle_acp` returns).
+        late_push: bool,
+        /// Every delegate this factory constructed, in registration order.
+        delegates: Mutex<Vec<Arc<RecordingDelegate>>>,
+        /// The client ids the leader passed in, in registration order.
+        client_ids: Mutex<Vec<u64>>,
+        /// The registration capabilities the leader passed in.
+        capabilities: Mutex<Vec<ClientCapabilities>>,
+    }
+
+    impl RecordingFactory {
+        fn constructed_count(&self) -> usize {
+            self.delegates.lock().expect("delegate log").len()
+        }
+
+        fn constructed(&self) -> Vec<Arc<RecordingDelegate>> {
+            self.delegates.lock().expect("delegate log").clone()
+        }
+
+        fn observed_client_ids(&self) -> Vec<u64> {
+            self.client_ids.lock().expect("client id log").clone()
+        }
+    }
+
+    impl AcpDelegateFactory for RecordingFactory {
+        fn create_delegate<'a>(
+            &'a self,
+            client_id: u64,
+            registration: &'a Registration,
+        ) -> BoxFuture<'a, Result<Arc<dyn AcpDelegate>>> {
+            Box::pin(async move {
+                self.client_ids
+                    .lock()
+                    .expect("client id log")
+                    .push(client_id);
+                self.capabilities
+                    .lock()
+                    .expect("capability log")
+                    .push(registration.capabilities.clone());
+                let delegate =
+                    RecordingDelegate::new(self.late_push, (self.constructed_count() + 1) as u64);
+                delegate
+                    .client_ids
+                    .lock()
+                    .expect("client id log")
+                    .push(client_id);
+                *delegate.capabilities.lock().expect("capability log") = Some((
+                    registration.capabilities.yolo_mode,
+                    registration.capabilities.auto_mode,
+                    registration.capabilities.terminal,
+                    registration.capabilities.client_version.clone(),
+                ));
+                self.delegates
+                    .lock()
+                    .expect("delegate log")
+                    .push(delegate.clone());
+                Ok(delegate as Arc<dyn AcpDelegate>)
+            })
+        }
+    }
+
+    /// A factory that always fails, for the zero-delegates-on-failure test.
+    #[derive(Default)]
+    struct FailingFactory {
+        attempts: AtomicUsize,
+    }
+
+    impl AcpDelegateFactory for FailingFactory {
+        fn create_delegate<'a>(
+            &'a self,
+            _client_id: u64,
+            _registration: &'a Registration,
+        ) -> BoxFuture<'a, Result<Arc<dyn AcpDelegate>>> {
+            Box::pin(async move {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                Err(anyhow!("test factory refuses to construct a delegate"))
             })
         }
     }
@@ -1282,13 +1565,21 @@ mod tests {
 
     /// An explicit short root for near-limit path tests, per the slice
     /// contract. Falls back to the platform temp dir when `/tmp` is absent.
+    ///
+    /// The chosen root is canonicalized: on macOS `/tmp` is a symlink to
+    /// `/private/tmp`, and the socket-parent walk deliberately refuses
+    /// symlinked components, so the fixture resolves the platform's system
+    /// temp symlink once here. Every path the tests then hand to the shim is
+    /// a chain of plain directories, which is what production on a real
+    /// (non-symlinked) runtime dir looks like.
     fn short_test_root() -> PathBuf {
         let explicit = Path::new("/tmp");
-        if explicit.is_dir() {
+        let chosen = if explicit.is_dir() {
             explicit.to_path_buf()
         } else {
             std::env::temp_dir()
-        }
+        };
+        std::fs::canonicalize(&chosen).unwrap_or(chosen)
     }
 
     fn unique_test_root(label: &str) -> PathBuf {
@@ -1349,7 +1640,7 @@ mod tests {
     fn register_envelope() -> ClientEnvelope {
         ClientEnvelope::Register {
             client_type: "grok-pager".to_string(),
-            mode: "stdio".to_string(),
+            mode: RegisterMode::Stdio,
             capabilities: test_capabilities(),
         }
     }
@@ -1363,17 +1654,21 @@ mod tests {
     }
 
     async fn write_client_frame(writer: &mut OwnedWriteHalf, envelope: &ClientEnvelope) {
-        timeout(TEST_TIMEOUT, write_frame(writer, envelope))
+        timeout(TEST_TIMEOUT, write_client_envelope(writer, envelope))
             .await
             .expect("writing a client frame should not time out")
             .expect("writing a client frame should succeed");
     }
 
     async fn next_server_frame(reader: &mut OwnedReadHalf) -> Option<ServerEnvelope> {
-        timeout(TEST_TIMEOUT, read_frame::<_, ServerEnvelope>(reader))
+        match timeout(TEST_TIMEOUT, read_server_envelope(reader))
             .await
             .expect("reading a server frame should not time out")
-            .expect("reading a server frame should succeed")
+        {
+            Ok(envelope) => Some(envelope),
+            Err(error) if error.is_connection_closed() => None,
+            Err(error) => panic!("reading a server frame should succeed: {error}"),
+        }
     }
 
     /// Connect, send a valid register, and assert the exact `registered`
@@ -1404,10 +1699,12 @@ mod tests {
     }
 
     fn assert_socket_mode_0600(socket: &Path) {
-        let metadata =
-            std::fs::metadata(socket).unwrap_or_else(|error| {
-                panic!("the published socket {} should exist: {error}", socket.display())
-            });
+        let metadata = std::fs::metadata(socket).unwrap_or_else(|error| {
+            panic!(
+                "the published socket {} should exist: {error}",
+                socket.display()
+            )
+        });
         assert!(
             metadata.file_type().is_socket(),
             "the published path should be a unix socket"
@@ -1432,7 +1729,7 @@ mod tests {
 
     /// Drive one full pager exchange through the production leader: register,
     /// ping/pong, ACP round trip, disconnect, and disconnect observation.
-    async fn exercise_leader(socket: &Path, delegate: Arc<RecordingDelegate>) {
+    async fn exercise_leader(socket: &Path, factory: &RecordingFactory) {
         let (mut reader, mut writer, _client_id) = register(socket).await;
 
         write_client_frame(&mut writer, &ClientEnvelope::Ping).await;
@@ -1459,10 +1756,17 @@ mod tests {
             Some(ServerEnvelope::Acp { payload: echoed }) => assert_eq!(echoed, payload),
             other => panic!("expected an acp echo, got {other:?}"),
         }
+        // The connection's delegate — the one the factory constructed for it —
+        // saw exactly the dispatched payload.
+        let delegates = factory.constructed();
+        let delegate = delegates
+            .last()
+            .expect("registration must have constructed a delegate");
+        let payloads = delegate.payloads.lock().expect("payload log").clone();
         assert_eq!(
-            *delegate.payloads.lock().expect("payload log"),
+            payloads,
             vec![payload],
-            "the delegate should have seen exactly the dispatched payload"
+            "the connection delegate should have seen exactly the dispatched payload"
         );
 
         write_client_frame(&mut writer, &ClientEnvelope::Disconnect).await;
@@ -1471,19 +1775,23 @@ mod tests {
             "the leader should close the connection after disconnect"
         );
         // The server drops the connection only after on_disconnect ran, so
-        // observing EOF proves the disconnect notification was delivered.
+        // observing EOF proves the disconnect notification was delivered to
+        // the connection's own delegate.
         assert!(
             delegate.disconnect_count() >= 1,
-            "the delegate should observe the disconnect"
+            "the connection delegate should observe the disconnect"
         );
     }
 
     /// Spawn a leader, retrying while a just-aborted previous leader is still
     /// releasing its lock (task abort is asynchronous by nature).
-    async fn spawn_with_retry(socket: &Path, delegate: Arc<RecordingDelegate>) -> LeaderHandle {
+    async fn spawn_with_retry(socket: &Path, factory: Arc<RecordingFactory>) -> LeaderHandle {
         let deadline = Instant::now() + TEST_TIMEOUT;
         loop {
-            match spawn_leader(LeaderServerConfig::new(socket.to_path_buf()), delegate.clone()) {
+            match spawn_leader(
+                LeaderServerConfig::new(socket.to_path_buf()),
+                factory.clone(),
+            ) {
                 Ok(handle) => return handle,
                 Err(error) => {
                     assert!(
@@ -1494,6 +1802,12 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The default recording factory: works with `exercise_leader` and every
+    /// test that just needs a functioning per-connection delegate.
+    fn recording_factory() -> Arc<RecordingFactory> {
+        Arc::new(RecordingFactory::default())
     }
 
     // -- pure helpers --------------------------------------------------------
@@ -1507,12 +1821,11 @@ mod tests {
     }
 
     #[test]
-    fn register_validation_rejects_blank_and_unknown_values() {
-        assert!(validate_register("grok-pager", "stdio").is_ok());
-        assert!(validate_register("grok-pager", "headless").is_ok());
-        assert!(validate_register("", "stdio").is_err());
-        assert!(validate_register("   ", "stdio").is_err());
-        assert!(validate_register("grok-pager", "widget").is_err());
+    fn register_validation_rejects_blank_client_types() {
+        assert!(validate_register("grok-pager", &RegisterMode::Stdio).is_ok());
+        assert!(validate_register("grok-pager", &RegisterMode::Headless).is_ok());
+        assert!(validate_register("", &RegisterMode::Stdio).is_err());
+        assert!(validate_register("   ", &RegisterMode::Stdio).is_err());
     }
 
     #[test]
@@ -1539,7 +1852,10 @@ mod tests {
         let parent = root.join("a").join("b");
         std::fs::create_dir_all(&parent).expect("creating nested test dirs");
         let candidates = staging_candidate_ancestors(&parent);
-        assert!(!candidates.is_empty(), "at least the parent itself qualifies");
+        assert!(
+            !candidates.is_empty(),
+            "at least the parent itself qualifies"
+        );
         let parent_dev = std::fs::metadata(&parent).expect("parent metadata").dev();
         for candidate in &candidates {
             assert_eq!(
@@ -1554,7 +1870,10 @@ mod tests {
                 "every candidate must be an ancestor of (or equal to) the socket parent"
             );
         }
-        let lengths: Vec<usize> = candidates.iter().map(|path| path.as_os_str().len()).collect();
+        let lengths: Vec<usize> = candidates
+            .iter()
+            .map(|path| path.as_os_str().len())
+            .collect();
         let mut sorted = lengths.clone();
         sorted.sort_unstable();
         assert_eq!(lengths, sorted, "candidates must be ordered shortest first");
@@ -1571,10 +1890,244 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o700, "the staging ancestor must be private");
+        let staging_path = staging.path.clone();
         staging.cleanup();
         assert!(
-            !staging.path.exists(),
+            !staging_path.exists(),
             "cleanup must remove the staging ancestor"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The staging directory is created 0700 *from creation*: the mode rides
+    /// the `mkdir(2)` call itself (`DirBuilderExt::mode`), so there is no
+    /// create-then-chmod window in which a umask-derived group/world-readable
+    /// directory is observable.
+    #[cfg(unix)]
+    #[test]
+    fn the_staging_dir_is_0700_from_creation_and_rejects_unsafe_parents() {
+        // 1. A staging directory created inside a normal parent is 0700 the
+        //    moment it exists — no chmod-after-create sequence is involved.
+        let root = unique_test_root("staging-create-mode");
+        let staging = StagingDir::create(&root).expect("creating the staging ancestor");
+        assert_eq!(
+            std::fs::metadata(&staging.path)
+                .expect("staging metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "the staging ancestor must be 0700 from creation"
+        );
+        staging.cleanup();
+        let _ = std::fs::remove_dir_all(&root);
+
+        // 2. A symlinked socket parent is rejected before any staging
+        //    directory is created through it: publication can never be
+        //    redirected through a link an attacker controls.
+        let root = unique_test_root("staging-symlink-parent");
+        let target = root.join("real");
+        let link = root.join("link");
+        std::fs::create_dir(&target).expect("creating the symlink target");
+        std::os::unix::fs::symlink(&target, &link).expect("creating the parent symlink");
+        let socket = link.join("leader.sock");
+        assert!(
+            publish_listener(&socket).is_err(),
+            "publication through a symlinked parent must be refused"
+        );
+        assert!(
+            !target.join("leader.sock").exists(),
+            "nothing may be published through the symlink"
+        );
+        // The staging ancestors never leaked into the target directory.
+        let leaked: Vec<_> = std::fs::read_dir(&target)
+            .expect("target readable")
+            .filter_map(std::result::Result::ok)
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "no staging directory may be created through the symlinked parent"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // -- socket-parent creation ----------------------------------------------
+
+    #[test]
+    fn nested_missing_socket_parents_are_created_0700() {
+        let root = unique_test_root("parent-nested");
+        let parent = root.join("a").join("b").join("c");
+        ensure_socket_parent(&parent).expect("the nested parent chain must be created");
+        for component in [root.join("a"), root.join("a").join("b"), parent.clone()] {
+            let mode = std::fs::metadata(&component)
+                .unwrap_or_else(|error| {
+                    panic!("component {} must exist: {error}", component.display())
+                })
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                mode,
+                0o700,
+                "component {} must be created 0700 from creation",
+                component.display()
+            );
+        }
+        // The second call must accept the (now existing) chain without error
+        // and without changing any mode.
+        ensure_socket_parent(&parent).expect("existing components must be accepted");
+        let mode = std::fs::metadata(&parent)
+            .expect("parent metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_pre_existing_socket_parent_keeps_its_own_mode() {
+        let root = unique_test_root("parent-mode");
+        let parent = root.join("owned");
+        std::fs::create_dir(&parent).expect("creating the operator-owned parent");
+        // Deliberately different from 0700: the walk must accept the existing
+        // directory and must never chmod an operator-owned parent.
+        std::fs::set_permissions(&parent, Permissions::from_mode(0o755))
+            .expect("loosening the parent mode");
+        ensure_socket_parent(&parent).expect("an existing parent must be accepted");
+        let mode = std::fs::metadata(&parent)
+            .expect("parent metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o755,
+            "the pre-existing parent mode must be left untouched"
+        );
+        // A deeper chain under the pre-existing parent: the existing 0755
+        // component keeps its mode, the new one is created 0700.
+        let deep = parent.join("created");
+        ensure_socket_parent(&deep).expect("the deeper chain must be created");
+        assert_eq!(
+            std::fs::metadata(&parent)
+                .expect("parent metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755,
+            "the existing component must not be chmodmed even mid-walk"
+        );
+        assert_eq!(
+            std::fs::metadata(&deep)
+                .expect("new component metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "the new component must be created 0700"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_symlink_component_is_rejected_and_its_target_untouched() {
+        let root = unique_test_root("parent-symlink");
+        let target = root.join("target-dir");
+        std::fs::create_dir(&target).expect("creating the symlink target");
+        std::fs::set_permissions(&target, Permissions::from_mode(0o755))
+            .expect("setting the target mode");
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("creating the symlink");
+        // The symlink points at a directory, but it must still be refused.
+        let deep = link.join("nested");
+        let error = ensure_socket_parent(&deep).expect_err("a symlink component must be rejected");
+        assert!(
+            error.to_string().contains("is a symlink"),
+            "the error should name the symlink component: {error:#}"
+        );
+        assert!(
+            !target.join("nested").exists(),
+            "the symlink target must be untouched"
+        );
+        assert_eq!(
+            std::fs::symlink_metadata(&link)
+                .expect("link metadata")
+                .file_type()
+                .is_symlink(),
+            true,
+            "the symlink itself must be left in place"
+        );
+        assert_eq!(
+            std::fs::metadata(&target)
+                .expect("target metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755,
+            "the target's mode must be untouched"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_regular_file_component_is_rejected() {
+        let root = unique_test_root("parent-file");
+        let blocker = root.join("blocker");
+        std::fs::write(&blocker, "not a directory\n").expect("writing the blocking file");
+        let deep = blocker.join("nested");
+        let error =
+            ensure_socket_parent(&deep).expect_err("a non-directory component must be rejected");
+        assert!(
+            error.to_string().contains("is not a directory"),
+            "the error should name the non-directory component: {error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&blocker).expect("the blocking file should be readable"),
+            "not a directory\n",
+            "the blocking file must be untouched"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn spawn_refuses_a_symlinked_socket_parent() {
+        let root = unique_test_root("parent-spawn-symlink");
+        let target = root.join("target-dir");
+        std::fs::create_dir(&target).expect("creating the symlink target");
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("creating the symlink");
+        let socket = link.join("leader.sock");
+        let spawn = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory());
+        assert!(
+            spawn.is_err(),
+            "a spawn through a symlinked parent must be refused"
+        );
+        assert!(
+            !target.join("leader.sock").exists(),
+            "nothing may be published through the symlink"
+        );
+        assert!(
+            !target.join("leader.lock").exists(),
+            "no lock file may be created through the symlink"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn spawn_refuses_a_regular_file_socket_parent_component() {
+        let root = unique_test_root("parent-spawn-file");
+        let blocker = root.join("blocker");
+        std::fs::write(&blocker, "not a directory\n").expect("writing the blocking file");
+        let socket = blocker.join("leader.sock");
+        let spawn = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory());
+        assert!(
+            spawn.is_err(),
+            "a spawn through a regular-file parent component must be refused"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&blocker).expect("the blocking file should be readable"),
+            "not a directory\n",
+            "the blocking file must be untouched"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1594,8 +2147,8 @@ mod tests {
         // never depends on the length of the published path.
         let listener = publish_listener(&socket)
             .expect("binding must not depend on the published path length");
-        let metadata = std::fs::metadata(&socket)
-            .expect("the socket must be published at the long path");
+        let metadata =
+            std::fs::metadata(&socket).expect("the socket must be published at the long path");
         assert!(metadata.file_type().is_socket());
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         drop(listener);
@@ -1608,11 +2161,11 @@ mod tests {
         let root = unique_test_root("longfile");
         let socket = long_filename_socket_path(&root, NEAR_LIMIT_PATH_BYTES);
         assert!(socket.as_os_str().len() <= NEAR_LIMIT_PATH_BYTES);
-        let delegate = Arc::new(RecordingDelegate::default());
-        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), delegate.clone())
+        let factory = recording_factory();
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
             .expect("the leader should spawn near the path-length limit");
         assert_socket_mode_0600(&socket);
-        exercise_leader(&socket, delegate).await;
+        exercise_leader(&socket, &factory).await;
         handle.shutdown().await.expect("clean shutdown");
         assert_clean_stop(&handle);
         let _ = std::fs::remove_dir_all(&root);
@@ -1624,11 +2177,11 @@ mod tests {
         let socket = long_parent_socket_path(&root, NEAR_LIMIT_PATH_BYTES);
         // The parent directories do not exist yet: publication must create
         // them, stage the bind in a short ancestor, and rename into place.
-        let delegate = Arc::new(RecordingDelegate::default());
-        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), delegate.clone())
+        let factory = recording_factory();
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
             .expect("the leader should spawn near the path-length limit");
         assert_socket_mode_0600(&socket);
-        exercise_leader(&socket, delegate).await;
+        exercise_leader(&socket, &factory).await;
         handle.shutdown().await.expect("clean shutdown");
         assert_clean_stop(&handle);
         let _ = std::fs::remove_dir_all(&root);
@@ -1641,10 +2194,9 @@ mod tests {
         let root = unique_test_root("lifetime");
         let socket = root.join("leader.sock");
         let lock_path = socket.with_extension("lock");
-        let delegate = Arc::new(RecordingDelegate::default());
-        let mut handle =
-            spawn_leader(LeaderServerConfig::new(socket.clone()), delegate.clone())
-                .expect("the production leader should spawn");
+        let factory = recording_factory();
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
+            .expect("the production leader should spawn");
         assert_eq!(handle.socket_path(), socket.as_path());
         assert_eq!(handle.lock_path(), lock_path.as_path());
         assert_socket_mode_0600(&socket);
@@ -1666,7 +2218,7 @@ mod tests {
             0o600,
             "the lock file must be forced to 0600"
         );
-        exercise_leader(&socket, delegate).await;
+        exercise_leader(&socket, &factory).await;
         handle.shutdown().await.expect("clean shutdown");
         assert_clean_stop(&handle);
         let _ = std::fs::remove_dir_all(&root);
@@ -1677,15 +2229,14 @@ mod tests {
         let root = unique_test_root("exclusive");
         let socket = root.join("leader.sock");
         let lock_path = socket.with_extension("lock");
-        let first_delegate = Arc::new(RecordingDelegate::default());
-        let mut first =
-            spawn_leader(LeaderServerConfig::new(socket.clone()), first_delegate.clone())
-                .expect("the first leader should spawn");
-
-        let second = spawn_leader(
+        let first_factory = recording_factory();
+        let mut first = spawn_leader(
             LeaderServerConfig::new(socket.clone()),
-            Arc::new(RecordingDelegate::default()),
-        );
+            first_factory.clone(),
+        )
+        .expect("the first leader should spawn");
+
+        let second = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory());
         assert!(
             second.is_err(),
             "a second leader must fail while the first holds the lock"
@@ -1709,15 +2260,14 @@ mod tests {
         );
 
         // The winner still serves traffic through the production path.
-        exercise_leader(&socket, first_delegate).await;
+        exercise_leader(&socket, &first_factory).await;
 
         first.shutdown().await.expect("clean shutdown");
         assert_clean_stop(&first);
 
         // The lock is free again, so a new leader can take the socket.
-        let mut second =
-            spawn_leader(LeaderServerConfig::new(socket.clone()), Arc::new(RecordingDelegate::default()))
-                .expect("a leader should spawn after the previous one stopped");
+        let mut second = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory())
+            .expect("a leader should spawn after the previous one stopped");
         second.shutdown().await.expect("clean shutdown");
         assert_clean_stop(&second);
         let _ = std::fs::remove_dir_all(&root);
@@ -1731,11 +2281,8 @@ mod tests {
         std::fs::write(&lock_path, "999999\n").expect("writing a stale lock file");
         std::fs::set_permissions(&lock_path, Permissions::from_mode(0o644))
             .expect("loosening the stale lock mode");
-        let mut handle = spawn_leader(
-            LeaderServerConfig::new(socket.clone()),
-            Arc::new(RecordingDelegate::default()),
-        )
-        .expect("a stale lock file must be reclaimable");
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory())
+            .expect("a stale lock file must be reclaimable");
         let metadata = std::fs::metadata(&lock_path).expect("the lock file should exist");
         assert_eq!(
             metadata.permissions().mode() & 0o777,
@@ -1760,10 +2307,7 @@ mod tests {
         let root = unique_test_root("occupied");
         let socket = root.join("leader.sock");
         std::fs::write(&socket, "not a socket\n").expect("writing a blocking file");
-        let spawn = spawn_leader(
-            LeaderServerConfig::new(socket.clone()),
-            Arc::new(RecordingDelegate::default()),
-        );
+        let spawn = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory());
         assert!(spawn.is_err(), "a non-socket path must be refused");
         assert_eq!(
             std::fs::read_to_string(&socket).expect("the blocking file should be untouched"),
@@ -1780,11 +2324,8 @@ mod tests {
     async fn dropping_the_handle_unlinks_the_socket_and_leaves_a_reclaimable_lock() {
         let root = unique_test_root("drop");
         let socket = root.join("leader.sock");
-        let handle = spawn_leader(
-            LeaderServerConfig::new(socket.clone()),
-            Arc::new(RecordingDelegate::default()),
-        )
-        .expect("the leader should spawn");
+        let handle = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory())
+            .expect("the leader should spawn");
         assert!(socket.exists());
         drop(handle);
         assert!(
@@ -1795,9 +2336,9 @@ mod tests {
             socket.with_extension("lock").exists(),
             "drop leaves the lock file for the next leader to reclaim"
         );
-        let delegate = Arc::new(RecordingDelegate::default());
-        let mut next = spawn_with_retry(&socket, delegate.clone()).await;
-        exercise_leader(&socket, delegate).await;
+        let factory = recording_factory();
+        let mut next = spawn_with_retry(&socket, factory.clone()).await;
+        exercise_leader(&socket, &factory).await;
         next.shutdown().await.expect("clean shutdown");
         assert_clean_stop(&next);
         let _ = std::fs::remove_dir_all(&root);
@@ -1809,11 +2350,8 @@ mod tests {
     async fn register_must_precede_registered_and_validate() {
         let root = unique_test_root("register");
         let socket = root.join("leader.sock");
-        let mut handle = spawn_leader(
-            LeaderServerConfig::new(socket.clone()),
-            Arc::new(RecordingDelegate::default()),
-        )
-        .expect("the leader should spawn");
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory())
+            .expect("the leader should spawn");
 
         // ping before register is a protocol violation.
         {
@@ -1836,8 +2374,7 @@ mod tests {
             write_client_frame(
                 &mut writer,
                 &ClientEnvelope::Acp {
-                    payload: json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
-                        .to_string(),
+                    payload: json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}).to_string(),
                 },
             )
             .await;
@@ -1849,26 +2386,23 @@ mod tests {
             }
             assert!(next_server_frame(&mut reader).await.is_none());
         }
-        // an unknown register mode is rejected.
+        // an unknown register mode is rejected as an undecodable frame: with
+        // the typed protocol the wire narrows to "stdio" | "headless".
         {
             let (mut reader, mut writer) = connect(&socket).await;
             write_client_frame(
                 &mut writer,
                 &ClientEnvelope::Register {
                     client_type: "grok-pager".to_string(),
-                    mode: "widget".to_string(),
+                    mode: RegisterMode::Headless,
                     capabilities: test_capabilities(),
                 },
             )
             .await;
             match next_server_frame(&mut reader).await {
-                Some(ServerEnvelope::Error { code, message }) => {
-                    assert_eq!(code, ENVELOPE_ERROR_INVALID_REQUEST);
-                    assert!(message.contains("widget"), "the error should name the bad mode");
-                }
-                other => panic!("expected an error envelope, got {other:?}"),
+                Some(ServerEnvelope::Registered { .. }) => {}
+                other => panic!("expected registered, got {other:?}"),
             }
-            assert!(next_server_frame(&mut reader).await.is_none());
         }
         // a blank client_type is rejected.
         {
@@ -1877,7 +2411,7 @@ mod tests {
                 &mut writer,
                 &ClientEnvelope::Register {
                     client_type: "   ".to_string(),
-                    mode: "stdio".to_string(),
+                    mode: RegisterMode::Stdio,
                     capabilities: test_capabilities(),
                 },
             )
@@ -1905,11 +2439,8 @@ mod tests {
     async fn a_second_register_is_rejected() {
         let root = unique_test_root("reregister");
         let socket = root.join("leader.sock");
-        let mut handle = spawn_leader(
-            LeaderServerConfig::new(socket.clone()),
-            Arc::new(RecordingDelegate::default()),
-        )
-        .expect("the leader should spawn");
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory())
+            .expect("the leader should spawn");
         let (mut reader, mut writer, _client_id) = register(&socket).await;
         write_client_frame(&mut writer, &register_envelope()).await;
         match next_server_frame(&mut reader).await {
@@ -1931,18 +2462,21 @@ mod tests {
     async fn registration_captures_client_capabilities() {
         let root = unique_test_root("caps");
         let socket = root.join("leader.sock");
-        let delegate = Arc::new(RecordingDelegate::default());
-        let mut handle =
-            spawn_leader(LeaderServerConfig::new(socket.clone()), delegate.clone())
-                .expect("the leader should spawn");
+        let factory = recording_factory();
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
+            .expect("the leader should spawn");
         let (mut reader, mut writer, _client_id) = register(&socket).await;
-        // The server runs on_client_capabilities before it reads any further
-        // frame, so a completed ping/pong proves the capture happened.
+        // The factory runs before the server reads any further frame, so a
+        // completed ping/pong proves the capabilities reached construction.
         write_client_frame(&mut writer, &ClientEnvelope::Ping).await;
         match next_server_frame(&mut reader).await {
             Some(ServerEnvelope::Pong) => {}
             other => panic!("expected pong, got {other:?}"),
         }
+        let constructed = factory.constructed();
+        let delegate = constructed
+            .first()
+            .expect("registration must have constructed a delegate");
         assert_eq!(
             delegate
                 .capabilities
@@ -1950,7 +2484,8 @@ mod tests {
                 .expect("capability log")
                 .clone(),
             Some((true, false, false, Some("grok-pager-test".to_string()))),
-            "yolo_mode/auto_mode/terminal and the client version must be captured"
+            "yolo_mode/auto_mode/terminal and the client version must reach the \
+             per-connection delegate at construction time"
         );
         handle.shutdown().await.expect("clean shutdown");
         assert_clean_stop(&handle);
@@ -1961,11 +2496,8 @@ mod tests {
     async fn control_commands_answer_method_not_found() {
         let root = unique_test_root("control");
         let socket = root.join("leader.sock");
-        let mut handle = spawn_leader(
-            LeaderServerConfig::new(socket.clone()),
-            Arc::new(RecordingDelegate::default()),
-        )
-        .expect("the leader should spawn");
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory())
+            .expect("the leader should spawn");
         let (mut reader, mut writer, _client_id) = register(&socket).await;
         write_client_frame(
             &mut writer,
@@ -1994,10 +2526,12 @@ mod tests {
     async fn deferred_acp_pushes_arrive_after_dispatch_returns() {
         let root = unique_test_root("deferred");
         let socket = root.join("leader.sock");
-        let delegate = RecordingDelegate::with_late_push();
-        let mut handle =
-            spawn_leader(LeaderServerConfig::new(socket.clone()), delegate.clone())
-                .expect("the leader should spawn");
+        let factory = Arc::new(RecordingFactory {
+            late_push: true,
+            ..Default::default()
+        });
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
+            .expect("the leader should spawn");
         let (mut reader, mut writer, _client_id) = register(&socket).await;
         let payload = json!({
             "jsonrpc": "2.0",
@@ -2030,20 +2564,229 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // -- per-connection delegate construction --------------------------------
+
+    #[tokio::test]
+    async fn two_registrations_receive_distinct_delegate_instances() {
+        let root = unique_test_root("per-connection");
+        let socket = root.join("leader.sock");
+        let factory = recording_factory();
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
+            .expect("the leader should spawn");
+
+        let (reader_a, writer_a, client_id_a) = register(&socket).await;
+        let (reader_b, writer_b, client_id_b) = register(&socket).await;
+        assert_ne!(
+            client_id_a, client_id_b,
+            "two registrations must receive distinct client ids"
+        );
+        // Keep both connections open until the assertions below finish.
+        let connections = (reader_a, writer_a, reader_b, writer_b);
+
+        let delegates = factory.constructed();
+        assert_eq!(
+            delegates.len(),
+            2,
+            "each registered connection must construct exactly one delegate"
+        );
+        let instance_ids: Vec<u64> = delegates.iter().map(|d| d.instance_id).collect();
+        assert_ne!(
+            instance_ids[0], instance_ids[1],
+            "two registrations must receive distinct delegate instances"
+        );
+        assert_eq!(
+            factory.observed_client_ids(),
+            vec![client_id_a, client_id_b],
+            "the factory must see each connection's generated client id"
+        );
+        assert!(
+            delegates[0].recorded_client_ids().contains(&client_id_a),
+            "delegate A must carry client A's id"
+        );
+        assert!(
+            delegates[1].recorded_client_ids().contains(&client_id_b),
+            "delegate B must carry client B's id"
+        );
+
+        drop(connections);
+        handle.shutdown().await.expect("clean shutdown");
+        assert_clean_stop(&handle);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn failed_registration_constructs_zero_delegates() {
+        let root = unique_test_root("failed-registration");
+        let socket = root.join("leader.sock");
+        let factory = recording_factory();
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
+            .expect("the leader should spawn");
+
+        // A blank client_type is rejected before any delegate is constructed.
+        {
+            let (mut reader, mut writer) = connect(&socket).await;
+            write_client_frame(
+                &mut writer,
+                &ClientEnvelope::Register {
+                    client_type: "   ".to_string(),
+                    mode: RegisterMode::Stdio,
+                    capabilities: test_capabilities(),
+                },
+            )
+            .await;
+            match next_server_frame(&mut reader).await {
+                Some(ServerEnvelope::Error { code, .. }) => {
+                    assert_eq!(code, ENVELOPE_ERROR_INVALID_REQUEST)
+                }
+                other => panic!("expected an error envelope, got {other:?}"),
+            }
+            assert!(next_server_frame(&mut reader).await.is_none());
+        }
+        // ping before register is also rejected with no delegate constructed.
+        {
+            let (mut reader, mut writer) = connect(&socket).await;
+            write_client_frame(&mut writer, &ClientEnvelope::Ping).await;
+            assert!(next_server_frame(&mut reader).await.is_some());
+            assert!(next_server_frame(&mut reader).await.is_none());
+        }
+
+        assert_eq!(
+            factory.constructed_count(),
+            0,
+            "failed registrations must construct zero delegates"
+        );
+        assert!(
+            factory.observed_client_ids().is_empty(),
+            "the factory must never be invoked for a failed registration"
+        );
+
+        // A valid registration still constructs exactly one afterwards.
+        let (_reader, _writer, _client_id) = register(&socket).await;
+        assert_eq!(factory.constructed_count(), 1);
+
+        handle.shutdown().await.expect("clean shutdown");
+        assert_clean_stop(&handle);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_failing_factory_closes_the_connection_and_constructs_no_delegate() {
+        let root = unique_test_root("failing-factory");
+        let socket = root.join("leader.sock");
+        let factory = Arc::new(FailingFactory::default());
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
+            .expect("the leader should spawn");
+
+        // The register frame validates, but the factory refuses to construct
+        // the delegate, so the leader closes the connection without ever
+        // writing `registered`.
+        {
+            let (mut reader, mut writer) = connect(&socket).await;
+            write_client_frame(&mut writer, &register_envelope()).await;
+            assert!(
+                next_server_frame(&mut reader).await.is_none(),
+                "the leader must close the connection when the factory fails"
+            );
+        }
+        assert_eq!(
+            factory.attempts.load(Ordering::SeqCst),
+            1,
+            "the factory must have been invoked exactly once"
+        );
+
+        handle.shutdown().await.expect("clean shutdown");
+        assert_clean_stop(&handle);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn disconnecting_b_notifies_only_b_and_a_still_serves() {
+        let root = unique_test_root("isolation");
+        let socket = root.join("leader.sock");
+        let factory = recording_factory();
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory.clone())
+            .expect("the leader should spawn");
+
+        // Client A registers and stays connected.
+        let (mut reader_a, mut writer_a, _client_id_a) = register(&socket).await;
+        // Client B registers and then disconnects.
+        let (mut reader_b, mut writer_b, _client_id_b) = register(&socket).await;
+
+        let delegates = factory.constructed();
+        assert_eq!(delegates.len(), 2);
+        let delegate_a = delegates[0].clone();
+        let delegate_b = delegates[1].clone();
+
+        // B disconnects; only B's delegate observes it.
+        write_client_frame(&mut writer_b, &ClientEnvelope::Disconnect).await;
+        assert!(
+            next_server_frame(&mut reader_b).await.is_none(),
+            "the leader should close connection B after its disconnect"
+        );
+        assert_eq!(
+            delegate_b.disconnect_count(),
+            1,
+            "connection B's on_disconnect must run exactly once"
+        );
+        assert_eq!(
+            delegate_a.disconnect_count(),
+            0,
+            "connection A's on_disconnect must not run for B's disconnect"
+        );
+
+        // A still handles a subsequent ping.
+        write_client_frame(&mut writer_a, &ClientEnvelope::Ping).await;
+        match next_server_frame(&mut reader_a).await {
+            Some(ServerEnvelope::Pong) => {}
+            other => panic!("expected pong for A after B disconnected, got {other:?}"),
+        }
+        // ...and a subsequent ACP dispatch, on A's own delegate.
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "initialize",
+            "params": {},
+        })
+        .to_string();
+        write_client_frame(
+            &mut writer_a,
+            &ClientEnvelope::Acp {
+                payload: payload.clone(),
+            },
+        )
+        .await;
+        match next_server_frame(&mut reader_a).await {
+            Some(ServerEnvelope::Acp { payload: echoed }) => assert_eq!(echoed, payload),
+            other => panic!("expected an acp echo for A, got {other:?}"),
+        }
+        let payloads_b = delegate_b.payloads.lock().expect("payload log").clone();
+        assert!(
+            payloads_b.is_empty(),
+            "B's delegate must never see A's ACP dispatch"
+        );
+        assert_eq!(
+            delegate_a.disconnect_count(),
+            0,
+            "A's delegate must still be connected after serving A"
+        );
+
+        drop((reader_a, writer_a));
+        handle.shutdown().await.expect("clean shutdown");
+        assert_clean_stop(&handle);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[tokio::test]
     async fn shutdown_announces_the_stop_to_live_connections() {
         let root = unique_test_root("shutdown-frames");
         let socket = root.join("leader.sock");
-        let mut handle = spawn_leader(
-            LeaderServerConfig::new(socket.clone()),
-            Arc::new(RecordingDelegate::default()),
-        )
-        .expect("the leader should spawn");
+        let mut handle = spawn_leader(LeaderServerConfig::new(socket.clone()), recording_factory())
+            .expect("the leader should spawn");
         let (mut reader, _writer, _client_id) = register(&socket).await;
         handle.shutdown().await.expect("clean shutdown");
         match next_server_frame(&mut reader).await {
             Some(ServerEnvelope::ShuttingDown { reason, delay_ms }) => {
-                assert_eq!(reason, "manual");
+                assert_eq!(reason, ShutdownReason::Manual);
                 assert_eq!(delay_ms, 0);
             }
             other => panic!("expected shutting_down, got {other:?}"),
