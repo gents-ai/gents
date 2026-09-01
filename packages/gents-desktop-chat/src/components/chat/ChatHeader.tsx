@@ -241,7 +241,7 @@ export function p2pConnectionDisplay(
       title,
     };
   }
-  return { label: "Paired", healthy: true, title };
+  return { label: "Connected", healthy: true, title };
 }
 
 export function ChatHeader({

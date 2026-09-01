@@ -17,7 +17,7 @@ use crate::support::snapshots::{
 };
 use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
 use crate::support::{
-    build_request, create_request, create_retry_request, set_valid_until, test_db, AGENT_DID,
+    build_request, create_request_with_valid_until, create_retry_request, test_db, AGENT_DID,
     AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
 
@@ -51,9 +51,15 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
     for _ in 0..BATCH {
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
-        let doc_id =
-            create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-        set_valid_until(&db.node, &doc_id, &past).await;
+        let doc_id = create_request_with_valid_until(
+            &db.node,
+            &request_id,
+            &session_id,
+            "pending",
+            &created_at,
+            Some(&past),
+        )
+        .await;
         request_doc_ids.push((doc_id, request_id, session_id));
     }
 
@@ -95,15 +101,15 @@ async fn resend_from_stale_populates_retry_chain() {
 
     let original_request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let original_doc_id = create_request(
+    let original_doc_id = create_request_with_valid_until(
         &db.node,
         &original_request_id,
         &session_id,
         "pending",
         &created_at,
+        Some(&past),
     )
     .await;
-    set_valid_until(&db.node, &original_doc_id, &past).await;
 
     let request = build_request(
         original_doc_id.clone(),
@@ -132,6 +138,7 @@ async fn resend_from_stale_populates_retry_chain() {
         &original_request_id,
         "hello",
         &resend_1_created_at,
+        Some(&past),
     )
     .await;
 
@@ -139,7 +146,6 @@ async fn resend_from_stale_populates_retry_chain() {
     assert_eq!(snap_1.retry_parent_request, original_request_id);
     assert_eq!(snap_1.retry_root_request, original_request_id);
 
-    set_valid_until(&db.node, &resend_1_doc_id, &past).await;
     let request_1 = build_request(
         resend_1_doc_id.clone(),
         resend_1_id.clone(),
@@ -167,6 +173,7 @@ async fn resend_from_stale_populates_retry_chain() {
         &original_request_id,
         "hello",
         &resend_2_created_at,
+        None,
     )
     .await;
 

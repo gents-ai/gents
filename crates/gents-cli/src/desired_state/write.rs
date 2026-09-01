@@ -53,7 +53,6 @@ fn validate_handles(manifest: &DesiredStateManifest) -> Result<(), String> {
     validate_vec(&manifest.inference_profiles, "profile_id")?;
     validate_vec(&manifest.tool_service_registries, "service_id")?;
     validate_vec(&manifest.projection_acp_bindings, "binding_id")?;
-    validate_vec(&manifest.peer_pairings, "peer_did")?;
     validate_vec(&manifest.tasks, "task_id")?;
     validate_vec(&manifest.schedules, "schedule_id")?;
     validate_vec(&manifest.event_triggers, "trigger_id")?;
@@ -129,12 +128,6 @@ pub(crate) fn write_manifest_root(
         root,
         Collection::ProjectionAcpBinding,
         &manifest.projection_acp_bindings,
-        no_sidecar,
-    )?;
-    write_per_doc_collection(
-        root,
-        Collection::PeerPairingDesired,
-        &manifest.peer_pairings,
         no_sidecar,
     )?;
     write_per_doc_collection(root, Collection::Task, &manifest.tasks, spill_task_sidecar)?;

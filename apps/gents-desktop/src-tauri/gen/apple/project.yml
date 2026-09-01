@@ -41,7 +41,6 @@ targets:
       path: gents-desktop-tauri_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
-        NSCameraUsageDescription: Gents uses the camera to scan signed agent pairing invites.
         UILaunchScreen: {}
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:

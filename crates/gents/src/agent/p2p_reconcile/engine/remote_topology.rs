@@ -10,57 +10,9 @@ use super::super::{
     TransportEndpoint,
 };
 
-/// Remove replicators already aimed at one transport endpoint when no durable
-/// applied owner exists for the replacement route. This is the narrow upgrade
-/// bridge from legacy unsuffixed mobile pairings: the endpoint match prevents
-/// one runtime route from tearing down any other route.
-pub async fn teardown_unowned_replicators_at_endpoint(
-    admin: &dyn RemoteP2pAdmin,
-    address: &str,
-    expected_collections: &[String],
-) -> Result<usize> {
-    let endpoint = TransportEndpoint::parse(address.to_string())?;
-    let expected_collections = expected_collections.iter().collect::<BTreeSet<_>>();
-    let replicators = admin
-        .list_replicators()
-        .await
-        .context("list replicators for client-route upgrade")?;
-    let mut removed = 0;
-    for replicator in replicators {
-        let matches_endpoint = replicator.address.as_deref().is_some_and(|candidate| {
-            candidate == address
-                || TransportEndpoint::parse(candidate.to_string())
-                    .is_ok_and(|candidate| candidate.peer_id() == endpoint.peer_id())
-        }) || replicator.id.as_deref() == Some(endpoint.peer_id());
-        if !matches_endpoint {
-            continue;
-        }
-        let mut resolved_collections = BTreeSet::new();
-        for collection_id in &replicator.collections {
-            let collection = admin
-                .resolve_collection_name(collection_id)
-                .await
-                .with_context(|| format!("resolve unowned replicator collection {collection_id}"))?
-                .unwrap_or_else(|| collection_id.clone());
-            resolved_collections.insert(collection);
-        }
-        if resolved_collections.iter().collect::<BTreeSet<_>>() != expected_collections {
-            continue;
-        }
-        let id = replicator.id.as_deref().unwrap_or(endpoint.peer_id());
-        admin
-            .delete_replicator(id, &replicator.collections)
-            .await
-            .with_context(|| format!("teardown unowned client replicator {id}"))?;
-        removed += 1;
-    }
-    Ok(removed)
-}
-
 /// Authoritatively remove every live replicator at an endpoint owned by a
-/// route being deleted. Unlike the legacy-upgrade helper above, ownership has
-/// already been established by the caller, so mutable collection/filter drift
-/// must not protect the stale route from teardown.
+/// route being deleted. Ownership has already been established by the caller,
+/// so mutable collection/filter drift must not protect the stale route.
 pub async fn teardown_owned_replicators_at_endpoint(
     admin: &dyn RemoteP2pAdmin,
     address: &str,

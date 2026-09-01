@@ -170,11 +170,6 @@ impl DesiredStateApplyPlan {
     pub fn new(mut documents: Vec<DesiredStateApplyDocument>) -> Result<Self> {
         let mut identities = BTreeSet::new();
         for document in &documents {
-            if document.collection == Collection::PeerPairingDesired {
-                anyhow::bail!(
-                    "PeerPairingDesired uses manifest ownership semantics and is not supported by the non-pruning runtime apply API"
-                );
-            }
             let collection = document.collection.graphql_type();
             let unique_field = document.collection.unique_field();
             let unique_value = unique_value(document)?;
@@ -285,7 +280,6 @@ async fn apply_document(
         Collection::EventTrigger => {
             write_event_trigger_document(txn, unique_value, &document.add, &document.update).await
         }
-        Collection::PeerPairingDesired => unreachable!("rejected by plan validation"),
         collection => apply_generic_document(txn, collection, unique_value, document).await,
     }
 }
@@ -329,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_is_dependency_ordered_and_rejects_duplicates_and_prune_owned_docs() {
+    fn plan_is_dependency_ordered_and_rejects_duplicates() {
         let plan = DesiredStateApplyPlan::new(vec![
             doc(Collection::EventTrigger, "trigger"),
             doc(Collection::ToolSelection, "tools"),
@@ -345,9 +339,6 @@ mod tests {
             doc(Collection::Task, "same"),
         ])
         .is_err());
-        assert!(
-            DesiredStateApplyPlan::new(vec![doc(Collection::PeerPairingDesired, "peer")]).is_err()
-        );
     }
 
     #[test]

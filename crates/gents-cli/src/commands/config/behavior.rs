@@ -1,9 +1,14 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::agent::persona_presets::{self, PresetFields};
 use gents::graphql::escape_graphql_string;
-use gents::{default_behavior_id_for_agent, AgentBehaviorDocument as AgentBehavior, Collection};
+use gents::{
+    default_behavior_id_for_agent, AgentBehaviorDocument as AgentBehavior, AgentIdentity,
+    Collection,
+};
+use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL_SELF};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -12,7 +17,8 @@ use crate::cli::*;
 use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
 use crate::request_helpers::resolve_dual_id;
 use crate::{
-    graphql_rows, print_json, resolve_config_access, EXPORT_AGENT_BEHAVIOR_FIELDS,
+    graphql_rows, load_initialized_home_identity, print_json, read_init_config,
+    resolve_config_access, resolve_home_dir, EXPORT_AGENT_BEHAVIOR_FIELDS,
     EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
 };
 
@@ -63,333 +69,215 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
     Ok(())
 }
 
-// -- create / clone / disable: routed through the shared persona
-// materializer (`gents::agent::persona_ops`), never re-implemented here.
-//
-// The CLI has no `Arc<EmbeddedNode>` to call `decide_persona_request` /
-// `apply_persona_request` directly with when it is pointed at a running
-// server (the normal case — `--graphql` addresses that server over HTTP, and
-// `gents server` already runs the persona-request reconciler as a background
-// task; see `crate::agent::p2p_reconcile::persona_requests`). So these
-// commands submit a `PersonaConfigRequest` row — the exact channel the
-// reconciler and the agent's own `configure_persona` self-config tool use —
-// and poll it to a terminal status, mirroring
-// `gents::self_config::persona_mutate`/`poll_persona_request`. This means
-// admission and materialization happen entirely inside the reconciler's call
-// to the shared core; nothing here duplicates that logic.
-
-// A little more generous than `gents::self_config`'s in-process 5s: the CLI
-// polls over HTTP GraphQL rather than sharing the node with the reconciler,
-// so each poll pays a network round trip on top of the sweep itself.
 const PERSONA_REQUEST_POLL_TIMEOUT: Duration = Duration::from_secs(10);
-const PERSONA_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(200);
-
-fn nullable_graphql_string(value: Option<&str>) -> String {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => format!(r#""{}""#, escape_graphql_string(value)),
-        None => "null".to_string(),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn create_persona_request_mutation(
-    request_key: &str,
-    requester_did: &str,
-    agent_did: &str,
-    op: &str,
-    behavior_id: Option<&str>,
-    clone_from: Option<&str>,
-    persona_name: Option<&str>,
-    backend_model: Option<&str>,
-    root: Option<&str>,
-    preset: Option<&str>,
-    profile_id: Option<&str>,
-    now: &str,
-) -> String {
-    format!(
-        r#"mutation {{
-            create_PersonaConfigRequest(input: {{
-                request_key: "{request_key}",
-                requester_did: "{requester_did}",
-                agent_did: "{agent_did}",
-                op: "{op}",
-                behavior_id: {behavior_id},
-                clone_from: {clone_from},
-                persona_name: {persona_name},
-                backend_model: {backend_model},
-                root: {root},
-                preset: {preset},
-                profile_id: {profile_id},
-                created_at: "{now}",
-                status: "pending"
-            }}) {{ _docID }}
-        }}"#,
-        request_key = escape_graphql_string(request_key),
-        requester_did = escape_graphql_string(requester_did),
-        agent_did = escape_graphql_string(agent_did),
-        op = escape_graphql_string(op),
-        behavior_id = nullable_graphql_string(behavior_id),
-        clone_from = nullable_graphql_string(clone_from),
-        persona_name = nullable_graphql_string(persona_name),
-        backend_model = nullable_graphql_string(backend_model),
-        root = nullable_graphql_string(root),
-        preset = nullable_graphql_string(preset),
-        profile_id = nullable_graphql_string(profile_id),
-        now = escape_graphql_string(now),
-    )
-}
 
 #[derive(Debug, Default, Deserialize)]
 struct PersonaRequestStatusRow {
     status: Option<String>,
-    #[serde(default)]
     status_detail: Option<String>,
-    #[serde(default)]
     applied_behavior_id: Option<String>,
-}
-
-/// Poll a freshly-submitted `PersonaConfigRequest` row until the runtime's
-/// persona reconciler (subscribed to every `Update` event) drives it to a
-/// terminal status, or [`PERSONA_REQUEST_POLL_TIMEOUT`] elapses. Mirrors
-/// `gents::self_config::poll_persona_request`'s cadence.
-async fn poll_persona_config_request(
-    access: &ConfigAccess,
-    request_key: &str,
-) -> Result<PersonaRequestStatusRow> {
-    let escaped = escape_graphql_string(request_key);
-    let query = format!(
-        r#"{{
-            PersonaConfigRequest(filter: {{ request_key: {{ _eq: "{escaped}" }} }}) {{
-                status
-                status_detail
-                applied_behavior_id
-            }}
-        }}"#
-    );
-    let deadline = tokio::time::Instant::now() + PERSONA_REQUEST_POLL_TIMEOUT;
-    loop {
-        let rows = graphql_rows(access, "PersonaConfigRequest", &query).await?;
-        if let Some(row) = rows.into_iter().next() {
-            let parsed: PersonaRequestStatusRow =
-                serde_json::from_value(row).context("decode PersonaConfigRequest row")?;
-            if parsed.status.as_deref() != Some("pending") {
-                return Ok(parsed);
-            }
-        }
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!(
-                "persona request {request_key} is still pending after {PERSONA_REQUEST_POLL_TIMEOUT:?}; \
-                 the runtime reconciler may need another moment — retry shortly, or check \
-                 `gents config behavior list`"
-            );
-        }
-        tokio::time::sleep(PERSONA_REQUEST_POLL_INTERVAL).await;
-    }
-}
-
-/// Submit `mutation`, then poll `request_key` to a terminal status. On
-/// `rejected`, the rejection detail (the exact `decide_persona_request`
-/// message) is surfaced verbatim as the returned error so it reaches stderr
-/// unmodified.
-async fn submit_and_await_persona_request(
-    access: &ConfigAccess,
-    request_key: &str,
-    mutation: &str,
-) -> Result<String> {
-    access.execute(mutation).await?;
-    let outcome = poll_persona_config_request(access, request_key).await?;
-    match outcome.status.as_deref() {
-        Some("applied") => outcome
-            .applied_behavior_id
-            .context("applied persona request missing applied_behavior_id"),
-        Some("rejected") => {
-            anyhow::bail!("{}", outcome.status_detail.unwrap_or_default())
-        }
-        other => anyhow::bail!("persona request {request_key} in unexpected status {other:?}"),
-    }
-}
-
-fn resolve_backend_model(
-    model: Option<&str>,
-    backend_id: Option<&str>,
-    model_name: Option<&str>,
-) -> Result<String> {
-    let model = model.map(str::trim).filter(|value| !value.is_empty());
-    let backend_id = backend_id.map(str::trim).filter(|value| !value.is_empty());
-    let model_name = model_name.map(str::trim).filter(|value| !value.is_empty());
-    match (model, backend_id, model_name) {
-        (Some(model), None, None) => Ok(model.to_string()),
-        (Some(_), _, _) => {
-            anyhow::bail!("--model is mutually exclusive with --backend-id/--model-name")
-        }
-        (None, Some(backend_id), Some(model_name)) => Ok(format!("{backend_id}|{model_name}")),
-        (None, _, _) => {
-            anyhow::bail!(
-                r#"provide --model "backend_id|model_name" or both --backend-id and --model-name"#
-            )
-        }
-    }
-}
-
-pub(super) async fn behavior_create(args: BehaviorCreateArgs) -> Result<()> {
-    let backend_model = resolve_backend_model(
-        args.model.as_deref(),
-        args.backend_id.as_deref(),
-        args.model_name.as_deref(),
-    )?;
-    let access = ConfigAccess::Graphql(args.graphql.clone());
-    let request_key = format!("cli-{}", uuid::Uuid::new_v4());
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = create_persona_request_mutation(
-        &request_key,
-        &args.agent_did,
-        &args.agent_did,
-        "create",
-        None,
-        args.clone_from.as_deref(),
-        Some(&args.display_name),
-        Some(&backend_model),
-        args.root.as_deref(),
-        args.preset.as_deref(),
-        args.profile_id.as_deref(),
-        &now,
-    );
-    let behavior_id = submit_and_await_persona_request(&access, &request_key, &mutation).await?;
-    print_json(&json!({
-        "request_key": request_key,
-        "status": "applied",
-        "agent_did": args.agent_did,
-        "persona_name": args.display_name,
-        "behavior_id": behavior_id,
-    }))
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct SourceBehaviorRow {
-    #[serde(default)]
     agent_did: Option<String>,
-    #[serde(default)]
     backend_id: Option<String>,
-    #[serde(default)]
     model_name: Option<String>,
-    #[serde(default)]
     inference_profile_id: Option<String>,
 }
 
-async fn load_source_behavior(
-    access: &ConfigAccess,
-    behavior_id: &str,
-) -> Result<Option<SourceBehaviorRow>> {
-    let escaped = escape_graphql_string(behavior_id);
+fn local_identity(home: Option<&std::path::Path>) -> Result<Arc<dyn AgentIdentity>> {
+    let home_dir = resolve_home_dir(home);
+    let config = read_init_config(&home_dir)?.with_context(|| {
+        format!(
+            "no init config found in {}; run `gents init` first",
+            home_dir.display()
+        )
+    })?;
+    load_initialized_home_identity(&home_dir, &config)
+}
+
+async fn poll_persona_request(access: &ConfigAccess, request_key: &str) -> Result<String> {
+    let key = escape_graphql_string(request_key);
     let query = format!(
-        r#"{{
-            AgentBehavior(filter: {{ behavior_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
-                agent_did
-                backend_id
-                model_name
-                inference_profile_id
-            }}
-        }}"#
+        r#"{{ PersonaConfigRequest(filter: {{ request_key: {{ _eq: "{key}" }} }}) {{ status status_detail applied_behavior_id }} }}"#
     );
-    let rows = graphql_rows(access, "AgentBehavior", &query).await?;
-    let Some(row) = rows.into_iter().next() else {
-        return Ok(None);
-    };
-    Ok(Some(
-        serde_json::from_value(row).context("decode AgentBehavior row")?,
-    ))
+    let deadline = tokio::time::Instant::now() + PERSONA_REQUEST_POLL_TIMEOUT;
+    loop {
+        if let Some(row) = graphql_rows(access, "PersonaConfigRequest", &query)
+            .await?
+            .into_iter()
+            .next()
+        {
+            let row: PersonaRequestStatusRow = serde_json::from_value(row)?;
+            match row.status.as_deref() {
+                Some("applied") => {
+                    return row
+                        .applied_behavior_id
+                        .context("applied persona request missing behavior id")
+                }
+                Some("rejected") => anyhow::bail!("{}", row.status_detail.unwrap_or_default()),
+                _ => {}
+            }
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "persona request {request_key} remained pending for {PERSONA_REQUEST_POLL_TIMEOUT:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn submit_local_persona(
+    graphql: &str,
+    home: Option<&std::path::Path>,
+    mut record: LocalPersonaRequestRecord,
+) -> Result<String> {
+    let identity = local_identity(home)?;
+    anyhow::ensure!(
+        identity.did() == record.agent_did,
+        "initialized home signer {} does not own target agent {}",
+        identity.did(),
+        record.agent_did
+    );
+    record.local_signature = identity.sign(&record.signing_payload()).await?;
+    record.validate_shape()?;
+    let access = ConfigAccess::Graphql(graphql.to_string());
+    access
+        .execute(&gents::agent::persona_ops::local_persona_request_mutation(
+            &record,
+        ))
+        .await?;
+    poll_persona_request(&access, &record.request_key).await
+}
+
+fn local_record(
+    agent_did: String,
+    op: &str,
+    behavior_id: Option<String>,
+    clone_from: Option<String>,
+    persona_name: Option<String>,
+    backend_model: Option<String>,
+    root: Option<String>,
+    preset: Option<String>,
+    profile_id: Option<String>,
+) -> LocalPersonaRequestRecord {
+    LocalPersonaRequestRecord {
+        request_key: format!("cli-{}", uuid::Uuid::new_v4()),
+        requester_did: agent_did.clone(),
+        agent_did: agent_did.clone(),
+        authority_kind: PERSONA_AUTHORITY_LOCAL_SELF.to_string(),
+        local_signer_did: agent_did,
+        op: op.to_string(),
+        behavior_id,
+        clone_from,
+        persona_name,
+        backend_model,
+        root,
+        preset,
+        profile_id,
+        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        local_signature: Vec::new(),
+    }
+}
+
+fn resolve_backend_model(args: &BehaviorCreateArgs) -> Result<String> {
+    match (
+        args.model
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()),
+        args.backend_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()),
+        args.model_name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()),
+    ) {
+        (Some(model), None, None) => Ok(model.trim().to_string()),
+        (None, Some(backend), Some(model)) => Ok(format!("{}|{}", backend.trim(), model.trim())),
+        _ => anyhow::bail!("provide --model or exactly --backend-id plus --model-name"),
+    }
+}
+
+async fn source_behavior(graphql: &str, behavior_id: &str) -> Result<SourceBehaviorRow> {
+    let access = ConfigAccess::Graphql(graphql.to_string());
+    let id = escape_graphql_string(behavior_id);
+    let query = format!(
+        r#"{{ AgentBehavior(filter: {{ behavior_id: {{ _eq: "{id}" }} }}, limit: 1) {{ agent_did backend_id model_name inference_profile_id }} }}"#
+    );
+    let row = graphql_rows(&access, "AgentBehavior", &query)
+        .await?
+        .into_iter()
+        .next()
+        .with_context(|| format!("unknown behavior_id {behavior_id:?}"))?;
+    Ok(serde_json::from_value(row)?)
+}
+
+pub(super) async fn behavior_create(args: BehaviorCreateArgs) -> Result<()> {
+    let model = resolve_backend_model(&args)?;
+    let record = local_record(
+        args.agent_did.clone(),
+        "create",
+        None,
+        args.clone_from.clone(),
+        Some(args.display_name.clone()),
+        Some(model),
+        args.root.clone(),
+        args.preset.clone(),
+        args.profile_id.clone(),
+    );
+    let request_key = record.request_key.clone();
+    let behavior_id = submit_local_persona(&args.graphql, args.home.as_deref(), record).await?;
+    print_json(&json!({"status":"applied", "request_key":request_key, "behavior_id":behavior_id}))
 }
 
 pub(super) async fn behavior_clone(args: BehaviorCloneArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
-    let source = load_source_behavior(&access, &args.source_behavior_id)
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "unknown clone_from {:?} — no such AgentBehavior",
-                args.source_behavior_id
-            )
-        })?;
-    let agent_did = source.agent_did.unwrap_or_default();
-
-    let backend_model = match args.model.as_deref().map(str::trim) {
-        Some(model) if !model.is_empty() => model.to_string(),
-        _ => format!(
+    let source = source_behavior(&args.graphql, &args.source_behavior_id).await?;
+    let agent_did = source
+        .agent_did
+        .context("source behavior missing agent_did")?;
+    let model = args.model.clone().unwrap_or_else(|| {
+        format!(
             "{}|{}",
             source.backend_id.unwrap_or_default(),
             source.model_name.unwrap_or_default()
-        ),
-    };
-    let profile_id = args
-        .profile_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or(source.inference_profile_id);
-
-    let request_key = format!("cli-{}", uuid::Uuid::new_v4());
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = create_persona_request_mutation(
-        &request_key,
-        &agent_did,
-        &agent_did,
+        )
+    });
+    let record = local_record(
+        agent_did,
         "create",
         None,
-        Some(&args.source_behavior_id),
-        Some(&args.display_name),
-        Some(&backend_model),
-        args.root.as_deref(),
+        Some(args.source_behavior_id.clone()),
+        Some(args.display_name.clone()),
+        Some(model),
+        args.root.clone(),
         None,
-        profile_id.as_deref(),
-        &now,
+        args.profile_id.clone().or(source.inference_profile_id),
     );
-    let behavior_id = submit_and_await_persona_request(&access, &request_key, &mutation).await?;
-    print_json(&json!({
-        "request_key": request_key,
-        "status": "applied",
-        "agent_did": agent_did,
-        "clone_from": args.source_behavior_id,
-        "persona_name": args.display_name,
-        "behavior_id": behavior_id,
-    }))
+    let request_key = record.request_key.clone();
+    let behavior_id = submit_local_persona(&args.graphql, args.home.as_deref(), record).await?;
+    print_json(&json!({"status":"applied", "request_key":request_key, "behavior_id":behavior_id}))
 }
 
 pub(super) async fn behavior_disable(args: BehaviorDisableArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
-    let source = load_source_behavior(&access, &args.behavior_id)
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "unknown behavior_id {:?} — no such AgentBehavior",
-                args.behavior_id
-            )
-        })?;
-    let agent_did = source.agent_did.unwrap_or_default();
-
-    let request_key = format!("cli-{}", uuid::Uuid::new_v4());
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = create_persona_request_mutation(
-        &request_key,
-        &agent_did,
-        &agent_did,
+    let source = source_behavior(&args.graphql, &args.behavior_id).await?;
+    let agent_did = source
+        .agent_did
+        .context("source behavior missing agent_did")?;
+    let record = local_record(
+        agent_did,
         "disable",
-        Some(&args.behavior_id),
+        Some(args.behavior_id.clone()),
         None,
         None,
         None,
         None,
         None,
         None,
-        &now,
     );
-    let behavior_id = submit_and_await_persona_request(&access, &request_key, &mutation).await?;
-    print_json(&json!({
-        "request_key": request_key,
-        "status": "applied",
-        "agent_did": agent_did,
-        "behavior_id": behavior_id,
-    }))
+    let request_key = record.request_key.clone();
+    let behavior_id = submit_local_persona(&args.graphql, args.home.as_deref(), record).await?;
+    print_json(&json!({"status":"applied", "request_key":request_key, "behavior_id":behavior_id}))
 }
 
 // -- enriched show: base AgentBehavior fields plus a `resolved` section

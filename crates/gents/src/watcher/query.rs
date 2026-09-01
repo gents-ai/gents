@@ -69,12 +69,13 @@ impl DefraWatcher {
             anyhow::bail!("watcher query failed: {:?}", resp.errors);
         }
 
-        let Some(row) = active_runtime_rows(resp.data.as_ref())?.into_iter().next() else {
+        let (rows, malformed) = parse_active_runtime_rows(resp.data.as_ref())?;
+        for row in malformed {
+            self.terminalize_malformed_pending_request(&row).await;
+        }
+        let Some(row) = rows.into_iter().next() else {
             return Ok(None);
         };
-        if row.is_deprecated_background_completion_wakeup() {
-            return Ok(None);
-        }
         if !self.row_is_claimable(&row).await? {
             return Ok(None);
         }
@@ -121,7 +122,10 @@ impl DefraWatcher {
             anyhow::bail!("watcher pending-request query failed: {:?}", resp.errors);
         }
 
-        let rows = active_runtime_rows(resp.data.as_ref())?;
+        let (rows, malformed) = parse_active_runtime_rows(resp.data.as_ref())?;
+        for row in malformed {
+            self.terminalize_malformed_pending_request(&row).await;
+        }
         for row in &rows {
             if row.is_pending() {
                 if let Err(error) = row.clone().into_agent_request() {
@@ -148,35 +152,13 @@ impl DefraWatcher {
         row: &AgentRequestRow,
         error: &anyhow::Error,
     ) {
-        let doc_id = crate::graphql::escape_graphql_string(&row.doc_id);
-        let failure_reason = crate::graphql::escape_graphql_string(&format!(
-            "request rejected at ingest: incoherent durable lineage ({error})"
-        ));
-        let agent_did = crate::graphql::escape_graphql_string(&self.agent_did);
-        let terminalized_at =
-            crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
-                        agent_did: {{ _eq: "{agent_did}" }},
-                        status: {{ _eq: "pending" }},
-                        lifecycle_state: {{ _eq: "pending" }}
-                    }},
-                    input: {{
-                        status: "error",
-                        lifecycle_state: "failed",
-                        failure_reason: "{failure_reason}",
-                        terminalized_at: "{terminalized_at}",
-                        terminal_redrive_attempts: 0
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-        if let Err(persist_error) = crate::retry::execute_graphql_with_terminal_persistence_retry(
+        let failure_reason =
+            format!("request rejected at ingest: incoherent durable lineage ({error})");
+        if let Err(persist_error) = crate::request_admission::terminalize_pending_request_rejection(
             self.node.as_ref(),
-            &mutation,
+            &row.doc_id,
+            &self.agent_did,
+            &failure_reason,
             "terminalize_incoherent_pending_request",
         )
         .await
@@ -195,6 +177,28 @@ impl DefraWatcher {
             %error,
             "terminalized incoherent AgentRequest at watcher ingest",
         );
+    }
+
+    async fn terminalize_malformed_pending_request(&self, row: &MalformedPendingRow) {
+        if row.agent_did != self.agent_did
+            || row.status != "pending"
+            || row.lifecycle_state.as_deref() != Some("pending")
+        {
+            return;
+        }
+        let reason = "request rejected at ingest: malformed durable AgentRequest row";
+        if let Err(error) = crate::request_admission::terminalize_pending_request_rejection(
+            self.node.as_ref(),
+            &row.doc_id,
+            &self.agent_did,
+            reason,
+            "terminalize_malformed_pending_request",
+        )
+        .await
+        {
+            tracing::error!(doc_id = %row.doc_id, error = %error,
+                "failed to terminalize malformed AgentRequest");
+        }
     }
 
     async fn row_is_claimable(&self, row: &AgentRequestRow) -> anyhow::Result<bool> {
@@ -221,8 +225,6 @@ impl DefraWatcher {
                     request_id
                     status
                     lifecycle_state
-                    execution_origin
-                    metadata
                     created_at
                 }}
             }}"#,
@@ -243,7 +245,6 @@ impl DefraWatcher {
 
         let active_blocker = rows
             .iter()
-            .filter(|candidate| !candidate.is_deprecated_background_completion_wakeup())
             .any(|candidate| candidate.doc_id != row.doc_id && candidate.is_active_non_pending());
         if active_blocker {
             return Ok(false);
@@ -251,17 +252,59 @@ impl DefraWatcher {
 
         Ok(rows
             .iter()
-            .filter(|candidate| !candidate.is_deprecated_background_completion_wakeup())
             .find(|candidate| candidate.is_pending())
             .is_some_and(|candidate| candidate.doc_id == row.doc_id))
     }
 }
 
+#[cfg(test)]
 fn active_runtime_rows(data: Option<&serde_json::Value>) -> anyhow::Result<Vec<AgentRequestRow>> {
     match data.and_then(|d| d.get("AgentRequest")) {
         Some(value) => Ok(serde_json::from_value(value.clone())?),
         None => Ok(Vec::new()),
     }
+}
+
+#[derive(Debug)]
+struct MalformedPendingRow {
+    doc_id: String,
+    agent_did: String,
+    status: String,
+    lifecycle_state: Option<String>,
+}
+
+fn parse_active_runtime_rows(
+    data: Option<&serde_json::Value>,
+) -> anyhow::Result<(Vec<AgentRequestRow>, Vec<MalformedPendingRow>)> {
+    let Some(value) = data.and_then(|data| data.get("AgentRequest")) else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("AgentRequest query result is not an array"))?;
+    let mut rows = Vec::with_capacity(values.len());
+    let mut malformed = Vec::new();
+    for value in values {
+        match serde_json::from_value::<AgentRequestRow>(value.clone()) {
+            Ok(row) => rows.push(row),
+            Err(error) => {
+                let string = |name: &str| value.get(name).and_then(serde_json::Value::as_str);
+                if let (Some(doc_id), Some(agent_did), Some(status)) =
+                    (string("_docID"), string("agent_did"), string("status"))
+                {
+                    malformed.push(MalformedPendingRow {
+                        doc_id: doc_id.to_string(),
+                        agent_did: agent_did.to_string(),
+                        status: status.to_string(),
+                        lifecycle_state: string("lifecycle_state").map(str::to_string),
+                    });
+                } else {
+                    tracing::warn!(%error, "unattributable malformed AgentRequest row quarantined");
+                }
+            }
+        }
+    }
+    Ok((rows, malformed))
 }
 
 pub(crate) fn agent_request_from_mutation_response(
@@ -274,16 +317,6 @@ pub(crate) fn agent_request_from_mutation_response(
         .transpose()?
         .map(AgentRequestRow::into_agent_request)
         .transpose()
-}
-
-#[cfg(test)]
-fn claimable_pending_rows(
-    data: Option<&serde_json::Value>,
-) -> anyhow::Result<Vec<AgentRequestRow>> {
-    Ok(prioritize_aged_background_wakes(
-        claimable_pending_rows_from_rows(active_runtime_rows(data)?),
-        chrono::Utc::now(),
-    ))
 }
 
 fn prioritize_aged_background_wakes(
@@ -303,7 +336,6 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
     // to malformed live work in the same session.
     let blocked_sessions = rows
         .iter()
-        .filter(|row| !row.is_deprecated_background_completion_wakeup())
         .filter(|row| row.is_active_non_pending())
         .map(|row| row.session_id.clone())
         .collect::<HashSet<_>>();
@@ -326,9 +358,6 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
     let mut claimable = Vec::new();
 
     for row in rows {
-        if row.is_deprecated_background_completion_wakeup() {
-            continue;
-        }
         let is_pending = row.is_pending();
         let is_preclaim_terminal = row.has_preclaim_terminal_signal();
         let pending_session_seen = seen_pending_sessions.contains(&row.session_id);
@@ -349,8 +378,7 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
 #[cfg(test)]
 mod tests {
     use super::{
-        active_runtime_rows, claimable_pending_rows, claimable_pending_rows_from_rows,
-        prioritize_aged_background_wakes,
+        active_runtime_rows, claimable_pending_rows_from_rows, prioritize_aged_background_wakes,
     };
 
     fn versioned_wake_metadata(session_id: &str) -> String {
@@ -454,51 +482,5 @@ mod tests {
         let ranked = prioritize_aged_background_wakes(rows, now);
         assert_eq!(ranked[0].request_id, "older-descendant");
         assert_eq!(ranked[1].request_id, "fresh-wake");
-    }
-
-    #[test]
-    fn processing_legacy_wake_does_not_block_interactive_request() {
-        let wake_metadata = serde_json::json!({
-            "queue": {
-                "source": "background_completion",
-                "policy": "coalesce",
-                "key": "child-1",
-                "queued_after_request_id": null
-            }
-        })
-        .to_string();
-        let data = serde_json::json!({
-            "AgentRequest": [
-                {
-                    "_docID": "wake-doc",
-                    "request_id": "legacy-wake",
-                    "agent_did": "did:agent:1",
-                    "behavior_id": "default",
-                    "session_id": "session-1",
-                    "content": "legacy wake",
-                    "metadata": wake_metadata,
-                    "execution_origin": "scheduled",
-                    "created_at": "2026-07-01T00:00:00Z",
-                    "status": "processing",
-                    "lifecycle_state": "processing"
-                },
-                {
-                    "_docID": "user-doc",
-                    "request_id": "interactive",
-                    "agent_did": "did:agent:1",
-                    "behavior_id": "default",
-                    "session_id": "session-1",
-                    "content": "hello",
-                    "execution_origin": "interactive",
-                    "created_at": "2026-07-01T00:00:01Z",
-                    "status": "pending",
-                    "lifecycle_state": "pending"
-                }
-            ]
-        });
-
-        let claimable = claimable_pending_rows(Some(&data)).expect("claimable rows");
-        assert_eq!(claimable.len(), 1);
-        assert_eq!(claimable[0].request_id, "interactive");
     }
 }

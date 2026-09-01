@@ -269,7 +269,9 @@ async function runSample(browserInstance, sampleIndex) {
         await page.evaluate(() =>
           window.__GENTS_MOBILE_PERFORMANCE__.setP2PStatus("healthy"),
         );
-        await page.waitForFunction(() => document.body.textContent?.includes("Paired"));
+        await page.waitForFunction(() =>
+          document.body.textContent?.includes("Connected"),
+        );
       },
       async () => ({
         syntheticSignal: true,

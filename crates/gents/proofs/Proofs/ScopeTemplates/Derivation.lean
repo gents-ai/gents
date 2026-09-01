@@ -113,10 +113,10 @@ def clientTranscriptPredicates (requesterDid ownerDid : Did) :
 def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did) :
     List CollectionPredicate :=
   clientTranscriptPredicates requesterDid ownerDid ++
-    [ { collection := "BearerPairingReady"
+    [ { collection := "PersonaConfigRequest"
       , clauses :=
-          [ { field := "claimant_did", value := requesterDid }
-          , { field := "issuer_did", value := ownerDid } ] }
+          [ { field := "requester_did", value := requesterDid }
+          , { field := "agent_did", value := ownerDid } ] }
     , { collection := "PeerEndpoint"
       , clauses :=
           [ { field := "did"
@@ -127,7 +127,12 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
     , { collection := "SessionHydrationRequest"
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
-          , { field := "agent_did", value := ownerDid } ] } ]
+          , { field := "agent_did", value := ownerDid } ] } ] ++
+    match direction with
+    | .clientToRuntime => []
+    | .runtimeToClient =>
+        [ { collection := "AgentBehaviorReadiness"
+          , clauses := [ { field := "agent_did", value := ownerDid } ] } ]
 
 def directionalScopeFilters (template : Template) (direction : RouteDirection)
     (requesterDid ownerDid : Did) : List CollectionPredicate :=
@@ -159,17 +164,13 @@ theorem conversation_filter_eq (peerDid localDid : Did) :
         , { collection := "AgentToolResult",   field := "requester_did", value := peerDid }
         , { collection := "AgentSession",      field := "requester_did", value := peerDid }
         , { collection := "AgentConversation", field := "requester_did", value := peerDid }
-        , { collection := "CompactionEntry",   field := "requester_did", value := peerDid }
-        , { collection := "BearerPairingReady", field := "claimant_did", value := peerDid } ] := by
+        , { collection := "CompactionEntry",   field := "requester_did", value := peerDid } ] := by
   simp [scopeFilter, conversationRules]
 
 theorem conversation_filters_requester_lineage (peerDid localDid : Did) :
     (scopeFilter conversationTemplate.scope [] peerDid localDid).all
       (fun k =>
-        k.value = peerDid ∧
-        (if k.collection = "BearerPairingReady"
-          then k.field = "claimant_did"
-          else k.field = "requester_did")) = true := by
+        k.value = peerDid ∧ k.field = "requester_did") = true := by
   simp [scopeFilter, conversationTemplate, conversationRules]
 
 theorem conversation_filters_exactly_transcript_collections (peerDid localDid : Did) :
@@ -197,19 +198,10 @@ theorem conversation_request_crossing_is_peer_scoped (peerDid localDid : Did) :
           some { collection := "AgentRequest", field := "requester_did", value := peerDid } := by
   simp [scopeFilter, conversationTemplate, conversationRules]
 
-theorem conversation_readiness_crossing_is_claimant_scoped (peerDid localDid : Did) :
-    (scopeFilter conversationTemplate.scope [] peerDid localDid).find?
-        (fun k => k.collection = "BearerPairingReady") =
-          some { collection := "BearerPairingReady", field := "claimant_did", value := peerDid } := by
-  simp [scopeFilter, conversationTemplate, conversationRules]
-
 theorem machine_filter_eq (peerDid homeDid : Did) :
     scopeFilter machineTemplate.scope [] peerDid homeDid =
       scopeFilter conversationTemplate.scope [] peerDid homeDid ++
         [ { collection := "MailboxItem"
-          , field := "requester_did"
-          , value := peerDid }
-        , { collection := "PersonaConfigRequest"
           , field := "requester_did"
           , value := peerDid }
         , { collection := "SessionHydrationRequest"
@@ -224,8 +216,7 @@ theorem machine_filters_transcript_persona_and_directory (peerDid homeDid : Did)
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
       = (conversationTranscriptCollections ++
-          ["MailboxItem", "PersonaConfigRequest", "SessionHydrationRequest",
-           "AgentDirectoryEntry"]).toFinset := by
+          ["MailboxItem", "SessionHydrationRequest", "AgentDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
     conversationRules, conversationCollections, conversationTranscriptCollections]
 
@@ -253,6 +244,19 @@ theorem client_request_filter_conjoins_requester_and_destination
         (fun predicate => predicate.collection = "AgentRequest") =
       some
         { collection := "AgentRequest"
+        , clauses :=
+            [ { field := "requester_did", value := requesterDid }
+            , { field := "agent_did", value := ownerDid } ] } := by
+  cases direction <;>
+    simp [clientRouteFilters, clientTranscriptPredicates,
+      clientTranscriptCollections]
+
+theorem client_persona_request_filter_conjoins_requester_and_destination
+    (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    (clientRouteFilters direction requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "PersonaConfigRequest") =
+      some
+        { collection := "PersonaConfigRequest"
         , clauses :=
             [ { field := "requester_did", value := requesterDid }
             , { field := "agent_did", value := ownerDid } ] } := by
@@ -292,18 +296,31 @@ theorem client_transcript_rejects_another_destination
       { requesterDid := requesterDid, agentDid := otherDid } = false := by
   simp [clientTranscriptMatches, different]
 
-theorem client_filters_cover_exact_outbound_projection
+theorem client_filters_cover_exact_directional_projection
     (direction : RouteDirection) (requesterDid ownerDid : Did) :
     (clientRouteFilters direction requesterDid ownerDid).map
-        (fun predicate => predicate.collection) = clientToRuntimeCollections := by
+        (fun predicate => predicate.collection) =
+      match direction with
+      | .clientToRuntime => clientToRuntimeCollections
+      | .runtimeToClient => clientToRuntimeCollections ++ clientOwnerProjectionCollections := by
   cases direction <;>
     simp [clientRouteFilters, clientTranscriptPredicates,
-      clientTranscriptCollections, clientToRuntimeCollections]
+      clientTranscriptCollections, clientToRuntimeCollections,
+      clientOwnerProjectionCollections]
 
 theorem client_return_adds_exact_bounded_control_plane :
     clientRouteCollections .runtimeToClient =
-      clientToRuntimeCollections ++ clientControlPlaneCollections := by
-  rfl
+      clientToRuntimeCollections ++ clientControlPlaneCollections ++
+        clientOwnerProjectionCollections := by rfl
+
+theorem client_readiness_return_is_owner_scoped
+    (requesterDid ownerDid : Did) :
+    (clientRouteFilters .runtimeToClient requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "AgentBehaviorReadiness") =
+      some
+        { collection := "AgentBehaviorReadiness"
+        , clauses := [ { field := "agent_did", value := ownerDid } ] } := by
+  simp [clientRouteFilters, clientTranscriptPredicates, clientTranscriptCollections]
 
 theorem client_return_control_plane_is_unfiltered
     (requesterDid ownerDid : Did) :

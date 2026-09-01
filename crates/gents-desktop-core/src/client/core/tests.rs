@@ -9,6 +9,7 @@ use defra_p2p_adapter::{
     ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, P2pDocumentRequest,
     ReplicationFilter, ReplicatorInfo,
 };
+use tokio::sync::Notify;
 
 use super::route_manager::cleanup_saved_peer_p2p;
 use super::supervisor::{
@@ -16,7 +17,7 @@ use super::supervisor::{
     request_index_for_ready_peers, saved_peer_needs_repair,
 };
 use super::*;
-use crate::client::PeerRecord;
+use crate::client::{PeerDirectory, PeerRecord};
 
 #[derive(Default)]
 struct RecordingP2P {
@@ -27,6 +28,8 @@ struct RecordingP2P {
     connected_peers: StdRwLock<Vec<String>>,
     connected_peers_error: StdRwLock<Option<String>>,
     connect_calls: StdRwLock<Vec<String>>,
+    connect_error: StdRwLock<Option<String>>,
+    connect_gate: StdRwLock<Option<Arc<Notify>>>,
     add_replicator_calls: StdRwLock<Vec<String>>,
     sync_branchable_calls: StdRwLock<Vec<String>>,
     cleanup_calls: StdRwLock<Vec<String>>,
@@ -87,6 +90,20 @@ impl RecordingP2P {
             .read()
             .expect("connect calls lock poisoned")
             .clone()
+    }
+
+    fn set_connect_error(&self, error: Option<&str>) {
+        *self
+            .connect_error
+            .write()
+            .expect("connect error lock poisoned") = error.map(ToOwned::to_owned);
+    }
+
+    fn set_connect_gate(&self, gate: Arc<Notify>) {
+        *self
+            .connect_gate
+            .write()
+            .expect("connect gate lock poisoned") = Some(gate);
     }
 
     fn add_replicator_calls(&self) -> Vec<String> {
@@ -169,6 +186,22 @@ impl P2POps for RecordingP2P {
             .write()
             .expect("connect calls lock poisoned")
             .push(addr.to_string());
+        let gate = self
+            .connect_gate
+            .read()
+            .expect("connect gate lock poisoned")
+            .clone();
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
+        if let Some(error) = self
+            .connect_error
+            .read()
+            .expect("connect error lock poisoned")
+            .clone()
+        {
+            return Err(error.into());
+        }
         self.connected_peers
             .write()
             .expect("connected peers lock poisoned")
@@ -289,6 +322,136 @@ impl P2POps for RecordingP2P {
 }
 
 #[tokio::test]
+async fn restart_clears_and_defers_persisted_enrollment_until_current_authority() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().join("core")),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let peer_path = tmp.path().join("restart-peers.json");
+    let mut directory = PeerDirectory::open_writer(&peer_path).await.unwrap();
+    let enrolled = directory
+        .upsert_enrollment_peer(
+            "server-peer",
+            "Enrolled server",
+            "iroh://server-ticket",
+            "did:key:owner",
+            "network-a",
+            "request-a",
+            "request-digest",
+            "did:key:admin",
+            7,
+            "2099-09-29T00:00:00Z",
+        )
+        .await
+        .unwrap();
+    let enrolled = directory
+        .set_pairing_ready(&enrolled.peer_id, true)
+        .await
+        .unwrap()
+        .expect("enrollment remains configured");
+    assert!(enrolled.pairing_ready);
+    drop(directory);
+
+    let owner = super::sync_state::ClientSyncStateOwner::new(
+        P2PHealth::default(),
+        PeerDirectory::open_writer(&peer_path).await.unwrap(),
+        Vec::new(),
+    );
+    let mut updates = owner.subscribe();
+    owner.clear_ephemeral_pairing_readiness().await.unwrap();
+    assert!(updates.has_changed().expect("watch remains open"));
+    let restarted = updates.borrow_and_update().clone();
+    assert_eq!(restarted.directory.len(), 1);
+    assert!(!restarted.directory[0].pairing_ready);
+
+    let recording = Arc::new(RecordingP2P::default());
+    let p2p: Arc<dyn P2POps> = recording.clone();
+    let route_manager = Arc::new(super::route_manager::ClientRouteManager::new(
+        core.node_arc(),
+        Arc::clone(&p2p),
+        Arc::new(core.principal().clone()),
+    ));
+    let options = ClientCoreOptions {
+        install_replicators_on_bootstrap: true,
+        ..ClientCoreOptions::local_only()
+    };
+    let (statuses, errors) = super::bootstrap::bootstrap_saved_peers(
+        &core.node_arc(),
+        &p2p,
+        &owner.records(),
+        &options,
+        core.principal(),
+        &route_manager,
+    )
+    .await;
+    assert!(errors.is_empty());
+    assert_eq!(statuses.len(), 1);
+    assert!(!statuses[0].dial_succeeded);
+    assert!(statuses[0].pairing.is_empty());
+    assert!(statuses[0].routes.is_empty());
+    assert!(recording.connect_calls().is_empty());
+    assert!(recording.add_replicator_calls().is_empty());
+    let persisted = crate::client::load_peer_records(&peer_path).await.unwrap();
+    assert_eq!(persisted, restarted.directory);
+    assert!(!persisted[0].pairing_ready);
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn expired_enrollment_is_persistently_demoted_before_submit_can_write() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tmp.path().to_path_buf()),
+        ClientCoreOptions::local_only(),
+    )
+    .await
+    .expect("client core");
+    let enrolled = core
+        .sync_state
+        .upsert_enrollment_peer(
+            "server-peer",
+            "Expired server",
+            "iroh://server-ticket",
+            "did:key:owner",
+            "network-a",
+            "request-a",
+            "request-digest",
+            "did:key:admin",
+            7,
+            "2020-01-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+    core.sync_state
+        .set_pairing_ready(&enrolled, true)
+        .await
+        .unwrap()
+        .expect("enrollment remains configured");
+
+    let error = core
+        .submit_request("session-a", "did:key:owner", "must not persist", None)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("route is not ready"));
+    assert!(!core.sync_state.records()[0].pairing_ready);
+    assert!(core.store().snapshot().requests.is_empty());
+    let persisted = crate::client::load_peer_records(&core.paths().peer_directory_path())
+        .await
+        .unwrap();
+    assert!(!persisted[0].pairing_ready);
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
 async fn index_sync_request_targets_exactly_the_client_index() {
     use crate::client::paths::DesktopPaths;
 
@@ -344,38 +507,51 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
     recording.set_connected_peers(vec!["peer-alpha".to_string()]);
     let p2p: Arc<dyn P2POps> = recording.clone();
     let node = core.node_arc();
-    let statuses = Arc::new(StdRwLock::new(vec![ClientPeerStatus {
-        peer_id: "saved-alpha".to_string(),
-        label: "Alpha".to_string(),
-        agent_did: "did:key:alpha".to_string(),
-        addr: "peer-alpha".to_string(),
-        dial_succeeded: true,
-        last_error: None,
-        pairing: Vec::new(),
-        routes: Vec::new(),
-        chat_safe: false,
-    }]));
+    let mut saved_record = PeerRecord::new("Alpha", "peer-alpha", "did:key:alpha");
+    saved_record.peer_id = "saved-alpha".to_string();
+    let (_sync_tempdir, sync_state) = sync_state::ClientSyncStateOwner::for_test(
+        vec![saved_record],
+        vec![ClientPeerStatus {
+            peer_id: "saved-alpha".to_string(),
+            label: "Alpha".to_string(),
+            agent_did: "did:key:alpha".to_string(),
+            addr: "peer-alpha".to_string(),
+            dial_succeeded: true,
+            last_error: None,
+            pairing: Vec::new(),
+            routes: Vec::new(),
+        }],
+    )
+    .await;
     let mut saved = BTreeSet::from(["saved-alpha".to_string()]);
-    let mut requested_for = BTreeSet::new();
+    let mut requested_for = BTreeMap::new();
     let index_collection_count = crate::client::schema::index_collection_names().len();
 
-    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
         index_collection_count
     );
-    assert_eq!(requested_for, saved);
+    assert_eq!(
+        requested_for.keys().cloned().collect::<BTreeSet<_>>(),
+        saved
+    );
 
-    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
         index_collection_count
     );
 
-    statuses
-        .write()
-        .expect("peer statuses lock poisoned")
-        .push(ClientPeerStatus {
+    let mut beta_record = PeerRecord::new("Beta", "peer-beta", "did:key:beta");
+    beta_record.peer_id = "saved-beta".to_string();
+    sync_state
+        .upsert_for_test(beta_record.clone())
+        .await
+        .unwrap();
+    assert!(sync_state.replace_peer(
+        &beta_record,
+        ClientPeerStatus {
             peer_id: "saved-beta".to_string(),
             label: "Beta".to_string(),
             agent_did: "did:key:beta".to_string(),
@@ -384,18 +560,21 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
             last_error: None,
             pairing: Vec::new(),
             routes: Vec::new(),
-            chat_safe: false,
-        });
+        }
+    ));
     saved.insert("saved-beta".to_string());
-    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
         index_collection_count * 2
     );
-    assert_eq!(requested_for, saved);
+    assert_eq!(
+        requested_for.keys().cloned().collect::<BTreeSet<_>>(),
+        saved
+    );
 
     requested_for.remove("saved-alpha");
-    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
+    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
         index_collection_count * 3
@@ -403,14 +582,15 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
 
     requested_for.remove("saved-alpha");
     recording.set_connected_peers(Vec::new());
-    request_index_for_ready_peers(&node, &p2p, &statuses, &saved, &mut requested_for).await;
-    let statuses = statuses.read().expect("peer statuses lock poisoned");
-    assert!(statuses
+    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    assert!(sync_state
+        .snapshot()
+        .peers
         .iter()
         .find(|status| status.peer_id == "saved-alpha")
         .and_then(|status| status.last_error.as_deref())
         .is_some_and(|error| error.contains("no connected peers")));
-    assert!(!requested_for.contains("saved-alpha"));
+    assert!(!requested_for.contains_key("saved-alpha"));
 
     core.shutdown().await.expect("shutdown");
 }
@@ -460,10 +640,8 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         "not-a-valid-p2p-address",
         "did:test:invalid\"quoted",
     );
-    core.peer_directory
-        .write()
-        .await
-        .upsert(record.clone())
+    core.sync_state
+        .upsert_for_test(record.clone())
         .await
         .expect("save invalid peer fixture");
     core.update_peer_status(ClientPeerStatus {
@@ -475,10 +653,10 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         last_error: None,
         pairing: Vec::new(),
         routes: Vec::new(),
-        chat_safe: true,
     });
     assert!(core
-        .peer_statuses()
+        .sync_state()
+        .peers
         .iter()
         .any(|status| status.peer_id == record.peer_id));
     let route = gents::agent::p2p_reconcile::ClientRouteIdentity::new(
@@ -489,20 +667,16 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
     )
     .expect("valid route fixture");
     let lifecycle = core.route_manager.lock().await;
-    lifecycle
+    let manual_write = lifecycle
         .upsert_desired(
             &route,
             gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
         )
-        .await
-        .expect("save pairing desired fixture");
-    lifecycle
-        .upsert_desired(
-            &route,
-            gents::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
-        )
-        .await
-        .expect("update pairing desired fixture");
+        .await;
+    assert!(manual_write
+        .expect_err("manual desired-state authoring must fail closed")
+        .to_string()
+        .contains("manual PeerPairingDesired authoring is disabled"));
     drop(lifecycle);
 
     let result = core
@@ -520,14 +694,14 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .iter()
         .any(|saved| saved.peer_id == record.peer_id));
     assert!(core
-        .peer_directory
-        .read()
-        .await
+        .sync_state
         .pending_removals()
+        .await
         .iter()
         .any(|pending| pending.peer_id == record.peer_id));
     assert!(!core
-        .peer_statuses()
+        .sync_state()
+        .peers
         .iter()
         .any(|status| status.peer_id == record.peer_id));
     let peer_id = gents_protocol::graphql::escape_graphql_string(
@@ -546,26 +720,9 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .and_then(|data| data.get("PeerPairingDesired"))
         .and_then(|rows| rows.as_array())
         .expect("saved pairing desired rows");
-    assert_eq!(rows.len(), 1, "writer must update the existing row");
-    let row = rows.first().expect("saved pairing desired row");
-    assert_eq!(
-        row.get("agent_did").and_then(serde_json::Value::as_str),
-        Some("did:test:invalid\"quoted")
-    );
-    assert!(row.get("profiles").is_some_and(serde_json::Value::is_null));
-    assert_eq!(
-        row.get("replicator_addresses")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|addresses| addresses.first())
-            .and_then(serde_json::Value::as_str),
-        Some(route.transport.address())
-    );
-    assert!(row
-        .get("collections")
-        .is_some_and(serde_json::Value::is_null));
-    assert_eq!(
-        row.get("template").and_then(serde_json::Value::as_str),
-        Some("client")
+    assert!(
+        rows.is_empty(),
+        "failed manual authoring and offline removal must not leave alternate desired authority"
     );
 
     core.shutdown().await.expect("shutdown");
@@ -593,7 +750,6 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
             last_error: Some("peer Workshop Bay dial failed".to_string()),
             pairing: Vec::new(),
             routes: Vec::new(),
-            chat_safe: false,
         }),
         "did:key:desktop",
         false,
@@ -605,6 +761,43 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
     assert_eq!(recording.connect_calls(), vec![record.addr.clone()]);
     assert!(repaired.dial_succeeded);
     assert_eq!(repaired.last_error, None);
+}
+
+#[tokio::test]
+async fn failed_redial_clears_stale_configured_peer_connectivity() {
+    let recording = Arc::new(RecordingP2P::default());
+    recording.set_connect_error(Some("peer unavailable"));
+    let p2p: Arc<dyn P2POps> = recording;
+    let record = PeerRecord::new(
+        "Workshop Bay",
+        "127.0.0.1:56000/p2p/peer-alpha",
+        "did:test:workshop-bay",
+    );
+
+    let repaired = repair_saved_peer(
+        &p2p,
+        &record,
+        Some(ClientPeerStatus {
+            peer_id: record.peer_id.clone(),
+            label: record.label.clone(),
+            agent_did: record.agent_did.clone(),
+            addr: record.addr.clone(),
+            dial_succeeded: true,
+            last_error: None,
+            pairing: Vec::new(),
+            routes: Vec::new(),
+        }),
+        "did:key:desktop",
+        false,
+        false,
+    )
+    .await;
+
+    assert!(!repaired.dial_succeeded);
+    assert!(repaired
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("dial failed")));
 }
 
 #[tokio::test]
@@ -631,7 +824,6 @@ async fn repair_saved_graphql_peer_leaves_replicator_installation_to_route_manag
             last_error: None,
             pairing: Vec::new(),
             routes: Vec::new(),
-            chat_safe: false,
         }),
         "did:key:desktop",
         true,
@@ -671,7 +863,6 @@ async fn saved_peer_needs_repair_when_live_connection_has_dropped() {
             last_error: None,
             pairing: Vec::new(),
             routes: Vec::new(),
-            chat_safe: false,
         }),
     )
     .await;
@@ -702,7 +893,6 @@ async fn saved_peer_does_not_need_repair_while_live_connection_is_healthy() {
             last_error: None,
             pairing: Vec::new(),
             routes: Vec::new(),
-            chat_safe: false,
         }),
     )
     .await;

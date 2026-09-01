@@ -16,7 +16,6 @@ import type {
   InterruptRequestResult,
   MCPServiceHealthView,
   McpServiceProbeResult,
-  PeerAddRequest,
   SubagentTreeView,
   SyncHealthView,
   TaskRunResult,
@@ -93,6 +92,8 @@ export type SessionSyncHarnessController = {
   progress(mergedCount: number, servedCount: number): void;
   complete(): void;
   fail(): void;
+  observe(): void;
+  retryCount(): number;
 };
 
 type DesktopUiHarness = {
@@ -153,13 +154,14 @@ export function createDesktopUiHarness(
   if (scenario === "backend-unavailable") {
     deployment = {
       ...deployment,
-      runtime: deployment.runtime
-        ? {
-            ...deployment.runtime,
-            runnableBehaviorCount: 0,
-            unavailableBehaviorCount: deployment.behaviors.length,
-          }
-        : null,
+      behaviorReadiness: {
+        ...deployment.behaviorReadiness,
+        behaviors: deployment.behaviorReadiness.behaviors.map((behavior) => ({
+          state: "unavailable" as const,
+          behaviorId: behavior.behaviorId,
+          reason: "backend_disabled" as const,
+        })),
+      },
       inferenceBackends: deployment.inferenceBackends.map((backend) => ({
         ...backend,
         enabled: false,
@@ -203,11 +205,11 @@ export function createDesktopUiHarness(
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
+  let hydrationRetryCalls = 0;
   let updateEvents = 0;
   let storeVersion = 1;
   let reconcileVersion = 1;
   let streamSequence = 0;
-  let hydrationRedrive = false;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
   let commits: MobilePerformanceCommit[] = [];
 
@@ -444,19 +446,6 @@ export function createDesktopUiHarness(
   }
   syncConversations();
 
-  if (typeof window !== "undefined") {
-    window.addEventListener(
-      "click",
-      (event) => {
-        const target = event.target as HTMLElement | null;
-        if (target?.closest("[data-testid='session-hydration-retry']")) {
-          hydrationRedrive = true;
-        }
-      },
-      true,
-    );
-  }
-
   function notify(reason: string, responseOnly = false) {
     updateEvents += 1;
     if (reason === "store") {
@@ -610,22 +599,6 @@ export function createDesktopUiHarness(
     };
   }
 
-  function upsertDeployment(nextPeer: PeerAddRequest) {
-    deployment = {
-      ...deployment,
-      peerId: nextPeer.agentDid === AGENT_DID ? deployment.peerId : "peer-added",
-      label: nextPeer.label.trim() || deployment.label,
-      agentDid: nextPeer.agentDid.trim() || deployment.agentDid,
-      addr: nextPeer.addr.trim() || deployment.addr,
-      graphql: nextPeer.graphql?.trim() || deployment.graphql,
-      agentPrincipal: {
-        ...deployment.agentPrincipal,
-        agentDid: nextPeer.agentDid.trim() || deployment.agentDid,
-        displayName: nextPeer.label.trim() || deployment.label,
-      },
-    };
-  }
-
   function createSessionFromPrompt(
     prompt: string,
     behaviorId?: string | null,
@@ -730,43 +703,6 @@ export function createDesktopUiHarness(
     },
     async setSelectedAgent() {
       return undefined;
-    },
-    async addPeer(request) {
-      upsertDeployment(request);
-      notify("peers");
-      return snapshot();
-    },
-    async pairBearer(request) {
-      const label = request.label?.trim() || "Amy";
-      upsertDeployment({
-        label,
-        agentDid: AGENT_DID,
-        addr: "127.0.0.1:56000/p2p/amy-bearer-peer",
-        graphql: null,
-      });
-      deployment = {
-        ...deployment,
-        source: "bearer-pairing",
-        graphql: null,
-      };
-      notify("peers");
-      const next = snapshot();
-      return {
-        ...next,
-        pairing: {
-          peerId: deployment.peerId,
-          label,
-          addr: deployment.addr,
-          issuerDid: AGENT_DID,
-          claimantDid: "did:key:zPhone",
-          networkId: "amy-network",
-          template: "conversation",
-          connected: true,
-          claimSubmitted: true,
-          endpointPublished: true,
-          replicationConfigured: true,
-        },
-      };
     },
     async removePeer(peerId) {
       if (peerId !== deployment.peerId) {
@@ -927,25 +863,21 @@ export function createDesktopUiHarness(
         graphql: "http://127.0.0.1:9181/api/v0/graphql",
       };
     },
-    async probePeerAddress() {
+    async requestStatusEnrollment() {
       return {
-        label: "Bombadil UI Agent",
-        agentDid: AGENT_DID,
-        addr: "/ip4/127.0.0.1/tcp/9292",
-        graphql: "http://127.0.0.1:9181/api/v0/graphql",
+        requestId: "enrollment-request-harness",
+        networkId: "network-harness",
+        adminDid: AGENT_DID,
+        serverPeer: deployment.peerId,
+        ownerAgent: AGENT_DID,
+        state: "pending_approval",
       };
     },
     async repairP2P() {
       p2pStatus = "healthy";
-      const hydrationPhase = syncHealth.hydration?.phase;
       syncHealth = {
         ...syncHealth,
-        state:
-          hydrationPhase === "failed"
-            ? "failed"
-            : hydrationPhase === "requested" || hydrationPhase === "serving"
-              ? "syncing"
-              : "healthy",
+        state: "healthy",
         offlineSince: null,
         stalledSince: null,
         connectedPeerCount: 1,
@@ -959,24 +891,6 @@ export function createDesktopUiHarness(
       if (!session) return null;
       const snapshot = clone(session);
       snapshot.projectionRevision = { storeVersion, reconcileVersion };
-      if (snapshot.hydration?.phase === "failed" && hydrationRedrive) {
-        hydrationRedrive = false;
-        snapshot.hydration = {
-          ...snapshot.hydration,
-          phase: "requested",
-          mergedCount: snapshot.timelineItems.length,
-          servedCount: null,
-        };
-        sessions.set(sessionId, clone(snapshot));
-        syncHealth = {
-          ...syncHealth,
-          state: "syncing",
-          lastErrorClass: null,
-          lastError: null,
-          hydration: snapshot.hydration,
-        };
-        notify("hydration");
-      }
       if (!timelinePage) return snapshot;
 
       const totalItems = snapshot.timelineItems.length;
@@ -1003,6 +917,28 @@ export function createDesktopUiHarness(
           snapshot.timelineItems[snapshot.timelineItems.length - 1]?.itemKey ?? null,
       };
       return snapshot;
+    },
+    async retrySessionHydration(sessionId, agentDid) {
+      hydrationRetryCalls += 1;
+      const session = sessions.get(sessionId);
+      const resolvedAgentDid = agentDid ?? session?.agentDid;
+      if (
+        !session ||
+        session.agentDid !== resolvedAgentDid ||
+        session.hydration?.phase !== "failed"
+      ) {
+        throw new Error(
+          "session hydration retry requires a failed attempt for the selected session",
+        );
+      }
+      const hydration = {
+        ...session.hydration,
+        phase: "requested" as const,
+        mergedCount: session.timelineItems.length,
+        servedCount: null,
+      };
+      sessions.set(sessionId, { ...session, hydration });
+      notify("store");
     },
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
@@ -1655,9 +1591,13 @@ export function createDesktopUiHarness(
 
   function runHarnessTask(taskId: string): TaskRunResult {
     const task = deployment.tasks.find((row) => row.taskId === taskId);
+    const behaviorId = deployment.behaviorReadiness.defaultBehaviorId;
+    if (!behaviorId) {
+      throw new Error("runtime readiness did not assign a default behavior");
+    }
     const { session, requestId } = createSessionFromPrompt(
       `Run task ${taskId}`,
-      deployment.defaultBehaviorId,
+      behaviorId,
       {
         taskId,
         taskName: task?.name ?? taskId,
@@ -1668,7 +1608,7 @@ export function createDesktopUiHarness(
       requestId,
       sessionId: session.sessionId,
       agentDid: deployment.agentDid,
-      behaviorId: deployment.defaultBehaviorId ?? DEFAULT_BEHAVIOR_ID,
+      behaviorId,
       status: "completed",
       lifecycleState: "completed",
     };
@@ -1752,6 +1692,12 @@ export function createDesktopUiHarness(
   }
 
   const sessionSync: SessionSyncHarnessController = {
+    observe() {
+      notify("store");
+    },
+    retryCount() {
+      return hydrationRetryCalls;
+    },
     progress(mergedCount, servedCount) {
       const session = sessions.get("session-remote");
       if (!session) return;
@@ -1774,13 +1720,7 @@ export function createDesktopUiHarness(
         timelineItems,
         hydration: remoteHydration("serving", mergedCount, servedCount),
       });
-      syncHealth = {
-        ...syncHealth,
-        state: "syncing",
-        hydration: remoteHydration("serving", mergedCount, servedCount),
-      };
       syncConversations();
-      notify("hydration");
       notify("store");
     },
     complete() {
@@ -1790,8 +1730,7 @@ export function createDesktopUiHarness(
         session.hydration?.servedCount ?? Math.max(session.timelineItems.length, 2);
       const hydration = remoteHydration("complete", servedCount, servedCount);
       sessions.set("session-remote", { ...session, hydration });
-      syncHealth = { ...syncHealth, state: "healthy", hydration };
-      notify("hydration");
+      notify("store");
     },
     fail() {
       const session = sessions.get("session-remote");
@@ -1802,14 +1741,7 @@ export function createDesktopUiHarness(
         session.hydration?.servedCount ?? null,
       );
       sessions.set("session-remote", { ...session, hydration });
-      syncHealth = {
-        ...syncHealth,
-        state: "failed",
-        lastErrorClass: "RemoteUnauthorized",
-        lastError: "hydration rejected",
-        hydration,
-      };
-      notify("hydration");
+      notify("store");
     },
   };
 
@@ -1939,6 +1871,19 @@ function createDeployment(): DeploymentView {
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
     dialSucceeded: true,
     pairingReady: true,
+    chatSafe: true,
+    behaviorReadiness: {
+      source: { state: "current" },
+      activeGeneration: 1,
+      routerGeneration: 1,
+      defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
+      updatedAt: STARTED_AT,
+      behaviors: [
+        { state: "ready", behaviorId: DEFAULT_BEHAVIOR_ID },
+        { state: "ready", behaviorId: "ops" },
+      ],
+    },
+    routes: [],
     pairing: [],
     lastError: null,
     defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
@@ -1951,15 +1896,12 @@ function createDeployment(): DeploymentView {
       createdBy: "bombadil",
     },
     runtime: {
-      processState: "running",
       reconcilePhase: "idle",
       lastReconcileResult: "ok",
       lastReconcileError: null,
       updatedAt: THIRTY_DAYS_AGO,
       behaviorExecutorCapacity: 4,
       behaviorExecutorQueueDepth: 0,
-      runnableBehaviorCount: 2,
-      unavailableBehaviorCount: 0,
     },
     behaviors: [
       {
@@ -2183,13 +2125,6 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
 }
 
 function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
-  const hydration = {
-    sessionId: scenario === "session-hydration" ? "session-remote" : "",
-    agentDid: AGENT_DID,
-    phase: scenario === "session-hydration" ? "requested" : "idle",
-    mergedCount: scenario === "session-hydration" ? 1 : 0,
-    servedCount: null as number | null,
-  };
   if (scenario === "sync-offline") {
     return {
       state: "offline",
@@ -2201,7 +2136,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       pairingRetryCount: 0,
       routeRetryCount: 0,
       connectedPeerCount: 0,
-      hydration,
     };
   }
   if (scenario === "sync-stalled") {
@@ -2215,7 +2149,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       pairingRetryCount: 6,
       routeRetryCount: 6,
       connectedPeerCount: 1,
-      hydration,
     };
   }
   if (scenario === "sync-failed") {
@@ -2229,12 +2162,11 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       pairingRetryCount: 1,
       routeRetryCount: 1,
       connectedPeerCount: 1,
-      hydration,
     };
   }
   if (scenario === "session-hydration") {
     return {
-      state: "syncing",
+      state: "healthy",
       since: STARTED_AT,
       offlineSince: null,
       stalledSince: null,
@@ -2243,7 +2175,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       pairingRetryCount: 0,
       routeRetryCount: 0,
       connectedPeerCount: 1,
-      hydration,
     };
   }
   return {
@@ -2256,7 +2187,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
     pairingRetryCount: 0,
     routeRetryCount: 0,
     connectedPeerCount: 1,
-    hydration,
   };
 }
 

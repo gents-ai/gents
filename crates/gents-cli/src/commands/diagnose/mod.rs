@@ -3,6 +3,7 @@ mod schema;
 mod tool_ceiling;
 
 use anyhow::Result;
+use gents_protocol::row::{project_behavior_readiness_summary, ProjectedBehaviorReadinessSummary};
 use serde_json::{json, Value};
 
 use crate::cli::args::{DiagnoseArgs, P2pTransportArg};
@@ -52,7 +53,6 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         inference_profiles: Vec::new(),
         tool_service_registries: Vec::new(),
         projection_acp_bindings: Vec::new(),
-        peer_pairings: Vec::new(),
         tasks: Vec::new(),
         schedules: Vec::new(),
         event_triggers: Vec::new(),
@@ -64,6 +64,60 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "error": error.to_string(),
         }),
     };
+    let live_runtime = graphql_reachable && runtime_row.get("agent_did").is_some();
+    let readiness_row = crate::commands::status::load_behavior_readiness(&access, &agent_did).await;
+    let (runtime_behavior_readiness, runtime_behavior_readiness_check) = match readiness_row {
+        Ok(row) => {
+            match project_behavior_readiness_summary(row.as_ref(), &agent_did, chrono::Utc::now()) {
+                ProjectedBehaviorReadinessSummary::Observed(summary) => {
+                    let unavailable = summary
+                        .unavailable_behaviors
+                        .iter()
+                        .map(|(behavior_id, reason)| {
+                            json!({
+                                "behavior_id": behavior_id,
+                                "reason": reason,
+                                "message": reason.public_message(),
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let observed_ready = unavailable.is_empty();
+                    (
+                        serde_json::to_value(&summary.snapshot).unwrap_or(Value::Null),
+                        json!({
+                            "ok": !live_runtime || observed_ready,
+                            "required": live_runtime,
+                            "status": if observed_ready { "ready" } else { "degraded" },
+                            "ready_behavior_count": summary.ready_count,
+                            "unavailable_behaviors": unavailable,
+                        }),
+                    )
+                }
+                ProjectedBehaviorReadinessSummary::Unknown(reason) => (
+                    json!({ "state": "unknown", "reason": reason }),
+                    json!({
+                        "ok": !live_runtime,
+                        "required": live_runtime,
+                        "status": "unknown",
+                        "reason": reason,
+                    }),
+                ),
+            }
+        }
+        Err(error) => (
+            json!({ "state": "unknown", "error": error.to_string() }),
+            json!({
+                "ok": !live_runtime,
+                "required": live_runtime,
+                "status": "unknown",
+                "error": error.to_string(),
+            }),
+        ),
+    };
+    let runtime_behavior_readiness_ok = runtime_behavior_readiness_check
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let behavior_ids = bundle
         .agent_behaviors
@@ -266,6 +320,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         && chatgpt_auth_ok
         && xai_auth_ok
         && p2p_ok
+        && runtime_behavior_readiness_ok
         && config_load_error.is_none()
     {
         "ok"
@@ -281,6 +336,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         "graphql": graphql,
         "graphql_reachable": graphql_reachable,
         "runtime": runtime_row,
+        "runtime_behavior_readiness": runtime_behavior_readiness,
         "p2p": p2p_status,
         "checks": {
             "schemas": schema_checks,
@@ -290,6 +346,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             },
             "agent_principal_present": principal_present,
             "default_behavior": default_behavior_check,
+            "runtime_behavior_readiness": runtime_behavior_readiness_check,
             "tool_ceiling": tool_ceiling_check,
             "chatgpt_auth": chatgpt_auth_check,
             "xai_auth": xai_auth_check,

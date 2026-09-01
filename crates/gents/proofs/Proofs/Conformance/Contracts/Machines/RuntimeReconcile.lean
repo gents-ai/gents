@@ -59,8 +59,8 @@ def runtimeReconcileActions : List (String × RuntimeState.Action) :=
   , ("beginApply", .beginApply runtimeResolvedB)
   , ("publish", .publish runtimeResolvedB)
   , ("applyFailed", .applyFailed)
-  , ("routerObserve", .routerObserve)
-  , ("acceptRequest", .acceptRequest 100 500)
+  , ("routerObserve", .routerObserve .ready)
+  , ("acceptRequest", .acceptRequest .ready 100 500)
   , ("finishRequest", .finishRequest 500)
   , ("retireGeneration", .retireGeneration 1)
   ]

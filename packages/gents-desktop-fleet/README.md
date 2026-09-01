@@ -1,7 +1,7 @@
 # @source-inc/gents-desktop-fleet
 
-Peer discovery, pairing, QR import, network health, fleet rows, and semantic
-styles. `BrandLockup` and theme controls stay host-owned through slots.
+Authenticated enrollment, connection health, fleet rows, and semantic styles.
+`BrandLockup` and theme controls stay host-owned through slots.
 
 Local runtime and inference administration are opt-in:
 
@@ -26,9 +26,8 @@ import {
 fleet stylesheet. The packaged `InferenceSetupWizard` additionally requires
 `local-runtime.css`.
 
-White-label hosts can pass `FleetDashboard.copy.pairingQrHint` and
-`LocalRuntimeConnect.copy.runtimeProductName` / `cliBinaryName`; Gents CLI
-wording is only the first-party default.
+White-label hosts can pass `LocalRuntimeConnect.copy.runtimeProductName` /
+`cliBinaryName`; Gents CLI wording is only the first-party default.
 
-**Required grants:** default + fleet-read; add fleet-admin for pairing UI.
+**Required grants:** default + fleet-read; add fleet-admin for enrollment UI.
 Only hosts rendering the `local-runtime` subpath add runtime-admin.

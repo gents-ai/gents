@@ -11,10 +11,11 @@ use std::sync::Arc;
 
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::row::{
-    AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
-    AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
-    MailboxItemRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    AgentBehaviorReadinessRow, AgentBehaviorRow, AgentConversationRow, AgentMessageRow,
+    AgentPrincipalRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow, AgentSessionRow,
+    AgentToolCallRow, AgentToolResultRow, CompactionEntryRow, EventTriggerRow, GoalRow,
+    InferenceBackendRow, InferenceProfileRow, MailboxItemRow, ScheduleRow, SkillRow, TaskRow,
+    ToolSelectionRow, ToolServiceRegistryRow,
 };
 use serde::Serialize;
 
@@ -26,6 +27,7 @@ pub struct ClientStoreRows {
     pub agent_principals: Vec<AgentPrincipalRow>,
     pub behaviors: Vec<AgentBehaviorRow>,
     pub runtimes: Vec<AgentRuntimeRow>,
+    pub behavior_readiness: Vec<AgentBehaviorReadinessRow>,
     pub conversations: Vec<AgentConversationRow>,
     pub requests: Vec<AgentRequestRow>,
     pub mailbox_items: Vec<MailboxItemRow>,
@@ -75,6 +77,7 @@ pub struct ClientStore {
     pub agent_principals: Vec<AgentPrincipalRow>,
     pub behaviors: Vec<AgentBehaviorRow>,
     pub runtimes: Vec<AgentRuntimeRow>,
+    pub behavior_readiness: Vec<AgentBehaviorReadinessRow>,
     pub conversations: Vec<AgentConversationRow>,
     pub requests: Vec<AgentRequestRow>,
     pub mailbox_items: Vec<MailboxItemRow>,
@@ -111,6 +114,7 @@ pub struct ClientStore {
     tool_calls_by_session_id: HashMap<String, Vec<usize>>,
     tool_results_by_session_id: HashMap<String, Vec<usize>>,
     runtimes_by_agent_did: HashMap<String, usize>,
+    behavior_readiness_by_agent_did: HashMap<String, usize>,
     latest_response_by_request_id: HashMap<String, usize>,
     response_index_by_key: HashMap<String, usize>,
     request_index_by_id: HashMap<String, usize>,

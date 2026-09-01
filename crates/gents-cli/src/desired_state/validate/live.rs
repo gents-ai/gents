@@ -9,14 +9,13 @@ use super::super::DesiredStateManifest;
 
 /// Validate live state that cannot be checked from the manifest alone.
 ///
-/// Apply validates pairing ownership, trigger filter syntax, and top-level
-/// `doc.*` template fields. Diff calls the narrower ownership validator.
+/// Apply validates trigger filter syntax and top-level `doc.*` template fields.
 /// Resolving fields below the top level remains outside this contract.
 pub(crate) async fn validate_manifest_against_live(
     manifest: &DesiredStateManifest,
     access: &ConfigAccess,
 ) -> Result<Vec<String>> {
-    let mut errors = validate_peer_pairing_ownership_against_live(manifest, access).await?;
+    let mut errors = Vec::new();
     for trigger in &manifest.event_triggers {
         let source_collection = trigger.source_collection.trim();
         let trigger_id = trigger.trigger_id.trim();
@@ -179,68 +178,5 @@ pub(crate) async fn validate_manifest_against_live(
         }
     }
 
-    Ok(errors)
-}
-
-pub(crate) async fn validate_peer_pairing_ownership_against_live(
-    manifest: &DesiredStateManifest,
-    access: &ConfigAccess,
-) -> Result<Vec<String>> {
-    let mut errors = Vec::new();
-    if manifest.peer_pairings.is_empty() {
-        return Ok(errors);
-    }
-
-    let rows = crate::graphql_rows(
-        access,
-        "PeerPairingDesired",
-        r#"query {
-        PeerPairingDesired {
-            peer_id
-            agent_did
-            source
-        }
-    }"#,
-    )
-    .await?;
-    let desired_dids = manifest
-        .peer_pairings
-        .iter()
-        .map(|pairing| pairing.peer_did.trim())
-        .filter(|peer_did| !peer_did.is_empty())
-        .collect::<BTreeSet<_>>();
-    let desired_peer_ids = manifest
-        .peer_pairings
-        .iter()
-        .filter_map(|pairing| pairing.resolved_peer_id())
-        .collect::<BTreeSet<_>>();
-    let expected_source =
-        super::super::peer_pairing_manifest_source(&manifest.agent_principal.agent_did);
-
-    for row in rows {
-        let peer_id = row
-            .get("peer_id")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
-        let peer_did = row
-            .get("agent_did")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
-        if !desired_dids.contains(peer_did) && !desired_peer_ids.contains(peer_id) {
-            continue;
-        }
-        let source = row
-            .get("source")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .unwrap_or("operator");
-        if source != expected_source {
-            errors.push(format!(
-            "peer pairing {peer_did:?} (peer_id {peer_id:?}) is owned by source {source:?}, not this manifest; refusing to overwrite or delete it"
-        ));
-        }
-    }
     Ok(errors)
 }

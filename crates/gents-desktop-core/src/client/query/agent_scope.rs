@@ -34,6 +34,14 @@ pub async fn load_agent_scoped_snapshot(
         &format!("query {{ {AGENT_RUNTIME_NAME}({did_filter}) {{ {AGENT_RUNTIME_FIELDS} }} }}"),
     )
     .await?;
+    let behavior_readiness: Vec<AgentBehaviorReadinessRow> = load_rows(
+        node,
+        AGENT_BEHAVIOR_READINESS_NAME,
+        &format!(
+            "query {{ {AGENT_BEHAVIOR_READINESS_NAME}({did_filter}) {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"
+        ),
+    )
+    .await?;
     let conversations: Vec<AgentConversationRow> = load_rows(
         node,
         AGENT_CONVERSATION_NAME,
@@ -121,6 +129,7 @@ pub async fn load_agent_scoped_snapshot(
         agent_principals,
         behaviors,
         runtimes,
+        behavior_readiness,
         conversations,
         requests,
         mailbox_items,

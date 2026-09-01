@@ -1,67 +1,185 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
-use tokio::sync::watch;
+use anyhow::{anyhow, Context, Result};
+use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle};
-use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::runtime_snapshot::{
+    effective_behavior_admission, ActiveRuntimeSnapshot, EffectiveBehaviorAdmission,
+};
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::watcher::{AgentRequest, DefraWatcher, Watcher};
 
 use super::context::BehaviorResolution;
+
+#[derive(Clone)]
+pub(super) struct RuntimeAdmissionGate {
+    state: Arc<RwLock<bool>>,
+    changed: watch::Sender<bool>,
+    #[cfg(test)]
+    entered: Arc<tokio::sync::Notify>,
+    #[cfg(test)]
+    dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+}
+
+impl RuntimeAdmissionGate {
+    pub(super) fn closed() -> Self {
+        let (changed, _) = watch::channel(false);
+        Self {
+            state: Arc::new(RwLock::new(false)),
+            changed,
+            #[cfg(test)]
+            entered: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            dispatch_attempted: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn closed_with_dispatch_probe(
+        dispatch_attempted: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    ) -> Self {
+        let mut gate = Self::closed();
+        gate.dispatch_attempted = dispatch_attempted;
+        gate
+    }
+
+    pub(super) async fn open(&self) {
+        *self.state.write().await = true;
+        self.changed.send_replace(true);
+    }
+
+    pub(super) async fn close(&self) {
+        // Announce closure before waiting for in-progress routing admissions.
+        // A router may hold the read-side lease while an executor queue is
+        // full; that blocked send selects on this watch and releases the lease
+        // so the write-side drain cannot deadlock behind it.
+        self.changed.send_replace(false);
+        *self.state.write().await = false;
+    }
+
+    async fn wait_open(&self, shutdown: &mut watch::Receiver<bool>) -> bool {
+        let mut changed = self.changed.subscribe();
+        loop {
+            if *changed.borrow_and_update() {
+                return true;
+            }
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => return false,
+                result = changed.changed() => {
+                    if result.is_err() {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn enter(&self) -> Option<OwnedRwLockReadGuard<bool>> {
+        let guard = self.state.clone().read_owned().await;
+        if !*guard {
+            return None;
+        }
+        #[cfg(test)]
+        self.entered.notify_one();
+        Some(guard)
+    }
+
+    pub(super) fn subscribe(&self) -> watch::Receiver<bool> {
+        self.changed.subscribe()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn is_open(&self) -> bool {
+        *self.state.read().await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn wait_for_entry_for_test(&self) {
+        self.entered.notified().await;
+    }
+}
 
 pub(super) async fn run_router(
     node: Arc<defra_node::EmbeddedNode>,
     agent_did: String,
     local_deployment_id: String,
     active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    shutdown: watch::Receiver<bool>,
-    startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
+    mut shutdown: watch::Receiver<bool>,
+    admission_gate: RuntimeAdmissionGate,
+    runtime_status: RuntimeStatusHandle,
 ) -> Result<()> {
+    if *shutdown.borrow() {
+        return Ok(());
+    }
+    if !admission_gate.wait_open(&mut shutdown).await {
+        return Ok(());
+    }
     let watcher =
         DefraWatcher::new(node.clone(), &agent_did).with_local_deployment_id(local_deployment_id);
-    run_router_with_watcher(
+    let result = run_router_with_watcher(
         node,
         agent_did,
         watcher,
         active_snapshot_rx,
         shutdown,
-        startup_demotions,
+        admission_gate.clone(),
+        runtime_status,
     )
-    .await
+    .await;
+    if result.is_err() {
+        // A router failure is an admission failure. Close locally before the
+        // task reports to the runtime coordinator so no concurrent watcher can
+        // dispatch against a readiness row whose router acknowledgement failed.
+        admission_gate.close().await;
+    }
+    result
 }
 
-async fn run_router_with_watcher<W>(
+pub(super) async fn run_router_with_watcher<W>(
     node: Arc<defra_node::EmbeddedNode>,
     agent_did: String,
     mut watcher: W,
     mut active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     mut shutdown: watch::Receiver<bool>,
-    startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
+    admission_gate: RuntimeAdmissionGate,
+    runtime_status: RuntimeStatusHandle,
 ) -> Result<()>
 where
     W: Watcher,
 {
     let mut active_snapshot = active_snapshot_rx.borrow().clone();
+    let mut admission_changed = admission_gate.subscribe();
+    let mut readiness_changed = runtime_status.readiness().subscribe_observation();
 
     loop {
-        let Some(request) = wait_for_next_request_with_latest_snapshot(
-            &agent_did,
-            &mut watcher,
-            &mut active_snapshot,
-            &mut active_snapshot_rx,
-            &mut shutdown,
-        )
-        .await?
+        let Some((request, routed_snapshot, admission_observation)) =
+            wait_for_next_request_with_latest_snapshot(
+                &agent_did,
+                &mut watcher,
+                &mut active_snapshot,
+                &mut active_snapshot_rx,
+                &mut shutdown,
+                &admission_gate,
+                &mut admission_changed,
+                &mut readiness_changed,
+                Some(&runtime_status),
+            )
+            .await?
         else {
+            return Ok(());
+        };
+
+        let Some(_admission) = admission_gate.enter().await else {
             return Ok(());
         };
 
         let resolution = resolve_behavior_for_request(
             node.as_ref(),
             &request,
-            active_snapshot.default_behavior_id.as_str(),
+            routed_snapshot.default_behavior_id.as_str(),
         )
         .await?;
         if let Some(reason) = resolution.rejection_reason.as_deref() {
@@ -83,55 +201,64 @@ where
             continue;
         }
 
-        if let Some(reason) = startup_demotions.reason(&resolution.behavior_id) {
-            tracing::warn!(
-                request_id = %request.request_id,
-                session_id = %request.session_id,
-                behavior_id = %resolution.behavior_id,
-                reason = %reason,
-                "behavior demoted at startup; rejecting request"
-            );
-            fail_routed_request(
-                node.clone(),
-                agent_did.as_str(),
-                request,
-                resolution.behavior_id.as_str(),
-                reason.as_str(),
-            )
-            .await?;
-            continue;
-        }
-
-        match active_snapshot.dispatchers.get(&resolution.behavior_id) {
-            Some(dispatcher) => {
+        let startup_diagnostic = admission_observation.demotion_reason(&resolution.behavior_id);
+        match effective_behavior_admission(
+            routed_snapshot
+                .dispatchers
+                .contains_key(&resolution.behavior_id),
+            routed_snapshot
+                .unavailable_behaviors
+                .get(&resolution.behavior_id),
+            startup_diagnostic.as_deref(),
+        ) {
+            EffectiveBehaviorAdmission::Ready => {
+                let dispatcher = routed_snapshot
+                    .dispatchers
+                    .get(&resolution.behavior_id)
+                    .expect("effective admission verified the dispatcher");
                 tracing::info!(
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     behavior_id = %resolution.behavior_id,
                     "dispatching request to behavior executor"
                 );
-                dispatcher.send(request).await.map_err(|_| {
+                #[cfg(test)]
+                if let Some(dispatch_attempted) = &admission_gate.dispatch_attempted {
+                    let _ = dispatch_attempted.send(());
+                }
+                let sent = tokio::select! {
+                    biased;
+                    changed = admission_changed.changed() => {
+                        if changed.is_err() || !*admission_changed.borrow_and_update() {
+                            return Ok(());
+                        }
+                        continue;
+                    }
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow_and_update() {
+                            return Ok(());
+                        }
+                        continue;
+                    }
+                    sent = dispatcher.send(request) => sent,
+                };
+                sent.map_err(|_| {
                     anyhow!(
                         "executor queue for behavior {} closed unexpectedly",
                         resolution.behavior_id
                     )
                 })?;
             }
-            None => {
-                let error_message = active_snapshot
-                    .unavailable_reason(&resolution.behavior_id)
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| {
-                        format!(
-                            "behavior {} is not loaded for principal {}",
-                            resolution.behavior_id, agent_did
-                        )
-                    });
+            EffectiveBehaviorAdmission::Unavailable {
+                public_reason,
+                diagnostic,
+            } => {
                 tracing::warn!(
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     behavior_id = %resolution.behavior_id,
-                    reason = %error_message,
+                    public_reason = ?public_reason,
+                    diagnostic = %diagnostic,
                     "behavior unavailable for request"
                 );
                 fail_routed_request(
@@ -139,7 +266,24 @@ where
                     agent_did.as_str(),
                     request,
                     resolution.behavior_id.as_str(),
-                    error_message.as_str(),
+                    public_reason.public_message(),
+                )
+                .await?;
+            }
+            EffectiveBehaviorAdmission::Unassigned => {
+                tracing::warn!(
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    behavior_id = %resolution.behavior_id,
+                    agent_did = %agent_did,
+                    "behavior is not assigned to the active runtime"
+                );
+                fail_routed_request(
+                    node.clone(),
+                    agent_did.as_str(),
+                    request,
+                    resolution.behavior_id.as_str(),
+                    "behavior is not assigned to this runtime",
                 )
                 .await?;
             }
@@ -153,21 +297,91 @@ pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
     active_snapshot: &mut Arc<ActiveRuntimeSnapshot>,
     active_snapshot_rx: &mut watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     shutdown: &mut watch::Receiver<bool>,
-) -> Result<Option<AgentRequest>>
+    admission_gate: &RuntimeAdmissionGate,
+    admission_changed: &mut watch::Receiver<bool>,
+    readiness_changed: &mut watch::Receiver<
+        crate::behavior_readiness_publisher::BehaviorAdmissionObservation,
+    >,
+    runtime_status: Option<&RuntimeStatusHandle>,
+) -> Result<
+    Option<(
+        AgentRequest,
+        Arc<ActiveRuntimeSnapshot>,
+        crate::behavior_readiness_publisher::BehaviorAdmissionObservation,
+    )>,
+>
 where
     W: Watcher,
 {
+    let mut pending_request = None;
     loop {
-        *active_snapshot = active_snapshot_rx.borrow_and_update().clone();
+        let routed_snapshot = active_snapshot_rx.borrow_and_update().clone();
+        let readiness_observation = readiness_changed.borrow_and_update().clone();
+        *active_snapshot = routed_snapshot.clone();
+        let readiness_aligned =
+            readiness_observation.source_generation() == routed_snapshot.generation;
+        if !readiness_aligned {
+            tokio::select! {
+                biased;
+
+                _ = shutdown.changed() => return Ok(None),
+                changed = admission_changed.changed() => {
+                    if changed.is_err() || !*admission_changed.borrow_and_update() {
+                        return Ok(None);
+                    }
+                }
+                changed = active_snapshot_rx.changed() => {
+                    if changed.is_err() {
+                        return Ok(None);
+                    }
+                }
+                changed = readiness_changed.changed() => {
+                    if changed.is_err() {
+                        return Ok(None);
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(runtime_status) = runtime_status {
+            if let Err(error) = runtime_status
+                .publish_router_generation(routed_snapshot.generation)
+                .await
+                .with_context(|| {
+                    format!(
+                        "durably acknowledge router generation {}",
+                        routed_snapshot.generation
+                    )
+                })
+            {
+                admission_gate.close().await;
+                return Err(error);
+            }
+        }
+        if let Some(request) = pending_request.take() {
+            return Ok(Some((request, routed_snapshot, readiness_observation)));
+        }
         let request = tokio::select! {
             biased;
 
             _ = shutdown.changed() => return Ok(None),
+            changed = admission_changed.changed() => {
+                if changed.is_err() || !*admission_changed.borrow_and_update() {
+                    return Ok(None);
+                }
+                continue;
+            }
             changed = active_snapshot_rx.changed() => {
                 if changed.is_err() {
                     return Ok(None);
                 }
                 *active_snapshot = active_snapshot_rx.borrow_and_update().clone();
+                continue;
+            }
+            changed = readiness_changed.changed() => {
+                if changed.is_err() {
+                    return Ok(None);
+                }
                 continue;
             }
             req = watcher.next_request() => {
@@ -181,35 +395,7 @@ where
                 }
             }
         };
-        *active_snapshot = active_snapshot_rx.borrow_and_update().clone();
-        return Ok(Some(request));
-    }
-}
-
-pub(super) async fn run_router_generation_observer(
-    mut active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    runtime_status: RuntimeStatusHandle,
-    mut shutdown: watch::Receiver<bool>,
-) -> Result<()> {
-    let mut observed_generation = 0u64;
-
-    loop {
-        let active_snapshot = active_snapshot_rx.borrow().clone();
-        if observed_generation != active_snapshot.generation {
-            runtime_status
-                .publish_router_generation(active_snapshot.generation)
-                .await;
-            observed_generation = active_snapshot.generation;
-        }
-
-        tokio::select! {
-            _ = shutdown.changed() => return Ok(()),
-            changed = active_snapshot_rx.changed() => {
-                if changed.is_err() {
-                    return Ok(());
-                }
-            }
-        }
+        pending_request = Some(request);
     }
 }
 

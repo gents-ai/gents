@@ -27,15 +27,11 @@ mod mutation;
 pub(crate) use atomic_inputs::enqueue_background_completion_with_message;
 #[cfg(test)]
 use atomic_inputs::transaction_created_doc_id;
-use atomic_inputs::{
-    normalize_request_only_control_parent, steering_transaction_attempt,
-    steering_transaction_error_is_retryable,
-};
+use atomic_inputs::{steering_transaction_attempt, steering_transaction_error_is_retryable};
 pub use coalescing::reconcile_coalesced_pending_request;
 use coalescing::{
     coalesce_key, lookup_request_doc_id, lookup_request_doc_id_optional, parent_behavior_id,
-    parent_linkage_graphql_fields, queue_row_to_enqueued_request, queue_source_and_key_match,
-    request_only_parent_linkage_graphql_fields, PendingQueueRow,
+    queue_row_to_enqueued_request, queue_source_and_key_match, PendingQueueRow,
 };
 pub use draining::drain_automated_wakeups;
 pub(crate) use draining::drain_subagent_owned_queue;
@@ -43,9 +39,8 @@ pub(crate) use enqueue::{enqueue_session_request, enqueue_steering_request_with_
 pub(crate) use goal_continuation::enqueue_goal_continuation;
 pub use metadata::QueueSource;
 pub(crate) use metadata::{
-    is_automated_wakeup, is_deprecated_background_completion_wakeup, is_goal_queue,
-    is_steering_input_message_key, is_subagent_owned_queue, parse_queue_hints, queue_metadata_json,
-    steering_input_message_key, QueueHints, QueuePolicy,
+    is_automated_wakeup, is_goal_queue, is_steering_input_message_key, is_subagent_owned_queue,
+    parse_queue_hints, queue_metadata_json, steering_input_message_key, QueueHints, QueuePolicy,
 };
 use mutation::session_request_create_mutation;
 

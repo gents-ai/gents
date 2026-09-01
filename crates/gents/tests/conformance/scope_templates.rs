@@ -68,8 +68,6 @@ fn resolve_template_is_total_over_catalog_and_id_faithful() {
             "client",
             "agent-config",
             "backup",
-            "discovery",
-            "network-control",
             "subagent-coordinator",
             "subagent-host",
             "app-collections",
@@ -113,7 +111,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "AgentConversation",
         "CompactionEntry",
         "MailboxItem",
-        "BearerPairingReady",
+        "PersonaConfigRequest",
         "PeerEndpoint",
         "SessionHydrationRequest",
     ];
@@ -130,6 +128,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "Schedule",
         "EventTrigger",
     ];
+    const OWNER_PROJECTION: &[&str] = &["AgentBehaviorReadiness"];
     const RUNTIME_TO_CLIENT: &[&str] = &[
         "AgentRequest",
         "AgentResponse",
@@ -140,7 +139,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "AgentConversation",
         "CompactionEntry",
         "MailboxItem",
-        "BearerPairingReady",
+        "PersonaConfigRequest",
         "PeerEndpoint",
         "SessionHydrationRequest",
         "AgentBehavior",
@@ -154,6 +153,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "Task",
         "Schedule",
         "EventTrigger",
+        "AgentBehaviorReadiness",
     ];
 
     assert_eq!(
@@ -205,9 +205,43 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
     }
     assert_and_eq_filter(
         outbound
-            .get("BearerPairingReady")
-            .expect("readiness filter"),
-        &[("claimant_did", requester), ("issuer_did", owner)],
+            .get("PersonaConfigRequest")
+            .expect("persona request filter"),
+        &[("requester_did", requester), ("agent_did", owner)],
+    );
+    let other_requester = resolve_template_filters(
+        template,
+        PairingDirection::ClientToRuntime,
+        non_owner,
+        owner,
+    );
+    let other_destination = resolve_template_filters(
+        template,
+        PairingDirection::ClientToRuntime,
+        requester,
+        non_owner,
+    );
+    assert_and_eq_filter(
+        other_requester
+            .get("PersonaConfigRequest")
+            .expect("other requester persona filter"),
+        &[("requester_did", non_owner), ("agent_did", owner)],
+    );
+    assert_and_eq_filter(
+        other_destination
+            .get("PersonaConfigRequest")
+            .expect("other destination persona filter"),
+        &[("requester_did", requester), ("agent_did", non_owner)],
+    );
+    assert_ne!(
+        outbound.get("PersonaConfigRequest"),
+        other_requester.get("PersonaConfigRequest"),
+        "a different requester must not share the enrolled persona-request route"
+    );
+    assert_ne!(
+        outbound.get("PersonaConfigRequest"),
+        other_destination.get("PersonaConfigRequest"),
+        "a different destination agent must not share the enrolled persona-request route"
     );
     assert_eq_filter(
         outbound
@@ -233,7 +267,10 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         requester,
         owner,
     );
-    assert_eq!(returning.len(), CLIENT_TO_RUNTIME.len());
+    assert_eq!(
+        returning.len(),
+        CLIENT_TO_RUNTIME.len() + OWNER_PROJECTION.len()
+    );
     assert_eq_filter(
         returning
             .get("PeerEndpoint")
@@ -248,6 +285,14 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
             "bounded return control-plane collection {collection} is deliberately unfiltered"
         );
     }
+    assert_eq_filter(
+        returning
+            .get("AgentBehaviorReadiness")
+            .expect("readiness owner filter"),
+        "agent_did",
+        owner,
+    );
+    assert!(!outbound.contains_key("AgentBehaviorReadiness"));
     for excluded in [
         "InferenceBackend",
         "PeerPairingDesired",
@@ -289,15 +334,9 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
         "AgentSession",
         "AgentConversation",
         "CompactionEntry",
-        "BearerPairingReady",
     ] {
         let pred = filter.get(col).expect("transcript collection filter");
-        let expected_field = if col == "BearerPairingReady" {
-            "claimant_did"
-        } else {
-            "requester_did"
-        };
-        assert_eq_filter(pred, expected_field, "did:key:bob");
+        assert_eq_filter(pred, "requester_did", "did:key:bob");
     }
     for col in [
         "AgentBehavior",
@@ -381,15 +420,9 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
         "AgentSession",
         "AgentConversation",
         "CompactionEntry",
-        "BearerPairingReady",
     ] {
         let predicate = filters.get(collection).expect("conversation filter");
-        let expected_field = if collection == "BearerPairingReady" {
-            "claimant_did"
-        } else {
-            "requester_did"
-        };
-        assert_eq_filter(predicate, expected_field, "did:key:phone");
+        assert_eq_filter(predicate, "requester_did", "did:key:phone");
     }
     assert_eq!(
         filters.get(AGENT_DIRECTORY_COLLECTION),

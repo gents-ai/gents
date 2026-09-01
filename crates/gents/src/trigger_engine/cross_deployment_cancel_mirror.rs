@@ -9,6 +9,7 @@ use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::p2p_reconcile::PeerAdmissionAuthority;
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
@@ -18,9 +19,10 @@ const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 pub(crate) async fn run_cross_deployment_cancel_mirror(
     node: Arc<EmbeddedNode>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    peer_admission: Arc<dyn PeerAdmissionAuthority>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    CrossDeploymentCancelMirror::new(node, snapshot_rx, cancel)
+    CrossDeploymentCancelMirror::new(node, snapshot_rx, peer_admission, cancel)
         .run()
         .await
 }
@@ -28,6 +30,7 @@ pub(crate) async fn run_cross_deployment_cancel_mirror(
 pub(crate) struct CrossDeploymentCancelMirror {
     node: Arc<EmbeddedNode>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    peer_admission: Arc<dyn PeerAdmissionAuthority>,
     subscription: events::Subscription,
     cancel: CancellationToken,
     collection_id_to_name: HashMap<String, String>,
@@ -38,12 +41,14 @@ impl CrossDeploymentCancelMirror {
     pub(crate) fn new(
         node: Arc<EmbeddedNode>,
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+        peer_admission: Arc<dyn PeerAdmissionAuthority>,
         cancel: CancellationToken,
     ) -> Self {
         let subscription = node.subscribe(&[EventName::Update]);
         Self {
             node,
             snapshot_rx,
+            peer_admission,
             subscription,
             cancel,
             collection_id_to_name: HashMap::new(),
@@ -171,10 +176,15 @@ impl CrossDeploymentCancelMirror {
         let Some(parent_did) = bridge_authoring_did.or(parent_authoring_did) else {
             return Ok(());
         };
-        let snapshot = self.snapshot_rx.borrow().clone();
-        if !snapshot.paired_peer_dids.contains(&parent_did) {
+        if !self
+            .peer_admission
+            .fresh_member_authorized(&parent_did)
+            .await?
+        {
             return Ok(());
         }
+
+        let snapshot = self.snapshot_rx.borrow().clone();
 
         let Some(child) = self.load_child_request(&child_request_id).await? else {
             return Ok(());
@@ -413,6 +423,23 @@ mod tests {
     const PARENT_DID: &str = "did:test:parent";
     const CHILD_DID: &str = "did:test:child";
 
+    struct TestPeerAdmission(bool);
+
+    #[async_trait::async_trait]
+    impl PeerAdmissionAuthority for TestPeerAdmission {
+        async fn fresh_member_authorized(&self, member_did: &str) -> anyhow::Result<bool> {
+            Ok(self.0 && member_did == PARENT_DID)
+        }
+
+        async fn fresh_member_authorized_for_agent(
+            &self,
+            member_did: &str,
+            _owner_agent: &str,
+        ) -> anyhow::Result<bool> {
+            self.fresh_member_authorized(member_did).await
+        }
+    }
+
     async fn test_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -433,7 +460,6 @@ mod tests {
             generation: 1,
             principal: None,
             local_did: CHILD_DID.to_string(),
-            paired_peer_dids: HashSet::from([PARENT_DID.to_string()]),
             default_behavior_id: "child-behavior".to_string(),
             behaviors: HashMap::new(),
             tool_surfaces: HashMap::new(),
@@ -534,7 +560,12 @@ mod tests {
         write_targeted_bridge_without_parent(node.as_ref()).await;
         let (_tx, rx) = watch::channel(snapshot());
         let cancel = CancellationToken::new();
-        let mut mirror = CrossDeploymentCancelMirror::new(node.clone(), rx, cancel);
+        let mut mirror = CrossDeploymentCancelMirror::new(
+            node.clone(),
+            rx,
+            Arc::new(TestPeerAdmission(true)),
+            cancel,
+        );
 
         mirror.scan_pending_intents().await.unwrap();
         assert!(child_interrupt_requested_at(node.as_ref()).await.is_none());
@@ -545,5 +576,38 @@ mod tests {
             child_interrupt_requested_at(node.as_ref()).await.as_deref(),
             Some("2026-05-15T00:01:00Z")
         );
+    }
+
+    #[tokio::test]
+    async fn injected_pairing_materialization_cannot_grant_cancel_admission() {
+        let node = test_node().await;
+        write_targeted_bridge_without_parent(node.as_ref()).await;
+        write_child_request(node.as_ref()).await;
+        exec(
+            node.as_ref(),
+            r#"mutation {
+                create_PeerPairingDesired(input: {
+                    peer_id: "hostile-peer",
+                    agent_did: "did:test:parent",
+                    collections: ["AgentToolCall"],
+                    replicator_addresses: ["127.0.0.1:1"],
+                    template: "subagent-coordinator",
+                    source: "hostile",
+                    created_at: "2026-05-15T00:00:00Z",
+                    updated_at: "2026-05-15T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+        let (_tx, rx) = watch::channel(snapshot());
+        let mut mirror = CrossDeploymentCancelMirror::new(
+            node.clone(),
+            rx,
+            Arc::new(TestPeerAdmission(false)),
+            CancellationToken::new(),
+        );
+
+        mirror.scan_pending_intents().await.unwrap();
+        assert!(child_interrupt_requested_at(node.as_ref()).await.is_none());
     }
 }

@@ -349,7 +349,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_RUNTIME_NAME,
         gents_protocol::schemas::AGENT_RUNTIME,
-        "bafyreig2kkghd2y4fwjjzomtsp753nby752xon7rx4jt3efl4xflhm6wgy"
+        "bafyreidb7aoppwicwdsujra6iqgejtxeohiyyx4ylif6bsyllvt2sukrpe"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_BEHAVIOR_READINESS_NAME,
+        gents_protocol::schemas::AGENT_BEHAVIOR_READINESS,
+        "bafyreiacvnnbi2vgx5py54oaqmbc3c4bep5nj26urw3zazxkowkncbmbym"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,
@@ -475,7 +480,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreiembxwedo23mylrybvoy5jvhw6nqvelc67qoywq2jc4lct64nbe54"
+        "bafyreigedclw5numik2xdoggcmxzz3vypmigy7wnvre7v2bi6hy2jvdweu"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
@@ -585,7 +590,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PEER_PAIRING_DESIRED_NAME,
         gents_protocol::schemas::PEER_PAIRING_DESIRED,
-        "bafyreicoms7ndji7z76sellaqumottresgd3uojmvrts5hxciho4lvu5xy"
+        "bafyreiglnk2kzvb6eoczcyppcr6c5alihf262z24yjjaxaz7gkn6v5lgmu"
     ),
     baseline_entry!(
         gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED_NAME,
@@ -600,27 +605,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PEER_REGISTRY_NAME,
         gents_protocol::schemas::PEER_REGISTRY,
-        "bafyreieyihzl6ibujs4jzxji64gmpff7jcyqqjpdfxz6my6dcswafjwhla"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::CONSUMED_INVITE_NONCE_NAME,
-        gents_protocol::schemas::CONSUMED_INVITE_NONCE,
-        "bafyreigbedn4ebkz4cap5x6d53uif2ddimsyivpxbbijkjhqedbpuponfa"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::RECIPROCAL_CONVERSATION_INTENT_NAME,
-        gents_protocol::schemas::RECIPROCAL_CONVERSATION_INTENT,
-        "bafyreid6huhh2y4sslnmuw55mk7mnzundgjpjbqhihhfmhs3yrp2aaq6bm"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::PAIRING_BEARER_CLAIM_NAME,
-        gents_protocol::schemas::PAIRING_BEARER_CLAIM,
-        "bafyreidlvcvil4o22lsy2byeh2yjugpj5mnnvkotxj56pg6mjswg2bzjjq"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::BEARER_PAIRING_READY_NAME,
-        gents_protocol::schemas::BEARER_PAIRING_READY,
-        "bafyreihuy5majnvf6mqy3ow54xjlzllgwqcvivuz2kvqtjrhdmb427ynry"
+        "bafyreianm22jl7ecpu6kl55wnvadusazbky7hz3dsrgl2jzhzknlj4ivba"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_NETWORK_NAME,
@@ -628,29 +613,49 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreifafg2su5zfp2zzrmtnp2we5iu2owkweuevvu4hq25qposuyiuyfm"
     ),
     baseline_entry!(
-        gents_protocol::schemas::NETWORK_MEMBERSHIP_NAME,
-        gents_protocol::schemas::NETWORK_MEMBERSHIP,
-        "bafyreiav6v7v2nab45gyqkcj2jrp7mfmtojuc7ypupzw4qnpsd5sidqni4"
-    ),
-    baseline_entry!(
         gents_protocol::schemas::PEER_ENDPOINT_NAME,
         gents_protocol::schemas::PEER_ENDPOINT,
         "bafyreidubdiopvxh3zm447ttse6fbs7jzyagiyt7ipw4toib2z3svr4neq"
     ),
     baseline_entry!(
-        gents_protocol::schemas::NETWORK_JOIN_REQUEST_NAME,
-        gents_protocol::schemas::NETWORK_JOIN_REQUEST,
-        "bafyreib5ufwrdzy77qvfziodcdgevd44pqoix4jcrriir3arpyyjwhdjym"
+        gents_protocol::schemas::NETWORK_ADMIN_PIN_NAME,
+        gents_protocol::schemas::NETWORK_ADMIN_PIN,
+        "bafyreihqlke25nkquhgf3jiokj26dz2gc4do62o3odhw3iwcfbsofy5iki"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST_NAME,
+        gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST,
+        "bafyreih7u36s37itjkab6z33vayo6ig2sybwq2sn2bdvw3cnbjtjxks6aa"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION_NAME,
+        gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION,
+        "bafyreiekqlaylsyoty5d7wehjitd4xt3z2oxduj6wnkova4yfevxqd7kwu"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
+        gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION,
+        "bafyreiezjnue5b7alot7eynlqss3l4nm7ppbttpthkzqcc3n7crela4grm"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
+        gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT,
+        "bafyreictae7jrd6dsljzwmhemsp47byzajy4psiiz6ubujbhdzyqluat4y"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE_NAME,
+        gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE,
+        "bafyreihqgfh2e6gc73zftjp6d2qlyba7hxsc3ab6mhgfb7jn4yydvdihaq"
     ),
     baseline_entry!(
         gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
         gents_protocol::schemas::PERSONA_CONFIG_REQUEST,
-        "bafyreihvhau2vf2wxh6jfbyfbwdndyfsrfamfvpceghflx4m7vdaangb5q"
+        "bafyreidoth5phfvohyp2mzpuocyf2nqxjzu367ytomvpr57lopqjysmgta"
     ),
     baseline_entry!(
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST,
-        "bafyreifuhe35hisrqxfuejsqf2y66rhgl26enmtwgjjmy4tapwcwmrerku"
+        "bafyreicmpatd7phppn77232g3pmarwsf6h55vw3rqxv3ymqzyalqub7sum"
     ),
 ];
 
@@ -779,10 +784,12 @@ pub fn fixture_lens_wasm() -> &'static [u8] {
 /// authors documents into directly: the conversation-plane transcript
 /// (`AgentRequest`, `AgentResponse`, `AgentMessage`, `AgentToolCall`,
 /// `AgentToolResult`, `AgentSession`, `AgentConversation`,
-/// `CompactionEntry`), pairing readiness/claim rows (`BearerPairingReady`,
-/// `PairingBearerClaim`), the signed `PeerEndpoint` heartbeat,
+/// `CompactionEntry`), the signed `PeerEndpoint` heartbeat,
 /// `PersonaConfigRequest`, `SessionHydrationRequest`, and the fleet-discovery
-/// `AgentDirectoryEntry`.
+/// `AgentDirectoryEntry`. It also includes the authenticated-enrollment
+/// request/decision/revision/route-receipt exchange: those documents use
+/// exact owner-scoped push rather than the machine template, but still cross
+/// stores and therefore need the same genesis-version identity fence.
 ///
 /// A client mints its store from the collection's *current* SDL with no
 /// server-side history: a single `add_schema` call produces a genesis
@@ -824,9 +831,11 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_SESSION_NAME,
     gents_protocol::schemas::AGENT_CONVERSATION_NAME,
     gents_protocol::schemas::COMPACTION_ENTRY_NAME,
-    gents_protocol::schemas::BEARER_PAIRING_READY_NAME,
-    gents_protocol::schemas::PAIRING_BEARER_CLAIM_NAME,
     gents_protocol::schemas::PEER_ENDPOINT_NAME,
+    gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST_NAME,
+    gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION_NAME,
+    gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
+    gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
     gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
     gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,

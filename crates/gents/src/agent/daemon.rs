@@ -38,6 +38,52 @@ async fn finalize_request_failure(
     }
 }
 
+/// Authenticate the exact durable request immediately before claim. Admission
+/// rejection is terminalized here so no caller can accidentally continue into
+/// `claim_with_identity` or provider execution with the stale queued snapshot.
+pub(crate) async fn verify_request_at_claim_boundary(
+    verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
+    node: Arc<defra_node::EmbeddedNode>,
+    behavior_id: &str,
+    request: AgentRequest,
+) -> Option<AgentRequest> {
+    match verifier.verify_fresh(&request, behavior_id).await {
+        Ok(verified) => Some(verified),
+        Err(error) if error.is_denied() => {
+            let reason = format!("request admission denied: {error:#}");
+            record_current_claim_outcome("admission_denied");
+            record_current_request_outcome("admission_denied");
+            if let Err(persist_error) =
+                crate::request_admission::terminalize_pending_request_rejection(
+                    node.as_ref(),
+                    &request.doc_id,
+                    &request.agent_did,
+                    &reason,
+                    "terminalize_request_admission_rejection",
+                )
+                .await
+            {
+                tracing::error!(
+                    request_id = %request.request_id,
+                    error = %persist_error,
+                    "failed to terminalize rejected AgentRequest after bounded retries"
+                );
+            }
+            None
+        }
+        Err(error) => {
+            record_current_claim_outcome("admission_unavailable");
+            record_current_request_outcome("admission_retry");
+            tracing::warn!(
+                request_id = %request.request_id,
+                error = %error,
+                "request admission authority is temporarily unavailable; leaving request pending"
+            );
+            None
+        }
+    }
+}
+
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<AgentBehavior>,
@@ -56,8 +102,10 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     approval_required_tools: Arc<Vec<String>>,
     output_obligations: Arc<Vec<(String, crate::document_config::WriteToolOutputObligation)>>,
     startup_barrier: Arc<StartupBarrier>,
-    startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
+    runtime_status: crate::runtime_status::RuntimeStatusHandle,
+    slot_generation: u64,
     operator_tool_root: Option<PathBuf>,
+    request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
 }
 
 enum HandleRequestOutcome {
@@ -81,7 +129,9 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         background_tool_registry: crate::hook::BackgroundToolRegistry,
         background_execution_registry: crate::hook::BackgroundExecutionRegistry,
         startup_barrier: Arc<StartupBarrier>,
-        startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
+        runtime_status: crate::runtime_status::RuntimeStatusHandle,
+        slot_generation: u64,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
     ) -> Self {
         let stream_writer = DefraStreamWriter::new(
             node.clone(),
@@ -119,8 +169,10 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             approval_required_tools: Arc::new(Vec::new()),
             output_obligations: Arc::new(Vec::new()),
             startup_barrier,
-            startup_demotions,
+            runtime_status,
+            slot_generation,
             operator_tool_root: None,
+            request_admission,
         }
     }
 
@@ -178,13 +230,16 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             "gents behavior started"
         );
 
-        self.startup_barrier
-            .mark_behavior_ready(&self.behavior.behavior_id)
-            .await;
-        // A successful start supersedes any demotion that raced it: the
-        // behavior is serving, so the ledger entry (which would make the
-        // router reject its requests) must not survive.
-        self.startup_demotions.clear(&self.behavior.behavior_id);
+        if self
+            .runtime_status
+            .readiness()
+            .mark_slot_ready(&self.behavior.behavior_id, self.slot_generation)
+            .await?
+        {
+            self.startup_barrier
+                .mark_behavior_ready(&self.behavior.behavior_id, self.slot_generation)
+                .await;
+        }
         tracing::info!(
             behavior_id = %self.behavior.behavior_id,
             did = %self.behavior.agent_did(),
@@ -246,11 +301,21 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         }
     }
 
-    async fn process_request(
+    pub(in crate::agent) async fn process_request(
         &mut self,
         request: AgentRequest,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
+        let Some(request) = verify_request_at_claim_boundary(
+            &self.request_admission,
+            self.node.clone(),
+            &self.behavior.behavior_id,
+            request,
+        )
+        .await
+        else {
+            return;
+        };
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
             &self.behavior.behavior_id,

@@ -115,7 +115,7 @@ pub(crate) async fn build_desktop_session_snapshot(
             .peer_records()
             .await
             .iter()
-            .any(|peer| peer.agent_did == agent_did && peer.is_bearer_pairing())
+            .any(|peer| peer.agent_did == agent_did && peer.is_enrollment())
             .then(|| fixture.desktop_core().principal().did().to_string())
     } else {
         None
@@ -240,7 +240,7 @@ async fn build_request_diagnostics(
         core.peer_records()
             .await
             .iter()
-            .any(|peer| peer.agent_did == agent_did && peer.is_bearer_pairing())
+            .any(|peer| peer.agent_did == agent_did && peer.is_enrollment())
             .then(|| core.principal().did().to_string())
     } else {
         None

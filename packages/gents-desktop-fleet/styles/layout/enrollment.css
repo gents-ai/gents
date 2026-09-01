@@ -1,0 +1,75 @@
+@layer fleet {
+  .fleet-enrollment {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .fleet-status-form {
+    display: grid;
+    gap: var(--space-5);
+    padding: var(--space-5);
+    border: 1px solid rgb(var(--color-accent-rgb) / 0.3);
+    border-radius: var(--radius-lg);
+    background: rgb(var(--color-accent-rgb) / 0.06);
+  }
+
+  .fleet-enrollment-copy {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .fleet-enrollment-copy h3 {
+    margin: 0;
+  }
+
+  .fleet-enrollment-copy p {
+    margin: 0;
+    max-width: 68ch;
+  }
+
+  .fleet-discovery-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) auto;
+    gap: var(--space-5);
+    align-items: end;
+  }
+
+  .fleet-import-status {
+    font-size: var(--text-sm);
+  }
+
+  .fleet-inline-error {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--color-error);
+  }
+
+  .fleet-empty {
+    display: grid;
+    min-height: 0;
+    height: 100%;
+    place-content: center;
+  }
+
+  .fleet-empty-card {
+    width: min(760px, calc(100vw - 64px));
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  .fleet-empty-card .fleet-discovery-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .fleet-empty-copy {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .fleet-empty-copy h2 {
+    margin: 0;
+    font-size: var(--text-2xl);
+  }
+}

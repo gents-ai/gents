@@ -170,9 +170,7 @@ fn split_apply_counts(
 fn prune_counts_from_plan(planned: &desired_state::DesiredStateDiffReport) -> ConfigApplyCounts {
     let mut counts = ConfigApplyCounts::default();
     for collection in Collection::ALL {
-        if !collection.manifest_authoritative() {
-            counts.set(collection, planned.collections.get(collection).delete.len());
-        }
+        counts.set(collection, planned.collections.get(collection).delete.len());
     }
     counts
 }

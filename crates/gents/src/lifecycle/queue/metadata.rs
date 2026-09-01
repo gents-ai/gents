@@ -49,7 +49,6 @@ fn parse_queue_metadata(metadata: Option<&str>) -> Option<RequestQueueMetadata> 
             "parsed deprecated queue source alias subagent_completion as background_completion"
         );
     }
-
     serde_json::from_str::<RequestQueueMetadata>(metadata).ok()
 }
 
@@ -74,20 +73,6 @@ fn queue_hints_are_automated_wakeup(hints: &QueueHints) -> bool {
             .key
             .as_deref()
             .is_some_and(|key| !key.trim().is_empty())
-}
-
-pub(crate) fn is_deprecated_background_completion_wakeup(
-    execution_origin: Option<&str>,
-    metadata: Option<&str>,
-) -> bool {
-    if execution_origin != Some("scheduled") {
-        return false;
-    }
-    parse_queue_metadata(metadata).is_some_and(|metadata| {
-        queue_hints_are_automated_wakeup(&metadata.queue)
-            && metadata.background_completion_wake_version
-                != Some(BACKGROUND_COMPLETION_WAKE_VERSION)
-    })
 }
 
 pub(crate) fn is_subagent_owned_queue(metadata: Option<&str>) -> bool {

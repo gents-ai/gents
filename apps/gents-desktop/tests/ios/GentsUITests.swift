@@ -60,13 +60,10 @@ final class GentsUITests: XCTestCase {
 
         var agent = try findVisualText(agentLabel, exact: true)
         if agent == nil {
-            try pairAgent(
-                label: agentLabel,
-                invite: pairingInvite(from: environment)
-            )
+            try enrollAgent(serverAddress: enrollmentServerAddress(from: environment))
             agent = try waitForVisualText(agentLabel, exact: true, timeout: 120)
         }
-        tap(try XCTUnwrap(agent, "\(agentLabel) did not appear after pairing"))
+        tap(try XCTUnwrap(agent, "\(agentLabel) did not appear after enrollment"))
 
         let composer = try waitForVisualText("Message the selected agent", timeout: 30)
         tap(composer)
@@ -81,35 +78,30 @@ final class GentsUITests: XCTestCase {
         add(attachment)
     }
 
-    private func pairAgent(label agentLabel: String, invite: String) throws {
+    private func enrollAgent(serverAddress: String) throws {
         if let disclosure = try findVisualText("Connect a remote agent") {
             tap(disclosure)
         } else {
             tap(try waitForVisualText("Add Agent", timeout: 10))
         }
 
-        let label = try scrollUntilVisualText("Agent label", timeout: 30)
-        tapBelow(label)
-        paste(agentLabel)
+        let address = try scrollUntilVisualText("Agent server", timeout: 30)
+        tapBelow(address)
+        paste(serverAddress)
         dismissKeyboard()
 
-        let token = try scrollUntilVisualText("Pairing invite", timeout: 30)
-        tapBelow(token)
-        paste(invite)
-        dismissKeyboard()
-
-        tap(try scrollUntilVisualText("Pair securely", timeout: 30))
+        tap(try scrollUntilVisualText("Request enrollment", timeout: 30))
     }
 
-    private func pairingInvite(from environment: [String: String]) throws -> String {
-        if let value = environment["GENTS_E2E_PAIR_TOKEN"], !value.isEmpty {
+    private func enrollmentServerAddress(from environment: [String: String]) throws -> String {
+        if let value = environment["GENTS_E2E_SERVER_ADDRESS"], !value.isEmpty {
             return value
         }
-        if let value = UIPasteboard.general.string, value.hasPrefix("dabear1-") {
+        if let value = UIPasteboard.general.string, !value.isEmpty {
             return value
         }
         throw XCTSkip(
-            "Set GENTS_E2E_PAIR_TOKEN or copy a fresh fleet-agent bearer invite to the simulator pasteboard"
+            "Set GENTS_E2E_SERVER_ADDRESS or copy the enrollment server address to the simulator pasteboard"
         )
     }
 

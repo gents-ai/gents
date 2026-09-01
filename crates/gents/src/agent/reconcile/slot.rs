@@ -32,6 +32,7 @@ pub(super) struct BehaviorSlot {
     pub(super) tool_surface_fingerprint: String,
     pub(super) executor_capacity: usize,
     pub(super) queue_capacity: usize,
+    pub(super) generation: u64,
 }
 
 impl BehaviorSlot {
@@ -51,12 +52,14 @@ impl BehaviorSlot {
 pub(crate) trait SlotFailurePolicy: Send + Sync {
     fn build_failure_budget(&self) -> u32;
     fn on_build_failure(&self, _behavior_id: &str, _failure_number: u32, _error: &str) {}
-    async fn try_demote(&self, behavior_id: &str, error: &str) -> bool;
-    async fn on_slot_retired(&self, behavior_id: &str, recreated: bool);
+    async fn on_slot_created(&self, behavior_id: &str, generation: u64) -> Result<()>;
+    async fn try_demote(&self, behavior_id: &str, generation: u64, error: &str) -> Result<bool>;
+    async fn on_slot_retired(&self, behavior_id: &str, generation: u64, recreated: bool);
 }
 
 async fn handle_slot_failure(
     behavior_id: &str,
+    generation: u64,
     error: &str,
     failure_policy: Option<&dyn SlotFailurePolicy>,
     standing: &Arc<std::sync::Mutex<BuildStanding>>,
@@ -105,15 +108,22 @@ async fn handle_slot_failure(
         }
         Verdict::Transitioned => {}
     }
-    if policy.try_demote(behavior_id, error).await {
-        park_until_retired(shutdown, state_rx).await;
-        true
-    } else {
-        if let Ok(mut standing) = standing.lock() {
-            *standing = BuildStanding::Ready;
-        }
-        false
+    match policy.try_demote(behavior_id, generation, error).await {
+        Ok(true) => {}
+        Ok(false) => tracing::warn!(
+            behavior_id,
+            generation,
+            "startup demotion was already stale; keeping the exhausted slot fail closed"
+        ),
+        Err(error) => tracing::error!(
+            behavior_id,
+            generation,
+            error = %error,
+            "failed to persist startup demotion; keeping the exhausted slot fail closed"
+        ),
     }
+    park_until_retired(shutdown, state_rx).await;
+    true
 }
 
 async fn park_until_retired(
@@ -141,6 +151,7 @@ async fn park_until_retired(
 
 pub(super) fn spawn_slots<F, Fut>(
     resolved_snapshot: &ResolvedRuntimeSnapshot,
+    generation: u64,
     retry_policy: RetryPolicy,
     runner: F,
     shutdown: watch::Receiver<bool>,
@@ -151,6 +162,7 @@ where
             Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            u64,
             watch::Receiver<bool>,
         ) -> Fut
         + Send
@@ -172,6 +184,7 @@ where
                 behavior.clone(),
                 tool_surface,
                 behavior_executor_capacity(behavior, &resolved_snapshot.backend_admission_configs),
+                generation,
                 retry_policy.clone(),
                 runner.clone(),
                 shutdown.clone(),
@@ -195,6 +208,7 @@ where
             Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            u64,
             watch::Receiver<bool>,
         ) -> Fut
         + Send
@@ -207,6 +221,7 @@ where
         behavior,
         tool_surface,
         1,
+        1,
         retry_policy,
         runner,
         shutdown,
@@ -218,6 +233,7 @@ pub(super) fn spawn_slot_with_capacity<F, Fut>(
     behavior: Arc<AgentBehavior>,
     tool_surface: Arc<ToolSurface>,
     executor_capacity: usize,
+    generation: u64,
     retry_policy: RetryPolicy,
     runner: F,
     shutdown: watch::Receiver<bool>,
@@ -228,6 +244,7 @@ where
             Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            u64,
             watch::Receiver<bool>,
         ) -> Fut
         + Send
@@ -251,6 +268,7 @@ where
         executor_capacity,
         retry_policy,
         runner,
+        generation,
         shutdown,
         state_rx,
         failure_policy,
@@ -265,6 +283,7 @@ where
         tool_surface_fingerprint,
         executor_capacity,
         queue_capacity: BEHAVIOR_EXECUTOR_QUEUE_CAPACITY,
+        generation,
     }
 }
 
@@ -288,6 +307,7 @@ pub(super) fn behavior_executor_capacity(
         .unwrap_or(1)
 }
 
+#[cfg(test)]
 pub(super) fn retire_slot(slot: BehaviorSlot) {
     let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
     drop(slot.dispatcher);
@@ -304,6 +324,7 @@ async fn run_slot_loop<F, Fut>(
     behavior: Arc<AgentBehavior>,
     tool_surface: Arc<ToolSurface>,
     request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+    generation: u64,
     retry_policy: RetryPolicy,
     runner: F,
     mut shutdown: watch::Receiver<bool>,
@@ -315,6 +336,7 @@ async fn run_slot_loop<F, Fut>(
             Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            u64,
             watch::Receiver<bool>,
         ) -> Fut
         + Send
@@ -343,6 +365,7 @@ async fn run_slot_loop<F, Fut>(
             behavior.clone(),
             tool_surface.clone(),
             request_rx.clone(),
+            generation,
             shutdown.clone(),
         ))
         .catch_unwind()
@@ -372,6 +395,7 @@ async fn run_slot_loop<F, Fut>(
             Ok(Err(error)) => {
                 if handle_slot_failure(
                     &behavior.behavior_id,
+                    generation,
                     &format!("{error:#}"),
                     failure_policy.as_deref(),
                     &standing,
@@ -397,6 +421,7 @@ async fn run_slot_loop<F, Fut>(
             Err(_) => {
                 if handle_slot_failure(
                     &behavior.behavior_id,
+                    generation,
                     "behavior runner panicked",
                     failure_policy.as_deref(),
                     &standing,
@@ -429,6 +454,7 @@ async fn run_slot_workers<F, Fut>(
     executor_capacity: usize,
     retry_policy: RetryPolicy,
     runner: F,
+    generation: u64,
     shutdown: watch::Receiver<bool>,
     state_rx: watch::Receiver<BehaviorSlotState>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
@@ -438,6 +464,7 @@ async fn run_slot_workers<F, Fut>(
             Arc<AgentBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            u64,
             watch::Receiver<bool>,
         ) -> Fut
         + Send
@@ -458,6 +485,7 @@ async fn run_slot_workers<F, Fut>(
             behavior.clone(),
             tool_surface.clone(),
             request_rx.clone(),
+            generation,
             retry_policy.clone(),
             runner.clone(),
             shutdown.clone(),
@@ -493,5 +521,73 @@ async fn wait_for_restart(
     tokio::select! {
         _ = tokio::time::sleep(delay) => true,
         _ = shutdown.changed() => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::anyhow;
+    use tokio::sync::Notify;
+
+    use super::*;
+
+    struct FailingDemotionPolicy {
+        attempted: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl SlotFailurePolicy for FailingDemotionPolicy {
+        fn build_failure_budget(&self) -> u32 {
+            1
+        }
+
+        async fn on_slot_created(&self, _behavior_id: &str, _generation: u64) -> Result<()> {
+            Ok(())
+        }
+
+        async fn try_demote(
+            &self,
+            _behavior_id: &str,
+            _generation: u64,
+            _error: &str,
+        ) -> Result<bool> {
+            self.attempted.notify_one();
+            Err(anyhow!("injected demotion persistence failure"))
+        }
+
+        async fn on_slot_retired(&self, _behavior_id: &str, _generation: u64, _recreated: bool) {}
+    }
+
+    #[tokio::test]
+    async fn failed_demotion_persistence_keeps_exhausted_slot_parked() {
+        let attempted = Arc::new(Notify::new());
+        let policy = Arc::new(FailingDemotionPolicy {
+            attempted: attempted.clone(),
+        });
+        let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let (state_tx, mut state_rx) = watch::channel(BehaviorSlotState::Active);
+        let standing_for_task = standing.clone();
+        let task = tokio::spawn(async move {
+            handle_slot_failure(
+                "general",
+                7,
+                "executor failed",
+                Some(policy.as_ref()),
+                &standing_for_task,
+                &mut shutdown_rx,
+                &mut state_rx,
+            )
+            .await
+        });
+
+        attempted.notified().await;
+        assert_eq!(*standing.lock().unwrap(), BuildStanding::Demoted);
+        assert!(
+            !task.is_finished(),
+            "a failed durable demotion must not restart the exhausted slot"
+        );
+        state_tx.send_replace(BehaviorSlotState::Retiring);
+        assert!(task.await.unwrap());
     }
 }

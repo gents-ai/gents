@@ -59,7 +59,7 @@ pub enum DidSource {
     /// Use the DID that owns the pairing's authoritative projection.
     ///
     /// This is the local DID on the issuer/runtime side and the remote issuer
-    /// DID on a bearer client. It lets both directions select the same
+    /// DID on an enrolled client. It lets both directions select the same
     /// issuer-owned rows without replicating another runtime's projection.
     HomeDid,
 }
@@ -217,21 +217,7 @@ pub(super) fn conjunctive_string_eq<'a>(
 pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 
 pub fn decode_pairing_filters(raw: &str) -> serde_json::Result<PairingFilters> {
-    let mut value: Value = serde_json::from_str(raw)?;
-    if let Some(filters) = value.as_object_mut() {
-        for filter in filters.values_mut() {
-            let legacy = filter.as_object().and_then(|object| {
-                Some((
-                    object.get("field")?.as_str()?.to_string(),
-                    object.get("value")?.as_str()?.to_string(),
-                ))
-            });
-            if let Some((field, value)) = legacy {
-                *filter = serde_json::to_value(equality_filter(field, value))?;
-            }
-        }
-    }
-    serde_json::from_value(value)
+    serde_json::from_str(raw)
 }
 
 // ---------------------------------------------------------------------------
@@ -250,7 +236,6 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "AgentConversation",
     "CompactionEntry",
-    "BearerPairingReady",
     "AgentBehavior",
     "ToolSelection",
     "InferenceBackend",
@@ -271,7 +256,6 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "AgentConversation",
     "CompactionEntry",
-    "BearerPairingReady",
 ];
 
 /// Bounded client dataplane. Unlike `machine`, this is intentionally a
@@ -291,7 +275,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentConversation",
     "CompactionEntry",
     "MailboxItem",
-    "BearerPairingReady",
+    "PersonaConfigRequest",
     "PeerEndpoint",
     "SessionHydrationRequest",
     "AgentBehavior",
@@ -305,6 +289,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "Task",
     "Schedule",
     "EventTrigger",
+    "AgentBehaviorReadiness",
 ];
 
 /// Client-authored rows that may travel toward a runtime. Runtime-owned
@@ -323,7 +308,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentConversation",
     "CompactionEntry",
     "MailboxItem",
-    "BearerPairingReady",
+    "PersonaConfigRequest",
     "PeerEndpoint",
     "SessionHydrationRequest",
 ];
@@ -369,11 +354,6 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
         field: "requester_did",
         source: DidSource::PeerDid,
     },
-    CollectionRule {
-        collection: "BearerPairingReady",
-        field: "claimant_did",
-        source: DidSource::PeerDid,
-    },
 ];
 
 /// Requester-scoped session-index grant. Complete historical index hydration
@@ -416,7 +396,6 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentConversation",
     "CompactionEntry",
     "MailboxItem",
-    "BearerPairingReady",
     "AgentBehavior",
     "ToolSelection",
     "InferenceBackend",
@@ -426,7 +405,6 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "DatastoreToolSurface",
     "ChainKeyBinding",
     "EthTool",
-    "PersonaConfigRequest",
     "SessionHydrationRequest",
     AGENT_DIRECTORY_COLLECTION,
 ];
@@ -478,16 +456,6 @@ const MACHINE_RULES: &[CollectionRule] = &[
         source: DidSource::PeerDid,
     },
     CollectionRule {
-        collection: "BearerPairingReady",
-        field: "claimant_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
-        collection: "PersonaConfigRequest",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
         collection: "SessionHydrationRequest",
         field: "requester_did",
         source: DidSource::PeerDid,
@@ -511,37 +479,6 @@ const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "DatastoreToolSurface",
     "ChainKeyBinding",
     "EthTool",
-];
-
-/// Discovery (network control-plane) collections: the membership documents a
-/// joiner needs to learn and run the network, plus agent-config so it can run
-/// what it discovers. Unscoped Replicate — small control-plane docs, not
-/// per-peer slices. This is the bootstrap on-ramp template.
-const DISCOVERY_COLLECTIONS: &[&str] = &[
-    "AgentNetwork",
-    "NetworkMembership",
-    "PeerEndpoint",
-    "NetworkJoinRequest",
-    "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
-    "InferenceProfile",
-    "ToolServiceRegistry",
-    "Skill",
-    "DatastoreToolSurface",
-    "ChainKeyBinding",
-    "EthTool",
-];
-
-/// Narrow network-control collections: the signed network-membership substrate
-/// only. Layer-1 network-derived mesh edges use this instead of the broader
-/// `discovery` bootstrap template so agent config is not re-replicated
-/// fleet-wide.
-pub const NETWORK_CONTROL_COLLECTIONS: &[&str] = &[
-    "AgentNetwork",
-    "NetworkMembership",
-    "PeerEndpoint",
-    "NetworkJoinRequest",
 ];
 
 /// Coordinator → host leg for subagent delegation: carry only bridges
@@ -588,7 +525,6 @@ const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
     },
 ];
 
-pub const NETWORK_CONTROL_TEMPLATE: &str = "network-control";
 pub const SUBAGENT_COORDINATOR_TEMPLATE: &str = "subagent-coordinator";
 pub const SUBAGENT_HOST_TEMPLATE: &str = "subagent-host";
 pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
@@ -624,18 +560,6 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     ScopeTemplate {
         id: "backup",
         collections: CONVERSATION_TRANSCRIPT_COLLECTIONS,
-        scope: Scope::Unscoped,
-        delivery: Delivery::Replicate,
-    },
-    ScopeTemplate {
-        id: "discovery",
-        collections: DISCOVERY_COLLECTIONS,
-        scope: Scope::Unscoped,
-        delivery: Delivery::Replicate,
-    },
-    ScopeTemplate {
-        id: NETWORK_CONTROL_TEMPLATE,
-        collections: NETWORK_CONTROL_COLLECTIONS,
         scope: Scope::Unscoped,
         delivery: Delivery::Replicate,
     },
@@ -737,16 +661,6 @@ pub fn scope_filter(
     }
 }
 
-/// Templates whose bearer/dapair claims mint a reciprocal conversation
-/// intent (mirrors Lean `conversationLike` in BearerClaim.lean).
-pub fn conversation_like(id: &str) -> bool {
-    // Rust trims incoming ids before applying the model's exact-equality
-    // predicate: normalization happens at this boundary, not in the model —
-    // Lean `conversationLike` is exact string equality with no trimming.
-    let id = id.trim();
-    id == "conversation" || id == MACHINE_TEMPLATE || id == CLIENT_TEMPLATE
-}
-
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
@@ -756,13 +670,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn conversation_is_scoped_push_with_transcript_and_readiness_collections() {
+    fn conversation_is_scoped_push_with_transcript_and_config_collections() {
         let t = resolve_template("conversation").unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(t.collections.len(), 18);
+        assert_eq!(t.collections.len(), 17);
         assert!(t.collections.contains(&"AgentRequest"));
-        assert!(t.collections.contains(&"BearerPairingReady"));
         assert!(t.collections.contains(&"AgentBehavior"));
         assert!(t.collections.contains(&"ChainKeyBinding"));
         assert!(t.collections.contains(&"EthTool"));
@@ -785,17 +698,12 @@ mod tests {
     }
 
     #[test]
-    fn conversation_scope_filters_transcript_by_requester_and_readiness_by_claimant() {
+    fn conversation_scope_filters_transcript_by_requester() {
         let t = resolve_template("conversation").unwrap();
         let f = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
-        assert_eq!(f.len(), 9);
+        assert_eq!(f.len(), 8);
         let p = f.get("AgentRequest").unwrap();
         assert_eq!(single_string_eq(p), Some(("requester_did", "did:key:bob")));
-        let ready = f.get("BearerPairingReady").unwrap();
-        assert_eq!(
-            single_string_eq(ready),
-            Some(("claimant_did", "did:key:bob"))
-        );
     }
 
     #[test]
@@ -834,19 +742,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_pairing_filter_decodes() {
-        let filters = decode_pairing_filters(
-            r#"{"AgentRequest":{"field":"requester_did","value":"did:key:phone"}}"#,
-        )
-        .expect("legacy filters");
-
-        assert_eq!(
-            filters.get("AgentRequest").and_then(single_string_eq),
-            Some(("requester_did", "did:key:phone"))
-        );
-    }
-
-    #[test]
     fn unscoped_scope_filter_is_empty() {
         let t = resolve_template("backup").unwrap();
         assert!(scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice").is_empty());
@@ -879,8 +774,8 @@ mod tests {
     }
 
     #[test]
-    fn builtin_template_count_is_eleven() {
-        assert_eq!(builtin_templates().len(), 11);
+    fn builtin_template_count_is_nine() {
+        assert_eq!(builtin_templates().len(), 9);
     }
 
     #[test]
@@ -934,35 +829,6 @@ mod tests {
                 .is_none(),
             "SessionHydrationRequest must stay protocol-owned and never ride app-collections"
         );
-    }
-
-    #[test]
-    fn network_control_is_narrow_unscoped_control_plane() {
-        let t = resolve_template(NETWORK_CONTROL_TEMPLATE).unwrap();
-        assert_eq!(t.delivery, Delivery::Replicate);
-        assert!(matches!(t.scope, Scope::Unscoped));
-        assert_eq!(t.collections, NETWORK_CONTROL_COLLECTIONS);
-        assert!(t.collections.contains(&"AgentNetwork"));
-        assert!(!t.collections.contains(&"AgentBehavior"));
-    }
-
-    #[test]
-    fn discovery_is_unscoped_replicate_with_control_plane_and_config() {
-        let t = resolve_template("discovery").unwrap();
-        assert_eq!(t.delivery, Delivery::Replicate);
-        assert!(matches!(t.scope, Scope::Unscoped));
-        // control-plane collections
-        assert!(t.collections.contains(&"AgentNetwork"));
-        assert!(t.collections.contains(&"NetworkMembership"));
-        assert!(t.collections.contains(&"PeerEndpoint"));
-        assert!(t.collections.contains(&"NetworkJoinRequest"));
-        // agent-config so a joiner can run what it discovers
-        for col in AGENT_CONFIG_COLLECTIONS {
-            assert!(
-                t.collections.contains(col),
-                "discovery missing config collection {col}"
-            );
-        }
     }
 
     #[test]
@@ -1032,41 +898,18 @@ mod tests {
         // Conversation collections stay member-scoped exactly like `conversation`.
         for col in CONVERSATION_RULES.iter().map(|rule| rule.collection) {
             let predicate = filters.get(col).expect("conversation collection filtered");
-            let expected_field = if col == "BearerPairingReady" {
-                "claimant_did"
-            } else {
-                "requester_did"
-            };
             assert_eq!(
                 single_string_eq(predicate),
-                Some((expected_field, "did:key:phone"))
+                Some(("requester_did", "did:key:phone"))
             );
         }
         assert_eq!(
             filters.get(AGENT_DIRECTORY_COLLECTION),
             Some(&equality_filter("source_did", "did:key:server"))
         );
-        // Persona request rows carry requester-authored config picks and the
-        // server's status_detail; losing this rule would push every
-        // requester's rows to every machine peer (the #687 leak class).
-        assert_eq!(
-            filters.get("PersonaConfigRequest"),
-            Some(&equality_filter("requester_did", "did:key:phone"))
-        );
         assert_eq!(
             filters.get("SessionHydrationRequest"),
             Some(&equality_filter("requester_did", "did:key:phone"))
         );
-    }
-
-    #[test]
-    fn conversation_like_accepts_exactly_the_intent_minting_templates() {
-        assert!(conversation_like("conversation"));
-        assert!(conversation_like("machine"));
-        assert!(conversation_like("client"));
-        assert!(conversation_like(" machine "));
-        assert!(!conversation_like("network-control"));
-        assert!(!conversation_like("discovery"));
-        assert!(!conversation_like(""));
     }
 }

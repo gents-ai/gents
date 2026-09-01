@@ -241,6 +241,8 @@ impl GentsBuilder {
             runtime_snapshot_observer: None,
             startup_build_failure_observer: None,
             startup_readiness: Default::default(),
+            #[cfg(test)]
+            router_dispatch_probe: None,
             // Same default as `Gents::from_default_behavior_documents`: every
             // provider request must pass through the durable DefraDB sink.
             rendered_request_capture_factory: Some(

@@ -1,4 +1,5 @@
 import Proofs.Basic
+import Mathlib.Data.Finset.Basic
 
 namespace RuntimeReconcile.StartupReadiness
 
@@ -176,10 +177,105 @@ theorem retire_never_claims_ready (standing : BehaviorStanding)
 def acrossGeneration (changed : Bool) (standing : BehaviorStanding) : BehaviorStanding :=
   if changed then seeded else standing
 
+/- During a reconcile handoff the active and staged slots coexist. Startup
+readiness therefore owns one pending obligation per exact slot generation;
+releasing a failed staged generation must not release the still-active one. -/
+structure PendingGenerationOwners where
+  generations : Finset Nat
+  deriving DecidableEq
+
+def registerGeneration (generation : Nat)
+    (current : PendingGenerationOwners) : PendingGenerationOwners :=
+  { generations := insert generation current.generations }
+
+def releaseGeneration (generation : Nat)
+    (current : PendingGenerationOwners) : PendingGenerationOwners :=
+  { generations := current.generations.erase generation }
+
+def generationPending (generation : Nat) (current : PendingGenerationOwners) : Prop :=
+  generation ∈ current.generations
+
+def allGenerationsReleased (current : PendingGenerationOwners) : Prop :=
+  current.generations = ∅
+
+theorem registration_adds_exact_pending_obligation
+    (current : PendingGenerationOwners) (generation : Nat) :
+    generationPending generation (registerGeneration generation current) := by
+  simp [generationPending, registerGeneration]
+
+theorem exact_release_removes_pending_obligation
+    (current : PendingGenerationOwners) (generation : Nat) :
+    ¬ generationPending generation (releaseGeneration generation current) := by
+  simp [generationPending, releaseGeneration]
+
+theorem releasing_one_generation_preserves_another
+    (current : PendingGenerationOwners) (releasedGeneration pendingGeneration : Nat)
+    (hDifferent : pendingGeneration ≠ releasedGeneration)
+    (hPending : generationPending pendingGeneration current) :
+    generationPending pendingGeneration (releaseGeneration releasedGeneration current) := by
+  unfold generationPending at hPending ⊢
+  exact Finset.mem_erase.mpr ⟨hDifferent, hPending⟩
+
+theorem staged_abort_preserves_active_pending
+    (current : PendingGenerationOwners) (activeGeneration stagedGeneration : Nat)
+    (hDifferent : activeGeneration ≠ stagedGeneration)
+    (hActive : generationPending activeGeneration current) :
+    generationPending activeGeneration
+      (releaseGeneration stagedGeneration (registerGeneration stagedGeneration current)) := by
+  unfold generationPending at hActive ⊢
+  exact Finset.mem_erase.mpr ⟨hDifferent, Finset.mem_insert_of_mem hActive⟩
+
+structure ScopedDemotion where
+  generation : Nat
+  active : Bool
+  deriving DecidableEq, Repr
+
+def visibleDemotion (sourceGeneration : Nat) (demotion : ScopedDemotion) : Bool :=
+  demotion.active && demotion.generation = sourceGeneration
+
+def clearDemotion (expectedGeneration : Nat) (demotion : ScopedDemotion) : ScopedDemotion :=
+  if demotion.generation = expectedGeneration then { demotion with active := false }
+  else demotion
+
+theorem newer_ready_cannot_clear_visible_old_source_demotion
+    (sourceGeneration newGeneration : Nat)
+    (hDifferent : sourceGeneration ≠ newGeneration) :
+    let demotion : ScopedDemotion := { generation := sourceGeneration, active := true }
+    visibleDemotion sourceGeneration (clearDemotion newGeneration demotion) = true := by
+  simp [clearDemotion, visibleDemotion, hDifferent]
+
+theorem old_demotion_is_not_visible_after_source_advance
+    (oldGeneration newGeneration : Nat)
+    (hDifferent : oldGeneration ≠ newGeneration) :
+    visibleDemotion newGeneration { generation := oldGeneration, active := true } = false := by
+  simp [visibleDemotion, hDifferent]
+
 theorem demotion_persists_when_unchanged (standing : BehaviorStanding) :
     acrossGeneration false standing = standing := rfl
 
 theorem change_restores_the_budget (standing : BehaviorStanding) :
     acrossGeneration true standing = seeded := rfl
+
+/- A durable Ready row is only an observation lease. A client must see a
+runtime heartbeat no further than `maxAge` behind its current clock. -/
+def observationFresh (publishedAt observedAt maxAge : Nat) : Bool :=
+  decide (publishedAt ≤ observedAt ∧ observedAt - publishedAt ≤ maxAge)
+
+theorem future_readiness_fails_closed (publishedAt observedAt maxAge : Nat)
+    (hFuture : observedAt < publishedAt) :
+    observationFresh publishedAt observedAt maxAge = false := by
+  simp [observationFresh, Nat.not_le.mpr hFuture]
+
+theorem expired_readiness_fails_closed (publishedAt observedAt maxAge : Nat)
+    (hPublished : publishedAt ≤ observedAt)
+    (hExpired : maxAge < observedAt - publishedAt) :
+    observationFresh publishedAt observedAt maxAge = false := by
+  simp [observationFresh, hPublished, Nat.not_le.mpr hExpired]
+
+theorem current_readiness_is_fresh (publishedAt observedAt maxAge : Nat)
+    (hPublished : publishedAt ≤ observedAt)
+    (hCurrent : observedAt - publishedAt ≤ maxAge) :
+    observationFresh publishedAt observedAt maxAge = true := by
+  simp [observationFresh, hPublished, hCurrent]
 
 end RuntimeReconcile.StartupReadiness

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,10 @@ use crate::{
     DEFAULT_AGENT_NAME,
 };
 use gents::codex_shim_binding::{ShimBinding, ShimUnboundReason};
+use gents_protocol::row::{
+    project_behavior_readiness_summary, BehaviorReadinessState, BehaviorReadinessSummary,
+    ProjectedBehaviorReadinessSummary,
+};
 
 pub(crate) struct CliReadyObserver {
     pub(crate) tx: watch::Sender<ProcessLifecycleState>,
@@ -36,14 +41,112 @@ impl ProcessLifecycleObserver for CliReadyObserver {
     }
 }
 
-struct CliRunnableBehaviorObserver {
-    tx: watch::Sender<Vec<String>>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeConfigurationObservation {
+    generation: u64,
+    fingerprint: String,
 }
 
-impl gents::RuntimeSnapshotObserver for CliRunnableBehaviorObserver {
-    fn on_generation_published(&self, _generation: u64, runnable_behavior_ids: &[String]) {
-        let _ = self.tx.send(runnable_behavior_ids.to_vec());
+struct CliRuntimeSnapshotObserver {
+    runnable_tx: watch::Sender<Vec<String>>,
+    configuration_tx: watch::Sender<Option<RuntimeConfigurationObservation>>,
+}
+
+impl gents::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
+    fn on_generation_published(
+        &self,
+        generation: u64,
+        configuration_fingerprint: &str,
+        runnable_behavior_ids: &[String],
+    ) {
+        self.runnable_tx
+            .send_replace(runnable_behavior_ids.to_vec());
+        self.configuration_tx
+            .send_replace(Some(RuntimeConfigurationObservation {
+                generation,
+                fingerprint: configuration_fingerprint.to_string(),
+            }));
     }
+}
+
+async fn wait_for_runtime_configuration(
+    receiver: &mut watch::Receiver<Option<RuntimeConfigurationObservation>>,
+    expected_fingerprint: Option<&str>,
+) -> Result<RuntimeConfigurationObservation> {
+    let wait = async {
+        loop {
+            if let Some(observation) = receiver.borrow_and_update().clone() {
+                if expected_fingerprint.is_none_or(|expected| observation.fingerprint == expected) {
+                    return Ok::<_, watch::error::RecvError>(observation);
+                }
+            }
+            receiver.changed().await?;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), wait)
+        .await
+        .context("runtime did not publish the resolved post-apply configuration")?
+        .context("runtime configuration observer closed")
+}
+
+async fn wait_for_live_behavior_readiness(
+    graphql_url: &str,
+    agent_did: &str,
+    fence: Option<&PostApplyReadinessFence>,
+) -> Result<BehaviorReadinessSummary> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let last_observation =
+            match crate::commands::status::load_live_behavior_readiness(graphql_url, agent_did)
+                .await
+            {
+                Ok(row) => match project_behavior_readiness_summary(row.as_ref(), agent_did, chrono::Utc::now()) {
+                    ProjectedBehaviorReadinessSummary::Observed(summary)
+                        if fence.is_none_or(|fence| fence.matches(&summary)) =>
+                    {
+                        return Ok(summary);
+                    }
+                    ProjectedBehaviorReadinessSummary::Observed(summary) => format!(
+                        "waiting for post-apply runtime projection (current generation={}, default={:?})",
+                        summary.snapshot.active_generation,
+                        summary.snapshot.default_behavior_id,
+                    ),
+                    ProjectedBehaviorReadinessSummary::Unknown(reason) => format!("{reason:?}"),
+                },
+                Err(error) => error.to_string(),
+            };
+        if Instant::now() >= deadline {
+            anyhow::bail!(
+                "runtime readiness never reached an admissible durable generation: \
+                 {last_observation}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+struct PostApplyReadinessFence {
+    expected_default_behavior_id: String,
+    expected_behavior_ids: BTreeSet<String>,
+}
+
+impl PostApplyReadinessFence {
+    fn matches(&self, summary: &BehaviorReadinessSummary) -> bool {
+        summary.snapshot.default_behavior_id == self.expected_default_behavior_id
+            && self.expected_behavior_ids.iter().all(|expected| {
+                summary
+                    .snapshot
+                    .behaviors
+                    .iter()
+                    .any(|entry| entry.behavior_id == *expected)
+            })
+    }
+}
+
+struct AppliedPack {
+    report: Value,
+    expected_default_behavior_id: String,
+    expected_behavior_ids: BTreeSet<String>,
 }
 
 fn announce_codex_shim(
@@ -106,7 +209,7 @@ async fn apply_pack_after_ready(
     home_dir: &Path,
     root: &Path,
     prune: bool,
-) -> Result<Value> {
+) -> Result<AppliedPack> {
     use crate::cli::ManifestAgentDidBindingArg;
     use crate::commands::config::apply::apply_bound_desired_manifest;
     use crate::commands::config::binding::{load_bound_manifest, ManifestBindingOptions};
@@ -145,6 +248,19 @@ async fn apply_pack_after_ready(
     .await?
     .require_valid()?;
 
+    let expected_default_behavior_id = bound
+        .manifest
+        .agent_principal
+        .default_behavior_id
+        .clone()
+        .context("applied pack has no default behavior")?;
+    let expected_behavior_ids = bound
+        .manifest
+        .agent_behaviors
+        .iter()
+        .map(|behavior| behavior.behavior_id.clone())
+        .collect::<BTreeSet<_>>();
+
     let mut report = apply_bound_desired_manifest(root, &access, &bound, prune).await?;
     report.schemas = schemas;
     if report
@@ -169,7 +285,11 @@ async fn apply_pack_after_ready(
         );
     }
 
-    serde_json::to_value(&report).context("serializing pack apply report")
+    Ok(AppliedPack {
+        report: serde_json::to_value(&report).context("serializing pack apply report")?,
+        expected_default_behavior_id,
+        expected_behavior_ids,
+    })
 }
 
 fn spawn_codex_shim_supervisor(
@@ -516,6 +636,8 @@ pub(crate) async fn serve_with_control(
     preflight_embedded_http_bind(http_addr).await?;
     let bind_probe_token = Uuid::new_v4().simple().to_string();
     let bind_probe_path = format!("/_gents/http-bind/{}", Uuid::new_v4().simple());
+    let enrollment_offer_issuer = crate::http::enrollment::empty_issuer_handle();
+    let enrollment_decisions = crate::http::enrollment::empty_decision_service_handle();
     let extra_routes = runtime_contract_router(
         graphql_url.clone(),
         agent_name.clone(),
@@ -524,6 +646,8 @@ pub(crate) async fn serve_with_control(
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
         Some(codex_shim_health.clone()),
+        enrollment_offer_issuer.clone(),
+        enrollment_decisions.clone(),
     )
     .merge(embedded_http_probe_router(
         &bind_probe_path,
@@ -550,8 +674,20 @@ pub(crate) async fn serve_with_control(
         return Err(error);
     }
     gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    let enrollment_network = crate::http::enrollment::ensure_enrollment_network(
+        node.as_ref(),
+        identity.as_ref(),
+        &agent_name,
+    )
+    .await
+    .context("ensuring authenticated enrollment network")?;
+    *enrollment_decisions.write().await = Some(
+        crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
+    );
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
     let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
+    let (configuration_tx, mut configuration_rx) =
+        watch::channel::<Option<RuntimeConfigurationObservation>>(None);
 
     let agent = Gents::from_default_behavior_documents(
         node.clone(),
@@ -562,8 +698,9 @@ pub(crate) async fn serve_with_control(
             tool_ceiling,
             backend_health: Some(backend_health),
             process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
-            runtime_snapshot_observer: Some(Arc::new(CliRunnableBehaviorObserver {
-                tx: runnable_tx,
+            runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
+                runnable_tx,
+                configuration_tx,
             })),
             ..Default::default()
         },
@@ -576,28 +713,11 @@ pub(crate) async fn serve_with_control(
             server_start_failure_hint(&home_dir)
         )
     })?;
-    let runnable_behaviors = agent
-        .behaviors()
-        .iter()
-        .map(|behavior| {
-            json!({
-                "behavior_id": behavior.behavior_id,
-                "backend_id": behavior.backend_id,
-                "model_name": behavior.model_name,
-            })
-        })
-        .collect::<Vec<_>>();
-    let default_behavior_id = agent.default_behavior_id().to_string();
-    let unavailable_behaviors = agent.unavailable_behaviors().clone();
-    let behavior_readiness = if unavailable_behaviors.is_empty() {
-        "ready"
-    } else {
-        "degraded"
-    };
     let background_execution_registry = agent.background_execution_registry();
+    let runtime_configuration_probe = agent.clone();
 
     // Aborting the run task would skip run_agent's shutdown epilogue, leaving
-    // AgentRuntime at `ready` and its detached children still firing, so hold a
+    // behavior readiness at `ready` and its detached children still firing, so hold a
     // sender here and forward any external signal into it.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     match external_shutdown {
@@ -647,36 +767,16 @@ pub(crate) async fn serve_with_control(
 
     let p2p_status =
         load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission).await?;
-    write_runtime_state(
-        &home_dir,
-        &StoredRuntimeState {
-            home: home_dir.to_string_lossy().to_string(),
-            graphql: graphql_url.clone(),
-            agent_name: agent_name.clone(),
-            agent_did: identity.did().to_string(),
-            default_behavior_id: default_behavior_id.clone(),
-            p2p_transport: p2p_status
-                .get("p2p_transport")
-                .and_then(Value::as_str)
-                .unwrap_or(P2pTransportArg::None.as_str())
-                .to_string(),
-            p2p_peer_id: p2p_status
-                .get("p2p_peer_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            p2p_listen_addresses: p2p_status
-                .get("p2p_listen_addresses")
-                .and_then(Value::as_array)
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            p2p_admission: p2p_admission_state,
-        },
-    )?;
+    if let Some(p2p) = node.p2p_arc() {
+        *enrollment_offer_issuer.write().await =
+            Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
+                identity.clone(),
+                p2p,
+                enrollment_network.network_id,
+                identity.did().to_string(),
+                "client".to_string(),
+            ));
+    }
 
     let mut codex_shim_output = None;
     let codex_shim_bind_args = CodexShimBindArgs {
@@ -770,13 +870,23 @@ pub(crate) async fn serve_with_control(
         }
     };
 
+    let configuration_before_apply =
+        match wait_for_runtime_configuration(&mut configuration_rx, None).await {
+            Ok(observation) => observation,
+            Err(error) => {
+                let _ = shutdown_tx.send(true);
+                let _ = (&mut run_handle).await;
+                return Err(error);
+            }
+        };
+
     // Optional pack apply against the same in-process node (schemas/ first,
     // then desired-state). Uses Local access so collection registration works
     // without a separate home open / remote schema API.
-    let pack_apply = match args.apply_root.as_ref() {
+    let applied_pack = match args.apply_root.as_ref() {
         Some(root) => {
             match apply_pack_after_ready(node.clone(), &home_dir, root, args.apply_prune).await {
-                Ok(report) => Some(report),
+                Ok(outcome) => Some(outcome),
                 Err(error) => {
                     // Dropping the handle only detaches; embedded callers
                     // would keep a live agent and an open node.
@@ -797,9 +907,134 @@ pub(crate) async fn serve_with_control(
         None => None,
     };
 
+    let readiness_fence = applied_pack
+        .as_ref()
+        .map(|outcome| PostApplyReadinessFence {
+            expected_default_behavior_id: outcome.expected_default_behavior_id.clone(),
+            expected_behavior_ids: outcome.expected_behavior_ids.clone(),
+        });
+
+    if applied_pack.is_some() {
+        let expected_fingerprint = match runtime_configuration_probe
+            .document_runtime_configuration_fingerprint()
+            .await
+        {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                let _ = shutdown_tx.send(true);
+                let _ = (&mut run_handle).await;
+                return Err(error).context("resolving applied runtime configuration");
+            }
+        };
+        if expected_fingerprint != configuration_before_apply.fingerprint {
+            let published = match wait_for_runtime_configuration(
+                &mut configuration_rx,
+                Some(expected_fingerprint.as_str()),
+            )
+            .await
+            {
+                Ok(observation) => observation,
+                Err(error) => {
+                    let _ = shutdown_tx.send(true);
+                    let _ = (&mut run_handle).await;
+                    return Err(error);
+                }
+            };
+            if published.generation <= configuration_before_apply.generation {
+                let _ = shutdown_tx.send(true);
+                let _ = (&mut run_handle).await;
+                anyhow::bail!(
+                    "runtime published changed configuration without advancing generation: {} -> {}",
+                    configuration_before_apply.generation,
+                    published.generation,
+                );
+            }
+        }
+    }
+
+    // `--apply-root` can replace the default behavior and advance the runtime
+    // generation. Report and persist only the post-apply authoritative
+    // snapshot; pre-apply configuration is never reused as readiness evidence.
+    let readiness = match wait_for_live_behavior_readiness(
+        &graphql_url,
+        identity.did(),
+        readiness_fence.as_ref(),
+    )
+    .await
+    {
+        Ok(readiness) => readiness,
+        Err(error) => {
+            let _ = shutdown_tx.send(true);
+            let _ = (&mut run_handle).await;
+            return Err(error);
+        }
+    };
+    let default_behavior_id = readiness.snapshot.default_behavior_id.clone();
+    let runnable_behaviors = readiness
+        .snapshot
+        .behaviors
+        .iter()
+        .filter(|entry| entry.state == BehaviorReadinessState::Ready)
+        .map(|entry| json!({ "behavior_id": entry.behavior_id }))
+        .collect::<Vec<_>>();
+    let unavailable_behaviors = readiness
+        .snapshot
+        .behaviors
+        .iter()
+        .filter_map(|entry| {
+            entry.reason.map(|reason| {
+                json!({
+                    "behavior_id": entry.behavior_id,
+                    "reason": reason,
+                    "message": reason.public_message(),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let readiness_status = if unavailable_behaviors.is_empty() {
+        "ready"
+    } else {
+        "degraded"
+    };
+    let behavior_readiness = serde_json::to_value(&readiness.snapshot)
+        .context("serializing durable behavior readiness")?;
+    let pack_apply = applied_pack.map(|outcome| outcome.report);
+
+    write_runtime_state(
+        &home_dir,
+        &StoredRuntimeState {
+            home: home_dir.to_string_lossy().to_string(),
+            graphql: graphql_url.clone(),
+            agent_name: agent_name.clone(),
+            agent_did: identity.did().to_string(),
+            default_behavior_id: default_behavior_id.clone(),
+            p2p_transport: p2p_status
+                .get("p2p_transport")
+                .and_then(Value::as_str)
+                .unwrap_or(P2pTransportArg::None.as_str())
+                .to_string(),
+            p2p_peer_id: p2p_status
+                .get("p2p_peer_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            p2p_listen_addresses: p2p_status
+                .get("p2p_listen_addresses")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            p2p_admission: p2p_admission_state,
+        },
+    )?;
+
     let output = json!({
         "status": "serving",
         "behavior_readiness": behavior_readiness,
+        "readiness_status": readiness_status,
         "home": home_dir,
         "agent_name": agent_name,
         "agent_did": identity.did(),

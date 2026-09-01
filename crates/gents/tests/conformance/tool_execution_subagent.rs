@@ -1160,12 +1160,18 @@ async fn integration_v3_schema_defaults_populate_correctly() {
 #[tokio::test]
 async fn integration_create_subagent_request_at_max_depth_succeeds() {
     let db = test_db("tc-sa-csr-1").await;
-    let parent_request_doc_id = crate::support::create_request(
+    let agent_did = db.node_identity.did().to_string();
+    let parent_request_doc_id = crate::support::create_request_for_agent_with_signed_fields(
         &db.node,
+        &agent_did,
         "parent-req-csr-1",
         "parent-sess-csr-1",
         "processing",
         &chrono::Utc::now().to_rfc3339(),
+        None,
+        None,
+        None,
+        None,
     )
     .await;
 
@@ -1173,7 +1179,7 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
         db.node.clone(),
         "parent-req-csr-1".to_string(),
         "parent-sess-csr-1".to_string(),
-        crate::support::AGENT_DID.to_string(),
+        agent_did.clone(),
         "parent-tc-csr-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1191,7 +1197,7 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
         "parent-tc-csr-1".to_string(),
         parent_tool_call_doc_id.clone(),
         MAX_SUBAGENT_DEPTH - 1,
-        crate::support::AGENT_DID.to_string(),
+        agent_did,
         "behavior-csr-1".to_string(),
         "csr test prompt".to_string(),
         None,

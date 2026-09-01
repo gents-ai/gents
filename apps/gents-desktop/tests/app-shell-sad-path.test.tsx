@@ -79,7 +79,7 @@ describe("App shell command sad paths", () => {
   it("keeps the real composer usable when client-route backend data is absent", async () => {
     const remoteDeployment = {
       ...deployment,
-      source: "bearer",
+      source: "enrollment",
       inferenceBackends: [],
     };
     const sendChatMessage = vi.fn(async () => ({

@@ -12,8 +12,12 @@ pub(crate) async fn enqueue_goal_continuation(
 
     let behavior_id = parent_behavior_id(node, parent).await?;
     let digest = Sha256::digest(format!("{goal_id}\0{}", parent.request_id).as_bytes());
+    // Signed request timestamps are canonicalized to whole seconds, so several
+    // fast continuations can legitimately share `created_at`. Keep the durable
+    // controller sequence in the request ID so the request query's documented
+    // `(created_at, request_id)` ordering remains causal within that second.
     let request_id = format!(
-        "goal-cont-{}",
+        "goal-cont-{continuation_sequence:020}-{}",
         digest[..16]
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -27,7 +31,7 @@ pub(crate) async fn enqueue_goal_continuation(
         });
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let queue_hints = QueueHints {
         source: QueueSource::Goal,
         policy: QueuePolicy::Coalesce,
@@ -46,52 +50,32 @@ pub(crate) async fn enqueue_goal_continuation(
     })
     .to_string();
 
-    let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_agent_did = escape_graphql_string(&parent.agent_did);
-    let requester_did_field = session::requester_did_create_field(parent.requester_did.as_deref());
-    let escaped_behavior_id = escape_graphql_string(&behavior_id);
-    let escaped_session_id = escape_graphql_string(&parent.session_id);
-    let escaped_content = escape_graphql_string(content);
-    let escaped_metadata = escape_graphql_string(&metadata);
-    let escaped_created_at = escape_graphql_string(&now);
-    let escaped_goal_id = escape_graphql_string(goal_id);
-    let escaped_parent_request_id = escape_graphql_string(&parent.request_id);
-    let escaped_parent_request_doc_id = escape_graphql_string(&parent.doc_id);
-    let inherited_trigger_context = crate::lifecycle::inherited_trigger_context_graphql_fields(
-        parent.caused_by_correlation.as_deref(),
-        parent.caused_by_trigger_context.as_deref(),
-    )?;
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
-                {requester_did_field}
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "{escaped_content}",
-                metadata: "{escaped_metadata}",
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "scheduled",
-                caused_by_trigger_id: "{escaped_goal_id}",
-                caused_by_trigger_kind: "goal",
-                {inherited_trigger_context}
-                caused_by_parent_request_id: "{escaped_parent_request_id}",
-                caused_by_parent_request_doc_id: "{escaped_parent_request_doc_id}",
-                failure_reason: "",
-                created_at: "{escaped_created_at}",
-                retry_count: 0,
-                max_retries: {max_retries},
-                subagent_depth: 0
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+    let admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
+            &parent.agent_did,
+            &parent.request_id,
+        );
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id.clone(),
+        &parent.agent_did,
+        &parent.agent_did,
+        behavior_id,
+        &parent.session_id,
+        content,
+        "scheduled",
+        now,
+        admission,
     );
+    create.metadata = Some(metadata);
+    create.caused_by_trigger_id = Some(goal_id.to_string());
+    create.caused_by_trigger_kind = Some("goal".to_string());
+    create.caused_by_correlation = parent.caused_by_correlation.clone();
+    create.caused_by_trigger_context = parent.caused_by_trigger_context.clone();
+    create.caused_by_parent_request_id = Some(parent.request_id.clone());
+    create.caused_by_parent_request_doc_id = Some(parent.doc_id.clone());
+    create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
+    crate::sign_agent_request_create_as_registered_target(&mut create).await?;
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let response =
         session::execute_mutation_with_retry(node, &mutation, "enqueue_goal_continuation").await?;
     let doc_id = extract_single_doc_id(&response, "create_AgentRequest")

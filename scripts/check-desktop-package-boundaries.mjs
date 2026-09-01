@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -350,7 +350,7 @@ const fleetLayoutPartials = filesUnder(
 if (
   !fleetBaseStyles.includes("./styles/layout.css") ||
   !fleetLayoutStyles.includes('./layout/dashboard.css"') ||
-  !fleetLayoutStyles.includes('./layout/pairing.css"') ||
+  !fleetLayoutStyles.includes('./layout/enrollment.css"') ||
   !fleetLayoutStyles.includes('./layout/responsive.css"') ||
   !fleetLayoutStyles.includes('./layout/responsive-table.css"') ||
   !fleetLayoutPartials.includes(".fleet-dashboard")
@@ -493,22 +493,25 @@ for (const path of [
   }
 }
 
-const qrScanner = readFileSync(
-  join(root, "packages/gents-desktop-fleet/src/components/QrScannerDialog.tsx"),
-  "utf8",
-);
 const fleetHostDashboard = readFileSync(
   join(root, "apps/gents-desktop/src/components/fleet/FleetHostDashboard.tsx"),
   "utf8",
 );
-if (qrScanner.includes("gents p2p pairings")) {
-  failures.push(
-    "the reusable QR scanner default copy must not name the Gents CLI",
-  );
+for (const legacyPairingPath of [
+  "packages/gents-desktop-fleet/src/components/QrScannerDialog.tsx",
+  "packages/gents-desktop-fleet/src/components/addPeer/BearerPairingForm.tsx",
+  "packages/gents-desktop-fleet/src/components/addPeer/ManualPeerDiscoveryForm.tsx",
+]) {
+  if (existsSync(join(root, legacyPairingPath))) {
+    failures.push(`${legacyPairingPath} must remain deleted`);
+  }
 }
-if (!fleetHostDashboard.includes("gents p2p pairings invite --bearer --qr")) {
+if (
+  fleetHostDashboard.includes("pairings invite") ||
+  fleetHostDashboard.includes("pair bearer")
+) {
   failures.push(
-    "the Gents host must retain its CLI-specific QR pairing guidance",
+    "the Gents host must not expose legacy invite or bearer pairing guidance",
   );
 }
 
@@ -557,22 +560,18 @@ for (const [path, maximumLines] of [
   ["packages/gents-desktop-fleet/src/inference/steps.tsx", 400],
   ["packages/gents-desktop-fleet/src/components/AddPeerForm.tsx", 100],
   [
-    "packages/gents-desktop-fleet/src/components/addPeer/BearerPairingForm.tsx",
-    180,
-  ],
-  [
-    "packages/gents-desktop-fleet/src/components/addPeer/ManualPeerDiscoveryForm.tsx",
+    "packages/gents-desktop-fleet/src/components/addPeer/StatusEnrollmentForm.tsx",
     220,
   ],
   [
-    "packages/gents-desktop-fleet/src/components/addPeer/useManualPeerDiscovery.ts",
+    "packages/gents-desktop-fleet/src/components/addPeer/useStatusEnrollment.ts",
     160,
   ],
   ["packages/gents-desktop-chat/src/components/Transcript.tsx", 100],
   ["packages/gents-desktop-fleet/styles/layout.css", 20],
   ["packages/gents-desktop-fleet/styles/layout/dashboard.css", 180],
   ["packages/gents-desktop-fleet/styles/layout/network.css", 120],
-  ["packages/gents-desktop-fleet/styles/layout/pairing.css", 230],
+  ["packages/gents-desktop-fleet/styles/layout/enrollment.css", 230],
   ["packages/gents-desktop-fleet/styles/layout/responsive.css", 100],
   ["packages/gents-desktop-fleet/styles/layout/responsive-table.css", 100],
   ["packages/gents-desktop-operations/styles/backend-health.css", 20],

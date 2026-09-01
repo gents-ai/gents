@@ -65,8 +65,8 @@ inductive Outcome where
 structure Terminal where
   key : String
   outcome : Outcome
-  servedCount : Nat
-  deriving DecidableEq, Repr
+  servedDocuments : Finset Document
+  deriving DecidableEq
 
 structure State where
   delivered : Finset Document
@@ -114,8 +114,8 @@ instance (st : State) (key : String) : Decidable (terminalFor st key) := by
   unfold terminalFor
   infer_instance
 
-def terminal (r : Request) (outcome : Outcome) (servedCount : Nat) : Terminal :=
-  { key := r.key, outcome, servedCount }
+def terminal (r : Request) (outcome : Outcome) (servedDocuments : Finset Document) : Terminal :=
+  { key := r.key, outcome, servedDocuments }
 
 def applyStep (cat : Catalog) (st : State) (r : Request) : State :=
   if terminalFor st r.key then st
@@ -123,8 +123,8 @@ def applyStep (cat : Catalog) (st : State) (r : Request) : State :=
     let docs := selectedDocuments cat r
     { st with
       delivered := st.delivered ∪ docs
-      terminals := insert (terminal r .served docs.card) st.terminals }
+      terminals := insert (terminal r .served docs) st.terminals }
   else
-    { st with terminals := insert (terminal r .rejected 0) st.terminals }
+    { st with terminals := insert (terminal r .rejected ∅) st.terminals }
 
 end SessionHydration

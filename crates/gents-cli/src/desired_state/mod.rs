@@ -31,16 +31,6 @@ use gents::{BackendProviderKind, Collection};
 
 pub(crate) const DEFAULT_TOOL_SERVICE_MCP_PATH: &str = "/mcp";
 pub(crate) const TOOL_SERVICE_ADDRESS_FIELDS: &[&str] = &["hostname", "tailscale_ip", "lan_ip"];
-pub(crate) const PEER_PAIRING_MANIFEST_SOURCE_PREFIX: &str =
-    gents::agent::p2p_reconcile::SOURCE_MANIFEST_PREFIX;
-
-pub(crate) fn peer_pairing_manifest_source(owner_agent_did: &str) -> String {
-    format!(
-        "{PEER_PAIRING_MANIFEST_SOURCE_PREFIX}{}",
-        owner_agent_did.trim()
-    )
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesiredAgentPrincipal {
@@ -527,63 +517,6 @@ pub(crate) struct DesiredProjectionAcpBinding {
     pub(crate) enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DesiredPeerPairing {
-    pub(crate) peer_did: String,
-    pub(crate) addresses: Vec<String>,
-    pub(crate) template: String,
-    pub(crate) enabled: bool,
-    #[serde(skip)]
-    pub(crate) peer_id: String,
-}
-
-impl DesiredPeerPairing {
-    pub(crate) fn resolved_peer_id(&self) -> Option<String> {
-        let stored = self.peer_id.trim();
-        if !stored.is_empty() {
-            return Some(stored.to_string());
-        }
-        self.addresses.iter().find_map(|address| {
-            p2p::iroh::parse_public_peer_addr(address.trim())
-                .ok()
-                .map(|(peer_id, _)| peer_id.to_string())
-        })
-    }
-
-    fn normalized_addresses(&self) -> Vec<(String, Vec<String>)> {
-        let mut normalized = self
-            .addresses
-            .iter()
-            .map(|address| {
-                p2p::iroh::parse_public_peer_addr(address.trim())
-                    .map(|(peer_id, addresses)| {
-                        let mut addresses = addresses
-                            .iter()
-                            .map(|address| address.as_str().to_string())
-                            .collect::<Vec<_>>();
-                        addresses.sort();
-                        (peer_id.to_string(), addresses)
-                    })
-                    .unwrap_or_else(|_| (address.trim().to_string(), Vec::new()))
-            })
-            .collect::<Vec<_>>();
-        normalized.sort();
-        normalized.dedup();
-        normalized
-    }
-}
-
-impl PartialEq for DesiredPeerPairing {
-    fn eq(&self, other: &Self) -> bool {
-        self.peer_did.trim() == other.peer_did.trim()
-            && self.template.trim() == other.template.trim()
-            && self.enabled == other.enabled
-            && self.resolved_peer_id() == other.resolved_peer_id()
-            && self.normalized_addresses() == other.normalized_addresses()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct DesiredStateManifest {
     pub(crate) agent_principal: DesiredAgentPrincipal,
@@ -597,7 +530,6 @@ pub(crate) struct DesiredStateManifest {
     pub(crate) inference_profiles: Vec<DesiredInferenceProfile>,
     pub(crate) tool_service_registries: Vec<DesiredToolServiceRegistry>,
     pub(crate) projection_acp_bindings: Vec<DesiredProjectionAcpBinding>,
-    pub(crate) peer_pairings: Vec<DesiredPeerPairing>,
     pub(crate) tasks: Vec<DesiredTask>,
     pub(crate) schedules: Vec<DesiredSchedule>,
     pub(crate) event_triggers: Vec<DesiredEventTrigger>,
@@ -651,7 +583,6 @@ pub(crate) struct DesiredStateDiffCollections {
     pub(crate) inference_profiles: DesiredStateCollectionDiff,
     pub(crate) tool_service_registries: DesiredStateCollectionDiff,
     pub(crate) projection_acp_bindings: DesiredStateCollectionDiff,
-    pub(crate) peer_pairings: DesiredStateCollectionDiff,
     pub(crate) tasks: DesiredStateCollectionDiff,
     pub(crate) schedules: DesiredStateCollectionDiff,
     pub(crate) event_triggers: DesiredStateCollectionDiff,
@@ -672,7 +603,6 @@ impl DesiredStateDiffCollections {
             Collection::InferenceProfile => &self.inference_profiles,
             Collection::ToolServiceRegistry => &self.tool_service_registries,
             Collection::ProjectionAcpBinding => &self.projection_acp_bindings,
-            Collection::PeerPairingDesired => &self.peer_pairings,
             Collection::Task => &self.tasks,
             Collection::Schedule => &self.schedules,
             Collection::EventTrigger => &self.event_triggers,
@@ -693,7 +623,6 @@ impl DesiredStateDiffCollections {
             Collection::InferenceProfile => &mut self.inference_profiles,
             Collection::ToolServiceRegistry => &mut self.tool_service_registries,
             Collection::ProjectionAcpBinding => &mut self.projection_acp_bindings,
-            Collection::PeerPairingDesired => &mut self.peer_pairings,
             Collection::Task => &mut self.tasks,
             Collection::Schedule => &mut self.schedules,
             Collection::EventTrigger => &mut self.event_triggers,
@@ -724,7 +653,6 @@ impl DesiredStateDiffCollections {
             inference_profiles: self.inference_profiles.counts(),
             tool_service_registries: self.tool_service_registries.counts(),
             projection_acp_bindings: self.projection_acp_bindings.counts(),
-            peer_pairings: self.peer_pairings.counts(),
             tasks: self.tasks.counts(),
             schedules: self.schedules.counts(),
             event_triggers: self.event_triggers.counts(),
@@ -746,7 +674,6 @@ pub(crate) struct DesiredStateDiffCollectionsCounts {
     pub(crate) inference_profiles: DesiredStateDiffCounts,
     pub(crate) tool_service_registries: DesiredStateDiffCounts,
     pub(crate) projection_acp_bindings: DesiredStateDiffCounts,
-    pub(crate) peer_pairings: DesiredStateDiffCounts,
     pub(crate) tasks: DesiredStateDiffCounts,
     pub(crate) schedules: DesiredStateDiffCounts,
     pub(crate) event_triggers: DesiredStateDiffCounts,
@@ -774,7 +701,6 @@ impl DesiredStateDiffCollectionsCounts {
             Collection::InferenceProfile => &self.inference_profiles,
             Collection::ToolServiceRegistry => &self.tool_service_registries,
             Collection::ProjectionAcpBinding => &self.projection_acp_bindings,
-            Collection::PeerPairingDesired => &self.peer_pairings,
             Collection::Task => &self.tasks,
             Collection::Schedule => &self.schedules,
             Collection::EventTrigger => &self.event_triggers,
@@ -819,7 +745,6 @@ pub(crate) struct DesiredStateCounts {
     pub(crate) inference_profiles: usize,
     pub(crate) tool_service_registries: usize,
     pub(crate) projection_acp_bindings: usize,
-    pub(crate) peer_pairings: usize,
     pub(crate) tasks: usize,
     pub(crate) schedules: usize,
     pub(crate) event_triggers: usize,
@@ -841,7 +766,6 @@ impl DesiredStateCounts {
             inference_profiles: 0,
             tool_service_registries: 0,
             projection_acp_bindings: 0,
-            peer_pairings: 0,
             tasks: 0,
             schedules: 0,
             event_triggers: 0,
@@ -914,11 +838,6 @@ impl DesiredFields for DesiredProjectionAcpBinding {
         "projection_acp_bindings"
     }
 }
-impl DesiredFields for DesiredPeerPairing {
-    fn collection_tag(&self) -> &'static str {
-        "peer_pairings"
-    }
-}
 impl DesiredFields for DesiredTask {
     fn collection_tag(&self) -> &'static str {
         "tasks"
@@ -988,11 +907,6 @@ impl HasUniqueId for DesiredToolServiceRegistry {
 impl HasUniqueId for DesiredProjectionAcpBinding {
     fn unique_id(&self) -> &str {
         &self.binding_id
-    }
-}
-impl HasUniqueId for DesiredPeerPairing {
-    fn unique_id(&self) -> &str {
-        &self.peer_did
     }
 }
 impl HasUniqueId for DesiredTask {

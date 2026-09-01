@@ -4,15 +4,25 @@ use serde::Deserialize;
 
 use super::{first_optional_row, first_row};
 
+fn null_string_default<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RequestSnapshotRow {
     status: String,
     lifecycle_state: String,
     behavior_id: String,
+    #[serde(deserialize_with = "null_string_default")]
     backend_id: String,
     execution_origin: String,
+    #[serde(deserialize_with = "null_string_default")]
     retry_parent_request: String,
     retry_root_request: String,
+    #[serde(deserialize_with = "null_string_default")]
     superseded_by_request: String,
     retry_count: i64,
     max_retries: i64,
@@ -129,10 +139,15 @@ pub struct RuntimeSnapshot {
     pub active_generation: i64,
     pub router_generation: i64,
     pub default_behavior_id: String,
-    pub runnable_behavior_count: i64,
-    pub unavailable_behavior_count: i64,
     pub last_reconcile_result: String,
     pub last_reconcile_error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RuntimeDiagnosticSnapshot {
+    reconcile_phase: String,
+    last_reconcile_result: String,
+    last_reconcile_error: String,
 }
 
 pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> RequestSnapshot {
@@ -428,24 +443,68 @@ pub async fn fetch_runtime_snapshot(
     let agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
+            AgentBehaviorReadiness(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                limit: 1
+            ) {{
+                agent_did
+                snapshot_json
+                updated_at
+            }}
             AgentRuntime(
                 filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
                 limit: 1
             ) {{
-                process_state
                 reconcile_phase
-                active_generation
-                router_generation
-                default_behavior_id
-                runnable_behavior_count
-                unavailable_behavior_count
                 last_reconcile_result
                 last_reconcile_error
             }}
         }}"#
     );
     let resp = node.execute(&query).await;
-    first_optional_row::<RuntimeSnapshot>(&resp, "AgentRuntime")
+    let diagnostic = first_optional_row::<RuntimeDiagnosticSnapshot>(&resp, "AgentRuntime")?;
+    let readiness_row = first_optional_row::<gents_protocol::row::AgentBehaviorReadinessRow>(
+        &resp,
+        "AgentBehaviorReadiness",
+    )?;
+    let readiness =
+        gents_protocol::row::decode_behavior_readiness_snapshot(&readiness_row, &agent_did).ok()?;
+    Some(RuntimeSnapshot {
+        process_state: readiness.process_state.as_str().to_string(),
+        reconcile_phase: diagnostic.reconcile_phase,
+        active_generation: i64::try_from(readiness.active_generation).unwrap_or(i64::MAX),
+        router_generation: i64::try_from(readiness.router_generation).unwrap_or(i64::MAX),
+        default_behavior_id: readiness.default_behavior_id,
+        last_reconcile_result: diagnostic.last_reconcile_result,
+        last_reconcile_error: diagnostic.last_reconcile_error,
+    })
+}
+
+pub async fn fetch_behavior_readiness_snapshot(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Option<gents_protocol::row::BehaviorReadinessSnapshot> {
+    let agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentBehaviorReadiness(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                limit: 1
+            ) {{
+                snapshot_json
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentBehaviorReadiness"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("snapshot_json"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|json| serde_json::from_str(json).ok())
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]

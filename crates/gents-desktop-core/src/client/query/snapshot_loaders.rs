@@ -5,6 +5,7 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         agent_principals: load_agent_principals(node).await?,
         behaviors: load_agent_behaviors(node).await?,
         runtimes: load_agent_runtimes(node).await?,
+        behavior_readiness: load_agent_behavior_readiness(node).await?,
         conversations: load_agent_conversations(node).await?,
         requests: load_agent_requests(node).await?,
         mailbox_items: load_mailbox_items(node).await?,
@@ -25,158 +26,19 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
 
 pub async fn load_full_snapshot_with_peer_records(
     node: &EmbeddedNode,
-    peers: &[PeerRecord],
-    requester_did: &str,
+    _peers: &[PeerRecord],
+    _requester_did: &str,
 ) -> Result<ClientStore> {
-    let mut rows = load_full_snapshot(node).await?.to_rows();
-    isolate_legacy_bearer_rows(&mut rows, peers, requester_did);
-    Ok(ClientStore::from_rows(rows))
-}
-
-/// Bearer replication is requester-scoped, but an upgraded database can still
-/// contain rows received by the old unfiltered replicator. Keep those rows
-/// durable for diagnostics while excluding them from every client projection.
-pub(crate) fn isolate_legacy_bearer_rows(
-    rows: &mut ClientStoreRows,
-    peers: &[PeerRecord],
-    requester_did: &str,
-) {
-    let bearer_dids = peers
-        .iter()
-        .filter(|peer| peer.is_bearer_pairing())
-        .map(|peer| peer.agent_did.as_str())
-        .collect::<HashSet<_>>();
-    if bearer_dids.is_empty() {
-        return;
-    }
-
-    let is_bearer_did = |did: Option<&str>| did.is_some_and(|did| bearer_dids.contains(did));
-    let requester_matches = |did: Option<&str>| did.is_some_and(|did| did == requester_did);
-    let mut bearer_sessions = rows
-        .conversations
-        .iter()
-        .filter(|row| is_bearer_did(row.agent_did.as_deref()))
-        .map(|row| row.session_id.clone())
-        .collect::<HashSet<_>>();
-    bearer_sessions.extend(
-        rows.requests
-            .iter()
-            .filter(|row| is_bearer_did(row.agent_did.as_deref()))
-            .filter_map(|row| row.session_id.clone()),
-    );
-    bearer_sessions.extend(
-        rows.responses
-            .iter()
-            .filter(|row| is_bearer_did(row.agent_did.as_deref()))
-            .filter_map(|row| row.session_id.clone()),
-    );
-    bearer_sessions.extend(
-        rows.tool_results
-            .iter()
-            .filter(|row| is_bearer_did(row.agent_did.as_deref()))
-            .filter_map(|row| row.session_id.clone()),
-    );
-
-    rows.conversations.retain(|row| {
-        !is_bearer_did(row.agent_did.as_deref()) || requester_matches(row.requester_did.as_deref())
-    });
-    rows.requests.retain(|row| {
-        !is_bearer_did(row.agent_did.as_deref()) || requester_matches(row.requester_did.as_deref())
-    });
-    rows.responses.retain(|row| {
-        !is_bearer_did(row.agent_did.as_deref()) || requester_matches(row.requester_did.as_deref())
-    });
-    retain_rows_with_sources(
-        &mut rows.tool_results,
-        &mut rows.tool_result_source_agent_dids,
-        |row| {
-            !is_bearer_did(row.agent_did.as_deref())
-                || requester_matches(row.requester_did.as_deref())
-        },
-    );
-    retain_rows_with_sources(
-        &mut rows.messages,
-        &mut rows.message_source_agent_dids,
-        |row| {
-            !row.session_id
-                .as_deref()
-                .is_some_and(|session_id| bearer_sessions.contains(session_id))
-                || requester_matches(row.requester_did.as_deref())
-        },
-    );
-    retain_rows_with_sources(
-        &mut rows.sessions,
-        &mut rows.session_source_agent_dids,
-        |row| {
-            !bearer_sessions.contains(&row.session_id)
-                || requester_matches(row.requester_did.as_deref())
-        },
-    );
-    retain_rows_with_sources(
-        &mut rows.tool_calls,
-        &mut rows.tool_call_source_agent_dids,
-        |row| {
-            !row.session_id
-                .as_deref()
-                .is_some_and(|session_id| bearer_sessions.contains(session_id))
-                || requester_matches(row.requester_did.as_deref())
-        },
-    );
-    retain_rows_with_sources(
-        &mut rows.compaction_entries,
-        &mut rows.compaction_entry_source_agent_dids,
-        |row| {
-            !row.session_id
-                .as_deref()
-                .is_some_and(|session_id| bearer_sessions.contains(session_id))
-                || requester_matches(row.requester_did.as_deref())
-        },
-    );
-    // Goal was never part of the requester-scoped conversation template, so
-    // any bearer-owned goal in the local store necessarily came from the old
-    // broad replicator.
-    rows.goals
-        .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
-
-    // Principal/runtime projections are not part of the signed client grant.
-    // Agent configuration is included by the conversation/machine template
-    // and must remain visible after it arrives through the local replica.
-    rows.agent_principals
-        .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
-    rows.runtimes
-        .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
+    load_full_snapshot(node).await
 }
 
 pub async fn load_agent_scoped_snapshot_with_peer_records(
     node: &EmbeddedNode,
     agent_did: &str,
-    peers: &[PeerRecord],
-    requester_did: &str,
+    _peers: &[PeerRecord],
+    _requester_did: &str,
 ) -> Result<ClientStore> {
-    let mut rows = load_agent_scoped_snapshot(node, agent_did).await?.to_rows();
-    isolate_legacy_bearer_rows(&mut rows, peers, requester_did);
-    Ok(ClientStore::from_rows(rows))
-}
-
-fn retain_rows_with_sources<T>(
-    rows: &mut Vec<T>,
-    sources: &mut Vec<Option<String>>,
-    mut keep: impl FnMut(&T) -> bool,
-) {
-    sources.resize(rows.len(), None);
-    let mut kept_rows = Vec::with_capacity(rows.len());
-    let mut kept_sources = Vec::with_capacity(sources.len());
-    for (row, source) in std::mem::take(rows)
-        .into_iter()
-        .zip(std::mem::take(sources))
-    {
-        if keep(&row) {
-            kept_rows.push(row);
-            kept_sources.push(source);
-        }
-    }
-    *rows = kept_rows;
-    *sources = kept_sources;
+    load_agent_scoped_snapshot(node, agent_did).await
 }
 
 pub async fn load_agent_principals(node: &EmbeddedNode) -> Result<Vec<AgentPrincipalRow>> {
@@ -202,6 +64,19 @@ pub async fn load_agent_runtimes(node: &EmbeddedNode) -> Result<Vec<AgentRuntime
         node,
         AGENT_RUNTIME_NAME,
         &format!("query {{ {AGENT_RUNTIME_NAME} {{ {AGENT_RUNTIME_FIELDS} }} }}"),
+    )
+    .await
+}
+
+pub async fn load_agent_behavior_readiness(
+    node: &EmbeddedNode,
+) -> Result<Vec<AgentBehaviorReadinessRow>> {
+    load_rows(
+        node,
+        AGENT_BEHAVIOR_READINESS_NAME,
+        &format!(
+            "query {{ {AGENT_BEHAVIOR_READINESS_NAME} {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"
+        ),
     )
     .await
 }

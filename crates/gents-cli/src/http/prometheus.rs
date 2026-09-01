@@ -2,6 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
+use gents_protocol::row::{
+    decode_behavior_readiness_snapshot, project_behavior_readiness_summary,
+    AgentBehaviorReadinessRow, ProjectedBehaviorReadinessSummary,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -17,6 +21,7 @@ const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
 #[derive(Debug, Serialize)]
 pub(crate) struct MetricsQueryData {
     pub(crate) agent_runtimes: Vec<MetricsRuntimeRow>,
+    pub(crate) behavior_readiness: Vec<AgentBehaviorReadinessRow>,
     pub(crate) inference_backends: Vec<MetricsBackendRow>,
     pub(crate) liveness: RuntimeLivenessSnapshot,
 }
@@ -25,6 +30,8 @@ pub(crate) struct MetricsQueryData {
 struct MetricsQueryEnvelope {
     #[serde(rename = "AgentRuntime", default)]
     agent_runtimes: Vec<MetricsRuntimeRow>,
+    #[serde(rename = "AgentBehaviorReadiness", default)]
+    behavior_readiness: Vec<AgentBehaviorReadinessRow>,
     #[serde(rename = "InferenceBackend", default)]
     inference_backends: Vec<MetricsBackendRow>,
     #[serde(rename = "AgentRequest", default)]
@@ -37,17 +44,7 @@ struct MetricsQueryEnvelope {
 pub(crate) struct MetricsRuntimeRow {
     pub(crate) agent_did: String,
     #[serde(default)]
-    pub(crate) process_state: String,
-    #[serde(default)]
     pub(crate) reconcile_phase: String,
-    #[serde(default)]
-    pub(crate) active_generation: i64,
-    #[serde(default)]
-    pub(crate) router_generation: i64,
-    #[serde(default)]
-    pub(crate) runnable_behavior_count: i64,
-    #[serde(default)]
-    pub(crate) unavailable_behavior_count: i64,
     #[serde(default)]
     pub(crate) last_reconcile_result: String,
     #[serde(default)]
@@ -219,12 +216,17 @@ pub(crate) async fn render_prometheus_metrics(
     push_metric_prelude(
         &mut lines,
         "gents_runtime_runnable_behaviors",
-        "Number of runnable behaviors in the active runtime snapshot.",
+        "Number of ready behaviors in the authoritative behavior-readiness snapshot.",
     );
     push_metric_prelude(
         &mut lines,
         "gents_runtime_unavailable_behaviors",
-        "Number of unavailable behaviors in the active runtime snapshot.",
+        "Number of unavailable behaviors in the authoritative behavior-readiness snapshot.",
+    );
+    push_metric_prelude(
+        &mut lines,
+        "gents_runtime_behavior_readiness_observed",
+        "Whether the authoritative behavior-readiness snapshot is valid and current.",
     );
     push_metric_prelude(
         &mut lines,
@@ -232,8 +234,13 @@ pub(crate) async fn render_prometheus_metrics(
         "Unix timestamp of the last completed reconcile.",
     );
 
-    for runtime in &data.agent_runtimes {
-        let agent_did = runtime.agent_did.clone();
+    for readiness in runtime_inventory(&data) {
+        let agent_did = readiness.agent_did.clone();
+        let runtime = data
+            .agent_runtimes
+            .iter()
+            .find(|runtime| runtime.agent_did == agent_did);
+        let lifecycle = decode_behavior_readiness_snapshot(readiness, &agent_did).ok();
         for state in [
             "uninitialized",
             "recovering",
@@ -248,56 +255,61 @@ pub(crate) async fn render_prometheus_metrics(
                     ("agent_did", agent_did.clone()),
                     ("state", state.to_string()),
                 ],
-                i64::from(runtime.process_state == state),
+                i64::from(
+                    lifecycle
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.process_state.as_str() == state),
+                ),
             );
         }
-        for phase in ["idle", "debouncing", "resolving", "diffing", "applying"] {
-            push_metric_sample(
-                &mut lines,
-                "gents_runtime_reconcile_phase",
-                &[
-                    ("agent_did", agent_did.clone()),
-                    ("phase", phase.to_string()),
-                ],
-                i64::from(runtime.reconcile_phase == phase),
-            );
-        }
-        for result in ["startup", "noop", "applied", "error"] {
-            push_metric_sample(
-                &mut lines,
-                "gents_runtime_last_reconcile_result",
-                &[
-                    ("agent_did", agent_did.clone()),
-                    ("result", result.to_string()),
-                ],
-                i64::from(runtime.last_reconcile_result == result),
-            );
+        if let Some(runtime) = runtime {
+            for phase in ["idle", "debouncing", "resolving", "diffing", "applying"] {
+                push_metric_sample(
+                    &mut lines,
+                    "gents_runtime_reconcile_phase",
+                    &[
+                        ("agent_did", agent_did.clone()),
+                        ("phase", phase.to_string()),
+                    ],
+                    i64::from(runtime.reconcile_phase == phase),
+                );
+            }
+            for result in ["startup", "noop", "applied", "error"] {
+                push_metric_sample(
+                    &mut lines,
+                    "gents_runtime_last_reconcile_result",
+                    &[
+                        ("agent_did", agent_did.clone()),
+                        ("result", result.to_string()),
+                    ],
+                    i64::from(runtime.last_reconcile_result == result),
+                );
+            }
         }
         push_metric_sample(
             &mut lines,
             "gents_runtime_active_generation",
             &[("agent_did", agent_did.clone())],
-            runtime.active_generation,
+            lifecycle
+                .as_ref()
+                .map(|snapshot| snapshot.active_generation)
+                .and_then(|generation| i64::try_from(generation).ok())
+                .unwrap_or_default(),
         );
         push_metric_sample(
             &mut lines,
             "gents_runtime_router_generation",
             &[("agent_did", agent_did.clone())],
-            runtime.router_generation,
+            lifecycle
+                .as_ref()
+                .map(|snapshot| snapshot.router_generation)
+                .and_then(|generation| i64::try_from(generation).ok())
+                .unwrap_or_default(),
         );
-        push_metric_sample(
-            &mut lines,
-            "gents_runtime_runnable_behaviors",
-            &[("agent_did", agent_did.clone())],
-            runtime.runnable_behavior_count,
-        );
-        push_metric_sample(
-            &mut lines,
-            "gents_runtime_unavailable_behaviors",
-            &[("agent_did", agent_did.clone())],
-            runtime.unavailable_behavior_count,
-        );
-        if let Some(timestamp) = rfc3339_timestamp_seconds(&runtime.last_reconcile_completed_at) {
+        push_behavior_readiness_metrics(&mut lines, &agent_did, &data.behavior_readiness);
+        if let Some(timestamp) = runtime
+            .and_then(|runtime| rfc3339_timestamp_seconds(&runtime.last_reconcile_completed_at))
+        {
             push_metric_sample(
                 &mut lines,
                 "gents_runtime_last_reconcile_completed_at_seconds",
@@ -431,6 +443,41 @@ pub(crate) async fn render_prometheus_metrics(
 
     lines.push(String::new());
     Ok(lines.join("\n"))
+}
+
+fn runtime_inventory(data: &MetricsQueryData) -> impl Iterator<Item = &AgentBehaviorReadinessRow> {
+    data.behavior_readiness.iter()
+}
+
+fn push_behavior_readiness_metrics(
+    lines: &mut Vec<String>,
+    agent_did: &str,
+    rows: &[AgentBehaviorReadinessRow],
+) {
+    let readiness = rows.iter().find(|row| row.agent_did == agent_did);
+    let (ready, unavailable, observed) =
+        match project_behavior_readiness_summary(readiness, agent_did, chrono::Utc::now()) {
+            ProjectedBehaviorReadinessSummary::Observed(summary) => (
+                i64::try_from(summary.ready_count).unwrap_or(i64::MAX),
+                i64::try_from(summary.unavailable_behaviors.len()).unwrap_or(i64::MAX),
+                1,
+            ),
+            ProjectedBehaviorReadinessSummary::Unknown(_) => (0, 0, 0),
+        };
+    let labels = [("agent_did", agent_did.to_string())];
+    push_metric_sample(lines, "gents_runtime_runnable_behaviors", &labels, ready);
+    push_metric_sample(
+        lines,
+        "gents_runtime_unavailable_behaviors",
+        &labels,
+        unavailable,
+    );
+    push_metric_sample(
+        lines,
+        "gents_runtime_behavior_readiness_observed",
+        &labels,
+        observed,
+    );
 }
 
 fn render_background_completion_metrics(
@@ -1159,14 +1206,14 @@ pub(crate) async fn load_metrics_query_data(
         r#"{
             AgentRuntime {
                 agent_did
-                process_state
                 reconcile_phase
-                active_generation
-                router_generation
-                runnable_behavior_count
-                unavailable_behavior_count
                 last_reconcile_result
                 last_reconcile_completed_at
+            }
+            AgentBehaviorReadiness {
+                agent_did
+                snapshot_json
+                updated_at
             }
             InferenceBackend {
                 backend_id
@@ -1216,6 +1263,7 @@ pub(crate) async fn load_metrics_query_data(
     );
     Ok(MetricsQueryData {
         agent_runtimes: envelope.agent_runtimes,
+        behavior_readiness: envelope.behavior_readiness,
         inference_backends: envelope.inference_backends,
         liveness,
     })
@@ -1336,6 +1384,113 @@ fn rfc3339_timestamp(value: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::row::{
+        BehaviorReadinessEntry, BehaviorReadinessProcessState, BehaviorReadinessSnapshot,
+        BehaviorReadinessState, BehaviorReadinessUnavailableReason,
+        BEHAVIOR_READINESS_FORMAT_VERSION,
+    };
+
+    fn metrics_runtime(agent_did: &str) -> MetricsRuntimeRow {
+        MetricsRuntimeRow {
+            agent_did: agent_did.to_string(),
+            reconcile_phase: "idle".to_string(),
+            last_reconcile_result: "applied".to_string(),
+            last_reconcile_completed_at: "2026-08-29T00:00:00Z".to_string(),
+        }
+    }
+
+    fn metrics_readiness(agent_did: &str) -> AgentBehaviorReadinessRow {
+        AgentBehaviorReadinessRow {
+            agent_did: agent_did.to_string(),
+            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
+                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
+                process_state: BehaviorReadinessProcessState::Ready,
+                active_generation: 4,
+                router_generation: 4,
+                default_behavior_id: "default".to_string(),
+                behaviors: vec![
+                    BehaviorReadinessEntry {
+                        behavior_id: "default".to_string(),
+                        state: BehaviorReadinessState::Ready,
+                        reason: None,
+                    },
+                    BehaviorReadinessEntry {
+                        behavior_id: "offline".to_string(),
+                        state: BehaviorReadinessState::Unavailable,
+                        reason: Some(
+                            BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
+                        ),
+                    },
+                ],
+            })
+            .unwrap(),
+            updated_at: "2026-08-29T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn behavior_readiness_metrics_distinguish_observed_from_unknown() {
+        let runtime = metrics_runtime("did:test:metrics");
+        let mut lines = Vec::new();
+        push_behavior_readiness_metrics(
+            &mut lines,
+            &runtime.agent_did,
+            &[metrics_readiness("did:test:metrics")],
+        );
+        let rendered = lines.join("\n");
+        assert!(rendered
+            .contains(r#"gents_runtime_runnable_behaviors{agent_did="did:test:metrics"} 1"#));
+        assert!(rendered
+            .contains(r#"gents_runtime_unavailable_behaviors{agent_did="did:test:metrics"} 1"#));
+        assert!(rendered.contains(
+            r#"gents_runtime_behavior_readiness_observed{agent_did="did:test:metrics"} 1"#
+        ));
+
+        for rows in [
+            Vec::new(),
+            vec![AgentBehaviorReadinessRow {
+                snapshot_json: "{}".to_string(),
+                ..metrics_readiness("did:test:metrics")
+            }],
+        ] {
+            let mut lines = Vec::new();
+            push_behavior_readiness_metrics(&mut lines, &runtime.agent_did, &rows);
+            let rendered = lines.join("\n");
+            assert!(rendered
+                .contains(r#"gents_runtime_runnable_behaviors{agent_did="did:test:metrics"} 0"#));
+            assert!(rendered.contains(
+                r#"gents_runtime_unavailable_behaviors{agent_did="did:test:metrics"} 0"#
+            ));
+            assert!(rendered.contains(
+                r#"gents_runtime_behavior_readiness_observed{agent_did="did:test:metrics"} 0"#
+            ));
+        }
+    }
+
+    #[test]
+    fn metrics_runtime_inventory_is_readiness_not_diagnostics() {
+        let readiness = metrics_readiness("did:test:readiness-only");
+        let data = MetricsQueryData {
+            agent_runtimes: Vec::new(),
+            behavior_readiness: vec![readiness],
+            inference_backends: Vec::new(),
+            liveness: RuntimeLivenessSnapshot::default(),
+        };
+        assert_eq!(
+            runtime_inventory(&data)
+                .map(|row| row.agent_did.as_str())
+                .collect::<Vec<_>>(),
+            vec!["did:test:readiness-only"]
+        );
+
+        let diagnostics_only = MetricsQueryData {
+            agent_runtimes: vec![metrics_runtime("did:test:diagnostics-only")],
+            behavior_readiness: Vec::new(),
+            inference_backends: Vec::new(),
+            liveness: RuntimeLivenessSnapshot::default(),
+        };
+        assert_eq!(runtime_inventory(&diagnostics_only).count(), 0);
+    }
 
     #[test]
     fn backend_probe_status_metric_reflects_measured_health() {
@@ -1623,6 +1778,7 @@ mod tests {
     fn metrics_query_envelope_treats_null_probe_status_as_unknown() {
         let envelope: MetricsQueryEnvelope = serde_json::from_value(serde_json::json!({
             "AgentRuntime": [],
+            "AgentBehaviorReadiness": [],
             "InferenceBackend": [{
                 "backend_id": "workstation-1",
                 "enabled": true,

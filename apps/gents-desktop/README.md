@@ -2,13 +2,13 @@
 
 This is the Tauri 2 + React desktop shell for `gents`.
 
-It is intentionally a local-first client. The app pairs with a running
+It is intentionally a local-first client. The app enrolls with a running
 `gents` runtime, consumes the replicated document surface through
 `gents-desktop-core`, and renders conversation, configuration, runtime,
 and fleet views from that local store.
 
 From the initial Fleet screen the desktop app can also provision and host the
-standard `~/.gents` runtime in-process. This is opt-in; remote pairing remains
+standard `~/.gents` runtime in-process. This is opt-in; remote enrollment remains
 available. Once enabled, the app starts that runtime on later launches and
 keeps it alive in the system tray when the main window closes. The CLI and
 desktop host share the `gents_server::server_host` implementation, so no CLI
@@ -70,29 +70,25 @@ Build the desktop binary from the repo root:
 cargo build -p gents-desktop --release
 ```
 
-## Pairing
+## Enrollment
 
-For a remote runtime, signed bearer pairing is the primary path. On the agent
-host, mint a five-minute, single-use conversation invite:
+Remote runtimes use authenticated status-first enrollment. In Gents, choose
+**Add Agent**, enter the runtime's address, and submit the enrollment request.
+The UI shows the immutable request ID. An operator on the runtime host must
+approve that exact request:
 
 ```bash
-gents p2p pairings invite --home ~/.gents/my-agent --bearer --qr
+gents p2p enrollment approve <request-id> --home ~/.gents/my-agent
 ```
 
-In Gents, choose **Add Agent**, then scan the QR code or paste the emitted
-`dabear1-` token. The client verifies the issuer and network signatures,
-publishes its own signed endpoint and claim, and installs filtered conversation
-replication. The running agent burns the invite nonce and creates the reciprocal
-replication leg.
+The client authenticates the transport identity advertised by `/status`, and
+chat remains blocked until the signed authorization, both filtered route legs,
+and the generation-bound server receipt are current.
 
-Conversation pairing is requester-scoped: all eight transcript collections
-replicate only rows whose immutable `requester_did` is the paired client DID.
-Legacy rows created before requester lineage was recorded remain local by
-design; pairing never widens the filter to import null-requester history.
-
-The manual `/status` and connection-JSON form remains under **Advanced manual
-discovery** for diagnostics and older runtimes. It does not perform the signed
-membership exchange.
+Conversation replication is requester-scoped: all eight transcript collections
+replicate only rows whose immutable `requester_did` is the enrolled client DID.
+Rows without requester lineage remain local by design; enrollment never widens
+the filter to import null-requester history.
 
 The desktop binary has an `init` subcommand that discovers or seeds a runtime
 deployment before the GUI starts:
@@ -183,9 +179,9 @@ The live form boots the real Rust bridge, embedded DefraDB runtime, and a local
 mock inference endpoint. See
 [tests/AGENT_BROWSER.md](./tests/AGENT_BROWSER.md) for commands and boundaries.
 
-The iOS lane builds and installs the real app in an iPhone Simulator, pairs
-with the isolated local `~/.gents/iphone-e2e` node through a fresh signed bearer
-invite, and verifies an actual prompt/response round-trip. It never targets a
+The iOS lane builds and installs the real app in an iPhone Simulator, enrolls
+with the explicitly configured test runtime through the authenticated status
+flow, and verifies an actual prompt/response round-trip. It never targets a
 deployed agent unless the issuer environment variables are set explicitly. It
 uses a debug-only in-app driver so the same React and Tauri command paths run
 inside the native `WKWebView`, detects an unexpected app exit, and retains

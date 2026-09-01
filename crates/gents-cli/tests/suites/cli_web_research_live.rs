@@ -94,25 +94,40 @@ async fn wait_for_all_research_behaviors_runnable(
             graphql,
             &format!(
                 r#"{{
-                    AgentRuntime(
+                    AgentBehaviorReadiness(
                         filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
                         limit: 1
                     ) {{
-                        active_generation
-                        runnable_behavior_count
-                        unavailable_behavior_count
-                        last_reconcile_error
+                        snapshot_json
                     }}
                 }}"#
             ),
         )
         .await?;
-        if response.pointer("/data/AgentRuntime/0").is_some_and(|row| {
-            row.get("runnable_behavior_count").and_then(Value::as_i64) == Some(5)
-                && row
-                    .get("unavailable_behavior_count")
-                    .and_then(Value::as_i64)
-                    == Some(0)
+        let snapshot = response
+            .pointer("/data/AgentBehaviorReadiness/0/snapshot_json")
+            .and_then(Value::as_str)
+            .and_then(|snapshot| serde_json::from_str::<Value>(snapshot).ok());
+        if snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.get("process_state").and_then(Value::as_str) == Some("ready")
+                && snapshot
+                    .get("active_generation")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|generation| {
+                        generation > 0
+                            && snapshot.get("router_generation").and_then(Value::as_u64)
+                                == Some(generation)
+                    })
+                && snapshot
+                    .get("behaviors")
+                    .and_then(Value::as_array)
+                    .is_some_and(|behaviors| {
+                        behaviors.len() == 5
+                            && behaviors.iter().all(|behavior| {
+                                behavior.get("state").and_then(Value::as_str) == Some("ready")
+                                    && behavior.get("reason").is_some_and(Value::is_null)
+                            })
+                    })
         }) {
             return Ok(());
         }

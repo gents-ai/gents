@@ -2,11 +2,18 @@
 
 This is the sole operator-facing record of the breaking rename to Gents. The
 cutover is intentionally one-way: install Gents, create fresh state and
-identity, reapply configuration, and re-pair the fleet. There are no aliases,
+identity, reapply configuration, and re-enroll the fleet. There are no aliases,
 automatic migrations, dual-read paths, or compatibility shims.
 
 DefraDB and `defradb.rs` keep their names. Domain vocabulary such as agent,
 principal, behavior, deployment, and request also remains unchanged.
+
+The behavior-readiness cut is also fresh-state only. The canonical
+`AgentRuntime` baseline no longer stores runnable/unavailable behavior counts;
+`AgentBehaviorReadiness` is the sole durable authority. Any pre-cut v0.14
+server database and desktop/phone state must be wiped and re-created together.
+The runtime deliberately does not upgrade or dual-read the old AgentRuntime
+version.
 
 ## Locked mapping
 
@@ -36,7 +43,7 @@ bundle identifier, or keychain service.
 | Runtime home | No automatic discovery, copy, or migration |
 | Identity/keychain | No dual-read service and no identity reuse |
 | Desktop | No old bundle, data-root, preference, or peer-directory import |
-| P2P peers | No pairing-row or invitation migration; enroll and pair the new DIDs |
+| P2P peers | No route-row or enrollment migration; enroll the new DIDs from fresh signed offers |
 
 ## Hard-cutover rules
 
@@ -49,7 +56,7 @@ bundle identifier, or keychain service.
   the new fleet is verified, then remove it deliberately under the applicable
   retention policy.
 - Treat every Gents principal as a new principal with a new DID. Reissue grants,
-  manifests, invitations, and peer relationships against that DID.
+  manifests, enrollment authorizations, and peer relationships against that DID.
 - Use only `source-inc/gents` as the canonical repository coordinate. Redirects
   are discovery aids, not configuration.
 
@@ -75,8 +82,9 @@ Complete these once for the fleet:
   manifest and record how each host receives them.
 - [ ] Provision the GitHub Actions secret `GENTS_API_KEY` for live smoke. Do
   not retain `AGENT_DAEMON_API_KEY` as an alias.
-- [ ] Decide the new fleet topology and which DIDs require network membership,
-  conversation data-plane edges, or cross-deployment subagent permission.
+- [ ] Decide the new fleet topology and which DIDs require authenticated
+  enrollment routes, conversation data-plane edges, or cross-deployment
+  subagent permission.
 - [ ] Schedule a quiet repository rename window and update local remotes only
   after the GitHub rename is complete.
 
@@ -151,9 +159,9 @@ order is fixed.
    `OPENAI_API_KEY` unchanged.
 7. Start Gents and wait for readiness. Record the new DID, peer ID, listen
    addresses, GraphQL endpoint, and binary version.
-8. Recreate network membership and peer pairings using the new DIDs. A copied
-   pairing row that names an old DID is not valid authority for the new
-   principal.
+8. Request and approve fresh authenticated enrollment for the new DIDs. A
+   copied desired/applied route row is not authority for the new principal;
+   require current authorization and signed route receipts.
 9. Verify runtime, P2P, and a real request:
 
    ```bash
@@ -167,11 +175,11 @@ order is fixed.
    ```
 
 10. Mark the host complete in the operator record only after the request reaches
-    a terminal success and every required pairing reports subscribed and
-    replicating.
+    a terminal success and every required enrollment-owned route reports
+    subscribed and replicating.
 
-See [operations.md](operations.md) for the signed-network and data-plane pairing
-commands.
+See [operations.md](operations.md) for authenticated enrollment and low-level
+route diagnostics.
 
 ## Host checklists
 
@@ -182,8 +190,8 @@ commands.
 - [ ] Install Gents and initialize a fresh `~/.gents`.
 - [ ] Capture the new `strangenas` DID and peer endpoint in the operator record.
 - [ ] Rebind and apply the `strangenas` manifest/configuration.
-- [ ] Reissue its network membership and re-pair every required storage/fleet
-  peer against the new DID.
+- [ ] Re-enroll every required storage/fleet peer against the new DID and verify
+  current signed route receipts.
 - [ ] Restart under the Gents supervisor and verify runtime, P2P, replication,
   and request health.
 
@@ -197,8 +205,7 @@ commands.
 - [ ] Capture the new `workstation-1` DID and peer endpoint.
 - [ ] Rebind and apply the `workstation-1` behavior, tool, and deployment
   configuration.
-- [ ] Reissue membership and pairings for each orchestrator or worker that may
-  route work to this host.
+- [ ] Re-enroll each orchestrator or worker that may route work to this host.
 - [ ] Restart and verify backend, runtime, P2P, request, and delegated-work
   health.
 
@@ -209,7 +216,7 @@ commands.
 - [ ] Install Gents and initialize a fresh `~/.gents`.
 - [ ] Capture the new `spark-1` DID and peer endpoint.
 - [ ] Rebind and apply the `spark-1` manifest/configuration.
-- [ ] Reissue membership and re-pair `spark-1` with its required fleet peers.
+- [ ] Re-enroll `spark-1` with its required fleet peers.
 - [ ] Restart and verify runtime, P2P, replication, request, and worker-slot
   health.
 
@@ -220,7 +227,7 @@ commands.
 - [ ] Install Gents and initialize a fresh `~/.gents`.
 - [ ] Capture the new `spark-2` DID and peer endpoint.
 - [ ] Rebind and apply the `spark-2` manifest/configuration.
-- [ ] Reissue membership and re-pair `spark-2` with its required fleet peers.
+- [ ] Re-enroll `spark-2` with its required fleet peers.
 - [ ] Restart and verify runtime, P2P, replication, request, and worker-slot
   health.
 
@@ -235,7 +242,7 @@ commands.
 - [ ] Capture the new `studio-1` demo DID and peer endpoint.
 - [ ] Rebind and apply only the active demo manifest/configuration; do not copy
   historical request, response, session, or pairing rows.
-- [ ] Recreate the demo network membership, invitations, data-plane pairings,
+- [ ] Recreate authenticated enrollment, enrollment-owned data-plane routes,
   and any cross-deployment subagent permission using the new DIDs.
 - [ ] Restart the demo, open the Gents desktop app with fresh desktop state, and
   verify runtime, backend, P2P, replication, chat, and delegated-request health.
@@ -250,8 +257,8 @@ After all five records are populated:
 - [ ] Confirm all running binaries report the intended Gents version and SHA.
 - [ ] Confirm every active principal DID equals the Gents DID in the operator
   record.
-- [ ] Confirm signed network membership and pairing rows name only those new
-  DIDs.
+- [ ] Confirm current enrollment authorizations and signed route receipts name
+  only those new DIDs.
 - [ ] Confirm required peer edges are connected, subscribed, and replicating.
 - [ ] Submit and observe one local request per host and one cross-host delegated
   request for each routed worker role.

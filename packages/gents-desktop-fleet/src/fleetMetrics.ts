@@ -20,7 +20,15 @@ export function deploymentStatus(deployment: DeploymentView): {
   lastError: string | null;
 } {
   const p2p = deployment.dialSucceeded ? "connected" : "saved";
-  const runtime = deployment.runtime?.processState ?? "unknown";
+  const readinessSource = deployment.behaviorReadiness?.source;
+  const runtime =
+    readinessSource?.state === "current"
+      ? "ready"
+      : `unknown (${
+          readinessSource?.state === "unknown"
+            ? readinessSource.reason
+            : "readiness_missing"
+        })`;
   const reconcile = deployment.runtime?.reconcilePhase ?? "unknown";
   const lastError =
     deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
@@ -43,9 +51,9 @@ export function deploymentStatus(deployment: DeploymentView): {
 
   if (!deployment.pairingReady) {
     return {
-      title: `${title} | awaiting signed reciprocal readiness`,
+      title: `${title} | awaiting signed enrollment route and behavior readiness`,
       tone: "yellow",
-      label: "Pairing",
+      label: "Preparing",
       lastError,
     };
   }

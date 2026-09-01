@@ -2,7 +2,7 @@
   "name": "@source-inc/gents-desktop-fleet",
   "version": "0.14.0",
   "license": "Apache-2.0",
-  "description": "Reusable peer discovery, pairing, health, and fleet surfaces for Gents desktop",
+  "description": "Reusable authenticated enrollment, connection health, and fleet surfaces for Gents desktop",
   "type": "module",
   "sideEffects": [
     "./styles.css",
@@ -32,10 +32,6 @@
   "scripts": {
     "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
     "test": "vitest run"
-  },
-  "dependencies": {
-    "fflate": "^0.8.2",
-    "jsqr": "^1.4.0"
   },
   "peerDependencies": {
     "react": "^19.0.0",

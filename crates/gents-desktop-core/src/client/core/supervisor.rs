@@ -1,25 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::sync::RwLock as StdRwLock;
 use std::time::{Duration, SystemTime};
 
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
-use gents::agent::p2p_reconcile::intervals::endpoint_interval;
 #[cfg(test)]
 use gents::agent::p2p_reconcile::{
     compute_pairing_diff, DiffOp, PairingActual, PairingDesired, RemoteP2pAdmin,
 };
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 
-use super::super::peer_directory::{PeerDirectory, PeerRecord};
+use super::super::peer_directory::PeerRecord;
 use super::super::principal_identity::PrincipalIdentity;
-use super::bearer_pairing::{
-    current_local_endpoint, install_bearer_replicator_for_record, is_bearer_peer,
-    observe_bearer_pairing_readiness, publish_local_endpoint,
-};
 use super::bootstrap::{
     connect_peer_with_retry, force_connect_peer_with_retry, is_connected_peer, request_index_sync,
 };
@@ -29,29 +23,45 @@ use super::p2p_ops::{
 };
 use super::route_manager::ClientRouteManager;
 use super::route_manager::PendingRemovalCleanup;
+use super::sync_state::ClientSyncStateOwner;
 use super::{
     ClientPeerStatus, P2PHealth, P2PHealthStatus, P2PSupervisorCommand, P2P_SUPERVISOR_INTERVAL,
     P2P_WEDGED_FAILURE_THRESHOLD,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RouteReconcileFence {
+    record: PeerRecord,
+    enrollment: Option<super::enrollment::EnrollmentAuthorizationGeneration>,
+}
+
+fn route_reconcile_fence(
+    record: &PeerRecord,
+    enrollment_authority: &BTreeMap<String, super::enrollment::EnrollmentAuthorizationGeneration>,
+) -> RouteReconcileFence {
+    RouteReconcileFence {
+        record: record.clone(),
+        enrollment: (record.source.as_deref() == Some("enrollment"))
+            .then(|| enrollment_authority.get(&record.peer_id).cloned())
+            .flatten(),
+    }
+}
+
 pub(super) fn spawn_p2p_supervisor_task(
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
-    peer_directory: Arc<RwLock<PeerDirectory>>,
-    peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
-    p2p_health: watch::Sender<P2PHealth>,
+    sync_state: ClientSyncStateOwner,
     mut control_rx: mpsc::Receiver<P2PSupervisorCommand>,
     remote_admin_actor: Arc<PrincipalIdentity>,
+    local_peer_id: String,
     route_manager: Arc<ClientRouteManager>,
     install_replicators_on_bootstrap: bool,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut health = p2p_health.borrow().clone();
+        let mut health = sync_state.snapshot().transport;
         let mut ticker = tokio::time::interval(P2P_SUPERVISOR_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let endpoint_refresh_interval = endpoint_interval();
-        let mut last_endpoint_refresh = Instant::now() - endpoint_refresh_interval;
-        let mut index_requests = BTreeSet::new();
+        let mut index_requests = BTreeMap::new();
         let mut route_reconciled_at = BTreeMap::new();
         let mut removal_retries = BTreeMap::new();
 
@@ -82,55 +92,71 @@ pub(super) fn spawn_p2p_supervisor_task(
                 }
             }
 
-            run_pending_removal_cleanup(
-                &peer_directory,
-                &peer_statuses,
-                &route_manager,
-                &mut removal_retries,
-            )
-            .await;
+            let enrollment_authority =
+                match super::enrollment::reconcile_status_enrollment_approvals(
+                    &node,
+                    &p2p,
+                    &remote_admin_actor,
+                    &local_peer_id,
+                    &sync_state,
+                    &route_manager,
+                )
+                .await
+                {
+                    Ok(authority) => authority,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "authenticated enrollment observation failed closed");
+                        demote_enrollment_readiness_after_authority_failure(&sync_state).await;
+                        BTreeMap::new()
+                    }
+                };
+            run_pending_removal_cleanup(&sync_state, &route_manager, &mut removal_retries).await;
             run_saved_peer_repair_cycle(
                 &node,
                 &p2p,
-                &peer_directory,
-                &peer_statuses,
+                &sync_state,
                 &remote_admin_actor,
                 &route_manager,
                 install_replicators_on_bootstrap,
                 manual_repair,
                 &mut index_requests,
                 &mut route_reconciled_at,
+                &enrollment_authority,
             )
             .await;
-
-            if last_endpoint_refresh.elapsed() >= endpoint_refresh_interval {
-                refresh_bearer_endpoint_heartbeat(
-                    &node,
-                    &p2p,
-                    &peer_directory,
-                    &remote_admin_actor,
-                )
-                .await;
-                last_endpoint_refresh = Instant::now();
-            }
 
             let next_health = probe_p2p_health(&p2p, &health).await;
             if p2p_health_materially_changed(&health, &next_health) {
                 log_p2p_health_transition(&health, &next_health);
-                p2p_health.send_replace(next_health.clone());
+                sync_state.replace_transport(next_health.clone());
             }
             health = next_health;
         }
     })
 }
 
+async fn demote_enrollment_readiness_after_authority_failure(sync_state: &ClientSyncStateOwner) {
+    for record in sync_state
+        .records()
+        .into_iter()
+        .filter(|record| record.source.as_deref() == Some("enrollment") && record.pairing_ready)
+    {
+        if let Err(persist_error) = sync_state.set_pairing_ready(&record, false).await {
+            tracing::warn!(
+                peer_id = %record.peer_id,
+                error = %persist_error,
+                "failed to persist fail-closed enrollment readiness"
+            );
+        }
+    }
+}
+
 async fn run_pending_removal_cleanup(
-    peer_directory: &Arc<RwLock<PeerDirectory>>,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    sync_state: &ClientSyncStateOwner,
     route_manager: &Arc<ClientRouteManager>,
     retries: &mut BTreeMap<String, RemovalRetry>,
 ) {
-    let pending = peer_directory.read().await.pending_removals().to_vec();
+    let pending = sync_state.pending_removals().await;
     let pending_ids = pending
         .iter()
         .map(|record| record.peer_id.clone())
@@ -147,7 +173,7 @@ async fn run_pending_removal_cleanup(
             continue;
         }
         let cleanup = route_manager
-            .retry_pending_removal(peer_directory, peer_statuses, &record)
+            .retry_pending_removal(sync_state, &record)
             .await;
         match cleanup {
             Ok(PendingRemovalCleanup::Completed | PendingRemovalCleanup::Superseded) => {
@@ -188,64 +214,42 @@ fn removal_retry_delay(failures: u32) -> Duration {
     Duration::from_secs(2_u64.saturating_pow(failures.min(5)))
 }
 
-async fn refresh_bearer_endpoint_heartbeat(
-    node: &Arc<EmbeddedNode>,
-    p2p: &Arc<dyn P2POps>,
-    peer_directory: &Arc<RwLock<PeerDirectory>>,
-    remote_admin_actor: &Arc<PrincipalIdentity>,
-) {
-    let has_bearer_peer = peer_directory
-        .read()
-        .await
-        .records()
-        .iter()
-        .any(is_bearer_peer);
-    if !has_bearer_peer {
-        return;
-    }
-
-    match publish_local_endpoint(node.as_ref(), p2p, remote_admin_actor.as_ref()).await {
-        Ok(_) => {
-            tracing::debug!(
-                target: "gents_desktop_core::peer_maintenance",
-                "refreshed signed desktop endpoint heartbeat"
-            );
-        }
-        Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop_core::peer_maintenance",
-                error = %error,
-                "failed to refresh signed desktop endpoint heartbeat"
-            );
-        }
-    }
-}
-
 async fn run_saved_peer_repair_cycle(
     node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
-    peer_directory: &Arc<RwLock<PeerDirectory>>,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    sync_state: &ClientSyncStateOwner,
     remote_admin_actor: &Arc<PrincipalIdentity>,
     route_manager: &Arc<ClientRouteManager>,
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
-    index_requests: &mut BTreeSet<String>,
-    route_reconciled_at: &mut BTreeMap<String, Instant>,
+    index_requests: &mut BTreeMap<String, PeerRecord>,
+    route_reconciled_at: &mut BTreeMap<String, (RouteReconcileFence, Instant)>,
+    enrollment_authority: &BTreeMap<String, super::enrollment::EnrollmentAuthorizationGeneration>,
 ) {
-    let records = peer_directory.read().await.records().to_vec();
+    let records = sync_state.records();
     let saved_peer_ids = records
         .iter()
         .map(|record| record.peer_id.clone())
         .collect::<BTreeSet<_>>();
-    index_requests.retain(|peer_id| saved_peer_ids.contains(peer_id));
-    route_reconciled_at.retain(|peer_id, _| saved_peer_ids.contains(peer_id));
+    index_requests
+        .retain(|peer_id, expected| expected.peer_id == *peer_id && records.contains(expected));
+    route_reconciled_at.retain(|peer_id, (expected, _)| {
+        expected.record.peer_id == *peer_id
+            && records.contains(&expected.record)
+            && *expected == route_reconcile_fence(&expected.record, enrollment_authority)
+    });
 
     for saved_record in &records {
+        if super::enrollment::enrollment_record_lacks_current_authority(
+            saved_record,
+            enrollment_authority,
+        ) {
+            index_requests.remove(&saved_record.peer_id);
+            route_reconciled_at.remove(&saved_record.peer_id);
+            continue;
+        }
         let route_lifecycle = route_manager.lock().await;
-        if !peer_directory
-            .read()
-            .await
+        if !sync_state
             .records()
             .iter()
             .any(|current| current == saved_record)
@@ -258,29 +262,25 @@ async fn run_saved_peer_repair_cycle(
             saved_record.pairing_ready,
             route_reconciled_at
                 .get(&saved_record.peer_id)
-                .map(Instant::elapsed),
+                .filter(|(expected, _)| {
+                    *expected == route_reconcile_fence(saved_record, enrollment_authority)
+                })
+                .map(|(_, reconciled_at)| reconciled_at.elapsed()),
             force_repair,
         );
         let record = if route_due {
             route_lifecycle
-                .refresh_endpoint(peer_directory, saved_record)
+                .refresh_endpoint(sync_state, saved_record)
                 .await
         } else {
             saved_record.clone()
         };
-        let current_status = peer_statuses
-            .read()
-            .expect("peer status lock poisoned")
-            .iter()
-            .find(|status| status.peer_id == record.peer_id)
-            .cloned();
+        let current_status = sync_state.peer(&record.peer_id);
 
         let needs_repair =
             force_repair || saved_peer_needs_repair(p2p, &record, current_status.as_ref()).await;
 
-        let mut still_saved = peer_directory
-            .read()
-            .await
+        let mut still_saved = sync_state
             .records()
             .iter()
             .any(|candidate| candidate.peer_id == record.peer_id);
@@ -295,50 +295,36 @@ async fn run_saved_peer_repair_cycle(
                 force_repair,
             )
             .await;
-            still_saved = peer_directory
-                .read()
-                .await
+            still_saved = sync_state
                 .records()
                 .iter()
                 .any(|candidate| candidate.peer_id == record.peer_id);
             if still_saved {
-                replace_peer_status(peer_statuses, updated);
+                sync_state.replace_peer(&record, updated);
             }
         }
 
-        if still_saved && is_bearer_peer(&record) {
-            revalidate_bearer_pairing_readiness(
-                node,
-                p2p,
-                peer_directory,
-                peer_statuses,
-                remote_admin_actor,
-                &record,
-            )
-            .await;
-        }
-
-        if still_saved && install_replicators_on_bootstrap && !is_bearer_peer(&record) && route_due
-        {
+        if still_saved && install_replicators_on_bootstrap && route_due {
             let reconcile = tokio::time::timeout(
                 super::P2P_OPERATION_TIMEOUT,
-                route_lifecycle.reconcile(&record, peer_statuses),
+                route_lifecycle.reconcile(
+                    &record,
+                    sync_state,
+                    enrollment_authority.contains_key(&record.peer_id),
+                ),
             )
             .await;
             match reconcile {
                 Ok(Some(route_ready)) => {
-                    if let Err(error) = peer_directory
-                        .write()
-                        .await
-                        .set_pairing_ready(&record.peer_id, route_ready)
-                        .await
-                    {
-                        tracing::warn!(
+                    match persist_pairing_readiness(sync_state, &record, route_ready).await {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {}
+                        Err(error) => tracing::warn!(
                             target: "gents_desktop_core::pairing_reconcile",
                             directory_peer_id = %record.peer_id,
                             error = %error,
                             "failed to persist client route readiness"
-                        );
+                        ),
                     }
                 }
                 Err(_) => tracing::warn!(
@@ -349,42 +335,59 @@ async fn run_saved_peer_repair_cycle(
                 ),
                 Ok(None) => {}
             }
-            route_reconciled_at.insert(record.peer_id.clone(), Instant::now());
+            route_reconciled_at.insert(
+                record.peer_id.clone(),
+                (
+                    route_reconcile_fence(&record, enrollment_authority),
+                    Instant::now(),
+                ),
+            );
         }
     }
 
     if install_replicators_on_bootstrap {
-        request_index_for_ready_peers(node, p2p, peer_statuses, &saved_peer_ids, index_requests)
-            .await;
+        request_index_for_ready_peers(node, p2p, sync_state, &saved_peer_ids, index_requests).await;
     }
 }
 
 pub(super) async fn request_index_for_ready_peers(
     node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    sync_state: &ClientSyncStateOwner,
     saved_peer_ids: &BTreeSet<String>,
-    requested_for: &mut BTreeSet<String>,
+    requested_for: &mut BTreeMap<String, PeerRecord>,
 ) {
-    let pending = peer_statuses
-        .read()
-        .expect("peer status lock poisoned")
+    let snapshot = sync_state.snapshot();
+    let pending = snapshot
+        .directory
         .iter()
-        .filter(|status| {
-            saved_peer_ids.contains(&status.peer_id)
-                && status.dial_succeeded
-                && status.last_error.is_none()
-                && !requested_for.contains(&status.peer_id)
+        .filter(|record| {
+            snapshot
+                .peers
+                .iter()
+                .find(|status| status.peer_id == record.peer_id)
+                .is_some_and(|status| {
+                    saved_peer_ids.contains(&record.peer_id)
+                        && status.dial_succeeded
+                        && status.last_error.is_none()
+                        && requested_for.get(&record.peer_id) != Some(record)
+                })
         })
-        .map(|status| status.peer_id.clone())
-        .collect::<BTreeSet<_>>();
+        .cloned()
+        .collect::<Vec<_>>();
     if pending.is_empty() {
         return;
     }
 
     match request_index_sync(node.as_ref(), p2p).await {
         Ok(collections) => {
-            requested_for.extend(pending);
+            let current = sync_state.records();
+            requested_for.extend(
+                pending
+                    .iter()
+                    .filter(|expected| current.contains(expected))
+                    .map(|record| (record.peer_id.clone(), record.clone())),
+            );
             tracing::info!(
                 target: "gents_desktop_core::peer_maintenance",
                 requested_collections = ?collections,
@@ -393,13 +396,7 @@ pub(super) async fn request_index_for_ready_peers(
         }
         Err(error) => {
             let message = format!("session index sync request failed: {error}");
-            let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
-            for status in statuses
-                .iter_mut()
-                .filter(|status| pending.contains(&status.peer_id))
-            {
-                status.last_error = Some(message.clone());
-            }
+            sync_state.set_last_error_for_records(&pending, message);
             tracing::warn!(
                 target: "gents_desktop_core::peer_maintenance",
                 error = %error,
@@ -409,84 +406,28 @@ pub(super) async fn request_index_for_ready_peers(
     }
 }
 
-async fn revalidate_bearer_pairing_readiness(
-    node: &Arc<EmbeddedNode>,
-    p2p: &Arc<dyn P2POps>,
-    peer_directory: &Arc<RwLock<PeerDirectory>>,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
-    remote_admin_actor: &Arc<PrincipalIdentity>,
-    record: &PeerRecord,
-) {
-    let result = async {
-        let network_id = record
-            .pairing_network_id
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("saved bearer peer has no signed network id"))?;
-        let local_endpoint = current_local_endpoint(p2p, remote_admin_actor.as_ref()).await?;
-        observe_bearer_pairing_readiness(
-            node.as_ref(),
-            remote_admin_actor.as_ref(),
-            &record.agent_did,
-            network_id,
-            record.pairing_template.as_deref().unwrap_or("conversation"),
-            &local_endpoint,
-        )
-        .await
-    }
-    .await;
+/// Persist readiness before publishing the configured-peer revision that
+/// wakes bridge projections. A failed directory write never becomes an
+/// optimistic UI observation.
+async fn persist_pairing_readiness(
+    sync_state: &ClientSyncStateOwner,
+    expected: &PeerRecord,
+    ready: bool,
+) -> anyhow::Result<Option<PeerRecord>> {
+    sync_state.set_pairing_ready(expected, ready).await
+}
 
-    let (ready, error) = match result {
-        Ok(ready) => (ready, None),
-        Err(error) => (
-            false,
-            Some(format!(
-                "peer {} bearer readiness check failed: {}",
-                record.label, error
-            )),
-        ),
-    };
-    if let Err(error) = peer_directory
-        .write()
-        .await
-        .set_bearer_pairing_ready(&record.peer_id, ready)
-        .await
-    {
-        tracing::warn!(
-            target: "gents_desktop_core::peer_maintenance",
-            peer_id = %record.peer_id,
-            error = %error,
-            "failed to persist bearer pairing readiness"
-        );
-    }
-
-    let mut status = peer_statuses
-        .read()
-        .expect("peer status lock poisoned")
-        .iter()
-        .find(|status| status.peer_id == record.peer_id)
-        .cloned()
-        .unwrap_or_else(|| ClientPeerStatus {
-            peer_id: record.peer_id.clone(),
-            label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
-            addr: record.addr.clone(),
-            dial_succeeded: false,
-            last_error: None,
-            pairing: Vec::new(),
-            routes: Vec::new(),
-            chat_safe: record.pairing_ready,
-        });
-    if let Some(error) = error {
-        status.last_error = Some(error);
-        replace_peer_status(peer_statuses, status);
-    } else if status
-        .last_error
-        .as_deref()
-        .is_some_and(|error| error.contains("bearer readiness check failed"))
-    {
-        status.last_error = None;
-        replace_peer_status(peer_statuses, status);
+#[cfg(test)]
+fn status_for_record(record: &PeerRecord) -> ClientPeerStatus {
+    ClientPeerStatus {
+        peer_id: record.peer_id.clone(),
+        label: record.label.clone(),
+        agent_did: record.agent_did.clone(),
+        addr: record.addr.clone(),
+        dial_succeeded: false,
+        last_error: None,
+        pairing: Vec::new(),
+        routes: Vec::new(),
     }
 }
 
@@ -612,8 +553,8 @@ pub(super) async fn repair_saved_peer(
     p2p: &Arc<dyn P2POps>,
     record: &PeerRecord,
     current_status: Option<ClientPeerStatus>,
-    requester_did: &str,
-    install_replicators_on_bootstrap: bool,
+    _requester_did: &str,
+    _install_replicators_on_bootstrap: bool,
     force_repair: bool,
 ) -> ClientPeerStatus {
     let mut status = current_status.unwrap_or_else(|| ClientPeerStatus {
@@ -625,7 +566,6 @@ pub(super) async fn repair_saved_peer(
         last_error: None,
         pairing: Vec::new(),
         routes: Vec::new(),
-        chat_safe: record.pairing_ready,
     });
 
     let expected_peer_id = p2p::iroh::parse_public_peer_addr(&record.addr)
@@ -666,17 +606,6 @@ pub(super) async fn repair_saved_peer(
         match connect_result {
             Ok(()) => {
                 status.dial_succeeded = true;
-                if install_replicators_on_bootstrap && is_bearer_peer(record) {
-                    let replicator_result =
-                        install_bearer_replicator_for_record(p2p, record, requester_did).await;
-                    if let Err(error) = replicator_result {
-                        status.last_error = Some(format!(
-                            "peer {} replicator bootstrap failed: {}",
-                            record.label, error
-                        ));
-                        return status;
-                    }
-                }
             }
             Err(error) => {
                 status.dial_succeeded = false;
@@ -693,36 +622,113 @@ pub(super) async fn repair_saved_peer(
     status
 }
 
-fn replace_peer_status(
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
-    status: ClientPeerStatus,
-) {
-    let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
-    if let Some(existing) = statuses
-        .iter_mut()
-        .find(|existing| existing.peer_id == status.peer_id)
-    {
-        *existing = status;
-    } else {
-        statuses.push(status);
-        statuses.sort_by(|left, right| {
-            left.label
-                .to_lowercase()
-                .cmp(&right.label.to_lowercase())
-                .then_with(|| left.peer_id.cmp(&right.peer_id))
-        });
-    }
-}
-
 #[cfg(test)]
 mod pairing_reconcile_tests {
     use std::collections::BTreeSet;
     use std::sync::Mutex;
     use std::time::Duration;
 
+    use crate::client::PeerDirectory;
     use async_trait::async_trait;
 
     use super::*;
+
+    async fn assert_persisted_readiness_wakes_snapshot(source: &str) {
+        let tempdir = tempfile::tempdir().expect("temporary peer directory");
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::open_writer(&path)
+            .await
+            .expect("load directory");
+        let mut record = PeerRecord::new("Mandrake", "endpoint", "did:key:mandrake");
+        record.source = Some(source.to_string());
+        directory
+            .upsert(record.clone())
+            .await
+            .expect("persist peer");
+        let status = status_for_record(&record);
+        let owner = ClientSyncStateOwner::new(P2PHealth::default(), directory, vec![status]);
+        let mut updates = owner.subscribe();
+
+        for ready in [true, false] {
+            let expected = owner.records().into_iter().next().expect("configured peer");
+            persist_pairing_readiness(&owner, &expected, ready)
+                .await
+                .expect("persist readiness")
+                .expect("configured peer remains present");
+
+            updates.changed().await.expect("sync watch remains open");
+            let snapshot = updates.borrow_and_update().clone();
+            assert_eq!(snapshot.directory.len(), 1);
+            assert_eq!(snapshot.peers.len(), 1);
+            assert_eq!(snapshot.directory[0].peer_id, snapshot.peers[0].peer_id);
+            assert_eq!(snapshot.directory[0].pairing_ready, ready);
+            let reloaded = crate::client::load_peer_records(&path)
+                .await
+                .expect("reload directory");
+            assert_eq!(reloaded[0].pairing_ready, ready);
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_readiness_true_and_false_publish_persisted_snapshot_revision() {
+        assert_persisted_readiness_wakes_snapshot("enrollment").await;
+    }
+
+    #[tokio::test]
+    async fn authority_failure_demotes_enrollment_and_preserves_other_peers() {
+        let tempdir = tempfile::tempdir().expect("temporary peer directory");
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::open_writer(&path)
+            .await
+            .expect("load directory");
+        let mut enrollment = PeerRecord::new("Enrollment", "endpoint-a", "did:key:enrolled");
+        enrollment.source = Some("enrollment".to_string());
+        enrollment.pairing_ready = true;
+        let mut direct = PeerRecord::new("Direct", "endpoint-b", "did:key:direct");
+        direct.source = Some("local-standard".to_string());
+        direct.pairing_ready = true;
+        directory
+            .upsert(enrollment.clone())
+            .await
+            .expect("persist enrollment peer");
+        directory
+            .upsert(direct.clone())
+            .await
+            .expect("persist direct peer");
+        let owner = ClientSyncStateOwner::new(
+            P2PHealth::default(),
+            directory,
+            vec![status_for_record(&enrollment), status_for_record(&direct)],
+        );
+
+        demote_enrollment_readiness_after_authority_failure(&owner).await;
+
+        let records = owner.records();
+        assert!(
+            !records
+                .iter()
+                .find(|record| record.peer_id == enrollment.peer_id)
+                .expect("enrollment peer")
+                .pairing_ready
+        );
+        assert!(
+            records
+                .iter()
+                .find(|record| record.peer_id == direct.peer_id)
+                .expect("direct peer")
+                .pairing_ready
+        );
+        let persisted = crate::client::load_peer_records(&path)
+            .await
+            .expect("reload directory");
+        assert!(
+            !persisted
+                .iter()
+                .find(|record| record.peer_id == enrollment.peer_id)
+                .expect("persisted enrollment peer")
+                .pairing_ready
+        );
+    }
 
     #[test]
     fn pending_removal_retries_use_bounded_exponential_backoff() {
@@ -730,6 +736,41 @@ mod pairing_reconcile_tests {
         assert_eq!(removal_retry_delay(2), Duration::from_secs(4));
         assert_eq!(removal_retry_delay(5), Duration::from_secs(32));
         assert_eq!(removal_retry_delay(50), Duration::from_secs(32));
+    }
+
+    #[test]
+    fn enrollment_route_cache_is_scoped_to_exact_authorization_generation() {
+        let mut record = PeerRecord::new("Enrollment", "endpoint", "did:key:server");
+        record.source = Some("enrollment".to_string());
+        let mut authority = BTreeMap::from([(
+            record.peer_id.clone(),
+            super::super::enrollment::EnrollmentAuthorizationGeneration {
+                request_digest: "request-a".to_string(),
+                sequence: 1,
+                expires_at: "2099-09-29T00:00:00Z".into(),
+            },
+        )]);
+        let first = route_reconcile_fence(&record, &authority);
+
+        authority.insert(
+            record.peer_id.clone(),
+            super::super::enrollment::EnrollmentAuthorizationGeneration {
+                request_digest: "request-b".to_string(),
+                sequence: 1,
+                expires_at: "2099-09-29T00:00:00Z".into(),
+            },
+        );
+        assert_ne!(first, route_reconcile_fence(&record, &authority));
+
+        authority.insert(
+            record.peer_id.clone(),
+            super::super::enrollment::EnrollmentAuthorizationGeneration {
+                request_digest: "request-a".to_string(),
+                sequence: 2,
+                expires_at: "2099-10-29T00:00:00Z".into(),
+            },
+        );
+        assert_ne!(first, route_reconcile_fence(&record, &authority));
     }
     use crate::remote_admin::{RemoteP2pAdminResult, RemoteReplicator};
 

@@ -1,5 +1,5 @@
 use super::*;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use std::sync::{Mutex, OnceLock};
 
 struct EnvVarGuard {
@@ -463,41 +463,70 @@ fn config_task_list_and_show_remain_available() {
 fn deprecated_spellings_still_parse() {
     for argv in [
         vec!["gents", "config", "task", "list"],
-        vec!["gents", "p2p", "pairings", "rm", "--peer", "p1"],
-        vec!["gents", "p2p", "pairings", "unpair", "--peer", "p1"],
         vec!["gents", "show", "request", "req-1"],
     ] {
         Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
     }
 }
 
-fn parse_p2p_invite(extra: &[&str]) -> P2pInviteArgs {
-    let mut argv = vec!["gents", "p2p", "pairings", "invite"];
-    argv.extend_from_slice(extra);
-    let cli = Cli::try_parse_from(argv).expect("p2p pairings invite should parse");
-    match cli.command {
-        Command::P2p {
-            command:
-                P2pCommand::Pairings {
-                    command: P2pPairingsCommand::Invite(args),
-                },
-        } => args,
-        _ => panic!("expected `p2p pairings invite`"),
+#[test]
+fn enrollment_owned_pairings_have_no_cli_authoring_surface() {
+    for argv in [
+        ["gents", "p2p", "pairings", "set"],
+        ["gents", "p2p", "pairings", "rm"],
+        ["gents", "p2p", "pairings", "remove"],
+    ] {
+        assert!(
+            Cli::try_parse_from(argv).is_err(),
+            "{argv:?} must not parse"
+        );
     }
+
+    let help = Cli::command().render_long_help().to_string();
+    assert!(!help.contains("pairings set"));
+    assert!(!help.contains("pairings rm"));
+
+    let pairing_commands = include_str!("../../commands/p2p/pairings.rs");
+    assert!(!pairing_commands.contains("upsert_PeerPairingDesired"));
+    assert!(!pairing_commands.contains("delete_PeerPairingDesired"));
+    assert!(!include_str!("../../desired_state/mod.rs").contains("DesiredPeerPairing"));
+    assert!(!include_str!("../../config_import.rs").contains("PeerPairingDesired"));
 }
 
-fn parse_p2p_join(extra: &[&str]) -> P2pJoinArgs {
-    let mut argv = vec!["gents", "p2p", "pairings", "join", "dapair1-token"];
-    argv.extend_from_slice(extra);
-    let cli = Cli::try_parse_from(argv).expect("p2p pairings join should parse");
-    match cli.command {
-        Command::P2p {
-            command:
-                P2pCommand::Pairings {
-                    command: P2pPairingsCommand::Join(args),
-                },
-        } => args,
-        _ => panic!("expected `p2p pairings join`"),
+#[test]
+fn enrollment_operator_surface_is_explicit_and_old_network_grants_do_not_parse() {
+    for argv in [
+        vec!["gents", "p2p", "enrollment", "pending"],
+        vec!["gents", "p2p", "enrollment", "approve", "request-1"],
+        vec!["gents", "p2p", "enrollment", "deny", "request-1"],
+        vec!["gents", "p2p", "enrollment", "revoke", "request-1"],
+    ] {
+        Cli::try_parse_from(&argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+    }
+    let native_simulator_argv = vec![
+        "gents",
+        "p2p",
+        "enrollment",
+        "approve",
+        "request-1",
+        "--home",
+        "/tmp/gents-native-e2e",
+    ];
+    Cli::try_parse_from(&native_simulator_argv)
+        .unwrap_or_else(|error| panic!("{native_simulator_argv:?}: {error}"));
+    for argv in [
+        vec!["gents", "p2p", "network", "grant", "request-1"],
+        vec!["gents", "p2p", "network", "revoke", "request-1"],
+        vec!["gents", "p2p", "network", "invite"],
+        vec!["gents", "p2p", "network", "join"],
+        vec!["gents", "p2p", "network", "approve-enrollment", "request-1"],
+        vec!["gents", "p2p", "network", "deny-enrollment", "request-1"],
+        vec!["gents", "p2p", "network", "revoke-enrollment", "request-1"],
+    ] {
+        assert!(
+            Cli::try_parse_from(&argv).is_err(),
+            "legacy network authority must not parse: {argv:?}"
+        );
     }
 }
 
@@ -530,19 +559,6 @@ fn parse_p2p_replicator_add(extra: &[&str]) -> P2pReplicatorAddArgs {
 }
 
 #[test]
-fn p2p_invite_template_defaults_to_conversation() {
-    let args = parse_p2p_invite(&[]);
-    assert_eq!(args.template, "conversation");
-    assert_eq!(args.member_did, None);
-}
-
-#[test]
-fn p2p_invite_member_did_parses() {
-    let args = parse_p2p_invite(&["--member-did", "did:key:zMember"]);
-    assert_eq!(args.member_did.as_deref(), Some("did:key:zMember"));
-}
-
-#[test]
 fn p2p_pairing_front_door_rejects_removed_scope_flags() {
     for argv in [
         vec![
@@ -569,49 +585,12 @@ fn p2p_pairing_front_door_rejects_removed_scope_flags() {
             "--profile",
             "chat-requests",
         ],
-        vec![
-            "gents",
-            "p2p",
-            "pairings",
-            "invite",
-            "--profile",
-            "chat-requests",
-        ],
-        vec![
-            "gents",
-            "p2p",
-            "pairings",
-            "join",
-            "dapair1-token",
-            "--profile",
-            "chat-requests",
-        ],
     ] {
         assert!(
             Cli::try_parse_from(&argv).is_err(),
             "expected clap to reject removed scope flag in: {argv:?}"
         );
     }
-}
-
-#[test]
-fn p2p_invite_template_accepts_known_templates() {
-    assert_eq!(
-        parse_p2p_invite(&["--template", "backup"]).template,
-        "backup"
-    );
-    assert_eq!(
-        parse_p2p_invite(&["--template", "agent-config"]).template,
-        "agent-config"
-    );
-}
-
-#[test]
-fn p2p_join_template_is_optional_override() {
-    let no_override = parse_p2p_join(&[]);
-    assert_eq!(no_override.template, None);
-    let with_override = parse_p2p_join(&["--template", "backup"]);
-    assert_eq!(with_override.template.as_deref(), Some("backup"));
 }
 
 #[test]

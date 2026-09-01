@@ -31,6 +31,23 @@ Field contents (prompt, model, tool policy) ride below this abstraction.
 namespace PeerRegistryDiscovery
 namespace PersonaRequest
 
+/-- The exact current enrollment generation supplied by the single durable
+authority owner. Persona requests never infer authority from route presence. -/
+structure EnrollmentAuthorization where
+  network : String
+  memberDid : String
+  memberPeer : String
+  ownerAgent : String
+  requestDigest : String
+  sequence : Nat
+  authorizationExpiresAt : String
+  deriving DecidableEq, Repr
+
+inductive AuthorityKind
+  | enrollment
+  | localSelf
+  deriving DecidableEq, Repr
+
 /-- The requested operation. `clone_from` is folded into `create` in the
 Rust code; here the request carries `cloneFrom` as a field and `create`
 branches on whether it is empty (mirroring `PersonaOp::Create { clone_from }`). -/
@@ -49,6 +66,7 @@ structure Catalog where
   roots : Finset String
   profiles : Finset String
   agents : Finset String
+  authorization : Option EnrollmentAuthorization
   -- No `Repr`: `Finset` has no `Repr` instance (quotient type); mirrors
   -- `BearerClaim.ClaimState`.
   deriving DecidableEq
@@ -60,6 +78,15 @@ structure Request where
   key : String
   op : Op
   agent : String
+  requester : String
+  network : String
+  memberPeer : String
+  enrollmentRequestDigest : String
+  authorizationSequence : Nat
+  authorizationExpiresAt : String
+  authorityKind : AuthorityKind
+  localSigner : String
+  localSignatureValid : Bool
   name : String
   model : String
   root : String
@@ -130,6 +157,42 @@ deployment. The reconciler builds `Catalog.agents` from local enabled
 rejected instead of minting orphan behaviors/selections. -/
 abbrev agentOk (cat : Catalog) (r : Request) : Prop := r.agent ∈ cat.agents
 
+/-- Every generation component must match one unique current enrollment.
+Missing authority, revocation, supersession, and cross-network replay all fail
+closed. -/
+def enrollmentAuthorizationOk (cat : Catalog) (r : Request) : Prop :=
+  ∃ authorization,
+    cat.authorization = some authorization ∧
+    authorization.network = r.network ∧
+    authorization.memberDid = r.requester ∧
+    authorization.memberPeer = r.memberPeer ∧
+    authorization.ownerAgent = r.agent ∧
+    authorization.requestDigest = r.enrollmentRequestDigest ∧
+    authorization.sequence = r.authorizationSequence ∧
+    authorization.authorizationExpiresAt = r.authorizationExpiresAt
+
+instance (cat : Catalog) (r : Request) : Decidable (enrollmentAuthorizationOk cat r) := by
+  unfold enrollmentAuthorizationOk
+  infer_instance
+
+/-- Local persona management is a separate, explicitly tagged authority. The
+request must be signed by the same local principal it requests and targets;
+an unsigned row or any cross-branch field substitution fails closed. -/
+def localSelfAuthorizationOk (r : Request) : Prop :=
+  r.localSigner = r.requester ∧ r.requester = r.agent ∧ r.localSignatureValid = true
+
+instance (r : Request) : Decidable (localSelfAuthorizationOk r) := by
+  unfold localSelfAuthorizationOk
+  infer_instance
+
+def authorizationOk (cat : Catalog) (r : Request) : Prop :=
+  (r.authorityKind = AuthorityKind.enrollment ∧ enrollmentAuthorizationOk cat r) ∨
+  (r.authorityKind = AuthorityKind.localSelf ∧ localSelfAuthorizationOk r)
+
+instance (cat : Catalog) (r : Request) : Decidable (authorizationOk cat r) := by
+  unfold authorizationOk
+  infer_instance
+
 /-- The per-op admission conjuncts. -/
 def opOk (cat : Catalog) (st : State) (r : Request) : Prop :=
   match r.op with
@@ -148,7 +211,7 @@ instance (cat : Catalog) (st : State) (r : Request) : Decidable (opOk cat st r) 
 /-- Admission gate, mirroring `decide_persona_request` conjunct-for-conjunct:
 the agent must be known regardless of op, then the per-op conjuncts apply. -/
 def admits (cat : Catalog) (st : State) (r : Request) : Prop :=
-  agentOk cat r ∧ opOk cat st r
+  authorizationOk cat r ∧ agentOk cat r ∧ opOk cat st r
 
 instance (cat : Catalog) (st : State) (r : Request) : Decidable (admits cat st r) := by
   unfold admits
@@ -239,7 +302,7 @@ theorem rejected_changes_nothing (cat : Catalog) (st : State) (r : Request)
   apply pending_request_grants_nothing
   intro hadm
   simp only [admits, opOk, hop, modelOk] at hadm
-  exact hmodel hadm.2.2.1
+  exact hmodel hadm.2.2.2.1
 
 /-- A request naming an unknown `agent_did` changes nothing, whatever its
 op: the `agentOk` conjunct fails, so `applyStep` is a no-op — a paired
@@ -249,7 +312,39 @@ theorem unknown_agent_changes_nothing (cat : Catalog) (st : State) (r : Request)
   apply pending_request_grants_nothing
   intro hadm
   unfold admits at hadm
-  exact hagent hadm.1
+  exact hagent hadm.2.1
+
+/-- A stale, revoked, superseded, or otherwise mismatched enrollment
+generation cannot mutate persona state. -/
+theorem noncurrent_authorization_changes_nothing
+    (cat : Catalog) (st : State) (r : Request)
+    (hauth : ¬ authorizationOk cat r) : applyStep cat st r = st := by
+  apply pending_request_grants_nothing
+  intro hadm
+  exact hauth hadm.1
+
+theorem unsigned_local_authorization_changes_nothing
+    (cat : Catalog) (st : State) (r : Request)
+    (hkind : r.authorityKind = AuthorityKind.localSelf)
+    (hsig : r.localSignatureValid = false) : applyStep cat st r = st := by
+  apply noncurrent_authorization_changes_nothing
+  intro hauth
+  rcases hauth with ⟨henrollment, _⟩ | ⟨_, hlocal⟩
+  · rw [hkind] at henrollment
+    cases henrollment
+  · unfold localSelfAuthorizationOk at hlocal
+    simp [hsig] at hlocal
+
+theorem cross_principal_local_authorization_changes_nothing
+    (cat : Catalog) (st : State) (r : Request)
+    (hkind : r.authorityKind = AuthorityKind.localSelf)
+    (hcross : r.requester ≠ r.agent) : applyStep cat st r = st := by
+  apply noncurrent_authorization_changes_nothing
+  intro hauth
+  rcases hauth with ⟨henrollment, _⟩ | ⟨_, hlocal⟩
+  · rw [hkind] at henrollment
+    cases henrollment
+  · exact hcross hlocal.2.1
 
 /-- An admitted create mints a well-formed behavior: the minted behavior is
 enabled, its fresh selection is in `selections`, and the profile was
@@ -263,7 +358,7 @@ theorem admitted_create_mints_wellformed (cat : Catalog) (st : State) (r : Reque
   refine ⟨Finset.mem_insert_self _ _, Finset.mem_insert_self _ _, ?_⟩
   have ha := hadm
   simp only [admits, opOk, hop, profileOk] at ha
-  exact ha.2.2.2.2.1
+  exact ha.2.2.2.2.2.1
 
 /-- An admitted clone mints a fresh selection distinct from the source's,
 mints the new behavior, and leaves the source behavior present. The
@@ -279,7 +374,7 @@ theorem admitted_clone_copies_selection (cat : Catalog) (st : State) (r : Reques
   have hsrc : (r.cloneFrom, true) ∈ st.behaviors := by
     have ha := hadm
     simp only [admits, opOk, hop, createModeOk, cloneOk] at ha
-    rcases ha.2.2.2.2.2 with ⟨he, _⟩ | ⟨_, _, hmem⟩
+    rcases ha.2.2.2.2.2.2 with ⟨he, _⟩ | ⟨_, _, hmem⟩
     · exact absurd he hclone
     · exact hmem
   rw [applyStep_admitted cat st r hadm, applyAdmitted_create st r hop]

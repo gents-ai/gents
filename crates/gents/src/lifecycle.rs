@@ -80,20 +80,6 @@ pub fn is_runtime_control_message(
     })
 }
 
-/// Legacy runtimes persisted unversioned background-completion wakeups as
-/// scheduled requests. They remain durable audit rows but must be ignored;
-/// current versioned completion wakes are authoritative continuation turns.
-pub fn is_deprecated_background_completion_request(
-    execution_origin: Option<&str>,
-    metadata: Option<&str>,
-) -> bool {
-    queue::is_deprecated_background_completion_wakeup(execution_origin, metadata)
-}
-
-fn graphql_retry_root_request(retry_root_request: Option<&str>, request_id: &str) -> String {
-    escape_graphql_string(retry_root_request.unwrap_or(request_id))
-}
-
 fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
     // DefraDB's GraphQL surface accepts `create_<Collection>` while the
     // response data may expose the normalized `add_<Collection>` field. Read
@@ -320,27 +306,6 @@ impl WorkspaceLineage {
         }
         Ok(())
     }
-
-    pub(crate) fn graphql_fields(&self) -> String {
-        let mut fields = String::new();
-        let mut push = |name: &str, value: Option<&str>| {
-            if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
-                fields.push_str(&format!(
-                    r#"
-                    {name}: "{}","#,
-                    escape_graphql_string(value)
-                ));
-            }
-        };
-        push("workspace_id", self.workspace_id.as_deref());
-        push("workspace_authority", self.workspace_authority.as_deref());
-        push(
-            "workspace_owner_deployment_id",
-            self.workspace_owner_deployment_id.as_deref(),
-        );
-        push("workspace_seal_hash", self.workspace_seal_hash.as_deref());
-        fields
-    }
 }
 
 pub const MAX_TRIGGER_CONTEXT_BYTES: usize = 16 * 1024;
@@ -369,35 +334,6 @@ impl TriggerExecutionContext {
         }
         Ok(context)
     }
-}
-
-pub(crate) fn inherited_trigger_context_graphql_fields(
-    correlation: Option<&str>,
-    trigger_context: Option<&str>,
-) -> anyhow::Result<String> {
-    let correlation = correlation
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            format!(
-                "\n                caused_by_correlation: \"{}\",",
-                escape_graphql_string(value)
-            )
-        })
-        .unwrap_or_default();
-    let trigger_context = trigger_context
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            TriggerExecutionContext::parse(Some(value))?;
-            Ok::<_, anyhow::Error>(format!(
-                "\n                caused_by_trigger_context: \"{}\",",
-                escape_graphql_string(value)
-            ))
-        })
-        .transpose()?
-        .unwrap_or_default();
-    Ok(format!("{correlation}{trigger_context}"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -635,6 +571,32 @@ mod tests {
         assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,
         lean_state_machine_contract, LeanContractVocabulary,
     };
+    use sha2::{Digest, Sha512};
+
+    struct MaterializationTestIdentity;
+
+    #[async_trait::async_trait]
+    impl crate::identity::AgentIdentity for MaterializationTestIdentity {
+        fn did(&self) -> &str {
+            "did:test:test"
+        }
+
+        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+            Ok(Sha512::digest(payload).to_vec())
+        }
+
+        async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+            Ok(did == self.did() && signature == Sha512::digest(payload).as_slice())
+        }
+
+        fn service_account(&self) -> Option<&crate::identity::ServiceAccount> {
+            None
+        }
+    }
+
+    fn materialization_identity() -> Arc<dyn crate::identity::AgentIdentity> {
+        Arc::new(MaterializationTestIdentity)
+    }
 
     #[test]
     fn rust_request_lifecycle_state_vocabulary_matches_lean_model() {
@@ -860,7 +822,7 @@ mod tests {
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",
-            "did:test:test",
+            materialization_identity(),
             "hello",
             60,
             ExecutionOrigin::Interactive,
@@ -939,7 +901,7 @@ mod tests {
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",
-            "did:test:test",
+            materialization_identity(),
             "hello",
             60,
             ExecutionOrigin::Interactive,

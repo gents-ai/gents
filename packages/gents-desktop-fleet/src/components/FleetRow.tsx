@@ -245,7 +245,7 @@ export function FleetRow({
             title={
               chatReady
                 ? "Open chat"
-                : "Chat unlocks after signed reciprocal pairing completes"
+                : "Chat unlocks after signed enrollment and behavior readiness complete"
             }
             type="button"
           >

@@ -268,7 +268,6 @@ fn empty_bundle(access_mode: &str, agent_did: &str) -> ConfigExportBundle {
         inference_profiles: Vec::new(),
         tool_service_registries: Vec::new(),
         projection_acp_bindings: Vec::new(),
-        peer_pairings: Vec::new(),
         tasks: Vec::new(),
         schedules: Vec::new(),
         event_triggers: Vec::new(),
@@ -297,7 +296,6 @@ fn push_doc(bundle: &mut ConfigExportBundle, collection: Collection, doc: Value)
         Collection::InferenceProfile => bundle.inference_profiles.push(doc),
         Collection::ToolServiceRegistry => bundle.tool_service_registries.push(doc),
         Collection::ProjectionAcpBinding => bundle.projection_acp_bindings.push(doc),
-        Collection::PeerPairingDesired => bundle.peer_pairings.push(doc),
         Collection::Task => bundle.tasks.push(doc),
         Collection::Schedule => bundle.schedules.push(doc),
         Collection::EventTrigger => bundle.event_triggers.push(doc),
@@ -359,9 +357,6 @@ fn remove_target(
         Collection::ProjectionAcpBinding => manifest
             .projection_acp_bindings
             .retain(|row| row.binding_id != id),
-        Collection::PeerPairingDesired => manifest
-            .peer_pairings
-            .retain(|row| row.resolved_peer_id().as_deref() != Some(id)),
         Collection::Task => manifest.tasks.retain(|row| row.task_id != id),
         Collection::Schedule => manifest.schedules.retain(|row| row.schedule_id != id),
         Collection::EventTrigger => manifest.event_triggers.retain(|row| row.trigger_id != id),

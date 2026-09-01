@@ -122,6 +122,7 @@ async fn configure_behavior_patches_and_rejects_wholesale() {
     let tools = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
+        None,
         &tool_config(&["behavior"], false, false),
     );
 
@@ -184,6 +185,7 @@ async fn configure_tools_respects_gate_and_no_lockout() {
     let guarded = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
+        None,
         &tool_config(&["tools"], true, false),
     );
     let output = call_tool(
@@ -222,6 +224,7 @@ async fn configure_tools_respects_gate_and_no_lockout() {
     let unguarded = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
+        None,
         &tool_config(&["tools"], false, false),
     );
     call_tool(
@@ -245,6 +248,7 @@ async fn get_my_config_reports_documents_and_never_the_api_key() {
     let tools = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
+        None,
         &tool_config(&["behavior", "tools", "profile", "backend"], false, true),
     );
 
@@ -298,6 +302,7 @@ async fn configure_rejects_non_scalar_patch_values() {
     let tools = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
+        None,
         &tool_config(&["backend", "automation"], false, false),
     );
 
@@ -391,6 +396,7 @@ async fn configure_automation_rejects_break_out_filter_fragments() {
     let tools = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
+        None,
         &tool_config(&["automation"], false, false),
     );
 
@@ -449,6 +455,7 @@ async fn configure_automation_creates_owned_chain_and_rejects_foreign_tasks() {
     let tools = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
+        None,
         &tool_config(&["automation"], false, false),
     );
 
@@ -532,6 +539,7 @@ async fn configure_automation_rejects_injection_shaped_source_collection() {
     let tools = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
+        None,
         &tool_config(&["automation"], false, false),
     );
 
@@ -632,6 +640,7 @@ async fn writes_carry_the_agent_identity() {
     let tools = build_self_config_tools(
         db.node.clone(),
         "not-a-did".to_string(),
+        None,
         &tool_config(&["behavior"], false, false),
     );
     let error = call_tool(
@@ -675,6 +684,7 @@ async fn self_only_boundaries_hold_across_behaviors_and_agents() {
     let tools = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
+        None,
         &tool_config(&["behavior", "tools", "automation"], false, false),
     );
 

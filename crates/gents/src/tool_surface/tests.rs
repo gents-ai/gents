@@ -6,6 +6,86 @@ fn temp_root(name: &str) -> PathBuf {
     path
 }
 
+fn fingerprint_test_config(
+    root: PathBuf,
+    approval_required_tools: Vec<String>,
+    lsp_config: Option<String>,
+) -> BehaviorToolConfig {
+    let enable_lsp = lsp_config.is_some();
+    let file_tools = if enable_lsp {
+        FileToolMode::ReadWrite
+    } else {
+        FileToolMode::Off
+    };
+    BehaviorToolConfig::from_selection(
+        "fingerprint",
+        ToolSelection {
+            file_tools,
+            approval_required_tools,
+            enable_lsp,
+            lsp_config,
+            ..ToolSelection::default()
+        },
+        &ToolCeiling::readwrite(root),
+        Vec::new(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn behavior_and_effective_surface_fingerprints_include_approval_holds() {
+    let root = temp_root("gents-fingerprint-approval-tools");
+    let baseline = fingerprint_test_config(root.clone(), Vec::new(), None);
+    let held = fingerprint_test_config(root, vec!["bash".to_string()], None);
+
+    assert_ne!(format!("{baseline:?}"), format!("{held:?}"));
+    assert_ne!(
+        format!(
+            "{:?}",
+            baseline.resolve_with_subagent_tools_for_runtime_availability(
+                RuntimeToolAvailability::all(),
+                SubagentToolConfig::default(),
+            )
+        ),
+        format!(
+            "{:?}",
+            held.resolve_with_subagent_tools_for_runtime_availability(
+                RuntimeToolAvailability::all(),
+                SubagentToolConfig::default(),
+            )
+        ),
+    );
+}
+
+#[test]
+fn behavior_and_effective_surface_fingerprints_include_lsp_configuration() {
+    let root = temp_root("gents-fingerprint-lsp-tools");
+    let baseline = fingerprint_test_config(root.clone(), Vec::new(), Some("{}".to_string()));
+    let configured = fingerprint_test_config(
+        root,
+        Vec::new(),
+        Some(r#"{"format_on_write":true}"#.to_string()),
+    );
+
+    assert_ne!(format!("{baseline:?}"), format!("{configured:?}"));
+    assert_ne!(
+        format!(
+            "{:?}",
+            baseline.resolve_with_subagent_tools_for_runtime_availability(
+                RuntimeToolAvailability::all(),
+                SubagentToolConfig::default(),
+            )
+        ),
+        format!(
+            "{:?}",
+            configured.resolve_with_subagent_tools_for_runtime_availability(
+                RuntimeToolAvailability::all(),
+                SubagentToolConfig::default(),
+            )
+        ),
+    );
+}
+
 #[test]
 fn selection_file_tool_root_clamps_within_operator_root() {
     let operator_root = temp_root("gents-operator-root");

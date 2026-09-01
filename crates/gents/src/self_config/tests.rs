@@ -161,6 +161,7 @@ async fn build_fails_closed_without_agent_did() {
     let tools = build_self_config_tools(
         std::sync::Arc::new(node),
         String::new(),
+        None,
         &config(&["behavior"]),
     );
     assert!(
@@ -180,6 +181,7 @@ async fn build_registers_gated_family() {
     let tools = build_self_config_tools(
         std::sync::Arc::new(node),
         "did:key:zSelfConfigTest".to_string(),
+        None,
         &config(&["behavior", "backend"]),
     );
     let names: Vec<String> = tools.iter().map(|tool| tool.name()).collect();
@@ -208,6 +210,14 @@ async fn build_persona_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
     std::sync::Arc::new(node)
 }
 
+fn persona_identity(label: &str) -> std::sync::Arc<dyn crate::AgentIdentity> {
+    let tempdir = tempfile::tempdir().expect("identity tempdir");
+    std::sync::Arc::new(
+        crate::KeyIdentity::load_or_create(&tempdir.path().join(format!("{label}.key")), None)
+            .expect("test identity"),
+    )
+}
+
 async fn call_persona_tool(
     tools: &[Box<dyn crate::llm::tool::ToolDyn>],
     args: serde_json::Value,
@@ -224,10 +234,13 @@ async fn call_persona_tool(
 #[tokio::test]
 async fn persona_category_gates_the_tool() {
     let node = build_persona_node().await;
+    let identity = persona_identity("persona-gate");
+    let agent_did = identity.did().to_string();
 
     let without_persona = build_self_config_tools(
         node.clone(),
-        "did:key:zGate".to_string(),
+        agent_did.clone(),
+        None,
         &config(&["behavior"]),
     );
     assert!(
@@ -238,7 +251,7 @@ async fn persona_category_gates_the_tool() {
     );
 
     let with_persona =
-        build_self_config_tools(node, "did:key:zGate".to_string(), &config(&["persona"]));
+        build_self_config_tools(node, agent_did, Some(identity), &config(&["persona"]));
     assert!(
         with_persona
             .iter()
@@ -250,9 +263,11 @@ async fn persona_category_gates_the_tool() {
 #[tokio::test]
 async fn persona_unknown_action_errors_cleanly() {
     let node = build_persona_node().await;
+    let identity = persona_identity("persona-unknown");
     let tools = build_self_config_tools(
         node,
-        "did:key:zPersonaUnknown".to_string(),
+        identity.did().to_string(),
+        Some(identity),
         &config(&["persona"]),
     );
 
@@ -325,7 +340,8 @@ fn take_persona_tool(
 #[tokio::test]
 async fn persona_create_authors_row_and_applies_after_manual_tick() {
     let node = build_persona_node().await;
-    let agent_did = "did:key:zPersonaCreateAgent";
+    let identity = persona_identity("persona-create");
+    let agent_did = identity.did().to_string();
 
     let seed = format!(
         r#"mutation {{
@@ -350,7 +366,12 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     let response = node.execute(&seed).await;
     assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
 
-    let tools = build_self_config_tools(node.clone(), agent_did.to_string(), &config(&["persona"]));
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &config(&["persona"]),
+    );
     let tool = take_persona_tool(tools);
 
     let args = serde_json::json!({
@@ -373,14 +394,14 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
 
     let mut request_key = None;
     for _ in 0..50 {
-        let rows = load_persona_rows_for_test(&node, agent_did).await;
+        let rows = load_persona_rows_for_test(&node, &agent_did).await;
         if let Some(row) = rows.into_iter().next() {
             assert_eq!(
                 row.requester_did.as_deref(),
-                Some(agent_did),
+                Some(agent_did.as_str()),
                 "self-authored requests set requester_did == agent_did"
             );
-            assert_eq!(row.agent_did.as_deref(), Some(agent_did));
+            assert_eq!(row.agent_did.as_deref(), Some(agent_did.as_str()));
             request_key = row.request_key;
             break;
         }
@@ -388,7 +409,11 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     }
     let request_key = request_key.expect("configure_persona authors a PersonaConfigRequest row");
 
-    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::new(node.clone());
+    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
+        node.clone(),
+        None,
+        identity,
+    );
     let outcome = crate::agent::p2p_reconcile::reconcile_persona_tick(&store, &node)
         .await
         .expect("manual reconcile tick");
@@ -397,7 +422,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         "manual tick must apply the pending request: {outcome:?}"
     );
 
-    let behaviors = crate::list_agent_behaviors(&node, agent_did)
+    let behaviors = crate::list_agent_behaviors(&node, &agent_did)
         .await
         .expect("list behaviors");
     assert_eq!(behaviors.len(), 1, "exactly one behavior materialized");
@@ -420,7 +445,8 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
 #[tokio::test]
 async fn persona_clone_accepts_sibling_behavior_id() {
     let node = build_persona_node().await;
-    let agent_did = "did:key:zPersonaCloneAgent";
+    let identity = persona_identity("persona-clone");
+    let agent_did = identity.did().to_string();
     let access = crate::config_client::ConfigAccess::Local(node.clone());
 
     let seed = format!(
@@ -487,7 +513,12 @@ async fn persona_clone_accepts_sibling_behavior_id() {
         .await
         .expect("seed sibling behavior");
 
-    let tools = build_self_config_tools(node.clone(), agent_did.to_string(), &config(&["persona"]));
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &config(&["persona"]),
+    );
     let tool = take_persona_tool(tools);
     let args = serde_json::json!({
         "action": "clone",
@@ -503,7 +534,7 @@ async fn persona_clone_accepts_sibling_behavior_id() {
 
     let mut request_key = None;
     for _ in 0..50 {
-        let rows = load_persona_rows_for_test(&node, agent_did).await;
+        let rows = load_persona_rows_for_test(&node, &agent_did).await;
         if let Some(row) = rows.into_iter().next() {
             assert_eq!(row.op.as_deref(), Some("create"));
             assert_eq!(
@@ -519,7 +550,11 @@ async fn persona_clone_accepts_sibling_behavior_id() {
     }
     let request_key = request_key.expect("configure_persona authors a PersonaConfigRequest row");
 
-    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::new(node.clone());
+    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
+        node.clone(),
+        None,
+        identity,
+    );
     let outcome = crate::agent::p2p_reconcile::reconcile_persona_tick(&store, &node)
         .await
         .expect("manual reconcile tick");

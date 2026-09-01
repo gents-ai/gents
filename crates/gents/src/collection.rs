@@ -23,7 +23,6 @@ pub enum Collection {
     InferenceProfile,
     ToolServiceRegistry,
     ProjectionAcpBinding,
-    PeerPairingDesired,
     Task,
     Schedule,
     EventTrigger,
@@ -33,14 +32,13 @@ pub enum Collection {
 /// a subset, but must preserve this order. Deletes intentionally have no
 /// equivalent runtime API: pruning is an operator CLI concern, never a package
 /// installation primitive.
-pub const DESIRED_STATE_APPLY_ORDER: [Collection; 15] = [
-    Collection::PeerPairingDesired,
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 14] = [
     Collection::InferenceBackend,
     Collection::InferenceProfile,
     Collection::ToolServiceRegistry,
+    Collection::DatastoreToolSurface,
     Collection::ChainKeyBinding,
     Collection::EthTool,
-    Collection::DatastoreToolSurface,
     Collection::ToolSelection,
     Collection::Skill,
     Collection::AgentBehavior,
@@ -59,7 +57,7 @@ impl Collection {
     // variant still exists on the enum (with real graphql_type/unique_field/
     // apply_order/dir_name) so exhaustive matches over `Collection` account
     // for it; it's just excluded from the CRUD-driving `ALL` set for now.
-    pub const ALL: [Collection; 15] = [
+    pub const ALL: [Collection; 14] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
         Collection::Skill,
@@ -71,7 +69,6 @@ impl Collection {
         Collection::InferenceProfile,
         Collection::ToolServiceRegistry,
         Collection::ProjectionAcpBinding,
-        Collection::PeerPairingDesired,
         Collection::Task,
         Collection::Schedule,
         Collection::EventTrigger,
@@ -98,7 +95,6 @@ impl Collection {
             Collection::InferenceProfile => Some("inference-profiles"),
             Collection::ToolServiceRegistry => Some("tool-services"),
             Collection::ProjectionAcpBinding => Some("projection-acp-bindings"),
-            Collection::PeerPairingDesired => Some("peer-pairings"),
             Collection::Task => Some("tasks"),
             Collection::Schedule => Some("schedules"),
             Collection::EventTrigger => Some("event_triggers"),
@@ -119,7 +115,6 @@ impl Collection {
             Collection::InferenceProfile => "InferenceProfile",
             Collection::ToolServiceRegistry => "ToolServiceRegistry",
             Collection::ProjectionAcpBinding => "ProjectionAcpBinding",
-            Collection::PeerPairingDesired => "PeerPairingDesired",
             Collection::Task => "Task",
             Collection::Schedule => "Schedule",
             Collection::EventTrigger => "EventTrigger",
@@ -140,7 +135,6 @@ impl Collection {
             Collection::InferenceProfile => "profile_id",
             Collection::ToolServiceRegistry => "service_id",
             Collection::ProjectionAcpBinding => "binding_id",
-            Collection::PeerPairingDesired => "peer_id",
             Collection::Task => "task_id",
             Collection::Schedule => "schedule_id",
             Collection::EventTrigger => "trigger_id",
@@ -160,8 +154,7 @@ impl Collection {
             | Collection::DatastoreToolSurface
             | Collection::ChainKeyBinding
             | Collection::EthTool
-            | Collection::WorkspaceRoot
-            | Collection::PeerPairingDesired => 0,
+            | Collection::WorkspaceRoot => 0,
             Collection::AgentBehavior => 1,
             Collection::ProjectionAcpBinding => 2,
             Collection::Task => 2,
@@ -169,10 +162,6 @@ impl Collection {
             Collection::AgentPrincipal => 3,
             Collection::EventTrigger => 3,
         }
-    }
-
-    pub fn manifest_authoritative(self) -> bool {
-        matches!(self, Collection::PeerPairingDesired)
     }
 }
 
@@ -191,7 +180,6 @@ impl fmt::Display for Collection {
             Collection::InferenceProfile => "inference_profiles",
             Collection::ToolServiceRegistry => "tool_service_registries",
             Collection::ProjectionAcpBinding => "projection_acp_bindings",
-            Collection::PeerPairingDesired => "peer_pairings",
             Collection::Task => "tasks",
             Collection::Schedule => "schedules",
             Collection::EventTrigger => "event_triggers",
@@ -231,15 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn peer_pairings_are_the_only_manifest_authoritative_collection() {
-        let authoritative = Collection::ALL
-            .into_iter()
-            .filter(|collection| collection.manifest_authoritative())
-            .collect::<Vec<_>>();
-        assert_eq!(authoritative, vec![Collection::PeerPairingDesired]);
-    }
-
-    #[test]
     fn canonical_variants_and_ranks() {
         // This list is the Rust side of the parity contract. The Lean
         // inductive `ApplyReconcile.Collection` and the
@@ -266,7 +245,6 @@ mod tests {
             (Collection::InferenceProfile, 0, "InferenceProfile"),
             (Collection::ToolServiceRegistry, 0, "ToolServiceRegistry"),
             (Collection::ProjectionAcpBinding, 2, "ProjectionAcpBinding"),
-            (Collection::PeerPairingDesired, 0, "PeerPairingDesired"),
             (Collection::Task, 2, "Task"),
             (Collection::Schedule, 2, "Schedule"),
             (Collection::EventTrigger, 3, "EventTrigger"),

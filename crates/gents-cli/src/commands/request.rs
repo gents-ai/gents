@@ -15,7 +15,8 @@ use crate::cli::args::{
 };
 use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::{
-    fetch_request_view, is_terminal_lifecycle_state, parse_duration_suffix, parse_valid_until_flag,
+    ensure_local_request_signer, fetch_request_view, is_terminal_lifecycle_state,
+    parse_duration_suffix, parse_valid_until_flag,
 };
 use crate::{
     create_agent_request, post_graphql, print_json, resolve_agent_did, resolve_graphql_endpoint,
@@ -37,6 +38,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let valid_until = parse_valid_until_flag(args.valid_until.as_deref())?;
+    ensure_local_request_signer(args.home.as_deref(), &agent_did)?;
     let submitted = create_agent_request(
         &graphql,
         &agent_did,
@@ -1339,6 +1341,7 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         );
     }
     let valid_until = Some(chrono::Utc::now() + chrono::Duration::minutes(5));
+    ensure_local_request_signer(args.home.as_deref(), &stale.agent_did)?;
     let submitted = create_agent_request(
         &graphql,
         &stale.agent_did,

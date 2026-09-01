@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
@@ -11,6 +12,20 @@ use super::graphql_helpers::{graphql_nullable_string_literal, graphql_string_lis
 use super::templates::resolve_template;
 
 pub const REGISTRY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+pub const REGISTRY_STALE_AFTER: Duration = Duration::from_secs(90);
+
+/// Resolve informational registry liveness without granting any pairing or
+/// routing authority. Excessive future skew is stale as well as old data.
+pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Duration) -> bool {
+    match now.signed_duration_since(ts).to_std() {
+        Ok(age) => age <= stale_after,
+        Err(_) => ts
+            .signed_duration_since(now)
+            .to_std()
+            .map(|ahead| ahead <= stale_after)
+            .unwrap_or(false),
+    }
+}
 
 pub const DEFAULT_NETWORK_ID: &str = "default";
 
@@ -60,7 +75,6 @@ pub struct RegistryEntry {
     pub display_name: Option<String>,
     pub status: String,
     pub network_id: String,
-    pub invited_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +97,6 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
     let display_name = graphql_nullable_string_literal(entry.display_name.as_deref());
     let status = escape_graphql_string(&entry.status);
     let network_id = escape_graphql_string(&entry.network_id);
-    let invited_by = graphql_nullable_string_literal(entry.invited_by.as_deref());
     let now = escape_graphql_string(now);
 
     let update_block = match kind {
@@ -95,7 +108,6 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
                     display_name: {display_name},
                     status: "{status}",
                     network_id: "{network_id}",
-                    invited_by: {invited_by},
                     updated_at: "{now}"
                 }}"#
         ),
@@ -121,7 +133,6 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
                     display_name: {display_name},
                     status: "{status}",
                     network_id: "{network_id}",
-                    invited_by: {invited_by},
                     registered_at: "{now}",
                     updated_at: "{now}"
                 }},
@@ -254,7 +265,6 @@ async fn tick_registry(
         display_name: None,
         status: status.to_string(),
         network_id: network_id.to_string(),
-        invited_by: None,
     };
     let observed_at = Instant::now();
     let Some(publish_reason) =
@@ -324,7 +334,6 @@ mod tests {
             display_name: None,
             status: status.into(),
             network_id: "default".into(),
-            invited_by: None,
         }
     }
 
@@ -390,7 +399,6 @@ mod tests {
                 display_name: Some("amy".into()),
                 status: "online".into(),
                 network_id: "default".into(),
-                invited_by: None,
             },
             "2026-06-13T00:00:00Z",
             UpsertKind::Full,
@@ -414,7 +422,6 @@ mod tests {
             display_name: Some("should-not-appear-in-update".into()),
             status: "online".into(),
             network_id: "default".into(),
-            invited_by: None,
         };
         let m = registry_upsert_mutation(&entry, "2026-06-13T01:00:00Z", UpsertKind::Heartbeat);
 
@@ -455,7 +462,6 @@ mod tests {
             display_name: Some("my-node".into()),
             status: "online".into(),
             network_id: "default".into(),
-            invited_by: None,
         };
         let m = registry_upsert_mutation(&entry, "2026-06-13T01:00:00Z", UpsertKind::Full);
 

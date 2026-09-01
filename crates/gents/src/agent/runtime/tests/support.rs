@@ -14,6 +14,10 @@ pub(super) use crate::identity::AgentIdentity;
 pub(super) use crate::runtime_status::RuntimeStatusHandle;
 pub(super) use crate::tool_surface::ToolCeiling;
 pub(super) use crate::watcher::AgentRequest;
+pub(super) use gents_protocol::row::{
+    BehaviorReadinessProcessState, BehaviorReadinessSnapshot, BehaviorReadinessState,
+    BehaviorReadinessUnavailableReason,
+};
 pub(super) use serde_json::Value;
 
 pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
@@ -68,31 +72,42 @@ pub(super) fn request(behavior_id: Option<&str>, session_id: &str) -> AgentReque
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug)]
 pub(super) struct RuntimeStatusRow {
     pub(super) process_state: String,
-    pub(super) reconcile_phase: String,
     pub(super) active_generation: i64,
-    pub(super) runnable_behavior_count: i64,
-    pub(super) unavailable_behavior_count: i64,
+    pub(super) reconcile_phase: String,
     pub(super) last_reconcile_result: String,
     pub(super) last_reconcile_error: String,
     pub(super) updated_at: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RuntimeDiagnosticRow {
+    reconcile_phase: String,
+    last_reconcile_result: String,
+    last_reconcile_error: String,
+    updated_at: String,
 }
 
 pub(super) async fn fetch_runtime_status(
     node: &defra_node::EmbeddedNode,
     agent_did: &str,
 ) -> RuntimeStatusRow {
+    fetch_runtime_status_if_present(node, agent_did)
+        .await
+        .expect("AgentRuntime row")
+}
+
+async fn fetch_runtime_status_if_present(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+) -> Option<RuntimeStatusRow> {
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
             AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
-                process_state
                 reconcile_phase
-                active_generation
-                runnable_behavior_count
-                unavailable_behavior_count
                 last_reconcile_result
                 last_reconcile_error
                 updated_at
@@ -111,9 +126,18 @@ pub(super) async fn fetch_runtime_status(
         .and_then(|data| data.get("AgentRuntime"))
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
-        .cloned()
-        .expect("AgentRuntime row");
-    serde_json::from_value(value).expect("decode AgentRuntime row")
+        .cloned()?;
+    let diagnostic: RuntimeDiagnosticRow =
+        serde_json::from_value(value).expect("decode AgentRuntime row");
+    let readiness = fetch_behavior_readiness(node, agent_did).await;
+    Some(RuntimeStatusRow {
+        process_state: readiness.process_state.as_str().to_string(),
+        active_generation: i64::try_from(readiness.active_generation).unwrap_or(i64::MAX),
+        reconcile_phase: diagnostic.reconcile_phase,
+        last_reconcile_result: diagnostic.last_reconcile_result,
+        last_reconcile_error: diagnostic.last_reconcile_error,
+        updated_at: diagnostic.updated_at,
+    })
 }
 
 pub(super) async fn wait_for_runtime_reconcile_phase(
@@ -121,53 +145,56 @@ pub(super) async fn wait_for_runtime_reconcile_phase(
     agent_did: &str,
     expected_reconcile_phase: &str,
 ) -> RuntimeStatusRow {
-    let escaped_agent_did = escape_graphql_string(agent_did);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
-        let query = format!(
-            r#"{{
-                AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
-                    process_state
-                    reconcile_phase
-                    active_generation
-                    runnable_behavior_count
-                    unavailable_behavior_count
-                    last_reconcile_result
-                    last_reconcile_error
-                    updated_at
-                }}
-            }}"#
-        );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "AgentRuntime query failed: {:?}",
-            response.errors
-        );
-        let row = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRuntime"))
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned()
-            .map(|value| {
-                serde_json::from_value::<RuntimeStatusRow>(value).expect("decode AgentRuntime row")
-            });
-        if row.as_ref().map(|row| row.reconcile_phase.as_str()) == Some(expected_reconcile_phase) {
-            return row.expect("checked AgentRuntime row");
+        if let Some(row) = fetch_runtime_status_if_present(node, agent_did).await {
+            if row.reconcile_phase == expected_reconcile_phase {
+                return row;
+            }
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "timed out waiting for AgentRuntime {} to reach reconcile_phase={}; last={:?}",
+            "timed out waiting for AgentRuntime {} to reach reconcile_phase={}",
             agent_did,
-            expected_reconcile_phase,
-            row.as_ref().map(|row| row.reconcile_phase.as_str())
+            expected_reconcile_phase
         );
         for _ in 0..10 {
             tokio::task::yield_now().await;
         }
     }
+}
+
+pub(super) async fn fetch_behavior_readiness(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+) -> BehaviorReadinessSnapshot {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentBehaviorReadiness(
+                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                limit: 1
+            ) {{
+                snapshot_json
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "AgentBehaviorReadiness query failed: {:?}",
+        response.errors
+    );
+    let snapshot_json = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentBehaviorReadiness"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("snapshot_json"))
+        .and_then(Value::as_str)
+        .expect("AgentBehaviorReadiness row");
+    serde_json::from_str(snapshot_json).expect("decode behavior readiness snapshot")
 }
 
 pub(super) async fn wait_for_runtime_process_state(
@@ -184,31 +211,34 @@ pub(super) async fn wait_for_runtime_process_state(
     loop {
         let query = format!(
             r#"{{
-                AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
-                    process_state
+                AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
+                    snapshot_json
                 }}
             }}"#
         );
         let response = node.execute(&query).await;
         assert!(
             !response.has_errors(),
-            "AgentRuntime query failed: {:?}",
+            "AgentBehaviorReadiness query failed: {:?}",
             response.errors
         );
         let process_state = response
             .data
             .as_ref()
-            .and_then(|data| data.get("AgentRuntime"))
+            .and_then(|data| data.get("AgentBehaviorReadiness"))
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
-            .and_then(|row| row.get("process_state"))
-            .and_then(Value::as_str);
-        if process_state == Some(expected_process_state) {
+            .and_then(|row| row.get("snapshot_json"))
+            .and_then(Value::as_str)
+            .and_then(|snapshot| serde_json::from_str::<BehaviorReadinessSnapshot>(snapshot).ok())
+            .map(|snapshot| snapshot.process_state);
+        if process_state.map(BehaviorReadinessProcessState::as_str) == Some(expected_process_state)
+        {
             return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRuntime {} to reach process_state={}; last={:?}",
+            "timed out waiting for AgentBehaviorReadiness {} to reach process_state={}; last={:?}",
             agent_did,
             expected_process_state,
             process_state
@@ -478,46 +508,38 @@ pub(super) async fn create_agent_request_for_behavior(
     session_id: &str,
     content: &str,
 ) -> String {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(behavior_id.unwrap_or_default());
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_content = escape_graphql_string(content);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "{escaped_content}",
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    let identity = crate::identity::RegisteredIdentity::from_registered_did(agent_did, None)
+        .expect("registered runtime test identity");
+    let behavior_id = behavior_id
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| crate::default_behavior_id_for_agent(agent_did));
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id,
+        agent_did,
+        agent_did,
+        behavior_id,
+        session_id,
+        content,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did),
     );
-    let response = node.execute(&mutation).await;
+    crate::sign_agent_request_create(&identity, &mut create)
+        .await
+        .expect("sign runtime test AgentRequest");
+    let response = node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(
         !response.has_errors(),
-        "create_AgentRequest failed: {:?}",
+        "create signed AgentRequest failed: {:?}",
         response.errors
     );
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                 _docID
             }}
-        }}"#
+        }}"#,
+        escape_graphql_string(request_id),
     );
     let response = node.execute(&query).await;
     assert!(

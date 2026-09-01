@@ -906,6 +906,7 @@ async fn drive_response_recovery_case(case: &lean_vocab_test::LeanRecoverySweepC
 
 async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let agent_did = db.node_identity.did().to_string();
     let parent_request_id = format!("{}-parent", case.name);
     let parent_session_id = format!("{}-parent-session", case.name);
     let tool_call_id = format!("{}-tool", case.name);
@@ -915,11 +916,12 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
         &parent_request_id,
         &parent_session_id,
         &tool_call_id,
+        &agent_did,
     )
     .await;
 
     if case.sweep_id == "tool_call_lifecycle_reconcile_terminal_parent_owned_tools" {
-        let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, AGENT_DID)
+        let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, &agent_did)
             .await
             .unwrap();
         assert_eq!(
@@ -927,7 +929,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             "live terminal-parent tool case {} should terminalize one tool call",
             case.name
         );
-        let second = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, AGENT_DID)
+        let second = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, &agent_did)
             .await
             .unwrap();
         assert_eq!(
@@ -937,7 +939,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
         );
     } else if case.sweep_id == "tool_call_lifecycle_reconcile_background_completion_side_effects" {
         let report =
-            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, AGENT_DID)
+            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, &agent_did)
                 .await
                 .unwrap();
         assert_eq!(
@@ -946,7 +948,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             case.name
         );
         let second =
-            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, AGENT_DID)
+            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, &agent_did)
                 .await
                 .unwrap();
         assert!(
@@ -979,7 +981,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
         );
         let registry = gents::BackgroundExecutionRegistry::default();
         let report =
-            ToolCallLifecycle::reconcile_orphaned_background_tools(&db.node, AGENT_DID, &registry)
+            ToolCallLifecycle::reconcile_orphaned_background_tools(&db.node, &agent_did, &registry)
                 .await
                 .unwrap();
         assert_eq!(
@@ -1010,7 +1012,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             ),
         }
     } else {
-        let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+        let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
             .await
             .unwrap();
         assert_eq!(
@@ -1149,13 +1151,19 @@ async fn seed_tool_parent_and_row(
     parent_request_id: &str,
     parent_session_id: &str,
     tool_call_id: &str,
+    agent_did: &str,
 ) {
-    let parent_doc_id = create_request(
+    let parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
         &node,
+        agent_did,
         parent_request_id,
         parent_session_id,
         "processing",
         RECOVERY_CREATED_AT,
+        None,
+        None,
+        None,
+        None,
     )
     .await;
     let future_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
@@ -1173,7 +1181,7 @@ async fn seed_tool_parent_and_row(
                 format!("{parent_request_id}-missing")
             },
             parent_session_id.to_string(),
-            "did:test:test".to_string(),
+            agent_did.to_string(),
             tool_call_id.to_string(),
             1,
             "spawn_process".to_string(),
@@ -1188,7 +1196,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_process".to_string(),
@@ -1213,7 +1221,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_subagent".to_string(),
@@ -1246,7 +1254,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_subagent".to_string(),
@@ -1266,7 +1274,7 @@ async fn seed_tool_parent_and_row(
                 node.clone(),
                 parent_request_id.to_string(),
                 parent_session_id.to_string(),
-                "did:test:test".to_string(),
+                agent_did.to_string(),
                 tool_call_id.to_string(),
                 1,
                 "slow_tool".to_string(),
@@ -1286,7 +1294,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "slow_tool".to_string(),
@@ -1302,7 +1310,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "slow_tool".to_string(),
@@ -1318,7 +1326,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_subagent".to_string(),
@@ -1336,7 +1344,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_subagent".to_string(),
@@ -1687,6 +1695,7 @@ pub(super) async fn generated_restart_disposition_cases_drive_recover_all() {
 
 async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispositionCase) {
     let db = test_db(&format!("restart-disposition-{}", case.name)).await;
+    let agent_did = db.node_identity.did().to_string();
     let parent_request_id = format!("{}-parent", case.name);
     let parent_session_id = format!("{}-parent-session", case.name);
     let tool_call_id = format!("{}-tool", case.name);
@@ -1694,12 +1703,17 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
     // Parent per the Lean observation vocabulary. `missing` seeds no parent
     // row at all: the bridge's request_id resolves to nothing.
     if case.parent_observation != "missing" {
-        let parent_doc_id = create_request(
+        let parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
             &db.node,
+            &agent_did,
             &parent_request_id,
             &parent_session_id,
             "processing",
             RECOVERY_CREATED_AT,
+            None,
+            None,
+            None,
+            None,
         )
         .await;
         match case.parent_observation.as_str() {
@@ -1754,7 +1768,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             db.node.clone(),
             parent_request_id.clone(),
             parent_session_id.clone(),
-            "did:test:test".to_string(),
+            agent_did.clone(),
             tool_call_id.clone(),
             1,
             "spawn_subagent".to_string(),
@@ -1774,7 +1788,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             db.node.clone(),
             parent_request_id.clone(),
             parent_session_id.clone(),
-            "did:test:test".to_string(),
+            agent_did.clone(),
             tool_call_id.clone(),
             1,
             "spawn_process".to_string(),
@@ -1786,7 +1800,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             db.node.clone(),
             parent_request_id.clone(),
             parent_session_id.clone(),
-            "did:test:test".to_string(),
+            agent_did.clone(),
             tool_call_id.clone(),
             1,
             "slow_tool".to_string(),
@@ -1799,7 +1813,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
         set_tool_unclaimed_deadline(&db.node, &tool_call_id, "2020-01-01T00:00:00Z").await;
     }
 
-    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     let row = fetch_tool_recovery_row(&db.node, &tool_call_id).await;

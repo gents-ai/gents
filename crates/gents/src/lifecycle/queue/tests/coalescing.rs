@@ -4,7 +4,7 @@ use super::*;
 async fn enqueue_session_request_coalesces_keyed_subagent_wakeups() {
     let db = test_db("coalesce").await;
     let session_id = "session-coalesced-wakeup";
-    let parent = parent_request(session_id);
+    let parent = parent_request(db.agent_did(), session_id);
     let hints = QueueHints {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
@@ -50,11 +50,11 @@ async fn enqueue_session_request_coalesces_keyed_subagent_wakeups() {
     assert_eq!(row.subagent_depth, Some(2));
     assert_eq!(
         row.caused_by_parent_request_id.as_deref(),
-        Some("root-parent-request")
+        Some("parent-request")
     );
     assert_eq!(
         row.caused_by_parent_request_doc_id.as_deref(),
-        Some("root-parent-request-doc")
+        Some("parent-doc")
     );
     assert_eq!(row.caused_by_parent_tool_call_id.as_deref(), None);
     assert_eq!(row.caused_by_parent_tool_call_doc_id.as_deref(), None);
@@ -65,7 +65,7 @@ async fn enqueue_session_request_coalesces_keyed_subagent_wakeups() {
 async fn enqueue_session_request_ignores_append_row_with_same_source_and_key() {
     let db = test_db("coalesce-ignores-append").await;
     let session_id = "session-coalesce-ignores-append";
-    let parent = parent_request(session_id);
+    let parent = parent_request(db.agent_did(), session_id);
     let append_hints = QueueHints {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Append,
@@ -75,6 +75,7 @@ async fn enqueue_session_request_ignores_append_row_with_same_source_and_key() {
     };
     insert_raw_queue_request(
         &db.node,
+        db.agent_did(),
         "req-existing-append-same-key",
         session_id,
         &queue_metadata_json(&append_hints),
@@ -109,7 +110,7 @@ async fn enqueue_session_request_ignores_append_row_with_same_source_and_key() {
 async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     let db = test_db("coalesce-race-reconcile").await;
     let session_id = "session-coalesce-race-reconcile";
-    let parent = parent_request(session_id);
+    let parent = parent_request(db.agent_did(), session_id);
     let hints = QueueHints {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
@@ -129,6 +130,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     .unwrap();
     let duplicate_doc_id = insert_raw_queue_request(
         &db.node,
+        db.agent_did(),
         "req-coalesce-race-duplicate",
         session_id,
         &queue_metadata_json(&hints),
@@ -138,7 +140,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     let reconciled = reconcile_coalesced_pending_request(
         &db.node,
         session_id,
-        TEST_AGENT_DID,
+        db.agent_did(),
         QueueSource::BackgroundCompletion,
         &key,
     )
@@ -175,7 +177,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
 async fn enqueue_session_request_reconciles_preexisting_duplicate_coalesce_rows() {
     let db = test_db("coalesce-preexisting-duplicates").await;
     let session_id = "session-coalesce-preexisting-duplicates";
-    let parent = parent_request(session_id);
+    let parent = parent_request(db.agent_did(), session_id);
     let hints = QueueHints {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
@@ -185,14 +187,16 @@ async fn enqueue_session_request_reconciles_preexisting_duplicate_coalesce_rows(
     };
     let survivor_doc_id = insert_raw_queue_request(
         &db.node,
-        "req-preexisting-coalesce-survivor",
+        db.agent_did(),
+        "req-preexisting-coalesce-a-survivor",
         session_id,
         &queue_metadata_json(&hints),
     )
     .await;
     let duplicate_doc_id = insert_raw_queue_request(
         &db.node,
-        "req-preexisting-coalesce-duplicate",
+        db.agent_did(),
+        "req-preexisting-coalesce-b-duplicate",
         session_id,
         &queue_metadata_json(&hints),
     )
@@ -222,7 +226,7 @@ async fn enqueue_session_request_reconciles_preexisting_duplicate_coalesce_rows(
     assert_eq!(duplicate.status, "superseded");
     assert_eq!(
         duplicate.superseded_by_request.as_deref(),
-        Some("req-preexisting-coalesce-survivor")
+        Some("req-preexisting-coalesce-a-survivor")
     );
     assert_eq!(
         duplicate.superseded_by_request_doc_id.as_deref(),
@@ -234,7 +238,7 @@ async fn enqueue_session_request_reconciles_preexisting_duplicate_coalesce_rows(
 async fn enqueue_session_request_without_key_does_not_coalesce() {
     let db = test_db("coalesce-without-key").await;
     let session_id = "session-unkeyed-wakeup";
-    let parent = parent_request(session_id);
+    let parent = parent_request(db.agent_did(), session_id);
     let hints = QueueHints {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,

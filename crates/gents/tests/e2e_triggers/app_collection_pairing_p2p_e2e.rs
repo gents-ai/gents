@@ -4,22 +4,18 @@
 //! drives replication through `DataPlanePairingDesired` + the pairing
 //! reconciler. Both nodes run `Gents::run`.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::templates::NETWORK_CONTROL_COLLECTIONS;
-use gents::agent::p2p_reconcile::{GraphqlNetworkStore, NetworkStore};
+use gents::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::graphql::graphql_response_with_transaction_retry as execute_graphql_with_conflict_retry;
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
-use gents_protocol::network_token::{
-    derive_membership_key, EndpointRecord, MembershipRecord, NetworkRecord,
-};
+use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
+use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_p2p_db;
@@ -30,10 +26,8 @@ const EXTERNAL_ID: &str = "change-app-1";
 const PROMPT_TEMPLATE: &str = "fired for {{ doc.external_id }}";
 const NETWORK_ID: &str = "net-app-collection-pairing";
 const NETWORK_NAME: &str = "App Collection Pairing Net";
-
-fn bs58_sig(sig: &[u8]) -> String {
-    bs58::encode(sig).into_string()
-}
+const HYDRATION_NETWORK_ID: &str = "net-enrollment-session-hydration";
+const HYDRATION_SESSION_ID: &str = "session-enrollment-hydration";
 
 async fn register_change_proposed_schema(node: &EmbeddedNode) {
     // @branchable is REQUIRED — DefraDB only P2P-syncs branchable collections.
@@ -47,208 +41,6 @@ async fn register_change_proposed_schema(node: &EmbeddedNode) {
     node.add_schema(sdl)
         .await
         .expect("add_schema ChangeProposed");
-}
-
-/// Write the signed AgentNetwork + active NetworkMembership + fresh PeerEndpoint
-/// documents on `node` so `GraphqlNetworkStore::load_materializable_entries`
-/// materializes `member_identity`'s endpoint.
-async fn seed_materializable_peer(
-    node: &EmbeddedNode,
-    network_id: &str,
-    admin_identity: &dyn AgentIdentity,
-    member_identity: &dyn AgentIdentity,
-    member_node_id: &str,
-    member_address: &str,
-) {
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-
-    let mut network = NetworkRecord {
-        network_id: network_id.to_string(),
-        admin_did: admin_identity.did().to_string(),
-        display_name: NETWORK_NAME.to_string(),
-        default_template: "network-control".to_string(),
-        created_at: now.clone(),
-        sig: Vec::new(),
-    };
-    network.sig = admin_identity
-        .sign(&network.signing_payload())
-        .await
-        .expect("sign AgentNetwork");
-
-    let mut membership = MembershipRecord {
-        network_id: network_id.to_string(),
-        member_did: member_identity.did().to_string(),
-        status: "active".to_string(),
-        granted_at: now.clone(),
-        revoked_at: String::new(),
-        sig: Vec::new(),
-    };
-    membership.sig = admin_identity
-        .sign(&membership.signing_payload())
-        .await
-        .expect("sign NetworkMembership");
-
-    let mut endpoint = EndpointRecord {
-        did: member_identity.did().to_string(),
-        node_id: member_node_id.to_string(),
-        address: member_address.to_string(),
-        updated_at: now.clone(),
-        sig: Vec::new(),
-    };
-    endpoint.sig = member_identity
-        .sign(&endpoint.signing_payload())
-        .await
-        .expect("sign PeerEndpoint");
-
-    let network_id_g = escape_graphql_string(&network.network_id);
-    let admin_did = escape_graphql_string(&network.admin_did);
-    let display_name = escape_graphql_string(&network.display_name);
-    let default_template = escape_graphql_string(&network.default_template);
-    let created_at = escape_graphql_string(&network.created_at);
-    let admin_sig = escape_graphql_string(&bs58_sig(&network.sig));
-    let network_mutation = format!(
-        r#"mutation {{
-            upsert_AgentNetwork(
-                filter: {{ network_id: {{ _eq: "{network_id_g}" }} }},
-                add: {{
-                    network_id: "{network_id_g}",
-                    admin_did: "{admin_did}",
-                    display_name: "{display_name}",
-                    default_template: "{default_template}",
-                    created_at: "{created_at}",
-                    admin_sig: "{admin_sig}"
-                }},
-                update: {{
-                    admin_did: "{admin_did}",
-                    display_name: "{display_name}",
-                    default_template: "{default_template}",
-                    created_at: "{created_at}",
-                    admin_sig: "{admin_sig}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = execute_graphql_with_conflict_retry(
-        node,
-        &network_mutation,
-        "seed materializable AgentNetwork",
-    )
-    .await;
-    assert!(
-        !resp.has_errors(),
-        "upsert AgentNetwork failed: {:?}",
-        resp.errors
-    );
-
-    let membership_key = escape_graphql_string(&derive_membership_key(
-        &membership.network_id,
-        &membership.member_did,
-    ));
-    let member_did = escape_graphql_string(&membership.member_did);
-    let status = escape_graphql_string(&membership.status);
-    let granted_at = escape_graphql_string(&membership.granted_at);
-    let revoked_at = escape_graphql_string(&membership.revoked_at);
-    let mem_sig = escape_graphql_string(&bs58_sig(&membership.sig));
-    let mem_mutation = format!(
-        r#"mutation {{
-            upsert_NetworkMembership(
-                filter: {{ membership_key: {{ _eq: "{membership_key}" }} }},
-                add: {{
-                    membership_key: "{membership_key}",
-                    network_id: "{network_id_g}",
-                    member_did: "{member_did}",
-                    status: "{status}",
-                    granted_at: "{granted_at}",
-                    revoked_at: "{revoked_at}",
-                    admin_sig: "{mem_sig}"
-                }},
-                update: {{
-                    network_id: "{network_id_g}",
-                    member_did: "{member_did}",
-                    status: "{status}",
-                    granted_at: "{granted_at}",
-                    revoked_at: "{revoked_at}",
-                    admin_sig: "{mem_sig}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = execute_graphql_with_conflict_retry(
-        node,
-        &mem_mutation,
-        "seed materializable NetworkMembership",
-    )
-    .await;
-    assert!(
-        !resp.has_errors(),
-        "upsert NetworkMembership failed: {:?}",
-        resp.errors
-    );
-
-    let did = escape_graphql_string(&endpoint.did);
-    let node_id = escape_graphql_string(&endpoint.node_id);
-    let address = escape_graphql_string(&endpoint.address);
-    let updated_at = escape_graphql_string(&endpoint.updated_at);
-    let binding_sig = escape_graphql_string(&bs58_sig(&endpoint.sig));
-    let ep_mutation = format!(
-        r#"mutation {{
-            upsert_PeerEndpoint(
-                filter: {{ did: {{ _eq: "{did}" }} }},
-                add: {{
-                    did: "{did}",
-                    node_id: "{node_id}",
-                    address: "{address}",
-                    updated_at: "{updated_at}",
-                    binding_sig: "{binding_sig}"
-                }},
-                update: {{
-                    node_id: "{node_id}",
-                    address: "{address}",
-                    updated_at: "{updated_at}",
-                    binding_sig: "{binding_sig}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    // The live runtime publishes this same DID's endpoint heartbeat. Keep the
-    // real concurrent write in the e2e, but cross the same bounded conflict
-    // retry boundary production document writers use (#730, #750).
-    let resp =
-        execute_graphql_with_conflict_retry(node, &ep_mutation, "seed materializable PeerEndpoint")
-            .await;
-    assert!(
-        !resp.has_errors(),
-        "upsert PeerEndpoint failed: {:?}",
-        resp.errors
-    );
-}
-
-async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let p2p = node.p2p().expect("p2p enabled");
-        let peer_id = p2p.local_peer_id().await.ok();
-        let shareable = p2p.shareable_address().await.ok().flatten();
-        if let (Some(peer_id), Some(address)) = (peer_id, shareable) {
-            if !peer_id.trim().is_empty() && !address.trim().is_empty() {
-                return (peer_id, address);
-            }
-        }
-        // Fallback: listen address + parse peer id from the multiaddr tail.
-        if let Ok(addrs) = p2p.listen_addresses().await {
-            if let Some(addr) = addrs.first() {
-                if let Some(peer_id) = addr.rsplit("/p2p/").nth(1) {
-                    if !peer_id.is_empty() {
-                        return (peer_id.to_string(), addr.clone());
-                    }
-                }
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("node never exposed a P2P peer identity");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
 
 async fn create_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prompt_template: &str) {
@@ -359,7 +151,8 @@ async fn write_app_collection_pairing(
             create_DataPlanePairingDesired(input: {{
                 peer_id: "{peer}", agent_did: "{did}",
                 collections: [{cols}], replicator_addresses: ["{addr}"],
-                template: "app-collections", created_at: "{now}", updated_at: "{now}"
+                template: "app-collections", source: "test-app-collections",
+                created_at: "{now}", updated_at: "{now}"
             }}) {{ _docID }}
         }}"#
     );
@@ -494,7 +287,7 @@ async fn wait_for_app_collections_pairing_applied(
     }
 }
 
-async fn wait_for_control_pairing_applied(
+async fn wait_for_enrollment_route_applied(
     node: &EmbeddedNode,
     peer_id: &str,
     timeout: Duration,
@@ -509,20 +302,147 @@ async fn wait_for_control_pairing_applied(
                  subscribed={subscribed:?}"
             );
             let has_addr = addresses.iter().any(|a| !a.trim().is_empty());
-            let has_control = NETWORK_CONTROL_COLLECTIONS
-                .iter()
-                .all(|expected| subscribed.iter().any(|actual| actual == expected));
-            if has_addr && has_control {
-                return NETWORK_CONTROL_COLLECTIONS
-                    .iter()
-                    .map(|collection| (*collection).to_string())
-                    .collect();
+            if has_addr {
+                return Vec::new();
             }
         }
         if Instant::now() >= deadline {
-            panic!(
-                "timed out waiting for network-control PeerPairingApplied({peer_id}); last={last}"
-            );
+            panic!("timed out waiting for enrollment PeerPairingApplied({peer_id}); last={last}");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn wait_for_current_route_receipt(
+    node: &EmbeddedNode,
+    request_id: &str,
+    request_digest: &str,
+    member_peer: &str,
+    timeout: Duration,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let deadline = Instant::now() + timeout;
+    loop {
+        let response = node
+            .execute(&format!(
+                r#"{{ NetworkEnrollmentRouteReceipt(
+                    filter: {{ request_id: {{ _eq: "{request_id}" }} }}
+                ) {{
+                    request_digest member_peer authorization_sequence
+                    authorization_expires_at direction signer_did admin_sig
+                }} }}"#
+            ))
+            .await;
+        let diagnostic = format!("data={:?} errors={:?}", response.data, response.errors);
+        let current = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("NetworkEnrollmentRouteReceipt"))
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.len() == 1
+                    && rows[0].get("request_digest").and_then(Value::as_str) == Some(request_digest)
+                    && rows[0].get("member_peer").and_then(Value::as_str) == Some(member_peer)
+                    && rows[0]
+                        .get("authorization_sequence")
+                        .and_then(Value::as_i64)
+                        .is_some_and(|sequence| sequence > 0)
+                    && rows[0]
+                        .get("authorization_expires_at")
+                        .and_then(Value::as_str)
+                        .is_some_and(|expires_at| !expires_at.is_empty())
+                    && rows[0].get("direction").and_then(Value::as_str) == Some("client_to_server")
+                    && rows[0]
+                        .get("signer_did")
+                        .and_then(Value::as_str)
+                        .is_some_and(|did| !did.is_empty())
+                    && rows[0]
+                        .get("admin_sig")
+                        .and_then(Value::as_str)
+                        .is_some_and(|signature| !signature.is_empty())
+            });
+        if current {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for directly delivered current route receipt: {diagnostic}");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn wait_for_revoked_route_teardown(
+    server: &EmbeddedNode,
+    member: &EmbeddedNode,
+    request_id: &str,
+    member_peer: &str,
+    timeout: Duration,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let member_peer = escape_graphql_string(member_peer);
+    let deadline = Instant::now() + timeout;
+    loop {
+        let server_response = server
+            .execute(&format!(
+                r#"{{
+                    PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{member_peer}" }} }}) {{ peer_id }}
+                    PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{member_peer}" }} }}) {{ peer_id }}
+                }}"#
+            ))
+            .await;
+        let member_response = member
+            .execute(&format!(
+                r#"{{ NetworkAuthorizationRevision(
+                    filter: {{ request_id: {{ _eq: "{request_id}" }}, kind: {{ _eq: "revoked" }} }}
+                ) {{ sequence kind signer_did admin_sig }} }}"#
+            ))
+            .await;
+        let empty = |response: &gents::defra_node::QueryResponse, field: &str| {
+            !response.has_errors()
+                && response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get(field))
+                    .and_then(Value::as_array)
+                    .is_some_and(Vec::is_empty)
+        };
+        let revoked = !member_response.has_errors()
+            && member_response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("NetworkAuthorizationRevision"))
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.len() == 1
+                        && rows[0].get("kind").and_then(Value::as_str) == Some("revoked")
+                        && rows[0]
+                            .get("sequence")
+                            .and_then(Value::as_i64)
+                            .is_some_and(|sequence| sequence > 1)
+                        && rows[0]
+                            .get("signer_did")
+                            .and_then(Value::as_str)
+                            .is_some_and(|did| !did.is_empty())
+                        && rows[0]
+                            .get("admin_sig")
+                            .and_then(Value::as_str)
+                            .is_some_and(|signature| !signature.is_empty())
+                });
+        if empty(&server_response, "PeerPairingDesired")
+            && empty(&server_response, "PeerPairingApplied")
+            && revoked
+        {
+            return;
+        }
+        let diagnostic = format!(
+            "server_data={:?} server_errors={:?} member_data={:?} member_errors={:?}",
+            server_response.data,
+            server_response.errors,
+            member_response.data,
+            member_response.errors
+        );
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for signed revocation and route teardown: {diagnostic}");
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -682,33 +602,6 @@ async fn query_change_proposed(node: &EmbeddedNode) -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn seed_makes_peer_materializable() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
-    let db = test_p2p_db("app-collection-seed").await;
-    let admin = test_identity("app-collection-seed-admin");
-    let member = test_identity("app-collection-seed-member");
-    seed_materializable_peer(
-        db.node.as_ref(),
-        "net-test",
-        &admin,
-        &member,
-        "peer-node",
-        "/ip4/127.0.0.1/tcp/9/p2p/peer-node",
-    )
-    .await;
-    let store = GraphqlNetworkStore::new(db.node.clone(), Arc::new(admin));
-    let entries = store
-        .load_materializable_entries()
-        .await
-        .expect("load materializable");
-    assert!(
-        entries.iter().any(|e| e.peer_id == "peer-node"),
-        "seeded peer must be materializable: {entries:?}"
-    );
-    db.node.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     // Compress pairing sweeps for this process (read once at daemon start).
@@ -719,9 +612,8 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     register_change_proposed_schema(db_a.node.as_ref()).await;
     register_change_proposed_schema(db_b.node.as_ref()).await;
 
-    let identity_a: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-agent-a"));
-    let identity_b: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-agent-b"));
-    let admin: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-admin"));
+    let identity_a = db_a.node_identity.clone();
+    let identity_b = db_b.node_identity.clone();
     let did_a = identity_a.did().to_string();
     let did_b = identity_b.did().to_string();
 
@@ -771,38 +663,27 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     let (peer_a, addr_a) = wait_for_peer_identity(db_a.node.as_ref()).await;
     let (peer_b, addr_b) = wait_for_peer_identity(db_b.node.as_ref()).await;
 
-    // Seed membership docs locally on both nodes (no chicken-and-egg with P2P).
-    seed_materializable_peer(
-        db_a.node.as_ref(),
+    // Approve each live transport identity through authenticated enrollment.
+    let enrollment_a_to_b = authorize_enrollment_peer(
+        db_a.node.clone(),
         NETWORK_ID,
-        admin.as_ref(),
-        identity_b.as_ref(),
+        NETWORK_NAME,
+        identity_a.clone(),
+        identity_b.clone(),
         &peer_b,
         &addr_b,
     )
     .await;
-    seed_materializable_peer(
-        db_b.node.as_ref(),
+    authorize_enrollment_peer(
+        db_b.node.clone(),
         NETWORK_ID,
-        admin.as_ref(),
-        identity_a.as_ref(),
+        NETWORK_NAME,
+        identity_b.clone(),
+        identity_a.clone(),
         &peer_a,
         &addr_a,
     )
     .await;
-
-    let store_a = GraphqlNetworkStore::new(db_a.node.clone(), admin.clone());
-    let store_b = GraphqlNetworkStore::new(db_b.node.clone(), admin.clone());
-    let entries_a = store_a.load_materializable_entries().await.unwrap();
-    let entries_b = store_b.load_materializable_entries().await.unwrap();
-    assert!(
-        entries_a.iter().any(|e| e.peer_id == peer_b),
-        "A must materialize B: {entries_a:?}"
-    );
-    assert!(
-        entries_b.iter().any(|e| e.peer_id == peer_a),
-        "B must materialize A: {entries_b:?}"
-    );
 
     // B: document reconcile for Task + EventTrigger (ordering invariant).
     let startup = wait_for_runtime_snapshot(db_b.node.as_ref(), &did_b, |s| {
@@ -835,14 +716,20 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     })
     .await;
 
-    // Co-existing control pairing: network reconciler materializes PeerPairingDesired
-    // (source=network, template=network-control) from the seeded membership docs.
-    // Do NOT create_PeerPairingDesired ourselves — peer_id is unique and would conflict.
+    // The enrollment owner materializes the base client routes.
     let control_a =
-        wait_for_control_pairing_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
+        wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
             .await;
+    wait_for_current_route_receipt(
+        db_b.node.as_ref(),
+        &enrollment_a_to_b.request_id,
+        &enrollment_a_to_b.request_digest,
+        &peer_b,
+        Duration::from_secs(60),
+    )
+    .await;
     let control_b =
-        wait_for_control_pairing_applied(db_b.node.as_ref(), &peer_a, Duration::from_secs(60))
+        wait_for_enrollment_route_applied(db_b.node.as_ref(), &peer_a, Duration::from_secs(60))
             .await;
 
     // App-collections data-plane rows on both sides.
@@ -952,6 +839,19 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     assert_eq!(post, post2, "pairing applied should be stable (idempotent)");
     wait_for_subscribed_collections(db_a.node.as_ref(), &control_a, Duration::from_secs(30)).await;
 
+    GraphqlEnrollmentStore::new(db_a.node.clone(), identity_a.clone())
+        .revoke_request(&enrollment_a_to_b.request_id)
+        .await
+        .expect("revoke exact approved enrollment generation");
+    wait_for_revoked_route_teardown(
+        db_a.node.as_ref(),
+        db_b.node.as_ref(),
+        &enrollment_a_to_b.request_id,
+        &peer_b,
+        Duration::from_secs(60),
+    )
+    .await;
+
     let _ = shutdown_a_tx.send(true);
     let _ = shutdown_b_tx.send(true);
     handle_a.await.unwrap().unwrap();
@@ -968,9 +868,8 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     let db_a = test_p2p_db("app-collection-soft-skip-a").await;
     let db_b = test_p2p_db("app-collection-soft-skip-b").await;
 
-    let identity_a: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-soft-a"));
-    let identity_b: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-soft-b"));
-    let admin: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-soft-admin"));
+    let identity_a = db_a.node_identity.clone();
+    let identity_b = db_b.node_identity.clone();
     let did_a = identity_a.did().to_string();
     let did_b = identity_b.did().to_string();
 
@@ -1019,28 +918,30 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     let (peer_a, addr_a) = wait_for_peer_identity(db_a.node.as_ref()).await;
     let (peer_b, addr_b) = wait_for_peer_identity(db_b.node.as_ref()).await;
 
-    seed_materializable_peer(
-        db_a.node.as_ref(),
+    authorize_enrollment_peer(
+        db_a.node.clone(),
         "net-soft-skip",
-        admin.as_ref(),
-        identity_b.as_ref(),
+        "Soft Skip Net",
+        identity_a.clone(),
+        identity_b.clone(),
         &peer_b,
         &addr_b,
     )
     .await;
-    seed_materializable_peer(
-        db_b.node.as_ref(),
+    authorize_enrollment_peer(
+        db_b.node.clone(),
         "net-soft-skip",
-        admin.as_ref(),
-        identity_a.as_ref(),
+        "Soft Skip Net",
+        identity_b.clone(),
+        identity_a.clone(),
         &peer_a,
         &addr_a,
     )
     .await;
 
-    // Network reconciler installs control pairing from seeded membership.
+    // Enrollment reconciler installs the base client route.
     let control =
-        wait_for_control_pairing_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
+        wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
             .await;
     let before = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
         .await
@@ -1056,7 +957,8 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
             create_DataPlanePairingDesired(input: {{
                 peer_id: "{peer}", agent_did: "{did}",
                 collections: ["   "], replicator_addresses: ["{addr}"],
-                template: "app-collections", created_at: "{now}", updated_at: "{now}"
+                template: "app-collections", source: "test-app-collections",
+                created_at: "{now}", updated_at: "{now}"
             }}) {{ _docID }}
         }}"#
     );
@@ -1099,4 +1001,390 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     handle_b.await.unwrap().unwrap();
     db_a.node.shutdown().await;
     db_b.node.shutdown().await;
+}
+
+#[derive(Debug, Deserialize)]
+struct HydrationStatusRow {
+    status: Option<String>,
+    served_doc_count: Option<i64>,
+    status_detail: Option<String>,
+}
+
+async fn seed_preexisting_hydration_history(
+    node: &EmbeddedNode,
+    requester_did: &str,
+    agent_did: &str,
+    behavior_id: &str,
+) {
+    let requester_did = escape_graphql_string(requester_did);
+    let agent_did = escape_graphql_string(agent_did);
+    let behavior_id = escape_graphql_string(behavior_id);
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mutation = format!(
+        r#"mutation {{
+            session: create_AgentSession(input: {{
+                session_id: "{HYDRATION_SESSION_ID}",
+                requester_did: "{requester_did}",
+                agent_did: "{agent_did}",
+                agent_name: "hydration-runtime",
+                behavior_id: "{behavior_id}",
+                started: "{now}",
+                status: "active"
+            }}) {{ _docID }}
+            message: create_AgentMessage(input: {{
+                message_key: "{HYDRATION_SESSION_ID}:1",
+                requester_did: "{requester_did}",
+                agent_did: "{agent_did}",
+                behavior_id: "{behavior_id}",
+                session_id: "{HYDRATION_SESSION_ID}",
+                sequence: 1,
+                role: "assistant",
+                content: "pre-existing authenticated hydration history",
+                timestamp: "{now}"
+            }}) {{ _docID }}
+        }}"#,
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "seed pre-existing hydration history: {:?}",
+        response.errors
+    );
+}
+
+async fn create_session_hydration_request(
+    node: &EmbeddedNode,
+    peer_id: &str,
+    requester_did: &str,
+    agent_did: &str,
+) -> String {
+    let request_key = format!("{peer_id}:{HYDRATION_SESSION_ID}");
+    let request_key_gql = escape_graphql_string(&request_key);
+    let requester_did = escape_graphql_string(requester_did);
+    let agent_did = escape_graphql_string(agent_did);
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_SessionHydrationRequest(input: {{
+                    request_key: "{request_key_gql}",
+                    requester_did: "{requester_did}",
+                    agent_did: "{agent_did}",
+                    session_id: "{HYDRATION_SESSION_ID}",
+                    created_at: "{now}",
+                    status: "pending",
+                    status_detail: "",
+                    served_doc_count: 0
+                }}) {{ _docID }}
+            }}"#,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create session hydration request: {:?}",
+        response.errors
+    );
+    request_key
+}
+
+async fn hydration_status(node: &EmbeddedNode, request_key: &str) -> Option<HydrationStatusRow> {
+    let request_key = escape_graphql_string(request_key);
+    let response = node
+        .execute(&format!(
+            r#"{{ SessionHydrationRequest(
+                filter: {{ request_key: {{ _eq: "{request_key}" }} }}, limit: 1
+            ) {{ status served_doc_count status_detail }} }}"#,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query hydration status: {:?}",
+        response.errors
+    );
+    crate::support::first_optional_row(&response, "SessionHydrationRequest")
+}
+
+async fn wait_for_hydrated_history(
+    node: &EmbeddedNode,
+    request_key: &str,
+    requester_did: &str,
+    agent_did: &str,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    let requester_did = escape_graphql_string(requester_did);
+    let agent_did = escape_graphql_string(agent_did);
+    loop {
+        let status = hydration_status(node, request_key).await;
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentMessage(filter: {{
+                    requester_did: {{ _eq: "{requester_did}" }},
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    session_id: {{ _eq: "{HYDRATION_SESSION_ID}" }}
+                }}) {{ content }} }}"#,
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "query hydrated history: {:?}",
+            response.errors
+        );
+        let message_present = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentMessage"))
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    row.get("content").and_then(Value::as_str)
+                        == Some("pre-existing authenticated hydration history")
+                })
+            });
+        if status.as_ref().is_some_and(|row| {
+            row.status.as_deref() == Some("served")
+                && row.served_doc_count.is_some_and(|count| count >= 1)
+        }) && message_present
+        {
+            return;
+        }
+        let last = format!("status={status:?}, message_present={message_present}");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for authenticated session hydration; last={last}"
+        );
+        if let Some(detail) = status
+            .as_ref()
+            .filter(|row| row.status.as_deref() == Some("rejected"))
+            .and_then(|row| row.status_detail.as_deref())
+        {
+            panic!("authenticated session hydration rejected: {detail}");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_enrollment_desired(node: &EmbeddedNode, peer_id: &str, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    let peer_id = escape_graphql_string(peer_id);
+    loop {
+        let response = node
+            .execute(&format!(
+                r#"{{ PeerPairingDesired(filter: {{
+                    peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }}
+                }}) {{ peer_id source }} }}"#,
+            ))
+            .await;
+        let ready = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("PeerPairingDesired"))
+            .and_then(Value::as_array)
+            .is_some_and(|rows| rows.len() == 1);
+        if ready {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for enrollment-owned hydration route; errors={:?}",
+            response.errors
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn install_control_only_authenticated_hydration_route(
+    server: &EmbeddedNode,
+    client: &EmbeddedNode,
+    client_peer: &str,
+    client_addr: &str,
+    requester_did: &str,
+    agent_did: &str,
+) {
+    use gents::agent::p2p_reconcile::{
+        resolve_template, resolve_template_filters, PairingDirection, CLIENT_COLLECTIONS,
+        CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
+    };
+
+    let server_addr = server
+        .p2p()
+        .expect("server P2P")
+        .shareable_address()
+        .await
+        .expect("server address lookup")
+        .expect("server shareable address");
+    let client_p2p = client.p2p().expect("client P2P");
+    let server_p2p = server.p2p().expect("server P2P");
+    client_p2p
+        .connect_peer(&server_addr)
+        .await
+        .expect("connect hydration client to server");
+    client_p2p
+        .add_collections(
+            CLIENT_COLLECTIONS
+                .iter()
+                .map(|collection| (*collection).to_string())
+                .collect(),
+        )
+        .await
+        .expect("subscribe hydration receiver collections");
+    server_p2p
+        .add_collections(vec!["SessionHydrationRequest".to_string()])
+        .await
+        .expect("subscribe hydration control collection");
+    client_p2p
+        .add_replicator(
+            CLIENT_TO_RUNTIME_COLLECTIONS
+                .iter()
+                .map(|collection| (*collection).to_string())
+                .collect(),
+            Some(&server_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("install client hydration control route");
+    server_p2p
+        .add_replicator(
+            vec!["SessionHydrationRequest".to_string()],
+            Some(client_addr),
+            Default::default(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("install hydration status return route");
+
+    let template = resolve_template(CLIENT_TEMPLATE).expect("client template");
+    let filters = resolve_template_filters(
+        template,
+        PairingDirection::ClientToRuntime,
+        requester_did,
+        agent_did,
+    );
+    let filters = escape_graphql_string(&serde_json::to_string(&filters).expect("pairing filters"));
+    let client_peer = escape_graphql_string(client_peer);
+    let client_addr = escape_graphql_string(client_addr);
+    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let response = server
+        .execute(&format!(
+            r#"mutation {{ create_PeerPairingApplied(input: {{
+                peer_id: "{client_peer}",
+                collections: ["SessionHydrationRequest"],
+                replicator_addresses: ["{client_addr}"],
+                replicator_filter: "{filters}",
+                created_at: "{now}",
+                updated_at: "{now}"
+            }}) {{ _docID }} }}"#,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "record control-only authenticated hydration route: {:?}",
+        response.errors
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticated_enrollment_hydrates_preexisting_session_history() {
+    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
+
+    let server = test_p2p_db("enrollment-session-hydration-server").await;
+    let client = test_p2p_db("enrollment-session-hydration-client").await;
+    let server_identity = server.node_identity.clone();
+    let client_identity = client.node_identity.clone();
+    let server_did = server_identity.did().to_string();
+    let client_did = client_identity.did().to_string();
+
+    seed_preexisting_hydration_history(
+        server.node.as_ref(),
+        &client_did,
+        &server_did,
+        "behavior-enrollment-hydration",
+    )
+    .await;
+
+    let (_server_peer, _server_addr) = wait_for_peer_identity(server.node.as_ref()).await;
+    let (client_peer, client_addr) = wait_for_peer_identity(client.node.as_ref()).await;
+    authorize_enrollment_peer(
+        server.node.clone(),
+        HYDRATION_NETWORK_ID,
+        "Enrollment Session Hydration",
+        server_identity.clone(),
+        client_identity.clone(),
+        &client_peer,
+        &client_addr,
+    )
+    .await;
+
+    let (authority_owner, authority) = gents::agent::p2p_reconcile::enrollment_authority_channel();
+    let enrollment_cancel = tokio_util::sync::CancellationToken::new();
+    let enrollment_handle = tokio::spawn(gents::agent::p2p_reconcile::run_enrollment_reconciler(
+        server.node.clone(),
+        server_identity.clone(),
+        authority_owner,
+        enrollment_cancel.clone(),
+    ));
+    wait_for_enrollment_desired(server.node.as_ref(), &client_peer, Duration::from_secs(30)).await;
+    install_control_only_authenticated_hydration_route(
+        server.node.as_ref(),
+        client.node.as_ref(),
+        &client_peer,
+        &client_addr,
+        &client_did,
+        &server_did,
+    )
+    .await;
+
+    let before = client
+        .node
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{HYDRATION_SESSION_ID}" }} }}) {{ _docID }} }}"#,
+        ))
+        .await;
+    assert!(
+        before
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentMessage"))
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "pre-existing history must not arrive before an explicit hydration request: {:?}",
+        before.data
+    );
+
+    let hydration_cancel = tokio_util::sync::CancellationToken::new();
+    let hydration_handle = tokio::spawn(
+        gents::agent::p2p_reconcile::run_session_hydration_reconciler(
+            server.node.clone(),
+            authority,
+            server_identity,
+            hydration_cancel.clone(),
+        ),
+    );
+
+    let request_key = create_session_hydration_request(
+        client.node.as_ref(),
+        &client_peer,
+        &client_did,
+        &server_did,
+    )
+    .await;
+    wait_for_hydrated_history(
+        client.node.as_ref(),
+        &request_key,
+        &client_did,
+        &server_did,
+        Duration::from_secs(60),
+    )
+    .await;
+
+    hydration_cancel.cancel();
+    enrollment_cancel.cancel();
+    hydration_handle.await.unwrap().unwrap();
+    enrollment_handle.await.unwrap().unwrap();
+    server.node.shutdown().await;
+    client.node.shutdown().await;
 }

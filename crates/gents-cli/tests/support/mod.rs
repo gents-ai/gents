@@ -28,11 +28,10 @@ pub use process::{
     spawn_server_with_env, spawn_server_with_ready_json, wait_for_port, ServeProcess,
 };
 pub use waits::{
-    insert_terminal_response, peer_pairing_row, wait_for_completed_inference_behaviors,
-    wait_for_completed_tool_calls, wait_for_connected_peer, wait_for_pairing_applied,
-    wait_for_request, wait_for_request_lifecycle_state, wait_for_runtime_doc_id,
-    wait_for_runtime_quiescence, wait_for_runtime_ready, wait_for_runtime_state_graphql,
-    wait_for_tool_call,
+    insert_terminal_response, wait_for_completed_inference_behaviors,
+    wait_for_completed_tool_calls, wait_for_connected_peer, wait_for_request,
+    wait_for_request_lifecycle_state, wait_for_runtime_quiescence, wait_for_runtime_ready,
+    wait_for_runtime_state_graphql, wait_for_tool_call,
 };
 
 // Matches the DEFAULT_LIVE_ENDPOINT the gents e2e_live suite uses
@@ -91,4 +90,17 @@ pub fn agent_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
         "init returned a name-derived DID placeholder: {agent_did}"
     );
     Ok(agent_did.to_string())
+}
+
+/// Load the exact initialized-home identity into this test process so fixtures
+/// that represent runtime-authored documents can use the production signing
+/// path. The server process registers the same key independently.
+pub fn identity_from_init(init: &serde_json::Value) -> anyhow::Result<gents::KeyIdentity> {
+    use anyhow::Context as _;
+
+    let key_path = init
+        .get("key_path")
+        .and_then(serde_json::Value::as_str)
+        .context("init output missing key_path")?;
+    gents::KeyIdentity::load_or_create(key_path, None).context("loading initialized agent identity")
 }

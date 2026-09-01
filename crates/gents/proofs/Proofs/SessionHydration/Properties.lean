@@ -2,9 +2,10 @@ import Proofs.SessionHydration.Executable
 
 namespace SessionHydration
 
-theorem terminalFor_insert_self (st : State) (r : Request) (outcome : Outcome) (count : Nat) :
-    terminalFor { st with terminals := insert (terminal r outcome count) st.terminals } r.key := by
-  exact ⟨terminal r outcome count, Finset.mem_insert_self _ _, rfl⟩
+theorem terminalFor_insert_self (st : State) (r : Request) (outcome : Outcome)
+    (documents : Finset Document) :
+    terminalFor { st with terminals := insert (terminal r outcome documents) st.terminals } r.key := by
+  exact ⟨terminal r outcome documents, Finset.mem_insert_self _ _, rfl⟩
 
 /-- A request that fails admission never delivers a document. -/
 theorem hydration_request_grants_nothing (cat : Catalog) (st : State) (r : Request)

@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::{AgentIdentity, KeyIdentity};
+use gents_protocol::row::{
+    decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow, BehaviorReadinessProcessState,
+};
 use serde_json::Value;
 
 use crate::cli::ManifestAgentDidBindingArg;
@@ -205,7 +208,6 @@ fn counts_for_manifest(manifest: &DesiredStateManifest) -> DesiredStateCounts {
         inference_profiles: manifest.inference_profiles.len(),
         tool_service_registries: manifest.tool_service_registries.len(),
         projection_acp_bindings: manifest.projection_acp_bindings.len(),
-        peer_pairings: manifest.peer_pairings.len(),
         tasks: manifest.tasks.len(),
         schedules: manifest.schedules.len(),
         event_triggers: manifest.event_triggers.len(),
@@ -291,17 +293,17 @@ async fn resolve_live_agent_did(access: &ConfigAccess) -> Result<String> {
     let response = access
         .execute(
             r#"{
-                AgentRuntime(order: { updated_at: DESC }) {
+                AgentBehaviorReadiness(order: { updated_at: DESC }) {
                     agent_did
-                    process_state
+                    snapshot_json
                     updated_at
                 }
             }"#,
         )
         .await
-        .context("querying live AgentRuntime for agent DID")?;
+        .context("querying live behavior readiness for agent DID")?;
     let rows = response
-        .pointer("/data/AgentRuntime")
+        .pointer("/data/AgentBehaviorReadiness")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -310,28 +312,30 @@ async fn resolve_live_agent_did(access: &ConfigAccess) -> Result<String> {
         .iter()
         .copied()
         .find(|row| {
-            row.get("process_state")
-                .and_then(Value::as_str)
+            serde_json::from_value::<AgentBehaviorReadinessRow>((*row).clone())
+                .ok()
+                .and_then(|row| {
+                    decode_behavior_readiness_snapshot(&row, &row.agent_did)
+                        .ok()
+                        .map(|snapshot| snapshot.process_state)
+                })
                 .is_some_and(is_active_runtime_state)
         })
-        .or_else(|| rows.first().copied())
-        .ok_or_else(|| anyhow::anyhow!("live runtime did not return an AgentRuntime agent_did"))?;
+        .ok_or_else(|| anyhow::anyhow!("live runtime did not publish active behavior readiness"))?;
     let agent_did = selected
         .get("agent_did")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!("live runtime returned an AgentRuntime row without agent_did")
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("live behavior readiness row did not contain agent_did"))?;
     Ok(agent_did.to_string())
 }
 
-fn is_active_runtime_state(state: &str) -> bool {
-    match state.trim() {
-        "shutdown" | "shuttingDown" => false,
-        value => !value.trim().is_empty(),
-    }
+fn is_active_runtime_state(state: BehaviorReadinessProcessState) -> bool {
+    !matches!(
+        state,
+        BehaviorReadinessProcessState::Shutdown | BehaviorReadinessProcessState::ShuttingDown
+    )
 }
 
 fn enforce_manifest_rebind_safety(
@@ -506,7 +510,6 @@ mod tests {
             inference_profiles: Vec::new(),
             tool_service_registries: Vec::new(),
             projection_acp_bindings: Vec::new(),
-            peer_pairings: Vec::new(),
             tasks: Vec::new(),
             schedules: Vec::new(),
             event_triggers: Vec::new(),

@@ -1,6 +1,6 @@
 //! Fleet-discovery directory projection (issue #714).
 //!
-//! Projects AgentPrincipal x AgentBehavior x AgentRuntime into
+//! Projects AgentPrincipal x AgentBehavior x AgentBehaviorReadiness into
 //! AgentDirectoryEntry rows — the replicated agent index the `machine`
 //! pairing template pushes to attached clients. Modeled in
 //! `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean`; fenced by
@@ -114,7 +114,8 @@ pub struct SourceSnapshot {
     /// Per principal, the enabled behaviors as `BehaviorInfo` (display name
     /// falls back to the id when blank).
     pub behaviors: BTreeMap<String, Vec<BehaviorInfo>>,
-    /// Per principal, `(process_state, updated_at)` from `AgentRuntime`.
+    /// Per principal, `(process_state, updated_at)` from the authoritative
+    /// `AgentBehaviorReadiness` projection.
     pub runtimes: BTreeMap<String, (String, String)>,
     /// `ToolSelection` rows keyed by `selection_id`.
     pub selections: BTreeMap<String, SelectionInfo>,
@@ -156,7 +157,7 @@ pub fn directory_entry_key(source_did: &str, agent_did: &str) -> String {
 /// `DateTime` column stores and returns, so a settled directory row stays a
 /// write-free fixpoint.
 ///
-/// `AgentRuntime.updated_at` is a *String* column the runtime writes as
+/// `AgentBehaviorReadiness.updated_at` is a *String* column the runtime writes as
 /// `Utc::now().to_rfc3339()` — offset `+00:00`, sub-second precision — but
 /// `AgentDirectoryEntry.last_seen` is a `DateTime` column that re-serializes on
 /// storage: it renders the offset as `Z`, and its sub-second rendering is not
@@ -171,7 +172,7 @@ pub fn directory_entry_key(source_did: &str, agent_did: &str) -> String {
 /// conformance fence and the embedded-node fixpoint test pin this), and
 /// sub-second freshness is not meaningful for a fleet "last seen". The function
 /// is idempotent (`canon(canon(x)) == canon(x)`), preserving the model's
-/// projection idempotence. Blank input (a principal with no `AgentRuntime` row)
+/// projection idempotence. Blank input (a principal with no readiness row)
 /// stays blank → rendered as `null`. Genuinely unparseable non-blank input
 /// passes through trimmed unchanged; that one row still fails its upsert, as
 /// before, under the per-entry error tolerance in `reconcile_directory_tick`.
@@ -304,7 +305,7 @@ pub async fn reconcile_directory_tick(
         .context("list directory entries")?;
 
     // Per-entry error tolerance: one principal's malformed source row (e.g.
-    // no AgentRuntime row, previously producing an unparseable `last_seen`)
+    // no readiness row, previously producing an unparseable `last_seen`)
     // must not abort the whole sweep. Warn-and-continue past each failure,
     // collecting only the first error to return once every entry has had a
     // chance to converge; outcome sets only ever record operations that
@@ -456,9 +457,9 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 inference_profile_id
                 enabled
             }
-            AgentRuntime {
+            AgentBehaviorReadiness {
                 agent_did
-                process_state
+                snapshot_json
                 updated_at
             }
             ToolSelection {
@@ -822,28 +823,22 @@ fn parse_behaviors(response: &QueryResponse) -> Result<BTreeMap<String, Vec<Beha
 }
 
 fn parse_runtime_states(response: &QueryResponse) -> Result<BTreeMap<String, (String, String)>> {
-    Ok(rows::<RuntimeRow>(response, "AgentRuntime")?
-        .into_iter()
-        .filter_map(|row| {
-            let did = row.agent_did?.trim().to_string();
-            if did.is_empty() {
-                return None;
-            }
-            let process_state = row
-                .process_state
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string();
-            let updated_at = row
-                .updated_at
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string();
-            Some((did, (process_state, updated_at)))
-        })
-        .collect())
+    Ok(
+        rows::<gents_protocol::row::AgentBehaviorReadinessRow>(response, "AgentBehaviorReadiness")?
+            .into_iter()
+            .filter_map(|row| {
+                let did = row.agent_did.trim().to_string();
+                if did.is_empty() {
+                    return None;
+                }
+                let snapshot =
+                    gents_protocol::row::decode_behavior_readiness_snapshot(&row, &did).ok()?;
+                let process_state = snapshot.process_state.as_str().to_string();
+                let updated_at = row.updated_at.trim().to_string();
+                Some((did, (process_state, updated_at)))
+            })
+            .collect(),
+    )
 }
 
 fn parse_tool_selections(response: &QueryResponse) -> Result<BTreeMap<String, SelectionInfo>> {
@@ -1124,15 +1119,6 @@ struct InferenceProfileRow {
 }
 
 #[derive(Deserialize)]
-struct RuntimeRow {
-    agent_did: Option<String>,
-    #[serde(default)]
-    process_state: Option<String>,
-    #[serde(default)]
-    updated_at: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct DirectoryRow {
     #[serde(default)]
     directory_key: Option<String>,
@@ -1221,7 +1207,7 @@ mod tests {
         }
     }
 
-    /// C2 regression: a principal with no `AgentRuntime` row derives a blank
+    /// C2 regression: a principal with no readiness row derives a blank
     /// `last_seen`; the mutation must render `null`, never `""` — DefraDB
     /// rejects a non-RFC3339 `DateTime` string on create AND upsert, and an
     /// unconditional quoted render poisoned the whole directory sweep.
@@ -1442,7 +1428,7 @@ mod tests {
         assert_eq!(canonicalize_last_seen("not-a-date"), "not-a-date");
     }
 
-    /// Regression fence for the settled-fixpoint bug: an `AgentRuntime.updated_at`
+    /// Regression fence for the settled-fixpoint bug: a readiness `updated_at`
     /// written in the runtime's real `Utc::now().to_rfc3339()` shape (offset
     /// `+00:00`, sub-second precision) used to differ from its own stored
     /// `AgentDirectoryEntry.last_seen` `DateTime` round-trip (offset `Z`),
@@ -1492,6 +1478,21 @@ mod tests {
         );
         crate::ensure_runtime_schemas(&node).await?;
         let updated_at = Utc::now().to_rfc3339();
+        let snapshot_json = escape_graphql_string(
+            &serde_json::json!({
+                "format_version": 1,
+                "process_state": "ready",
+                "active_generation": 1,
+                "router_generation": 1,
+                "default_behavior_id": "general",
+                "behaviors": [{
+                    "behavior_id": "general",
+                    "state": "ready",
+                    "reason": null
+                }]
+            })
+            .to_string(),
+        );
         let seed = format!(
             r#"mutation {{
                 create_AgentPrincipal(input: {{
@@ -1500,9 +1501,9 @@ mod tests {
                     enabled: true,
                     created_at: "2026-07-23T00:00:00Z"
                 }}) {{ _docID }}
-                create_AgentRuntime(input: {{
+                create_AgentBehaviorReadiness(input: {{
                     agent_did: "did:key:real",
-                    process_state: "running",
+                    snapshot_json: "{snapshot_json}",
                     updated_at: "{updated_at}"
                 }}) {{ _docID }}
             }}"#
@@ -1534,8 +1535,8 @@ mod tests {
 
     /// C2 regression, embedded-node integration (mirrors reciprocal.rs's
     /// `graphql_tick_retracts_for_signed_revoked_membership`): two principals,
-    /// one WITHOUT an `AgentRuntime` row, converge in one tick — the
-    /// runtime-less principal's directory row must exist with `last_seen`
+    /// one WITHOUT an `AgentBehaviorReadiness` row, converge in one tick — the
+    /// readiness-less principal's directory row must exist with `last_seen`
     /// round-tripping to `""` rather than aborting the sweep. Deleting a
     /// principal then retracts exactly its row.
     ///
@@ -1605,9 +1606,9 @@ mod tests {
                 display_name: "Disabled Behavior",
                 enabled: false
             }) { _docID }
-            create_AgentRuntime(input: {
+            create_AgentBehaviorReadiness(input: {
                 agent_did: "did:key:with-runtime",
-                process_state: "running",
+                snapshot_json: "{\"format_version\":1,\"process_state\":\"ready\",\"active_generation\":1,\"router_generation\":1,\"default_behavior_id\":\"enabled-behavior\",\"behaviors\":[{\"behavior_id\":\"artist-behavior\",\"state\":\"ready\",\"reason\":null},{\"behavior_id\":\"enabled-behavior\",\"state\":\"ready\",\"reason\":null}]}",
                 updated_at: "2026-07-23T12:34:56.845794+00:00"
             }) { _docID }
             create_ToolSelection(input: {
@@ -1661,7 +1662,7 @@ mod tests {
         let with_runtime = entries
             .get("did:key:with-runtime")
             .expect("with-runtime directory row");
-        assert_eq!(with_runtime.runtime_state, "running");
+        assert_eq!(with_runtime.runtime_state, "ready");
         assert_eq!(
             with_runtime.behaviors,
             vec![
@@ -1744,10 +1745,10 @@ mod tests {
         assert_eq!(with_runtime.last_seen, "2026-07-23T12:34:56Z");
         let no_runtime = entries
             .get("did:key:no-runtime")
-            .expect("no-runtime directory row present despite no AgentRuntime row");
+            .expect("no-runtime directory row present despite no readiness row");
         assert_eq!(
             no_runtime.last_seen, "",
-            "runtime-less principal's stored null last_seen must round-trip to \"\""
+            "readiness-less principal's stored null last_seen must round-trip to \"\""
         );
         assert_eq!(
             no_runtime.default_behavior_id, "",

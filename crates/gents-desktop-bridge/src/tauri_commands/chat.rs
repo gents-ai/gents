@@ -34,7 +34,10 @@ pub async fn desktop_session_snapshot(
     });
 
     if let Some(agent_did) = agent_did.as_deref() {
-        if let Err(error) = core.focus_session(&session_id, agent_did).await {
+        if let Err(error) = core
+            .ensure_session_hydration_started(&session_id, agent_did)
+            .await
+        {
             tracing::warn!(
                 target: "gents_desktop::chat",
                 agent_did,
@@ -59,7 +62,7 @@ pub async fn desktop_session_snapshot(
         core.peer_records()
             .await
             .iter()
-            .any(|peer| peer.agent_did == agent_did && peer.is_bearer_pairing())
+            .any(|peer| peer.agent_did == agent_did && peer.is_enrollment())
             .then(|| core.principal().did().to_string())
     } else {
         None
@@ -123,6 +126,36 @@ pub async fn desktop_session_snapshot(
         .map_err(BridgeError::from_legacy_message)?;
     }
     Ok(snapshot)
+}
+
+#[tauri::command]
+pub async fn desktop_session_hydration_retry(
+    session_id: String,
+    agent_did: Option<String>,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
+    };
+    let agent_did = agent_did
+        .or_else(|| {
+            core.store()
+                .snapshot()
+                .conversations
+                .iter()
+                .find(|conversation| conversation.session_id == session_id)
+                .and_then(|conversation| conversation.agent_did.clone())
+        })
+        .ok_or_else(|| {
+            BridgeError::from_legacy_message(
+                "session hydration retry requires an agent for the selected session",
+            )
+        })?;
+    core.retry_session_hydration(&session_id, &agent_did)
+        .await
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
 #[tauri::command]

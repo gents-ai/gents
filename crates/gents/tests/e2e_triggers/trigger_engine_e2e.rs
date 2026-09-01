@@ -21,7 +21,9 @@
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 
-use crate::support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
+use crate::support::{
+    materialization_identity, test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+};
 
 #[tokio::test]
 async fn scheduled_fire_persists_trigger_lineage_on_agent_request() {
@@ -38,7 +40,7 @@ async fn scheduled_fire_persists_trigger_lineage_on_agent_request() {
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        materialization_identity(),
         "rendered prompt from trigger engine",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -57,6 +59,10 @@ async fn scheduled_fire_persists_trigger_lineage_on_agent_request() {
                 caused_by_source_doc_id
                 execution_origin
                 lifecycle_state
+                requester_did
+                admission_kind
+                admission_signer_did
+                admission_signature
             }}
         }}"#
     );
@@ -101,5 +107,26 @@ async fn scheduled_fire_persists_trigger_lineage_on_agent_request() {
         row.get("lifecycle_state").and_then(|v| v.as_str()),
         Some("claimed"),
         "materialize_claimed_with_execution_binding should persist lifecycle_state=claimed: {row}"
+    );
+    assert_eq!(
+        row.get("requester_did").and_then(|v| v.as_str()),
+        Some(AGENT_DID),
+        "direct materialization must use the target principal as requester: {row}"
+    );
+    assert_eq!(
+        row.get("admission_kind").and_then(|v| v.as_str()),
+        Some("local-self"),
+        "direct materialization must use the signed localSelf branch: {row}"
+    );
+    assert_eq!(
+        row.get("admission_signer_did").and_then(|v| v.as_str()),
+        Some(AGENT_DID),
+        "direct materialization must be signed by the target principal: {row}"
+    );
+    assert!(
+        row.get("admission_signature")
+            .and_then(|v| v.as_str())
+            .is_some_and(|signature| !signature.is_empty()),
+        "direct materialization must persist a non-empty admission signature: {row}"
     );
 }

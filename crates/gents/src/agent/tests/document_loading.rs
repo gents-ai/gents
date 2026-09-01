@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use gents_protocol::row::BehaviorReadinessUnavailableReason;
+
 use super::super::*;
 use super::support::*;
 use crate::default_behavior_id_for_agent;
@@ -56,7 +58,7 @@ async fn from_default_behavior_documents_marks_unbound_default_behavior_unavaila
         agent
             .unavailable_behaviors()
             .get(default_behavior_id.as_str())
-            .map(String::as_str),
+            .map(|unavailable| unavailable.diagnostic.as_str()),
         Some(format!("behavior {default_behavior_id} has no backend binding").as_str())
     );
 }
@@ -481,7 +483,7 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
     assert!(agent
         .unavailable_behaviors()
         .get(default_behavior_id.as_str())
-        .is_some_and(|message| message.contains("subagent_targets entry")));
+        .is_some_and(|message| message.diagnostic.contains("subagent_targets entry")));
 }
 
 #[tokio::test]
@@ -635,7 +637,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
         .cloned()
         .expect("missing default behavior rejection");
     assert_eq!(
-        default_reason,
+        default_reason.diagnostic,
         format!("behavior {default_behavior_id} has no backend binding")
     );
     let broken_reason = agent
@@ -643,17 +645,25 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
         .get("broken")
         .cloned()
         .expect("missing broken behavior rejection");
-    assert!(broken_reason.contains("references missing backend backend-missing"));
+    assert!(broken_reason
+        .diagnostic
+        .contains("references missing backend backend-missing"));
     let disabled_reason = agent
         .unavailable_behaviors()
         .get("disabled")
         .cloned()
         .expect("missing disabled behavior rejection");
-    assert_eq!(disabled_reason, "behavior disabled is disabled");
+    assert_eq!(disabled_reason.diagnostic, "behavior disabled is disabled");
     let unhealthy_reason = agent
         .unavailable_behaviors()
         .get("unhealthy")
         .cloned()
         .expect("missing unhealthy behavior rejection");
-    assert!(unhealthy_reason.contains("backend backend-unhealthy is unavailable"));
+    assert_eq!(
+        unhealthy_reason.public_reason,
+        BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
+    );
+    assert!(unhealthy_reason
+        .diagnostic
+        .contains("backend backend-unhealthy is not ready"));
 }

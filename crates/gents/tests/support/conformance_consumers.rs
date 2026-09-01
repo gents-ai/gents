@@ -203,6 +203,41 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_session_hydration_progress_cases_match_observe",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::session_hydration::generated_session_hydration_durable_cases_match_storage_projection",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/session_hydration.rs",
+            module_path: "conformance::session_hydration",
+            function: "generated_session_hydration_durable_cases_match_storage_projection",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::enrollment::generated_enrollment_cases_match_production_transition_core",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/enrollment.rs",
+            module_path: "conformance::enrollment",
+            function: "generated_enrollment_cases_match_production_transition_core",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::enrollment::generated_enrollment_encoding_vectors_match_wire_codec",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/enrollment.rs",
+            module_path: "conformance::enrollment",
+            function: "generated_enrollment_encoding_vectors_match_wire_codec",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::enrollment::generated_enrollment_digest_vectors_match_wire_codec",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/enrollment.rs",
+            module_path: "conformance::enrollment",
+            function: "generated_enrollment_digest_vectors_match_wire_codec",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::enrollment::generated_agent_request_admission_cases_match_shared_projector",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/enrollment.rs",
+            module_path: "conformance::enrollment",
+            function: "generated_agent_request_admission_cases_match_shared_projector",
+        },
+        ConformanceConsumer::RustTest {
             id: "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary",
             package: "gents-cli",
             source_path:

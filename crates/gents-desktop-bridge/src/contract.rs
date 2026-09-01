@@ -1,6 +1,5 @@
 //! Bridge contract fingerprint: command inventory, permission sets, events,
-//! error codes, and version. Phase 2 wires the snapshot; phase 3 enforces
-//! permission projection and typed errors against it.
+//! error codes, generated wire schema, and version.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -8,6 +7,12 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 4.0: breaking — status-first enrollment replaces unauthenticated peer add.
+// 3.0: breaking — runtime-authored behavior readiness is required on every
+//       deployment and duplicate AgentRuntime readiness counters are removed.
+// 2.0: breaking — global sync health no longer embeds selected-session
+//       hydration; hydration wakes use the existing store reason.
+// 1.6: additive — explicit session hydration retry command.
 // 1.5: additive — session hydration / sync-health snapshot fields and
 //       `desktop://client-updated` reason `hydration`.
 // 1.4: additive — owner-scoped mailbox read/start/dismiss commands.
@@ -24,7 +29,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "1.5";
+pub const CONTRACT_VERSION: &str = "4.0";
+
+/// Exact digest of the committed generated TypeScript wire tree. The client
+/// checks this in addition to semantic versioning, so a DTO shape change
+/// cannot silently ship under an unchanged contract version.
+pub const WIRE_SCHEMA_HASH: &str =
+    "7a0203eda69c7fedd3f50f89b48af64e7aac23c86a92718742dc9417d8c6bc7a";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -34,6 +45,7 @@ pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct BridgeContract {
     pub contract_version: String,
     pub package_version: String,
+    pub wire_schema_hash: String,
     pub events: Vec<String>,
     pub event_reasons: Vec<String>,
     pub error_codes: Vec<String>,
@@ -68,7 +80,7 @@ pub const MANAGED_SERVER_TRAY_STOP_EVENT: &str = "desktop://managed-server-tray-
 pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
 
 /// Coarse ping reasons on `desktop://client-updated`.
-pub const EVENT_REASONS: &[&str] = &["store", "health", "hydration", "lifecycle", "config"];
+pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
 /// Provisional command → permission-set map from the design table.
 /// Phase 3 finalizes assignment under the no-read/mutate-mixing rule.
@@ -91,6 +103,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
+        // session-control
+        ("desktop_session_hydration_retry", "session-control"),
         // trace-read
         ("desktop_request_timeline", "trace-read"),
         // tool-surface-read
@@ -111,11 +125,9 @@ pub fn command_inventory() -> Vec<CommandContract> {
         // workspace-read
         ("desktop_workspace_list", "workspace-read"),
         // fleet-admin
-        ("desktop_peer_add", "fleet-admin"),
-        ("desktop_peer_pair_bearer", "fleet-admin"),
         ("desktop_peer_remove", "fleet-admin"),
         ("desktop_peer_rename", "fleet-admin"),
-        ("desktop_peer_probe_address", "fleet-admin"),
+        ("desktop_peer_enroll_status", "fleet-admin"),
         ("desktop_p2p_repair", "fleet-admin"),
         // operations-read
         ("desktop_operations_snapshot", "operations-read"),
@@ -185,6 +197,7 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("client-lifecycle", "mutate"),
         ("runtime-admin", "mutate"),
         ("session-read", "read"),
+        ("session-control", "mutate"),
         ("trace-read", "read"),
         ("tool-surface-read", "read"),
         ("chat-write", "mutate"),
@@ -239,6 +252,7 @@ pub fn current_contract() -> BridgeContract {
     BridgeContract {
         contract_version: CONTRACT_VERSION.to_string(),
         package_version: PACKAGE_VERSION.to_string(),
+        wire_schema_hash: WIRE_SCHEMA_HASH.to_string(),
         events: vec![
             CLIENT_UPDATED_EVENT.to_string(),
             CODEX_LOGIN_URL_EVENT.to_string(),
@@ -289,6 +303,34 @@ mod tests {
     use serde::Deserialize;
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
+
+    fn generated_wire_schema_hash() -> String {
+        let generated = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/gents-desktop-client/src/generated");
+        let mut paths = std::fs::read_dir(&generated)
+            .expect("read generated wire bindings")
+            .map(|entry| entry.expect("generated binding entry").path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("ts"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        let mut hasher = blake3::Hasher::new();
+        for path in paths {
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .expect("generated binding filename");
+            hasher.update(name.as_bytes());
+            hasher.update(&[0]);
+            hasher.update(&std::fs::read(&path).expect("read generated binding"));
+            hasher.update(&[0]);
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
+    #[test]
+    fn wire_schema_hash_matches_generated_bindings() {
+        assert_eq!(WIRE_SCHEMA_HASH, generated_wire_schema_hash());
+    }
 
     #[derive(Debug, Deserialize)]
     struct PermissionSetFile {
@@ -450,7 +492,7 @@ mod tests {
             .filter(|set_id| {
                 !matches!(
                     set_id.as_str(),
-                    "full" | "native-e2e" | "core" | "client-lifecycle"
+                    "full" | "native-e2e" | "core" | "client-lifecycle" | "runtime-admin"
                 )
             })
             .cloned()
@@ -458,7 +500,7 @@ mod tests {
         expected_full_references.insert("default".to_string());
         assert_eq!(
             full_references, expected_full_references,
-            "production full bundle must compose default plus every production set exactly once"
+            "cross-platform full bundle must exclude desktop-only runtime administration"
         );
 
         let sets_by_id = permission_file
@@ -488,12 +530,12 @@ mod tests {
         }
         let expected_production_commands = inventory
             .iter()
-            .filter(|(_, set)| set.as_str() != "native-e2e")
+            .filter(|(_, set)| !matches!(set.as_str(), "native-e2e" | "runtime-admin"))
             .map(|(command, _)| command.clone())
             .collect::<BTreeSet<_>>();
         assert_eq!(
             expanded_full_commands, expected_production_commands,
-            "production full bundle must expand to every production command and exclude native-e2e"
+            "cross-platform full bundle must exclude native-e2e and desktop-only runtime commands"
         );
     }
 
@@ -524,6 +566,7 @@ mod tests {
             ("desktop_managed_server_stop", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_session_live_delta", "read"),
+            ("desktop_session_hydration_retry", "mutate"),
             ("desktop_request_timeline", "read"),
             ("desktop_tool_surface_explain", "read"),
             ("desktop_chat_send", "mutate"),
@@ -536,11 +579,9 @@ mod tests {
             ("desktop_peer_status_fetch", "read"),
             ("desktop_network_status", "read"),
             ("desktop_workspace_list", "read"),
-            ("desktop_peer_add", "mutate"),
-            ("desktop_peer_pair_bearer", "mutate"),
             ("desktop_peer_remove", "mutate"),
             ("desktop_peer_rename", "mutate"),
-            ("desktop_peer_probe_address", "mutate"),
+            ("desktop_peer_enroll_status", "mutate"),
             ("desktop_p2p_repair", "mutate"),
             ("desktop_operations_snapshot", "read"),
             ("desktop_list_subagent_tree", "read"),

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,8 +27,9 @@ pub(super) struct RuntimeContext {
     pub(super) background_execution_registry: BackgroundExecutionRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
     pub(super) startup_readiness: crate::startup_readiness::StartupReadinessOptions,
-    pub(super) startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
+    pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
     pub(super) operator_tool_root: Option<PathBuf>,
+    pub(super) enrollment_authority: crate::agent::p2p_reconcile::EnrollmentAuthorityHandle,
 }
 
 pub(super) struct BehaviorResolution {
@@ -37,27 +38,37 @@ pub(super) struct BehaviorResolution {
 }
 
 pub struct StartupBarrier {
-    pending_behaviors: Mutex<HashSet<String>>,
+    pending_standings: Mutex<BTreeSet<(String, u64)>>,
     pending_count_tx: watch::Sender<usize>,
 }
 
 impl StartupBarrier {
     pub(super) fn new(behaviors: &[Arc<crate::config::AgentBehavior>]) -> Self {
-        let pending: HashSet<String> = behaviors
+        let pending: BTreeSet<(String, u64)> = behaviors
             .iter()
-            .map(|behavior| behavior.behavior_id.clone())
+            .map(|behavior| (behavior.behavior_id.clone(), 1))
             .collect();
         let (pending_count_tx, _) = watch::channel(pending.len());
         Self {
-            pending_behaviors: Mutex::new(pending),
+            pending_standings: Mutex::new(pending),
             pending_count_tx,
         }
     }
 
-    async fn release(&self, behavior_id: &str) {
-        let mut pending = self.pending_behaviors.lock().await;
-        if pending.remove(behavior_id) {
+    async fn release(&self, behavior_id: &str, generation: u64) -> bool {
+        let mut pending = self.pending_standings.lock().await;
+        if pending.remove(&(behavior_id.to_string(), generation)) {
             let _ = self.pending_count_tx.send_replace(pending.len());
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn register_behavior(&self, behavior_id: &str, generation: u64) {
+        let mut pending = self.pending_standings.lock().await;
+        if pending.insert((behavior_id.to_string(), generation)) {
+            self.pending_count_tx.send_replace(pending.len());
         }
     }
 
@@ -66,32 +77,32 @@ impl StartupBarrier {
         Self::new(&[])
     }
 
-    pub async fn mark_behavior_ready(&self, behavior_id: &str) {
-        self.release(behavior_id).await;
+    pub async fn mark_behavior_ready(&self, behavior_id: &str, generation: u64) -> bool {
+        self.release(behavior_id, generation).await
     }
 
-    pub async fn mark_behavior_demoted(&self, behavior_id: &str) {
-        self.release(behavior_id).await;
+    pub async fn mark_behavior_demoted(&self, behavior_id: &str, generation: u64) -> bool {
+        self.release(behavior_id, generation).await
     }
 
-    pub async fn mark_behavior_superseded(&self, behavior_id: &str) {
-        self.release(behavior_id).await;
+    pub async fn mark_behavior_superseded(&self, behavior_id: &str, generation: u64) -> bool {
+        self.release(behavior_id, generation).await
     }
 
-    pub async fn is_pending(&self, behavior_id: &str) -> bool {
-        self.pending_behaviors.lock().await.contains(behavior_id)
+    pub async fn is_pending(&self, behavior_id: &str, generation: u64) -> bool {
+        self.pending_standings
+            .lock()
+            .await
+            .contains(&(behavior_id.to_string(), generation))
     }
 
     pub async fn pending_behaviors(&self) -> Vec<String> {
-        let mut pending: Vec<String> = self
-            .pending_behaviors
+        self.pending_standings
             .lock()
             .await
             .iter()
-            .cloned()
-            .collect();
-        pending.sort();
-        pending
+            .map(|(behavior_id, generation)| format!("{behavior_id}@{generation}"))
+            .collect()
     }
 
     pub(super) async fn wait_ready(&self) {
@@ -106,6 +117,7 @@ impl RuntimeContext {
         behavior: Arc<crate::config::AgentBehavior>,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        slot_generation: u64,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
@@ -164,6 +176,7 @@ impl RuntimeContext {
                     Box::pin(self.run_behavior_with_client(
                         behavior,
                         request_rx,
+                        slot_generation,
                         shutdown,
                         prompt_builder,
                         preamble,
@@ -195,6 +208,7 @@ impl RuntimeContext {
                     Box::pin(self.run_behavior_with_client(
                         behavior,
                         request_rx,
+                        slot_generation,
                         shutdown,
                         prompt_builder,
                         preamble,
@@ -225,6 +239,7 @@ impl RuntimeContext {
                 Box::pin(self.run_behavior_with_client(
                     behavior,
                     request_rx,
+                    slot_generation,
                     shutdown,
                     prompt_builder,
                     preamble,
@@ -262,6 +277,7 @@ impl RuntimeContext {
                 Box::pin(self.run_behavior_with_client(
                     behavior,
                     request_rx,
+                    slot_generation,
                     shutdown,
                     prompt_builder,
                     preamble,
@@ -300,6 +316,7 @@ impl RuntimeContext {
                     Box::pin(self.run_behavior_with_client(
                         behavior,
                         request_rx,
+                        slot_generation,
                         shutdown,
                         prompt_builder,
                         preamble,
@@ -326,6 +343,7 @@ impl RuntimeContext {
                     Box::pin(self.run_behavior_with_client(
                         behavior,
                         request_rx,
+                        slot_generation,
                         shutdown,
                         prompt_builder,
                         preamble,
@@ -346,6 +364,7 @@ impl RuntimeContext {
         &self,
         behavior: Arc<crate::config::AgentBehavior>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        slot_generation: u64,
         shutdown: watch::Receiver<bool>,
         prompt_builder: LayeredPromptBuilder,
         preamble: String,
@@ -364,6 +383,11 @@ impl RuntimeContext {
             self.admission_registry.clone(),
             behavior.as_ref(),
         ));
+        let request_admission = crate::request_admission::AgentRequestAdmissionVerifier::new(
+            self.node.clone(),
+            behavior.principal_identity().clone(),
+            self.enrollment_authority.clone(),
+        );
         let mut daemon = BehaviorDaemon::new(
             self.node.clone(),
             behavior,
@@ -376,7 +400,9 @@ impl RuntimeContext {
             background_tool_registry,
             self.background_execution_registry.clone(),
             self.startup_barrier.clone(),
-            self.startup_demotions.clone(),
+            self.runtime_status.clone(),
+            slot_generation,
+            request_admission,
         )
         .with_approval_required_tools(approval_required_tools)
         .with_output_obligations(output_obligations)
@@ -421,14 +447,14 @@ mod startup_barrier_tests {
         let barrier = Arc::new(StartupBarrier::new(&[behavior("a"), behavior("b")]));
 
         // Release one before any waiter exists.
-        barrier.mark_behavior_ready("a").await;
+        barrier.mark_behavior_ready("a", 1).await;
 
         let waiter = {
             let barrier = barrier.clone();
             tokio::spawn(async move { barrier.wait_ready().await })
         };
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        barrier.mark_behavior_ready("b").await;
+        barrier.mark_behavior_ready("b", 1).await;
 
         tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
             .await
@@ -447,11 +473,11 @@ mod startup_barrier_tests {
             behavior("retired"),
         ]));
 
-        barrier.mark_behavior_ready("healthy").await;
-        barrier.mark_behavior_demoted("unbuildable").await;
-        assert!(barrier.is_pending("retired").await);
-        barrier.mark_behavior_superseded("retired").await;
-        assert!(!barrier.is_pending("retired").await);
+        barrier.mark_behavior_ready("healthy", 1).await;
+        barrier.mark_behavior_demoted("unbuildable", 1).await;
+        assert!(barrier.is_pending("retired", 1).await);
+        barrier.mark_behavior_superseded("retired", 1).await;
+        assert!(!barrier.is_pending("retired", 1).await);
 
         tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
             .await

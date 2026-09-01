@@ -126,6 +126,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         task: &crate::runtime_snapshot::ResolvedTask,
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
+        trigger_doc_id: Option<&str>,
         source_doc_id: Option<&str>,
         correlation: Option<&str>,
         trigger_context: Option<&str>,
@@ -246,7 +247,7 @@ impl TriggerEngine {
 
         let snapshot = self.snapshot_rx.borrow().clone();
 
-        match intent.trigger_kind {
+        let trigger_doc_id = match intent.trigger_kind {
             TriggerKind::Schedule => {
                 let Some(trigger_id) = intent.trigger_id.as_deref() else {
                     let result = FireResult::Errored {
@@ -255,13 +256,14 @@ impl TriggerEngine {
                     (intent.on_result)(result.clone());
                     return result;
                 };
-                if snapshot.active_schedules().get(trigger_id).is_none() {
+                let Some(trigger) = snapshot.active_schedules().get(trigger_id) else {
                     let result = FireResult::Skipped {
                         reason: "trigger disabled".to_string(),
                     };
                     (intent.on_result)(result.clone());
                     return result;
-                }
+                };
+                Some(trigger.trigger_doc_id.clone())
             }
             TriggerKind::Event => {
                 let Some(trigger_id) = intent.trigger_id.as_deref() else {
@@ -271,16 +273,17 @@ impl TriggerEngine {
                     (intent.on_result)(result.clone());
                     return result;
                 };
-                if snapshot.active_event_triggers().get(trigger_id).is_none() {
+                let Some(trigger) = snapshot.active_event_triggers().get(trigger_id) else {
                     let result = FireResult::Skipped {
                         reason: "trigger disabled".to_string(),
                     };
                     (intent.on_result)(result.clone());
                     return result;
-                }
+                };
+                Some(trigger.trigger_doc_id.clone())
             }
-            TriggerKind::Manual => {}
-        }
+            TriggerKind::Manual => None,
+        };
 
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let (node_scope, ctx_scope) =
@@ -311,7 +314,7 @@ impl TriggerEngine {
                 .map(|behavior| behavior.agent_did().to_string())
                 .ok_or_else(|| {
                     snapshot
-                        .unavailable_reason(&intent.task.behavior_id)
+                        .unavailable_public_message(&intent.task.behavior_id)
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| {
                             format!("behavior {} is not loaded", intent.task.behavior_id)
@@ -319,12 +322,16 @@ impl TriggerEngine {
                 })
         };
         let Some(trigger_id) = intent.trigger_id.clone() else {
-            return self.materialize_after_lock(intent, rendered).await;
+            return self
+                .materialize_after_lock(intent, trigger_doc_id, rendered)
+                .await;
         };
         if intent.concurrency == crate::runtime_snapshot::ConcurrencyMode::Parallel
             && intent.group_vars.is_none()
         {
-            return self.materialize_after_lock(intent, rendered).await;
+            return self
+                .materialize_after_lock(intent, trigger_doc_id, rendered)
+                .await;
         }
         let agent_did = match concurrency_agent_did() {
             Ok(did) => did,
@@ -459,7 +466,9 @@ impl TriggerEngine {
             }
         }
 
-        let result = self.materialize_after_lock(intent, rendered).await;
+        let result = self
+            .materialize_after_lock(intent, trigger_doc_id, rendered)
+            .await;
         drop(guard);
         self.prune_trigger_lock(&lock_key, &lock).await;
         result
@@ -476,7 +485,12 @@ impl TriggerEngine {
         }
     }
 
-    async fn materialize_after_lock(&self, intent: FireIntent, rendered: String) -> FireResult {
+    async fn materialize_after_lock(
+        &self,
+        intent: FireIntent,
+        trigger_doc_id: Option<String>,
+        rendered: String,
+    ) -> FireResult {
         let source_doc_id = if matches!(intent.trigger_kind, TriggerKind::Event) {
             intent
                 .event_vars
@@ -494,6 +508,7 @@ impl TriggerEngine {
                     &intent.task,
                     intent.trigger_id.as_deref(),
                     intent.trigger_kind,
+                    trigger_doc_id.as_deref(),
                     source_doc_id.as_deref(),
                     intent.correlation.as_deref(),
                     intent.trigger_context.as_deref(),
@@ -510,6 +525,7 @@ impl TriggerEngine {
 pub async fn run_subagent_source_for_test(
     node: Arc<defra_node::EmbeddedNode>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    authorized_peer_dids: std::collections::HashSet<String>,
     cancel: CancellationToken,
 ) {
     struct UnusedMaterializer;
@@ -519,6 +535,7 @@ pub async fn run_subagent_source_for_test(
             _task: &crate::runtime_snapshot::ResolvedTask,
             _trigger_id: Option<&str>,
             _trigger_kind: TriggerKind,
+            _trigger_doc_id: Option<&str>,
             _source_doc_id: Option<&str>,
             _correlation: Option<&str>,
             _trigger_context: Option<&str>,
@@ -566,11 +583,15 @@ pub async fn run_subagent_source_for_test(
         }
     }
 
-    let subagent_source: Box<dyn TriggerSource> = Box::new(subagent_source::SubagentSource::new(
-        snapshot_rx.clone(),
-        node,
-        cancel.clone(),
-    ));
+    let subagent_source: Box<dyn TriggerSource> = Box::new(
+        subagent_source::SubagentSource::with_subscription_source_for_test(
+            node.clone(),
+            snapshot_rx.clone(),
+            node,
+            authorized_peer_dids,
+            cancel.clone(),
+        ),
+    );
     let materializer: Arc<dyn MaterializerHandle> = Arc::new(UnusedMaterializer);
     let engine = TriggerEngine::new(snapshot_rx, materializer);
     engine.run(vec![subagent_source], cancel).await;

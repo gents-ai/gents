@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-peer-enroll-status"
+description = "Enables the desktop_peer_enroll_status command without any pre-configured scope."
+commands.allow = ["desktop_peer_enroll_status"]
+
+[[permission]]
+identifier = "deny-desktop-peer-enroll-status"
+description = "Denies the desktop_peer_enroll_status command without any pre-configured scope."
+commands.deny = ["desktop_peer_enroll_status"]

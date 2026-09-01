@@ -72,9 +72,9 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
     };
     let latest_request_id = preferred_request_id
         .filter(|request_id| {
-            requests.iter().any(|row| {
-                row.request_id == *request_id && !request_is_deprecated_background_completion(row)
-            })
+            requests
+                .iter()
+                .any(|row| row.request_id == *request_id && !request_is_background_completion(row))
         })
         .map(str::to_owned)
         .or_else(|| {
@@ -98,7 +98,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                     requests
                         .iter()
                         .rev()
-                        .find(|request| !request_is_deprecated_background_completion(request))
+                        .find(|request| !request_is_background_completion(request))
                         .copied()
                 })
                 .flatten()

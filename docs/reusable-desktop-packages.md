@@ -2,6 +2,12 @@
 
 _Design spec — 2026-07-27. Issue [#877](https://github.com/source-inc/gents/issues/877)._
 
+> **Current authority terminology:** users request authenticated **enrollment**;
+> an operator approves or denies that immutable request. `Pairing`,
+> `PairedRemoteOnly`, and `PeerPairing*` below name the lower-level P2P transport
+> policy/actuator, or quote the pre-enrollment baseline recorded by this design.
+> They are not alternate admission paths.
+
 **Implementation status (PR #878, honest):**
 
 | Phase                | Status                 | Notes                                                                                              |
@@ -30,9 +36,8 @@ session polling/restart coordinator in `useDesktopShell` and passes package
 components data + callbacks. Each `DesktopClient` now owns a full
 transport-bound `client.api`; operations providers and fleet package-owned reads
 accept that adapter, while the global API seam remains only for compatibility.
-Package CSS is semantic-token-only but preserves the existing class names to
-keep the extraction behavior-identical; a future collision-hardening release
-may prefix them. Live-lane verification of the serde camelCase fix is fenced by
+Package CSS is semantic-token-only and fleet-owned classes use the `fleet-`
+prefix. Live-lane verification of the serde camelCase fix is fenced by
 a wire-format assertion in `test:live:chat` (`itemKey` must arrive camelCase over
 real IPC). External Amygdala authentication/Cargo-fetch
 and the first real tag publish remain release-environment evidence, not changes
@@ -57,7 +62,7 @@ reusing Gents chat, fleet, and operator behavior through versioned dependencies.
 The motivating downstream is **Amygdala**, a separately branded household-operations
 app (see the Amygdala App Platform design, 2026-07-26, in the Amygdala repository).
 Its kitchen-inventory domain stays out of Gents; the extension seam it needs lives
-here. Amygdala's architecture pairs with two authoritative peers — a Kitchen Gents
+here. Amygdala's architecture enrolls with two authoritative peers — a Kitchen Gents
 runtime for chat and `kitchen-mcp` for inventory collections — and its v1 keeps the
 Kitchen domain in a **separate client store** under the Amygdala home. The v1 contract
 supports that model (§ Domain storage and co-resident plugins), but the in-tree
@@ -66,7 +71,7 @@ itself becomes the first-party consumer of every extracted seam, so the package
 boundary is exercised on every CI run.
 
 Related docs: [gents.md](gents.md) (platform architecture),
-[operations.md](operations.md) (pairing and desktop operation),
+[operations.md](operations.md) (enrollment and desktop operation),
 [../apps/gents-desktop/README.md](../apps/gents-desktop/README.md) (desktop app),
 [../apps/gents-desktop/tests/AGENT_BROWSER.md](../apps/gents-desktop/tests/AGENT_BROWSER.md)
 (semantic browser harness), [../crates/gents/proofs/README.md](../crates/gents/proofs/README.md)
@@ -81,7 +86,7 @@ The boundary proposed below follows the seams the code already has. The load-bea
 facts:
 
 **Rust.** `crates/gents-desktop-core` has no Tauri dependency; it exposes `client`
-(`ClientCore`, store, queries, mutations, bearer pairing), `local_runtime`, and
+(`ClientCore`, store, queries, mutations, authenticated enrollment), `local_runtime`, and
 `remote_admin`, and owns identity (`PrincipalIdentity::load_or_create`), storage
 layout (`DesktopPaths`, keyed off `GENTS_DESKTOP_HOME`), schema registration
 (`ensure_runtime_schemas` + `subscribe_all_collections` inside `ClientCore::start`),
@@ -103,8 +108,8 @@ and the embedded DefraDB node. All Tauri coupling lives in
   `commands/*`, `snapshot/*`, `types/*` (view models), `cascade.rs`,
   `cause_derivation.rs` — is already Tauri-agnostic.
 - The bridge depends on `gents-desktop-core`, and directly on the `gents` runtime
-  crate (backend registry, tool-surface explain, graphql helpers) and
-  `gents-protocol` (bearer tokens).
+  crate (backend registry, tool-surface explain, GraphQL helpers) and
+  `gents-protocol` (authenticated-enrollment wire types).
 - The debug-only native-E2E commands (`desktop_native_e2e_config`,
   `desktop_native_e2e_status`) are registered unconditionally but double-gated:
   `#[cfg(debug_assertions)]` bodies plus a `GENTS_NATIVE_E2E=1` runtime check;
@@ -140,8 +145,8 @@ internals through deliberate seams (`setDesktopApiAdapterForTests`,
 `tests/run-ios-simulator-e2e.mjs` + `tests/ios/GentsUITests.swift` — drive only public
 surfaces: the Vite-served harness, the `bridge_runner` binary's JSON-ready protocol,
 `data-testid` selectors, the `com.source-inc.gents` bundle id, and the
-`native-e2e-status.json` temp-file contract. The iPhone branch added mobile bearer
-pairing, chat recovery/reconnect/interrupt routing, responsive layout, the agent
+`native-e2e-status.json` temp-file contract. The iPhone branch added mobile
+authenticated enrollment, chat recovery/reconnect/interrupt routing, responsive layout, the agent
 browser, and the native Simulator lane; all of these are contracts this design must
 keep working, and most of them already point at the seams a package boundary needs.
 
@@ -207,7 +212,7 @@ Six published packages plus the private apps, managed as npm workspaces:
 @source-inc/gents-desktop-client     transport, shared store, canonical types
         ▲   ▲   ▲
         │   │   └── @source-inc/gents-desktop-chat        chat state + components
-        │   └────── @source-inc/gents-desktop-fleet       discovery/pairing/health/peers
+        │   └────── @source-inc/gents-desktop-fleet       discovery/enrollment/health/peers
         └────────── @source-inc/gents-desktop-operations  holds, traces, health panels
                           ▲
                           │ (all packages consumed by)
@@ -300,7 +305,7 @@ pub struct BridgeConfig {
     /// Host-side ceiling on LOCAL RUNTIME provisioning — and only that.
     /// desktop_client_start performs client-store bootstrap in the resolved
     /// home (create dirs, mint/load the principal identity, open the embedded
-    /// node), which clean-install pairing requires; it never provisions or
+    /// node), which clean-install enrollment requires; it never provisions or
     /// attaches a local Gents runtime. Local-runtime provisioning goes
     /// exclusively through desktop_init_local_standard (permission set
     /// `runtime-admin`); LocalRuntimeAllowed permits that command,
@@ -408,7 +413,7 @@ split, and hosts opt into each in their capability files:
 | `resend-control`    | request resend                                                                                                                                                                                                                        |
 | `fleet-read`        | peer status fetch (**by saved peer id only** — see below), network status                                                                                                                                                             |
 | `workspace-read`    | workspace list                                                                                                                                                                                                                        |
-| `fleet-admin`       | peer add/remove/rename, bearer pairing, P2P repair (all address-accepting flows live only here)                                                                                                                                       |
+| `fleet-admin`       | status-first enrollment, peer removal/rename, P2P repair (all address-accepting flows live only here)                                                                                                                                 |
 | `operations-read`   | operations snapshot, subagent tree, backend/MCP health lists, MCP probe                                                                                                                                                               |
 | `interrupt-read`    | interrupt-cascade preview                                                                                                                                                                                                             |
 | `interrupt-control` | interrupt request                                                                                                                                                                                                                     |
@@ -491,7 +496,7 @@ Three refinements keep the projection honest without forcing broad grants:
   read grant. Under the plugin it is re-keyed to a **saved peer id**; the native
   side resolves the address from the peer directory. The invariant, stated
   precisely: **read-only commands never accept arbitrary addresses**. Admin flows
-  necessarily do — adding a peer or pairing takes an address by nature — which is
+  necessarily do — requesting enrollment takes an address by nature — which is
   exactly why those commands live in `fleet-admin`, a grant a host extends only to
   surfaces that administer the fleet.
 
@@ -503,7 +508,7 @@ following a package's documented install must never hit permission-denied:
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `-client`     | `default` (`core` + `client-lifecycle`, which covers the restart/backoff loop's shutdown-then-start)                                                                                                                                                                                                                                                                                                                                             |
 | `-chat`       | `default` + `session-read` + `chat-write` + `resend-control` (retry) + `interrupt-read` (cascade preview for the cancel dialog) + `interrupt-control` (interrupt is part of the promised chat UX). **Never the hold sets** — enumerating or approving held tool executions is not a chat capability                                                                                                                                              |
-| `-fleet`      | `default` + `fleet-read`; add `fleet-admin` for the pairing surfaces (`AddPeerForm`, QR pairing). The local-runtime onboarding affordance ("Connect Local Agent", today inside `FleetDashboard`) is extracted as an **opt-in subcomponent** with its own declared requirement of `runtime-admin` + `BootstrapPolicy::LocalRuntimeAllowed`; the base fleet profile never includes `runtime-admin`, and paired-remote hosts simply don't render it |
+| `-fleet`      | `default` + `fleet-read`; add `fleet-admin` for the authenticated enrollment surface (`AddPeerForm`). The local-runtime onboarding affordance ("Connect Local Agent", today inside `FleetDashboard`) is extracted as an **opt-in subcomponent** with its own declared requirement of `runtime-admin` + `BootstrapPolicy::LocalRuntimeAllowed`; the base fleet profile never includes `runtime-admin`, and mobile or paired-remote hosts do not render it |
 | `-operations` | `default` + `operations-read` + `interrupt-read` + `interrupt-control` + `holds-read` + `holds-control` + `trace-read` (`RequestTracePanel` timelines) + `resend-control` (backgrounded-tools resume) + `workspace-read` (`WorkspaceTreePanel`)                                                                                                                                                                                                  |
 
 The app-private config workspace (not packaged in v1) uses `config-read` +
@@ -576,13 +581,13 @@ six frontend packages, loads real bridge session snapshots, and CI builds the ho
 runs its grant-composition test, and runs a native test with two concurrent
 `ClientCore` stores under distinct homes. The fixture-domain plugin is a
 `BTreeMap` persisted as JSON, not a second embedded DefraDB node, and CI does not
-drive bearer pairing, chat, and domain writes through a complete Tauri journey.
+drive authenticated enrollment, chat, and domain writes through a complete Tauri journey.
 That two-node product journey remains downstream/Amygdala integration evidence.
 
 ### Ownership split
 
 The **bridge owns**: `DesktopAppState` (the `ClientCore` lifecycle), the update pump
-that turns `store_updates()`/`p2p_health_updates()` into `desktop://client-updated`
+that turns `store_change_updates()`/`sync_state_updates()` into `desktop://client-updated`
 events, all command implementations, view-model serialization, snapshot builders,
 and interrupt-cascade preview/execution.
 
@@ -954,7 +959,7 @@ chat-write + fleet-read + fleet-admin + operations-read` permissions (no
 8. **`@source-inc/gents-desktop-fleet`.** Same shape; `BrandLockup` stays in-app via
    `brand` slot; the fixture host consumes the package surface. Delivered evidence:
    package tests/build and the existing Gents Desktop pairing/fleet lanes. An
-   automated fixture clean-install pairing journey remains downstream evidence.
+   automated fixture clean-install enrollment journey remains downstream evidence.
 9. **`@source-inc/gents-desktop-operations`.** Focused holds, health, trace, and
    workspace panels. Background and subagent presentation moved into the chat
    timeline so hosts do not have to compose a second tool-state UI.
@@ -973,8 +978,9 @@ chat-write + fleet-read + fleet-admin + operations-read` permissions (no
   `bridge_runner` after phase 3. Because it never imported app internals, its JSONL
   protocol, semantic targeting, and viewport presets are unchanged — and the fixture
   app reuses it wholesale by pointing it at a different harness entry.
-- **`test:ui:ios:e2e`**: the mint-invite → clean-install → pair → chat → stability
-  flow is untouched; the bundle id and app-bundle path become parameters (defaulting
+- **`test:ui:ios:e2e`**: the clean-install → authenticated enrollment → operator
+  approval → readiness → chat → terminal hydration flow remains the native fence;
+  the bundle id and app-bundle path become parameters (defaulting
   to Gents values), the build step adds `--features native-e2e` plus the E2E
   capability overlay, and the `native-e2e-status.json` contract and staged status
   reporting stay. The XCUITest
@@ -989,7 +995,7 @@ chat-write + fleet-read + fleet-admin + operations-read` permissions (no
 | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | Minimal downstream app owns binary, identity, storage home, schema registration, extra commands | `gents-desktop-bridge::init(BridgeConfig)` + `HomePolicy`; domain plugins own their stores/schemas (co-residence contract)                | 3–4         | Fixture build + grant test; native concurrent-`ClientCore` home-isolation test. A second domain node remains downstream evidence |
 | Working chat surface: streaming, retry, interrupt, reconnect, recovery — no copied source       | `@source-inc/gents-desktop-chat` projection/components over the typed `-client` contract                                                  | 7           | Gents agent-browser/live chat lanes; fixture renders session snapshots. Downstream recovery coordinator/journey remains required |
-| Fleet pairing, health, peer management via package API                                          | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets)                                                                    | 8           | Gents `test:live:fleet` and QR/bearer journeys; fixture composes the surface. Downstream clean-install pairing remains required  |
+| Fleet enrollment, health, peer management via package API                                       | `@source-inc/gents-desktop-fleet` (+ bridge `fleet-*` permission sets)                                                                    | 8           | Gents `test:live:fleet` and authenticated-enrollment journeys; fixture composes the surface. Downstream clean-install enrollment remains required |
 | Operator holds/traces/cancellation via package API                                              | `@source-inc/gents-desktop-operations` (+ `operations-read`, interrupt, and hold permission sets)                                         | 9           | `test:live:operations`/`interrupt`/`cascade` and deterministic operations scenarios                                              |
 | Own branding, semantic theme, navigation, domain routes without patching components             | Semantic tokens contract (split before extraction), `brand` slots, host-owned navigation                                                  | 6–9         | Token-override smoke, fixture-host distinct branding + domain module, visual suite                                               |
 | Gents Desktop builds and passes its checks consuming the extracted packages                     | App consumes all four packages + plugin                                                                                                   | every phase | Standing exit gates on each phase (app is the first consumer throughout)                                                         |
@@ -1022,9 +1028,10 @@ that today would let a `runtime-admin` webview aim initialization — with its
 reset/overwrite flags — at an arbitrary path.
 
 **Identity and ACP boundaries stay explicit.** Principals are minted per storage
-home by `PrincipalIdentity`; bearer pairing keeps its full verification chain
-(issuer signature, freshness, network-admin check, signed behavior binding, ticket
-peer id) inside `gents-desktop-core`, untouched by packaging. Domain plugins run
+home by `PrincipalIdentity`; enrollment keeps its full verification chain
+(fresh transport-DID authentication, durable TOFU pins, admin-signed immutable
+decisions and revisions, and generation-bound route receipts) inside
+`gents-desktop-core`, untouched by packaging. Domain plugins run
 their own clients in their own homes under their own ACP policies; the co-residence
 contract gives them **no supported API path** into the bridge's store, and the
 deferred `BridgeHandle` is the only future mechanism that would — which is precisely
@@ -1134,16 +1141,17 @@ Stated openly rather than buried as implementation detail:
 ## References
 
 Issue: [#877](https://github.com/source-inc/gents/issues/877). Base series:
-[#875](https://github.com/source-inc/gents/pull/875) (squash-merged as `1a5e23d5`,
-formerly `agent/iphone-amy-bearer-pairing`) — mobile bearer pairing with
-cryptographically verified reciprocal readiness and relaunch revalidation, chat
+[#875](https://github.com/source-inc/gents/pull/875) (squash-merged as `1a5e23d5`) —
+the predecessor mobile pairing implementation, now replaced by status-first
+authenticated enrollment with signed route receipts, authoritative behavior
+readiness and relaunch revalidation, chat
 recovery/interrupt routing, responsive shell, agent-browser harness, native
 Simulator E2E. Downstream design: _Amygdala App Platform — Downstream Product on
 Gents_ (2026-07-26, Amygdala repository,
 `docs/superpowers/specs/2026-07-26-amygdala-app-platform-design.md`) — two
 authoritative peers, separate Kitchen client store, composition API. Key code
-anchors: `apps/gents-desktop/src-tauri/src/bridge/mod.rs` (builder + 55-command
-handler), `crates/gents-desktop-core/src/client/` (`core/bearer_pairing.rs`,
+anchors: `apps/gents-desktop/src-tauri/src/bridge/mod.rs` (builder + command
+handler), `crates/gents-desktop-core/src/client/` (`core/enrollment.rs`,
 `paths.rs`, `principal_identity.rs`, `schema.rs`),
 `apps/gents-desktop/src/lib/desktop-api.ts`, `src/lib/types/`,
 `src/hooks/useDesktopShell.ts` + `desktopShell*`,

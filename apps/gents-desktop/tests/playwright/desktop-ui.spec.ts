@@ -21,7 +21,7 @@ test.describe("desktop UI harness", () => {
     await openChat(page);
 
     await expect(page.getByTestId("composer-status")).toHaveText(
-      "Backend “OpenAI Harness” is disabled",
+      "Behavior “Default” has a disabled inference backend",
     );
     await expect(page.getByTestId("composer-input")).toBeEditable();
     await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();

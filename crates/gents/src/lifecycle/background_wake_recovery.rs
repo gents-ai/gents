@@ -7,7 +7,6 @@ use serde::Deserialize;
 use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
-use crate::session;
 
 use super::queue::{parse_queue_hints, QueuePolicy, QueueSource};
 use super::{BackgroundWakeRedriveReport, RequestLifecycle};
@@ -22,7 +21,6 @@ struct FailedWakeRow {
     doc_id: String,
     request_id: String,
     agent_did: String,
-    requester_did: Option<String>,
     behavior_id: String,
     session_id: String,
     retry_root_request: Option<String>,
@@ -34,8 +32,6 @@ struct FailedWakeRow {
     max_total_tokens: Option<i64>,
     metadata: Option<String>,
     backend_id: Option<String>,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
     subagent_depth: Option<u32>,
     retry_count: i64,
     max_retries: i64,
@@ -184,10 +180,9 @@ async fn load_candidates(
                     lifecycle_state: {{ _eq: "failed" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}, order: [{{ terminalized_at: ASC }}, {{ request_id: ASC }}]) {{
-                    _docID request_id agent_did requester_did behavior_id session_id
+                    _docID request_id agent_did behavior_id session_id
                     retry_root_request temperature top_p top_k seed max_tokens
-                    max_total_tokens metadata backend_id caused_by_parent_request_id
-                    caused_by_parent_request_doc_id subagent_depth retry_count max_retries
+                    max_total_tokens metadata backend_id subagent_depth retry_count max_retries
                     terminalized_at
                 }}
                 successors: AgentRequest(filter: {{
@@ -228,12 +223,6 @@ fn eligible_queue_key(candidate: &FailedWakeRow) -> Option<String> {
         return None;
     }
     let hints = parse_queue_hints(candidate.metadata.as_deref())?;
-    if super::is_deprecated_background_completion_request(
-        Some("scheduled"),
-        candidate.metadata.as_deref(),
-    ) {
-        return None;
-    }
     automated_queue_key(&hints)
 }
 
@@ -342,12 +331,7 @@ async fn redrive_in_transaction(
     }
 
     let response = txn
-        .execute(&redrive_mutation(
-            candidate,
-            conversation,
-            request_id,
-            &retry_key,
-        ))
+        .execute(&redrive_mutation(candidate, conversation, request_id, &retry_key).await?)
         .await?;
     let data = response
         .get("data")
@@ -399,57 +383,58 @@ fn precondition_query(candidate: &FailedWakeRow, retry_key: &str) -> String {
     )
 }
 
-fn optional_field<T: std::fmt::Display>(name: &str, value: Option<T>) -> String {
-    value
-        .map(|value| format!("{name}: {value},"))
-        .unwrap_or_default()
-}
-
-fn optional_string_field(name: &str, value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| format!(r#"{name}: "{}","#, escape_graphql_string(value)))
-        .unwrap_or_default()
-}
-
-fn redrive_mutation(
+async fn redrive_mutation(
     candidate: &FailedWakeRow,
     conversation: &ConversationRow,
     request_id: &str,
     retry_key: &str,
-) -> String {
-    let now = chrono::Utc::now().to_rfc3339();
+) -> Result<String> {
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let retry_root = candidate
         .retry_root_request
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(&candidate.request_id);
-    let requester_did = session::requester_did_create_field(candidate.requester_did.as_deref());
-    let parent_request_id = optional_string_field(
-        "caused_by_parent_request_id",
-        candidate.caused_by_parent_request_id.as_deref(),
+    let admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
+            &candidate.agent_did,
+            &candidate.request_id,
+        );
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id,
+        &candidate.agent_did,
+        &candidate.agent_did,
+        &candidate.behavior_id,
+        &candidate.session_id,
+        BACKGROUND_COMPLETION_WAKE_PROMPT,
+        "scheduled",
+        &now,
+        admission,
     );
-    let parent_request_doc_id = optional_string_field(
-        "caused_by_parent_request_doc_id",
-        candidate.caused_by_parent_request_doc_id.as_deref(),
-    );
-    format!(
+    create.retry_parent_request = Some(candidate.request_id.clone());
+    create.retry_parent_request_doc_id = Some(candidate.doc_id.clone());
+    create.retry_root_request = Some(retry_root.to_string());
+    create.retry_key = Some(retry_key.to_string());
+    create.temperature = candidate.temperature;
+    create.top_p = candidate.top_p;
+    create.top_k = candidate.top_k;
+    create.seed = candidate.seed;
+    create.max_tokens = candidate.max_tokens;
+    create.max_total_tokens = candidate.max_total_tokens;
+    create.metadata = candidate.metadata.clone();
+    create.backend_id = candidate.backend_id.clone();
+    create.retry_count = candidate.retry_count + 1;
+    create.max_retries = candidate.max_retries;
+    create.subagent_depth = candidate.subagent_depth.unwrap_or_default();
+    create.caused_by_parent_request_id = Some(candidate.request_id.clone());
+    create.caused_by_parent_request_doc_id = Some(candidate.doc_id.clone());
+    crate::sign_agent_request_create_as_registered_target(&mut create).await?;
+    let request_fields = create.graphql_input_fields().map_err(anyhow::Error::msg)?;
+    Ok(format!(
         r#"mutation {{
             successor: create_AgentRequest(input: {{
-                request_id: "{request_id}", agent_did: "{agent_did}", {requester_did}
-                behavior_id: "{behavior_id}", session_id: "{session_id}",
-                retry_parent_request: "{source_id}",
-                retry_parent_request_doc_id: "{source_doc_id}",
-                retry_root_request: "{retry_root}", retry_key: "{retry_key}",
-                superseded_by_request: "", content: "{content}",
-                {temperature} {top_p} {top_k} {seed} {max_tokens} {max_total_tokens}
-                metadata: "{metadata}", status: "pending", lifecycle_state: "pending",
-                backend_id: "{backend_id}", execution_origin: "scheduled", failure_reason: "",
-                terminal_redrive_attempts: 0, created_at: "{created_at}",
-                retry_count: {retry_count}, max_retries: {max_retries},
-                subagent_depth: {subagent_depth}, {parent_request_id} {parent_request_doc_id}
+                {request_fields}
             }}) {{ _docID }}
             conversation: update_AgentConversation(
                 filter: {{ _docID: {{ _eq: "{conversation_doc_id}" }},
@@ -458,27 +443,9 @@ fn redrive_mutation(
                     status: "active", updated_at: "{created_at}" }}
             ) {{ _docID }}
         }}"#,
-        request_id = escape_graphql_string(request_id),
-        agent_did = escape_graphql_string(&candidate.agent_did),
-        behavior_id = escape_graphql_string(&candidate.behavior_id),
-        session_id = escape_graphql_string(&candidate.session_id),
         source_id = escape_graphql_string(&candidate.request_id),
-        source_doc_id = escape_graphql_string(&candidate.doc_id),
-        retry_root = escape_graphql_string(retry_root),
-        retry_key = escape_graphql_string(retry_key),
         content = escape_graphql_string(BACKGROUND_COMPLETION_WAKE_PROMPT),
-        temperature = optional_field("temperature", candidate.temperature),
-        top_p = optional_field("top_p", candidate.top_p),
-        top_k = optional_field("top_k", candidate.top_k),
-        seed = optional_field("seed", candidate.seed),
-        max_tokens = optional_field("max_tokens", candidate.max_tokens),
-        max_total_tokens = optional_field("max_total_tokens", candidate.max_total_tokens),
-        metadata = escape_graphql_string(candidate.metadata.as_deref().unwrap_or("")),
-        backend_id = escape_graphql_string(candidate.backend_id.as_deref().unwrap_or("")),
         created_at = escape_graphql_string(&now),
-        retry_count = candidate.retry_count + 1,
-        max_retries = candidate.max_retries,
-        subagent_depth = candidate.subagent_depth.unwrap_or_default(),
         conversation_doc_id = escape_graphql_string(&conversation.doc_id),
-    )
+    ))
 }

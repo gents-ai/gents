@@ -76,6 +76,18 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
     );
     assert_eq!(
         output
+            .pointer("/checks/runtime_behavior_readiness/required")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        output
+            .pointer("/checks/runtime_behavior_readiness/ok")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        output
             .pointer("/checks/backends/0/ok")
             .and_then(Value::as_bool),
         Some(true)
@@ -83,6 +95,131 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
     assert!(
         output.pointer("/checks/chatgpt_auth/ok").is_some(),
         "diagnose output missing ChatGPT auth check: {output}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-live-diagnose-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            "live-diagnose",
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut serve = spawn_server_with_env(&home_dir, port, &[], &[])?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    // Keep the live assertions on the live access path. Auto-discovery intentionally
+    // falls back to local storage when its endpoint probe fails, but the server owns
+    // that store exclusively for the duration of this phase.
+    let healthy = run_cli_json(&home_dir, &["diagnose", "--graphql", &graphql])?;
+    assert_eq!(
+        healthy
+            .pointer("/checks/runtime_behavior_readiness/required")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        healthy
+            .pointer("/checks/runtime_behavior_readiness/ok")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                update_AgentBehaviorReadiness(
+                    filter: {{ agent_did: {{ _eq: "{}" }} }},
+                    input: {{ snapshot_json: "{{}}" }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&agent_did),
+        ),
+    )
+    .await?;
+    let malformed = run_cli_json(&home_dir, &["diagnose", "--graphql", &graphql])?;
+    assert_eq!(
+        malformed.get("status").and_then(Value::as_str),
+        Some("degraded")
+    );
+    assert_eq!(
+        malformed
+            .pointer("/checks/runtime_behavior_readiness/ok")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        malformed
+            .pointer("/runtime_behavior_readiness/state")
+            .and_then(Value::as_str),
+        Some("unknown")
+    );
+
+    let default_behavior_id = gents::default_behavior_id_for_agent(&agent_did);
+    let stale_degraded_snapshot = serde_json::json!({
+        "format_version": 1,
+        "process_state": "ready",
+        "active_generation": 1,
+        "router_generation": 1,
+        "default_behavior_id": default_behavior_id,
+        "behaviors": [{
+            "behavior_id": default_behavior_id,
+            "state": "unavailable",
+            "reason": "backend_disabled",
+        }],
+    });
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                update_AgentBehaviorReadiness(
+                    filter: {{ agent_did: {{ _eq: "{}" }} }},
+                    input: {{ snapshot_json: "{}" }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&agent_did),
+            escape_graphql_string(&serde_json::to_string(&stale_degraded_snapshot)?),
+        ),
+    )
+    .await?;
+    drop(serve);
+
+    let offline = run_cli_json(&home_dir, &["diagnose"])?;
+    assert_eq!(offline.get("status").and_then(Value::as_str), Some("ok"));
+    assert_eq!(
+        offline
+            .pointer("/checks/runtime_behavior_readiness/required")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        offline
+            .pointer("/checks/runtime_behavior_readiness/ok")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        offline
+            .pointer("/checks/runtime_behavior_readiness/status")
+            .and_then(Value::as_str),
+        Some("degraded")
     );
 
     Ok(())

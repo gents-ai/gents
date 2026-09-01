@@ -137,32 +137,40 @@ fn observer_never_retains_transcript_content_from_a_mislabeled_patch() {
 use crate::client::schema::ensure_runtime_schemas;
 use defra_node::{EventName, NodeBuilder};
 use std::sync::Arc;
-use tokio::sync::RwLock as AsyncRwLock;
 
-async fn build_observer_fixture() -> (Arc<EmbeddedNode>, Arc<ObservedStore>, ObserverHandle) {
+async fn build_observer_fixture() -> (
+    tempfile::TempDir,
+    Arc<EmbeddedNode>,
+    Arc<ObservedStore>,
+    ObserverHandle,
+) {
+    let tempdir = tempfile::tempdir().expect("observer peer directory");
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
     let (store, _rx) = ObservedStore::new(crate::client::store::ClientStore::default());
-    let peer_dir = Arc::new(AsyncRwLock::new(
-        crate::client::peer_directory::PeerDirectory::load(
-            "/tmp/gents-observe-test-peers-nonexistent.json",
-        )
-        .await
-        .expect("peer_directory"),
-    ));
+    let peer_dir = crate::client::peer_directory::PeerDirectory::open_writer(
+        tempdir.path().join("peers.json"),
+    )
+    .await
+    .expect("peer_directory");
+    let configured_peers = crate::client::core::sync_state::ClientSyncStateOwner::new(
+        crate::client::core::P2PHealth::default(),
+        peer_dir,
+        Vec::new(),
+    );
     let subscription = node.subscribe(&[EventName::Update]);
     let (_tx, rx) = watch::channel::<Option<String>>(None);
     let handle = spawn_observer_with_selection(
         node.clone(),
         store.clone(),
-        peer_dir,
+        configured_peers,
         "did:test:requester".to_string(),
         subscription,
         rx,
     );
-    (node, store, handle)
+    (tempdir, node, store, handle)
 }
 
 async fn seed_principal(node: &EmbeddedNode, did: &str) {
@@ -201,7 +209,7 @@ async fn seed_message(node: &EmbeddedNode, session_id: &str, seq: i64, content: 
 
 #[tokio::test]
 async fn coalesces_burst_into_one_fetch_per_doc() {
-    let (node, store, handle) = build_observer_fixture().await;
+    let (_tempdir, node, store, handle) = build_observer_fixture().await;
 
     let create = r#"mutation {
             create_AgentResponse(input: {
@@ -255,7 +263,7 @@ async fn coalesces_burst_into_one_fetch_per_doc() {
 
 #[tokio::test]
 async fn multi_collection_burst_fans_out_correctly() {
-    let (node, store, handle) = build_observer_fixture().await;
+    let (_tempdir, node, store, handle) = build_observer_fixture().await;
 
     let create_resp = r#"mutation {
             create_AgentResponse(input: {
@@ -320,7 +328,7 @@ async fn multi_collection_burst_fans_out_correctly() {
 
 #[tokio::test]
 async fn dropped_events_with_no_selection_falls_back_to_full() {
-    let (node, store, handle) = build_observer_fixture().await;
+    let (_tempdir, node, store, handle) = build_observer_fixture().await;
     seed_principal(node.as_ref(), "did:zero").await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let snap = store.snapshot();
@@ -335,7 +343,7 @@ async fn dropped_events_with_no_selection_falls_back_to_full() {
 
 #[tokio::test]
 async fn transcript_create_and_delete_only_invalidate_the_projection() {
-    let (node, store, handle) = build_observer_fixture().await;
+    let (_tempdir, node, store, handle) = build_observer_fixture().await;
 
     let before = store.projection_revision();
     seed_message(node.as_ref(), "sess-1", 1, "before-delete").await;
@@ -357,8 +365,57 @@ async fn transcript_create_and_delete_only_invalidate_the_projection() {
 }
 
 #[tokio::test]
+async fn hydration_control_updates_only_invalidate_the_session_projection() {
+    let (_tempdir, node, store, handle) = build_observer_fixture().await;
+    let mut changes = store.subscribe_changes();
+    let before = store.projection_revision();
+
+    let create = node
+        .execute(
+            r#"mutation {
+                create_SessionHydrationRequest(input: {
+                    request_key: "peer-1:session-1"
+                    requester_did: "did:test:requester"
+                    agent_did: "did:test:agent"
+                    session_id: "session-1"
+                    created_at: "2026-08-28T00:00:00Z"
+                    status: "pending"
+                    status_detail: ""
+                    served_doc_count: 0
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!create.has_errors(), "{:?}", create.errors);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let after_create = store.projection_revision();
+    assert!(after_create.reconcile_version > before.reconcile_version);
+    assert!(!changes.borrow_and_update().response_only);
+    assert_eq!(store.snapshot().row_count(), 0);
+
+    let update = node
+        .execute(
+            r#"mutation {
+                update_SessionHydrationRequest(
+                    filter: { request_key: { _eq: "peer-1:session-1" } }
+                    input: { status: "served", served_doc_count: 0 }
+                ) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!update.has_errors(), "{:?}", update.errors);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    assert!(store.projection_revision().reconcile_version > after_create.reconcile_version);
+    assert!(!changes.borrow_and_update().response_only);
+    assert_eq!(store.snapshot().row_count(), 0);
+    handle.shutdown().await;
+}
+
+#[tokio::test]
 async fn fetch_failures_increment_on_unknown_collection() {
-    let (node, _store, handle) = build_observer_fixture().await;
+    let (_tempdir, node, _store, handle) = build_observer_fixture().await;
 
     let result =
         crate::client::query::fetch_doc_patch(node.as_ref(), "NotARealCollection", &["x"]).await;
@@ -371,7 +428,7 @@ async fn fetch_failures_increment_on_unknown_collection() {
 
 #[tokio::test]
 async fn local_write_increments_redundant_fetch_counter() {
-    let (node, _store, handle) = build_observer_fixture().await;
+    let (_tempdir, node, _store, handle) = build_observer_fixture().await;
 
     seed_message(node.as_ref(), "sess-2", 1, "local").await;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;

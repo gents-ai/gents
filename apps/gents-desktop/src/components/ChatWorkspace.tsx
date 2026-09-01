@@ -110,7 +110,9 @@ export function ActiveChatWorkspace({
     explicitApi?.previewInterruptCascade ?? previewChatInterruptCascade;
   const interrupt = explicitApi?.interruptRequest ?? interruptChatRequest;
   const activeBehaviorId =
-    selectedBehaviorId ?? selectedDeployment.defaultBehaviorId ?? null;
+    selectedBehaviorId ??
+    selectedDeployment.behaviorReadiness.defaultBehaviorId ??
+    null;
   const activeBehavior =
     selectedDeployment.behaviors.find(
       (behavior) => behavior.behaviorId === activeBehaviorId,

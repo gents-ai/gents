@@ -62,16 +62,6 @@ export function findNewChatButton(label: string): HTMLButtonElement | null {
   );
 }
 
-export function findPairingReadyStatus(label: string): HTMLElement | null {
-  const status = document.querySelector<HTMLElement>(
-    '[data-testid="fleet-pair-status"]',
-  );
-  return status &&
-    normalized(status.textContent ?? "").includes(normalized(`${label} is ready`))
-    ? status
-    : null;
-}
-
 export function findAssistantResponseMarker(
   root: ParentNode,
   expectedResponse: string,

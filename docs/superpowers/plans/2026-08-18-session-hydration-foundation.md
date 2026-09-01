@@ -1,5 +1,10 @@
 # Session Hydration Foundation (#1142) Implementation Plan
 
+> Historical implementation plan. Current hydration admission derives exact
+> applied routes and current authorization from authenticated enrollment
+> (#1312–#1313); older pairing/membership wording below is not an alternate
+> authority path.
+
 **Goal:** Define the tenant-safe, idempotent `SessionHydrationRequest` lifecycle and register its client-authored control collection without inventing a second P2P delivery path.
 
 **Architecture:** Follow the foundation flow: model admission, document selection, terminality, crash re-drive, pairing non-interference, and receiver progress in Lean; fence the executable decisions in Rust; register the branchable schema in the shared catalog, client-authored migration fence, and `machine` template; then run the server sweep through DefraDB's existing peer-targeted document pusher. The client requests hydration on focus and declares completion only after its exact local seven-collection document count reaches the server's selected-document count.
@@ -44,4 +49,4 @@ GENTS_LIVE_SESSION_HYDRATION=1 cargo test -p gents --features live-e2e \
   -- --ignored --nocapture
 ```
 
-The test defaults to `http://100.87.27.25:8000/v1` and `GLM-5.2`; `GENTS_LIVE_SESSION_HYDRATION_ENDPOINT` and `GENTS_LIVE_SESSION_HYDRATION_MODEL` override those defaults. This gate covers the protocol/runtime boundary and shared receiver state machine. Desktop `ClientCore::focus_session` orchestration remains covered by the desktop-core test suite rather than this integration target, avoiding a dependency cycle from `gents` back to `gents-desktop-core`.
+The test defaults to `http://100.87.27.25:8000/v1` and `GLM-5.2`; `GENTS_LIVE_SESSION_HYDRATION_ENDPOINT` and `GENTS_LIVE_SESSION_HYDRATION_MODEL` override those defaults. This gate covers the protocol/runtime boundary and shared receiver state machine. Desktop start/observe/retry orchestration remains covered by the desktop-core test suite rather than this integration target, avoiding a dependency cycle from `gents` back to `gents-desktop-core`.

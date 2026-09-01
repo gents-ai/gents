@@ -409,6 +409,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
             caused_by_trigger_kind: None,
             caused_by_correlation: None,
             caused_by_trigger_context: None,
+            caused_by_trigger_doc_id: None,
             caused_by_source_doc_id: None,
             caused_by_parent_request_id: None,
             interrupt_requested_at: None,
@@ -462,35 +463,6 @@ fn overlay_hidden_when_response_tail_is_empty() {
         .iter()
         .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }));
     assert!(!has_live, "overlay must be hidden when tail is empty");
-}
-
-#[test]
-fn legacy_wake_is_filtered_from_latest_turn_projection() {
-    let mut rows = make_streaming_store_with_response_content("").to_rows();
-    rows.requests[0].status = Some("completed".to_string());
-    rows.requests[0].lifecycle_state = Some("completed".to_string());
-    rows.responses.clear();
-    let mut wake = rows.requests[0].clone();
-    wake.request_id = "legacy-wake".to_string();
-    wake.content = Some("legacy wake".to_string());
-    wake.status = Some("pending".to_string());
-    wake.lifecycle_state = Some("pending".to_string());
-    wake.execution_origin = Some("scheduled".to_string());
-    wake.metadata = Some(
-        r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"child-1","queued_after_request_id":null}}"#
-            .to_string(),
-    );
-    wake.created_at = Some("2026-04-21T12:02:00Z".to_string());
-    rows.requests.push(wake);
-    rows.conversations[0].latest_request_id = Some("legacy-wake".to_string());
-
-    let store = ClientStore::from_rows(rows);
-    let snapshot =
-        build_session_snapshot_from_store(&store, "sess-1", Some("legacy-wake")).expect("snapshot");
-
-    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-1"));
-    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
-    assert!(snapshot.pending_turn.is_none());
 }
 
 #[test]
@@ -747,6 +719,7 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
                 caused_by_trigger_kind: None,
                 caused_by_correlation: None,
                 caused_by_trigger_context: None,
+                caused_by_trigger_doc_id: None,
                 caused_by_source_doc_id: None,
                 caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
@@ -789,6 +762,7 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
                 caused_by_trigger_kind: None,
                 caused_by_correlation: None,
                 caused_by_trigger_context: None,
+                caused_by_trigger_doc_id: None,
                 caused_by_source_doc_id: None,
                 caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
@@ -973,6 +947,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
             caused_by_trigger_kind: None,
             caused_by_correlation: None,
             caused_by_trigger_context: None,
+            caused_by_trigger_doc_id: None,
             caused_by_source_doc_id: None,
             caused_by_parent_request_id: None,
             interrupt_requested_at: None,
@@ -1092,6 +1067,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 caused_by_trigger_kind: None,
                 caused_by_correlation: None,
                 caused_by_trigger_context: None,
+                caused_by_trigger_doc_id: None,
                 caused_by_source_doc_id: None,
                 caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
@@ -1134,6 +1110,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 caused_by_trigger_kind: None,
                 caused_by_correlation: None,
                 caused_by_trigger_context: None,
+                caused_by_trigger_doc_id: None,
                 caused_by_source_doc_id: None,
                 caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
@@ -1264,6 +1241,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             caused_by_trigger_kind: None,
             caused_by_correlation: None,
             caused_by_trigger_context: None,
+            caused_by_trigger_doc_id: None,
             caused_by_source_doc_id: None,
             caused_by_parent_request_id: None,
             interrupt_requested_at: None,

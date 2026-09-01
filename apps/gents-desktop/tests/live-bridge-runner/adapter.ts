@@ -1,7 +1,6 @@
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import type {
-  BearerPairingResponse,
   BehaviorSaveRequest,
   CascadeCancelPreview,
   ChatSendResult,
@@ -56,14 +55,10 @@ export function createBridgeHttpAdapter(
     setSelectedAgent: async (agentDid) => {
       await client.postJson("/desktop/selected-agent", { agentDid });
     },
-    addPeer: async (request) =>
-      client.postJson<DesktopClientSnapshot>("/desktop/peer/add", request),
-    pairBearer: async (request) =>
-      client.postJson<BearerPairingResponse>("/desktop/peer/pair-bearer", request),
     fetchPeerStatus: async (peerId) =>
       client.postJson("/desktop/peer/status", { peerId }),
-    probePeerAddress: async (serverAddress) =>
-      client.postJson("/desktop/peer/status", { serverAddress }),
+    requestStatusEnrollment: async (serverAddress) =>
+      client.postJson("/desktop/peer/enroll-status", { serverAddress }),
     repairP2P: async () =>
       client.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
     fetchSessionSnapshot: async (sessionId, agentDid, requestId, timelinePage) =>
@@ -74,6 +69,12 @@ export function createBridgeHttpAdapter(
         timelineLimit: timelinePage?.limit,
         timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
+    retrySessionHydration: async (sessionId, agentDid) => {
+      await client.postJson("/desktop/session/hydration/retry", {
+        sessionId,
+        agentDid,
+      });
+    },
     sendChatMessage: async (request) => {
       const normalized: TauriDriverChatRequest = {
         agentDid: request.agentDid,

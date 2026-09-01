@@ -1,12 +1,12 @@
 import { tauriTransport, type DesktopTransport } from "../transport.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type {
-  BearerPairingResponse,
   CascadeCancelPreview,
   ChatSendResult,
   CodexLoginResult,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
+  EnrollmentRequestView,
   SessionLiveDeltaView,
   InferenceProbeResult,
   InitSummary,
@@ -106,12 +106,6 @@ export function createDesktopApiAdapter(
       }),
     setSelectedAgent: (agentDid) =>
       invokeDesktop<void>("desktop_set_selected_agent", { agentDid }),
-    addPeer: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_peer_add", { request }),
-    pairBearer: (request) =>
-      invokeDesktop<BearerPairingResponse>("desktop_peer_pair_bearer", {
-        request,
-      }),
     removePeer: (peerId) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_peer_remove", { peerId }),
     renamePeer: (peerId, label) =>
@@ -123,8 +117,8 @@ export function createDesktopApiAdapter(
       invokeDesktop<unknown>("desktop_peer_status_fetch", {
         request: { peerId },
       }),
-    probePeerAddress: (serverAddress) =>
-      invokeDesktop<unknown>("desktop_peer_probe_address", {
+    requestStatusEnrollment: (serverAddress) =>
+      invokeDesktop<EnrollmentRequestView>("desktop_peer_enroll_status", {
         request: { serverAddress },
       }),
     repairP2P: () => invokeDesktop<DesktopClientSnapshot>("desktop_p2p_repair"),
@@ -152,6 +146,11 @@ export function createDesktopApiAdapter(
         timelineLimit: timelinePage?.limit,
         timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
+    retrySessionHydration: (sessionId, agentDid) =>
+      invokeDesktop<void>("desktop_session_hydration_retry", {
+        sessionId,
+        agentDid: agentDid ?? null,
+      }),
     fetchSessionLiveDelta: (request) =>
       invokeDesktop<SessionLiveDeltaView | null>("desktop_session_live_delta", {
         sessionId: request.sessionId,
@@ -165,8 +164,7 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop<ChatSendResult>("desktop_chat_send", { request }),
-    listMailbox: () =>
-      invokeDesktop<MailboxItemView[]>("desktop_mailbox_list"),
+    listMailbox: () => invokeDesktop<MailboxItemView[]>("desktop_mailbox_list"),
     startMailboxRequest: (itemId) =>
       invokeDesktop<MailboxItemView>("desktop_mailbox_start_request", {
         request: { itemId },

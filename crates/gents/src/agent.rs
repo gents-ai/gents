@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
@@ -19,7 +20,7 @@ use crate::identity::{AgentIdentity, AgentPrincipal};
 use crate::mcp_pool::McpPool;
 use crate::migration;
 use crate::retry::RetryPolicy;
-use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
+use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableBehavior};
 use crate::tool_surface::{BehaviorToolConfig, SubagentToolConfig, ToolCeiling, ToolSelection};
 use crate::trigger_engine::manual_source::ManualTriggerHandle;
 
@@ -77,7 +78,12 @@ pub trait ProcessLifecycleObserver: Send + Sync {
 }
 
 pub trait RuntimeSnapshotObserver: Send + Sync {
-    fn on_generation_published(&self, generation: u64, runnable_behavior_ids: &[String]);
+    fn on_generation_published(
+        &self,
+        generation: u64,
+        configuration_fingerprint: &str,
+        runnable_behavior_ids: &[String],
+    );
 }
 
 #[derive(Default)]
@@ -97,6 +103,8 @@ pub struct DocumentRuntimeOptions {
     pub startup_build_failure_observer:
         Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     pub startup_readiness: crate::startup_readiness::StartupReadinessOptions,
+    #[cfg(test)]
+    pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 
 #[derive(Clone)]
@@ -111,7 +119,7 @@ pub struct Gents {
     node: Arc<EmbeddedNode>,
     principal: Arc<AgentPrincipal>,
     behaviors: Vec<Arc<AgentBehavior>>,
-    unavailable_behaviors: HashMap<String, String>,
+    unavailable_behaviors: HashMap<String, UnavailableBehavior>,
     document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
     local_hostname: String,
@@ -127,6 +135,8 @@ pub struct Gents {
     startup_build_failure_observer:
         Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     startup_readiness: crate::startup_readiness::StartupReadinessOptions,
+    #[cfg(test)]
+    router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
@@ -216,6 +226,8 @@ impl Gents {
             runtime_snapshot_observer: options.runtime_snapshot_observer,
             startup_build_failure_observer: options.startup_build_failure_observer,
             startup_readiness: options.startup_readiness,
+            #[cfg(test)]
+            router_dispatch_probe: options.router_dispatch_probe,
             // Capture is mandatory (#840): a provider call with no durable
             // rendered input is a log entry, not a fact record. The public
             // builder exposes only a fail-closed fault-injection hook, never an
@@ -259,12 +271,27 @@ impl Gents {
         &self.principal.default_behavior_id
     }
 
-    pub fn unavailable_behaviors(&self) -> &HashMap<String, String> {
+    pub fn unavailable_behaviors(&self) -> &HashMap<String, UnavailableBehavior> {
         &self.unavailable_behaviors
     }
 
     pub fn background_execution_registry(&self) -> BackgroundExecutionRegistry {
         self.background_execution_registry.clone()
+    }
+
+    /// Resolve the exact operational configuration identity used by the
+    /// runtime reconciler. Observers can use this to fence an external config
+    /// transaction without reimplementing the fingerprint's field set.
+    pub async fn document_runtime_configuration_fingerprint(&self) -> anyhow::Result<String> {
+        let context = self
+            .document_runtime_context
+            .as_ref()
+            .context("runtime was not constructed from documents")?;
+        Ok(
+            resolve_document_runtime_snapshot(self.node.as_ref(), context)
+                .await?
+                .configuration_fingerprint(),
+        )
     }
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {

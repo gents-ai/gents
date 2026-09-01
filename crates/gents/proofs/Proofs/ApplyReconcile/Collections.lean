@@ -18,7 +18,6 @@ inductive Collection where
   | inferenceProfile
   | toolServiceRegistry
   | projectionAcpBinding
-  | peerPairingDesired
   | task
   | schedule
   | eventTrigger
@@ -33,17 +32,12 @@ def Collection.applyOrder : Collection → Nat
   | .datastoreToolSurface  => 0
   | .chainKeyBinding       => 0
   | .ethTool               => 0
-  | .peerPairingDesired    => 0
   | .agentBehavior         => 1
   | .projectionAcpBinding  => 2
   | .task                  => 2
   | .schedule              => 2
   | .agentPrincipal        => 3
   | .eventTrigger          => 3
-
-def Collection.manifestAuthoritative : Collection → Bool
-  | .peerPairingDesired => true
-  | _ => false
 
 instance : LT Collection where
   lt a b := Collection.applyOrder a < Collection.applyOrder b
@@ -87,7 +81,6 @@ example (c : Collection) : Nat :=
   | .inferenceProfile     => 0
   | .toolServiceRegistry  => 0
   | .projectionAcpBinding => 2
-  | .peerPairingDesired   => 0
   | .task                 => 2
   | .schedule             => 2
   | .eventTrigger         => 3
@@ -106,7 +99,6 @@ theorem applyOrder_matches_parity_contract : ∀ c : Collection,
        | .inferenceProfile     => 0
        | .toolServiceRegistry  => 0
        | .projectionAcpBinding => 2
-       | .peerPairingDesired   => 0
        | .task                 => 2
        | .schedule             => 2
        | .eventTrigger         => 3) := by

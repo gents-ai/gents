@@ -108,59 +108,6 @@ fn request_row(
 }
 
 #[test]
-fn legacy_wake_is_not_authoritative_latest_request() {
-    let metadata = background_wake_metadata();
-    let store = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![AgentConversationRow {
-            session_id: "session-1".to_string(),
-            agent_name: None,
-            agent_did: Some("did:agent:1".to_string()),
-            requester_did: None,
-            behavior_id: Some("default".to_string()),
-            title: None,
-            title_source: None,
-            preview_text: None,
-            status: Some("active".to_string()),
-            created_at: None,
-            updated_at: None,
-            latest_request_id: Some("legacy-wake".to_string()),
-        }],
-        requests: vec![
-            request_row(
-                "interactive",
-                "2026-07-01T00:00:00Z",
-                "completed",
-                "interactive",
-                None,
-            ),
-            request_row(
-                "legacy-wake",
-                "2026-07-01T00:00:01Z",
-                "pending",
-                "scheduled",
-                Some(metadata),
-            ),
-        ],
-        ..ClientStoreRows::default()
-    });
-
-    assert_eq!(
-        store.latest_request_id_for_session("session-1").as_deref(),
-        Some("interactive")
-    );
-    assert_eq!(
-        store
-            .latest_request_id_for_session_for_agent("session-1", "did:agent:1")
-            .as_deref(),
-        Some("interactive")
-    );
-    assert_eq!(
-        store.derive_turn("session-1"),
-        Some(ClientTurnState::Completed)
-    );
-}
-
-#[test]
 fn unknown_conversation_pointer_preserves_partial_observation() {
     let store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
@@ -202,63 +149,6 @@ fn unknown_conversation_pointer_preserves_partial_observation() {
         None,
         "an unknown latest pointer must not regress to an older terminal request"
     );
-}
-
-#[test]
-fn remote_scope_replacement_preserves_unstamped_same_session_rows() {
-    let current = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![
-            serde_json::from_value(serde_json::json!({
-                "session_id": "shared-session",
-                "agent_did": "did:agent:local"
-            }))
-            .expect("local conversation"),
-            serde_json::from_value(serde_json::json!({
-                "session_id": "shared-session",
-                "agent_did": "did:agent:remote"
-            }))
-            .expect("remote conversation"),
-        ],
-        messages: vec![
-            serde_json::from_value(serde_json::json!({
-                "message_key": "local:1",
-                "session_id": "shared-session",
-                "role": "user",
-                "content": "local"
-            }))
-            .expect("local message"),
-            serde_json::from_value(serde_json::json!({
-                "message_key": "remote:1",
-                "session_id": "shared-session",
-                "role": "user",
-                "content": "remote"
-            }))
-            .expect("remote message"),
-        ],
-        message_source_agent_dids: vec![None, Some("did:agent:remote".to_string())],
-        ..ClientStoreRows::default()
-    });
-
-    let replaced = current.replace_remote_agent_scope("did:agent:remote", ClientStore::default());
-
-    assert_eq!(replaced.conversations.len(), 1);
-    assert_eq!(
-        replaced.conversations[0].agent_did.as_deref(),
-        Some("did:agent:local")
-    );
-    assert_eq!(
-        replaced
-            .messages
-            .iter()
-            .map(|row| row.message_key.as_str())
-            .collect::<Vec<_>>(),
-        vec!["local:1"]
-    );
-    assert_eq!(replaced.message_source_agent_dids, vec![None]);
-}
-
-fn background_wake_metadata() -> String {
-    r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"child-1","queued_after_request_id":null}}"#.to_string()
 }
 
 #[test]

@@ -13,6 +13,7 @@ pub mod backend_registry;
 pub mod background_completion;
 mod background_completion_diagnostics;
 pub(crate) mod background_tools;
+mod behavior_readiness_publisher;
 pub(crate) mod callback;
 pub mod chatgpt_codex;
 pub mod chatgpt_oauth_refresh;
@@ -90,6 +91,12 @@ pub mod prompt;
 pub mod provider_context_reduction;
 pub(crate) mod registry;
 pub mod rendered_request;
+mod request_admission;
+#[doc(hidden)]
+pub use request_admission::final_claim_admission_disposition;
+pub use request_admission::{
+    sign_agent_request_create, sign_agent_request_create_as_registered_target,
+};
 pub(crate) mod request_binding;
 pub mod retry;
 pub mod run_timeline;

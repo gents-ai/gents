@@ -132,7 +132,7 @@ export function App() {
       <h1 data-testid="fixture-title">Indigo Relay Fixture Host</h1>
       <p>
         Downstream shell: own bundle id, <code>AppDataDir</code> home,
-        paired-remote bootstrap (no runtime-admin), co-resident file-backed
+        enrolled-remote bootstrap (no runtime-admin), co-resident file-backed
         domain plugin.
       </p>
 
@@ -243,24 +243,16 @@ export function App() {
               <span>Independent agent console</span>
             </div>
           }
-          copy={{
-            pairingQrHint:
-              "Scan an invite generated from the Indigo Relay administration console.",
-          }}
           bootstrap={snapshot?.bootstrap ?? null}
           deployments={deployments}
           loading={false}
           p2pHealth={runtime?.p2pHealth ?? null}
           repairingP2P={false}
           starting={!storeState.started && busy}
-          onAddPeer={(request) =>
-            run("peer_add", () => bridge.peerAdd(request))
-          }
-          onPairBearer={(request) =>
-            run("peer_pair_bearer", () => bridge.api.pairBearer(request))
-          }
-          onProbePeerAddress={(address) =>
-            run("peer_probe", () => bridge.api.probePeerAddress(address))
+          onRequestStatusEnrollment={(address) =>
+            run("peer_enroll", () =>
+              bridge.api.requestStatusEnrollment(address),
+            )
           }
           onOpenChat={(agentDid) => push(`open_chat: ${agentDid}`)}
           onOpenConfig={(agentDid) => push(`open_config: ${agentDid}`)}

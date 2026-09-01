@@ -19,6 +19,28 @@ fn generated_tool_selection_id_for_agent(agent_did: &str) -> String {
     default_tool_selection_id_for_behavior(&default_behavior_id)
 }
 
+fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
+    for suffix in ["alpha", "zeta"] {
+        let skill_id = format!("{agent_did}:skill-{suffix}");
+        write_json_file(
+            &root.join("skills").join(&skill_id).join("object.json"),
+            &serde_json::json!({
+                "skill_id": skill_id,
+                "agent_did": agent_did,
+                "scope": "principal",
+                "name": format!("Skill {suffix}"),
+                "description": null,
+                "instructions": format!("Instructions for skill {suffix}."),
+                "tool_refs": [],
+                "display_name": null,
+                "interface_json": null,
+                "enabled": true,
+            }),
+        )?;
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotently() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -165,6 +187,240 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         Some(1)
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let pack_root = tempdir.path().join("pack");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-apply-root-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-apply-root-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            pack_root.to_str().context("pack root utf8")?,
+        ],
+    )?;
+    let principal_path = pack_root.join("agent-principal.json");
+    let mut principal = read_json_file(&principal_path)?;
+    let original_behavior_id = principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .context("exported principal missing default behavior")?
+        .to_string();
+    let applied_behavior_id = format!("{agent_did}:applied-default");
+    let original_behavior_dir = pack_root
+        .join("agent-behaviors")
+        .join(&original_behavior_id);
+    let applied_behavior_dir = pack_root.join("agent-behaviors").join(&applied_behavior_id);
+    fs::create_dir_all(&applied_behavior_dir)?;
+    for entry in fs::read_dir(&original_behavior_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            fs::copy(entry.path(), applied_behavior_dir.join(entry.file_name()))?;
+        }
+    }
+    let mut applied_behavior = read_json_file(&original_behavior_dir.join("object.json"))?;
+    applied_behavior["behavior_id"] = Value::String(applied_behavior_id.clone());
+    applied_behavior["display_name"] = Value::String("Applied default".to_string());
+    write_json_file(&applied_behavior_dir.join("object.json"), &applied_behavior)?;
+    principal["default_behavior_id"] = Value::String(applied_behavior_id.clone());
+    write_json_file(&principal_path, &principal)?;
+
+    let port = allocate_port()?;
+    let pack_root_arg = pack_root.to_str().context("pack root utf8")?;
+    let (serve, readiness) =
+        spawn_server_with_ready_json(&home_dir, port, &["--apply-root", pack_root_arg], &[])?;
+
+    assert_eq!(
+        readiness.get("default_behavior_id").and_then(Value::as_str),
+        Some(applied_behavior_id.as_str())
+    );
+    assert_eq!(
+        readiness
+            .pointer("/behavior_readiness/default_behavior_id")
+            .and_then(Value::as_str),
+        Some(applied_behavior_id.as_str())
+    );
+    assert!(readiness
+        .pointer("/behavior_readiness/behaviors")
+        .and_then(Value::as_array)
+        .is_some_and(|behaviors| behaviors.iter().any(|behavior| {
+            behavior.get("behavior_id").and_then(Value::as_str)
+                == Some(applied_behavior_id.as_str())
+        })));
+    assert_eq!(
+        readiness
+            .pointer("/apply_root/changed")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    drop(serve);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_apply_root_accepts_metadata_only_change_without_generation_advance() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let pack_root = tempdir.path().join("pack");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-metadata-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &format!("metadata-apply-{}", Uuid::new_v4().simple()),
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            pack_root.to_str().context("pack root utf8")?,
+        ],
+    )?;
+    add_principal_skill_pair(&pack_root, &agent_did)?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            pack_root.to_str().context("pack root utf8")?,
+        ],
+    )?;
+    let principal_path = pack_root.join("agent-principal.json");
+    let mut principal = read_json_file(&principal_path)?;
+    principal["display_name"] = Value::String("Metadata-only rename".to_string());
+    write_json_file(&principal_path, &principal)?;
+
+    let port = allocate_port()?;
+    let (serve, readiness) = spawn_server_with_ready_json(
+        &home_dir,
+        port,
+        &[
+            "--apply-root",
+            pack_root.to_str().context("pack root utf8")?,
+        ],
+        &[],
+    )?;
+
+    assert_eq!(
+        readiness
+            .pointer("/behavior_readiness/active_generation")
+            .and_then(Value::as_u64),
+        Some(1),
+        "principal display name is not part of runtime operational identity",
+    );
+    drop(serve);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let pack_root = tempdir.path().join("pack");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-task-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &format!("task-apply-{}", Uuid::new_v4().simple()),
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            pack_root.to_str().context("pack root utf8")?,
+        ],
+    )?;
+    add_principal_skill_pair(&pack_root, &agent_did)?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            pack_root.to_str().context("pack root utf8")?,
+        ],
+    )?;
+    let principal = read_json_file(&pack_root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .context("exported principal missing default behavior")?;
+    let task_id = format!("post-apply-task-{}", Uuid::new_v4().simple());
+    write_json_file(
+        &pack_root.join("tasks").join(&task_id).join("object.json"),
+        &serde_json::json!({
+            "task_id": task_id,
+            "name": "Post-apply task",
+            "description": null,
+            "behavior_id": behavior_id,
+            "prompt_template": "Exercise the post-apply runtime generation.",
+            "enabled": true,
+            "output_schema_ref": null,
+        }),
+    )?;
+
+    let port = allocate_port()?;
+    let (serve, readiness) = spawn_server_with_ready_json(
+        &home_dir,
+        port,
+        &[
+            "--apply-root",
+            pack_root.to_str().context("pack root utf8")?,
+        ],
+        &[],
+    )?;
+
+    assert!(
+        readiness
+            .pointer("/behavior_readiness/active_generation")
+            .and_then(Value::as_u64)
+            .is_some_and(|generation| generation > 1),
+        "task-only apply must wait for a newer runtime generation: {readiness}",
+    );
+    drop(serve);
     Ok(())
 }
 

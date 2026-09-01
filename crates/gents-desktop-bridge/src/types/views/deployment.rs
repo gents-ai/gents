@@ -1,4 +1,3 @@
-use gents_desktop_core::client::BearerPairingResult;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -21,28 +20,6 @@ pub struct P2PHealthView {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionHydrationView {
-    pub session_id: String,
-    pub agent_did: String,
-    pub phase: String,
-    pub merged_count: usize,
-    pub served_count: Option<usize>,
-}
-
-impl Default for SessionHydrationView {
-    fn default() -> Self {
-        Self {
-            session_id: String::new(),
-            agent_did: String::new(),
-            phase: "idle".into(),
-            merged_count: 0,
-            served_count: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct SyncHealthView {
     pub state: String,
     pub since: Option<String>,
@@ -53,7 +30,6 @@ pub struct SyncHealthView {
     pub pairing_retry_count: u32,
     pub route_retry_count: u32,
     pub connected_peer_count: usize,
-    pub hydration: SessionHydrationView,
 }
 
 impl Default for SyncHealthView {
@@ -68,7 +44,6 @@ impl Default for SyncHealthView {
             pairing_retry_count: 0,
             route_retry_count: 0,
             connected_peer_count: 0,
-            hydration: SessionHydrationView::default(),
         }
     }
 }
@@ -86,15 +61,126 @@ pub struct PairingCollectionStatusView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeView {
-    pub process_state: Option<String>,
     pub reconcile_phase: Option<String>,
     pub last_reconcile_result: Option<String>,
     pub last_reconcile_error: Option<String>,
     pub updated_at: Option<String>,
     pub behavior_executor_capacity: Option<i64>,
     pub behavior_executor_queue_depth: Option<i64>,
-    pub runnable_behavior_count: Option<i64>,
-    pub unavailable_behavior_count: Option<i64>,
+}
+
+#[cfg(test)]
+mod runtime_view_tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_runtime_dto_cannot_serialize_readiness_authority() {
+        let value = serde_json::to_value(RuntimeView {
+            reconcile_phase: Some("idle".to_string()),
+            last_reconcile_result: Some("applied".to_string()),
+            last_reconcile_error: None,
+            updated_at: Some("2026-08-29T00:00:00Z".to_string()),
+            behavior_executor_capacity: Some(1),
+            behavior_executor_queue_depth: Some(0),
+        })
+        .expect("serialize diagnostic runtime view");
+        let object = value.as_object().expect("runtime view object");
+        for forbidden in [
+            "processState",
+            "activeGeneration",
+            "routerGeneration",
+            "defaultBehaviorId",
+            "runnableBehaviorCount",
+            "unavailableBehaviorCount",
+        ] {
+            assert!(
+                !object.contains_key(forbidden),
+                "forbidden field: {forbidden}"
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BehaviorUnavailableReasonView {
+    BehaviorDisabled,
+    RuntimeConfigurationInvalid,
+    BackendNotConfigured,
+    BackendDisabled,
+    BackendTemporarilyUnavailable,
+    CredentialsRequired,
+    InferenceProfileInvalid,
+    ToolConfigurationInvalid,
+    ToolSurfaceUnavailable,
+    ExecutorStartFailed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BehaviorReadinessUnknownReasonView {
+    ReadinessMissing,
+    ReadinessMalformed,
+    ReadinessVersionUnsupported,
+    ReadinessStale,
+    ProcessNotReady,
+    RouterGenerationStale,
+    BehaviorNotAssigned,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(
+    tag = "state",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum BehaviorReadinessStatusView {
+    Ready {
+        behavior_id: String,
+    },
+    Unavailable {
+        behavior_id: String,
+        reason: BehaviorUnavailableReasonView,
+    },
+    Unknown {
+        behavior_id: String,
+        reason: BehaviorReadinessUnknownReasonView,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum BehaviorReadinessSourceView {
+    Current,
+    Unknown {
+        reason: BehaviorReadinessUnknownReasonView,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BehaviorReadinessView {
+    pub source: BehaviorReadinessSourceView,
+    pub active_generation: Option<u64>,
+    pub router_generation: Option<u64>,
+    pub default_behavior_id: Option<String>,
+    pub updated_at: Option<String>,
+    pub behaviors: Vec<BehaviorReadinessStatusView>,
+}
+
+impl Default for BehaviorReadinessView {
+    fn default() -> Self {
+        Self {
+            source: BehaviorReadinessSourceView::Unknown {
+                reason: BehaviorReadinessUnknownReasonView::ReadinessMissing,
+            },
+            active_generation: None,
+            router_generation: None,
+            default_behavior_id: None,
+            updated_at: None,
+            behaviors: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -440,6 +526,7 @@ pub struct DeploymentView {
     pub default_behavior_id: Option<String>,
     pub agent_principal: AgentPrincipalView,
     pub runtime: Option<RuntimeView>,
+    pub behavior_readiness: BehaviorReadinessView,
     pub behaviors: Vec<BehaviorView>,
     pub behavior_environments: Vec<BehaviorEnvironmentView>,
     pub inference_backends: Vec<InferenceBackendView>,
@@ -513,55 +600,24 @@ pub struct PeerRemoveResponse {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct BearerPairingView {
-    pub peer_id: String,
-    pub label: String,
-    pub addr: String,
-    pub issuer_did: String,
-    pub claimant_did: String,
+pub struct EnrollmentRequestView {
+    pub request_id: String,
     pub network_id: String,
-    pub template: String,
-    pub connected: bool,
-    pub claim_submitted: bool,
-    pub endpoint_published: bool,
-    pub replication_configured: bool,
-    pub membership_observed: bool,
-    pub bidirectional_replication_observed: bool,
+    pub admin_did: String,
+    pub server_peer: String,
+    pub owner_agent: String,
+    pub state: String,
 }
 
-impl From<BearerPairingResult> for BearerPairingView {
-    fn from(result: BearerPairingResult) -> Self {
+impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentRequestView {
+    fn from(result: gents_desktop_core::client::EnrollmentRequestResult) -> Self {
         Self {
-            peer_id: result.peer_id,
-            label: result.label,
-            addr: result.addr,
-            issuer_did: result.issuer_did,
-            claimant_did: result.claimant_did,
+            request_id: result.request_id,
             network_id: result.network_id,
-            template: result.template,
-            connected: result.connected,
-            claim_submitted: result.claim_submitted,
-            endpoint_published: result.endpoint_published,
-            replication_configured: result.replication_configured,
-            membership_observed: result.membership_observed,
-            bidirectional_replication_observed: result.bidirectional_replication_observed,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct BearerPairingResponse {
-    #[serde(flatten)]
-    pub snapshot: DesktopClientSnapshot,
-    pub pairing: BearerPairingView,
-}
-
-impl BearerPairingResponse {
-    pub fn new(snapshot: DesktopClientSnapshot, pairing: BearerPairingResult) -> Self {
-        Self {
-            snapshot,
-            pairing: pairing.into(),
+            admin_did: result.admin_did,
+            server_peer: result.server_peer,
+            owner_agent: result.owner_agent,
+            state: result.state,
         }
     }
 }

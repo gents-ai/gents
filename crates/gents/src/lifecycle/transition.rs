@@ -509,9 +509,7 @@ impl RequestLifecycle {
                     input: {{
                         status: "{target_status}",
                         lifecycle_state: "{target_lifecycle_state}",
-                        behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
-                        execution_origin: "{execution_origin}",
                         failure_reason: "{failure_reason}",
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
@@ -519,9 +517,7 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#,
             target_lifecycle_state = target_lifecycle_state.as_str(),
-            behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),
-            execution_origin = self.execution_origin.as_str(),
             failure_reason =
                 escape_graphql_string(self.failure_reason.as_deref().unwrap_or_default()),
         );
@@ -609,18 +605,14 @@ impl RequestLifecycle {
                     input: {{
                         status: "{target_status}",
                         lifecycle_state: "{target_lifecycle_state}",
-                        behavior_id: "{behavior_id}",
                         backend_id: "{backend_id}",
-                        execution_origin: "{execution_origin}",
                         failure_reason: "{failure_reason}"
                     }}
                 ) {{ _docID }}
             }}"#,
             from_lifecycle_state = from_lifecycle_state.as_str(),
             target_lifecycle_state = target_lifecycle_state.as_str(),
-            behavior_id = escape_graphql_string(&self.behavior_id),
             backend_id = escape_graphql_string(&self.backend_id),
-            execution_origin = self.execution_origin.as_str(),
             failure_reason =
                 escape_graphql_string(self.failure_reason.as_deref().unwrap_or_default()),
         );

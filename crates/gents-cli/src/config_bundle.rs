@@ -278,7 +278,6 @@ pub(crate) async fn build_config_export_bundle(
     )
     .await?;
     sort_document_rows(&mut projection_acp_binding_rows, "binding_id");
-    let peer_pairing_rows = load_manifest_owned_peer_pairings(access, agent_did).await?;
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -298,7 +297,6 @@ pub(crate) async fn build_config_export_bundle(
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
         projection_acp_bindings: projection_acp_binding_rows,
-        peer_pairings: peer_pairing_rows,
         tasks: task_rows,
         schedules: schedule_rows,
         event_triggers: event_trigger_rows,
@@ -633,7 +631,6 @@ pub(crate) async fn build_desired_state_live_bundle(
                 .is_some_and(|binding_id| desired_binding_ids.contains(binding_id))
     });
     sort_document_rows(&mut projection_acp_binding_rows, "binding_id");
-    let peer_pairing_rows = load_manifest_owned_peer_pairings(access, agent_did).await?;
 
     Ok(ConfigExportBundle {
         format: CONFIG_EXPORT_FORMAT.to_string(),
@@ -653,7 +650,6 @@ pub(crate) async fn build_desired_state_live_bundle(
         inference_profiles: profile_rows,
         tool_service_registries: tool_service_registry_rows,
         projection_acp_bindings: projection_acp_binding_rows,
-        peer_pairings: peer_pairing_rows,
         tasks: task_rows,
         schedules: schedule_rows,
         event_triggers: event_trigger_rows,
@@ -685,7 +681,6 @@ pub(crate) fn live_manifest_from_bundle(
                 inference_profiles: Vec::new(),
                 tool_service_registries: Vec::new(),
                 projection_acp_bindings: Vec::new(),
-                peer_pairings: Vec::new(),
                 tasks: Vec::new(),
                 schedules: Vec::new(),
                 event_triggers: Vec::new(),
@@ -694,32 +689,6 @@ pub(crate) fn live_manifest_from_bundle(
             },
         ))
     }
-}
-
-async fn load_manifest_owned_peer_pairings(
-    access: &ConfigAccess,
-    owner_agent_did: &str,
-) -> Result<Vec<Value>> {
-    let source = desired_state::peer_pairing_manifest_source(owner_agent_did);
-    let source = escape_graphql_string(&source);
-    let mut rows = graphql_rows_or_empty_if_collection_missing(
-        access,
-        "PeerPairingDesired",
-        &format!(
-            r#"{{
-                PeerPairingDesired(filter: {{ source: {{ _eq: "{source}" }} }}) {{
-                    peer_id
-                    agent_did
-                    replicator_addresses
-                    template
-                    source
-                }}
-            }}"#
-        ),
-    )
-    .await?;
-    sort_document_rows(&mut rows, "peer_id");
-    Ok(rows)
 }
 
 pub(crate) fn filter_tasks_and_schedules_by_agent_reachability(
@@ -928,16 +897,14 @@ pub(crate) fn sanitize_import_document(
     //  - UPDATE: omitting would leave a previously non-empty list in place,
     //    so a "remove the last entry" edit could never converge on re-apply.
     //    Write `null` to actually CLEAR it (the deserializers read null as
-    //    empty). Required non-null list fields (peer_pairing_desired) cannot be
-    //    nulled — leave them omitted so apply does not clobber/err on them.
-    const REQUIRED_LIST_FIELDS: [&str; 2] = ["collections", "replicator_addresses"];
+    //    empty).
     let empty_list_fields: Vec<String> = object
         .iter()
         .filter(|(_, value)| matches!(value, Value::Array(items) if items.is_empty()))
         .map(|(key, _)| key.clone())
         .collect();
     for field in empty_list_fields {
-        if for_update && !REQUIRED_LIST_FIELDS.contains(&field.as_str()) {
+        if for_update {
             object.insert(field, Value::Null);
         } else {
             object.remove(&field);
@@ -1038,18 +1005,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(revoked["revoked_at"], "2026-08-28T00:00:00Z");
-    }
-
-    #[test]
-    fn required_non_null_list_fields_are_never_nulled() {
-        let updated = sanitize_import_document(
-            "PeerPairingDesired",
-            &json!({ "id": "p", "collections": [], "replicator_addresses": [] }),
-            true,
-        )
-        .unwrap();
-        assert!(updated.get("collections").is_none());
-        assert!(updated.get("replicator_addresses").is_none());
     }
 
     #[test]

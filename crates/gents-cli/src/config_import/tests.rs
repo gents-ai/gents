@@ -44,7 +44,6 @@ fn every_apply_collection_schema_has_a_recreate_identity_field() {
             Collection::InferenceProfile => schemas::INFERENCE_PROFILE,
             Collection::ToolServiceRegistry => schemas::TOOL_SERVICE_REGISTRY,
             Collection::ProjectionAcpBinding => schemas::PROJECTION_ACP_BINDING,
-            Collection::PeerPairingDesired => schemas::PEER_PAIRING_DESIRED,
             Collection::Task => schemas::TASK,
             Collection::Schedule => schemas::SCHEDULE,
             Collection::EventTrigger => schemas::EVENT_TRIGGER,
@@ -129,23 +128,6 @@ fn delete_mutation_field_escapes_unique_value() {
             filter: { task_id: { _eq: "task\"with\\chars" } }
         ) { _docID }"#
     );
-}
-
-#[test]
-fn manifest_pairing_delete_is_owner_scoped_and_escaped() {
-    let field = manifest_pairing_delete_mutation_field(
-        3,
-        r#"peer"with\chars"#,
-        r#"manifest:did:key:owner"with\chars"#,
-    );
-
-    assert_eq!(field.alias, "doc_3");
-    assert!(field
-        .field
-        .contains(r#"peer_id: { _eq: "peer\"with\\chars" }"#));
-    assert!(field
-        .field
-        .contains(r#"source: { _eq: "manifest:did:key:owner\"with\\chars" }"#));
 }
 
 #[test]

@@ -6,6 +6,11 @@ type PeerPairingDesired {
     profiles: [String!]
     template: String @index
     source: String @index
+    # Exact enrollment generation authorizing this materialization. These are
+    # null for non-enrollment local overlays and never grant by themselves.
+    enrollment_request_digest: String @index
+    enrollment_authorization_sequence: Int @index
+    enrollment_authorization_expires_at: DateTime @index
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
 }

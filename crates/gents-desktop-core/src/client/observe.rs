@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 use events::Subscription;
-use tokio::sync::{watch, RwLock as AsyncRwLock};
+use tokio::sync::watch;
 
 use super::collection_resolver::CollectionResolver;
-use super::peer_directory::PeerDirectory;
+use super::core::sync_state::ClientSyncStateOwner;
 use super::query::{
-    fetch_doc_patch, is_transcript_content_collection, isolate_legacy_bearer_rows,
+    fetch_doc_patch, is_transcript_content_collection,
     load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
     supports_doc_patch_collection,
 };
@@ -24,6 +24,7 @@ pub use projection_store::{
 
 const OBSERVER_DEBOUNCE: Duration = Duration::from_millis(150);
 const FETCH_RETRY_LIMIT: u32 = 3;
+const SESSION_HYDRATION_REQUEST: &str = "SessionHydrationRequest";
 
 pub struct ObserverHandle {
     stop_tx: watch::Sender<bool>,
@@ -45,7 +46,7 @@ impl ObserverHandle {
 pub fn spawn_observer_with_selection(
     node: Arc<EmbeddedNode>,
     store: Arc<ObservedStore>,
-    peer_directory: Arc<AsyncRwLock<PeerDirectory>>,
+    configured_peers: ClientSyncStateOwner,
     requester_did: String,
     subscription: Subscription,
     selected_agent_did_rx: watch::Receiver<Option<String>>,
@@ -126,21 +127,8 @@ pub fn spawn_observer_with_selection(
                 redundant_fetches_pending.clear();
 
                 let scope = selected_agent_did_rx.borrow().clone();
-                let peers = peer_directory.read().await.records().to_vec();
-                let selected_is_legacy_remote = scope.as_deref().is_some_and(|did| {
-                    peers.iter().any(|peer| {
-                        peer.agent_did == did
-                            && peer
-                                .graphql
-                                .as_deref()
-                                .is_some_and(|value| !value.trim().is_empty())
-                    })
-                });
+                let peers = configured_peers.records();
                 let result = match scope {
-                    _ if selected_is_legacy_remote => {
-                        load_full_snapshot_with_peer_records(node.as_ref(), &peers, &requester_did)
-                            .await
-                    }
                     Some(ref did) => {
                         load_agent_scoped_snapshot_with_peer_records(
                             node.as_ref(),
@@ -157,10 +145,9 @@ pub fn spawn_observer_with_selection(
                 };
                 match result {
                     Ok(snapshot) => {
-                        match (selected_is_legacy_remote, scope.as_deref()) {
-                            (true, _) => store.replace_snapshot(snapshot),
-                            (false, Some(did)) => store.replace_agent_snapshot(did, snapshot),
-                            (false, None) => store.replace_snapshot(snapshot),
+                        match scope.as_deref() {
+                            Some(did) => store.replace_agent_snapshot(did, snapshot),
+                            None => store.replace_snapshot(snapshot),
                         };
                         metrics_for_task
                             .scope_reloads
@@ -196,21 +183,29 @@ pub fn spawn_observer_with_selection(
                 .filter(|(name, _)| is_transcript_content_collection(name))
                 .map(|(_, doc_ids)| doc_ids.len())
                 .sum::<usize>();
-            if transcript_changed_docs > 0 {
+            let hydration_control_changed_docs = flushed
+                .get(SESSION_HYDRATION_REQUEST)
+                .map_or(0, HashSet::len);
+            if transcript_changed_docs > 0 || hydration_control_changed_docs > 0 {
                 let store_version = store.invalidate_projection();
-                metrics_for_task
-                    .transcript_invalidations
-                    .fetch_add(1, Ordering::Relaxed);
+                if transcript_changed_docs > 0 {
+                    metrics_for_task
+                        .transcript_invalidations
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 tracing::trace!(
                     changed_collections = transcript_collection_count,
-                    changed_docs = transcript_changed_docs,
+                    transcript_changed_docs,
+                    hydration_control_changed_docs,
                     store_version,
-                    "published coalesced transcript projection invalidation"
+                    "published coalesced session projection invalidation"
                 );
             }
 
             for (collection_name, doc_ids) in flushed {
-                if is_transcript_content_collection(collection_name) {
+                if is_transcript_content_collection(collection_name)
+                    || collection_name == SESSION_HYDRATION_REQUEST
+                {
                     continue;
                 }
                 let id_refs: Vec<&str> = doc_ids.iter().map(|s| s.as_str()).collect();
@@ -222,25 +217,8 @@ pub fn spawn_observer_with_selection(
                             // evidence. Reload and replace the selected scope so
                             // the removed row cannot remain visible until restart.
                             let scope = selected_agent_did_rx.borrow().clone();
-                            let peers = peer_directory.read().await.records().to_vec();
-                            let selected_is_legacy_remote = scope.as_deref().is_some_and(|did| {
-                                peers.iter().any(|peer| {
-                                    peer.agent_did == did
-                                        && peer
-                                            .graphql
-                                            .as_deref()
-                                            .is_some_and(|value| !value.trim().is_empty())
-                                })
-                            });
+                            let peers = configured_peers.records();
                             let reload = match scope.as_deref() {
-                                _ if selected_is_legacy_remote => {
-                                    load_full_snapshot_with_peer_records(
-                                        node.as_ref(),
-                                        &peers,
-                                        &requester_did,
-                                    )
-                                    .await
-                                }
                                 Some(did) => {
                                     load_agent_scoped_snapshot_with_peer_records(
                                         node.as_ref(),
@@ -260,15 +238,11 @@ pub fn spawn_observer_with_selection(
                                 }
                             };
                             match reload {
-                                Ok(snapshot) => match (selected_is_legacy_remote, scope.as_deref())
-                                {
-                                    (true, _) => {
-                                        store.replace_snapshot(snapshot);
-                                    }
-                                    (false, Some(did)) => {
+                                Ok(snapshot) => match scope.as_deref() {
+                                    Some(did) => {
                                         store.replace_agent_snapshot(did, snapshot);
                                     }
-                                    (false, None) => {
+                                    None => {
                                         store.replace_snapshot(snapshot);
                                     }
                                 },
@@ -281,9 +255,7 @@ pub fn spawn_observer_with_selection(
                                 }
                             }
                         } else {
-                            let mut rows = patch.to_rows();
-                            let peers = peer_directory.read().await.records().to_vec();
-                            isolate_legacy_bearer_rows(&mut rows, &peers, &requester_did);
+                            let rows = patch.to_rows();
                             let response_only = collection_name == "AgentResponse";
                             let outcome = store.merge_observer_patch_with_outcome(
                                 ClientStore::from_rows(rows),
@@ -359,8 +331,10 @@ async fn accumulate_dirty(
     metrics: &ObserverMetrics,
 ) {
     match resolver.resolve(node, collection_id).await {
-        Ok(Some(name)) if supports_doc_patch_collection(name) => {
-            if !is_relay {
+        Ok(Some(name))
+            if supports_doc_patch_collection(name) || name == SESSION_HYDRATION_REQUEST =>
+        {
+            if !is_relay && supports_doc_patch_collection(name) {
                 metrics
                     .local_write_redundant_fetches
                     .fetch_add(1, Ordering::Relaxed);

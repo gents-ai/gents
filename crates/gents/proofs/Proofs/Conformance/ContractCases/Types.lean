@@ -28,6 +28,186 @@ structure RuntimeReconcileCase where
   trackedSessionBehavior : BehaviorId
   deriving Repr
 
+structure ClientBehaviorReadinessCase where
+  name : String
+  observationPresent : Bool
+  observationKind : String
+  processState : String
+  activeGeneration : Generation
+  routerGeneration : Generation
+  runnable : Bool
+  unavailable : Bool
+  startupDemoted : Bool
+  runtimeUnavailableReason : String
+  expectedState : String
+  expectedReason : Option String
+  expectedRuntimeAdmissible : Bool
+  deriving Repr
+
+structure EnrollmentTraceStep where
+  action : String
+  peerAdmissionDid : String
+  offerId : String
+  offerChallenge : String
+  offerNetworkId : String
+  offerAdminDid : String
+  offerServerPeer : String
+  offerOwnerAgent : String
+  offerProfile : String
+  challenge : String
+  requestId : String
+  requestDigest : String
+  requestOfferId : String
+  networkId : String
+  adminDid : String
+  serverPeer : String
+  serverTicketPeer : String
+  resolvedServerDid : String
+  profile : String
+  schemaCompatible : Bool
+  offerAdminSigned : Bool
+  offerFresh : Bool
+  candidateDid : String
+  candidatePeer : String
+  observedCandidatePeer : String
+  resolvedCandidateDid : String
+  candidateTicketPeer : String
+  ownerAgent : String
+  clientNonce : String
+  issuedAt : String
+  expiresAt : String
+  candidateSigned : Bool
+  requestFresh : Bool
+  decisionAuthorizationSequence : Nat
+  decisionAuthorizationExpiresAt : String
+  decisionSignerDid : String
+  decisionKind : String
+  decisionRequestId : String
+  decisionRequestDigest : String
+  decisionNetworkId : String
+  decisionAdminDid : String
+  decisionCandidateDid : String
+  decisionCandidatePeer : String
+  decisionOwnerAgent : String
+  decisionAdminSigned : Bool
+  decisionFresh : Bool
+  revisionKind : String
+  revisionSequence : Nat
+  revisionAuthorizationExpiresAt : String
+  revisionSignerDid : String
+  revisionRequestId : String
+  revisionRequestDigest : String
+  revisionNetworkId : String
+  revisionAdminDid : String
+  revisionMemberDid : String
+  revisionMemberPeer : String
+  revisionOwnerAgent : String
+  revisionAdminSigned : Bool
+  receiptRequestId : String
+  receiptRequestDigest : String
+  receiptNetworkId : String
+  receiptAdminDid : String
+  receiptMemberDid : String
+  receiptMemberPeer : String
+  receiptServerPeer : String
+  receiptOwnerAgent : String
+  receiptAuthorizationSequence : Nat
+  receiptAuthorizationExpiresAt : String
+  receiptDirection : String
+  receiptSignerDid : String
+  receiptAdminSigned : Bool
+  receiptApplied : Bool
+  observedOfferCount : Nat
+  adminPinCount : Nat
+  challengeBindingCount : Nat
+  requestBindingCount : Nat
+  requestCount : Nat
+  decisionCount : Nat
+  authorizationCount : Nat
+  membershipCount : Nat
+  receiptCount : Nat
+  routeCount : Nat
+  requestAccepted : Bool
+  decisionRecorded : Bool
+  authorizationRecorded : Bool
+  revisionRecorded : Bool
+  receiptRecorded : Bool
+  membershipPresent : Bool
+  clientRoutePresent : Bool
+  serverRoutePresent : Bool
+  adminPinPresent : Bool
+  adminPinConflict : Bool
+  challengeBindingConflict : Bool
+  requestBindingConflict : Bool
+  currentApproval : Bool
+  peerAdmitted : Bool
+  ready : Bool
+  clientHydrationAdmits : Bool
+  serverHydrationAdmits : Bool
+  deriving Repr
+
+structure EnrollmentCase where
+  name : String
+  steps : List EnrollmentTraceStep
+  deriving Repr
+
+structure EnrollmentDurableProjectionCase where
+  name : String
+  documents : List EnrollmentTraceStep
+  expectedCurrentApproval : Bool
+  expectedCurrentRouteReceipt : Bool
+  deriving Repr
+
+structure EnrollmentEncodingCase where
+  name : String
+  value : String
+  expectedFrame : String
+  actualFrame : String
+  frameMatches : Bool
+  deriving Repr
+
+structure EnrollmentDigestCase where
+  name : String
+  fields : List String
+  expectedPayload : String
+  actualPayload : String
+  expectedDigest : String
+  actualDigest : String
+  payloadMatches : Bool
+  digestMatches : Bool
+  deriving Repr
+
+structure AgentRequestAdmissionCase where
+  name : String
+  observationAvailable : Bool
+  kind : String
+  signatureValid : Bool
+  signedFieldsMatch : Bool
+  branchFieldsExact : Bool
+  pendingDeadlineAbsent : Bool
+  signerMatchesRequester : Bool
+  requesterMatchesTarget : Bool
+  signerMatchesTarget : Bool
+  signerMatchesIssuer : Bool
+  requesterMatchesIssuer : Bool
+  currentApproval : Bool
+  exactGeneration : Bool
+  authorizationFresh : Bool
+  runtimeEvidencePresent : Bool
+  runtimeSourceKind : String
+  targetRuntimeAttestationValid : Bool
+  sourceBindingCurrent : Bool
+  triggerConfigDocumentBindingCurrent : Bool
+  sourceDocumentBindingCurrent : Bool
+  sourceToolCallBindingCurrent : Bool
+  targetPolicyAllows : Bool
+  bridgeAuthorBindingCurrent : Bool
+  bridgeAuthorAuthorizationFresh : Bool
+  targetCrossDeploymentPolicyAllows : Bool
+  expectedAdmitted : Bool
+  expectedDisposition : String
+  deriving Repr
+
 structure SessionRecoveryCase where
   name : String
   action : String

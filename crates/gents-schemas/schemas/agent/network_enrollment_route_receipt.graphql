@@ -1,0 +1,22 @@
+# Admin-signed immutable evidence that the runtime reconciled the exact
+# client-to-server route for one current enrollment authorization generation.
+# Authorization remains owned by NetworkAuthorizationRevision; a later maximum
+# revision makes this historical receipt non-current.
+type NetworkEnrollmentRouteReceipt @branchable {
+    protocol_version: Int @immutable
+    receipt_id: String @index(unique: true) @immutable
+    request_id: String @index @immutable
+    request_digest: String @index @immutable
+    network_id: String @index @immutable
+    admin_did: String @index @immutable
+    member_did: String @index @immutable
+    member_peer: String @index @immutable
+    server_peer: String @index @immutable
+    owner_agent: String @index @immutable
+    authorization_sequence: Int @index @immutable
+    authorization_expires_at: DateTime @immutable
+    direction: String @index @immutable
+    applied_at: DateTime @immutable
+    signer_did: String @index @immutable
+    admin_sig: String @immutable
+}

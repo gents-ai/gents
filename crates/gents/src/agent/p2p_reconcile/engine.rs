@@ -1,14 +1,14 @@
 //! Runtime pairing reconcile engine.
 
-mod bearer_readiness;
 mod remote_topology;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use defra_node::{EmbeddedNode, EventName};
 use futures::{stream, StreamExt};
 use p2p::iroh::parse_public_peer_addr;
@@ -18,31 +18,69 @@ use tokio_util::sync::CancellationToken;
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
 
+use super::enrollment_reconcile::EnrollmentAuthorityHandle;
 use super::graphql_helpers::{ensure_no_errors, first_row, graphql_string_list_literal, rows};
-use super::network::{GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore};
-use super::reciprocal::GraphqlReciprocalStore;
-use super::templates::{
-    admit_app_collections, decode_pairing_filters, equality_filter, resolve_template, Delivery,
-    DidSource, PairingFilters, Scope, APP_COLLECTIONS_TEMPLATE,
-};
 #[cfg(test)]
-use super::templates::{scope_filter, FilterPredicate};
+use super::templates::Delivery;
+use super::templates::{
+    admit_app_collections, decode_pairing_filters, equality_filter, resolve_template, DidSource,
+    PairingFilters, Scope, APP_COLLECTIONS_TEMPLATE,
+};
 use super::{
     compute_owned_pairing_diff, owned_pairing_live_matches, DiffOp, EmbeddedRemoteP2pAdmin,
     PairingApplied, PairingDesired, RemoteP2pAdmin,
 };
 
-pub use bearer_readiness::bearer_pairing_ready_upsert_mutation;
-use bearer_readiness::earned_bearer_readiness;
 #[cfg(test)]
 use remote_topology::canonical_replicator_address;
+pub use remote_topology::teardown_owned_replicators_at_endpoint;
 use remote_topology::{apply_op, read_actual, replay_replicator_after_reconnect};
-pub use remote_topology::{
-    teardown_owned_replicators_at_endpoint, teardown_unowned_replicators_at_endpoint,
-};
 
 pub const PAIRING_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 pub const MAX_CONCURRENT_PEER_PREPARATIONS: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrollmentEndpointEntry {
+    /// Durable materialization key; may be directional and is not a transport peer id.
+    pub desired_id: String,
+    pub peer_id: String,
+    pub agent_did: String,
+    pub address: String,
+    pub request_digest: String,
+    pub authorization_sequence: u64,
+    pub authorization_expires_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrollmentRouteGeneration {
+    pub member_did: String,
+    pub member_peer: String,
+    pub member_ticket: String,
+    pub request_digest: String,
+    pub authorization_sequence: u64,
+    pub authorization_expires_at: String,
+}
+
+impl From<&super::enrollment_reconcile::EnrollmentAuthorizationFence>
+    for EnrollmentRouteGeneration
+{
+    fn from(fence: &super::enrollment_reconcile::EnrollmentAuthorizationFence) -> Self {
+        Self {
+            member_did: fence.member_did.clone(),
+            member_peer: fence.member_peer.clone(),
+            member_ticket: fence.member_ticket.clone(),
+            request_digest: fence.request_digest.clone(),
+            authorization_sequence: fence.authorization_sequence,
+            authorization_expires_at: fence.authorization_expires_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LoadedPairingDesired {
+    pub state: Option<PairingDesired>,
+    pub enrollment_generation: Option<EnrollmentRouteGeneration>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingTickOutcome {
@@ -66,20 +104,25 @@ pub struct LoadedPairingApplied {
 pub trait PairingStateStore: Send + Sync {
     async fn load_desired(&self, peer_id: &str) -> Result<Option<PairingDesired>>;
 
+    async fn load_desired_with_authority(&self, peer_id: &str) -> Result<LoadedPairingDesired> {
+        Ok(LoadedPairingDesired {
+            state: self.load_desired(peer_id).await?,
+            enrollment_generation: None,
+        })
+    }
+
+    async fn enrollment_generation_is_current(
+        &self,
+        _generation: &EnrollmentRouteGeneration,
+    ) -> Result<bool> {
+        Ok(true)
+    }
+
     async fn load_applied(&self, peer_id: &str) -> Result<LoadedPairingApplied>;
 
     async fn persist_applied(&self, peer_id: &str, applied: &LoadedPairingApplied) -> Result<()>;
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>>;
-
-    async fn reconcile_bearer_readiness(
-        &self,
-        _peer_id: &str,
-        _desired: Option<&PairingDesired>,
-        _applied: &PairingApplied,
-    ) -> Result<()> {
-        Ok(())
-    }
 
     /// Called once at the start of each sweep, before the per-peer loop. Lets a
     /// store amortize per-sweep work (e.g. computing the membership-materializable
@@ -112,6 +155,7 @@ enum PreparedPairingState {
     DesiredReadFailed,
     Ready {
         desired: Option<PairingDesired>,
+        enrollment_generation: Option<EnrollmentRouteGeneration>,
         applied: LoadedPairingApplied,
         reconnected: bool,
         force_replay: bool,
@@ -130,7 +174,7 @@ async fn prepare_pairing_peer(
     peer_id: String,
     force_replay_when_active: bool,
 ) -> PairingPeerPreparation {
-    let desired = match store.load_desired(&peer_id).await {
+    let loaded_desired = match store.load_desired_with_authority(&peer_id).await {
         Ok(desired) => desired,
         Err(error) => {
             tracing::warn!(
@@ -145,6 +189,13 @@ async fn prepare_pairing_peer(
             };
         }
     };
+    let mut desired = loaded_desired.state;
+    let enrollment_generation = loaded_desired.enrollment_generation;
+    if desired.is_some()
+        && !fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
+    {
+        desired = None;
+    }
     let desired_state = desired.clone().unwrap_or_default();
     let applied = match store.load_applied(&peer_id).await {
         Ok(applied) => applied,
@@ -172,14 +223,22 @@ async fn prepare_pairing_peer(
                 break;
             }
         }
-        if endpoints.is_empty() {
-            // Additive compatibility for pre-Iroh and synthetic pairings.
-            // A valid dialable endpoint always wins over this opaque key.
-            active_before = peer_already_active(admin, &peer_id).await;
-        }
         if !endpoint_changed && active_before {
             tracing::debug!(peer_id = %peer_id, "pairing peer already connected; skipping redial");
         } else {
+            if !fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await {
+                return PairingPeerPreparation {
+                    peer_id,
+                    active_before,
+                    state: Ok(PreparedPairingState::Ready {
+                        desired: None,
+                        enrollment_generation,
+                        applied,
+                        reconnected: false,
+                        force_replay: false,
+                    }),
+                };
+            }
             let addresses = desired_state
                 .replicator_addresses
                 .iter()
@@ -213,6 +272,7 @@ async fn prepare_pairing_peer(
         active_before,
         state: Ok(PreparedPairingState::Ready {
             desired,
+            enrollment_generation,
             applied,
             reconnected,
             force_replay: force_replay_when_active && active_before,
@@ -228,7 +288,8 @@ async fn reconcile_prepared_peer(
     let active_before = prepared.active_before;
     let peer_id = prepared.peer_id;
     let PreparedPairingState::Ready {
-        desired,
+        mut desired,
+        enrollment_generation,
         applied: mut applied_record,
         reconnected,
         force_replay,
@@ -243,14 +304,24 @@ async fn reconcile_prepared_peer(
             live_route_matches: false,
         });
     };
-    let desired_state = desired.clone().unwrap_or_default();
-    let actual = read_actual(admin, &applied_record.state.replicator_addresses).await?;
+    let mut desired_state = desired.clone().unwrap_or_default();
+    let mut actual = read_actual(admin, &applied_record.state.replicator_addresses).await?;
 
     if !applied_record.duplicate_doc_ids.is_empty() {
         persist_applied_record(store, &peer_id, &mut applied_record).await?;
     }
 
-    let ops = compute_owned_pairing_diff(&desired_state, &actual.state, &applied_record.state);
+    if desired.is_some()
+        && !fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
+    {
+        desired = None;
+        desired_state = PairingDesired::default();
+    }
+    let mut ops = std::collections::VecDeque::from(compute_owned_pairing_diff(
+        &desired_state,
+        &actual.state,
+        &applied_record.state,
+    ));
     let mut ops_applied = Vec::new();
     let mut replayed_replicators = Vec::new();
 
@@ -263,7 +334,10 @@ async fn reconcile_prepared_peer(
     // any new same-value request history. If the desired identity itself
     // changed, the ordinary diff already contains teardown+install and is the
     // replay; avoid doing it twice.
-    if (reconnected || force_replay) && desired_state.uses_subagent_template() {
+    if (reconnected || force_replay)
+        && desired_state.uses_subagent_template()
+        && fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
+    {
         for address in desired_state
             .replicator_addresses
             .intersection(&actual.state.replicator_addresses)
@@ -284,7 +358,22 @@ async fn reconcile_prepared_peer(
         }
     }
 
-    for op in ops {
+    while let Some(op) = ops.pop_front() {
+        if desired.is_some()
+            && !fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
+        {
+            desired = None;
+            desired_state = PairingDesired::default();
+            actual = read_actual(admin, &applied_record.state.replicator_addresses)
+                .await
+                .context("reload live pairing state after enrollment authority closed")?;
+            ops = std::collections::VecDeque::from(compute_owned_pairing_diff(
+                &desired_state,
+                &actual.state,
+                &applied_record.state,
+            ));
+            continue;
+        }
         apply_op(admin, &op, &desired_state, &actual).await?;
         update_applied_after_success(&mut applied_record.state, &op, &desired_state);
         persist_applied_record(store, &peer_id, &mut applied_record).await?;
@@ -308,10 +397,6 @@ async fn reconcile_prepared_peer(
         applied_record.state = PairingApplied::default();
         persist_applied_record(store, &peer_id, &mut applied_record).await?;
     }
-    store
-        .reconcile_bearer_readiness(&peer_id, desired.as_ref(), &applied_record.state)
-        .await?;
-
     Ok(PairingTickOutcome {
         peer_id,
         ops_applied,
@@ -320,6 +405,34 @@ async fn reconcile_prepared_peer(
         peer_active: active_before || reconnected,
         live_route_matches,
     })
+}
+
+async fn fresh_enrollment_generation_or_close(
+    store: &dyn PairingStateStore,
+    generation: Option<&EnrollmentRouteGeneration>,
+) -> bool {
+    let Some(generation) = generation else {
+        return true;
+    };
+    match store.enrollment_generation_is_current(generation).await {
+        Ok(current) => current,
+        Err(error) => {
+            tracing::warn!(error = %error, "enrollment authority recheck failed; closing pairing route");
+            false
+        }
+    }
+}
+
+/// Read the live transport without applying mutations and compare it with the
+/// exact desired/persisted ownership tuple. Attestation writers use this seam
+/// so the pairing reconciler remains the only route writer.
+pub async fn observe_owned_pairing_live_matches(
+    admin: &dyn RemoteP2pAdmin,
+    desired: &PairingDesired,
+    applied: &PairingApplied,
+) -> Result<bool> {
+    let actual = read_actual(admin, &applied.replicator_addresses).await?;
+    Ok(owned_pairing_live_matches(desired, &actual.state, applied))
 }
 
 async fn persist_applied_record(
@@ -354,6 +467,7 @@ async fn peer_already_active(admin: &dyn RemoteP2pAdmin, peer_id: &str) -> bool 
 pub async fn run_pairing_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn AgentIdentity>,
+    enrollment: EnrollmentAuthorityHandle,
     cancel: CancellationToken,
 ) -> Result<()> {
     if node.p2p_arc().is_none() {
@@ -363,7 +477,8 @@ pub async fn run_pairing_reconciler(
     }
 
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
-    let store = GraphqlPairingStateStore::new(node.clone(), identity);
+    let store =
+        GraphqlPairingStateStore::with_enrollment_authority(node.clone(), identity, enrollment);
     let subscription = node.subscribe(&[EventName::Update]);
 
     run_pairing_reconciler_loop(&admin, &store, subscription, &cancel).await;
@@ -575,58 +690,102 @@ pub fn update_applied_after_success(
 pub struct GraphqlPairingStateStore {
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn AgentIdentity>,
-    /// Per-sweep cache of the membership-materializable entries, refreshed by
-    /// [`begin_sweep`](PairingStateStore::begin_sweep). `Some` during a sweep so
-    /// the Layer-2 gate verifies every signature ONCE per sweep instead of once
-    /// per peer (avoids O(N²) crypto). `None` ⇒ no cached set, fall back to a
-    /// live read (also the path for the very first read or a refresh failure).
-    materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
-    reciprocal_materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
+    enrollment: Option<EnrollmentAuthorityHandle>,
+    exact_enrollment: Option<EnrollmentEndpointEntry>,
 }
 
 impl GraphqlPairingStateStore {
-    pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
+    /// Construct a store for explicit `PeerPairingDesired` ownership only.
+    ///
+    /// Runtime data-plane materialization must instead use
+    /// [`Self::with_enrollment_authority`] so it cannot bypass the durable
+    /// enrollment projection.
+    pub fn for_explicit_desired(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
         Self {
             node,
             identity,
-            materializable_cache: Arc::new(Mutex::new(None)),
-            reciprocal_materializable_cache: Arc::new(Mutex::new(None)),
+            enrollment: None,
+            exact_enrollment: None,
+        }
+    }
+
+    pub fn with_enrollment_authority(
+        node: Arc<EmbeddedNode>,
+        identity: Arc<dyn AgentIdentity>,
+        enrollment: EnrollmentAuthorityHandle,
+    ) -> Self {
+        Self {
+            node,
+            identity,
+            enrollment: Some(enrollment),
+            exact_enrollment: None,
+        }
+    }
+
+    /// Construct a materialization store fenced by one already-verified exact
+    /// enrollment generation. The desired document is evidence only.
+    pub fn for_enrollment_materialization(
+        node: Arc<EmbeddedNode>,
+        identity: Arc<dyn AgentIdentity>,
+        entry: EnrollmentEndpointEntry,
+    ) -> Self {
+        Self {
+            node,
+            identity,
+            enrollment: None,
+            exact_enrollment: Some(entry),
         }
     }
 
     async fn data_plane_materialized_entry(
         &self,
         peer_id: &str,
-    ) -> Result<Option<NetworkEndpointEntry>> {
-        let cached = self.materializable_cache.lock().unwrap().clone();
-        let entries = match cached {
-            Some(entries) => entries,
-            None => {
-                let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
-                network.load_materializable_entries().await?
-            }
+    ) -> Result<Option<(MaterializedDataPlaneEntry, EnrollmentRouteGeneration)>> {
+        let now = Utc::now();
+        let (entry, generation) = if let Some(enrollment) = self.enrollment.as_ref() {
+            let fence = match enrollment.fresh_peer_authorization(peer_id).await {
+                Ok(Some(fence)) => fence,
+                Ok(None) => return Ok(None),
+                Err(error) => {
+                    tracing::warn!(
+                        peer_id,
+                        error = %error,
+                        "enrollment authority projection unavailable; closing materialized route"
+                    );
+                    return Ok(None);
+                }
+            };
+            let generation = EnrollmentRouteGeneration::from(&fence);
+            let entry = EnrollmentEndpointEntry {
+                desired_id: fence.member_peer.clone(),
+                peer_id: fence.member_peer,
+                agent_did: fence.member_did,
+                address: fence.member_ticket,
+                request_digest: fence.request_digest,
+                authorization_sequence: fence.authorization_sequence,
+                authorization_expires_at: fence.authorization_expires_at,
+            };
+            (entry, generation)
+        } else if let Some(exact) = self.exact_enrollment.as_ref() {
+            let generation = EnrollmentRouteGeneration {
+                member_did: exact.agent_did.clone(),
+                member_peer: exact.peer_id.clone(),
+                member_ticket: exact.address.clone(),
+                request_digest: exact.request_digest.clone(),
+                authorization_sequence: exact.authorization_sequence,
+                authorization_expires_at: exact.authorization_expires_at.clone(),
+            };
+            (exact.clone(), generation)
+        } else {
+            return Ok(None);
         };
-        if let Some(entry) =
-            data_plane_materialized_entry_from_sources(&entries, &[], peer_id, self.identity.did())
-        {
-            return Ok(Some(entry));
+        if !enrollment_entry_is_fresh_at(&entry, now) {
+            return Ok(None);
         }
-
-        let cached = self.reciprocal_materializable_cache.lock().unwrap().clone();
-        let reciprocal_entries = match cached {
-            Some(entries) => entries,
-            None => {
-                let reciprocal =
-                    GraphqlReciprocalStore::new(self.node.clone(), self.identity.clone());
-                reciprocal.load_materializable_entries().await?
-            }
-        };
-        Ok(data_plane_materialized_entry_from_sources(
-            &[],
-            &reciprocal_entries,
-            peer_id,
-            self.identity.did(),
-        ))
+        Ok(
+            materialized_enrollment_entry(&[entry], peer_id, self.identity.did())
+                .map(|entry| (entry, generation)),
+        )
     }
 
     async fn load_applied_rows(&self, peer_id: &str) -> Result<Vec<AppliedStateRow>> {
@@ -649,22 +808,94 @@ impl GraphqlPairingStateStore {
     }
 }
 
-fn data_plane_materialized_entry_from_sources(
-    network_entries: &[NetworkEndpointEntry],
-    reciprocal_entries: &[NetworkEndpointEntry],
+fn enrollment_entry_is_fresh_at(entry: &EnrollmentEndpointEntry, now: DateTime<Utc>) -> bool {
+    entry.authorization_sequence > 0
+        && entry.authorization_sequence <= i64::MAX as u64
+        && gents_protocol::enrollment::authorization_lease_is_fresh_at(
+            &entry.authorization_expires_at,
+            now,
+        )
+}
+
+fn materialized_enrollment_entry(
+    entries: &[EnrollmentEndpointEntry],
     peer_id: &str,
     self_did: &str,
-) -> Option<NetworkEndpointEntry> {
-    super::network::materializable_entry_for_peer(network_entries, peer_id, self_did)
-        .or_else(|| {
-            super::network::materializable_entry_for_peer(reciprocal_entries, peer_id, self_did)
-        })
+) -> Option<MaterializedDataPlaneEntry> {
+    entries
+        .iter()
+        .find(|entry| entry.desired_id == peer_id && entry.agent_did != self_did)
         .cloned()
+        .map(|endpoint| MaterializedDataPlaneEntry {
+            endpoint,
+            source: "enrollment",
+        })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MaterializedDataPlaneEntry {
+    endpoint: EnrollmentEndpointEntry,
+    source: &'static str,
+}
+
+impl std::ops::Deref for MaterializedDataPlaneEntry {
+    type Target = EnrollmentEndpointEntry;
+
+    fn deref(&self) -> &Self::Target {
+        &self.endpoint
+    }
+}
+
+fn enrollment_base_row(
+    mut row: PairingStateRow,
+    entry: &MaterializedDataPlaneEntry,
+    self_did: &str,
+) -> Option<PairingStateRow> {
+    if row.source.as_deref() != Some(entry.source) {
+        return None;
+    }
+    if row.enrollment_request_digest.as_deref() != Some(&entry.request_digest)
+        || row.enrollment_authorization_sequence != Some(entry.authorization_sequence as i64)
+        || row.enrollment_authorization_expires_at.as_deref()
+            != Some(&entry.authorization_expires_at)
+    {
+        return None;
+    }
+    // Enrollment authority owns the full base route. The document is only a
+    // materialization witness; hostile row fields cannot alter its endpoint,
+    // scope, or transport identity.
+    row.peer_id = Some(entry.endpoint.desired_id.clone());
+    row.agent_did = Some(self_did.to_string());
+    row.collections = None;
+    row.replicator_addresses = Some(vec![entry.endpoint.address.clone()]);
+    row.template = Some(super::templates::CLIENT_TEMPLATE.to_string());
+    Some(row)
+}
+
+fn local_data_plane_row(
+    mut row: PairingStateRow,
+    entry: &MaterializedDataPlaneEntry,
+    self_did: &str,
+) -> Option<PairingStateRow> {
+    let source = row.source.as_deref()?.trim();
+    if source.is_empty() || source == entry.source {
+        return None;
+    }
+    // A local data-plane document may choose only the non-protocol collection
+    // overlay. Current enrollment remains the transport and identity gate.
+    row.peer_id = Some(entry.endpoint.peer_id.clone());
+    row.agent_did = Some(self_did.to_string());
+    row.replicator_addresses = Some(vec![entry.endpoint.address.clone()]);
+    Some(row)
 }
 
 #[async_trait]
 impl PairingStateStore for GraphqlPairingStateStore {
     async fn load_desired(&self, peer_id: &str) -> Result<Option<PairingDesired>> {
+        Ok(self.load_desired_with_authority(peer_id).await?.state)
+    }
+
+    async fn load_desired_with_authority(&self, peer_id: &str) -> Result<LoadedPairingDesired> {
         let raw_peer_id = peer_id.to_string();
         let peer_id = escape_graphql_string(peer_id);
         let query = format!(
@@ -674,6 +905,10 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     agent_did
                     replicator_addresses
                     template
+                    source
+                    enrollment_request_digest
+                    enrollment_authorization_sequence
+                    enrollment_authorization_expires_at
                 }}
                 DataPlanePairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
                     peer_id
@@ -681,41 +916,66 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     collections
                     replicator_addresses
                     template
+                    source
                 }}
             }}"#
         );
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "query pairing desired state")?;
-        let base_row = first_row::<PairingStateRow>(&response, "PeerPairingDesired")?;
-        let base_peer_did = base_row
-            .as_ref()
-            .and_then(|row| row.agent_did.as_deref())
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_string();
-        let base = base_row
-            .map(|row| desired_from_pairing_row(row, self.identity.did()))
-            .transpose()?
-            .flatten();
         let materialized_entry = self
             .data_plane_materialized_entry(&raw_peer_id)
             .await
-            .with_context(|| format!("checking network membership gate for {raw_peer_id}"))?;
-        let data_plane = match (
-            materialized_entry,
-            first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?,
-        ) {
-            (Some(entry), Some(row)) => {
-                data_plane_desired_from_pairing_row(row, &entry, self.identity.did())?
-            }
-            _ => None,
+            .with_context(|| format!("checking enrollment authority for {raw_peer_id}"))?;
+        let Some((entry, generation)) = materialized_entry else {
+            return Ok(LoadedPairingDesired::default());
         };
-        Ok(merge_layered_desired(
-            self.identity.did(),
-            &base_peer_did,
-            base,
-            data_plane,
-        ))
+        let base = first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
+            .and_then(|row| enrollment_base_row(row, &entry, self.identity.did()))
+            .map(|row| {
+                data_plane_desired_from_pairing_row(row, &entry.endpoint, self.identity.did())
+            })
+            .transpose()?
+            .flatten();
+        let data_plane = first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?
+            .and_then(|row| local_data_plane_row(row, &entry, self.identity.did()))
+            .map(|row| {
+                data_plane_desired_from_pairing_row(row, &entry.endpoint, self.identity.did())
+            })
+            .transpose()?
+            .flatten();
+        Ok(LoadedPairingDesired {
+            state: merge_layered_desired(
+                self.identity.did(),
+                &entry.endpoint.agent_did,
+                base,
+                data_plane,
+            ),
+            enrollment_generation: Some(generation),
+        })
+    }
+
+    async fn enrollment_generation_is_current(
+        &self,
+        generation: &EnrollmentRouteGeneration,
+    ) -> Result<bool> {
+        if let Some(enrollment) = self.enrollment.as_ref() {
+            return Ok(enrollment
+                .fresh_authorization(&generation.member_did, &generation.member_peer)
+                .await?
+                .as_ref()
+                .map(EnrollmentRouteGeneration::from)
+                .as_ref()
+                == Some(generation));
+        }
+        Ok(self.exact_enrollment.as_ref().is_some_and(|entry| {
+            enrollment_entry_is_fresh_at(entry, Utc::now())
+                && entry.agent_did == generation.member_did
+                && entry.peer_id == generation.member_peer
+                && entry.address == generation.member_ticket
+                && entry.request_digest == generation.request_digest
+                && entry.authorization_sequence == generation.authorization_sequence
+                && entry.authorization_expires_at == generation.authorization_expires_at
+        }))
     }
 
     async fn load_applied(&self, peer_id: &str) -> Result<LoadedPairingApplied> {
@@ -820,55 +1080,6 @@ impl PairingStateStore for GraphqlPairingStateStore {
         }
         Ok(ids)
     }
-
-    async fn reconcile_bearer_readiness(
-        &self,
-        peer_id: &str,
-        desired: Option<&PairingDesired>,
-        applied: &PairingApplied,
-    ) -> Result<()> {
-        let Some((claimant_did, address, template)) =
-            earned_bearer_readiness(desired, applied, self.identity.did())
-        else {
-            return self.delete_bearer_readiness_for_peer(peer_id).await;
-        };
-        self.upsert_bearer_readiness(peer_id, &claimant_did, &address, &template)
-            .await
-    }
-
-    async fn begin_sweep(&self) -> Result<()> {
-        // Compute the membership-materializable set ONCE for this sweep so the
-        // per-peer Layer-2 gate (`data_plane_peer_is_materializable`) reuses it
-        // instead of re-verifying every membership/endpoint signature for every
-        // peer (the O(N²) the review flagged). A refresh failure is non-fatal:
-        // clear the cache so the per-peer path falls back to a live read.
-        let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
-        let refreshed = match network.load_materializable_entries().await {
-            Ok(entries) => Some(entries),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "materializable-set refresh failed; per-peer gate will read live this sweep"
-                );
-                None
-            }
-        };
-        *self.materializable_cache.lock().unwrap() = refreshed;
-
-        let reciprocal = GraphqlReciprocalStore::new(self.node.clone(), self.identity.clone());
-        let reciprocal_refreshed = match reciprocal.load_materializable_entries().await {
-            Ok(entries) => Some(entries),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "reciprocal materializable-set refresh failed; per-peer gate will read live this sweep"
-                );
-                None
-            }
-        };
-        *self.reciprocal_materializable_cache.lock().unwrap() = reciprocal_refreshed;
-        Ok(())
-    }
 }
 
 #[derive(Default, Deserialize)]
@@ -881,6 +1092,14 @@ struct PairingStateRow {
     replicator_addresses: Option<Vec<String>>,
     #[serde(default)]
     template: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    enrollment_request_digest: Option<String>,
+    #[serde(default)]
+    enrollment_authorization_sequence: Option<i64>,
+    #[serde(default)]
+    enrollment_authorization_expires_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -914,6 +1133,7 @@ struct PeerIdRow {
     peer_id: String,
 }
 
+#[cfg(test)]
 fn desired_from_pairing_row(
     row: PairingStateRow,
     local_did: &str,
@@ -963,8 +1183,7 @@ fn desired_from_pairing_row(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .context("client pairing row is missing its durable route key")?;
-        let direction = super::policy::client_route_direction(route_id)?
-            .unwrap_or(super::policy::PairingDirection::ClientToRuntime);
+        let direction = super::policy::client_route_direction(route_id)?;
         (local_did, peer_did, direction)
     } else {
         (
@@ -1004,7 +1223,7 @@ fn desired_from_pairing_row(
 
 fn data_plane_desired_from_pairing_row(
     mut row: PairingStateRow,
-    signed_endpoint: &NetworkEndpointEntry,
+    signed_endpoint: &EnrollmentEndpointEntry,
     self_did: &str,
 ) -> Result<Option<PairingDesired>> {
     let row_addresses = row
@@ -1060,6 +1279,19 @@ fn data_plane_desired_from_pairing_row(
         resolve_template(DEFAULT_PAIRING_TEMPLATE)
             .expect("default pairing template is in the catalog")
     });
+    // Runtime enrollment rows historically use the unsuffixed member peer as
+    // their return-route key. Desktop-owned routes carry an explicit suffix,
+    // and that direction must survive enrollment materialization: it decides
+    // both which collections may leave this node and which DID owns each side
+    // of the requester/agent filter.
+    let client_route_direction = if template.scope == Scope::ClientRoute {
+        row.peer_id
+            .as_deref()
+            .and_then(|route_id| super::policy::client_route_direction(route_id).ok())
+            .unwrap_or(super::policy::PairingDirection::RuntimeToClient)
+    } else {
+        super::policy::PairingDirection::RuntimeToClient
+    };
     let peer_did = signed_endpoint.agent_did.trim();
     if data_plane_scope_requires_signed_peer_did(&template.scope) && peer_did.is_empty() {
         anyhow::bail!(
@@ -1098,8 +1330,12 @@ fn data_plane_desired_from_pairing_row(
             };
             (row_cols.clone(), row_cols)
         } else {
-            let cols = template
-                .collections
+            let collections = if template.scope == Scope::ClientRoute {
+                super::policy::client_route_collections(client_route_direction)
+            } else {
+                template.collections
+            };
+            let cols = collections
                 .iter()
                 .map(|&c| c.to_string())
                 .collect::<BTreeSet<_>>();
@@ -1110,8 +1346,13 @@ fn data_plane_desired_from_pairing_row(
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
-    let replicator_filter =
-        data_plane_scope_filter(&template.scope, &filter_collections, peer_did, self_did);
+    let replicator_filter = data_plane_scope_filter(
+        &template.scope,
+        &filter_collections,
+        peer_did,
+        self_did,
+        client_route_direction,
+    );
 
     Ok(Some(PairingDesired {
         collections: subscription_collections,
@@ -1122,6 +1363,7 @@ fn data_plane_desired_from_pairing_row(
     }))
 }
 
+#[cfg(test)]
 fn scope_requires_peer_did(scope: &Scope) -> bool {
     match scope {
         Scope::PeerDid { .. } => true,
@@ -1148,6 +1390,7 @@ fn data_plane_scope_filter(
     collections: &[&str],
     signed_peer_did: &str,
     local_did: &str,
+    client_route_direction: super::policy::PairingDirection,
 ) -> PairingFilters {
     match scope {
         Scope::PeerDid { field } => collections
@@ -1169,12 +1412,18 @@ fn data_plane_scope_filter(
                 )
             })
             .collect(),
-        Scope::ClientRoute => super::policy::resolve_template_filters(
-            resolve_template(super::templates::CLIENT_TEMPLATE).expect("client template"),
-            super::policy::PairingDirection::RuntimeToClient,
-            signed_peer_did,
-            local_did,
-        ),
+        Scope::ClientRoute => {
+            let (requester_did, owner_agent_did) = match client_route_direction {
+                super::policy::PairingDirection::ClientToRuntime => (local_did, signed_peer_did),
+                super::policy::PairingDirection::RuntimeToClient => (signed_peer_did, local_did),
+            };
+            super::policy::resolve_template_filters(
+                resolve_template(super::templates::CLIENT_TEMPLATE).expect("client template"),
+                client_route_direction,
+                requester_did,
+                owner_agent_did,
+            )
+        }
     }
 }
 

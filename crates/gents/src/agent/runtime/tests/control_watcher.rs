@@ -1,7 +1,6 @@
 use super::support::*;
 use super::*;
 use crate::runtime_status::ReconcilePhase;
-use crate::ProcessLifecycleState;
 
 async fn update_agent_principal_enabled(
     node: &defra_node::EmbeddedNode,
@@ -53,8 +52,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
     runtime_status
-        .set_process_state(ProcessLifecycleState::Recovering)
-        .await;
+        .initialize_startup(agent.default_behavior_id())
+        .await
+        .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
@@ -150,8 +150,9 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
     let behavior_id = agent.default_behavior_id().to_string();
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
     runtime_status
-        .set_process_state(ProcessLifecycleState::Recovering)
-        .await;
+        .initialize_startup(agent.default_behavior_id())
+        .await
+        .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
     let (health_tx, health_rx) = mpsc::channel::<()>(1);
@@ -195,8 +196,9 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         .get(&behavior_id)
         .expect("unavailable reason for demoted behavior");
     assert!(
-        reason.contains("measured unhealthy"),
-        "reason must name the local measurement, got: {reason}"
+        reason.diagnostic.contains("measured unhealthy"),
+        "reason must name the local measurement, got: {}",
+        reason.diagnostic
     );
     let config = snapshot
         .backend_admission_configs
@@ -263,8 +265,9 @@ async fn control_watcher_recovers_after_resolve_error() {
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
     runtime_status
-        .set_process_state(ProcessLifecycleState::Recovering)
-        .await;
+        .initialize_startup(agent.default_behavior_id())
+        .await
+        .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
@@ -335,8 +338,9 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
     runtime_status
-        .set_process_state(ProcessLifecycleState::Recovering)
-        .await;
+        .initialize_startup(agent.default_behavior_id())
+        .await
+        .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 

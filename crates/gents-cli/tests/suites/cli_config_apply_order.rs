@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 fn config_apply_order_from_source() -> Vec<Collection> {
     let src = include_str!("../../src/config_import.rs");
     assert!(src.contains(
-        "const CONFIG_APPLY_ORDER: [Collection; 13] = gents::DESIRED_STATE_APPLY_ORDER;"
+        "const CONFIG_APPLY_ORDER: [Collection; 14] = gents::DESIRED_STATE_APPLY_ORDER;"
     ));
     DESIRED_STATE_APPLY_ORDER.to_vec()
 }

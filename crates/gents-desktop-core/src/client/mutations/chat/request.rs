@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigApplyTxn;
 use gents::skills::prompt_slash_skill_selection;
+use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -63,6 +64,8 @@ pub async fn submit_request(
     session_id: &str,
     agent_did: &str,
     requester_did: &str,
+    signer: &dyn gents::identity::AgentIdentity,
+    admission: AgentRequestAdmissionRecord,
     content: &str,
     behavior_id: Option<&str>,
     options: SubmitRequestOptions,
@@ -79,7 +82,6 @@ pub async fn submit_request(
     }
     let (content, options) = prepare_prompt_submission(content, options)?;
     let request_id = Uuid::new_v4().to_string();
-    let created_at = Utc::now().to_rfc3339();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
     if let Some(mailbox_item_id) = options
         .caused_by_source_doc_id
@@ -100,7 +102,7 @@ pub async fn submit_request(
 
     // Thread retry linkage: carry parent's retry root forward, else this row is
     // the root of its own retry chain.
-    let (retry_parent_request, retry_parent_request_doc_id, retry_root_request) =
+    let (retry_parent_request, retry_parent_request_doc_id, retry_root_request, parent_created_at) =
         if let Some(parent_id) = options.retry_parent_request.as_deref() {
             let parent = fetch_retry_lineage(node, parent_id, agent_did, requester_did).await?;
             (
@@ -109,30 +111,43 @@ pub async fn submit_request(
                 parent
                     .retry_root_request
                     .unwrap_or_else(|| parent_id.to_string()),
+                parent.created_at,
             )
         } else {
-            (String::new(), None, request_id.clone())
+            (String::new(), None, request_id.clone(), None)
         };
+    let created_at = canonical_request_created_at_after(parent_created_at.as_deref())?;
 
-    let request_field = build_add_agent_request_field(
-        "request",
-        &request_id,
+    let mut create = AgentRequestCreate::base(
+        request_id.clone(),
         agent_did,
         requester_did,
         binding.behavior_id.as_deref().unwrap_or(""),
         session_id,
-        &retry_parent_request,
-        retry_parent_request_doc_id.as_deref(),
-        &retry_root_request,
-        &content,
-        &created_at,
-        0,
-        i64::from(DEFAULT_REQUEST_MAX_RETRIES),
-        "",
+        content,
         "interactive",
-        &submit_request_extra_fields(&options),
+        created_at,
+        admission,
     );
-    let mutation = format!("mutation {{\n{request_field}\n}}");
+    create.behavior_id = binding.behavior_id.clone();
+    create.retry_parent_request =
+        (!retry_parent_request.is_empty()).then_some(retry_parent_request);
+    create.retry_parent_request_doc_id = retry_parent_request_doc_id;
+    create.retry_root_request = Some(retry_root_request);
+    create.temperature = options.temperature;
+    create.top_p = options.top_p;
+    create.top_k = options.top_k;
+    create.seed = options.seed;
+    create.max_tokens = options.max_tokens;
+    create.max_total_tokens = options.max_total_tokens;
+    create.metadata = options.metadata;
+    create.valid_until = options
+        .valid_until
+        .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    create.caused_by_source_doc_id = options.caused_by_source_doc_id;
+    create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
+    gents::sign_agent_request_create(signer, &mut create).await?;
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     execute_mutation(node, &mutation, "submit_request").await?;
 
     Ok(SubmittedRequest {
@@ -254,12 +269,16 @@ pub async fn retry_request(
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
+    signer: &dyn gents::identity::AgentIdentity,
+    admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
     retry_request_with_request_id(
         node,
         store,
         parent,
         requester_did,
+        signer,
+        admission,
         Uuid::new_v4().to_string(),
     )
     .await
@@ -270,6 +289,8 @@ async fn retry_request_with_request_id(
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
+    signer: &dyn gents::identity::AgentIdentity,
+    admission: AgentRequestAdmissionRecord,
     request_id: String,
 ) -> Result<SubmittedRequest> {
     let request_id = normalize_required("new_request_id", &request_id)?.to_string();
@@ -292,6 +313,8 @@ async fn retry_request_with_request_id(
             parent_request_id,
             agent_did,
             requester_did,
+            signer,
+            admission.clone(),
             &request_id,
         )
         .await
@@ -325,6 +348,8 @@ async fn retry_request_in_txn(
     parent_request_id: &str,
     agent_did: &str,
     requester_did: &str,
+    signer: &dyn gents::identity::AgentIdentity,
+    admission: AgentRequestAdmissionRecord,
     candidate_request_id: &str,
 ) -> Result<SubmittedRequest> {
     let (parent_doc_id, parent) =
@@ -373,41 +398,36 @@ async fn retry_request_in_txn(
     let retry_root_request = normalize_optional_string(parent.retry_root_request.as_deref())
         .unwrap_or(parent_request_id);
     let backend_id = normalize_optional_string(parent.backend_id.as_deref()).unwrap_or("");
-    let created_at = Utc::now().to_rfc3339();
+    let created_at = canonical_request_created_at_after(parent.created_at.as_deref())?;
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(parent_session_id))?;
-    let retry_extra_fields = format!(
-        "{},\n                retry_key: \"{}\"",
-        submit_request_extra_fields(&SubmitRequestOptions {
-            temperature: parent.temperature,
-            top_p: parent.top_p,
-            top_k: parent.top_k,
-            seed: parent.seed,
-            max_tokens: parent.max_tokens,
-            max_total_tokens: parent.max_total_tokens,
-            metadata: parent.metadata.clone(),
-            ..SubmitRequestOptions::default()
-        }),
-        escape_graphql_string(&retry_key),
-    );
-    let request_field = build_add_agent_request_field(
-        "request",
+    let mut create = AgentRequestCreate::base(
         candidate_request_id,
         agent_did,
         requester_did,
         binding.behavior_id.as_deref().unwrap_or(""),
         parent_session_id,
-        parent_request_id,
-        Some(&parent_doc_id),
-        retry_root_request,
         content,
-        &created_at,
-        retry_count,
-        max_retries,
-        backend_id,
         execution_origin,
-        &retry_extra_fields,
+        created_at,
+        admission,
     );
-    txn.execute(&format!("mutation {{\n{request_field}\n}}"))
+    create.behavior_id = binding.behavior_id.clone();
+    create.retry_parent_request = Some(parent_request_id.to_string());
+    create.retry_parent_request_doc_id = Some(parent_doc_id);
+    create.retry_root_request = Some(retry_root_request.to_string());
+    create.retry_key = Some(retry_key);
+    create.temperature = parent.temperature;
+    create.top_p = parent.top_p;
+    create.top_k = parent.top_k;
+    create.seed = parent.seed;
+    create.max_tokens = parent.max_tokens;
+    create.max_total_tokens = parent.max_total_tokens;
+    create.metadata = parent.metadata;
+    create.backend_id = (!backend_id.is_empty()).then(|| backend_id.to_string());
+    create.retry_count = retry_count;
+    create.max_retries = max_retries;
+    gents::sign_agent_request_create(signer, &mut create).await?;
+    txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
         .await?;
 
     Ok(SubmittedRequest {
@@ -580,7 +600,7 @@ async fn latest_interactive_request_in_txn(
                     requester_did: {{ _eq: "{requester}" }}
                 }},
                 order: [{{ created_at: DESC }}, {{ request_id: DESC }}]
-            ) {{ request_id execution_origin metadata }}
+            ) {{ request_id }}
         }}"#
     );
     let response = txn.execute(&query).await?;
@@ -590,16 +610,11 @@ async fn latest_interactive_request_in_txn(
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .find(|row| {
-            !gents::lifecycle::is_deprecated_background_completion_request(
-                row.get("execution_origin").and_then(Value::as_str),
-                row.get("metadata").and_then(Value::as_str),
-            )
-        })
+        .next()
         .and_then(|row| row.get("request_id"))
         .and_then(Value::as_str)
         .map(str::to_string)
-        .context("retry parent session has no non-legacy request")
+        .context("retry parent session has no request")
 }
 
 async fn ensure_retry_candidate_is_fresh_in_txn(
@@ -687,72 +702,8 @@ fn ensure_retry_parent_eligible(
     Ok(())
 }
 
-fn submit_request_extra_fields(options: &SubmitRequestOptions) -> String {
-    let valid_until_field = match options.valid_until.as_ref() {
-        Some(valid_until) => {
-            let escaped = escape_graphql_string(&valid_until.to_rfc3339());
-            format!(
-                r#",
-                valid_until: "{escaped}""#,
-            )
-        }
-        None => String::new(),
-    };
-
-    // Only emit sampling override + metadata fields when the caller actually
-    // set them. Omitting a field leaves the schema default (null) in place;
-    // emitting `null` explicitly also works but leaving the field out keeps
-    // the mutation shape identical to what previously-submitted rows used
-    // before the override plumbing landed.
-    let mut override_parts: Vec<String> = Vec::new();
-    if let Some(temperature) = options.temperature {
-        override_parts.push(format!("temperature: {temperature}"));
-    }
-    if let Some(top_p) = options.top_p {
-        override_parts.push(format!("top_p: {top_p}"));
-    }
-    if let Some(top_k) = options.top_k {
-        override_parts.push(format!("top_k: {top_k}"));
-    }
-    if let Some(seed) = options.seed {
-        override_parts.push(format!("seed: {seed}"));
-    }
-    if let Some(max_tokens) = options.max_tokens {
-        override_parts.push(format!("max_tokens: {max_tokens}"));
-    }
-    if let Some(max_total_tokens) = options.max_total_tokens {
-        override_parts.push(format!("max_total_tokens: {max_total_tokens}"));
-    }
-    if let Some(metadata) = options.metadata.as_deref() {
-        override_parts.push(format!(
-            r#"metadata: "{}""#,
-            escape_graphql_string(metadata)
-        ));
-    }
-    if let Some(source_doc_id) = options
-        .caused_by_source_doc_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        override_parts.push(format!(
-            r#"caused_by_source_doc_id: "{}""#,
-            escape_graphql_string(source_doc_id)
-        ));
-    }
-    let override_fields = if override_parts.is_empty() {
-        String::new()
-    } else {
-        format!(
-            ",\n                {}",
-            override_parts.join(",\n                ")
-        )
-    };
-
-    format!("{valid_until_field}{override_fields}")
-}
-
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn build_add_agent_request_field(
     alias: &str,
     request_id: &str,
@@ -822,6 +773,8 @@ pub async fn resend_request(
     stale_request_id: &str,
     agent_did: &str,
     requester_did: &str,
+    signer: &dyn gents::identity::AgentIdentity,
+    admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
     let stale = fetch_request_view(node, stale_request_id, agent_did, requester_did).await?;
     if stale.lifecycle_state != "dead" || stale.failure_reason != "Stale" {
@@ -838,6 +791,8 @@ pub async fn resend_request(
         &retry_session_id,
         &stale.agent_did,
         requester_did,
+        signer,
+        admission,
         &stale.content,
         stale.behavior_id.as_deref(),
         SubmitRequestOptions {
@@ -963,6 +918,7 @@ async fn fetch_request_view(
 struct RetryLineage {
     doc_id: String,
     retry_root_request: Option<String>,
+    created_at: Option<String>,
 }
 
 async fn fetch_retry_lineage(
@@ -986,6 +942,7 @@ async fn fetch_retry_lineage(
             ) {{
                 _docID
                 retry_root_request
+                created_at
             }}
         }}"#
     );
@@ -1022,7 +979,28 @@ async fn fetch_retry_lineage(
             row.get("retry_root_request").and_then(Value::as_str),
         )
         .map(str::to_string),
+        created_at: normalize_optional_string(row.get("created_at").and_then(Value::as_str))
+            .map(str::to_string),
     })
+}
+
+fn canonical_request_created_at_after(parent_created_at: Option<&str>) -> Result<String> {
+    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let now = DateTime::parse_from_rfc3339(&now)
+        .expect("UTC RFC3339 seconds formatter must parse")
+        .with_timezone(&Utc);
+    let created_at = match normalize_optional_string(parent_created_at) {
+        Some(parent_created_at) => {
+            let parent = DateTime::parse_from_rfc3339(parent_created_at)
+                .with_context(|| {
+                    format!("retry parent request has invalid created_at {parent_created_at:?}")
+                })?
+                .with_timezone(&Utc);
+            now.max(parent + chrono::Duration::seconds(1))
+        }
+        None => now,
+    };
+    Ok(created_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 #[cfg(test)]

@@ -1,11 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FleetHostDashboard } from "../src/components/fleet/FleetHostDashboard";
 import type {
-  BearerPairingResponse,
   BootstrapSummary,
   DeploymentView,
+  EnrollmentRequestView,
 } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
@@ -35,6 +35,25 @@ const bootstrap: BootstrapSummary = {
   savedPeers: [],
 };
 
+const enrollmentRequest: EnrollmentRequestView = {
+  requestId: "enrollment-request-1",
+  networkId: "network-amy",
+  adminDid: "did:key:z6MkAmy",
+  serverPeer: "server-peer-amy",
+  ownerAgent: "did:key:z6MkAmy",
+  state: "pending",
+};
+
+const originalUserAgent = navigator.userAgent;
+
+afterEach(() => {
+  delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
+  Object.defineProperty(navigator, "userAgent", {
+    configurable: true,
+    value: originalUserAgent,
+  });
+});
+
 describe("FleetHostDashboard add connection flow", () => {
   it("connects the local runtime from the fleet empty state", async () => {
     const onInitLocalRuntime = vi.fn(async () => undefined);
@@ -50,9 +69,7 @@ describe("FleetHostDashboard add connection flow", () => {
         p2pHealth={null}
         repairingP2P={false}
         starting={false}
-        onAddPeer={vi.fn()}
-        onPairBearer={vi.fn()}
-        onProbePeerAddress={vi.fn()}
+        onRequestStatusEnrollment={vi.fn()}
         onInitLocalRuntime={onInitLocalRuntime}
         onStartManagedServer={onStartManagedServer}
         onCommitManagedServerAutoStart={onCommitManagedServerAutoStart}
@@ -79,16 +96,8 @@ describe("FleetHostDashboard add connection flow", () => {
     });
   });
 
-  it("discovers peer connection details from a server /status address", async () => {
-    const onProbePeerAddress = vi.fn(async () => ({
-      agent_name: "worker-a",
-      agent_did: "did:key:z6MkWorkerA",
-      desktop_graphql: "http://127.0.0.1:9181/api/v0/graphql",
-      p2p: {
-        p2p_shareable_address: "/ip4/100.73.235.39/tcp/9161/p2p/12D3KooWorker",
-      },
-    }));
-    const onAddPeer = vi.fn(async () => undefined);
+  it("requests authenticated enrollment from a server /status address", async () => {
+    const onRequestStatusEnrollment = vi.fn(async () => enrollmentRequest);
 
     render(
       <FleetHostDashboard
@@ -99,9 +108,7 @@ describe("FleetHostDashboard add connection flow", () => {
         p2pHealth={null}
         repairingP2P={false}
         starting={false}
-        onAddPeer={onAddPeer}
-        onPairBearer={vi.fn()}
-        onProbePeerAddress={onProbePeerAddress}
+        onRequestStatusEnrollment={onRequestStatusEnrollment}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -116,22 +123,47 @@ describe("FleetHostDashboard add connection flow", () => {
     fireEvent.click(screen.getByTestId("fleet-fetch-status"));
 
     await waitFor(() => {
-      expect(onProbePeerAddress).toHaveBeenCalledWith("http://127.0.0.1:9181");
-      expect(onAddPeer).toHaveBeenCalledWith({
-        label: "worker-a",
-        agentDid: "did:key:z6MkWorkerA",
-        addr: "/ip4/100.73.235.39/tcp/9161/p2p/12D3KooWorker",
-        graphql: "http://127.0.0.1:9181/api/v0/graphql",
-      });
+      expect(onRequestStatusEnrollment).toHaveBeenCalledWith("http://127.0.0.1:9181");
+      expect(screen.getByTestId("fleet-import-status")).toHaveTextContent(
+        "awaiting server approval",
+      );
     });
   });
 
-  it("keeps discovered details available when adding the connection fails", async () => {
-    const onProbePeerAddress = vi.fn(async () => ({
-      agent_name: "api-gateway",
-      agent_did: "did:key:z6MkGateway",
-      p2p_shareable_address: "iroh://gateway",
-    }));
+  it("offers only authenticated enrollment in the mobile Tauri shell", () => {
+    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X)",
+    });
+
+    render(
+      <FleetHostDashboard
+        addingPeer={false}
+        bootstrap={bootstrap}
+        deployments={[]}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onRequestStatusEnrollment={vi.fn()}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+        {...inferenceProps}
+      />,
+    );
+
+    expect(screen.queryByTestId("fleet-connect-local")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Connect your agent" })).toBeVisible();
+    expect(screen.getByText("Connect agent")).toBeVisible();
+  });
+
+  it("contains and renders a rejected enrollment request", async () => {
+    const onRequestStatusEnrollment = vi.fn(async () => {
+      throw new Error("enrollment rejected");
+    });
 
     render(
       <FleetHostDashboard
@@ -142,11 +174,7 @@ describe("FleetHostDashboard add connection flow", () => {
         p2pHealth={null}
         repairingP2P={false}
         starting={false}
-        onAddPeer={vi.fn(async () => {
-          throw new Error("connection rejected");
-        })}
-        onPairBearer={vi.fn()}
-        onProbePeerAddress={onProbePeerAddress}
+        onRequestStatusEnrollment={onRequestStatusEnrollment}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -161,31 +189,16 @@ describe("FleetHostDashboard add connection flow", () => {
     fireEvent.click(screen.getByTestId("fleet-fetch-status"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("fleet-add-label")).toHaveValue("api-gateway");
-      expect(screen.getByTestId("fleet-add-agent-did")).toHaveValue(
-        "did:key:z6MkGateway",
-      );
-      expect(screen.getByTestId("fleet-add-addr")).toHaveValue("iroh://gateway");
       expect(screen.getByTestId("fleet-import-status")).toHaveTextContent(
-        "Fetched /status",
+        "enrollment rejected",
       );
-      expect(
-        (screen.getByTestId("fleet-add-connection-json") as HTMLTextAreaElement).value,
-      ).toContain('"agent_name": "api-gateway"');
-      expect(screen.getByText("connection rejected")).toBeInTheDocument();
     });
   });
 
-  it("surfaces a P2P-disabled discovery result beside the fetch controls", async () => {
-    const onProbePeerAddress = vi.fn(async () => ({
-      agent_name: "amy",
-      agent_did: "did:key:z6MkAmy",
-      p2p_transport: "none",
-      p2p: {
-        enabled: false,
-        p2p_listen_addresses: [],
-      },
-    }));
+  it("surfaces an unavailable enrollment offer beside the controls", async () => {
+    const onRequestStatusEnrollment = vi.fn(async () => {
+      throw new Error("This runtime has P2P disabled");
+    });
 
     render(
       <FleetHostDashboard
@@ -196,9 +209,7 @@ describe("FleetHostDashboard add connection flow", () => {
         p2pHealth={null}
         repairingP2P={false}
         starting={false}
-        onAddPeer={vi.fn()}
-        onPairBearer={vi.fn()}
-        onProbePeerAddress={onProbePeerAddress}
+        onRequestStatusEnrollment={onRequestStatusEnrollment}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -217,120 +228,9 @@ describe("FleetHostDashboard add connection flow", () => {
         "This runtime has P2P disabled",
       );
     });
-    expect(screen.getByTestId("fleet-add-label")).toHaveValue("");
     expect(screen.getByTestId("fleet-add-server-address")).toHaveValue(
       "http://amy.local:9191",
     );
-  });
-
-  it("saves a typed GraphQL endpoint when manually adding a peer", async () => {
-    const onProbePeerAddress = vi.fn();
-    const onAddPeer = vi.fn(async () => undefined);
-
-    render(
-      <FleetHostDashboard
-        addingPeer={false}
-        bootstrap={null}
-        deployments={[]}
-        loading={false}
-        p2pHealth={null}
-        repairingP2P={false}
-        starting={false}
-        onAddPeer={onAddPeer}
-        onPairBearer={vi.fn()}
-        onProbePeerAddress={onProbePeerAddress}
-        onInitLocalRuntime={vi.fn()}
-        onOpenChat={vi.fn()}
-        onOpenConfig={vi.fn()}
-        onRepairP2P={vi.fn()}
-        {...inferenceProps}
-      />,
-    );
-
-    fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
-      target: { value: "http://100.73.235.38:9181/api/v0/graphql" },
-    });
-    fireEvent.click(screen.getByText("Enter connection details manually"));
-    fireEvent.change(screen.getByTestId("fleet-add-label"), {
-      target: { value: "studio-1-steward" },
-    });
-    fireEvent.change(screen.getByTestId("fleet-add-agent-did"), {
-      target: { value: "did:key:z6MkStudio" },
-    });
-    fireEvent.change(screen.getByTestId("fleet-add-addr"), {
-      target: {
-        value: "/ip4/100.73.235.38/tcp/9161/p2p/12D3KooStudio",
-      },
-    });
-    fireEvent.click(screen.getByTestId("fleet-add-submit"));
-
-    await waitFor(() => {
-      expect(onProbePeerAddress).not.toHaveBeenCalled();
-      expect(onAddPeer).toHaveBeenCalledWith({
-        label: "studio-1-steward",
-        agentDid: "did:key:z6MkStudio",
-        addr: "/ip4/100.73.235.38/tcp/9161/p2p/12D3KooStudio",
-        graphql: "http://100.73.235.38:9181/api/v0/graphql",
-      });
-    });
-  });
-
-  it("keeps verified pairing readiness visible after closing the add panel", async () => {
-    const onPairBearer = vi.fn(async () => ({
-      bootstrap: {} as BearerPairingResponse["bootstrap"],
-      client: null,
-      pairing: {
-        peerId: "peer-steward",
-        label: "amygdalabook-steward",
-        addr: "iroh://steward",
-        issuerDid: "did:key:zSteward",
-        claimantDid: "did:key:zPhone",
-        networkId: "steward-network",
-        template: "conversation",
-        connected: true,
-        claimSubmitted: true,
-        endpointPublished: true,
-        replicationConfigured: true,
-        membershipObserved: true,
-        bidirectionalReplicationObserved: true,
-      },
-    }));
-
-    render(
-      <FleetHostDashboard
-        addingPeer={false}
-        bootstrap={bootstrap}
-        deployments={[deployment]}
-        loading={false}
-        p2pHealth={null}
-        repairingP2P={false}
-        starting={false}
-        onAddPeer={vi.fn()}
-        onPairBearer={onPairBearer}
-        onProbePeerAddress={vi.fn()}
-        onInitLocalRuntime={vi.fn()}
-        onOpenChat={vi.fn()}
-        onOpenConfig={vi.fn()}
-        onRepairP2P={vi.fn()}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Add Agent" }));
-    fireEvent.click(screen.getByText("Use a signed pairing invite"));
-    fireEvent.change(screen.getByTestId("fleet-pair-label"), {
-      target: { value: "amygdalabook-steward" },
-    });
-    fireEvent.change(screen.getByTestId("fleet-pair-token"), {
-      target: { value: "dabear1-signed-invite" },
-    });
-    fireEvent.click(screen.getByTestId("fleet-pair-submit"));
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("fleet-pair-submit")).not.toBeInTheDocument();
-      expect(screen.getByTestId("fleet-pair-status")).toHaveTextContent(
-        "amygdalabook-steward is ready",
-      );
-    });
   });
 });
 
@@ -345,9 +245,7 @@ describe("FleetHostDashboard fleet-level P2P repair", () => {
         p2pHealth={null}
         repairingP2P={false}
         starting={false}
-        onAddPeer={vi.fn()}
-        onPairBearer={vi.fn()}
-        onProbePeerAddress={vi.fn()}
+        onRequestStatusEnrollment={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
@@ -382,7 +280,6 @@ describe("FleetHostDashboard per-deployment inference status", () => {
         p2pHealth={null}
         repairingP2P={false}
         starting={false}
-        onAddPeer={vi.fn()}
         onInitLocalRuntime={vi.fn()}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}

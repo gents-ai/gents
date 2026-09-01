@@ -41,23 +41,24 @@ use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
     lean_backend_health_cases, lean_bridge_step_cases, lean_cancel_propagation_cases,
-    lean_client_shell_case, lean_codex_shim_behavior_selection_cases,
-    lean_codex_shim_binding_cases, lean_codex_shim_compaction_projection_cases,
-    lean_codex_shim_context_usage_cases, lean_codex_shim_projection_case,
-    lean_codex_shim_projection_cases, lean_codex_shim_reasoning_projection_cases,
-    lean_codex_shim_subagent_listing_cases, lean_codex_shim_subagent_metadata_cases,
-    lean_codex_shim_subagent_status_cases, lean_codex_shim_subagent_thread_shape_cases,
-    lean_codex_shim_subagent_tool_cases, lean_codex_shim_subagent_visibility_cases,
-    lean_codex_shim_thread_status_cases, lean_codex_shim_tool_metadata_cases,
-    lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
-    lean_command_sandbox_case, lean_compaction_cursor_cases, lean_compaction_reducer_cases,
-    lean_composed_invariant_witnesses, lean_contract_snapshot, lean_descendant_graph_cases,
-    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
-    lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
-    lean_inference_slot_accounting_case, lean_inference_slot_accounting_cases,
-    lean_managed_exec_liveness_cases, lean_managed_exec_tool_boundary_cases, lean_mcp_health_cases,
-    lean_process_transition_cases, lean_queue_deadline_case, lean_queue_deadline_cases,
-    lean_r4c_background_work_case, lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
+    lean_client_behavior_readiness_cases, lean_client_shell_case,
+    lean_codex_shim_behavior_selection_cases, lean_codex_shim_binding_cases,
+    lean_codex_shim_compaction_projection_cases, lean_codex_shim_context_usage_cases,
+    lean_codex_shim_projection_case, lean_codex_shim_projection_cases,
+    lean_codex_shim_reasoning_projection_cases, lean_codex_shim_subagent_listing_cases,
+    lean_codex_shim_subagent_metadata_cases, lean_codex_shim_subagent_status_cases,
+    lean_codex_shim_subagent_thread_shape_cases, lean_codex_shim_subagent_tool_cases,
+    lean_codex_shim_subagent_visibility_cases, lean_codex_shim_thread_status_cases,
+    lean_codex_shim_tool_metadata_cases, lean_codex_shim_turn_lifecycle_cases,
+    lean_command_env_case, lean_command_policy_case, lean_command_sandbox_case,
+    lean_compaction_cursor_cases, lean_compaction_reducer_cases, lean_composed_invariant_witnesses,
+    lean_contract_snapshot, lean_descendant_graph_cases, lean_event_delivery_convergence_traces,
+    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
+    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
+    lean_inference_slot_accounting_cases, lean_managed_exec_liveness_cases,
+    lean_managed_exec_tool_boundary_cases, lean_mcp_health_cases, lean_process_transition_cases,
+    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
+    lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
@@ -79,17 +80,17 @@ use support::snapshots::{
 };
 use support::{
     build_request, create_agent_session, create_conversation_row, create_request,
+    create_request_with_signed_fields, create_request_with_valid_until,
     create_response_with_content_and_status, create_response_with_status, first_optional_row,
-    first_row, set_interrupt_requested_at, set_request_lifecycle_state, set_valid_until, test_db,
-    upsert_conversation, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    first_row, materialization_identity, set_interrupt_requested_at, set_request_lifecycle_state,
+    test_db, try_set_valid_until, upsert_conversation, AGENT_DID, AGENT_NAME, BACKEND_ID,
+    DEADLINE_SECS,
 };
 
 #[path = "conformance/backend_health.rs"]
 mod backend_health;
 #[path = "conformance/background.rs"]
 mod background;
-#[path = "conformance/bearer_claim.rs"]
-mod bearer_claim;
 #[path = "conformance/callback_lifecycle.rs"]
 mod callback_lifecycle;
 #[path = "conformance/cancel_propagation.rs"]
@@ -112,6 +113,8 @@ mod config_replication;
 mod coverage;
 #[path = "conformance/directory_projection.rs"]
 mod directory_projection;
+#[path = "conformance/enrollment.rs"]
+mod enrollment;
 #[path = "conformance/eth_submission.rs"]
 mod eth_submission;
 #[path = "conformance/event_delivery.rs"]
@@ -142,8 +145,6 @@ mod process;
 mod prompt_template;
 #[path = "conformance/r5_cross_deployment.rs"]
 mod r5_cross_deployment;
-#[path = "conformance/reciprocal_conversation.rs"]
-mod reciprocal_conversation;
 #[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
 #[path = "conformance/replicated_request_convergence.rs"]
@@ -355,7 +356,6 @@ fn generated_streaming_response_idle_timeout_case_drives_daemon_contract() {
                 .build()
                 .expect("build streaming idle-timeout runtime")
                 .block_on(async {
-                    tokio::time::pause();
                     streaming_compaction::generated_streaming_response_idle_timeout_case_drives_daemon_contract()
                         .await;
                 });
@@ -575,8 +575,6 @@ mod manual_run;
 mod pairing_invariant_tests;
 #[path = "conformance/pairing_reconcile.rs"]
 mod pairing_reconcile;
-#[path = "conformance/peer_registry_discovery.rs"]
-mod peer_registry_discovery;
 #[path = "conformance/persona_request.rs"]
 mod persona_request;
 #[path = "conformance/prompt_assembly.rs"]

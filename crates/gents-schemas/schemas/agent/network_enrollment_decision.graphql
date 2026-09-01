@@ -1,0 +1,21 @@
+# Admin-authored immutable terminal decision for one exact request digest.
+# Approval also names the first authorization revision sequence and lease.
+# Denial uses decided_at as its non-leased boundary and never materializes
+# membership or routes.
+type NetworkEnrollmentDecision @branchable {
+    protocol_version: Int @immutable
+    decision_id: String @index(unique: true) @immutable
+    request_id: String @index(unique: true) @immutable
+    request_digest: String @index @immutable
+    network_id: String @index @immutable
+    admin_did: String @index @immutable
+    candidate_did: String @index @immutable
+    candidate_peer: String @index @immutable
+    owner_agent: String @index @immutable
+    decision: String @index @immutable
+    authorization_sequence: Int @immutable
+    authorization_expires_at: DateTime @immutable
+    decided_at: DateTime @immutable
+    signer_did: String @index @immutable
+    admin_sig: String @immutable
+}

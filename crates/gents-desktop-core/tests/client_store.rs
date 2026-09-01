@@ -55,13 +55,7 @@ fn store_indexes_conversations_and_runtimes() {
         ],
         runtimes: vec![AgentRuntimeRow {
             agent_did: "did:test:amy".to_string(),
-            process_state: Some("online".to_string()),
             reconcile_phase: None,
-            active_generation: None,
-            router_generation: None,
-            default_behavior_id: None,
-            runnable_behavior_count: Some(1),
-            unavailable_behavior_count: Some(0),
             behavior_executor_capacity: None,
             behavior_executor_queue_depth: None,
             behavior_executor_status_json: None,
@@ -79,8 +73,8 @@ fn store_indexes_conversations_and_runtimes() {
     assert_eq!(
         store
             .latest_runtime("did:test:amy")
-            .and_then(|runtime| runtime.process_state.as_deref()),
-        Some("online")
+            .and_then(|runtime| runtime.updated_at.as_deref()),
+        Some("2026-04-14T00:05:00Z")
     );
 }
 
@@ -121,6 +115,7 @@ fn store_derives_turn_from_retry_chain_tip() {
                 caused_by_trigger_kind: None,
                 caused_by_correlation: None,
                 caused_by_trigger_context: None,
+                caused_by_trigger_doc_id: None,
                 caused_by_source_doc_id: None,
                 caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
@@ -163,6 +158,7 @@ fn store_derives_turn_from_retry_chain_tip() {
                 caused_by_trigger_kind: None,
                 caused_by_correlation: None,
                 caused_by_trigger_context: None,
+                caused_by_trigger_doc_id: None,
                 caused_by_source_doc_id: None,
                 caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
@@ -275,6 +271,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 caused_by_trigger_kind: None,
                 caused_by_correlation: None,
                 caused_by_trigger_context: None,
+                caused_by_trigger_doc_id: None,
                 caused_by_source_doc_id: None,
                 caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
@@ -317,6 +314,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 caused_by_trigger_kind: None,
                 caused_by_correlation: None,
                 caused_by_trigger_context: None,
+                caused_by_trigger_doc_id: None,
                 caused_by_source_doc_id: None,
                 caused_by_parent_request_id: None,
                 interrupt_requested_at: None,
@@ -461,6 +459,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             caused_by_trigger_kind: None,
             caused_by_correlation: None,
             caused_by_trigger_context: None,
+            caused_by_trigger_doc_id: None,
             caused_by_source_doc_id: None,
             caused_by_parent_request_id: None,
             failure_reason: None,

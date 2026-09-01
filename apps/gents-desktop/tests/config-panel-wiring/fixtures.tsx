@@ -36,6 +36,18 @@ export const deployment: DeploymentView = {
   graphql: null,
   dialSucceeded: true,
   pairingReady: true,
+  chatSafe: true,
+  behaviorReadiness: {
+    source: { state: "current" },
+    activeGeneration: 1,
+    routerGeneration: 1,
+    defaultBehaviorId: "default",
+    updatedAt: "2026-08-28T00:00:00Z",
+    behaviors: [
+      { state: "ready", behaviorId: "default" },
+      { state: "ready", behaviorId: "ops" },
+    ],
+  },
   pairing: [],
   defaultBehaviorId: "default",
   agentPrincipal: {

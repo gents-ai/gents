@@ -2,7 +2,6 @@ use std::sync::Mutex;
 
 use anyhow::anyhow;
 use events::Bus;
-use gents_protocol::bearer_token::BearerPairingReadyRecord;
 
 use super::*;
 use crate::agent::p2p_reconcile::{
@@ -16,6 +15,13 @@ use desired_state::desired_row;
 fn set(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| value.to_string()).collect()
 }
+
+const TEST_TRANSPORT_PEER_ID: &str =
+    "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
+const TEST_TRANSPORT_ADDRESS_A: &str =
+    "127.0.0.1:56091/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
+const TEST_TRANSPORT_ADDRESS_B: &str =
+    "127.0.0.1:56092/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
 
 fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     let mut filters = PairingFilters::new();
@@ -31,89 +37,6 @@ fn merge_desired(
     data_plane: Option<PairingDesired>,
 ) -> Option<PairingDesired> {
     merge_layered_desired("did:key:local", "did:key:peer", base, data_plane)
-}
-
-fn bearer_desired(template_id: &str, claimant_did: &str, address: &str) -> PairingDesired {
-    let template = resolve_template(template_id).expect("bearer template");
-    PairingDesired {
-        replicator_addresses: set(&[address]),
-        replicator_collections: template
-            .collections
-            .iter()
-            .map(|collection| (*collection).to_string())
-            .collect(),
-        replicator_filter: scope_filter(
-            &template.scope,
-            template.collections,
-            claimant_did,
-            "did:key:issuer",
-        ),
-        template_ids: set(&[template_id]),
-        ..Default::default()
-    }
-}
-
-#[test]
-fn bearer_readiness_requires_exact_applied_conversation_replicator() {
-    let desired = bearer_desired("conversation", "did:key:claimant", "iroh-ticket");
-    let pending = PairingApplied::default();
-    assert_eq!(
-        earned_bearer_readiness(Some(&desired), &pending, "did:key:issuer"),
-        None
-    );
-
-    let applied = PairingApplied {
-        replicator_addresses: desired.replicator_addresses.clone(),
-        replicator_filter: desired.replicator_filter.clone(),
-        ..Default::default()
-    };
-    assert_eq!(
-        earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
-        Some((
-            "did:key:claimant".to_string(),
-            "iroh-ticket".to_string(),
-            "conversation".to_string()
-        ))
-    );
-
-    let mut wrong_filter = applied;
-    wrong_filter.replicator_filter.insert(
-        "AgentRequest".to_string(),
-        equality_filter("requester_did", "did:key:someone-else"),
-    );
-    assert_eq!(
-        earned_bearer_readiness(Some(&desired), &wrong_filter, "did:key:issuer"),
-        None
-    );
-}
-
-#[test]
-fn bearer_readiness_accepts_merged_conversation_layers() {
-    let control = bearer_desired("conversation", "did:key:claimant", "iroh-ticket");
-    let data = control.clone();
-    let mut desired = merge_desired(Some(control), Some(data)).expect("merged desired");
-    let claimant = desired
-        .replicator_filter
-        .remove("BearerPairingReady")
-        .expect("readiness filter");
-    desired.replicator_filter.insert(
-        "BearerPairingReady".to_string(),
-        FilterPredicate::All(vec![claimant, equality_filter("template", "conversation")]),
-    );
-    let applied = PairingApplied {
-        replicator_addresses: desired.replicator_addresses.clone(),
-        replicator_filter: desired.replicator_filter.clone(),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
-        Some((
-            "did:key:claimant".to_string(),
-            "iroh-ticket".to_string(),
-            "conversation".to_string()
-        ))
-    );
 }
 
 #[test]
@@ -161,34 +84,11 @@ fn explicit_client_route_keeps_requester_and_owner_across_remote_admin() {
 }
 
 #[test]
-fn bearer_readiness_mutation_escapes_signed_fields() {
-    let record = BearerPairingReadyRecord {
-        issuer_did: "did:key:issuer".to_string(),
-        claimant_did: "did:key:claimant\"quoted".to_string(),
-        peer_id: "peer-a".to_string(),
-        address: "ticket\\route".to_string(),
-        template: "conversation".to_string(),
-        acknowledged_at: "2026-07-27T00:00:00Z".to_string(),
-        sig: vec![1, 2, 3],
-    };
-
-    let mutation = bearer_pairing_ready_upsert_mutation("ready\"key", &record);
-    assert!(
-        mutation.find("delete_BearerPairingReady").unwrap()
-            < mutation.find("upsert_BearerPairingReady").unwrap()
-    );
-    assert!(mutation.contains(r#"readiness_key: "ready\"key""#));
-    assert!(mutation.contains(r#"claimant_did: "did:key:claimant\"quoted""#));
-    assert!(mutation.contains(r#"address: "ticket\\route""#));
-    assert!(!mutation.contains("[]"));
-}
-
-#[test]
 fn merge_desired_unions_control_and_data_plane_state() {
     let control = PairingDesired {
-        collections: set(&["AgentNetwork", "NetworkMembership"]),
+        collections: set(&["ControlA", "ControlB"]),
         replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
-        replicator_collections: set(&["AgentNetwork", "NetworkMembership"]),
+        replicator_collections: set(&["ControlA", "ControlB"]),
         replicator_filter: PairingFilters::new(),
         template_ids: BTreeSet::new(),
     };
@@ -203,11 +103,11 @@ fn merge_desired_unions_control_and_data_plane_state() {
     let merged = merge_desired(Some(control), Some(data)).expect("merged desired");
     assert_eq!(
         merged.replicator_collections,
-        set(&["AgentNetwork", "NetworkMembership", "AgentRequest"])
+        set(&["ControlA", "ControlB", "AgentRequest"])
     );
     assert_eq!(
         merged.collections,
-        set(&["AgentNetwork", "NetworkMembership"]),
+        set(&["ControlA", "ControlB"]),
         "data-plane collections must not expand the subscription set"
     );
     assert_eq!(
@@ -221,21 +121,7 @@ fn merge_desired_unions_control_and_data_plane_state() {
             .and_then(single_string_eq),
         Some(("agent_did", "did:key:a"))
     );
-    assert!(!merged.replicator_filter.contains_key("AgentNetwork"));
-}
-
-#[test]
-fn signed_data_plane_route_supersedes_the_bearer_bootstrap_route() {
-    let control = bearer_desired(
-        "network-control",
-        "did:key:claimant",
-        "peer-a@127.0.0.1:4100",
-    );
-    let data = bearer_desired("conversation", "did:key:claimant", "peer-a@127.0.0.1:4200");
-
-    let merged = merge_desired(Some(control), Some(data)).expect("merged desired");
-
-    assert_eq!(merged.replicator_addresses, set(&["peer-a@127.0.0.1:4200"]));
+    assert!(!merged.replicator_filter.contains_key("ControlA"));
 }
 
 #[test]
@@ -258,68 +144,168 @@ fn data_plane_only_desired_is_replicator_only() {
 }
 
 #[test]
-fn data_plane_gate_accepts_network_membership_endpoint() {
-    let network_entries = vec![NetworkEndpointEntry {
+fn data_plane_gate_accepts_current_enrollment_endpoint() {
+    let enrollment_entries = vec![EnrollmentEndpointEntry {
         peer_id: "peer-network".to_string(),
         agent_did: "did:key:network".to_string(),
         address: "/ticket/network".to_string(),
+        desired_id: "peer-network".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     }];
 
-    let entry = data_plane_materialized_entry_from_sources(
-        &network_entries,
-        &[],
-        "peer-network",
-        "did:key:self",
-    )
-    .expect("network endpoint should pass gate");
+    let entry = materialized_enrollment_entry(&enrollment_entries, "peer-network", "did:key:self")
+        .expect("enrollment endpoint should pass gate");
 
     assert_eq!(entry.address, "/ticket/network");
 }
 
+#[tokio::test(start_paused = true)]
+async fn cached_data_plane_generation_expires_without_waiting_for_a_sweep() {
+    let entry = EnrollmentEndpointEntry {
+        peer_id: "peer-network".to_string(),
+        agent_did: "did:key:network".to_string(),
+        address: "/ticket/network".to_string(),
+        desired_id: "peer-network".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2026-08-30T12:00:01Z".to_string(),
+    };
+    let before = "2026-08-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let expired = "2026-08-30T12:00:01Z".parse::<DateTime<Utc>>().unwrap();
+
+    assert!(enrollment_entry_is_fresh_at(&entry, before));
+    assert!(!enrollment_entry_is_fresh_at(&entry, expired));
+}
+
 #[test]
-fn data_plane_gate_accepts_reciprocal_endpoint_without_network_membership() {
-    let reciprocal_entries = vec![NetworkEndpointEntry {
-        peer_id: "peer-phone".to_string(),
-        agent_did: "did:key:phone".to_string(),
-        address: "/ticket/phone".to_string(),
+fn enrollment_base_and_local_data_plane_have_disjoint_owners() {
+    let enrollment_entries = vec![EnrollmentEndpointEntry {
+        peer_id: "peer-network".to_string(),
+        agent_did: "did:key:network".to_string(),
+        address: "/ticket/network".to_string(),
+        desired_id: "peer-network".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     }];
-
-    let entry = data_plane_materialized_entry_from_sources(
-        &[],
-        &reciprocal_entries,
-        "peer-phone",
-        "did:key:server",
+    let entry = materialized_enrollment_entry(&enrollment_entries, "peer-network", "did:key:self")
+        .expect("enrollment endpoint should pass gate");
+    assert!(enrollment_base_row(
+        PairingStateRow {
+            source: Some("enrollment".to_string()),
+            enrollment_request_digest: Some("digest".to_string()),
+            enrollment_authorization_sequence: Some(1),
+            enrollment_authorization_expires_at: Some("2099-09-29T00:00:00Z".to_string()),
+            ..Default::default()
+        },
+        &entry,
+        "did:key:self",
     )
-    .expect("reciprocal endpoint should pass Layer-2 gate without NetworkMembership");
+    .is_some());
+    assert!(enrollment_base_row(
+        PairingStateRow {
+            source: Some("operator".to_string()),
+            ..Default::default()
+        },
+        &entry,
+        "did:key:self",
+    )
+    .is_none());
+    assert!(enrollment_base_row(
+        PairingStateRow {
+            source: Some("enrollment".to_string()),
+            ..Default::default()
+        },
+        &entry,
+        "did:key:self",
+    )
+    .is_none());
+    assert!(enrollment_base_row(
+        PairingStateRow {
+            source: Some("enrollment".to_string()),
+            enrollment_request_digest: Some("digest".to_string()),
+            enrollment_authorization_sequence: Some(2),
+            enrollment_authorization_expires_at: Some("2099-09-29T00:00:00Z".to_string()),
+            ..Default::default()
+        },
+        &entry,
+        "did:key:self",
+    )
+    .is_none());
+    assert!(local_data_plane_row(
+        PairingStateRow {
+            source: Some("operator".to_string()),
+            template: Some("app-collections".to_string()),
+            ..Default::default()
+        },
+        &entry,
+        "did:key:self",
+    )
+    .is_some());
+    assert!(local_data_plane_row(
+        PairingStateRow {
+            source: Some("enrollment".to_string()),
+            ..Default::default()
+        },
+        &entry,
+        "did:key:self",
+    )
+    .is_none());
 
-    assert_eq!(entry.agent_did, "did:key:phone");
-    assert_eq!(entry.address, "/ticket/phone");
+    let canonical = enrollment_base_row(
+        PairingStateRow {
+            source: Some("enrollment".to_string()),
+            enrollment_request_digest: Some("digest".to_string()),
+            enrollment_authorization_sequence: Some(1),
+            enrollment_authorization_expires_at: Some("2099-09-29T00:00:00Z".to_string()),
+            agent_did: Some("did:key:attacker".to_string()),
+            template: Some("app-collections".to_string()),
+            collections: Some(vec!["HostileCollection".to_string()]),
+            replicator_addresses: Some(vec!["/ticket/attacker".to_string()]),
+            ..Default::default()
+        },
+        &entry,
+        "did:key:self",
+    )
+    .expect("the enrollment owner matches");
+    assert_eq!(canonical.agent_did.as_deref(), Some("did:key:self"));
+    assert_eq!(canonical.template.as_deref(), Some("client"));
+    assert_eq!(canonical.collections, None);
+    assert_eq!(
+        canonical.replicator_addresses,
+        Some(vec!["/ticket/network".to_string()])
+    );
 }
 
 #[test]
 fn data_plane_gate_rejects_self_endpoint_from_both_sources() {
-    let reciprocal_entries = vec![NetworkEndpointEntry {
+    let enrollment_entries = vec![EnrollmentEndpointEntry {
         peer_id: "peer-self".to_string(),
         agent_did: "did:key:self".to_string(),
         address: "/ticket/self".to_string(),
+        desired_id: "peer-self".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     }];
 
-    let entry = data_plane_materialized_entry_from_sources(
-        &[],
-        &reciprocal_entries,
-        "peer-self",
-        "did:key:self",
-    );
+    let entry = materialized_enrollment_entry(&enrollment_entries, "peer-self", "did:key:self");
 
     assert!(entry.is_none());
 }
 
 #[test]
 fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
-    let signed_endpoint = NetworkEndpointEntry {
+    let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         agent_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     };
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
@@ -349,11 +335,55 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
 }
 
 #[test]
+fn enrolled_client_outbound_route_preserves_directional_authority() {
+    let signed_endpoint = EnrollmentEndpointEntry {
+        peer_id: "runtime-peer".to_string(),
+        agent_did: "did:key:runtime".to_string(),
+        address: "/ip4/127.0.0.1/tcp/4001/p2p/runtime-peer".to_string(),
+        desired_id: "runtime-peer:client-to-runtime".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
+    };
+    let desired = data_plane_desired_from_pairing_row(
+        PairingStateRow {
+            peer_id: Some("runtime-peer:client-to-runtime".to_string()),
+            agent_did: Some("did:key:phone".to_string()),
+            replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
+            template: Some("client".to_string()),
+            ..Default::default()
+        },
+        &signed_endpoint,
+        "did:key:phone",
+    )
+    .expect("client data-plane desired")
+    .expect("some client data-plane layer");
+
+    assert!(desired.replicator_collections.contains("AgentRequest"));
+    assert!(!desired.replicator_collections.contains("AgentBehavior"));
+    let encoded = serde_json::to_string(
+        desired
+            .replicator_filter
+            .get("AgentRequest")
+            .expect("request filter"),
+    )
+    .unwrap();
+    assert!(encoded.contains("requester_did"));
+    assert!(encoded.contains("did:key:phone"));
+    assert!(encoded.contains("agent_did"));
+    assert!(encoded.contains("did:key:runtime"));
+}
+
+#[test]
 fn protocol_collection_in_app_data_plane_is_rejected_without_stalling_control_pairing() {
-    let signed_endpoint = NetworkEndpointEntry {
+    let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-app".to_string(),
         agent_did: "did:key:app".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-app".to_string(),
+        desired_id: "peer-app".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     };
     let data_plane = data_plane_desired_from_pairing_row(
         PairingStateRow {
@@ -374,7 +404,7 @@ fn protocol_collection_in_app_data_plane_is_rejected_without_stalling_control_pa
     let control = PairingDesired {
         replicator_addresses: set(&[signed_endpoint.address.as_str()]),
         replicator_collections: set(&["AgentNetwork"]),
-        template_ids: set(&["network-control"]),
+        template_ids: set(&["enrollment-base"]),
         ..Default::default()
     };
     assert_eq!(
@@ -386,10 +416,14 @@ fn protocol_collection_in_app_data_plane_is_rejected_without_stalling_control_pa
 
 #[test]
 fn data_plane_subagent_coordinator_uses_signed_peer_for_targeted_bridge() {
-    let signed_endpoint = NetworkEndpointEntry {
+    let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         agent_did: "did:key:host".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     };
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
@@ -418,10 +452,14 @@ fn data_plane_subagent_coordinator_uses_signed_peer_for_targeted_bridge() {
 
 #[test]
 fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
-    let signed_endpoint = NetworkEndpointEntry {
+    let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-a".to_string(),
         agent_did: "did:key:coord".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-a".to_string(),
+        desired_id: "peer-a".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     };
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
@@ -457,10 +495,14 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
 
 #[test]
 fn data_plane_desired_rejects_foreign_agent_did_scope() {
-    let signed_endpoint = NetworkEndpointEntry {
+    let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         agent_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     };
     let error = data_plane_desired_from_pairing_row(
         PairingStateRow {
@@ -591,6 +633,55 @@ impl PairingStateStore for MockStore {
 struct MultiPeerStore {
     desired: BTreeMap<String, PairingDesired>,
     applied: Mutex<BTreeMap<String, PairingApplied>>,
+}
+
+struct EnrollmentFenceStore {
+    desired: PairingDesired,
+    generation: EnrollmentRouteGeneration,
+    applied: Mutex<PairingApplied>,
+    authority_checks: Mutex<std::collections::VecDeque<Result<bool, String>>>,
+}
+
+#[async_trait]
+impl PairingStateStore for EnrollmentFenceStore {
+    async fn load_desired(&self, _peer_id: &str) -> Result<Option<PairingDesired>> {
+        Ok(Some(self.desired.clone()))
+    }
+
+    async fn load_desired_with_authority(&self, _peer_id: &str) -> Result<LoadedPairingDesired> {
+        Ok(LoadedPairingDesired {
+            state: Some(self.desired.clone()),
+            enrollment_generation: Some(self.generation.clone()),
+        })
+    }
+
+    async fn enrollment_generation_is_current(
+        &self,
+        _generation: &EnrollmentRouteGeneration,
+    ) -> Result<bool> {
+        self.authority_checks
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Ok(false))
+            .map_err(anyhow::Error::msg)
+    }
+
+    async fn load_applied(&self, _peer_id: &str) -> Result<LoadedPairingApplied> {
+        Ok(LoadedPairingApplied {
+            state: self.applied.lock().unwrap().clone(),
+            ..Default::default()
+        })
+    }
+
+    async fn persist_applied(&self, _peer_id: &str, applied: &LoadedPairingApplied) -> Result<()> {
+        *self.applied.lock().unwrap() = applied.state.clone();
+        Ok(())
+    }
+
+    async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {
+        Ok(set(&["peer-a"]))
+    }
 }
 
 #[async_trait]
@@ -862,66 +953,6 @@ impl RemoteP2pAdmin for MockAdmin {
 }
 
 #[tokio::test]
-async fn upgrade_tears_down_only_unowned_replicator_at_client_endpoint() {
-    let admin = MockAdmin::default();
-    let legacy_address =
-        "127.0.0.1:56091/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb"
-            .to_string();
-    let unrelated_address =
-        "127.0.0.1:56092/p2p/7fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bc"
-            .to_string();
-    admin.replicators.lock().unwrap().insert(
-        legacy_address.clone(),
-        RemoteReplicator {
-            id: Some("legacy-runtime-replicator".into()),
-            // Real DefraDB shape: get_replicators returns CollectionIDs,
-            // while desired teardown policy is expressed in schema names.
-            collections: vec![mock_collection_id("legacy-machine-collection")],
-            address: Some(legacy_address.clone()),
-            filters: Some(Default::default()),
-        },
-    );
-    admin.replicators.lock().unwrap().insert(
-        unrelated_address.clone(),
-        RemoteReplicator {
-            id: Some("unrelated-replicator".into()),
-            collections: vec![mock_collection_id("unrelated-collection")],
-            address: Some(unrelated_address.clone()),
-            filters: Some(Default::default()),
-        },
-    );
-    let sibling_key = "sibling-on-same-endpoint".to_string();
-    admin.replicators.lock().unwrap().insert(
-        sibling_key.clone(),
-        RemoteReplicator {
-            id: Some("sibling-runtime-replicator".into()),
-            collections: vec![mock_collection_id("sibling-collection")],
-            address: Some(legacy_address.clone()),
-            filters: Some(Default::default()),
-        },
-    );
-
-    let removed = teardown_unowned_replicators_at_endpoint(
-        &admin,
-        &legacy_address,
-        &[String::from("legacy-machine-collection")],
-    )
-    .await
-    .expect("legacy endpoint cleanup");
-
-    assert_eq!(removed, 1);
-    let remaining = admin.replicators.lock().unwrap();
-    assert!(!remaining.contains_key(&legacy_address));
-    assert!(remaining.contains_key(&unrelated_address));
-    assert!(remaining.contains_key(&sibling_key));
-    assert_eq!(
-        *admin.deleted_replicator_collections.lock().unwrap(),
-        vec![vec![mock_collection_id("legacy-machine-collection")]],
-        "teardown must pass the live CollectionIDs back to DefraDB"
-    );
-}
-
-#[tokio::test]
 async fn owned_teardown_removes_endpoint_despite_collection_drift() {
     let admin = MockAdmin::default();
     let owned_address =
@@ -967,7 +998,7 @@ async fn owned_teardown_removes_endpoint_despite_collection_drift() {
 #[tokio::test]
 async fn cancellation_preempts_in_flight_pairing_sweep_admin_wait() {
     let store = MockStore::with_desired(Some(PairingDesired {
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         ..Default::default()
     }));
     let started = Arc::new(tokio::sync::Notify::new());
@@ -999,6 +1030,85 @@ async fn cancellation_preempts_in_flight_pairing_sweep_admin_wait() {
         .await
         .expect("cancellation must preempt the in-flight admin wait");
     assert!(!completed, "cancelled sweep must skip its remaining peers");
+}
+
+fn enrolled_live_route_store(
+    authority_checks: impl IntoIterator<Item = Result<bool, String>>,
+) -> EnrollmentFenceStore {
+    EnrollmentFenceStore {
+        desired: PairingDesired {
+            replicator_addresses: set(&["addr1"]),
+            replicator_collections: set(&["AgentRequest"]),
+            ..Default::default()
+        },
+        generation: EnrollmentRouteGeneration {
+            member_did: "did:key:member".into(),
+            member_peer: "peer-a".into(),
+            member_ticket: "addr1".into(),
+            request_digest: "digest-1".into(),
+            authorization_sequence: 1,
+            authorization_expires_at: "2099-09-29T00:00:00Z".into(),
+        },
+        applied: Mutex::new(PairingApplied {
+            replicator_addresses: set(&["addr1"]),
+            ..Default::default()
+        }),
+        authority_checks: Mutex::new(authority_checks.into_iter().collect()),
+    }
+}
+
+fn admin_with_live_enrolled_route() -> MockAdmin {
+    let admin = MockAdmin::default();
+    admin.active.lock().unwrap().push("peer-a".into());
+    admin.replicators.lock().unwrap().insert(
+        "addr1".into(),
+        RemoteReplicator {
+            id: Some("route-1".into()),
+            collections: vec![mock_collection_id("AgentRequest")],
+            address: Some("addr1".into()),
+            filters: Some(Default::default()),
+        },
+    );
+    admin
+}
+
+#[tokio::test]
+async fn committed_revocation_between_desired_load_and_apply_tears_down_stale_route() {
+    // First check observes the generation loaded by the sweep; the second
+    // models a committed revoke before the enrollment subscription refresh.
+    let store = enrolled_live_route_store([Ok(true), Ok(false)]);
+    let admin = admin_with_live_enrolled_route();
+
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("revoked route reconciles fail closed");
+
+    assert_eq!(
+        outcome.ops_applied,
+        vec![DiffOp::TeardownReplicator("addr1".into())]
+    );
+    assert!(admin.connects.lock().unwrap().is_empty());
+    assert!(admin.replicators.lock().unwrap().is_empty());
+    assert!(store.applied.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn enrollment_projection_read_failure_tears_down_instead_of_preserving_live_route() {
+    let store = enrolled_live_route_store([Err("projection unavailable".into())]);
+    let admin = admin_with_live_enrolled_route();
+
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("unknown enrollment authority closes the route");
+
+    assert!(!outcome.desired_read_failed);
+    assert_eq!(
+        outcome.ops_applied,
+        vec![DiffOp::TeardownReplicator("addr1".into())]
+    );
+    assert!(admin.connects.lock().unwrap().is_empty());
+    assert!(admin.replicators.lock().unwrap().is_empty());
+    assert!(store.applied.lock().unwrap().is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -1146,7 +1256,7 @@ async fn read_failure_noops_without_remote_reads() {
 async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
     let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
     let desired = PairingDesired {
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["subagent-host"]),
@@ -1155,22 +1265,22 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
     let store = MockStore {
         desired: Mutex::new(Err("transient desired read".into())),
         applied: Mutex::new(PairingApplied {
-            replicator_addresses: set(&["addr1"]),
+            replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
             replicator_filter: filter,
             ..Default::default()
         }),
         ..Default::default()
     };
     let admin = MockAdmin {
-        active: Mutex::new(vec!["peer-a".into()]),
+        active: Mutex::new(vec![TEST_TRANSPORT_PEER_ID.into()]),
         ..Default::default()
     };
     admin.replicators.lock().unwrap().insert(
-        "addr1".into(),
+        TEST_TRANSPORT_ADDRESS_A.into(),
         RemoteReplicator {
-            id: Some("id-addr1".into()),
+            id: Some("id-current-endpoint".into()),
             collections: vec![mock_collection_id("AgentRequest")],
-            address: Some("addr1".into()),
+            address: Some(TEST_TRANSPORT_ADDRESS_A.into()),
             filters: Some(Default::default()),
         },
     );
@@ -1203,8 +1313,8 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
     assert_eq!(
         *admin.emitted.lock().unwrap(),
         vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
+            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
+            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
         ],
         "the deferred startup replay must fire on the first healthy sweep"
     );
@@ -1438,25 +1548,29 @@ async fn reconnect_force_replays_converged_subagent_replicator() {
 async fn inbound_reconnect_force_replays_without_owner_redial() {
     let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
     let store = MockStore::with_desired(Some(PairingDesired {
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
         template_ids: set(&["subagent-host"]),
         ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: filter.clone(),
         ..Default::default()
     };
     let admin = MockAdmin::default();
-    admin.active.lock().unwrap().push("peer-a".into());
+    admin
+        .active
+        .lock()
+        .unwrap()
+        .push(TEST_TRANSPORT_PEER_ID.into());
     admin.replicators.lock().unwrap().insert(
-        "addr1".into(),
+        TEST_TRANSPORT_ADDRESS_A.into(),
         RemoteReplicator {
-            id: Some("id-addr1".into()),
+            id: Some("id-current-endpoint".into()),
             collections: vec![mock_collection_id("AgentRequest")],
-            address: Some("addr1".into()),
+            address: Some(TEST_TRANSPORT_ADDRESS_A.into()),
             filters: Some(mock_live_filters(&filter)),
         },
     );
@@ -1466,12 +1580,12 @@ async fn inbound_reconnect_force_replays_without_owner_redial() {
         .expect("inbound reconnect replay tick");
 
     assert!(admin.connects.lock().unwrap().is_empty());
-    assert_eq!(outcome.replayed_replicators, vec!["addr1"]);
+    assert_eq!(outcome.replayed_replicators, vec![TEST_TRANSPORT_ADDRESS_A]);
     assert_eq!(
         *admin.emitted.lock().unwrap(),
         vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
+            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
+            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
         ]
     );
 }
@@ -1490,28 +1604,28 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
     // collection, and a scoped filter (identity change ⇒ reinstall).
     let store = MockStore::with_desired(Some(PairingDesired {
         collections: set(&["AgentNetwork", "AgentRequest"]),
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: conversation_filter.clone(),
         ..Default::default()
     }));
     // Control-plane pairing already applied: unfiltered replicator on addr1.
     *store.applied.lock().unwrap() = PairingApplied {
         collections: set(&["AgentNetwork"]),
-        replicator_addresses: set(&["addr1"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: PairingFilters::new(),
     };
     let admin = MockAdmin {
-        active: Mutex::new(vec!["peer-a".into()]),
+        active: Mutex::new(vec![TEST_TRANSPORT_PEER_ID.into()]),
         fail_connect: true,
         ..Default::default()
     };
     *admin.collections.lock().unwrap() = set(&[&mock_collection_id("AgentNetwork")]);
     admin.replicators.lock().unwrap().insert(
-        "addr1".into(),
+        TEST_TRANSPORT_ADDRESS_A.into(),
         RemoteReplicator {
-            id: Some("id-addr1".into()),
+            id: Some("id-current-endpoint".into()),
             collections: vec!["AgentNetwork".into()],
-            address: Some("addr1".into()),
+            address: Some(TEST_TRANSPORT_ADDRESS_A.into()),
             filters: Some(Default::default()),
         },
     );
@@ -1528,8 +1642,8 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
         outcome.ops_applied,
         vec![
             DiffOp::InstallCollection("AgentRequest".into()),
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr1".into()),
+            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
+            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
         ]
     );
     // Applied records the conversation filter — this is what surfaces as
@@ -1655,11 +1769,8 @@ async fn matching_applied_repairs_restored_unfiltered_stale_address() {
     assert_eq!(repaired.filters.as_ref(), Some(&mock_live_filters(&filter)));
 }
 
-/// Older remote-admin responses did not expose `Filters`. Unknown visibility
-/// must neither certify a scoped route nor cause reinstall on every sweep once
-/// durable applied identity already matches desired.
 #[tokio::test]
-async fn omitted_live_filters_fail_closed_without_reinstall_churn() {
+async fn omitted_live_filters_force_current_protocol_repair() {
     let filter = one_filter("AgentRequest", "agent_did", "did:key:mandrake");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&["addr1"]),
@@ -1683,18 +1794,13 @@ async fn omitted_live_filters_fail_closed_without_reinstall_churn() {
         },
     );
 
-    for _ in 0..2 {
-        let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
-            .await
-            .expect("compatibility reconcile tick");
-        assert!(outcome.ops_applied.is_empty());
-        assert!(
-            !outcome.live_route_matches,
-            "unknown scoped filter must not earn route readiness"
-        );
-    }
-    assert!(admin.emitted.lock().unwrap().is_empty());
-    assert!(admin.recorded_filters.lock().unwrap().is_empty());
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("current-protocol reconcile tick");
+    assert!(!outcome.ops_applied.is_empty());
+    assert!(outcome.live_route_matches);
+    assert!(!admin.emitted.lock().unwrap().is_empty());
+    assert!(!admin.recorded_filters.lock().unwrap().is_empty());
 }
 
 /// Current DefraDB HTTP responses omit `Filters` only for an empty effective
@@ -1826,7 +1932,7 @@ async fn applied_state_persist_collapses_duplicates_and_recovers_a_missing_row()
         crate::identity::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
             .unwrap(),
     );
-    let store = GraphqlPairingStateStore::new(node.clone(), identity);
+    let store = GraphqlPairingStateStore::for_explicit_desired(node.clone(), identity);
     let mut applied = store.load_applied("peer-a").await.expect("load duplicates");
     applied.state = PairingApplied {
         replicator_addresses: set(&["fresh"]),
@@ -1892,17 +1998,17 @@ async fn applied_state_persist_collapses_duplicates_and_recovers_a_missing_row()
 #[tokio::test]
 async fn stale_applied_endpoint_absent_from_actual_is_torn_down_once() {
     let desired = PairingDesired {
-        replicator_addresses: set(&["addr2"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_B]),
         replicator_collections: set(&["AgentRequest"]),
         ..Default::default()
     };
     let store = MockStore::with_desired(Some(desired));
     *store.applied.lock().unwrap() = PairingApplied {
-        replicator_addresses: set(&["addr1", "addr2"]),
+        replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A, TEST_TRANSPORT_ADDRESS_B]),
         ..Default::default()
     };
     let admin = MockAdmin {
-        active: Mutex::new(vec!["peer-a".into()]),
+        active: Mutex::new(vec![TEST_TRANSPORT_PEER_ID.into()]),
         ..Default::default()
     };
     let first = reconcile_peer_tick(&admin, &store, "peer-a")
@@ -1915,19 +2021,22 @@ async fn stale_applied_endpoint_absent_from_actual_is_torn_down_once() {
     assert_eq!(
         first.ops_applied,
         vec![
-            DiffOp::TeardownReplicator("addr1".into()),
-            DiffOp::InstallReplicator("addr2".into()),
+            DiffOp::TeardownReplicator(TEST_TRANSPORT_ADDRESS_A.into()),
+            DiffOp::InstallReplicator(TEST_TRANSPORT_ADDRESS_B.into()),
         ]
     );
     assert!(second.ops_applied.is_empty());
-    assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr2"]]);
+    assert_eq!(
+        *admin.connects.lock().unwrap(),
+        vec![vec![TEST_TRANSPORT_ADDRESS_B.to_string()]]
+    );
     assert_eq!(
         *admin.deleted_replicator_collections.lock().unwrap(),
         vec![vec!["AgentRequest".to_string()]]
     );
     assert_eq!(
         store.applied.lock().unwrap().replicator_addresses,
-        set(&["addr2"])
+        set(&[TEST_TRANSPORT_ADDRESS_B])
     );
 }
 
@@ -2385,36 +2494,20 @@ async fn add_replicator_records_filters_at_seam() {
     assert_eq!(single_string_eq(pred), Some(("agent_did", "did:key:alice")));
 }
 
-#[test]
-fn bearer_readiness_accepts_exact_applied_machine_replicator() {
-    let mut desired = bearer_desired("machine", "did:key:claimant", "iroh-ticket");
-    desired.template_ids.insert("conversation".to_string());
-    let applied = PairingApplied {
-        replicator_addresses: desired.replicator_addresses.clone(),
-        replicator_filter: desired.replicator_filter.clone(),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        earned_bearer_readiness(Some(&desired), &applied, "did:key:issuer"),
-        Some((
-            "did:key:claimant".to_string(),
-            "iroh-ticket".to_string(),
-            "machine".to_string()
-        ))
-    );
-}
-
 /// #714 C1 regression: the `machine` template's conversation collections
 /// must scope to the same requester DID `conversation` uses on the data
 /// plane, while `AgentDirectoryEntry` is restricted to this issuer's
 /// source-owned projection.
 #[test]
 fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
-    let signed_endpoint = NetworkEndpointEntry {
+    let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
         agent_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
+        desired_id: "peer-b".to_string(),
+        request_digest: "digest".to_string(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
     };
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {

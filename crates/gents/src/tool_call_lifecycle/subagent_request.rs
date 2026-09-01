@@ -17,6 +17,11 @@ use crate::session::execute_mutation_with_retry;
 
 use super::IllegalToolCallTransition;
 
+enum SubagentAdmissionSource {
+    LocalChild,
+    CrossDeploymentChild { bridge_author_did: String },
+}
+
 /// The configured cap on subagent recursion depth. Matches Lean's
 /// `Subagent.maxSubagentDepth = 3` (see
 /// `crates/gents/proofs/Proofs/Background/State.lean`). Exposed as
@@ -118,8 +123,7 @@ pub async fn create_subagent_request_with_request_id(
         behavior_id,
         prompt,
         deadline,
-        true,
-        None,
+        SubagentAdmissionSource::LocalChild,
         (parent_request_doc_id, parent_tool_call_doc_id),
         None,
     )
@@ -153,8 +157,7 @@ pub(crate) async fn create_subagent_request_with_request_id_and_workspace(
         behavior_id,
         prompt,
         deadline,
-        true,
-        None,
+        SubagentAdmissionSource::LocalChild,
         (parent_request_doc_id, parent_tool_call_doc_id),
         workspace,
     )
@@ -190,8 +193,9 @@ pub async fn create_subagent_request_with_trusted_parent_request_id(
         behavior_id,
         prompt,
         deadline,
-        false,
-        Some(requester_did),
+        SubagentAdmissionSource::CrossDeploymentChild {
+            bridge_author_did: requester_did,
+        },
         (parent_request_doc_id, parent_tool_call_doc_id),
         None,
     )
@@ -224,8 +228,9 @@ pub(crate) async fn create_subagent_request_with_trusted_parent_request_id_and_w
         behavior_id,
         prompt,
         deadline,
-        false,
-        Some(requester_did),
+        SubagentAdmissionSource::CrossDeploymentChild {
+            bridge_author_did: requester_did,
+        },
         (parent_request_doc_id, parent_tool_call_doc_id),
         workspace,
     )
@@ -243,8 +248,7 @@ async fn create_subagent_request_inner(
     behavior_id: String,
     prompt: String,
     deadline: Option<DateTime<Utc>>,
-    require_parent_agent_match: bool,
-    requester_did: Option<String>,
+    admission_source: SubagentAdmissionSource,
     parent_doc_ids: (String, String),
     workspace: Option<WorkspaceLineage>,
 ) -> Result<String> {
@@ -252,11 +256,6 @@ async fn create_subagent_request_inner(
     if parent_subagent_depth >= MAX_SUBAGENT_DEPTH {
         return Err(anyhow!(IllegalToolCallTransition::SubagentDepthExceeded));
     }
-
-    // Normalize the immutable route key before validating and persisting it.
-    // A whitespace-padded DID must not create a request that can never match
-    // the paired peer's exact replication filter.
-    let requester_did = requester_did.map(|did| did.trim().to_owned());
 
     // 2. Coherence check (pure precondition, fires before any DB I/O).
     if request_id.is_empty()
@@ -272,13 +271,19 @@ async fn create_subagent_request_inner(
     // cross-deployment child instead uses the targeted, owner-authored bridge
     // as its durable parent edge; copying the entire parent request to every
     // possible host is neither necessary nor pair-scoped (#683).
-    if require_parent_agent_match {
-        let parent = load_parent_request_by_doc_id(node, &parent_doc_ids.0).await?;
-        if parent.request_id != parent_request_id || parent.agent_did != agent_did {
+    match &admission_source {
+        SubagentAdmissionSource::LocalChild => {
+            let parent = load_parent_request_by_doc_id(node, &parent_doc_ids.0).await?;
+            if parent.request_id != parent_request_id || parent.agent_did != agent_did {
+                return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
+            }
+        }
+        SubagentAdmissionSource::CrossDeploymentChild { bridge_author_did }
+            if bridge_author_did.is_empty() || bridge_author_did.trim() != bridge_author_did =>
+        {
             return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
         }
-    } else if requester_did.as_deref().is_none_or(str::is_empty) {
-        return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
+        SubagentAdmissionSource::CrossDeploymentChild { .. } => {}
     }
 
     // 4. Generate fresh session identifier (mirror materialize.rs pattern).
@@ -286,21 +291,8 @@ async fn create_subagent_request_inner(
     let new_subagent_depth = parent_subagent_depth + 1;
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_agent_did = escape_graphql_string(&agent_did);
-    let requester_field = requester_did
-        .as_deref()
-        .map(escape_graphql_string)
-        .map(|did| format!("requester_did: \"{did}\","))
-        .unwrap_or_default();
-    let escaped_behavior_id = escape_graphql_string(&behavior_id);
-    let escaped_session_id = escape_graphql_string(&new_session_id);
     let prompt_selection = crate::skills::prompt_slash_skill_selection(&prompt);
     let prompt = prompt_selection.prompt;
-    let escaped_prompt = escape_graphql_string(&prompt);
-    let escaped_created_at = escape_graphql_string(&now);
-    let escaped_parent_request_id = escape_graphql_string(&parent_request_id);
-    let escaped_parent_tool_call_id = escape_graphql_string(&parent_tool_call_id);
     validate_parent_tool_call(
         node,
         &parent_doc_ids.1,
@@ -308,14 +300,9 @@ async fn create_subagent_request_inner(
         &parent_tool_call_id,
     )
     .await?;
-    let parent_doc_fields = format!(
-        r#"
-                caused_by_parent_request_doc_id: "{}",
-                caused_by_parent_tool_call_doc_id: "{}","#,
-        escape_graphql_string(&parent_doc_ids.0),
-        escape_graphql_string(&parent_doc_ids.1),
-    );
-    let metadata_field = selected_skill_metadata_field(&prompt_selection.selected_skill_ids);
+    let metadata = (!prompt_selection.selected_skill_ids.is_empty()).then(|| {
+        serde_json::json!({ "selected_skill_ids": prompt_selection.selected_skill_ids }).to_string()
+    });
     let runtime_context = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
     let inherited_context_json = runtime_context
         .as_ref()
@@ -327,84 +314,62 @@ async fn create_subagent_request_inner(
             })
         })
         .transpose()?;
-    let inherited_trigger_context = crate::lifecycle::inherited_trigger_context_graphql_fields(
-        runtime_context
-            .as_ref()
-            .and_then(|context| context.correlation.as_deref()),
-        inherited_context_json.as_deref(),
-    )?;
-
-    let deadline_field = deadline
-        .map(|d| {
-            let escaped_deadline = escape_graphql_string(&d.to_rfc3339());
-            format!(
-                r#"
-                deadline: "{escaped_deadline}","#
-            )
-        })
-        .unwrap_or_default();
     if let Some(workspace) = workspace.as_ref() {
         workspace.require_authority_if_workspace_id()?;
     }
-    let workspace_fields = workspace
-        .as_ref()
-        .map(WorkspaceLineage::graphql_fields)
-        .unwrap_or_default();
-
-    // 5. Build and execute the CREATE mutation. Mirrors the field shape
-    // of `write_pending_agent_request_with_lineage_and_conversation_title`
-    // in `lifecycle/materialize.rs`, plus the three subagent fields.
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
-                {requester_field}
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "{escaped_prompt}",{metadata_field}
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "interactive",
-                failure_reason: "",
-                created_at: "{escaped_created_at}",{deadline_field}
-                retry_count: 0,
-                max_retries: {max_retries},
-                subagent_depth: {new_subagent_depth},
-                caused_by_parent_request_id: "{escaped_parent_request_id}",
-                {parent_doc_fields}
-                caused_by_parent_tool_call_id: "{escaped_parent_tool_call_id}",
-                caused_by_trigger_id: "{escaped_parent_tool_call_id}",
-                caused_by_trigger_kind: "subagent",
-                {inherited_trigger_context}{workspace_fields}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+    let admission = match &admission_source {
+        SubagentAdmissionSource::LocalChild => {
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_child(
+                &agent_did,
+                &parent_request_id,
+            )
+        }
+        SubagentAdmissionSource::CrossDeploymentChild { bridge_author_did } => {
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_cross_deployment_child(
+                &agent_did,
+                &parent_request_id,
+                bridge_author_did,
+            )
+        }
+    };
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        request_id.clone(),
+        agent_did.clone(),
+        agent_did.clone(),
+        behavior_id,
+        new_session_id,
+        prompt,
+        "interactive",
+        now,
+        admission,
     );
+    create.metadata = metadata;
+    create.valid_until =
+        deadline.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
+    create.subagent_depth = new_subagent_depth;
+    create.caused_by_parent_request_id = Some(parent_request_id);
+    create.caused_by_parent_request_doc_id = Some(parent_doc_ids.0);
+    create.caused_by_parent_tool_call_id = Some(parent_tool_call_id.clone());
+    create.caused_by_parent_tool_call_doc_id = Some(parent_doc_ids.1);
+    create.caused_by_trigger_id = Some(parent_tool_call_id);
+    create.caused_by_trigger_kind = Some("subagent".to_string());
+    create.caused_by_correlation = runtime_context
+        .as_ref()
+        .and_then(|context| context.correlation.clone());
+    create.caused_by_trigger_context = inherited_context_json;
+    if let Some(workspace) = workspace {
+        create.workspace_id = workspace.workspace_id;
+        create.workspace_authority = workspace.workspace_authority;
+        create.workspace_owner_deployment_id = workspace.workspace_owner_deployment_id;
+        create.workspace_seal_hash = workspace.workspace_seal_hash;
+    }
+    crate::sign_agent_request_create_as_registered_target(&mut create).await?;
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
 
     execute_mutation_with_retry(node, &mutation, "create_subagent_request").await?;
 
     Ok(request_id)
-}
-
-fn selected_skill_metadata_field(selected_skill_ids: &[String]) -> String {
-    if selected_skill_ids.is_empty() {
-        return String::new();
-    }
-
-    let metadata = serde_json::json!({
-        "selected_skill_ids": selected_skill_ids,
-    })
-    .to_string();
-    format!(
-        r#"
-                metadata: "{}","#,
-        escape_graphql_string(&metadata)
-    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -520,19 +485,5 @@ mod tests {
         for parent_depth in 3..=10 {
             assert!(parent_depth >= MAX_SUBAGENT_DEPTH);
         }
-    }
-
-    #[test]
-    fn subagent_prompt_slash_command_adds_selected_skill_metadata() {
-        let selected = vec!["vuln-scan".to_string()];
-        let field = selected_skill_metadata_field(&selected);
-
-        assert!(field.contains("metadata:"));
-        assert!(field.contains(r#"\"selected_skill_ids\":[\"vuln-scan\"]"#));
-    }
-
-    #[test]
-    fn subagent_prompt_without_leading_slash_keeps_metadata_absent() {
-        assert_eq!(selected_skill_metadata_field(&[]), "");
     }
 }

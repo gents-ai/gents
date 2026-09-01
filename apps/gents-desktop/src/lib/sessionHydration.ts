@@ -14,7 +14,7 @@ export function visibleSessionHydration(
   if (!hydration || !sessionId || hydration.sessionId !== sessionId) {
     return null;
   }
-  if (agentDid && hydration.agentDid && hydration.agentDid !== agentDid) {
+  if (agentDid && hydration.agentDid !== agentDid) {
     return null;
   }
   if (

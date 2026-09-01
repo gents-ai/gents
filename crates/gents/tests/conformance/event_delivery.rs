@@ -192,11 +192,12 @@ impl ProductionEventDeliveryDriver {
                 }
             }
             "SubagentSource" => {
-                install_subagent_source_fixture(db.node.as_ref())
+                install_subagent_source_fixture(db.node.as_ref(), db.node_identity.did())
                     .await
                     .expect("install SubagentSource event-delivery fixture");
                 let (runner, emitted_rx, snapshot_tx) = spawn_subagent_source_runner(
                     db.node.clone(),
+                    db.node_identity.clone(),
                     mock_subs.clone(),
                     cancel.clone(),
                 );
@@ -416,17 +417,23 @@ impl ProductionEventDeliveryDriver {
     }
 
     async fn create_subagent_tool_call_doc(&self, doc: &str) -> Result<String, String> {
+        let agent_did = self.db.node_identity.did();
         let tool_call_id = escape_graphql_string(doc);
         let tool_call_key = escape_graphql_string(&format!("event-delivery-session:{doc}"));
         let parent_request_id = format!("event-delivery-parent-{doc}");
         let parent_session_id = format!("event-delivery-session-{doc}");
         let child_request_id = format!("event-delivery-child-{doc}");
-        let parent_request_doc_id = create_request(
+        let parent_request_doc_id = crate::support::create_request_for_agent_with_signed_fields(
             self.db.node.as_ref(),
+            agent_did,
             &parent_request_id,
             &parent_session_id,
             "processing",
             "2026-05-20T00:00:00Z",
+            None,
+            None,
+            None,
+            None,
         )
         .await;
         let parent_request_id = escape_graphql_string(&parent_request_id);
@@ -436,18 +443,20 @@ impl ProductionEventDeliveryDriver {
         let args = escape_graphql_string(
             &serde_json::json!({
                 "name": AGENT_NAME,
-                "agent_did": AGENT_DID,
+                "agent_did": agent_did,
                 "behavior_id": AGENT_NAME,
                 "prompt": "materialize event-delivery child",
             })
             .to_string(),
         );
+        let agent_did = escape_graphql_string(agent_did);
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     request_id: "{parent_request_id}",
-                    request_doc_id: "{parent_request_doc_id}",
+                request_doc_id: "{parent_request_doc_id}",
+                agent_did: "{agent_did}",
                     session_id: "{parent_session_id}",
                     message_sequence: 1,
                     tool_name: "spawn_subagent",
@@ -715,6 +724,7 @@ fn spawn_event_source_runner(
 
 fn spawn_subagent_source_runner(
     node: Arc<EmbeddedNode>,
+    identity: Arc<dyn gents::AgentIdentity>,
     mock_subs: MockUpdateSubscriptionSource,
     cancel: CancellationToken,
 ) -> (
@@ -722,11 +732,16 @@ fn spawn_subagent_source_runner(
     mpsc::Receiver<String>,
     watch::Sender<Arc<ActiveRuntimeSnapshot>>,
 ) {
-    let snapshot = active_snapshot_without_event_triggers();
+    let snapshot = active_snapshot_without_event_triggers(identity);
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let mut source =
-        SubagentSource::with_subscription_source(Arc::new(mock_subs), snapshot_rx, node, cancel)
-            .with_rescan_interval(RESCAN_TEST_INTERVAL);
+    let mut source = SubagentSource::with_subscription_source_for_test(
+        Arc::new(mock_subs),
+        snapshot_rx,
+        node,
+        HashSet::new(),
+        cancel,
+    )
+    .with_rescan_interval(RESCAN_TEST_INTERVAL);
     let (tx, rx) = mpsc::channel(16);
     let runner = tokio::spawn(async move {
         while let Some(intent) = source.next_fire().await {
@@ -764,16 +779,19 @@ async fn install_event_delivery_source_schema(node: &EmbeddedNode) {
         .expect("add_schema for EventDeliveryDoc");
 }
 
-async fn install_subagent_source_fixture(node: &EmbeddedNode) -> Result<(), String> {
+async fn install_subagent_source_fixture(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<(), String> {
     const TOOL_SELECTION_ID: &str = "event-delivery-subagent-tools";
 
     upsert_tool_selection(
         node,
         &ToolSelectionDocument {
             selection_id: TOOL_SELECTION_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.to_string(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
-                AGENT_NAME, AGENT_DID, AGENT_NAME, None,
+                AGENT_NAME, agent_did, AGENT_NAME, None,
             )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
@@ -787,7 +805,7 @@ async fn install_subagent_source_fixture(node: &EmbeddedNode) -> Result<(), Stri
         node,
         &AgentBehaviorDocument {
             behavior_id: AGENT_NAME.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.to_string(),
             display_name: Some("Event delivery subagent fixture".to_string()),
             description: None,
             summary: None,
@@ -820,6 +838,7 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
         output_schema_ref: None,
     };
     let trigger = ResolvedEventTrigger {
+        trigger_doc_id: "event-source-trigger-doc".to_string(),
         trigger_id: EVENT_SOURCE_TRIGGER_ID.to_string(),
         task_id: task.task_id.clone(),
         task: task.clone(),
@@ -842,8 +861,40 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
     )
 }
 
-fn active_snapshot_without_event_triggers() -> Arc<ActiveRuntimeSnapshot> {
-    active_snapshot(HashMap::new(), HashMap::new())
+fn active_snapshot_without_event_triggers(
+    identity: Arc<dyn gents::AgentIdentity>,
+) -> Arc<ActiveRuntimeSnapshot> {
+    let agent_did = identity.did().to_string();
+    let principal = Arc::new(gents::AgentPrincipal {
+        agent_did: agent_did.clone(),
+        identity,
+        default_behavior_id: AGENT_NAME.to_string(),
+        display_name: None,
+        enabled: true,
+    });
+    Arc::new(ActiveRuntimeSnapshot {
+        generation: 1,
+        principal: Some(principal.clone()),
+        local_did: agent_did,
+        default_behavior_id: AGENT_NAME.to_string(),
+        behaviors: HashMap::from([(
+            AGENT_NAME.to_string(),
+            Arc::new(crate::support::fixtures::test_behavior_for_principal(
+                AGENT_NAME, principal,
+            )),
+        )]),
+        tool_surfaces: HashMap::new(),
+        backend_admission_configs: HashMap::new(),
+        unavailable_behaviors: HashMap::new(),
+        active_schedules: HashMap::new(),
+        unavailable_schedules: HashSet::new(),
+        active_event_triggers: HashMap::new(),
+        unavailable_event_triggers: HashSet::new(),
+        active_tasks: HashMap::new(),
+        dispatchers: HashMap::new(),
+        behavior_executor_capacities: HashMap::new(),
+        behavior_executor_queue_capacities: HashMap::new(),
+    })
 }
 
 fn active_snapshot(
@@ -854,7 +905,6 @@ fn active_snapshot(
         generation: 1,
         principal: None,
         local_did: AGENT_DID.to_string(),
-        paired_peer_dids: HashSet::new(),
         default_behavior_id: AGENT_NAME.to_string(),
         behaviors: HashMap::from([(AGENT_NAME.to_string(), runtime_behavior(AGENT_NAME))]),
         tool_surfaces: HashMap::new(),

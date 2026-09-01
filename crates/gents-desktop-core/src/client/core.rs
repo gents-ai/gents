@@ -1,8 +1,9 @@
-pub(super) mod bearer_pairing;
 mod bootstrap;
+mod enrollment;
 mod p2p_ops;
 mod route_manager;
 mod supervisor;
+pub(super) mod sync_state;
 mod writes;
 
 #[cfg(test)]
@@ -18,20 +19,19 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
-use tokio::sync::{mpsc, watch, Mutex, RwLock};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 
 use super::observe::{ObservedStore, ObserverHandle};
 use super::paths::DesktopPaths;
-use super::peer_directory::{PeerDirectory, PeerRecord};
+use super::peer_directory::PeerRecord;
 use super::principal_identity::PrincipalIdentity;
 use super::query::{
     load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
 };
 use crate::remote_admin::PairingErrorClass;
-use gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress;
 
-pub use bearer_pairing::{BearerInvitePreview, BearerPairingResult};
+pub use enrollment::EnrollmentRequestResult;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -87,7 +87,7 @@ impl ClientCoreOptions {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientPeerStatus {
     pub peer_id: String,
     pub label: String,
@@ -98,8 +98,6 @@ pub struct ClientPeerStatus {
     pub pairing: Vec<PairingCollectionStatus>,
     /// Directional route diagnostics published by the single route owner.
     pub routes: Vec<ClientRouteStatus>,
-    /// True only when both directional routes are known safe for chat.
-    pub chat_safe: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,7 +202,6 @@ mod pairing_status_tests {
             last_error: None,
             pairing: vec![PairingCollectionStatus::new("c1")],
             routes: Vec::new(),
-            chat_safe: false,
         };
         assert_eq!(peer_status.pairing.len(), 1);
     }
@@ -291,6 +288,21 @@ impl P2PHealth {
     }
 }
 
+/// One coherent observation of desktop transport and every configured peer.
+///
+/// The transport counters are diagnostic. Product sync readiness is derived
+/// from the configured peer rows in this same revision, never from an
+/// independently sampled global connection count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientSyncStateSnapshot {
+    pub transport: P2PHealth,
+    /// The exact durable configured-peer revision that caused this snapshot.
+    /// Bridge projections consume this copy instead of racing a second
+    /// directory read after receiving a sync update.
+    pub directory: Vec<PeerRecord>,
+    pub peers: Vec<ClientPeerStatus>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum P2PSupervisorCommand {
     RepairNow,
@@ -302,14 +314,12 @@ pub struct ClientCore {
     principal: PrincipalIdentity,
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
-    peer_directory: Arc<RwLock<PeerDirectory>>,
     route_manager: Arc<route_manager::ClientRouteManager>,
     store: Arc<ObservedStore>,
     observer: Mutex<Option<ObserverHandle>>,
-    peer_statuses: Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
-    p2p_health: watch::Sender<P2PHealth>,
-    hydration: watch::Sender<ClientHydrationProgress>,
+    hydration_transition: Mutex<()>,
     selected_agent_did: watch::Sender<Option<String>>,
     last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
@@ -347,14 +357,13 @@ impl ClientCore {
 
     #[cfg(test)]
     pub(crate) async fn add_local_standard_peer_for_test(&self, agent_did: &str) -> Result<()> {
-        self.peer_directory
-            .write()
-            .await
+        self.sync_state
             .upsert_local_standard_peer(
                 "Test Local Runtime",
                 "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
                 agent_did,
                 "http://127.0.0.1:56001/graphql",
+                "/tmp/test-agent-home",
             )
             .await?;
         Ok(())
@@ -368,27 +377,12 @@ impl ClientCore {
         &self.listen_addresses
     }
 
-    pub fn peer_statuses(&self) -> Vec<ClientPeerStatus> {
-        self.peer_statuses
-            .read()
-            .expect("peer status lock poisoned")
-            .clone()
+    pub fn sync_state(&self) -> ClientSyncStateSnapshot {
+        self.sync_state.snapshot()
     }
 
-    pub fn p2p_health(&self) -> P2PHealth {
-        self.p2p_health.borrow().clone()
-    }
-
-    pub fn p2p_health_updates(&self) -> watch::Receiver<P2PHealth> {
-        self.p2p_health.subscribe()
-    }
-
-    pub fn hydration_progress(&self) -> ClientHydrationProgress {
-        self.hydration.borrow().clone()
-    }
-
-    pub fn hydration_progress_updates(&self) -> watch::Receiver<ClientHydrationProgress> {
-        self.hydration.subscribe()
+    pub fn sync_state_updates(&self) -> watch::Receiver<ClientSyncStateSnapshot> {
+        self.sync_state.subscribe()
     }
 
     async fn send_p2p_command(&self, command: P2PSupervisorCommand) -> Result<()> {
@@ -418,7 +412,7 @@ impl ClientCore {
     }
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {
-        self.peer_directory.read().await.records().to_vec()
+        self.sync_state.records()
     }
 
     pub fn store(&self) -> &Arc<ObservedStore> {
@@ -437,31 +431,6 @@ impl ClientCore {
         &self.bootstrap_errors
     }
 
-    pub fn peer_issue_count(&self) -> usize {
-        self.peer_statuses
-            .read()
-            .expect("peer status lock poisoned")
-            .iter()
-            .filter(|status| status.last_error.is_some())
-            .count()
-    }
-
-    pub fn configured_peer_count(&self) -> usize {
-        self.peer_statuses
-            .read()
-            .expect("peer status lock poisoned")
-            .len()
-    }
-
-    pub fn dialed_peer_count(&self) -> usize {
-        self.peer_statuses
-            .read()
-            .expect("peer status lock poisoned")
-            .iter()
-            .filter(|status| status.dial_succeeded)
-            .count()
-    }
-
     pub fn last_mutation_error(&self) -> Option<String> {
         self.last_mutation_error
             .read()
@@ -475,7 +444,7 @@ impl ClientCore {
 
     pub async fn refresh_store(&self) -> Result<u64> {
         let scoped = self.selected_agent_did();
-        let records = self.peer_directory.read().await.records().to_vec();
+        let records = self.sync_state.records();
         let snapshot = match scoped.as_deref() {
             Some(did) => {
                 load_agent_scoped_snapshot_with_peer_records(
@@ -515,7 +484,7 @@ impl ClientCore {
         if agent_did.is_empty() {
             return Ok(None);
         }
-        let records = self.peer_directory.read().await.records().to_vec();
+        let records = self.sync_state.records();
         let snapshot = load_agent_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
             agent_did,
@@ -545,7 +514,7 @@ impl ClientCore {
                 return Ok(false);
             }
         }
-        let records = self.peer_directory.read().await.records().to_vec();
+        let records = self.sync_state.records();
         let snapshot = load_agent_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
             agent_did,

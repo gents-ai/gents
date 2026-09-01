@@ -63,7 +63,6 @@ struct WakeRow {
     metadata: Option<String>,
     status: Option<String>,
     lifecycle_state: Option<String>,
-    execution_origin: Option<String>,
     failure_reason: Option<String>,
     created_at: Option<String>,
     claimed_at: Option<String>,
@@ -122,7 +121,7 @@ pub async fn load_background_completion_diagnostics(
                     execution_origin: {{ _eq: "scheduled" }}
                 }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}], limit: {WAKE_SCAN_LIMIT}) {{
                     request_id session_id retry_root_request metadata status lifecycle_state
-                    execution_origin failure_reason created_at claimed_at terminalized_at
+                    failure_reason created_at claimed_at terminalized_at
                     retry_count max_retries background_completion_input_through_sequence
                     background_completion_notification_keys_json
                 }}
@@ -174,13 +173,7 @@ fn summarize(
     let scanned_notifications = notifications.len();
     let wakes = wakes
         .into_iter()
-        .filter(|wake| {
-            crate::lifecycle::is_background_completion_request(wake.metadata.as_deref())
-                && !crate::lifecycle::is_deprecated_background_completion_request(
-                    wake.execution_origin.as_deref(),
-                    wake.metadata.as_deref(),
-                )
-        })
+        .filter(|wake| crate::lifecycle::is_background_completion_request(wake.metadata.as_deref()))
         .collect::<Vec<_>>();
     let roots_by_request = wakes
         .iter()
@@ -476,7 +469,6 @@ mod tests {
             metadata: Some(METADATA.to_string()),
             status: Some(if state == "failed" { "error" } else { state }.to_string()),
             lifecycle_state: Some(state.to_string()),
-            execution_origin: Some("scheduled".to_string()),
             failure_reason: (state == "failed").then(|| "provider unavailable".to_string()),
             created_at: Some(format!("2026-08-12T00:00:0{retry_count}Z")),
             claimed_at: (state != "pending").then(|| "2026-08-12T00:00:03Z".to_string()),

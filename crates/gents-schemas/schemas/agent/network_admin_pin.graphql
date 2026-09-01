@@ -1,0 +1,10 @@
+# Local trust-on-first-use binding for authenticated status enrollment.
+# This collection is deliberately NOT branchable: a pin is local operator
+# trust state and must never be learned from the network it authorizes.
+type NetworkAdminPin {
+    pin_key: String @index(unique: true) @immutable
+    network_id: String @index @immutable
+    admin_did: String @index @immutable
+    offer_id: String @immutable
+    confirmed_at: DateTime @immutable
+}

@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 
 use crate::commands::chat::submit_chat_turn;
+use crate::request_helpers::ensure_local_request_signer;
 
 use super::backend::{pick_backend, write_backend_args};
-use super::fleet::{delegate, desktop, pair, spawn_server, wait_http, wait_runtime_ready, Fleet};
+use super::fleet::{desktop, spawn_server, wait_http, wait_runtime_ready, Fleet};
 use super::setup::{init_agent, seed_demo_skills};
 use super::util::{prompt, short, StdinLines};
 use super::NODE_A_NAME;
@@ -14,9 +15,7 @@ pub(super) fn print_welcome(fleet: &Fleet) {
     println!("  skills:  summarize, fleet-guide");
     println!("  graphql: {}", fleet.graphql_a);
     println!();
-    println!(
-        "Commands: chat · skill · status · pair · delegate · desktop · reconfigure · help · down"
-    );
+    println!("Commands: chat · skill · status · desktop · reconfigure · help · down");
     println!("Type `chat` to talk to your agent, or `help` for the full list.");
 }
 
@@ -29,20 +28,10 @@ pub(super) async fn run_shell(fleet: &mut Fleet, reader: &mut StdinLines) -> Res
         match line.trim() {
             "" => continue,
             "help" | "?" => print_help(),
-            "chat" => chat_loop(&fleet.graphql_a, &fleet.did_a, reader).await?,
+            "chat" => chat_loop(&fleet.graphql_a, &fleet.did_a, &fleet.home_a, reader).await?,
             "status" => print_status(fleet),
             "skill" | "skills" => {
                 println!("  skills: summarize, fleet-guide (ask the agent to use one in `chat`)")
-            }
-            "pair" => {
-                if let Err(error) = pair(fleet).await {
-                    println!("  pair failed: {error}");
-                }
-            }
-            "delegate" => {
-                if let Err(error) = delegate(fleet).await {
-                    println!("  delegate failed: {error}");
-                }
             }
             "desktop" => {
                 if let Err(error) = desktop(fleet).await {
@@ -67,27 +56,24 @@ fn print_status(fleet: &Fleet) {
         short(&fleet.did_a),
         fleet.graphql_a
     );
-    match &fleet.node_b {
-        Some(b) => {
-            println!("  node B: live · agent {} · {}", short(&b.did), b.graphql);
-            println!("  paired: yes · run `delegate` for cross-node subagent delegation");
-        }
-        None => println!("  node B: not paired (run `pair` to add a 2nd node)"),
-    }
 }
 
 fn print_help() {
     println!("  chat         talk to your agent (skills available; `/back` to exit)");
     println!("  skill        list the demo skills");
     println!("  status       show the fleet state");
-    println!("  pair         spin up a 2nd node (worker) and pair it");
-    println!("  delegate     enable cross-node subagent delegation (run after `pair`)");
-    println!("  desktop      open the desktop app paired to your demo node(s)");
+    println!("  desktop      open the desktop app and request authenticated enrollment");
     println!("  reconfigure  switch the inference backend (starts a fresh agent)");
     println!("  down         stop and exit (state is saved; `--reset` to wipe)");
 }
 
-async fn chat_loop(graphql: &str, agent_did: &str, reader: &mut StdinLines) -> Result<()> {
+async fn chat_loop(
+    graphql: &str,
+    agent_did: &str,
+    home: &std::path::Path,
+    reader: &mut StdinLines,
+) -> Result<()> {
+    ensure_local_request_signer(Some(home), agent_did)?;
     let session_id = uuid::Uuid::new_v4().to_string();
     println!("  (chatting — type `/back` to return to the demo shell)");
     loop {
@@ -113,10 +99,7 @@ async fn chat_loop(graphql: &str, agent_did: &str, reader: &mut StdinLines) -> R
 
 async fn reconfigure(fleet: &mut Fleet, reader: &mut StdinLines) -> Result<()> {
     println!("  Reconfigure starts a fresh demo agent with a new backend");
-    println!("  (this clears the current agent and any paired node).");
-    if let Some(mut worker) = fleet.node_b.take() {
-        let _ = worker.server.start_kill();
-    }
+    println!("  (this clears the current agent).");
     let backend = pick_backend(None, reader).await?;
     println!("  Setting up your demo agent (backend: {})…", backend.label);
 

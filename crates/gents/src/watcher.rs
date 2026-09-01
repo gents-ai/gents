@@ -229,10 +229,6 @@ impl Watcher for DefraWatcher {
 
             match self.pending_requests().await {
                 Ok(requests) => {
-                    let requests = requests
-                        .into_iter()
-                        .filter(|request| !is_deprecated_background_completion_wakeup(request))
-                        .collect::<Vec<_>>();
                     let pending_count = requests.len();
                     if let Some(request) = take_next_eligible_pending_request(
                         &mut self.processed_request_ids,
@@ -286,23 +282,4 @@ impl Watcher for DefraWatcher {
             continue;
         }
     }
-}
-
-/// Legacy runtimes persisted a synthetic scheduled request when a background
-/// child completed. Reading one of those rows must neither execute nor mutate
-/// it: durable cleanup is an explicit operator action, not a watcher side
-/// effect.
-fn is_deprecated_background_completion_wakeup(request: &AgentRequest) -> bool {
-    let deprecated = crate::lifecycle::queue::is_deprecated_background_completion_wakeup(
-        request.execution_origin.as_deref(),
-        request.metadata.as_deref(),
-    );
-    if deprecated {
-        tracing::warn!(
-            request_id = %request.request_id,
-            session_id = %request.session_id,
-            "ignored deprecated background completion wake without mutating it"
-        );
-    }
-    deprecated
 }

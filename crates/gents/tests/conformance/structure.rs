@@ -36,6 +36,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("DescendantGraph", Module("misc/descendant_graph.rs")),
         ("EditMatch", Module("conformance/edit_match.rs")),
         ("EthSubmission", Module("conformance/eth_submission.rs")),
+        ("Enrollment", Module("conformance/enrollment.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
         ("Goals", Module("conformance/goals.rs")),
@@ -55,10 +56,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         (
             "PairingReconcile",
             Module("conformance/pairing_reconcile.rs"),
-        ),
-        (
-            "PeerRegistryDiscovery",
-            Module("conformance/peer_registry_discovery.rs"),
         ),
         (
             "Persistence",

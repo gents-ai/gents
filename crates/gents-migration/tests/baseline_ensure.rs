@@ -114,6 +114,36 @@ fn default_baseline_covers_every_protocol_collection_once() {
 }
 
 #[tokio::test]
+async fn fresh_agent_runtime_baseline_is_diagnostics_only() {
+    let node = fresh_node().await;
+    ensure_migrations(node.as_ref())
+        .await
+        .expect("ensure migrations");
+    let runtime = node
+        .get_collection(gents_protocol::schemas::AGENT_RUNTIME_NAME)
+        .expect("get AgentRuntime")
+        .expect("AgentRuntime installed");
+    assert_eq!(
+        runtime.version_id,
+        "bafyreidb7aoppwicwdsujra6iqgejtxeohiyyx4ylif6bsyllvt2sukrpe"
+    );
+    let field_names = runtime
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(!field_names.contains("runnable_behavior_count"));
+    assert!(!field_names.contains("unavailable_behavior_count"));
+    assert!(!field_names.contains("process_state"));
+    assert!(!field_names.contains("active_generation"));
+    assert!(!field_names.contains("router_generation"));
+    assert!(!field_names.contains("default_behavior_id"));
+    assert!(field_names.contains("reconcile_phase"));
+    assert!(field_names.contains("updated_at"));
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn ensure_migrations_registers_baseline_and_is_idempotent() {
     let node = fresh_node().await;
     let report1 = ensure_migrations(node.as_ref())
@@ -266,6 +296,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
                 background_completion_notification_keys_json
                 workspace_id workspace_authority
                 workspace_owner_deployment_id workspace_seal_hash
+                caused_by_trigger_doc_id
             } }"#,
         )
         .await;
@@ -291,6 +322,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     assert!(rows[0]["workspace_authority"].is_null());
     assert!(rows[0]["workspace_owner_deployment_id"].is_null());
     assert!(rows[0]["workspace_seal_hash"].is_null());
+    assert!(rows[0]["caused_by_trigger_doc_id"].is_null());
 
     // The idempotence half of the test name: this store's AgentRequest was
     // first registered by raw add_schema (the client-like genesis path), not

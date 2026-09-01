@@ -9,13 +9,19 @@ use gents::{
     ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleState,
     ToolCeiling,
 };
-use serde_json::Value;
+use gents_protocol::row::{
+    BehaviorReadinessSnapshot, BehaviorReadinessState, BehaviorReadinessUnavailableReason,
+};
 use tokio::sync::watch;
 
 use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::fixtures::test_identity;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
+
+// This guards against a wedged startup, not startup latency. The package-wide
+// suite runs many embedded DefraDB nodes concurrently on shared CI runners.
+const STARTUP_DEADLOCK_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 struct BuildFailure {
@@ -87,18 +93,21 @@ impl gents::startup_readiness::StartupBuildFailureObserver for RecordingBuildFai
     }
 }
 
-async fn wait_for_runtime_counts(
+async fn wait_for_behavior_readiness(
     node: &EmbeddedNode,
     agent_did: &str,
-    runnable: i64,
-    unavailable: i64,
-) -> Value {
+    behavior_id: &str,
+    state: BehaviorReadinessState,
+    reason: Option<BehaviorReadinessUnavailableReason>,
+) -> BehaviorReadinessSnapshot {
     let escaped_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
-            AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
-                runnable_behavior_count
-                unavailable_behavior_count
+            AgentBehaviorReadiness(
+                filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }},
+                limit: 1
+            ) {{
+                snapshot_json
             }}
         }}"#
     );
@@ -106,20 +115,24 @@ async fn wait_for_runtime_counts(
     loop {
         let response = node.execute(&query).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        if let Some(row) = response
+        if let Some(snapshot) = response
             .data
             .as_ref()
-            .and_then(|data| data.get("AgentRuntime"))
-            .and_then(Value::as_array)
+            .and_then(|data| data.get("AgentBehaviorReadiness"))
+            .and_then(serde_json::Value::as_array)
             .and_then(|rows| rows.first())
-            .cloned()
+            .and_then(|row| row.get("snapshot_json"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|json| serde_json::from_str::<BehaviorReadinessSnapshot>(json).ok())
         {
-            let observed_runnable = row.get("runnable_behavior_count").and_then(Value::as_i64);
-            let observed_unavailable = row
-                .get("unavailable_behavior_count")
-                .and_then(Value::as_i64);
-            if observed_runnable == Some(runnable) && observed_unavailable == Some(unavailable) {
-                return row;
+            if snapshot.process_state.accepts_work()
+                && snapshot.behaviors.iter().any(|entry| {
+                    entry.behavior_id == behavior_id
+                        && entry.state == state
+                        && entry.reason == reason
+                })
+            {
+                return snapshot;
             }
         }
         updates
@@ -190,7 +203,18 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
-    observer.wait_for(ProcessLifecycleState::Ready).await;
+    tokio::time::timeout(
+        STARTUP_DEADLOCK_GUARD,
+        observer.wait_for(ProcessLifecycleState::Ready),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "persistent startup failure did not reach Ready; states={:?}, failures={:?}",
+            observer.states(),
+            build_failure_observer.failures()
+        )
+    });
 
     let failures = build_failure_observer.failures();
     assert_eq!(failures.len(), 2, "the configured budget must be exhausted");
@@ -204,18 +228,15 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
         .iter()
         .all(|failure| failure.error.contains("GENTS_TEST_559_UNSET_KEY")));
 
-    let row = wait_for_runtime_counts(node.as_ref(), identity.did(), 0, 1).await;
-    assert_eq!(
-        row.get("runnable_behavior_count").and_then(Value::as_i64),
-        Some(0),
-        "the demoted behavior must not be counted runnable: {row}"
-    );
-    assert_eq!(
-        row.get("unavailable_behavior_count")
-            .and_then(Value::as_i64),
-        Some(1),
-        "the demotion must be visible as unavailable: {row}"
-    );
+    let readiness = wait_for_behavior_readiness(
+        node.as_ref(),
+        identity.did(),
+        &default_behavior_id,
+        BehaviorReadinessState::Unavailable,
+        Some(BehaviorReadinessUnavailableReason::ExecutorStartFailed),
+    )
+    .await;
+    assert_eq!(readiness.behaviors.len(), 1);
 
     let _ = shutdown_tx.send(true);
     run_task.await??;
@@ -327,18 +348,15 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         .all(|failure| failure.behavior_id == default_behavior_id));
     assert!(failures.iter().all(|failure| failure.error.contains(VAR)));
 
-    let row = wait_for_runtime_counts(node.as_ref(), identity.did(), 1, 0).await;
-    assert_eq!(
-        row.get("runnable_behavior_count").and_then(Value::as_i64),
-        Some(1),
-        "a behavior that recovered within the budget must be healthy: {row}"
-    );
-    assert_eq!(
-        row.get("unavailable_behavior_count")
-            .and_then(Value::as_i64),
-        Some(0),
-        "no demotion may survive a successful start: {row}"
-    );
+    let readiness = wait_for_behavior_readiness(
+        node.as_ref(),
+        identity.did(),
+        &default_behavior_id,
+        BehaviorReadinessState::Ready,
+        None,
+    )
+    .await;
+    assert_eq!(readiness.behaviors.len(), 1);
 
     let _ = shutdown_tx.send(true);
     run_task.await??;

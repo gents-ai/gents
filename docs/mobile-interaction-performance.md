@@ -150,10 +150,10 @@ falls back to an available debug issuer CLI, rejects unusable viewport samples,
 resamples on page/window lifecycle events, and turns bridge/global failures into
 an explicit `failed` boundary.
 
-The round trip then established P2P connectivity and replicated the signed
-grant, but the phone truthfully rejected `BearerPairingReady` after its current
-signed endpoint differed from the endpoint bound into the acknowledgement. That
-is a sync/iOS-hardening dependency, not a successful performance sample. No
+The predecessor round trip then established P2P connectivity but truthfully
+rejected its readiness acknowledgement after the current signed endpoint
+differed from the endpoint bound into that acknowledgement. That historical
+result is not a successful performance sample. No
 native wall-clock, RSS, CPU, or observer distribution is published. The next
 native acceptance run must first make readiness stable across signed endpoint
 publication; #890 should run the corrected harness, while the pairing/sync
@@ -338,13 +338,13 @@ or duplicate an older page. Equal-sequence rows remain atomic. A page containing
 durable rows receives a synthetic durable continuation cursor instead of
 silently ending pagination, and old orphan tool groups cannot move the page
 boundary. Every lookup is scoped to the selected agent and, when present, the
-bearer requester DID. Request-refresh fallback queries are also request-owned
+enrolled requester DID. Request-refresh fallback queries are also request-owned
 now; they no longer reload every historical message, tool result, and compaction
 row in the session.
 
 Two independent pagination-focused review passes were run after rebasing onto
 #1154. They found and drove tests for equal-sequence gaps, tool-window overflow,
-bearer isolation, nullable sequence handling, hidden-only continuation pages,
+requester isolation, nullable sequence handling, hidden-only continuation pages,
 and orphan tool groups. A separate workstation review attempt exposed a review
 harness defect: unrestricted workers can clean an uncommitted shared worktree,
 and the review server readiness check can race startup. No result from that run
@@ -525,9 +525,9 @@ Proposed follow-up issue slices, in dependency order:
    reconcile state.
 4. Add cursor-backed session-index virtualization; acceptance: 1,000 durable
    index rows keep bridge and mounted-row counts bounded without a second cache.
-5. Stabilize signed endpoint publication across bearer readiness before the
-   acknowledgement is accepted; acceptance: the corrected native lane reaches
-   paired index repeatedly without relaxing issuer/claimant/endpoint checks.
+5. Stabilize signed route publication across authenticated enrollment before the
+   receipt is accepted; acceptance: the corrected native lane reaches paired
+   index repeatedly without relaxing transport-DID, generation, or route checks.
 6. Extend `mobile-hydration-v1` after #1142/#1143 and expose truthful progress
    after #1144.
 7. Put the native build/smoke artifact on the macOS runner under #890, then

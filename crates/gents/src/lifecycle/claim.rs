@@ -501,7 +501,6 @@ impl RequestLifecycle {
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);
-        let escaped_behavior_id = escape_graphql_string(&self.behavior_id);
         let execution_origin = self.execution_origin.as_str();
         let request_fields = crate::watcher::AGENT_REQUEST_FIELDS;
 
@@ -517,9 +516,7 @@ impl RequestLifecycle {
                     input: {{
                         status: "processing",
                         lifecycle_state: "{lifecycle_state}",
-                        behavior_id: "{escaped_behavior_id}",
                         backend_id: "{escaped_backend_id}",
-                        execution_origin: "{execution_origin}",
                         claimed_at: "{escaped_claimed_at}",
                         {background_completion_snapshot_fields}
                         deadline: "{escaped_deadline}"
@@ -621,10 +618,16 @@ mod tests {
         request_id: &str,
         session_id: &str,
         created_at: &str,
+        metadata: Option<&str>,
+        execution_origin: &str,
     ) -> AgentRequest {
         let escaped_request_id = escape_graphql_string(request_id);
         let escaped_session_id = escape_graphql_string(session_id);
         let escaped_created_at = escape_graphql_string(created_at);
+        let metadata_field = metadata
+            .map(|value| format!(r#"metadata: "{}","#, escape_graphql_string(value)))
+            .unwrap_or_default();
+        let escaped_execution_origin = escape_graphql_string(execution_origin);
         let mutation = format!(
             r#"mutation {{
                 create_AgentRequest(input: {{
@@ -636,10 +639,11 @@ mod tests {
                     retry_root_request: "{escaped_request_id}",
                     superseded_by_request: "",
                     content: "same-session request",
+                    {metadata_field}
                     status: "pending",
                     lifecycle_state: "pending",
                     backend_id: "",
-                    execution_origin: "interactive",
+                    execution_origin: "{escaped_execution_origin}",
                     failure_reason: "",
                     created_at: "{escaped_created_at}",
                     retry_count: 0,
@@ -691,8 +695,8 @@ mod tests {
             seed: None,
             max_tokens: None,
             max_total_tokens: None,
-            metadata: None,
-            execution_origin: Some("interactive".to_string()),
+            metadata: metadata.map(ToOwned::to_owned),
+            execution_origin: Some(execution_origin.to_string()),
             created_at: created_at.to_string(),
             deadline: None,
             subagent_depth: 0,
@@ -749,6 +753,8 @@ mod tests {
             "same-session-request-1",
             "same-session",
             "2026-01-01T00:00:00Z",
+            None,
+            "interactive",
         )
         .await;
         let first_doc_id = first.doc_id.clone();
@@ -760,18 +766,18 @@ mod tests {
                 ) {{ _docID }}
             }}"#
         );
-        crate::graphql::graphql_with_transaction_retry(
-            node.as_ref(),
-            &refresh,
-            "refresh_pending_request_before_claim",
-        )
-        .await
-        .unwrap();
+        let refresh_response = node.execute(&refresh).await;
+        assert!(
+            refresh_response.has_errors(),
+            "immutable request content changed"
+        );
         let second = insert_pending_request(
             node.as_ref(),
             "same-session-request-2",
             "same-session",
             "2026-01-01T00:00:01Z",
+            None,
+            "interactive",
         )
         .await;
 
@@ -800,29 +806,14 @@ mod tests {
         );
         assert_eq!(
             first_lifecycle.request().content,
-            "refreshed before claim",
-            "the runtime must process fields returned by the claim mutation, not a stale watcher row"
+            "same-session request",
+            "claim must preserve immutable request semantics"
         );
         let claimed_cid = first_lifecycle
             .request_commit_cid()
             .expect("successful claim records its exact DefraDB commit")
             .to_string();
 
-        let post_claim_update = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{first_doc_id}" }} }},
-                    input: {{ content: "changed after claim" }}
-                ) {{ _docID }}
-            }}"#
-        );
-        crate::graphql::graphql_with_transaction_retry(
-            node.as_ref(),
-            &post_claim_update,
-            "update_request_after_claim",
-        )
-        .await
-        .unwrap();
         let commits = crate::graphql::composite_commits(
             node.as_ref(),
             &first_doc_id,
@@ -830,10 +821,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_ne!(
+        assert_eq!(
             commits.first().map(|commit| commit.cid.as_str()),
             Some(claimed_cid.as_str()),
-            "a later update must not rebind the lifecycle's request version"
+            "the recorded claim CID must remain the latest durable request version"
         );
         assert!(
             commits.iter().any(|commit| commit.cid == claimed_cid),
@@ -849,13 +840,6 @@ mod tests {
     async fn background_claim_snapshots_transcript_before_successor_input() {
         let node = test_node().await;
         let session_id = "background-claim-snapshot";
-        let mut request = insert_pending_request(
-            node.as_ref(),
-            "background-wake-1",
-            session_id,
-            "2026-08-12T22:00:00Z",
-        )
-        .await;
         let metadata =
             crate::lifecycle::queue::queue_metadata_json(&crate::lifecycle::queue::QueueHints {
                 source: crate::lifecycle::queue::QueueSource::BackgroundCompletion,
@@ -864,22 +848,15 @@ mod tests {
                 queued_after_request_id: Some("parent-request".to_string()),
                 interrupted_request_id: None,
             });
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{}" }} }},
-                    input: {{ metadata: "{}", execution_origin: "scheduled" }}
-                ) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&request.doc_id),
-            escape_graphql_string(&metadata),
-        );
-        session::execute_mutation_with_retry(node.as_ref(), &mutation, "mark_background_wake")
-            .await
-            .unwrap();
-        request.metadata = Some(metadata);
-        request.execution_origin = Some("scheduled".to_string());
-
+        let request = insert_pending_request(
+            node.as_ref(),
+            "background-wake-1",
+            session_id,
+            "2026-08-12T22:00:00Z",
+            Some(&metadata),
+            "scheduled",
+        )
+        .await;
         session::append_message_once_with_key_and_requester_did(
             node.as_ref(),
             session_id,

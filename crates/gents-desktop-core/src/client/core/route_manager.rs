@@ -1,6 +1,6 @@
 //! Single owner for directional desktop-to-runtime route lifecycle.
 
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
@@ -9,21 +9,21 @@ use defra_p2p_adapter::P2POperations as P2POps;
 use gents::agent::p2p_reconcile::{
     client_route_id, desired_route_is_applied, reconcile_peer_tick,
     teardown_owned_replicators_at_endpoint, ClientRouteIdentity, EmbeddedRemoteP2pAdmin,
-    GraphqlPairingStateStore, PairingDesired, PairingDirection, PairingStateStore, RemoteP2pAdmin,
-    RemoteP2pAdminError,
+    EnrollmentEndpointEntry, GraphqlPairingStateStore, PairingDesired, PairingDirection,
+    PairingStateStore, RemoteP2pAdmin, RemoteP2pAdminError,
 };
 use gents_protocol::graphql::escape_graphql_string;
 use p2p::iroh::parse_public_peer_addr;
-use tokio::sync::{Mutex, MutexGuard, RwLock};
+use tokio::sync::{Mutex, MutexGuard};
 use tokio::time::{sleep, Instant};
 
-use super::super::peer_directory::{PeerDirectory, PeerRecord};
+use super::super::peer_directory::PeerRecord;
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::schema::subscribed_collection_names;
-use super::bearer_pairing::saved_peer_replicator_collections;
-use super::bearer_pairing::{current_local_endpoint, is_bearer_peer, publish_local_endpoint};
-use super::bootstrap::{connect_peer_with_retry_until, is_connected_peer};
+use super::bootstrap::is_connected_peer;
+use super::enrollment::current_local_endpoint;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
+use super::sync_state::ClientSyncStateOwner;
 use super::{
     ClientPeerStatus, ClientRouteStatus, PairingCollectionStatus, BOOTSTRAP_OPERATION_BACKOFF,
     P2P_OPERATION_TIMEOUT, PEER_ADD_OPERATION_TIMEOUT,
@@ -43,12 +43,6 @@ pub(super) struct ClientRouteManager {
 pub(super) struct ClientRouteLifecycle<'a> {
     manager: &'a ClientRouteManager,
     _guard: MutexGuard<'a, ()>,
-}
-
-pub(super) struct RouteActivation {
-    pub(super) record: PeerRecord,
-    pub(super) connected: bool,
-    pub(super) warning: Option<String>,
 }
 
 pub(super) struct RouteRemoval {
@@ -98,95 +92,13 @@ impl ClientRouteManager {
         }
     }
 
-    pub(super) async fn activate_peer(
-        &self,
-        peer_directory: &Arc<RwLock<PeerDirectory>>,
-        label: &str,
-        addr: &str,
-        agent_did: &str,
-        graphql: Option<&str>,
-        default_behavior_id: Option<&str>,
-    ) -> Result<RouteActivation> {
-        let lifecycle = self.lock().await;
-        let record = peer_directory
-            .write()
-            .await
-            .upsert_saved_peer_with_graphql(label, addr, agent_did, graphql, default_behavior_id)
-            .await?;
-        let mut warning = None;
-        let connected = match connect_peer_with_retry_until(
-            &self.p2p,
-            &record.addr,
-            &record.label,
-            PEER_ADD_OPERATION_TIMEOUT,
-        )
-        .await
-        {
-            Ok(()) => true,
-            Err(error) => {
-                append_warning(
-                    &mut warning,
-                    format!("deployment saved but dial failed: {error}"),
-                );
-                false
-            }
-        };
-        if let Err(error) = lifecycle.configure(&record).await {
-            let prefix = if connected {
-                "deployment connected"
-            } else {
-                "deployment saved"
-            };
-            append_warning(
-                &mut warning,
-                format!("{prefix} but reverse pairing failed: {error}"),
-            );
-        }
-        Ok(RouteActivation {
-            record,
-            connected,
-            warning,
-        })
-    }
-
-    pub(super) async fn publish_status_if_current(
-        &self,
-        peer_directory: &Arc<RwLock<PeerDirectory>>,
-        peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
-        status: ClientPeerStatus,
-    ) -> bool {
-        let _lifecycle = self.lock().await;
-        let current = peer_directory
-            .read()
-            .await
-            .records()
-            .iter()
-            .any(|record| record.peer_id == status.peer_id && record.addr == status.addr);
-        if !current {
-            return false;
-        }
-        let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
-        if let Some(existing) = statuses
-            .iter_mut()
-            .find(|existing| existing.peer_id == status.peer_id)
-        {
-            *existing = status;
-        } else {
-            statuses.push(status);
-        }
-        true
-    }
-
     pub(super) async fn remove_peer(
         &self,
-        peer_directory: &Arc<RwLock<PeerDirectory>>,
-        peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+        sync_state: &ClientSyncStateOwner,
         peer_id: &str,
     ) -> Result<RouteRemoval> {
         let lifecycle = self.lock().await;
-        let record = peer_directory
-            .read()
-            .await
+        let record = sync_state
             .records()
             .iter()
             .find(|record| record.peer_id == peer_id)
@@ -195,16 +107,13 @@ impl ClientRouteManager {
         if record.source.as_deref() == Some("local-standard") {
             anyhow::bail!("the local runtime deployment cannot be removed");
         }
-        let removed = peer_directory
-            .write()
-            .await
-            .queue_removal(peer_id)
+        let removed = sync_state
+            .queue_removal(&record)
             .await
             .with_context(|| format!("queueing peer {peer_id} for durable route teardown"))?
             .with_context(|| format!("peer {peer_id} not found while queueing removal"))?;
-        remove_peer_status(peer_statuses, &removed.peer_id);
         let cleanup_error = lifecycle
-            .cleanup_pending_removal_if_current(peer_directory, &record)
+            .cleanup_pending_removal_if_current(sync_state, &record)
             .await
             .err();
         Ok(RouteRemoval {
@@ -215,46 +124,44 @@ impl ClientRouteManager {
 
     pub(super) async fn retry_pending_removal(
         &self,
-        peer_directory: &Arc<RwLock<PeerDirectory>>,
-        peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+        sync_state: &ClientSyncStateOwner,
         record: &PeerRecord,
     ) -> Result<PendingRemovalCleanup> {
         let lifecycle = self.lock().await;
-        remove_peer_status(peer_statuses, &record.peer_id);
         lifecycle
-            .cleanup_pending_removal_if_current(peer_directory, record)
+            .cleanup_pending_removal_if_current(sync_state, record)
             .await
     }
 
+    pub(super) async fn configure_enrollment_peer(&self, record: &PeerRecord) -> Result<()> {
+        anyhow::ensure!(
+            is_enrollment_peer(record),
+            "enrollment route configuration requires enrollment-owned peer"
+        );
+        self.lock().await.configure(record).await
+    }
+
     async fn configure(&self, record: &PeerRecord) -> Result<()> {
-        let local = publish_local_endpoint(&self.node, &self.p2p, self.actor.as_ref())
-            .await
-            .context("resolving requester P2P endpoint for reciprocal pairing")?;
         let outbound = ClientRouteIdentity::new(
             &record.peer_id,
             &record.addr,
             self.actor.did(),
             &record.agent_did,
         )?;
-        let inbound = ClientRouteIdentity::new(
-            &record.peer_id,
-            local.address,
-            self.actor.did(),
-            &record.agent_did,
-        )?;
-
-        self.upsert_desired(&outbound, PairingDirection::ClientToRuntime)
-            .await?;
-        self.upsert_desired(&inbound, PairingDirection::RuntimeToClient)
+        anyhow::ensure!(
+            is_enrollment_peer(record),
+            "authenticated enrollment is required to configure a remote client route"
+        );
+        self.upsert_desired(&outbound, PairingDirection::ClientToRuntime, record)
             .await
     }
 
     async fn refresh_endpoint(
         &self,
-        peer_directory: &Arc<RwLock<PeerDirectory>>,
+        sync_state: &ClientSyncStateOwner,
         saved: &PeerRecord,
     ) -> PeerRecord {
-        if is_bearer_peer(saved) {
+        if is_enrollment_peer(saved) {
             return saved.clone();
         }
         let current = match gents::agent::p2p_reconcile::TransportEndpoint::parse(
@@ -279,39 +186,28 @@ impl ClientRouteManager {
                     .and_then(|addresses| replacement_endpoint(&current, addresses)),
                 Err(_) => None,
             }
-        } else if saved.source.is_none() {
-            // Legacy rows have no authoritative server-status endpoint. A
-            // signed, freshness-checked PeerEndpoint is their upgrade path.
-            let identity: Arc<dyn gents::AgentIdentity> = self.actor.clone();
-            let store = gents::agent::p2p_reconcile::GraphqlReciprocalStore::new(
-                Arc::clone(&self.node),
-                identity,
-            );
-            store
-                .load_verified_endpoint_for_did(&saved.agent_did)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|endpoint| replacement_endpoint(&current, [endpoint.address]))
         } else {
             None
         };
         let Some(endpoint) = endpoint else {
             return saved.clone();
         };
-        let mut updated = saved.clone();
-        updated.addr = endpoint;
-        updated.pairing_ready = false;
-        updated.updated_at = chrono::Utc::now().to_rfc3339();
-        if let Err(error) = peer_directory.write().await.upsert(updated.clone()).await {
-            tracing::warn!(
-                target: "gents_desktop_core::pairing_reconcile",
-                directory_peer_id = %saved.peer_id,
-                error = %error,
-                "failed to persist rotated saved deployment endpoint"
-            );
-            return saved.clone();
-        }
+        let mut replacement = saved.clone();
+        replacement.addr = endpoint;
+        replacement.pairing_ready = false;
+        let updated = match sync_state.replace_record(saved, replacement).await {
+            Ok(Some(updated)) => updated,
+            Ok(None) => return saved.clone(),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop_core::pairing_reconcile",
+                    directory_peer_id = %saved.peer_id,
+                    error = %error,
+                    "failed to persist rotated saved deployment endpoint"
+                );
+                return saved.clone();
+            }
+        };
         if let Err(error) = self.configure(&updated).await {
             tracing::warn!(
                 target: "gents_desktop_core::pairing_reconcile",
@@ -328,68 +224,69 @@ impl ClientRouteManager {
     async fn reconcile(
         &self,
         record: &PeerRecord,
-        peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+        sync_state: &ClientSyncStateOwner,
+        enrollment_remote_applied: bool,
     ) -> Option<bool> {
-        let store = self.pairing_store();
+        let store = match self.pairing_store(record) {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!(peer_id = %record.peer_id, error = %error,
+                    "enrollment route has no exact durable authority generation");
+                return Some(false);
+            }
+        };
         let outbound = self
             .reconcile_route(
                 &EmbeddedRemoteP2pAdmin::new(Arc::clone(&self.node)),
                 &store,
                 PairingDirection::ClientToRuntime,
                 record,
-                peer_statuses,
+                sync_state,
             )
             .await;
-        let inbound = match management_endpoint(record) {
-            Some(graphql) => {
-                match HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor)) {
-                    Ok(admin) => {
-                        self.reconcile_route(
-                            &admin.with_local_resolver(Arc::clone(&self.node)),
-                            &store,
-                            PairingDirection::RuntimeToClient,
-                            record,
-                            peer_statuses,
-                        )
-                        .await
-                    }
-                    Err(error) => {
-                        self.publish_unavailable_route(
-                            &store,
-                            PairingDirection::RuntimeToClient,
-                            record,
-                            peer_statuses,
-                            format!("invalid remote GraphQL endpoint: {error}"),
-                            true,
-                        )
-                        .await
+        let inbound = if is_enrollment_peer(record) {
+            enrollment_remote_route_state(enrollment_remote_applied)
+        } else {
+            match management_endpoint(record) {
+                Some(graphql) => {
+                    match HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor)) {
+                        Ok(admin) => {
+                            self.reconcile_route(
+                                &admin.with_local_resolver(Arc::clone(&self.node)),
+                                &store,
+                                PairingDirection::RuntimeToClient,
+                                record,
+                                sync_state,
+                            )
+                            .await
+                        }
+                        Err(error) => {
+                            self.publish_unavailable_route(
+                                &store,
+                                PairingDirection::RuntimeToClient,
+                                record,
+                                sync_state,
+                                format!("invalid remote GraphQL endpoint: {error}"),
+                                true,
+                            )
+                            .await
+                        }
                     }
                 }
-            }
-            None => {
-                self.publish_unavailable_route(
-                    &store,
-                    PairingDirection::RuntimeToClient,
-                    record,
-                    peer_statuses,
-                    "remote GraphQL endpoint is unavailable".to_string(),
-                    true,
-                )
-                .await
+                None => {
+                    self.publish_unavailable_route(
+                        &store,
+                        PairingDirection::RuntimeToClient,
+                        record,
+                        sync_state,
+                        "remote GraphQL endpoint is unavailable".to_string(),
+                        true,
+                    )
+                    .await
+                }
             }
         };
         let readiness = combined_route_readiness(outbound, inbound);
-        if readiness == Some(true) {
-            if let Err(error) = self.cleanup_legacy(record).await {
-                tracing::warn!(
-                    target: "gents_desktop_core::pairing_reconcile",
-                    directory_peer_id = %record.peer_id,
-                    error = %error,
-                    "client route is ready but legacy route cleanup will retry"
-                );
-            }
-        }
-        publish_chat_safety(record, peer_statuses, readiness);
         readiness
     }
 
@@ -399,7 +296,7 @@ impl ClientRouteManager {
         store: &GraphqlPairingStateStore,
         direction: PairingDirection,
         record: &PeerRecord,
-        peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+        sync_state: &ClientSyncStateOwner,
     ) -> RouteReconcileState {
         let route_id = client_route_id(&record.peer_id, direction);
         let (desired, desired_exists) = match store.load_desired(&route_id).await {
@@ -408,7 +305,7 @@ impl ClientRouteManager {
             Err(error) => {
                 publish_route_status(
                     record,
-                    peer_statuses,
+                    sync_state,
                     route_status(record, direction, None, false, false, false),
                     Some(format!("load desired route failed: {error}")),
                     None,
@@ -421,7 +318,7 @@ impl ClientRouteManager {
             Ok(_) => {
                 publish_route_status(
                     record,
-                    peer_statuses,
+                    sync_state,
                     route_status(
                         record,
                         direction,
@@ -440,12 +337,12 @@ impl ClientRouteManager {
                     .downcast_ref::<RemoteP2pAdminError>()
                     .map(classify_remote_admin_error);
                 if let Some(remote_error) = error.downcast_ref::<RemoteP2pAdminError>() {
-                    record_failure(record, peer_statuses, &desired, remote_error);
+                    record_failure(record, sync_state, &desired, remote_error);
                 }
-                record_pairing_error(record, peer_statuses, &error);
+                record_pairing_error(record, sync_state, &error);
                 publish_route_status(
                     record,
-                    peer_statuses,
+                    sync_state,
                     route_status(
                         record,
                         direction,
@@ -471,10 +368,10 @@ impl ClientRouteManager {
             Ok(applied)
                 if live_route_matches && desired_route_is_applied(&desired, &applied.state) =>
             {
-                record_route_success(record, peer_statuses);
+                record_route_success(record, sync_state);
                 publish_route_status(
                     record,
-                    peer_statuses,
+                    sync_state,
                     route_status(
                         record,
                         direction,
@@ -492,7 +389,7 @@ impl ClientRouteManager {
                 let applied_matches = desired_route_is_applied(&desired, &applied.state);
                 publish_route_status(
                     record,
-                    peer_statuses,
+                    sync_state,
                     route_status(
                         record,
                         direction,
@@ -509,7 +406,7 @@ impl ClientRouteManager {
             Err(error) => {
                 publish_route_status(
                     record,
-                    peer_statuses,
+                    sync_state,
                     route_status(
                         record,
                         direction,
@@ -531,7 +428,7 @@ impl ClientRouteManager {
         store: &GraphqlPairingStateStore,
         direction: PairingDirection,
         record: &PeerRecord,
-        peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+        sync_state: &ClientSyncStateOwner,
         error: String,
         confirmed_drift: bool,
     ) -> RouteReconcileState {
@@ -543,7 +440,7 @@ impl ClientRouteManager {
         };
         publish_route_status(
             record,
-            peer_statuses,
+            sync_state,
             route_status(
                 record,
                 direction,
@@ -566,6 +463,7 @@ impl ClientRouteManager {
         &self,
         route: &ClientRouteIdentity,
         direction: PairingDirection,
+        record: &PeerRecord,
     ) -> Result<()> {
         use gents::agent::p2p_reconcile::templates::CLIENT_TEMPLATE;
 
@@ -575,6 +473,25 @@ impl ClientRouteManager {
         let now = escape_graphql_string(
             &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
+        anyhow::ensure!(
+            record.is_enrollment(),
+            "manual pairing desired authority is disabled"
+        );
+        let request_digest = escape_graphql_string(
+            record
+                .enrollment_request_digest
+                .as_deref()
+                .context("enrollment record has no request digest")?,
+        );
+        let authorization_sequence = record
+            .enrollment_authorization_sequence
+            .context("enrollment record has no authorization sequence")?;
+        let authorization_expires_at = escape_graphql_string(
+            record
+                .enrollment_authorization_expires_at
+                .as_deref()
+                .context("enrollment record has no authorization expiry")?,
+        );
         let response = self
             .node
             .execute(&format!(
@@ -582,9 +499,15 @@ impl ClientRouteManager {
                     filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                     add: {{ peer_id: "{peer_id}", agent_did: "{agent_did}", collections: null,
                         template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
+                        source: "enrollment", enrollment_request_digest: "{request_digest}",
+                        enrollment_authorization_sequence: {authorization_sequence},
+                        enrollment_authorization_expires_at: "{authorization_expires_at}",
                         profiles: null, created_at: "{now}", updated_at: "{now}" }},
                     update: {{ agent_did: "{agent_did}", collections: null,
                         template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
+                        source: "enrollment", enrollment_request_digest: "{request_digest}",
+                        enrollment_authorization_sequence: {authorization_sequence},
+                        enrollment_authorization_expires_at: "{authorization_expires_at}",
                         profiles: null, updated_at: "{now}" }}
                 ) {{ _docID }} }}"#
             ))
@@ -593,8 +516,14 @@ impl ClientRouteManager {
     }
 
     async fn teardown_remote(&self, record: &PeerRecord) -> Result<()> {
+        if is_enrollment_peer(record) {
+            // The runtime enrollment owner retracts its own return route from
+            // the authorization revision. This client only tears down its
+            // locally owned outbound route.
+            return Ok(());
+        }
         let route_id = client_route_id(&record.peer_id, PairingDirection::RuntimeToClient);
-        let store = self.pairing_store();
+        let store = self.pairing_store(record)?;
         let mut addresses = store
             .load_desired(&route_id)
             .await?
@@ -624,7 +553,6 @@ impl ClientRouteManager {
 
     async fn delete_local_state(&self, directory_id: &str) -> Result<bool> {
         let ids = [
-            directory_id.to_string(),
             client_route_id(directory_id, PairingDirection::ClientToRuntime),
             client_route_id(directory_id, PairingDirection::RuntimeToClient),
         ]
@@ -648,30 +576,37 @@ impl ClientRouteManager {
             .is_some_and(|rows| !rows.is_empty()))
     }
 
-    async fn cleanup_legacy(&self, record: &PeerRecord) -> Result<()> {
-        // Iroh authorizes one replicator per transport peer. Installing each
-        // directional route replaces that peer's old broad collections and
-        // filter atomically; deleting guessed collections here would instead
-        // mutate the newly installed route.
-        self.delete_legacy_state(&record.peer_id).await
-    }
-
-    async fn delete_legacy_state(&self, directory_id: &str) -> Result<()> {
-        let id = escape_graphql_string(directory_id);
-        let response = self
-            .node
-            .execute(&format!(
-                r#"mutation {{
-                    delete_PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{id}" }} }}) {{ _docID }}
-                    delete_PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{id}" }} }}) {{ _docID }}
-                }}"#
-            ))
-            .await;
-        ensure_graphql_ok(&response, "delete legacy client pairing state")
-    }
-
-    fn pairing_store(&self) -> GraphqlPairingStateStore {
-        GraphqlPairingStateStore::new(Arc::clone(&self.node), self.actor.clone())
+    fn pairing_store(&self, record: &PeerRecord) -> Result<GraphqlPairingStateStore> {
+        if !record.is_enrollment() {
+            return Ok(GraphqlPairingStateStore::for_explicit_desired(
+                Arc::clone(&self.node),
+                self.actor.clone(),
+            ));
+        }
+        let request_digest = record
+            .enrollment_request_digest
+            .clone()
+            .context("enrollment record has no request digest")?;
+        let authorization_sequence = record
+            .enrollment_authorization_sequence
+            .context("enrollment record has no authorization sequence")?;
+        let authorization_expires_at = record
+            .enrollment_authorization_expires_at
+            .clone()
+            .context("enrollment record has no authorization expiry")?;
+        Ok(GraphqlPairingStateStore::for_enrollment_materialization(
+            Arc::clone(&self.node),
+            self.actor.clone(),
+            EnrollmentEndpointEntry {
+                desired_id: client_route_id(&record.peer_id, PairingDirection::ClientToRuntime),
+                peer_id: record.peer_id.clone(),
+                agent_did: record.agent_did.clone(),
+                address: record.addr.clone(),
+                request_digest,
+                authorization_sequence,
+                authorization_expires_at,
+            },
+        ))
     }
 }
 
@@ -682,18 +617,21 @@ impl ClientRouteLifecycle<'_> {
 
     pub(super) async fn refresh_endpoint(
         &self,
-        peer_directory: &Arc<RwLock<PeerDirectory>>,
+        sync_state: &ClientSyncStateOwner,
         saved: &PeerRecord,
     ) -> PeerRecord {
-        self.manager.refresh_endpoint(peer_directory, saved).await
+        self.manager.refresh_endpoint(sync_state, saved).await
     }
 
     pub(super) async fn reconcile(
         &self,
         record: &PeerRecord,
-        peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+        sync_state: &ClientSyncStateOwner,
+        enrollment_remote_applied: bool,
     ) -> Option<bool> {
-        self.manager.reconcile(record, peer_statuses).await
+        self.manager
+            .reconcile(record, sync_state, enrollment_remote_applied)
+            .await
     }
 
     pub(super) async fn teardown_remote(&self, record: &PeerRecord) -> Result<()> {
@@ -706,15 +644,13 @@ impl ClientRouteLifecycle<'_> {
 
     async fn cleanup_pending_removal_if_current(
         &self,
-        peer_directory: &Arc<RwLock<PeerDirectory>>,
+        sync_state: &ClientSyncStateOwner,
         record: &PeerRecord,
     ) -> Result<PendingRemovalCleanup> {
-        if !peer_directory.read().await.has_pending_removal(record) {
+        if !sync_state.has_pending_removal(record).await {
             return Ok(PendingRemovalCleanup::Superseded);
         }
-        let has_shared_transport_owner = peer_directory
-            .read()
-            .await
+        let has_shared_transport_owner = sync_state
             .records()
             .iter()
             .any(|active| same_transport_peer(active, record));
@@ -750,12 +686,7 @@ impl ClientRouteLifecycle<'_> {
                 )
             })??;
 
-        if !peer_directory
-            .write()
-            .await
-            .complete_removal_if_matches(record)
-            .await?
-        {
+        if !sync_state.complete_removal_if_matches(record).await? {
             anyhow::bail!(
                 "pending removal intent changed while route lifecycle owned {}",
                 record.peer_id
@@ -767,10 +698,10 @@ impl ClientRouteLifecycle<'_> {
     #[cfg(test)]
     pub(super) async fn upsert_desired(
         &self,
-        route: &ClientRouteIdentity,
-        direction: PairingDirection,
+        _route: &ClientRouteIdentity,
+        _direction: PairingDirection,
     ) -> Result<()> {
-        self.manager.upsert_desired(route, direction).await
+        anyhow::bail!("manual PeerPairingDesired authoring is disabled")
     }
 }
 
@@ -779,24 +710,29 @@ pub(super) async fn cleanup_saved_peer_p2p(
     record: &PeerRecord,
 ) -> Result<()> {
     let mut replicator_errors = Vec::new();
-    if let Err(error) =
-        p2p_remove_replicator(p2p, saved_peer_replicator_collections(record), &record.addr).await
+    if let Err(error) = p2p_remove_replicator(
+        p2p,
+        gents::agent::p2p_reconcile::client_route_collections(PairingDirection::ClientToRuntime)
+            .iter()
+            .map(|collection| (*collection).to_string())
+            .collect(),
+        &record.addr,
+    )
+    .await
     {
         replicator_errors.push(error.to_string());
     }
-    if !record.is_bearer_pairing() {
-        if let Err(error) = p2p_remove_replicator(
-            p2p,
-            subscribed_collection_names()
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-            &record.addr,
-        )
-        .await
-        {
-            replicator_errors.push(error.to_string());
-        }
+    if let Err(error) = p2p_remove_replicator(
+        p2p,
+        subscribed_collection_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        &record.addr,
+    )
+    .await
+    {
+        replicator_errors.push(error.to_string());
     }
     let replicator_result = if replicator_errors.is_empty() {
         Ok(())
@@ -858,38 +794,20 @@ fn same_transport_peer(left: &PeerRecord, right: &PeerRecord) -> bool {
 }
 
 fn requires_managed_remote_teardown(record: &PeerRecord) -> bool {
-    !record.is_bearer_pairing()
-        && record
-            .graphql
-            .as_deref()
-            .is_some_and(|endpoint| !endpoint.trim().is_empty())
-}
-
-fn remove_peer_status(peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>, peer_id: &str) {
-    peer_statuses
-        .write()
-        .expect("peer status lock poisoned")
-        .retain(|status| status.peer_id != peer_id);
-}
-
-fn append_warning(warning: &mut Option<String>, message: String) {
-    match warning {
-        Some(existing) => {
-            existing.push_str("; ");
-            existing.push_str(&message);
-        }
-        None => *warning = Some(message),
-    }
+    record
+        .graphql
+        .as_deref()
+        .is_some_and(|endpoint| !endpoint.trim().is_empty())
 }
 
 #[derive(Clone, Copy)]
-enum RouteReconcileState {
+pub(super) enum RouteReconcileState {
     Ready,
     Drifted,
     Unavailable,
 }
 
-fn combined_route_readiness(
+pub(super) fn combined_route_readiness(
     outbound: RouteReconcileState,
     inbound: RouteReconcileState,
 ) -> Option<bool> {
@@ -900,12 +818,24 @@ fn combined_route_readiness(
     }
 }
 
+pub(super) fn enrollment_remote_route_state(signed_current_receipt: bool) -> RouteReconcileState {
+    if signed_current_receipt {
+        RouteReconcileState::Ready
+    } else {
+        RouteReconcileState::Drifted
+    }
+}
+
 fn management_endpoint(record: &PeerRecord) -> Option<&str> {
     record
         .graphql
         .as_deref()
         .map(str::trim)
         .filter(|endpoint| !endpoint.is_empty())
+}
+
+pub(super) fn is_enrollment_peer(record: &PeerRecord) -> bool {
+    record.source.as_deref() == Some("enrollment")
 }
 
 fn replacement_endpoint(
@@ -986,111 +916,71 @@ fn route_status(
 
 fn publish_route_status(
     record: &PeerRecord,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    sync_state: &ClientSyncStateOwner,
     mut route: ClientRouteStatus,
     error: Option<String>,
     error_class: Option<crate::remote_admin::PairingErrorClass>,
 ) {
-    let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
-    let Some(status) = statuses
-        .iter_mut()
-        .find(|status| status.peer_id == record.peer_id)
-    else {
-        return;
-    };
-    let previous = status
-        .routes
-        .iter()
-        .find(|existing| existing.direction == route.direction);
-    if let Some(error) = error {
-        route.last_error = Some(error);
-        route.retry_count = previous.map_or(1, |previous| previous.retry_count.saturating_add(1));
-        route.last_retry_at = Some(SystemTime::now());
-        route.last_retry_error_class =
-            error_class.or_else(|| previous.and_then(|previous| previous.last_retry_error_class));
-    }
-    if let Some(index) = status
-        .routes
-        .iter()
-        .position(|existing| existing.direction == route.direction)
-    {
-        status.routes[index] = route;
-    } else {
-        status.routes.push(route);
-        status
+    sync_state.update_peer(record, |status| {
+        let previous = status
             .routes
-            .sort_by(|left, right| left.direction.cmp(&right.direction));
-    }
-}
-
-fn publish_chat_safety(
-    record: &PeerRecord,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
-    readiness: Option<bool>,
-) {
-    if let Some(status) = peer_statuses
-        .write()
-        .expect("peer status lock poisoned")
-        .iter_mut()
-        .find(|status| status.peer_id == record.peer_id)
-    {
-        status.chat_safe = readiness.unwrap_or(record.pairing_ready);
-        if readiness == Some(true) {
-            status.last_error = None;
+            .iter()
+            .find(|existing| existing.direction == route.direction);
+        if let Some(error) = error {
+            route.last_error = Some(error);
+            route.retry_count =
+                previous.map_or(1, |previous| previous.retry_count.saturating_add(1));
+            route.last_retry_at = Some(SystemTime::now());
+            route.last_retry_error_class = error_class
+                .or_else(|| previous.and_then(|previous| previous.last_retry_error_class));
         }
-    }
+        if let Some(index) = status
+            .routes
+            .iter()
+            .position(|existing| existing.direction == route.direction)
+        {
+            status.routes[index] = route;
+        } else {
+            status.routes.push(route);
+            status
+                .routes
+                .sort_by(|left, right| left.direction.cmp(&right.direction));
+        }
+    });
 }
 
 fn record_pairing_error(
     record: &PeerRecord,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    sync_state: &ClientSyncStateOwner,
     error: &anyhow::Error,
 ) {
-    if let Some(status) = peer_statuses
-        .write()
-        .expect("peer status lock poisoned")
-        .iter_mut()
-        .find(|status| status.peer_id == record.peer_id)
-    {
+    sync_state.update_peer(record, |status| {
         status.last_error = Some(format!("client route reconcile failed: {error:#}"));
-    }
+    });
 }
 
 fn record_failure(
     record: &PeerRecord,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
+    sync_state: &ClientSyncStateOwner,
     desired: &PairingDesired,
     error: &RemoteP2pAdminError,
 ) {
     let class = classify_remote_admin_error(error);
-    let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
-    let Some(status) = statuses
-        .iter_mut()
-        .find(|status| status.peer_id == record.peer_id)
-    else {
-        return;
-    };
-    for collection in desired.effective_replicator_collections() {
-        let status = ensure_pairing_status(status, collection);
-        status.record_retry(class);
-        status.update_stuck_indicator(SystemTime::now());
-    }
+    sync_state.update_peer(record, |status| {
+        for collection in desired.effective_replicator_collections() {
+            let status = ensure_pairing_status(status, collection);
+            status.record_retry(class);
+            status.update_stuck_indicator(SystemTime::now());
+        }
+    });
 }
 
-fn record_route_success(
-    record: &PeerRecord,
-    peer_statuses: &Arc<StdRwLock<Vec<ClientPeerStatus>>>,
-) {
-    let mut statuses = peer_statuses.write().expect("peer status lock poisoned");
-    let Some(status) = statuses
-        .iter_mut()
-        .find(|status| status.peer_id == record.peer_id)
-    else {
-        return;
-    };
-    for collection in &mut status.pairing {
-        collection.record_success();
-    }
+fn record_route_success(record: &PeerRecord, sync_state: &ClientSyncStateOwner) {
+    sync_state.update_peer(record, |status| {
+        for collection in &mut status.pairing {
+            collection.record_success();
+        }
+    });
 }
 
 fn ensure_pairing_status<'a>(
@@ -1164,6 +1054,24 @@ mod tests {
     }
 
     #[test]
+    fn enrollment_needs_current_server_route_receipt() {
+        assert_eq!(
+            combined_route_readiness(
+                RouteReconcileState::Ready,
+                enrollment_remote_route_state(false),
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            combined_route_readiness(
+                RouteReconcileState::Ready,
+                enrollment_remote_route_state(true),
+            ),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn healthy_routes_use_slow_reconcile_cadence() {
         assert!(!ClientRouteManager::reconcile_due(
             true,
@@ -1205,8 +1113,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn route_diagnostics_preserve_identity_filter_error_and_retry() {
+    #[tokio::test]
+    async fn route_diagnostics_preserve_identity_filter_error_and_retry() {
         let record = PeerRecord::new(
             "Mandrake",
             "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
@@ -1220,26 +1128,34 @@ mod tests {
         )
         .unwrap();
         let desired = route.desired(PairingDirection::ClientToRuntime);
-        let statuses = Arc::new(StdRwLock::new(vec![ClientPeerStatus {
-            peer_id: record.peer_id.clone(),
-            label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
-            addr: record.addr.clone(),
-            dial_succeeded: true,
-            last_error: None,
-            pairing: Vec::new(),
-            routes: Vec::new(),
-            chat_safe: false,
-        }]));
+        let (_tempdir, sync_state) = ClientSyncStateOwner::for_test(
+            vec![record.clone()],
+            vec![ClientPeerStatus {
+                peer_id: record.peer_id.clone(),
+                label: record.label.clone(),
+                agent_did: record.agent_did.clone(),
+                addr: record.addr.clone(),
+                dial_succeeded: true,
+                last_error: None,
+                pairing: Vec::new(),
+                routes: Vec::new(),
+            }],
+        )
+        .await;
+        let mut updates = sync_state.subscribe();
         record_failure(
             &record,
-            &statuses,
+            &sync_state,
             &desired,
             &RemoteP2pAdminError::RpcTimeout,
         );
-        record_pairing_error(&record, &statuses, &anyhow::anyhow!("filter mismatch"));
+        assert!(updates.has_changed().expect("sync watch remains open"));
+        updates.borrow_and_update();
+        record_pairing_error(&record, &sync_state, &anyhow::anyhow!("filter mismatch"));
+        assert!(updates.has_changed().expect("sync watch remains open"));
+        updates.borrow_and_update();
 
-        let status = statuses.read().unwrap()[0].clone();
+        let status = sync_state.snapshot().peers[0].clone();
         assert!(route
             .desired_id(PairingDirection::ClientToRuntime)
             .ends_with(":client-to-runtime"));
@@ -1254,26 +1170,37 @@ mod tests {
             .pairing
             .iter()
             .all(|entry| entry.pairing_retry_count == 1));
+
+        record_route_success(&record, &sync_state);
+        assert!(updates.has_changed().expect("sync watch remains open"));
+        assert!(sync_state.snapshot().peers[0]
+            .pairing
+            .iter()
+            .all(|entry| entry.pairing_retry_count == 0));
     }
 
-    #[test]
-    fn route_owner_publishes_both_directional_statuses_and_chat_safety() {
+    #[tokio::test]
+    async fn route_owner_publishes_both_directional_statuses() {
         let record = PeerRecord::new(
             "Mandrake",
             "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
             "did:key:mandrake",
         );
-        let statuses = Arc::new(StdRwLock::new(vec![ClientPeerStatus {
-            peer_id: record.peer_id.clone(),
-            label: record.label.clone(),
-            agent_did: record.agent_did.clone(),
-            addr: record.addr.clone(),
-            dial_succeeded: true,
-            last_error: None,
-            pairing: Vec::new(),
-            routes: Vec::new(),
-            chat_safe: false,
-        }]));
+        let (_tempdir, sync_state) = ClientSyncStateOwner::for_test(
+            vec![record.clone()],
+            vec![ClientPeerStatus {
+                peer_id: record.peer_id.clone(),
+                label: record.label.clone(),
+                agent_did: record.agent_did.clone(),
+                addr: record.addr.clone(),
+                dial_succeeded: true,
+                last_error: None,
+                pairing: Vec::new(),
+                routes: Vec::new(),
+            }],
+        )
+        .await;
+        let mut updates = sync_state.subscribe();
         let route = ClientRouteIdentity::new(
             &record.peer_id,
             &record.addr,
@@ -1288,16 +1215,15 @@ mod tests {
             let desired = route.desired(direction);
             publish_route_status(
                 &record,
-                &statuses,
+                &sync_state,
                 route_status(&record, direction, Some(&desired), true, true, true),
                 None,
                 None,
             );
+            assert!(updates.has_changed().expect("sync watch remains open"));
+            updates.borrow_and_update();
         }
-        publish_chat_safety(&record, &statuses, Some(true));
-
-        let status = statuses.read().unwrap()[0].clone();
-        assert!(status.chat_safe);
+        let status = sync_state.snapshot().peers[0].clone();
         assert_eq!(status.routes.len(), 2);
         assert_eq!(status.routes[0].direction, "client-to-runtime");
         assert_eq!(status.routes[1].direction, "runtime-to-client");

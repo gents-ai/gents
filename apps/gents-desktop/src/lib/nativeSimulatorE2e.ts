@@ -7,7 +7,6 @@ import {
   findAgentDeploymentControl,
   findAssistantResponseMarker,
   findNewChatButton,
-  findPairingReadyStatus,
   isConversationTurnSettled,
 } from "./nativeSimulatorE2eDom";
 
@@ -17,13 +16,12 @@ export {
   findAgentDeploymentControl,
   findAssistantResponseMarker,
   findNewChatButton,
-  findPairingReadyStatus,
   isConversationTurnSettled,
 } from "./nativeSimulatorE2eDom";
 
 type NativeE2eConfig = {
   agentLabel: string;
-  pairToken: string;
+  serverAddress: string;
   prompt: string;
   expectedResponse: string;
   expectEmptyConversationSlice: boolean;
@@ -94,35 +92,28 @@ async function runNativeSimulatorE2e() {
     await reportStatus({ stage: "starting" });
     await waitForText("Fleet Dashboard", 30_000);
     await reportStatus({ stage: "shell-interactive" });
+    if (document.querySelector('[data-testid="fleet-connect-local"]')) {
+      throw new Error("Mobile shell exposed unsupported local runtime setup");
+    }
 
-    let pairedThisRun = false;
     const deploymentControl = await waitForOptional(
       () => findAgentDeploymentControl(config.agentLabel),
       15_000,
     );
     if (!deploymentControl) {
-      await reportStatus({ stage: "pairing" });
-      await pairAgent(config);
-      pairedThisRun = true;
+      await reportStatus({ stage: "enrollment" });
+      await enrollAgent(config);
       await waitFor(
         () => findAgentDeploymentControl(config.agentLabel),
         300_000,
         `${config.agentLabel} deployment`,
       );
     }
-    if (pairedThisRun) {
-      await waitFor(
-        () => findPairingReadyStatus(config.agentLabel),
-        300_000,
-        `${config.agentLabel} signed pairing readiness`,
-      );
-    }
-
     await reportStatus({ stage: "waiting-ready" });
     const currentChatButton = await waitFor(
       () => findAgentChatButton(config.agentLabel),
       300_000,
-      `${config.agentLabel} enabled chat control after signed pairing readiness`,
+      `${config.agentLabel} enabled chat control after signed enrollment readiness`,
     );
     currentChatButton.click();
     await waitFor(
@@ -136,7 +127,7 @@ async function runNativeSimulatorE2e() {
       const conversationCount = conversationRowCount(document);
       if (conversationCount > 0) {
         throw new Error(
-          `Requester-scoped pairing leaked ${conversationCount} pre-existing conversation(s)`,
+          `Requester-scoped enrollment leaked ${conversationCount} pre-existing conversation(s)`,
         );
       }
     }
@@ -201,6 +192,21 @@ async function runNativeSimulatorE2e() {
       `${config.agentLabel} terminal turn state`,
     );
 
+    await reportStatus({ stage: "waiting-hydration" });
+    await waitFor(
+      () => {
+        const status = document.querySelector<HTMLElement>(
+          '[data-testid="session-hydration-status"]',
+        );
+        if (status?.dataset.hydrationPhase === "failed") {
+          throw new Error(status.textContent?.trim() || "Session hydration failed");
+        }
+        return status?.dataset.hydrationPhase === "complete" ? status : null;
+      },
+      180_000,
+      `${config.agentLabel} completed session hydration`,
+    );
+
     await reportStatus({ stage: "passed" });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -208,7 +214,7 @@ async function runNativeSimulatorE2e() {
   }
 }
 
-async function pairAgent(config: NativeE2eConfig) {
+async function enrollAgent(config: NativeE2eConfig) {
   const disclosure = await waitFor(
     () =>
       document.querySelector<HTMLElement>(
@@ -219,31 +225,37 @@ async function pairAgent(config: NativeE2eConfig) {
   );
   disclosure.click();
 
-  const labelInput = await waitFor(
-    () => document.querySelector<HTMLInputElement>('[data-testid="fleet-pair-label"]'),
-    10_000,
-    "pairing label input",
-  );
-  const tokenInput = await waitFor(
+  const serverAddressInput = await waitFor(
     () =>
-      document.querySelector<HTMLTextAreaElement>('[data-testid="fleet-pair-token"]'),
+      document.querySelector<HTMLInputElement>(
+        '[data-testid="fleet-add-server-address"]',
+      ),
     10_000,
-    "pairing invite input",
+    "server address input",
   );
-  setControlledValue(labelInput, config.agentLabel);
-  setControlledValue(tokenInput, config.pairToken);
+  setControlledValue(serverAddressInput, config.serverAddress);
 
   const submit = await waitFor(
     () => {
       const button = document.querySelector<HTMLButtonElement>(
-        '[data-testid="fleet-pair-submit"]',
+        '[data-testid="fleet-fetch-status"]',
       );
       return button && !button.disabled ? button : null;
     },
     10_000,
-    "enabled secure-pairing button",
+    "enabled enrollment request button",
   );
   submit.click();
+
+  const requestId = await waitFor(
+    () =>
+      document
+        .querySelector<HTMLElement>('[data-testid="fleet-import-status"]')
+        ?.textContent?.match(/Enrollment request (\S+) sent/)?.[1] ?? null,
+    30_000,
+    "enrollment request ID",
+  );
+  await reportStatus({ stage: "enrollment-pending", detail: requestId });
 }
 
 function setControlledValue(
@@ -282,11 +294,11 @@ async function waitFor<T>(
     if (value) {
       return value;
     }
-    const pairingError = document.querySelector<HTMLElement>(
-      '[data-testid="fleet-pair-status"].fleet-inline-error',
+    const enrollmentError = document.querySelector<HTMLElement>(
+      '[data-testid="fleet-import-status"].fleet-inline-error',
     );
-    if (pairingError?.textContent?.trim()) {
-      throw new Error(pairingError.textContent.trim());
+    if (enrollmentError?.textContent?.trim()) {
+      throw new Error(enrollmentError.textContent.trim());
     }
     const globalError = document.querySelector<HTMLElement>(
       '[data-testid="error-banner"] .error-banner-message',

@@ -20,8 +20,6 @@ mod mailbox_live;
 mod p2p_admission_concurrent_live;
 #[path = "e2e_live/seed_live.rs"]
 mod seed_live;
-#[path = "e2e_live/session_hydration_live.rs"]
-mod session_hydration_live;
 #[path = "e2e_live/steward_loop_live.rs"]
 mod steward_loop_live;
 #[path = "e2e_live/subagent_delegation_live.rs"]

@@ -3,7 +3,7 @@
 //! Platform adapters own dialing and persistence. This module owns what a
 //! route means: directory identity versus transport identity, direction,
 //! collection membership, and filters. Keeping that vocabulary here prevents
-//! bearer, desktop, mobile, CLI, and runtime repair paths from rebuilding
+//! desktop, mobile, CLI, and runtime repair paths from rebuilding
 //! subtly different replicators.
 
 use std::collections::BTreeSet;
@@ -47,9 +47,8 @@ impl PairingDirection {
     }
 }
 
-/// Read the direction from a durable client-route key. Unsuffixed keys are
-/// accepted as the legacy one-way client-to-runtime shape.
-pub fn client_route_direction(pairing_id: &str) -> Result<Option<PairingDirection>> {
+/// Read the mandatory direction from a durable client-route key.
+pub fn client_route_direction(pairing_id: &str) -> Result<PairingDirection> {
     let pairing_id = pairing_id.trim();
     if pairing_id.is_empty() {
         bail!("client pairing id must not be blank");
@@ -62,10 +61,10 @@ pub fn client_route_direction(pairing_id: &str) -> Result<Option<PairingDirectio
             if directory_id.trim().is_empty() {
                 bail!("client pairing id has a blank directory identity");
             }
-            return Ok(Some(direction));
+            return Ok(direction);
         }
     }
-    Ok(None)
+    bail!("client pairing id has no recognized direction suffix")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,6 +222,7 @@ fn client_route_filters(
         "AgentConversation",
         "CompactionEntry",
         "MailboxItem",
+        "PersonaConfigRequest",
     ] {
         filters.insert(
             collection.to_string(),
@@ -232,13 +232,6 @@ fn client_route_filters(
             ),
         );
     }
-    filters.insert(
-        "BearerPairingReady".to_string(),
-        combine_filters(
-            equality_filter("claimant_did", requester_did),
-            equality_filter("issuer_did", owner_agent_did),
-        ),
-    );
     let endpoint_did = match direction {
         PairingDirection::ClientToRuntime => requester_did,
         PairingDirection::RuntimeToClient => owner_agent_did,
@@ -254,6 +247,12 @@ fn client_route_filters(
             equality_filter("agent_did", owner_agent_did),
         ),
     );
+    if direction == PairingDirection::RuntimeToClient {
+        filters.insert(
+            "AgentBehaviorReadiness".to_string(),
+            equality_filter("agent_did", owner_agent_did),
+        );
+    }
     // Runtime-owned configuration is unfiltered only on the return leg. Each
     // replicator has one runtime source, while its mutable owner fields cannot
     // legally participate in DefraDB replication filters.
@@ -287,20 +286,17 @@ mod tests {
     }
 
     #[test]
-    fn route_key_direction_is_explicit_and_legacy_keys_remain_outbound() {
+    fn route_key_direction_is_explicit_and_unsuffixed_keys_are_rejected() {
         assert_eq!(
             client_route_direction("directory-a:client-to-runtime").unwrap(),
-            Some(PairingDirection::ClientToRuntime)
+            PairingDirection::ClientToRuntime
         );
         assert_eq!(
             client_route_direction("directory-a:runtime-to-client").unwrap(),
-            Some(PairingDirection::RuntimeToClient)
+            PairingDirection::RuntimeToClient
         );
-        assert_eq!(client_route_direction("legacy-peer").unwrap(), None);
-        assert_eq!(
-            client_route_direction("did:key:phone:legacy-route").unwrap(),
-            None
-        );
+        assert!(client_route_direction("peer").is_err());
+        assert!(client_route_direction("did:key:phone:route").is_err());
     }
 
     #[test]

@@ -24,7 +24,10 @@ import { describeLive, logTurn } from "./tauri-driver-live/helpers";
 describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
   it("B3+C2: cascade-mode interrupt drives a running child subagent to interrupted", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
-      const defaultBehavior = deployment.behaviors.find((b) => b.isDefault);
+      const defaultBehavior = deployment.behaviors.find(
+        (behavior) =>
+          behavior.behaviorId === deployment.behaviorReadiness.defaultBehaviorId,
+      );
       const defaultTools = deployment.toolSelections.find(
         (s) => s.selectionId === defaultBehavior?.toolSelectionId,
       );

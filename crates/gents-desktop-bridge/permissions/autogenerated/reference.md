@@ -1012,25 +1012,12 @@ Denies the desktop_p2p_repair command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-peer-add`
+`gents-desktop-bridge:allow-desktop-peer-enroll-status`
 
 </td>
 <td>
 
-Enables the desktop_peer_add command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-add`
-
-</td>
-<td>
-
-Denies the desktop_peer_add command without any pre-configured scope.
+Enables the desktop_peer_enroll_status command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1038,51 +1025,12 @@ Denies the desktop_peer_add command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-peer-pair-bearer`
+`gents-desktop-bridge:deny-desktop-peer-enroll-status`
 
 </td>
 <td>
 
-Enables the desktop_peer_pair_bearer command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-pair-bearer`
-
-</td>
-<td>
-
-Denies the desktop_peer_pair_bearer command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-peer-probe-address`
-
-</td>
-<td>
-
-Enables the desktop_peer_probe_address command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-probe-address`
-
-</td>
-<td>
-
-Denies the desktop_peer_probe_address command without any pre-configured scope.
+Denies the desktop_peer_enroll_status command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1473,6 +1421,32 @@ Enables the desktop_schedule_save command without any pre-configured scope.
 <td>
 
 Denies the desktop_schedule_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-session-hydration-retry`
+
+</td>
+<td>
+
+Enables the desktop_session_hydration_retry command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-hydration-retry`
+
+</td>
+<td>
+
+Denies the desktop_session_hydration_retry command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1909,6 +1883,19 @@ Session/conversation snapshot and live-delta reads
 <tr>
 <td>
 
+`gents-desktop-bridge:session-control`
+
+</td>
+<td>
+
+Explicit selected-session hydration retry
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:trace-read`
 
 </td>
@@ -2018,7 +2005,7 @@ Workspace browser
 </td>
 <td>
 
-Peer add/remove/rename, bearer pairing, address probe, P2P repair
+Authenticated peer enrollment, removal/rename, and P2P repair
 
 </td>
 </tr>

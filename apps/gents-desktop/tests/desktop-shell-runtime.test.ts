@@ -21,7 +21,7 @@ function deferred() {
 }
 
 describe("desktopUpdateRefreshScope", () => {
-  it("keeps health, active-turn, and general store reads separate", () => {
+  it("uses ordinary store wakes for session control-row changes", () => {
     expect(desktopUpdateRefreshScope("health", "session-1", "request-1")).toBe(
       "snapshot",
     );
@@ -33,10 +33,6 @@ describe("desktopUpdateRefreshScope", () => {
     );
     expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
     expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
-    expect(desktopUpdateRefreshScope("hydration", "session-1", "request-1")).toBe(
-      "full",
-    );
-    expect(desktopUpdateRefreshScope("hydration", null, null)).toBe("snapshot");
   });
 });
 

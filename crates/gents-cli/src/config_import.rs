@@ -27,9 +27,9 @@ mod lean_vocab_test;
 
 const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
 
-const CONFIG_APPLY_ORDER: [Collection; 15] = gents::DESIRED_STATE_APPLY_ORDER;
+const CONFIG_APPLY_ORDER: [Collection; 14] = gents::DESIRED_STATE_APPLY_ORDER;
 
-const CONFIG_PRUNE_ORDER: [Collection; 15] = [
+const CONFIG_PRUNE_ORDER: [Collection; 14] = [
     Collection::AgentPrincipal,
     Collection::EventTrigger,
     Collection::Schedule,
@@ -38,13 +38,12 @@ const CONFIG_PRUNE_ORDER: [Collection; 15] = [
     Collection::AgentBehavior,
     Collection::Skill,
     Collection::ToolSelection,
-    Collection::DatastoreToolSurface,
     Collection::EthTool,
     Collection::ChainKeyBinding,
+    Collection::DatastoreToolSurface,
     Collection::ToolServiceRegistry,
     Collection::InferenceProfile,
     Collection::InferenceBackend,
-    Collection::PeerPairingDesired,
 ];
 
 #[cfg(test)]
@@ -131,9 +130,7 @@ pub(crate) async fn apply_import_collection(
         return Ok(0);
     }
 
-    if override_existing && collection_name == "PeerPairingDesired" {
-        apply_manifest_pairing_documents(txn, &prepared).await?;
-    } else if override_existing && uses_custom_apply_writer(collection_name) {
+    if override_existing && uses_custom_apply_writer(collection_name) {
         apply_custom_override_collection_batched(txn, collection_name, unique_field, &prepared)
             .await?;
     } else {
@@ -148,92 +145,6 @@ pub(crate) async fn apply_import_collection(
     }
 
     Ok(docs.len())
-}
-
-async fn apply_manifest_pairing_documents(
-    txn: &ConfigApplyTxn<'_>,
-    docs: &[PreparedImportDocument],
-) -> Result<()> {
-    let fields = docs
-        .iter()
-        .enumerate()
-        .map(|(index, doc)| {
-            let source = doc
-                .add_doc
-                .get("source")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|source| {
-                    source.starts_with(desired_state::PEER_PAIRING_MANIFEST_SOURCE_PREFIX)
-                })
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "manifest PeerPairingDesired {} is missing manifest source provenance",
-                        doc.unique_value
-                    )
-                })?;
-            let add_doc = crate::config_writes::mint_recreate_identity(&doc.add_doc);
-            let add_literal = graphql_input_literal(&add_doc)?;
-            let update_literal =
-                graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("missing update document for PeerPairingDesired")
-                })?)?;
-            Ok(AliasedMutationField {
-                alias: format!("doc_{index}"),
-                field: format!(
-                    r#"doc_{index}: upsert_PeerPairingDesired(
-                        filter: {{
-                            peer_id: {{ _eq: "{peer_id}" }},
-                            source: {{ _eq: "{source}" }}
-                        }},
-                        add: {add_literal},
-                        update: {update_literal}
-                    ) {{ _docID }}"#,
-                    peer_id = escape_graphql_string(&doc.unique_value),
-                    source = escape_graphql_string(source),
-                ),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    execute_aliased_mutation_batches(txn, "PeerPairingDesired", &fields).await
-}
-
-async fn apply_delete_manifest_pairings(
-    txn: &ConfigApplyTxn<'_>,
-    ids: &[String],
-    owner_agent_did: &str,
-) -> Result<usize> {
-    if ids.is_empty() {
-        return Ok(0);
-    }
-    let source = desired_state::peer_pairing_manifest_source(owner_agent_did);
-    let fields = ids
-        .iter()
-        .enumerate()
-        .map(|(index, peer_id)| manifest_pairing_delete_mutation_field(index, peer_id, &source))
-        .collect::<Vec<_>>();
-    execute_aliased_mutation_batches(txn, "PeerPairingDesired", &fields).await?;
-    Ok(ids.len())
-}
-
-fn manifest_pairing_delete_mutation_field(
-    index: usize,
-    peer_id: &str,
-    source: &str,
-) -> AliasedMutationField {
-    AliasedMutationField {
-        alias: format!("doc_{index}"),
-        field: format!(
-            r#"doc_{index}: delete_PeerPairingDesired(
-                filter: {{
-                    peer_id: {{ _eq: "{peer_id}" }},
-                    source: {{ _eq: "{source}" }}
-                }}
-            ) {{ _docID }}"#,
-            peer_id = escape_graphql_string(peer_id),
-            source = escape_graphql_string(source),
-        ),
-    }
 }
 
 pub(crate) async fn apply_delete_collection(
@@ -840,13 +751,10 @@ pub(crate) async fn apply_desired_state_changes(
 
     for collection in CONFIG_APPLY_ORDER {
         let docs = select_apply_docs_for_collection(desired_bundle, planned, collection)?;
-        let applied = if collection == Collection::PeerPairingDesired
-            || uses_custom_apply_writer(collection.graphql_type())
-        {
-            // Pairings have compound manifest ownership semantics and remain
-            // in the CLI-specific path. The three custom writers also retain
-            // the existing batched/tombstone-aware CLI behavior; the runtime
-            // API routes package calls through the same dedicated writers.
+        let applied = if uses_custom_apply_writer(collection.graphql_type()) {
+            // These custom writers retain the existing batched/tombstone-aware
+            // CLI behavior; the runtime API routes package calls through the
+            // same dedicated writers.
             apply_import_collection(
                 txn,
                 collection.graphql_type(),
@@ -880,17 +788,13 @@ pub(crate) async fn apply_desired_state_changes(
 
     for collection in CONFIG_PRUNE_ORDER {
         let diff = planned.collections.get(collection);
-        let deleted = if collection == Collection::PeerPairingDesired {
-            apply_delete_manifest_pairings(txn, &diff.delete, &planned.agent_did).await?
-        } else {
-            apply_delete_collection(
-                txn,
-                collection.graphql_type(),
-                collection.unique_field(),
-                &diff.delete,
-            )
-            .await?
-        };
+        let deleted = apply_delete_collection(
+            txn,
+            collection.graphql_type(),
+            collection.unique_field(),
+            &diff.delete,
+        )
+        .await?;
         counts.add(collection, deleted);
 
         if let Some(sleep) = per_collection_sleep {

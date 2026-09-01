@@ -32,6 +32,11 @@ permissions = [
 ]
 
 [[set]]
+identifier = "session-control"
+description = "Explicit selected-session hydration retry"
+permissions = ["allow-desktop-session-hydration-retry"]
+
+[[set]]
 identifier = "trace-read"
 description = "Request timeline read"
 permissions = ["allow-desktop-request-timeline"]
@@ -85,13 +90,11 @@ permissions = ["allow-desktop-workspace-list"]
 
 [[set]]
 identifier = "fleet-admin"
-description = "Peer add/remove/rename, bearer pairing, address probe, P2P repair"
+description = "Authenticated peer enrollment, removal/rename, and P2P repair"
 permissions = [
-  "allow-desktop-peer-add",
-  "allow-desktop-peer-pair-bearer",
+  "allow-desktop-peer-enroll-status",
   "allow-desktop-peer-remove",
   "allow-desktop-peer-rename",
-  "allow-desktop-peer-probe-address",
   "allow-desktop-p2p-repair",
 ]
 
@@ -194,8 +197,8 @@ identifier = "full"
 description = "Full Gents Desktop production surface (excludes native-e2e)"
 permissions = [
   "default",
-  "runtime-admin",
   "session-read",
+  "session-control",
   "trace-read",
   "tool-surface-read",
   "chat-write",

@@ -84,6 +84,7 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
     "AgentRuntime",
+    "AgentBehaviorReadiness",
     "ToolSelection",
     "InferenceProfile",
     "InferenceBackend",
@@ -105,6 +106,7 @@ const AGENT_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
     "AgentRuntime",
+    "AgentBehaviorReadiness",
     "ToolSelection",
     "InferenceBackend",
     "InferenceProfile",
@@ -139,6 +141,7 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
     "AgentRuntime",
+    "AgentBehaviorReadiness",
     "ToolSelection",
     "InferenceBackend",
     "InferenceProfile",
@@ -184,13 +187,16 @@ mod tests {
     }
 
     #[test]
-    fn profiles_replicate_agent_runtime_for_fleet_visibility() {
+    fn fleet_profiles_replicate_diagnostics_and_authoritative_readiness() {
         for profile in [
             P2pCollectionProfile::Runtime,
             P2pCollectionProfile::Agent,
             P2pCollectionProfile::Discovery,
         ] {
             assert!(profile.collection_names().contains(&"AgentRuntime"));
+            assert!(profile
+                .collection_names()
+                .contains(&"AgentBehaviorReadiness"));
         }
     }
 }

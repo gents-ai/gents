@@ -247,9 +247,8 @@ gents demo
 ```
 
 `pair` brings up a second isolated node (the **Worker**), creates an
-admin-signed network, grants the Worker membership, joins it with a
-`network-control` invite, writes the bidirectional conversation data-plane
-rows, and waits for the runtime reconcilers to install replicators. `delegate`
+authenticated enrollment, waits for both owner-scoped route legs and the
+runtime's signed applied-route receipt, then opens chat. `delegate`
 then enables cross-node subagent delegation, and `status` shows the fleet. No
 checkout, `make`, or mock is required — the command ships in the binary and
 picks a real backend on first run.
@@ -261,16 +260,17 @@ so you can drive the flow by hand and see exactly what reconciles.
 
 | Document | Who writes it | Meaning |
 |---|---|---|
-| `PeerPairingDesired` | you (or the network materializer) | the control-plane pairing you want: which peer, which DID you expect it to have, and which narrow network documents should replicate |
-| `DataPlanePairingDesired` | you (the operator) | the application edge you want: which admitted peer should receive this agent's conversation/subagent documents |
+| `NetworkEnrollmentRequest` | the candidate client | one immutable, challenge-bound request for an authenticated server/network |
+| `NetworkEnrollmentDecision` | the server operator | the terminal approval or denial of that exact request |
+| `NetworkAuthorizationRevision` | the server operator | the unique-max authorization generation, including revocation or supersession |
+| `PeerPairingDesired` | the enrollment reconciler | the exact local route intent derived from current authorization; callers do not author it |
 | `PeerPairingApplied` | the runtime reconciler | what it actually installed for that peer — the **ownership record** |
+| `NetworkEnrollmentRouteReceipt` | the runtime reconciler | signed evidence that the current authorization generation's server route is applied |
 
-The split matters. The reconciler only ever tears down wiring it finds in
-`PeerPairingApplied` — so collections or replicators you added by hand with
-the low-level `p2p admin` commands are never touched, and deleting a pairing
-removes exactly what the pairing introduced and nothing else. You declare
-intent; the runtime owns the consequences and can always undo precisely its
-own work.
+The split matters. The enrollment projector is the authority, the pairing
+engine is only an actuator, and readiness requires exact applied evidence.
+The reconciler tears down only wiring recorded in `PeerPairingApplied`; low-level
+diagnostic wiring never grants enrollment.
 
 ## 1. Start a second runtime
 
@@ -288,53 +288,26 @@ gents server --home /tmp/coding --no-codex-shim \
 Use Part 1's home (say `~/.gents`) as the first node, "Amy", and
 `/tmp/coding` as the second, "Coding".
 
-## 2. Create the network and grant membership
+## 2. Request and approve enrollment
 
-Pairing carries the remote agent's **DID** — the identity that is the
-permission and audit boundary for everything that replicates. The
-invite/join flow moves the DID for you, but v5 invites are membership-gated:
-the issuer must first create an `AgentNetwork` and grant the joining DID.
-
-On Amy:
+In the desktop client, choose **Add Agent** and enter Amy's server address.
+The client authenticates Amy's transport DID from `/status`, pins the exact
+network/admin identity, and submits one immutable enrollment request. Copy the
+request ID shown in the UI and approve it on Amy:
 
 ```bash
-CODING_DID=$(jq -r .agent_did /tmp/coding/init.json)
-gents p2p network create --name "Two Node Demo"
-gents p2p network grant "$CODING_DID"
+gents p2p enrollment approve <request-id> --home ~/.gents
 ```
 
-Then mint a signed network-control invite for Coding:
+The client remains unavailable until it observes the current signed decision,
+authorization revision, both applied route legs, and Amy's signed route receipt.
 
-```bash
-AMY_INVITE=$(
-  gents p2p pairings invite \
-    --member-did "$CODING_DID" \
-    --template network-control \
-    | jq -r .token
-)
-```
+## 3. Let the enrollment owner install routes
 
-On Coding, accept it:
-
-```bash
-gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
-```
-
-This writes Coding's control-plane `PeerPairingDesired` row for Amy, imports
-the signed network root and membership grant, burns the single-use invite
-nonce, and lets the reconciler install the network-control replicator.
-
-## 3. Add the conversation data plane
-
-The network-control edge moves membership and endpoint documents. Conversation
-traffic lives in a separate operator-owned `DataPlanePairingDesired` row so it
-can be filtered by local `agent_did` and gated by the same membership decision.
-
-The `gents demo` `pair` command writes the two data-plane rows for you (an
-`upsert_DataPlanePairingDesired` mutation in each direction, carrying the peer
-id, local `agent_did`, the conversation collections, and the replicator
-address). A dedicated CLI sugar command for data-plane rows is the next
-operator-ergonomics step.
+No caller writes route intent. The enrollment reconciler derives exact
+requester/agent filters from the current authorization generation, owns the
+`PeerPairingDesired` materialization, and publishes a signed receipt only after
+the server route is truthfully applied.
 
 ## 4. Watch the runtime reconcile
 
@@ -386,28 +359,17 @@ gents request show \
   "$REQ" --output json | jq .request
 ```
 
-## 6. Unpair
+## 6. Revoke
 
-Delete the desired row. The runtime sees the row gone, reads its
-`PeerPairingApplied` record, tears down **only** what it installed for that
-pairing, then deletes the applied record:
+Revocation is a new operator-signed authorization revision. Once observed, both
+sides retract the current routes and chat readiness. There is no manual desired
+row deletion surface.
 
-```bash
-gents p2p pairings rm --home /tmp/coding --peer "$AMY_PEER_ID"
-```
+## Low-level diagnostics
 
-Any wiring you had added by hand survives — the reconciler never owned it.
-
-## When to reach past invite/join
-
-- **`p2p pairings set`** is the scripted/manual path: you supply `--did`,
-  `--address`, and `--collection`/`--profile` directly. `--did` is required —
-  a pairing always names the identity it trusts. `--peer` is optional when an
-  `--address` is a shareable ticket the peer id can be derived from.
 - **`p2p admin`** (`connect`, `collections`, `replicators`, `documents`) is
   the escape hatch: imperative surgery on live state, for non-paired
-  topologies and debugging. It does not write desired documents, so the
-  reconciler leaves its wiring alone.
+  topologies and debugging. It cannot grant enrollment or make chat ready.
 
 One last boundary: replication moves *documents*, not *permission*. A child
 node replicating a parent's requests still cannot act as a delegated subagent
@@ -417,77 +379,46 @@ transport; trust is still configured explicitly.
 
 # Part 3 — Grow the link into a fleet
 
-Part 2 showed the two-node flow. A real fleet repeats the same pattern for
-each member, with two separate layers:
+Part 2 showed the two-node flow. A real fleet repeats the same authenticated
+enrollment for each member, with three explicit layers:
 
 | Layer | Documents | What it does |
 |---|---|---|
-| **Network control** | `AgentNetwork`, `NetworkMembership`, `PeerEndpoint`, `PeerPairingDesired` | admits a DID into the fleet and gossips only membership/endpoint state |
-| **Conversation data plane** | `DataPlanePairingDesired` | declares which application documents should replicate between two admitted members |
+| **Authorization** | `AgentNetwork`, enrollment requests/decisions, authorization revisions | identifies the network/admin and records the unique-max member authorization |
+| **Transport binding** | `PeerEndpoint` | binds the authorized DID to the authenticated transport peer |
+| **Applied routes** | enrollment-owned `PeerPairingDesired`, `PeerPairingApplied`, route receipts | installs and proves exact requester/agent-scoped application routes |
 
-That split is the important bit. The invite/join command is now for the narrow
-`network-control` substrate. Chat, subagent, and trace documents move only
-after an operator writes the data-plane edge for that relationship.
+That split is the important bit. Approval alone is not route readiness, and a
+manually injected desired row is not authorization.
 
-## 1. Create the fleet root
+## 1. Observe the fleet root
 
-The fleet admin creates one signed network root, then grants each joining DID.
-On Amy:
+`/status` returns a signed, short-lived offer bound to the server transport
+identity. The client durably pins the exact network/admin identity on first
+use; a conflicting pin fails closed.
 
-```bash
-gents p2p network create --name "Fleet One"
-gents p2p network grant "$CODING_DID"
-```
+## 2. Enroll each member
 
-`network create` writes the singleton `AgentNetwork` document and the admin's
-own membership. `network grant` writes an active, admin-signed
-`NetworkMembership` for Coding's DID.
+Each client sends a challenge-bound immutable request and awaits an explicit
+signed operator decision. Replays are idempotent only for the exact same
+request; conflicting request identities fail closed.
 
-## 2. Enroll the member
+## 3. Observe application routes
 
-Mint a v5 invite for the granted DID. Use `network-control` for fleet
-enrollment:
+The enrollment owner derives the application edge from the current
+authorization. It installs exact requester/agent filters and keeps chat closed
+until both route legs and the signed receipt match that generation.
 
-```bash
-AMY_INVITE=$(
-  gents p2p pairings invite \
-    --member-did "$CODING_DID" \
-    --template network-control \
-    | jq -r .token
-)
+## 4. Informational discovery
 
-gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
-```
-
-The token embeds the signed network root and the signed membership grant.
-`join` verifies both, burns the single-use nonce, writes Coding's
-`PeerPairingDesired` row for Amy, and lets the runtime reconcile the
-network-control edge. v5 joins do not mint a reciprocal token.
-
-## 3. Add an application edge
-
-Network membership answers "may this node belong to the fleet?" It does not
-answer "which application documents should move?" For chat and subagent demos,
-write `DataPlanePairingDesired` rows for the exact pair of agents you want to
-link.
-
-The interactive `gents demo` command does this today: its `pair` step
-writes both conversation data-plane rows and waits until both reconcilers
-install push replicators, and `delegate` then runs a cross-node subagent whose
-child request replicates back — the same edge, driven from the binary.
-
-## 4. Optional registry discovery
-
-`p2p network register` and `p2p network list` still operate on the
-`PeerRegistry` discovery view: useful names, offered templates, heartbeat
-freshness, and "visible but not paired" diagnostics. Discovery makes a peer
-visible; it does not grant membership and it does not create conversation
-authority by itself.
+`p2p network list` can expose names and health for operators. Registry rows are
+informational only: they cannot authorize a peer, repair routes, or materialize
+desired pairing state.
 
 ## 5. The authorization boundary, again
 
-Network-control and data-plane replication moved documents and wired
-transport. They did **not** grant tool permission. A peer Coding is linked to
+Enrollment and its scoped routes moved documents and wired transport. They did
+**not** grant tool permission. A peer Coding is linked to
 still cannot run a delegated subagent on Coding's behalf unless
 `subagent_allow_cross_deployment: true` is set on both behaviors' tool
 selections. Visible ≠ admitted ≠ replicating ≠ authorized; each is its own

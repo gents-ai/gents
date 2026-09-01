@@ -90,21 +90,25 @@ mod tests {
     use serde_json::Value;
 
     use super::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
+    use crate::identity::{AgentIdentity, KeyIdentity};
     use crate::schema::ensure_schemas;
 
-    async fn test_node() -> Arc<EmbeddedNode> {
+    async fn test_node() -> (Arc<EmbeddedNode>, String) {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
+        let did = identity.did().to_string();
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         ensure_schemas(node.as_ref()).await.unwrap();
-        node
+        (node, did)
     }
 
     #[tokio::test]
     async fn writes_manual_request_with_rendered_template_and_manual_lineage() {
-        let node = test_node().await;
+        let (node, agent_did) = test_node().await;
 
         let doc_id = write_manual_agent_request(
             node.as_ref(),
-            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            &agent_did,
             "behavior-1",
             "task-1",
             "hello {{ args.name }}",
@@ -160,12 +164,10 @@ mod tests {
 
     #[tokio::test]
     async fn manual_task_template_gets_node_and_ctx_scope() {
-        let node = test_node().await;
-
-        let agent_did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let (node, agent_did) = test_node().await;
         let doc_id = write_manual_agent_request(
             node.as_ref(),
-            agent_did,
+            &agent_did,
             "behavior-1",
             "task-1",
             "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.behavior_id }}",
@@ -198,17 +200,17 @@ mod tests {
             .expect("request content");
 
         assert!(content.starts_with("tick "));
-        assert!(content.contains(agent_did), "content={content:?}");
+        assert!(content.contains(&agent_did), "content={content:?}");
         assert!(content.ends_with(" / behavior-1"), "content={content:?}");
     }
 
     #[tokio::test]
     async fn writes_manual_request_with_slash_selected_skill_metadata() {
-        let node = test_node().await;
+        let (node, agent_did) = test_node().await;
 
         let doc_id = write_manual_agent_request(
             node.as_ref(),
-            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            &agent_did,
             "behavior-1",
             "task-1",
             "/vuln-scan\nReview /work",
@@ -248,11 +250,11 @@ mod tests {
 
     #[tokio::test]
     async fn writes_manual_request_with_deferred_conversation_title() {
-        let node = test_node().await;
+        let (node, agent_did) = test_node().await;
 
         let doc_id = write_manual_agent_request_with_conversation_title(
             node.as_ref(),
-            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+            &agent_did,
             "behavior-1",
             "task-1",
             "hello {{ args.name }}",
@@ -329,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn surfaces_template_render_errors() {
-        let node = test_node().await;
+        let (node, _agent_did) = test_node().await;
         let err = write_manual_agent_request(
             node.as_ref(),
             "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",

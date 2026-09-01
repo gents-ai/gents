@@ -751,40 +751,16 @@
           "markdownDescription": "Denies the desktop_p2p_repair command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_peer_add command without any pre-configured scope.",
+          "description": "Enables the desktop_peer_enroll_status command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-desktop-peer-add",
-          "markdownDescription": "Enables the desktop_peer_add command without any pre-configured scope."
+          "const": "allow-desktop-peer-enroll-status",
+          "markdownDescription": "Enables the desktop_peer_enroll_status command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_peer_add command without any pre-configured scope.",
+          "description": "Denies the desktop_peer_enroll_status command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-desktop-peer-add",
-          "markdownDescription": "Denies the desktop_peer_add command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_peer_pair_bearer command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-peer-pair-bearer",
-          "markdownDescription": "Enables the desktop_peer_pair_bearer command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_peer_pair_bearer command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-peer-pair-bearer",
-          "markdownDescription": "Denies the desktop_peer_pair_bearer command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_peer_probe_address command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-peer-probe-address",
-          "markdownDescription": "Enables the desktop_peer_probe_address command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_peer_probe_address command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-peer-probe-address",
-          "markdownDescription": "Denies the desktop_peer_probe_address command without any pre-configured scope."
+          "const": "deny-desktop-peer-enroll-status",
+          "markdownDescription": "Denies the desktop_peer_enroll_status command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_peer_remove command without any pre-configured scope.",
@@ -965,6 +941,18 @@
           "type": "string",
           "const": "deny-desktop-schedule-save",
           "markdownDescription": "Denies the desktop_schedule_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_session_hydration_retry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-hydration-retry",
+          "markdownDescription": "Enables the desktop_session_hydration_retry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_hydration_retry command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-hydration-retry",
+          "markdownDescription": "Denies the desktop_session_hydration_retry command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_session_live_delta command without any pre-configured scope.",
@@ -1171,6 +1159,12 @@
           "markdownDescription": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`"
         },
         {
+          "description": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`",
+          "type": "string",
+          "const": "session-control",
+          "markdownDescription": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`"
+        },
+        {
           "description": "Request timeline read\n#### This permission set includes:\n\n- `allow-desktop-request-timeline`",
           "type": "string",
           "const": "trace-read",
@@ -1219,10 +1213,10 @@
           "markdownDescription": "Workspace browser\n#### This permission set includes:\n\n- `allow-desktop-workspace-list`"
         },
         {
-          "description": "Peer add/remove/rename, bearer pairing, address probe, P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-add`\n- `allow-desktop-peer-pair-bearer`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-peer-probe-address`\n- `allow-desktop-p2p-repair`",
+          "description": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`",
           "type": "string",
           "const": "fleet-admin",
-          "markdownDescription": "Peer add/remove/rename, bearer pairing, address probe, P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-add`\n- `allow-desktop-peer-pair-bearer`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-peer-probe-address`\n- `allow-desktop-p2p-repair`"
+          "markdownDescription": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`"
         },
         {
           "description": "Operations snapshot, health, subagent tree, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-list-subagent-tree`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",
@@ -1285,10 +1279,10 @@
           "markdownDescription": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`"
         },
         {
-          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`",
+          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`",
           "type": "string",
           "const": "full",
-          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`"
+          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`"
         }
       ]
     }

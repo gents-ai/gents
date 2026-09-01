@@ -1,0 +1,8 @@
+# Runtime-authored, credential-free readiness projection for paired clients.
+# One atomic JSON snapshot prevents generation, process, and per-behavior
+# verdicts from tearing across independently replicated registers.
+type AgentBehaviorReadiness @branchable {
+    agent_did: String @index(unique: true) @immutable
+    snapshot_json: String
+    updated_at: DateTime @index(direction: DESC)
+}

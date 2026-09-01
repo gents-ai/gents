@@ -7,7 +7,6 @@ import {
   findAgentDeploymentControl,
   findAssistantResponseMarker,
   findNewChatButton,
-  findPairingReadyStatus,
   isConversationTurnSettled,
   startNativeSimulatorE2e,
 } from "./nativeSimulatorE2e";
@@ -32,7 +31,7 @@ describe("startNativeSimulatorE2e", () => {
 });
 
 describe("findAgentDeploymentControl", () => {
-  it("finds the current fleet detail control after pairing materializes a deployment", () => {
+  it("finds the current fleet detail control after enrollment materializes a deployment", () => {
     document.body.innerHTML = `
       <button data-testid="fleet-detail-name-peer-a">iPhone E2E</button>
     `;
@@ -87,19 +86,6 @@ describe("findNewChatButton", () => {
     `;
 
     expect(findNewChatButton("iPhone E2E")).toBeNull();
-  });
-});
-
-describe("findPairingReadyStatus", () => {
-  it("waits for the requested deployment's truthful signed readiness", () => {
-    document.body.innerHTML = `
-      <p data-testid="fleet-pair-status">
-        iPhone E2E is ready. Signed membership and bidirectional replication were observed.
-      </p>
-    `;
-
-    expect(findPairingReadyStatus("iPhone E2E")).not.toBeNull();
-    expect(findPairingReadyStatus("iPhone E2E staging")).toBeNull();
   });
 });
 

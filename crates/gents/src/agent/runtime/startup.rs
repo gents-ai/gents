@@ -1,10 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -12,7 +11,9 @@ use tracing::Instrument;
 use super::context::{RuntimeContext, StartupBarrier};
 use crate::admission::{AdmissionRegistry, BackendAdmissionConfig};
 use crate::agent::reconcile::GenerationSupervisor;
-use crate::agent::{DocumentResolveContext, Gents, ProcessLifecycleState};
+use crate::agent::{
+    DocumentResolveContext, Gents, ProcessLifecycleObserver, ProcessLifecycleState,
+};
 use crate::backend_registry;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -21,7 +22,6 @@ use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
 
 enum BackgroundTaskResult {
     Router(Result<()>),
-    RouterObserver(Result<()>),
     ExecutorStatus(Result<()>),
     Reconcile(Result<()>),
     Control(Result<()>),
@@ -29,21 +29,30 @@ enum BackgroundTaskResult {
     GraphRunReconcile(Result<()>),
     CrossDeploymentCancelMirror(Result<()>),
     PairingReconcile(Result<()>),
+    EnrollmentReconcile(Result<()>),
     RegistryHeartbeat(Result<()>),
     EndpointHeartbeat(Result<()>),
-    NetworkReconcile(Result<()>),
-    ReciprocalReconcile(Result<()>),
-    BearerClaimReconcile(Result<()>),
-    PersonaRequestReconcile(Result<()>),
     SessionHydrationReconcile(Result<()>),
-    DiscoveryReconcile(Result<()>),
+    PersonaRequestReconcile(Result<()>),
     DirectoryProjection(Result<()>),
 }
 
+#[cfg(test)]
+pub(super) type TestSlotRunner = Arc<
+    dyn Fn(
+            u64,
+            watch::Receiver<bool>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+        + Send
+        + Sync,
+>;
+
 struct StartupSlotFailurePolicy {
     barrier: Arc<StartupBarrier>,
-    demotions: Arc<crate::startup_readiness::StartupDemotions>,
     runtime_status: RuntimeStatusHandle,
+    admission_gate: super::router::RuntimeAdmissionGate,
+    runtime_cancel: CancellationToken,
+    fatal_error: mpsc::UnboundedSender<anyhow::Error>,
     observer: Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     budget: u32,
 }
@@ -65,17 +74,59 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
         }
     }
 
-    async fn try_demote(&self, behavior_id: &str, error: &str) -> bool {
-        if !self.barrier.is_pending(behavior_id).await {
-            return false;
+    async fn on_slot_created(&self, behavior_id: &str, generation: u64) -> Result<()> {
+        self.runtime_status
+            .readiness()
+            .register_slot(behavior_id, generation)
+            .await
+            .with_context(|| {
+                format!("register behavior readiness slot {behavior_id} generation {generation}")
+            })?;
+        self.barrier
+            .register_behavior(behavior_id, generation)
+            .await;
+        Ok(())
+    }
+
+    async fn try_demote(&self, behavior_id: &str, generation: u64, error: &str) -> Result<bool> {
+        if !self.barrier.is_pending(behavior_id, generation).await {
+            return Ok(false);
         }
         let reason = format!(
             "demoted after {} consecutive startup build failures; last error: {error}",
             self.build_failure_budget()
         );
-        self.demotions.record(behavior_id, reason.clone());
-        self.barrier.mark_behavior_demoted(behavior_id).await;
-        self.runtime_status.record_startup_demotion().await;
+        let applied = match self
+            .runtime_status
+            .readiness()
+            .demote_slot(behavior_id, generation, reason)
+            .await
+        {
+            Ok(applied) => applied,
+            Err(error) => {
+                // The executor has exhausted its restart budget and is about
+                // to park. If that veto cannot become durable, close routing
+                // before returning so the last Ready observation can never
+                // admit another request into its dead queue. Runtime teardown
+                // will then publish a terminal state or fail boundedly.
+                self.admission_gate.close().await;
+                let rendered = format!("{error:#}");
+                if self.fatal_error.send(error).is_err() {
+                    tracing::error!(
+                        error = %rendered,
+                        "runtime coordinator stopped before demotion failure was delivered"
+                    );
+                }
+                self.runtime_cancel.cancel();
+                return Err(anyhow!(rendered));
+            }
+        };
+        if !applied {
+            return Ok(false);
+        }
+        self.barrier
+            .mark_behavior_demoted(behavior_id, generation)
+            .await;
         tracing::error!(
             behavior_id = %behavior_id,
             budget = self.build_failure_budget(),
@@ -84,29 +135,249 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
              the process will report Ready without it. Fix the behavior/backend \
              config — a config change re-admits it with a fresh budget."
         );
-        true
+        Ok(true)
     }
 
-    async fn on_slot_retired(&self, behavior_id: &str, recreated: bool) {
-        self.barrier.mark_behavior_superseded(behavior_id).await;
+    async fn on_slot_retired(&self, behavior_id: &str, generation: u64, recreated: bool) {
+        if let Err(error) = self
+            .runtime_status
+            .readiness()
+            .retire_slot(behavior_id, generation)
+            .await
+        {
+            tracing::error!(behavior_id, generation, error = %error, "failed to retire behavior readiness slot");
+        }
+        self.barrier
+            .mark_behavior_superseded(behavior_id, generation)
+            .await;
         let _ = recreated;
-        self.demotions.clear(behavior_id);
+    }
+}
+
+/// Sole owner of the process-state/admission ordering boundary.
+///
+/// Ready is persisted before the gate opens. Beginning shutdown marks the
+/// lifecycle terminal under the same mutex, closes the gate (waiting for any
+/// in-progress routing admission), and only then publishes ShuttingDown.
+struct RuntimeLifecycleCoordinator {
+    closing: Mutex<bool>,
+    admission_gate: super::router::RuntimeAdmissionGate,
+    runtime_status: RuntimeStatusHandle,
+    observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+}
+
+impl RuntimeLifecycleCoordinator {
+    fn new(
+        admission_gate: super::router::RuntimeAdmissionGate,
+        runtime_status: RuntimeStatusHandle,
+        observer: Option<Arc<dyn ProcessLifecycleObserver>>,
+    ) -> Self {
+        Self {
+            closing: Mutex::new(false),
+            admission_gate,
+            runtime_status,
+            observer,
+        }
+    }
+
+    async fn become_ready(&self) -> Result<bool> {
+        let closing = self.closing.lock().await;
+        if *closing {
+            return Ok(false);
+        }
+        self.runtime_status
+            .set_process_state_durable(ProcessLifecycleState::Ready)
+            .await?;
+        self.admission_gate.open().await;
+        if let Some(observer) = &self.observer {
+            observer.on_process_state_change(ProcessLifecycleState::Ready);
+        }
+        Ok(true)
+    }
+
+    async fn begin_shutdown(&self) -> Result<()> {
+        let mut closing = self.closing.lock().await;
+        if *closing {
+            return Ok(());
+        }
+        *closing = true;
+        self.admission_gate.close().await;
+        self.runtime_status
+            .set_process_state_durable(ProcessLifecycleState::ShuttingDown)
+            .await?;
+        if let Some(observer) = &self.observer {
+            observer.on_process_state_change(ProcessLifecycleState::ShuttingDown);
+        }
+        Ok(())
+    }
+
+    async fn finish_shutdown(&self) -> Result<()> {
+        let _closing = self.closing.lock().await;
+        self.runtime_status
+            .set_process_state_durable(ProcessLifecycleState::Shutdown)
+            .await?;
+        if let Some(observer) = &self.observer {
+            observer.on_process_state_change(ProcessLifecycleState::Shutdown);
+        }
+        Ok(())
     }
 }
 
 pub(in crate::agent) async fn run_agent(
     agent: Gents,
-    mut shutdown: watch::Receiver<bool>,
+    external_shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    let cancel = CancellationToken::new();
     crate::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
         .context("ensure runtime schema migrations")?;
-    let runtime_status =
-        RuntimeStatusHandle::new(agent.node.clone(), agent.agent_did().to_string());
-    runtime_status
-        .set_process_state(ProcessLifecycleState::Recovering)
+    let (runtime_status_owner, runtime_status) =
+        RuntimeStatusHandle::start(agent.node.clone(), agent.agent_did().to_string());
+    run_agent_with_runtime_status(
+        agent,
+        external_shutdown,
+        runtime_status_owner,
+        runtime_status,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(super) async fn run_agent_with_readiness_writer(
+    agent: Gents,
+    external_shutdown: watch::Receiver<bool>,
+    writer: Arc<dyn crate::behavior_readiness_publisher::BehaviorReadinessWriter>,
+    retry_delay: std::time::Duration,
+) -> Result<()> {
+    run_agent_with_readiness_writer_and_slot_runner(
+        agent,
+        external_shutdown,
+        writer,
+        retry_delay,
+        None,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
+    agent: Gents,
+    external_shutdown: watch::Receiver<bool>,
+    writer: Arc<dyn crate::behavior_readiness_publisher::BehaviorReadinessWriter>,
+    retry_delay: std::time::Duration,
+    slot_runner: Option<TestSlotRunner>,
+) -> Result<()> {
+    crate::migration::ensure_all_runtime_migrations(agent.node.clone())
+        .await
+        .context("ensure runtime schema migrations")?;
+    let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+        agent.node.clone(),
+        agent.agent_did().to_string(),
+        writer,
+        retry_delay,
+    );
+    run_agent_with_runtime_status(
+        agent,
+        external_shutdown,
+        runtime_status_owner,
+        runtime_status,
+        slot_runner,
+    )
+    .await
+}
+
+async fn run_agent_with_runtime_status(
+    agent: Gents,
+    external_shutdown: watch::Receiver<bool>,
+    runtime_status_owner: crate::runtime_status::RuntimeStatusOwner,
+    runtime_status: RuntimeStatusHandle,
+    #[cfg(test)] slot_runner: Option<TestSlotRunner>,
+) -> Result<()> {
+    let terminal_observer = agent.process_state_observer.clone();
+    let initialized = runtime_status
+        .initialize_startup(agent.default_behavior_id())
         .await;
+    let body_result = match initialized {
+        Ok(()) => {
+            run_agent_owned(
+                agent,
+                external_shutdown,
+                runtime_status.clone(),
+                #[cfg(test)]
+                slot_runner,
+            )
+            .await
+        }
+        Err(error) => Err(error.context("initialize runtime behavior readiness")),
+    };
+
+    finish_run_agent(
+        body_result,
+        runtime_status_owner,
+        runtime_status,
+        terminal_observer,
+    )
+    .await
+}
+
+async fn finish_run_agent(
+    body_result: Result<()>,
+    runtime_status_owner: crate::runtime_status::RuntimeStatusOwner,
+    runtime_status: RuntimeStatusHandle,
+    terminal_observer: Option<Arc<dyn crate::agent::ProcessLifecycleObserver>>,
+) -> Result<()> {
+    let mut teardown_error = None;
+    let process_state = runtime_status.readiness().observation().process_state();
+    if process_state != gents_protocol::row::BehaviorReadinessProcessState::Shutdown {
+        if process_state != gents_protocol::row::BehaviorReadinessProcessState::ShuttingDown {
+            if let Err(error) = runtime_status
+                .set_process_state_durable(ProcessLifecycleState::ShuttingDown)
+                .await
+            {
+                tracing::error!(error = %error, "failed to publish terminal ShuttingDown state");
+                teardown_error = Some(error);
+            } else if let Some(observer) = &terminal_observer {
+                observer.on_process_state_change(ProcessLifecycleState::ShuttingDown);
+            }
+        }
+        if let Err(error) = runtime_status
+            .set_process_state_durable(ProcessLifecycleState::Shutdown)
+            .await
+        {
+            tracing::error!(error = %error, "failed to publish terminal Shutdown state");
+            if teardown_error.is_none() {
+                teardown_error = Some(error);
+            }
+        } else if let Some(observer) = &terminal_observer {
+            observer.on_process_state_change(ProcessLifecycleState::Shutdown);
+        }
+    }
+    if let Err(error) = runtime_status_owner.close().await {
+        tracing::error!(error = %error, "failed to close runtime behavior readiness owner");
+        if teardown_error.is_none() {
+            teardown_error = Some(error);
+        }
+    }
+
+    match body_result {
+        Err(error) => Err(error),
+        Ok(()) => teardown_error.map_or(Ok(()), Err),
+    }
+}
+
+async fn run_agent_owned(
+    agent: Gents,
+    mut external_shutdown: watch::Receiver<bool>,
+    runtime_status: RuntimeStatusHandle,
+    #[cfg(test)] slot_runner: Option<TestSlotRunner>,
+) -> Result<()> {
+    let cancel = CancellationToken::new();
+    let (fatal_error_tx, mut fatal_error_rx) = mpsc::unbounded_channel();
+    // Every owned runtime task listens to this internal signal. If any one
+    // background task exits unexpectedly, the coordinator closes admission,
+    // broadcasts shutdown to the remaining tasks and awaits their joins.
+    let (runtime_shutdown_tx, shutdown) = watch::channel(false);
     runtime_status
         .set_reconcile_phase(ReconcilePhase::Resolving)
         .await;
@@ -121,6 +392,7 @@ pub(in crate::agent) async fn run_agent(
         agent.local_hostname.clone(),
         agent.local_subnet.clone(),
         agent.agent_did().to_string(),
+        Some(agent.principal_arc().identity.clone()),
     );
     backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
 
@@ -142,25 +414,6 @@ pub(in crate::agent) async fn run_agent(
         .document_runtime_context()
         .is_some()
         .then(|| agent.node.subscribe(&[defra_node::EventName::Update]));
-    let _health_checker = spawn_health_checker(
-        agent.node.clone(),
-        agent.mcp_pool.clone(),
-        health_map.clone(),
-        agent.local_hostname.clone(),
-        agent.local_subnet.clone(),
-        cancel.child_token(),
-        agent.health_checker_options.clone(),
-        agent.agent_did().to_string(),
-    );
-    let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
-    let _backend_prober = crate::backend_health::spawn_backend_prober(
-        agent.node.clone(),
-        agent.backend_health.clone(),
-        agent.backend_prober_options.clone(),
-        backend_health_events_tx,
-        cancel.child_token(),
-    );
-
     log_recovery(
         agent.node.as_ref(),
         agent.agent_did(),
@@ -171,7 +424,12 @@ pub(in crate::agent) async fn run_agent(
         .await
         .context("ensure local HostDeployment")?;
     for (behavior_id, reason) in &agent.unavailable_behaviors {
-        tracing::warn!(behavior_id = %behavior_id, reason = %reason, "behavior unavailable at startup");
+        tracing::warn!(
+            behavior_id = %behavior_id,
+            public_reason = ?reason.public_reason,
+            diagnostic = %reason.diagnostic,
+            "behavior unavailable at startup"
+        );
     }
 
     let startup_barrier = Arc::new(StartupBarrier::new(
@@ -181,7 +439,20 @@ pub(in crate::agent) async fn run_agent(
             .cloned()
             .collect::<Vec<_>>(),
     ));
+    #[cfg(not(test))]
+    let admission_gate = super::router::RuntimeAdmissionGate::closed();
+    #[cfg(test)]
+    let admission_gate = super::router::RuntimeAdmissionGate::closed_with_dispatch_probe(
+        agent.router_dispatch_probe.clone(),
+    );
+    let lifecycle = Arc::new(RuntimeLifecycleCoordinator::new(
+        admission_gate.clone(),
+        runtime_status.clone(),
+        agent.process_state_observer.clone(),
+    ));
     let admission_registry = AdmissionRegistry::new(agent.node.clone());
+    let (enrollment_owner, enrollment_handle) =
+        crate::agent::p2p_reconcile::enrollment_authority_channel();
     let lsp_pool = tool_runtime.lsp_pool.clone();
     let runtime = RuntimeContext {
         node: agent.node.clone(),
@@ -192,16 +463,21 @@ pub(in crate::agent) async fn run_agent(
         background_execution_registry: agent.background_execution_registry.clone(),
         startup_barrier: startup_barrier.clone(),
         startup_readiness: agent.startup_readiness.clone(),
-        startup_demotions: runtime_status.startup_demotions(),
+        runtime_status: runtime_status.clone(),
         operator_tool_root: agent.operator_tool_root().map(PathBuf::from),
+        enrollment_authority: enrollment_handle.clone(),
     };
     let runtime_for_runner = runtime.clone();
-    let startup_demotions = runtime_status.startup_demotions();
+    #[cfg(test)]
+    let test_slot_runner = slot_runner;
+    let readiness_fatal_error = fatal_error_tx.clone();
     let slot_failure_policy: Arc<dyn crate::agent::reconcile::SlotFailurePolicy> =
         Arc::new(StartupSlotFailurePolicy {
             barrier: startup_barrier.clone(),
-            demotions: startup_demotions.clone(),
             runtime_status: runtime_status.clone(),
+            admission_gate: admission_gate.clone(),
+            runtime_cancel: cancel.clone(),
+            fatal_error: fatal_error_tx,
             observer: agent.startup_build_failure_observer.clone(),
             budget: agent.startup_readiness.build_failure_budget,
         });
@@ -209,50 +485,92 @@ pub(in crate::agent) async fn run_agent(
         resolved_snapshot,
         admission_registry.clone(),
         agent.retry_policy.clone(),
-        move |behavior, tool_surface, request_rx, shutdown| {
+        move |behavior, tool_surface, request_rx, generation, shutdown| {
             let runtime = runtime_for_runner.clone();
+            #[cfg(test)]
+            let test_slot_runner = test_slot_runner.clone();
             async move {
+                #[cfg(test)]
+                if let Some(test_slot_runner) = test_slot_runner {
+                    return test_slot_runner(generation, shutdown.clone()).await;
+                }
                 runtime
-                    .run_behavior(behavior, tool_surface, request_rx, shutdown)
+                    .run_behavior(behavior, tool_surface, request_rx, generation, shutdown)
                     .await
             }
         },
         runtime_status.clone(),
         shutdown.clone(),
         Some(slot_failure_policy),
-    )?;
+    )
+    .await?;
     let initial_active_snapshot = generation_supervisor.current_snapshot();
-    runtime_status
+    if let Err(error) = runtime_status
         .publish_startup_snapshot(initial_active_snapshot.as_ref())
-        .await;
+        .await
+    {
+        // Bootstrap owns live generation-one slots before the initial source is
+        // durable. Transfer them through the same ordered shutdown boundary as
+        // the steady-state supervisor; dropping JoinHandles here would detach
+        // executors that can outlive the readiness owner.
+        runtime_shutdown_tx.send_replace(true);
+        cancel.cancel();
+        generation_supervisor.shutdown_slots().await;
+        return Err(error).context("durably publish startup behavior readiness source");
+    }
     let (active_snapshot_tx, active_snapshot_rx) = watch::channel(initial_active_snapshot.clone());
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();
+    let health_checker = spawn_health_checker(
+        agent.node.clone(),
+        agent.mcp_pool.clone(),
+        health_map.clone(),
+        agent.local_hostname.clone(),
+        agent.local_subnet.clone(),
+        cancel.child_token(),
+        agent.health_checker_options.clone(),
+        agent.agent_did().to_string(),
+    );
+    let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
+    let backend_prober = crate::backend_health::spawn_backend_prober(
+        agent.node.clone(),
+        agent.backend_health.clone(),
+        agent.backend_prober_options.clone(),
+        backend_health_events_tx,
+        cancel.child_token(),
+    );
 
-    if let Some(observer) = agent.runtime_snapshot_observer.clone() {
-        let mut snapshot_rx = active_snapshot_rx.clone();
-        let mut observer_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            loop {
-                let (generation, runnable) = {
-                    let snapshot = snapshot_rx.borrow_and_update();
-                    let mut ids: Vec<String> = snapshot.behaviors.keys().cloned().collect();
-                    ids.sort();
-                    (snapshot.generation, ids)
-                };
-                observer.on_generation_published(generation, &runnable);
+    let runtime_snapshot_observer_handle =
+        if let Some(observer) = agent.runtime_snapshot_observer.clone() {
+            let mut snapshot_rx = active_snapshot_rx.clone();
+            let mut observer_shutdown = shutdown.clone();
+            Some(tokio::spawn(async move {
+                loop {
+                    let (generation, fingerprint, runnable) = {
+                        let snapshot = snapshot_rx.borrow_and_update();
+                        let mut ids: Vec<String> = snapshot.behaviors.keys().cloned().collect();
+                        ids.sort();
+                        (
+                            snapshot.generation,
+                            snapshot.configuration_fingerprint(),
+                            ids,
+                        )
+                    };
+                    observer.on_generation_published(generation, &fingerprint, &runnable);
 
-                tokio::select! {
-                    changed = snapshot_rx.changed() => {
-                        if changed.is_err() {
-                            break;
+                    tokio::select! {
+                        changed = snapshot_rx.changed() => {
+                            if changed.is_err() {
+                                break;
+                            }
                         }
+                        _ = observer_shutdown.changed() => break,
                     }
-                    _ = observer_shutdown.changed() => break,
                 }
-            }
-        });
-    }
+            }))
+        } else {
+            None
+        };
 
     let trigger_engine_node = agent.node.clone();
     let trigger_engine_schedule_snapshot_rx = active_snapshot_rx.clone();
@@ -261,6 +579,9 @@ pub(in crate::agent) async fn run_agent(
     let trigger_engine_subagent_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_engine_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
+    let trigger_engine_peer_admission: Arc<
+        dyn crate::agent::p2p_reconcile::PeerAdmissionAuthority,
+    > = Arc::new(enrollment_handle.clone());
     let trigger_engine_cancel = cancel.child_token();
     let trigger_engine_startup_barrier = startup_barrier.clone();
     // Construct the `ManualSource` up-front so the `ManualTriggerHandle` can
@@ -313,6 +634,7 @@ pub(in crate::agent) async fn run_agent(
             Box::new(crate::trigger_engine::subagent_source::SubagentSource::new(
                 trigger_engine_subagent_snapshot_rx,
                 trigger_engine_node.clone(),
+                trigger_engine_peer_admission,
                 trigger_engine_cancel.clone(),
             ));
         let goal_source: Box<dyn crate::trigger_engine::TriggerSource> =
@@ -365,11 +687,10 @@ pub(in crate::agent) async fn run_agent(
 
     let ready_cancel = cancel.child_token();
     let ready_startup_barrier = startup_barrier.clone();
-    let ready_observer = agent.process_state_observer.clone();
-    let ready_runtime_status = runtime_status.clone();
+    let ready_lifecycle = lifecycle.clone();
     let ready_behavior_count = initial_active_snapshot.behaviors.len();
     let ready_unavailable_count = initial_active_snapshot.unavailable_behaviors.len();
-    let ready_demotions = startup_demotions.clone();
+    let ready_runtime_status = runtime_status.clone();
     let readiness_handle = tokio::spawn(async move {
         let mut watchdog = tokio::time::interval(std::time::Duration::from_secs(60));
         watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -387,13 +708,20 @@ pub(in crate::agent) async fn run_agent(
                 }
             }
         }
-        ready_runtime_status
-            .set_process_state(ProcessLifecycleState::Ready)
-            .await;
-        if let Some(observer) = &ready_observer {
-            observer.on_process_state_change(ProcessLifecycleState::Ready);
+        let became_ready = match ready_lifecycle.become_ready().await {
+            Ok(ready) => ready,
+            Err(error) => {
+                tracing::error!(error = %error, "failed to durably publish runtime readiness");
+                let _ = readiness_fatal_error
+                    .send(error.context("durably publish runtime Ready state"));
+                return;
+            }
+        };
+        if !became_ready {
+            return;
         }
-        let demoted = ready_demotions.snapshot();
+        let demoted = ready_runtime_status.readiness().observation();
+        let demoted = demoted.demotions();
         if demoted.is_empty() {
             tracing::info!(
                 runnable_behaviors = ready_behavior_count,
@@ -446,13 +774,31 @@ pub(in crate::agent) async fn run_agent(
 
     let cancel_mirror_node = agent.node.clone();
     let cancel_mirror_snapshot_rx = active_snapshot_rx.clone();
+    let cancel_mirror_peer_admission: Arc<dyn crate::agent::p2p_reconcile::PeerAdmissionAuthority> =
+        Arc::new(enrollment_handle.clone());
     let cancel_mirror_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::CrossDeploymentCancelMirror(
             crate::trigger_engine::cross_deployment_cancel_mirror::run_cross_deployment_cancel_mirror(
                 cancel_mirror_node,
                 cancel_mirror_snapshot_rx,
+                cancel_mirror_peer_admission,
                 cancel_mirror_cancel,
+            )
+            .await,
+        )
+    });
+
+    let enrollment_node = agent.node.clone();
+    let enrollment_identity = agent.principal_arc().identity.clone();
+    let enrollment_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::EnrollmentReconcile(
+            crate::agent::p2p_reconcile::run_enrollment_reconciler(
+                enrollment_node,
+                enrollment_identity,
+                enrollment_owner,
+                enrollment_cancel,
             )
             .await,
         )
@@ -460,12 +806,14 @@ pub(in crate::agent) async fn run_agent(
 
     let pairing_node = agent.node.clone();
     let pairing_identity = agent.principal_arc().identity.clone();
+    let pairing_enrollment = enrollment_handle.clone();
     let pairing_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::PairingReconcile(
             crate::agent::p2p_reconcile::run_pairing_reconciler(
                 pairing_node,
                 pairing_identity,
+                pairing_enrollment,
                 pairing_cancel,
             )
             .await,
@@ -501,29 +849,17 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
-    let network_node = agent.node.clone();
-    let network_identity = agent.principal_arc().identity.clone();
-    let network_cancel = cancel.child_token();
+    let hydration_node = agent.node.clone();
+    let hydration_enrollment = enrollment_handle.clone();
+    let hydration_identity = agent.principal_arc().identity.clone();
+    let hydration_cancel = cancel.child_token();
     background_tasks.spawn(async move {
-        BackgroundTaskResult::NetworkReconcile(
-            crate::agent::p2p_reconcile::run_network_reconciler(
-                network_node,
-                network_identity,
-                network_cancel,
-            )
-            .await,
-        )
-    });
-
-    let bearer_node = agent.node.clone();
-    let bearer_identity = agent.principal_arc().identity.clone();
-    let bearer_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::BearerClaimReconcile(
-            crate::agent::p2p_reconcile::run_bearer_claim_reconciler(
-                bearer_node,
-                bearer_identity,
-                bearer_cancel,
+        BackgroundTaskResult::SessionHydrationReconcile(
+            crate::agent::p2p_reconcile::run_session_hydration_reconciler(
+                hydration_node,
+                hydration_enrollment,
+                hydration_identity,
+                hydration_cancel,
             )
             .await,
         )
@@ -534,41 +870,17 @@ pub(in crate::agent) async fn run_agent(
         .document_runtime_context()
         .and_then(|context| context.tool_ceiling.root())
         .map(std::path::Path::to_path_buf);
+    let persona_request_authority = enrollment_handle;
+    let persona_request_identity = agent.principal_arc().identity.clone();
     let persona_request_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::PersonaRequestReconcile(
             crate::agent::p2p_reconcile::run_persona_request_reconciler(
                 persona_request_node,
                 persona_request_ceiling,
+                persona_request_authority,
+                persona_request_identity,
                 persona_request_cancel,
-            )
-            .await,
-        )
-    });
-
-    let hydration_node = agent.node.clone();
-    let hydration_identity = agent.principal_arc().identity.clone();
-    let hydration_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::SessionHydrationReconcile(
-            crate::agent::p2p_reconcile::run_session_hydration_reconciler(
-                hydration_node,
-                hydration_identity,
-                hydration_cancel,
-            )
-            .await,
-        )
-    });
-
-    let reciprocal_node = agent.node.clone();
-    let reciprocal_identity = agent.principal_arc().identity.clone();
-    let reciprocal_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::ReciprocalReconcile(
-            crate::agent::p2p_reconcile::run_reciprocal_reconciler(
-                reciprocal_node,
-                reciprocal_identity,
-                reciprocal_cancel,
             )
             .await,
         )
@@ -593,21 +905,13 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
-    let discovery_node = agent.node.clone();
-    let discovery_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::DiscoveryReconcile(
-            crate::agent::p2p_reconcile::run_discovery_reconciler(discovery_node, discovery_cancel)
-                .await,
-        )
-    });
-
     let router_node = agent.node.clone();
     let router_agent_did = agent.agent_did().to_string();
     let router_deployment_id = local_deployment_id.clone();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
     let router_shutdown = shutdown.clone();
-    let router_startup_demotions = startup_demotions.clone();
+    let router_admission_gate = admission_gate.clone();
+    let router_runtime_status = runtime_status.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::Router(
             super::router::run_router(
@@ -616,21 +920,8 @@ pub(in crate::agent) async fn run_agent(
                 router_deployment_id,
                 router_active_snapshot_rx,
                 router_shutdown,
-                router_startup_demotions,
-            )
-            .await,
-        )
-    });
-
-    let router_observer_active_snapshot_rx = active_snapshot_rx.clone();
-    let router_observer_runtime_status = runtime_status.clone();
-    let router_observer_shutdown = shutdown.clone();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::RouterObserver(
-            super::router::run_router_generation_observer(
-                router_observer_active_snapshot_rx,
-                router_observer_runtime_status,
-                router_observer_shutdown,
+                router_admission_gate,
+                router_runtime_status,
             )
             .await,
         )
@@ -693,43 +984,38 @@ pub(in crate::agent) async fn run_agent(
         });
     }
 
-    let (result, shutdown_requested) = tokio::select! {
-        _ = shutdown.changed() => (Ok(()), true),
+    let result = tokio::select! {
+        biased;
+        Some(error) = fatal_error_rx.recv() => Err(error),
+        _ = external_shutdown.changed() => Ok(()),
         Some(joined) = background_tasks.join_next() => match joined {
-            Ok(BackgroundTaskResult::Router(result)) => (result, false),
-            Ok(BackgroundTaskResult::RouterObserver(result)) => (result, false),
-            Ok(BackgroundTaskResult::ExecutorStatus(result)) => (result, false),
-            Ok(BackgroundTaskResult::Reconcile(result)) => (result, false),
-            Ok(BackgroundTaskResult::Control(result)) => (result, false),
-            Ok(BackgroundTaskResult::SubagentCompletion(result)) => (result, false),
-            Ok(BackgroundTaskResult::GraphRunReconcile(result)) => (result, false),
-            Ok(BackgroundTaskResult::CrossDeploymentCancelMirror(result)) => (result, false),
-            Ok(BackgroundTaskResult::PairingReconcile(result)) => (result, false),
-            Ok(BackgroundTaskResult::RegistryHeartbeat(result)) => (result, false),
-            Ok(BackgroundTaskResult::EndpointHeartbeat(result)) => (result, false),
-            Ok(BackgroundTaskResult::NetworkReconcile(result)) => (result, false),
-            Ok(BackgroundTaskResult::ReciprocalReconcile(result)) => (result, false),
-            Ok(BackgroundTaskResult::BearerClaimReconcile(result)) => (result, false),
-            Ok(BackgroundTaskResult::PersonaRequestReconcile(result)) => (result, false),
-            Ok(BackgroundTaskResult::SessionHydrationReconcile(result)) => (result, false),
-            Ok(BackgroundTaskResult::DiscoveryReconcile(result)) => (result, false),
-            Ok(BackgroundTaskResult::DirectoryProjection(result)) => (result, false),
-            Err(error) => (Err(anyhow!("background task join failed: {error}")), false),
+            Ok(BackgroundTaskResult::Router(result)) => result,
+            Ok(BackgroundTaskResult::ExecutorStatus(result)) => result,
+            Ok(BackgroundTaskResult::Reconcile(result)) => result,
+            Ok(BackgroundTaskResult::Control(result)) => result,
+            Ok(BackgroundTaskResult::SubagentCompletion(result)) => result,
+            Ok(BackgroundTaskResult::GraphRunReconcile(result)) => result,
+            Ok(BackgroundTaskResult::CrossDeploymentCancelMirror(result)) => result,
+            Ok(BackgroundTaskResult::PairingReconcile(result)) => result,
+            Ok(BackgroundTaskResult::EnrollmentReconcile(result)) => result,
+            Ok(BackgroundTaskResult::RegistryHeartbeat(result)) => result,
+            Ok(BackgroundTaskResult::EndpointHeartbeat(result)) => result,
+            Ok(BackgroundTaskResult::SessionHydrationReconcile(result)) => result,
+            Ok(BackgroundTaskResult::PersonaRequestReconcile(result)) => result,
+            Ok(BackgroundTaskResult::DirectoryProjection(result)) => result,
+            Err(error) => Err(anyhow!("background task join failed: {error}")),
         },
-        else => (Ok(()), false),
+        else => Ok(()),
     };
 
-    if let Some(observer) = &agent.process_state_observer {
-        observer.on_process_state_change(ProcessLifecycleState::ShuttingDown);
+    let mut teardown_error = None;
+    if let Err(error) = lifecycle.begin_shutdown().await {
+        tracing::error!(error = %error, "failed to begin ordered runtime shutdown");
+        teardown_error = Some(error);
     }
-    runtime_status
-        .set_process_state(ProcessLifecycleState::ShuttingDown)
-        .await;
 
+    runtime_shutdown_tx.send_replace(true);
     cancel.cancel();
-    if !shutdown_requested {
-        background_tasks.abort_all();
-    }
     while let Some(joined) = background_tasks.join_next().await {
         if let Err(error) = joined {
             if !error.is_cancelled() {
@@ -741,16 +1027,24 @@ pub(in crate::agent) async fn run_agent(
     let _ = readiness_handle.await;
     let _ = trigger_engine_handle.await;
     let _ = callback_engine_handle.await;
+    let _ = health_checker.await;
+    let _ = backend_prober.await;
+    if let Some(handle) = runtime_snapshot_observer_handle {
+        let _ = handle.await;
+    }
     lsp_pool.shutdown().await;
 
-    if let Some(observer) = &agent.process_state_observer {
-        observer.on_process_state_change(ProcessLifecycleState::Shutdown);
+    if let Err(error) = lifecycle.finish_shutdown().await {
+        tracing::error!(error = %error, "failed to finish ordered runtime shutdown");
+        if teardown_error.is_none() {
+            teardown_error = Some(error);
+        }
     }
-    runtime_status
-        .set_process_state(ProcessLifecycleState::Shutdown)
-        .await;
 
-    result
+    match result {
+        Err(error) => Err(error),
+        Ok(()) => teardown_error.map_or(Ok(()), Err),
+    }
 }
 
 async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_behavior_id: &str) {
@@ -840,15 +1134,19 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
     }
 }
 
-fn is_degraded_startup_unavailable_reason(reason: &str) -> bool {
-    let reason = reason.trim();
-    reason.ends_with(" is disabled")
-        || (reason.contains(" backend ")
-            && reason.contains(" is unavailable (enabled=")
-            && reason.contains(" probe_status="))
-        || reason.contains("did not advertise model")
-        || reason.contains("startup readiness probe")
-        || reason.contains("has no backend binding")
+fn is_degraded_startup_unavailable_reason(
+    reason: gents_protocol::row::BehaviorReadinessUnavailableReason,
+) -> bool {
+    use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
+
+    matches!(
+        reason,
+        Reason::BehaviorDisabled
+            | Reason::BackendNotConfigured
+            | Reason::BackendDisabled
+            | Reason::BackendTemporarilyUnavailable
+            | Reason::CredentialsRequired
+    )
 }
 
 async fn validate_startup_snapshot(
@@ -856,6 +1154,15 @@ async fn validate_startup_snapshot(
     tool_runtime: &ToolRuntimeContext,
     snapshot: &ResolvedRuntimeSnapshot,
 ) -> Result<()> {
+    snapshot
+        .validate_behavior_readiness_source()
+        .with_context(|| {
+            format!(
+                "validate behavior readiness source for {}",
+                agent.agent_did()
+            )
+        })?;
+
     if snapshot.behaviors.is_empty() {
         let mut unavailable = snapshot
             .unavailable_behaviors
@@ -873,8 +1180,8 @@ async fn validate_startup_snapshot(
 
         let blocking = unavailable
             .iter()
-            .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason))
-            .map(|(behavior_id, reason)| format!("{behavior_id}: {reason}"))
+            .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason.public_reason))
+            .map(|(behavior_id, reason)| format!("{behavior_id}: {}", reason.public_message()))
             .collect::<Vec<_>>();
         if !blocking.is_empty() {
             anyhow::bail!(
@@ -923,8 +1230,6 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
                 resolve_tool_surfaces(agent.node.as_ref(), &agent.behaviors).await?;
             let backend_admission_configs =
                 resolve_backend_admission_configs(agent.node.as_ref(), &agent.behaviors).await?;
-            let paired_peer_dids =
-                load_startup_paired_peer_dids(agent.node.as_ref(), agent.agent_did()).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
                 agent.default_behavior_id().to_string(),
                 agent.behaviors.clone(),
@@ -936,57 +1241,9 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
                 snapshot
                     .with_principal(agent.principal_arc())
                     .with_local_did(agent.agent_did().to_string())
-                    .with_paired_peer_dids(paired_peer_dids)
             })
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct StartupPeerPairingDesiredRow {
-    peer_id: String,
-    agent_did: Option<String>,
-}
-
-async fn load_startup_paired_peer_dids(
-    node: &defra_node::EmbeddedNode,
-    local_did: &str,
-) -> Result<HashSet<String>> {
-    let query = r#"{
-        PeerPairingDesired {
-            peer_id
-            agent_did
-        }
-    }"#;
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query PeerPairingDesired for startup paired peer DIDs failed: {:?}",
-            response.errors
-        );
-    }
-    let rows: Vec<StartupPeerPairingDesiredRow> = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("PeerPairingDesired"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    let local_did = local_did.trim();
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            row.agent_did
-                .as_deref()
-                .map(str::trim)
-                .filter(|did| !did.is_empty())
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    let peer_id = row.peer_id.trim();
-                    peer_id.starts_with("did:").then(|| peer_id.to_string())
-                })
-        })
-        .filter(|did| !did.trim().is_empty() && did.trim() != local_did)
-        .collect())
 }
 
 async fn resolve_backend_admission_configs(
@@ -1050,18 +1307,19 @@ async fn resolve_document_snapshot_with_tools(
 #[cfg(test)]
 mod degraded_reason_tests {
     use super::is_degraded_startup_unavailable_reason;
+    use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
 
     #[test]
     fn unprobed_backend_is_degraded() {
         assert!(is_degraded_startup_unavailable_reason(
-            "behavior 'default' backend workstation-1 is unavailable (enabled=true probe_status=unknown)"
+            Reason::BackendTemporarilyUnavailable
         ));
     }
 
     #[test]
     fn disabled_behavior_is_degraded() {
         assert!(is_degraded_startup_unavailable_reason(
-            "behavior 'x' is disabled"
+            Reason::BehaviorDisabled
         ));
     }
 
@@ -1070,14 +1328,429 @@ mod degraded_reason_tests {
         // A backendless behavior (e.g. the seeded bootstrap default before a
         // backend is configured) must not be fatal at startup.
         assert!(is_degraded_startup_unavailable_reason(
-            "behavior did:key:zABC:default has no backend binding"
+            Reason::BackendNotConfigured
         ));
     }
 
     #[test]
     fn unknown_structural_reason_is_blocking() {
         assert!(!is_degraded_startup_unavailable_reason(
-            "behavior 'default' references missing tool selection 'gone'"
+            Reason::ToolConfigurationInvalid
         ));
+    }
+}
+
+#[cfg(test)]
+mod startup_slot_failure_policy_tests {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use crate::agent::reconcile::SlotFailurePolicy as _;
+    use crate::behavior_readiness_publisher::{
+        BehaviorReadinessWriter, FatalBehaviorReadinessWrite,
+    };
+    use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+
+    use super::*;
+
+    struct FailDemotionWriter;
+
+    #[async_trait::async_trait]
+    impl BehaviorReadinessWriter for FailDemotionWriter {
+        async fn upsert(
+            &self,
+            _agent_did: &str,
+            snapshot: &gents_protocol::row::BehaviorReadinessSnapshot,
+            _updated_at: &str,
+        ) -> Result<()> {
+            if snapshot.behaviors.iter().any(|entry| {
+                entry.reason
+                    == Some(gents_protocol::row::BehaviorReadinessUnavailableReason::ExecutorStartFailed)
+            }) {
+                return Err(FatalBehaviorReadinessWrite.into());
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn aborted_staged_generation_does_not_release_active_startup_obligation() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (status_owner, runtime_status) =
+            RuntimeStatusHandle::start(node.clone(), "did:test:startup-generation-barrier");
+        runtime_status.initialize_startup("general").await.unwrap();
+        let barrier = Arc::new(StartupBarrier::ready_for_test());
+        let (fatal_error, _fatal_errors) = mpsc::unbounded_channel();
+        let policy = StartupSlotFailurePolicy {
+            barrier: barrier.clone(),
+            runtime_status,
+            admission_gate: super::super::router::RuntimeAdmissionGate::closed(),
+            runtime_cancel: CancellationToken::new(),
+            fatal_error,
+            observer: None,
+            budget: 1,
+        };
+
+        policy.on_slot_created("general", 1).await.unwrap();
+        policy.on_slot_created("general", 2).await.unwrap();
+        assert!(barrier.is_pending("general", 1).await);
+        assert!(barrier.is_pending("general", 2).await);
+
+        policy.on_slot_retired("general", 2, true).await;
+        assert!(barrier.is_pending("general", 1).await);
+        assert!(!barrier.is_pending("general", 2).await);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), barrier.wait_ready())
+                .await
+                .is_err(),
+            "aborting staged generation two released unresolved generation one"
+        );
+
+        policy.on_slot_retired("general", 1, true).await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
+            .await
+            .expect("exact generation-one retirement should release the final obligation");
+        status_owner.close().await.unwrap();
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn demotion_persistence_failure_closes_admission_and_cancels_runtime() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+            node.clone(),
+            "did:test:demotion-fail-closed",
+            Arc::new(FailDemotionWriter),
+            std::time::Duration::from_millis(1),
+        );
+        runtime_status.initialize_startup("general").await.unwrap();
+        runtime_status
+            .readiness()
+            .register_slot("general", 1)
+            .await
+            .unwrap();
+        let (dispatcher, _requests) = mpsc::channel(1);
+        runtime_status
+            .readiness()
+            .publish_snapshot(&ActiveRuntimeSnapshot {
+                generation: 1,
+                principal: None,
+                local_did: String::new(),
+                default_behavior_id: "general".to_string(),
+                behaviors: HashMap::new(),
+                tool_surfaces: HashMap::new(),
+                backend_admission_configs: HashMap::new(),
+                unavailable_behaviors: HashMap::new(),
+                active_schedules: HashMap::new(),
+                unavailable_schedules: HashSet::new(),
+                active_event_triggers: HashMap::new(),
+                unavailable_event_triggers: HashSet::new(),
+                active_tasks: HashMap::new(),
+                dispatchers: HashMap::from([("general".to_string(), dispatcher)]),
+                behavior_executor_capacities: HashMap::new(),
+                behavior_executor_queue_capacities: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        runtime_status
+            .readiness()
+            .set_router_generation(1)
+            .await
+            .unwrap();
+        runtime_status
+            .set_process_state_durable(ProcessLifecycleState::Ready)
+            .await
+            .unwrap();
+
+        let barrier = Arc::new(StartupBarrier::ready_for_test());
+        barrier.register_behavior("general", 1).await;
+        let gate = super::super::router::RuntimeAdmissionGate::closed();
+        gate.open().await;
+        let runtime_cancel = CancellationToken::new();
+        let (fatal_error, mut fatal_errors) = mpsc::unbounded_channel();
+        let policy = StartupSlotFailurePolicy {
+            barrier,
+            runtime_status: runtime_status.clone(),
+            admission_gate: gate.clone(),
+            runtime_cancel: runtime_cancel.clone(),
+            fatal_error,
+            observer: None,
+            budget: 1,
+        };
+
+        assert!(policy
+            .try_demote("general", 1, "executor failed")
+            .await
+            .is_err());
+        assert!(!gate.is_open().await, "failed veto left routing open");
+        assert!(
+            runtime_cancel.is_cancelled(),
+            "runtime teardown was not armed"
+        );
+        let fatal = fatal_errors
+            .recv()
+            .await
+            .expect("runtime coordinator must receive demotion persistence failure");
+        assert_eq!(fatal.to_string(), "injected fatal behavior readiness write");
+        assert_eq!(
+            runtime_status
+                .readiness()
+                .observation()
+                .demotion_reason("general"),
+            None,
+            "failed persistence must not forge a committed demotion"
+        );
+
+        status_owner.close().await.unwrap();
+        node.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod run_agent_teardown_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio::sync::mpsc;
+
+    use crate::behavior_readiness_publisher::BehaviorReadinessWriter;
+
+    use super::*;
+
+    // This is a deadlock guard, not a teardown latency SLO. The full test
+    // suite runs many embedded DefraDB nodes concurrently on shared runners.
+    const DEADLOCK_GUARD: Duration = Duration::from_secs(30);
+
+    struct StuckAfterInitializeWriter {
+        attempts: mpsc::UnboundedSender<()>,
+        writes: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl BehaviorReadinessWriter for StuckAfterInitializeWriter {
+        async fn upsert(
+            &self,
+            _agent_did: &str,
+            _snapshot: &gents_protocol::row::BehaviorReadinessSnapshot,
+            _updated_at: &str,
+        ) -> Result<()> {
+            if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Ok(());
+            }
+            let _ = self.attempts.send(());
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn saturated_stuck_publisher_cannot_wedge_run_agent_teardown() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
+        let (owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+            node.clone(),
+            "did:test:run-agent-teardown",
+            Arc::new(StuckAfterInitializeWriter {
+                attempts: attempts_tx,
+                writes: AtomicUsize::new(0),
+            }),
+            Duration::from_millis(1),
+        );
+        runtime_status.initialize_startup("general").await.unwrap();
+
+        let blocked = {
+            let runtime_status = runtime_status.clone();
+            tokio::spawn(async move {
+                runtime_status
+                    .set_process_state_durable(ProcessLifecycleState::Ready)
+                    .await
+            })
+        };
+        attempts_rx.recv().await.expect("Ready write must be stuck");
+        let queued = (0..64)
+            .map(|generation| {
+                let runtime_status = runtime_status.clone();
+                tokio::spawn(async move {
+                    runtime_status
+                        .readiness()
+                        .set_router_generation(generation)
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while runtime_status.readiness().command_capacity_for_test() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("test must saturate the runtime publisher queue");
+
+        let admission_gate = super::super::router::RuntimeAdmissionGate::closed();
+        admission_gate.open().await;
+        admission_gate.close().await;
+        assert!(!admission_gate.is_open().await);
+
+        let error = tokio::time::timeout(
+            DEADLOCK_GUARD,
+            finish_run_agent(
+                Err(anyhow::anyhow!("sentinel runtime body failure")),
+                owner,
+                runtime_status,
+                None,
+            ),
+        )
+        .await
+        .expect("run_agent teardown must return boundedly")
+        .expect_err("runtime body failure must be preserved");
+        assert_eq!(error.to_string(), "sentinel runtime body failure");
+        assert!(blocked.await.unwrap().is_err());
+        let mut rejected = 0;
+        for queued in queued {
+            if queued.await.unwrap().is_err() {
+                rejected += 1;
+            }
+        }
+        assert!(
+            rejected > 0,
+            "publisher cancellation must reject queued work"
+        );
+        node.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_coordinator_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    use tokio::sync::{Barrier, Notify, Semaphore};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingObserver {
+        states: StdMutex<Vec<ProcessLifecycleState>>,
+    }
+
+    impl ProcessLifecycleObserver for RecordingObserver {
+        fn on_process_state_change(&self, state: ProcessLifecycleState) {
+            self.states.lock().expect("observer mutex").push(state);
+        }
+    }
+
+    struct FailFirstReadyWriter {
+        calls: AtomicUsize,
+        ready_attempted: Barrier,
+        release: Semaphore,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for FailFirstReadyWriter {
+        async fn upsert(
+            &self,
+            _agent_did: &str,
+            _snapshot: &gents_protocol::row::BehaviorReadinessSnapshot,
+            _updated_at: &str,
+        ) -> Result<()> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                self.ready_attempted.wait().await;
+                self.release.acquire().await.unwrap().forget();
+                anyhow::bail!("injected first Ready persistence failure");
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn admission_gate_waits_for_durable_ready_retry_ack() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let writer = Arc::new(FailFirstReadyWriter {
+            calls: AtomicUsize::new(0),
+            ready_attempted: Barrier::new(2),
+            release: Semaphore::new(0),
+        });
+        let (status_owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
+            node.clone(),
+            "did:test:ready-gate-persistence",
+            writer.clone(),
+            std::time::Duration::from_millis(5),
+        );
+        status.initialize_startup("general").await.unwrap();
+        let gate = super::super::router::RuntimeAdmissionGate::closed();
+        let coordinator = Arc::new(RuntimeLifecycleCoordinator::new(gate.clone(), status, None));
+        let becoming_ready = {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move { coordinator.become_ready().await })
+        };
+
+        writer.ready_attempted.wait().await;
+        assert!(
+            !gate.is_open().await,
+            "Ready write failure opened admission"
+        );
+        assert!(
+            !becoming_ready.is_finished(),
+            "Ready lifecycle acknowledged before persistence retry"
+        );
+        writer.release.add_permits(1);
+        assert!(becoming_ready.await.unwrap().unwrap());
+        assert!(gate.is_open().await, "durable Ready did not open admission");
+
+        coordinator.begin_shutdown().await.unwrap();
+        coordinator.finish_shutdown().await.unwrap();
+        status_owner.close().await.unwrap();
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_wins_over_a_late_startup_barrier_release() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let status = RuntimeStatusHandle::new(node.clone(), "did:test:lifecycle-race");
+        status.initialize_startup("general").await.unwrap();
+        let gate = super::super::router::RuntimeAdmissionGate::closed();
+        let observer = Arc::new(RecordingObserver::default());
+        let coordinator = Arc::new(RuntimeLifecycleCoordinator::new(
+            gate.clone(),
+            status,
+            Some(observer.clone()),
+        ));
+        let waiting = Arc::new(Barrier::new(2));
+        let release = Arc::new(Notify::new());
+
+        let ready_task = {
+            let coordinator = coordinator.clone();
+            let waiting = waiting.clone();
+            let release = release.clone();
+            tokio::spawn(async move {
+                waiting.wait().await;
+                release.notified().await;
+                coordinator.become_ready().await
+            })
+        };
+
+        waiting.wait().await;
+        coordinator.begin_shutdown().await.unwrap();
+        release.notify_one();
+
+        assert!(
+            !ready_task.await.unwrap().unwrap(),
+            "closing lifecycle reopened Ready"
+        );
+        assert!(
+            !gate.is_open().await,
+            "closing lifecycle reopened admission"
+        );
+        assert_eq!(
+            *observer.states.lock().expect("observer mutex"),
+            vec![ProcessLifecycleState::ShuttingDown],
+            "Ready must never become observable after shutdown begins"
+        );
+        node.shutdown().await;
     }
 }

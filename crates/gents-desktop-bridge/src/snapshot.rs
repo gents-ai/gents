@@ -12,8 +12,8 @@ use std::time::SystemTime;
 use chrono::{DateTime, Utc};
 use gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress;
 use gents_desktop_core::client::{
-    project_sync_health, ClientCore, DesktopPaths, P2PHealth, PairingCollectionStatus,
-    PeerDirectory, SyncHealth,
+    load_peer_records, project_sync_health, ClientCore, ClientSyncStateSnapshot, DesktopPaths,
+    P2PHealth, PairingCollectionStatus, SyncHealth,
 };
 use gents_desktop_core::remote_admin::PairingErrorClass;
 
@@ -58,20 +58,6 @@ pub(crate) fn to_hydration_view(progress: &ClientHydrationProgress) -> SessionHy
     }
 }
 
-pub(crate) fn hydration_view_for_session(
-    progress: &ClientHydrationProgress,
-    session_id: &str,
-    agent_did: Option<&str>,
-) -> Option<SessionHydrationView> {
-    if progress.session_id != session_id {
-        return None;
-    }
-    if agent_did.is_some_and(|agent_did| progress.agent_did != agent_did) {
-        return None;
-    }
-    Some(to_hydration_view(progress))
-}
-
 pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
     SyncHealthView {
         state: health.state.as_str().to_string(),
@@ -83,7 +69,6 @@ pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
         pairing_retry_count: health.pairing_retry_count,
         route_retry_count: health.route_retry_count,
         connected_peer_count: health.connected_peer_count,
-        hydration: to_hydration_view(&health.hydration),
     }
 }
 
@@ -99,12 +84,8 @@ pub(crate) fn to_pairing_collection_view(
     }
 }
 
-pub(crate) fn project_core_sync_health(core: &ClientCore) -> SyncHealthView {
-    to_sync_health_view(&project_sync_health(
-        &core.p2p_health(),
-        &core.peer_statuses(),
-        &core.hydration_progress(),
-    ))
+pub(crate) fn project_client_sync_health(sync: &ClientSyncStateSnapshot) -> SyncHealthView {
+    to_sync_health_view(&project_sync_health(sync))
 }
 
 fn pairing_error_class_label(class: Option<PairingErrorClass>) -> Option<String> {
@@ -135,7 +116,7 @@ async fn build_bootstrap_summary_raw(
     desktop_paths: &DesktopPaths,
     agent_home: Option<&Path>,
 ) -> Result<DesktopBootstrapSummary, String> {
-    let peer_directory = PeerDirectory::load(desktop_paths.peer_directory_path())
+    let peer_records = load_peer_records(&desktop_paths.peer_directory_path())
         .await
         .map_err(|error| error.to_string())?;
     let init = agent_home.and_then(read_stored_init_config);
@@ -165,8 +146,7 @@ async fn build_bootstrap_summary_raw(
         agent_home_exists,
         desktop_home_exists: desktop_paths.root().exists(),
         peer_directory_exists: desktop_paths.peer_directory_path().exists(),
-        saved_peers: peer_directory
-            .records()
+        saved_peers: peer_records
             .iter()
             .map(|peer| SavedPeerView {
                 peer_id: peer.peer_id.clone(),

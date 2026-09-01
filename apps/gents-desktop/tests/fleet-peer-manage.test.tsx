@@ -11,7 +11,7 @@ function makeDeployment(overrides: Partial<DeploymentView> = {}): DeploymentView
     agentDid: "did:key:z6MkRemote",
     addr: "/ip4/10.0.0.2/tcp/9292",
     graphql: null,
-    source: "server-status",
+    source: "enrollment",
     agentPrincipal: { agentDid: "did:key:z6MkRemote" },
     behaviors: [],
     tasks: [],

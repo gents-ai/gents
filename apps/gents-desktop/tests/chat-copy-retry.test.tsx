@@ -14,6 +14,18 @@ import { copyText } from "@source-inc/gents-desktop-ui";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
+const readyBehaviorReadiness = {
+  kind: "ready",
+  behaviorId: "default",
+  behaviorLabel: "Default",
+} as const;
+const unavailableBehaviorReadiness = {
+  kind: "unavailable",
+  behaviorId: "ops",
+  behaviorLabel: "Ops",
+  reason: "backend_temporarily_unavailable",
+} as const;
+
 afterEach(() => setDesktopApiAdapterForTests(null));
 
 describe("copyText", () => {
@@ -136,26 +148,6 @@ describe("error card retry", () => {
 
     fireEvent.click(screen.getByTestId("retry-turn"));
     expect(onRetryMessage).toHaveBeenCalledWith("req-failed");
-  });
-
-  it("surfaces an actionable backend-readiness failure", () => {
-    render(
-      <ChatTranscriptPanel
-        selectedSessionId="s1"
-        session={{
-          ...session,
-          latestResponse: {
-            status: "failed",
-            errorMessage:
-              "behavior default backend workstation-2 is unavailable (enabled=true probe_status=unknown)",
-          },
-        }}
-      />,
-    );
-
-    expect(screen.getByTestId("response-error-card")).toHaveTextContent(
-      "Backend “workstation-2” is not ready yet",
-    );
   });
 
   it("disables retry while the selected behavior backend is unavailable", () => {
@@ -301,6 +293,8 @@ describe("error card retry", () => {
       session,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
+      chatSafe: deployment.chatSafe,
+      behaviorReadiness: readyBehaviorReadiness,
     });
     expect(shellProjection.sendStatus).toMatchObject({
       kind: "disabled",
@@ -311,10 +305,10 @@ describe("error card retry", () => {
     const actions = createDesktopShellChatActions({
       api: getDesktopApiAdapter(),
       draft: "",
+      behaviorReadiness: readyBehaviorReadiness,
       newConversationAgentRef: { current: null },
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
-      selectedBehaviorId: deployment.defaultBehaviorId ?? null,
       selectedDeployment: deployment,
       selectedSessionId: "s1",
       pendingMailboxCauseId: null,
@@ -329,12 +323,95 @@ describe("error card retry", () => {
       setPendingMailboxCauseId: vi.fn(),
       setSession: vi.fn(),
       shellProjection,
+      retryShellProjection: shellProjection,
     });
 
     actions.onRetryMessage("req-failed");
 
     await waitFor(() => expect(retryRequest).toHaveBeenCalledWith("req-failed"));
     expect(sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("gates Retry with the persisted session behavior, not the composer selection", async () => {
+    const retryRequest = vi.fn().mockResolvedValue({
+      agentDid: deployment.agentDid,
+      sessionId: "s1",
+      requestId: "req_retry",
+    });
+    const setError = vi.fn();
+    const composerProjection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: deployment.agentDid,
+      selectedSessionId: "s1",
+      draft: "retry",
+      sending: false,
+      session,
+      selectedConversation: null,
+      localWorkflow: { kind: "ready" },
+      chatSafe: true,
+      behaviorReadiness: readyBehaviorReadiness,
+    });
+    const blockedRetryProjection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: deployment.agentDid,
+      selectedSessionId: "s1",
+      draft: "retry",
+      sending: false,
+      session,
+      selectedConversation: null,
+      localWorkflow: { kind: "ready" },
+      chatSafe: true,
+      behaviorReadiness: unavailableBehaviorReadiness,
+    });
+    const common = {
+      api: { retryRequest } as unknown as DesktopApiAdapter,
+      draft: "",
+      newConversationAgentRef: { current: null },
+      refreshSession: vi.fn(),
+      refreshSnapshot: vi.fn(),
+      selectedDeployment: deployment,
+      selectedSessionId: "s1",
+      pendingMailboxCauseId: null,
+      session,
+      setDraft: vi.fn(),
+      setError,
+      setLocalWorkflow: vi.fn(),
+      setOptimisticPendingTurn: vi.fn(),
+      setSelectedBehaviorId: vi.fn(),
+      setSelectedSessionId: vi.fn(),
+      setSending: vi.fn(),
+      setPendingMailboxCauseId: vi.fn(),
+      setSession: vi.fn(),
+    };
+
+    const blocked = createDesktopShellChatActions({
+      ...common,
+      behaviorReadiness: readyBehaviorReadiness,
+      shellProjection: composerProjection,
+      retryShellProjection: blockedRetryProjection,
+    });
+    await blocked.onRetryMessage("req-failed");
+    expect(retryRequest).not.toHaveBeenCalled();
+    expect(setError).toHaveBeenCalledWith(
+      blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
+        ? blockedRetryProjection.nonEmptyContentSendStatus.hint
+        : null,
+    );
+
+    setError.mockClear();
+    const readyRetry = createDesktopShellChatActions({
+      ...common,
+      behaviorReadiness: unavailableBehaviorReadiness,
+      shellProjection: blockedRetryProjection,
+      retryShellProjection: composerProjection,
+    });
+    await readyRetry.onRetryMessage("req-failed");
+    expect(retryRequest).toHaveBeenCalledWith("req-failed");
+    expect(setError).not.toHaveBeenCalledWith(
+      blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
+        ? blockedRetryProjection.nonEmptyContentSendStatus.hint
+        : null,
+    );
   });
 
   it("projects an acknowledged send immediately before replication observes it", async () => {
@@ -354,15 +431,17 @@ describe("error card retry", () => {
       session,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
+      chatSafe: deployment.chatSafe,
+      behaviorReadiness: readyBehaviorReadiness,
     });
 
     const actions = createDesktopShellChatActions({
       api: { sendChatMessage } as unknown as DesktopApiAdapter,
+      behaviorReadiness: readyBehaviorReadiness,
       draft: "check the upgrade",
       newConversationAgentRef: { current: null },
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
-      selectedBehaviorId: deployment.defaultBehaviorId ?? null,
       selectedDeployment: deployment,
       selectedSessionId: "s1",
       pendingMailboxCauseId: null,
@@ -377,6 +456,7 @@ describe("error card retry", () => {
       setPendingMailboxCauseId: vi.fn(),
       setSession: vi.fn(),
       shellProjection,
+      retryShellProjection: shellProjection,
     });
 
     await actions.onSendMessage({ preventDefault: vi.fn() } as never);

@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
@@ -11,6 +12,7 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::p2p_reconcile::PeerAdmissionAuthority;
 use crate::background_tools::{
     fail_running_subagent_tool_call, load_behavior_allow_cross_deployment,
     load_parent_subagent_authorization, subagent_spawn_denial, subagent_tool_not_allowed_payload,
@@ -36,9 +38,29 @@ use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 const TOOL_CALL_COLLECTION: &str = "AgentToolCall";
 const SUBAGENT_SOURCE_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
+struct StaticPeerAdmission {
+    authorized_peer_dids: HashSet<String>,
+}
+
+#[async_trait]
+impl PeerAdmissionAuthority for StaticPeerAdmission {
+    async fn fresh_member_authorized(&self, member_did: &str) -> anyhow::Result<bool> {
+        Ok(self.authorized_peer_dids.contains(member_did))
+    }
+
+    async fn fresh_member_authorized_for_agent(
+        &self,
+        member_did: &str,
+        _owner_agent: &str,
+    ) -> anyhow::Result<bool> {
+        self.fresh_member_authorized(member_did).await
+    }
+}
+
 pub struct SubagentSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
+    peer_admission: Arc<dyn PeerAdmissionAuthority>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::Subscription>,
     cancel: CancellationToken,
@@ -180,20 +202,23 @@ impl SubagentSource {
     pub fn new(
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
         node: Arc<EmbeddedNode>,
+        peer_admission: Arc<dyn PeerAdmissionAuthority>,
         cancel: CancellationToken,
     ) -> Self {
-        Self::with_subscription_source(node.clone(), snapshot_rx, node, cancel)
+        Self::with_subscription_source(node.clone(), snapshot_rx, node, peer_admission, cancel)
     }
 
     pub fn with_subscription_source(
         subs: Arc<dyn UpdateSubscriptionSource>,
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
         node: Arc<EmbeddedNode>,
+        peer_admission: Arc<dyn PeerAdmissionAuthority>,
         cancel: CancellationToken,
     ) -> Self {
         Self {
             snapshot_rx,
             node,
+            peer_admission,
             subscription_source: subs,
             subscription: None,
             cancel,
@@ -202,6 +227,25 @@ impl SubagentSource {
             warned_incoherent_tool_calls: HashSet::new(),
             rescan_tick: subagent_source_rescan_tick(SUBAGENT_SOURCE_RESCAN_INTERVAL),
         }
+    }
+
+    #[doc(hidden)]
+    pub fn with_subscription_source_for_test(
+        subs: Arc<dyn UpdateSubscriptionSource>,
+        snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+        node: Arc<EmbeddedNode>,
+        authorized_peer_dids: HashSet<String>,
+        cancel: CancellationToken,
+    ) -> Self {
+        Self::with_subscription_source(
+            subs,
+            snapshot_rx,
+            node,
+            Arc::new(StaticPeerAdmission {
+                authorized_peer_dids,
+            }),
+            cancel,
+        )
     }
 
     #[doc(hidden)]
@@ -517,52 +561,20 @@ impl SubagentSource {
         };
         let parent_request_doc_id = match non_empty(row.request_doc_id.as_deref()) {
             Some(value) => value.to_string(),
-            None => match crate::request_binding::resolve_request_doc_id(
-                self.node.as_ref(),
-                &parent_request_id,
-            )
-            .await
-            {
-                Ok(Some(doc_id)) => {
+            None => {
+                if self
+                    .warned_incoherent_tool_calls
+                    .insert(processed_key.clone())
+                {
                     tracing::warn!(
                         doc_id = %row.doc_id,
                         parent_request_id = %parent_request_id,
-                        parent_request_doc_id = %doc_id,
                         tool_call_id = %row.tool_call_id,
-                        "subagent source recovered legacy logical-only request binding",
+                        "subagent source quarantined AgentToolCall without exact parent document binding",
                     );
-                    doc_id
                 }
-                Ok(None) => {
-                    if self
-                        .warned_incoherent_tool_calls
-                        .insert(processed_key.clone())
-                    {
-                        tracing::warn!(
-                            doc_id = %row.doc_id,
-                            parent_request_id = %parent_request_id,
-                            tool_call_id = %row.tool_call_id,
-                            "subagent source quarantined AgentToolCall whose parent request is not visible",
-                        );
-                    }
-                    return Ok(None);
-                }
-                Err(error) => {
-                    if self
-                        .warned_incoherent_tool_calls
-                        .insert(processed_key.clone())
-                    {
-                        tracing::warn!(
-                            doc_id = %row.doc_id,
-                            parent_request_id = %parent_request_id,
-                            tool_call_id = %row.tool_call_id,
-                            %error,
-                            "subagent source could not resolve legacy logical-only request binding",
-                        );
-                    }
-                    return Ok(None);
-                }
-            },
+                return Ok(None);
+            }
         };
         let parent_tool_call_id = match non_empty(Some(&row.tool_call_id)) {
             Some(value) => value.to_string(),
@@ -610,34 +622,36 @@ impl SubagentSource {
             anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
         }
         let snapshot = self.snapshot_rx.borrow().clone();
-        // SECURITY (#377): under the current replication-trust posture this
-        // self-declared bridge DID is trusted once it names a configured paired
-        // peer; ACP signing must eventually bind it to the actual remote author.
         let bridge_authoring_did = non_empty(row.agent_did.as_deref()).map(ToOwned::to_owned);
-        if let (Some(bridge_did), Some(parent_did)) = (
-            bridge_authoring_did.as_deref(),
-            parent.as_ref().map(|parent| parent.agent_did.as_str()),
-        ) {
-            // A paired-peer bridge is a remote authority boundary, so its DID
-            // must agree with any legacy parent replica still present. Local
-            // legacy rows predate that invariant and keep using the parent row
-            // as their authority.
-            if bridge_did != parent_did
-                && (snapshot.paired_peer_dids.contains(bridge_did)
-                    || snapshot.paired_peer_dids.contains(parent_did))
-            {
-                anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
-            }
-        }
         let parent_authoring_did = parent
             .as_ref()
             .map(|parent| parent.agent_did.clone())
-            .or(bridge_authoring_did)
+            .or_else(|| bridge_authoring_did.clone())
             .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
-        let trusted_paired_peer = snapshot.paired_peer_dids.contains(&parent_authoring_did);
-        if parent.is_none() && !trusted_paired_peer {
-            anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
-        }
+        let parent_is_local = parent.as_ref().is_some_and(|parent| {
+            !snapshot.local_did.trim().is_empty()
+                && parent.agent_did.trim() == snapshot.local_did.trim()
+        });
+        let trusted_paired_peer = if parent_is_local {
+            false
+        } else {
+            if let (Some(bridge_did), Some(parent_did)) = (
+                bridge_authoring_did.as_deref(),
+                parent.as_ref().map(|parent| parent.agent_did.as_str()),
+            ) {
+                if bridge_did != parent_did {
+                    anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
+                }
+            }
+            if !self
+                .peer_admission
+                .fresh_member_authorized(&parent_authoring_did)
+                .await?
+            {
+                anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
+            }
+            true
+        };
         let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
         if trusted_paired_peer {
             let local_did = snapshot.local_did.trim();

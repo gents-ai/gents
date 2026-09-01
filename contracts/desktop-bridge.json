@@ -53,6 +53,10 @@
       "permissionSet": "session-read"
     },
     {
+      "name": "desktop_session_hydration_retry",
+      "permissionSet": "session-control"
+    },
+    {
       "name": "desktop_request_timeline",
       "permissionSet": "trace-read"
     },
@@ -101,14 +105,6 @@
       "permissionSet": "workspace-read"
     },
     {
-      "name": "desktop_peer_add",
-      "permissionSet": "fleet-admin"
-    },
-    {
-      "name": "desktop_peer_pair_bearer",
-      "permissionSet": "fleet-admin"
-    },
-    {
       "name": "desktop_peer_remove",
       "permissionSet": "fleet-admin"
     },
@@ -117,7 +113,7 @@
       "permissionSet": "fleet-admin"
     },
     {
-      "name": "desktop_peer_probe_address",
+      "name": "desktop_peer_enroll_status",
       "permissionSet": "fleet-admin"
     },
     {
@@ -285,7 +281,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "1.5",
+  "contractVersion": "4.0",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -303,7 +299,6 @@
   "eventReasons": [
     "store",
     "health",
-    "hydration",
     "lifecycle",
     "config"
   ],
@@ -335,6 +330,10 @@
     {
       "kind": "read",
       "name": "session-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "session-control"
     },
     {
       "kind": "read",
@@ -416,5 +415,6 @@
       "kind": "bundle",
       "name": "full"
     }
-  ]
+  ],
+  "wireSchemaHash": "7a0203eda69c7fedd3f50f89b48af64e7aac23c86a92718742dc9417d8c6bc7a"
 }

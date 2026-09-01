@@ -147,9 +147,15 @@ async fn pending_dead_stale_via_expire() {
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let valid_until = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    set_valid_until(&db.node, &doc_id, &valid_until).await;
+    let doc_id = create_request_with_valid_until(
+        &db.node,
+        &request_id,
+        &session_id,
+        "pending",
+        &created_at,
+        Some(&valid_until),
+    )
+    .await;
 
     let request = build_request(
         doc_id.clone(),
@@ -360,9 +366,15 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
     let created_at = chrono::Utc::now().to_rfc3339();
     let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
     let interrupt_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    set_valid_until(&db.node, &doc_id, &past).await;
+    let doc_id = create_request_with_valid_until(
+        &db.node,
+        &request_id,
+        &session_id,
+        "pending",
+        &created_at,
+        Some(&past),
+    )
+    .await;
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
 
     let request = build_request(
@@ -556,15 +568,21 @@ async fn interrupt_on_already_terminal_is_noop() {
 }
 
 #[tokio::test]
-async fn valid_until_cached_at_claim_ignores_post_claim_extension() {
+async fn valid_until_is_immutable_after_claim_and_cached_value_is_preserved() {
     let db = test_db("s8-cached-at-claim").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let future = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    set_valid_until(&db.node, &doc_id, &future).await;
+    let doc_id = create_request_with_valid_until(
+        &db.node,
+        &request_id,
+        &session_id,
+        "pending",
+        &created_at,
+        Some(&future),
+    )
+    .await;
 
     let request = build_request(
         doc_id.clone(),
@@ -585,7 +603,11 @@ async fn valid_until_cached_at_claim_ignores_post_claim_extension() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
     let much_later = (chrono::Utc::now() + chrono::Duration::hours(10)).to_rfc3339();
-    set_valid_until(&db.node, &doc_id, &much_later).await;
+    let response = try_set_valid_until(&db.node, &doc_id, &much_later).await;
+    assert!(
+        response.has_errors(),
+        "signed valid_until must reject post-create mutation"
+    );
 
     let expected = chrono::DateTime::parse_from_rfc3339(&future)
         .unwrap()
@@ -692,9 +714,15 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let t0 = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    set_valid_until(&db.node, &doc_id, &t0).await;
+    let doc_id = create_request_with_valid_until(
+        &db.node,
+        &request_id,
+        &session_id,
+        "pending",
+        &created_at,
+        Some(&t0),
+    )
+    .await;
     let snap0 = fetch_request_snapshot_raw(&db.node, &doc_id).await;
     assert_eq!(snap0.valid_until.as_deref(), Some(t0.as_str()));
 
@@ -923,7 +951,7 @@ async fn manual_run_materializes_pending_request() {
 
     let doc_id = write_manual_agent_request(
         &db.node,
-        AGENT_DID,
+        db.node_identity.did(),
         AGENT_NAME,
         "task-manual-pending",
         "manual prompt body",
@@ -972,7 +1000,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
 
     let doc_id = write_manual_agent_request(
         &db.node,
-        AGENT_DID,
+        db.node_identity.did(),
         AGENT_NAME,
         "task-manual-claim",
         "manual prompt body",

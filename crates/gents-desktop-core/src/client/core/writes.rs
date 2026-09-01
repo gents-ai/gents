@@ -1,12 +1,20 @@
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, BTreeSet};
 use std::hash::{Hash, Hasher};
-use std::sync::RwLock as StdRwLock;
+use std::path::Path;
+use std::sync::{Arc, RwLock as StdRwLock};
 
 use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use gents::identity::AgentIdentity;
+use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+};
+use gents_protocol::session_hydration::{
+    decode_manifest_json, SessionHydrationDocumentKey, SessionHydrationReceipt,
+    SESSION_HYDRATION_RECEIPT_VERSION,
 };
 use serde::Deserialize;
 
@@ -17,9 +25,18 @@ use super::super::query::load_chat_patch;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
-use super::{ClientCore, ClientPeerStatus};
+use super::ClientCore;
+#[cfg(test)]
+use super::ClientPeerStatus;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
+
+fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'a str> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .with_context(|| format!("{name} is missing from the current peer authority"))
+}
 
 fn is_terminal_lifecycle_state(value: Option<&str>) -> bool {
     matches!(
@@ -83,7 +100,6 @@ fn behavior_id_for_write(
         .map(str::to_owned)
         .or_else(|| {
             peer_record
-                .filter(|record| record.is_bearer_pairing())
                 .and_then(|record| record.default_behavior_id.as_deref())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -91,9 +107,13 @@ fn behavior_id_for_write(
         })
 }
 
-fn ensure_peer_chat_ready(agent_did: &str, peer_record: Option<&PeerRecord>) -> Result<()> {
+fn ensure_peer_chat_ready_at(
+    agent_did: &str,
+    peer_record: Option<&PeerRecord>,
+    now: DateTime<Utc>,
+) -> Result<()> {
     match peer_record {
-        Some(record) if record.is_chat_ready() => Ok(()),
+        Some(record) if record.is_chat_ready_at(now) => Ok(()),
         Some(_) => bail!(
             "the selected deployment route is not ready; no request was saved (wait for pairing repair or inspect pairing status)"
         ),
@@ -103,21 +123,54 @@ fn ensure_peer_chat_ready(agent_did: &str, peer_record: Option<&PeerRecord>) -> 
     }
 }
 
-fn peer_record_owning_agent(records: &[PeerRecord], agent_did: &str) -> Option<PeerRecord> {
-    if let Some(exact) = records.iter().find(|record| record.agent_did == agent_did) {
-        return Some(exact.clone());
-    }
-    // A machine bearer intentionally carries requests for child agent DIDs
-    // hosted behind the paired runtime. Preserve that established fleet path,
-    // but fail closed when more than one machine could own the target.
-    let mut machine_routes = records.iter().filter(|record| {
-        record.pairing_template.as_deref() == Some("machine") && record.is_chat_ready()
-    });
-    let route = machine_routes.next()?.clone();
-    machine_routes.next().is_none().then_some(route)
+fn peer_record_owning_agent_at(
+    records: &[PeerRecord],
+    agent_did: &str,
+    now: DateTime<Utc>,
+) -> Option<PeerRecord> {
+    records
+        .iter()
+        .find(|record| record.agent_did == agent_did)
+        .filter(|record| record.is_chat_ready_at(now))
+        .cloned()
 }
 
 impl ClientCore {
+    pub async fn refresh_local_standard_peer(
+        &self,
+        agent_home: &Path,
+        label: &str,
+    ) -> Result<PeerRecord> {
+        let discovery = crate::local_runtime::discover_standard_runtime(agent_home).await?;
+        self.persist_local_standard_peer(
+            label,
+            &discovery.p2p_listen_address,
+            &discovery.agent_did,
+            &discovery.graphql,
+            &agent_home.display().to_string(),
+        )
+        .await
+    }
+
+    pub async fn persist_local_standard_peer(
+        &self,
+        label: &str,
+        addr: &str,
+        agent_did: &str,
+        graphql: &str,
+        agent_home: &str,
+    ) -> Result<PeerRecord> {
+        self.sync_state
+            .upsert_local_standard_peer(
+                normalize_required("label", label)?,
+                normalize_required("addr", addr)?,
+                normalize_required("agent_did", agent_did)?,
+                normalize_required("graphql", graphql)?,
+                normalize_required("agent_home", agent_home)?,
+            )
+            .await
+    }
+
     /// Dismiss an open mailbox item as the authenticated local principal.
     pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
         let result =
@@ -159,15 +212,22 @@ impl ClientCore {
         options: SubmitRequestOptions,
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        let peer_record = self.peer_record_for_agent(agent_did).await;
-        ensure_peer_chat_ready(agent_did, peer_record.as_ref())?;
+        let peer_record = self
+            .peer_record_for_chat_write(agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(agent_did, peer_record.as_ref(), Utc::now())?;
+        let (signer, admission, requester_did) = self
+            .request_authority(agent_did, peer_record.as_ref())
+            .await?;
         let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
         match mutations::submit_request(
             self.node.as_ref(),
             snapshot.as_ref(),
             session_id,
             agent_did,
-            self.principal.did(),
+            &requester_did,
+            signer.as_ref(),
+            admission,
             content,
             behavior_id.as_deref(),
             options,
@@ -236,6 +296,10 @@ impl ClientCore {
         reason: Option<String>,
     ) -> Result<String> {
         let agent_did = normalize_required("agent_did", agent_did)?;
+        let peer_record = self
+            .peer_record_for_chat_write(&agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(&agent_did, peer_record.as_ref(), Utc::now())?;
         let tool_call_id = normalize_required("tool_call_id", tool_call_id)?;
         let approval_id = match self
             .resolve_tool_call_hold_inner(agent_did, tool_call_id, approve, reason)
@@ -302,7 +366,7 @@ impl ClientCore {
         let listen_addresses = p2p_ops::p2p_listen_addresses(&self.p2p).await;
         let connected_peers = p2p_ops::p2p_connected_peers(&self.p2p).await;
         let replicators = p2p_ops::p2p_get_replicators(&self.p2p).await;
-        let saved_peers = self.peer_directory.read().await.records().to_vec();
+        let saved_peers = self.sync_state.records();
 
         NetworkStatus {
             local_peer_id: local_peer_id.map_err(|error| error.to_string()),
@@ -325,13 +389,102 @@ impl ClientCore {
         }
     }
 
-    pub async fn peer_record_for_agent(&self, agent_did: &str) -> Option<PeerRecord> {
-        let agent_did = agent_did.trim();
-        if agent_did.is_empty() {
-            return None;
+    /// Reload the current directory generation and synchronously fence a chat
+    /// mutation against its signed enrollment lease. Expired readiness is
+    /// durably demoted before the caller can create an AgentRequest.
+    async fn peer_record_for_chat_write(
+        &self,
+        agent_did: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<PeerRecord>> {
+        let records = self.sync_state.records();
+        let record = peer_record_owning_agent_at(&records, agent_did.trim(), now);
+        if record.is_some() {
+            return Ok(record);
         }
-        let peer_directory = self.peer_directory.read().await;
-        peer_record_owning_agent(peer_directory.records(), agent_did)
+
+        let stale = records
+            .iter()
+            .find(|record| record.agent_did == agent_did.trim())
+            .cloned();
+        if let Some(stale) = stale {
+            if stale.is_enrollment() && stale.pairing_ready {
+                self.sync_state
+                    .set_pairing_ready(&stale, false)
+                    .await
+                    .context("persisting expired enrollment write fence")?;
+            }
+            ensure_peer_chat_ready_at(agent_did, Some(&stale), now)?;
+        }
+        Ok(None)
+    }
+
+    async fn request_authority(
+        &self,
+        agent_did: &str,
+        record: Option<&PeerRecord>,
+    ) -> Result<(
+        Arc<dyn gents::identity::AgentIdentity>,
+        AgentRequestAdmissionRecord,
+        String,
+    )> {
+        let record = record.context("chat target has no current owned peer route")?;
+        if record.is_enrollment() {
+            let request_id = required_peer_generation(
+                "enrollment_request_id",
+                record.enrollment_request_id.as_deref(),
+            )?;
+            let digest = required_peer_generation(
+                "enrollment_request_digest",
+                record.enrollment_request_digest.as_deref(),
+            )?;
+            let admin_did = required_peer_generation(
+                "enrollment_admin_did",
+                record.enrollment_admin_did.as_deref(),
+            )?;
+            let sequence = record
+                .enrollment_authorization_sequence
+                .filter(|value| *value > 0)
+                .context("enrollment authorization sequence is missing")?;
+            let expires_at = required_peer_generation(
+                "enrollment_authorization_expires_at",
+                record.enrollment_authorization_expires_at.as_deref(),
+            )?;
+            let signer: Arc<dyn gents::identity::AgentIdentity> = Arc::new(self.principal.clone());
+            let admission = AgentRequestAdmissionRecord::enrollment(
+                self.principal.did(),
+                request_id,
+                digest,
+                admin_did,
+                sequence,
+                expires_at,
+            );
+            return Ok((signer, admission, self.principal.did().to_string()));
+        }
+        anyhow::ensure!(
+            record.source.as_deref() == Some("local-standard") && record.agent_did == agent_did,
+            "chat target is not owned by enrollment or a local standard runtime"
+        );
+        let signer: Arc<dyn gents::identity::AgentIdentity> =
+            match gents::identity::RegisteredIdentity::from_registered_did(agent_did, None) {
+                Ok(identity) => Arc::new(identity),
+                Err(_) => {
+                    let home = required_peer_generation(
+                        "local_agent_home",
+                        record.local_agent_home.as_deref(),
+                    )?;
+                    crate::local_runtime::load_standard_runtime_identity(Path::new(home))?
+                }
+            };
+        anyhow::ensure!(
+            signer.did() == agent_did,
+            "local request signer does not own target agent"
+        );
+        Ok((
+            signer,
+            AgentRequestAdmissionRecord::local_self(agent_did),
+            agent_did.to_string(),
+        ))
     }
 
     pub async fn refresh_local_request(
@@ -1044,14 +1197,21 @@ impl ClientCore {
             .agent_did
             .as_deref()
             .context("stale request has no agent_did")?;
-        let peer_record = self.peer_record_for_agent(agent_did).await;
-        ensure_peer_chat_ready(agent_did, peer_record.as_ref())?;
+        let peer_record = self
+            .peer_record_for_chat_write(agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(agent_did, peer_record.as_ref(), Utc::now())?;
+        let (signer, admission, requester_did) = self
+            .request_authority(agent_did, peer_record.as_ref())
+            .await?;
         let result = mutations::resend_request(
             self.node.as_ref(),
             snapshot.as_ref(),
             stale_request_id,
             agent_did,
-            self.principal.did(),
+            &requester_did,
+            signer.as_ref(),
+            admission,
         )
         .await;
         match result {
@@ -1074,6 +1234,32 @@ impl ClientCore {
     }
 
     pub async fn interrupt_request(&self, request_id: &str) -> Result<()> {
+        let snapshot = self.store.snapshot();
+        let selected_agent_did = self.selected_agent_did();
+        let mut requests = snapshot
+            .requests
+            .iter()
+            .filter(|request| request.request_id == request_id)
+            .filter(|request| {
+                selected_agent_did
+                    .as_deref()
+                    .is_none_or(|selected| request.agent_did.as_deref() == Some(selected))
+            });
+        let request = requests
+            .next()
+            .with_context(|| format!("request {request_id} is absent from the selected agent"))?;
+        anyhow::ensure!(
+            requests.next().is_none(),
+            "request {request_id} is ambiguous across the selected agent scope"
+        );
+        let agent_did = request
+            .agent_did
+            .as_deref()
+            .context("request has no agent_did")?;
+        let peer_record = self
+            .peer_record_for_chat_write(agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(agent_did, peer_record.as_ref(), Utc::now())?;
         match mutations::interrupt_request(self.node.as_ref(), request_id).await {
             Ok(()) => {
                 self.clear_mutation_error();
@@ -1095,13 +1281,20 @@ impl ClientCore {
             .agent_did
             .as_deref()
             .context("retry parent has no agent_did")?;
-        let peer_record = self.peer_record_for_agent(agent_did).await;
-        ensure_peer_chat_ready(agent_did, peer_record.as_ref())?;
+        let peer_record = self
+            .peer_record_for_chat_write(agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(agent_did, peer_record.as_ref(), Utc::now())?;
+        let (signer, admission, requester_did) = self
+            .request_authority(agent_did, peer_record.as_ref())
+            .await?;
         let result = mutations::retry_request(
             self.node.as_ref(),
             snapshot.as_ref(),
             parent,
-            self.principal.did(),
+            &requester_did,
+            signer.as_ref(),
+            admission,
         )
         .await;
         match result {
@@ -1125,106 +1318,40 @@ impl ClientCore {
     pub async fn rename_peer(&self, peer_id: &str, label: &str) -> Result<()> {
         let peer_id = normalize_required("peer_id", peer_id)?;
         let label = normalize_required("label", label)?;
-        let mut peer_directory = self.peer_directory.write().await;
-        let record = peer_directory
+        let record = self
+            .sync_state
             .records()
             .iter()
             .find(|record| record.peer_id == peer_id)
             .cloned()
             .with_context(|| format!("peer {peer_id} not found"))?;
-        let mut record = record;
-        record.label = label.to_string();
-        peer_directory.upsert(record).await?;
+        let mut renamed = record.clone();
+        renamed.label = label.to_string();
+        self.sync_state
+            .replace_record(&record, renamed)
+            .await?
+            .with_context(|| format!("peer {peer_id} changed while it was being renamed"))?;
         self.clear_mutation_error();
         Ok(())
     }
 
-    pub async fn add_peer(
-        &self,
-        label: &str,
-        addr: &str,
-        agent_did: &str,
-        graphql: Option<&str>,
-        default_behavior_id: Option<&str>,
-    ) -> Result<PeerMutationResult> {
-        let label = normalize_required("label", label)?;
-        let addr = normalize_required("addr", addr)?;
-        let agent_did = normalize_required("agent_did", agent_did)?;
-        let graphql = graphql.map(str::trim).filter(|value| !value.is_empty());
-        let default_behavior_id = default_behavior_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-
-        let activation = self
-            .route_manager
-            .activate_peer(
-                &self.peer_directory,
-                label,
-                addr,
-                agent_did,
-                graphql,
-                default_behavior_id,
-            )
-            .await?;
-        let record = activation.record;
-        let connected = activation.connected;
-        let mut warning = activation.warning;
-        if let Err(error) = self.refresh_agent(&record.agent_did).await {
-            append_warning(
-                &mut warning,
-                format!("deployment saved but local replica refresh failed: {error}"),
-            );
+    #[cfg(test)]
+    pub(super) fn update_peer_status(&self, status: ClientPeerStatus) {
+        if let Some(expected) = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.peer_id == status.peer_id)
+        {
+            self.sync_state.replace_peer(&expected, status);
         }
-
-        self.route_manager
-            .publish_status_if_current(
-                &self.peer_directory,
-                &self.peer_statuses,
-                ClientPeerStatus {
-                    peer_id: record.peer_id.clone(),
-                    label: record.label.clone(),
-                    agent_did: record.agent_did.clone(),
-                    addr: record.addr.clone(),
-                    dial_succeeded: connected,
-                    last_error: warning.clone(),
-                    pairing: Vec::new(),
-                    routes: Vec::new(),
-                    chat_safe: record.pairing_ready,
-                },
-            )
-            .await;
-        self.clear_mutation_error();
-        if let Some(warning) = warning.as_deref() {
-            tracing::warn!(
-                target: "gents_desktop_core::peer",
-                peer_id = %record.peer_id,
-                label = %record.label,
-                error = %warning,
-                "desktop deployment add warning"
-            );
-        } else {
-            tracing::info!(
-                target: "gents_desktop_core::peer",
-                peer_id = %record.peer_id,
-                label = %record.label,
-                "desktop deployment added"
-            );
-        }
-
-        Ok(PeerMutationResult {
-            peer_id: record.peer_id,
-            label: record.label,
-            addr: record.addr,
-            connected,
-            warning,
-        })
     }
 
     pub async fn remove_peer(&self, peer_id: &str) -> Result<PeerMutationResult> {
         let peer_id = normalize_required("peer_id", peer_id)?;
         let removal = self
             .route_manager
-            .remove_peer(&self.peer_directory, &self.peer_statuses, peer_id)
+            .remove_peer(&self.sync_state, peer_id)
             .await?;
         let removed = removal.record;
         let warning = match removal.cleanup_error {
@@ -1474,45 +1601,75 @@ impl ClientCore {
         }
     }
 
-    pub(super) fn update_peer_status(&self, status: ClientPeerStatus) {
-        let mut statuses = self
-            .peer_statuses
-            .write()
-            .expect("peer status lock poisoned");
-        if let Some(existing) = statuses
-            .iter_mut()
-            .find(|existing| existing.peer_id == status.peer_id)
-        {
-            *existing = status;
-        } else {
-            statuses.push(status);
-            statuses.sort_by(|left, right| {
-                left.label
-                    .to_lowercase()
-                    .cmp(&right.label.to_lowercase())
-                    .then_with(|| left.peer_id.cmp(&right.peer_id))
-            });
-        }
-    }
-
-    pub async fn focus_session(&self, session_id: &str, agent_did: &str) -> Result<()> {
+    /// Observe hydration for a selected session and start its first request.
+    ///
+    /// A rejected request is terminal here. Retrying it is an explicit user
+    /// action owned by [`Self::retry_session_hydration`].
+    pub async fn ensure_session_hydration_started(
+        &self,
+        session_id: &str,
+        agent_did: &str,
+    ) -> Result<()> {
         let session_id = normalize_required("session_id", session_id)?;
         let agent_did = normalize_required("agent_did", agent_did)?;
-        self.refresh_hydration_progress(&session_id, &agent_did)
+        let _transition = self.hydration_transition.lock().await;
+        let progress = self
+            .session_hydration_progress(&session_id, &agent_did)
             .await?;
-        let progress = self.hydration_progress();
-        if !should_write_session_hydration_request(&progress, &session_id, &agent_did) {
+        if !should_start_session_hydration_request(&progress, &session_id, &agent_did) {
+            return Ok(());
+        }
+        let evidence = load_local_hydration_start_evidence(
+            self.node.as_ref(),
+            self.principal.did(),
+            &session_id,
+            &agent_did,
+        )
+        .await?;
+        if !hydration_start_evidence_is_ready(&progress, &evidence) {
             return Ok(());
         }
         self.request_session_hydration(&session_id, &agent_did)
-            .await?;
-        self.refresh_hydration_progress(&session_id, &agent_did)
             .await
     }
 
-    pub async fn request_session_hydration(&self, session_id: &str, agent_did: &str) -> Result<()> {
+    /// Derive receiver progress from durable rows for one exact target.
+    pub async fn session_hydration_progress(
+        &self,
+        session_id: &str,
+        agent_did: &str,
+    ) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress> {
         let session_id = normalize_required("session_id", session_id)?;
         let agent_did = normalize_required("agent_did", agent_did)?;
+        self.load_hydration_progress(&session_id, &agent_did).await
+    }
+
+    /// Explicitly restart a failed hydration attempt for one session.
+    pub async fn retry_session_hydration(&self, session_id: &str, agent_did: &str) -> Result<()> {
+        let session_id = normalize_required("session_id", session_id)?;
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let _transition = self.hydration_transition.lock().await;
+        let progress = self
+            .load_hydration_progress(&session_id, &agent_did)
+            .await?;
+        if !gents::agent::p2p_reconcile::session_hydration::can_retry_hydration(
+            &progress,
+            &session_id,
+            &agent_did,
+        ) {
+            bail!("session hydration retry requires a failed attempt for the selected session");
+        }
+        self.request_session_hydration(&session_id, &agent_did)
+            .await
+    }
+
+    async fn request_session_hydration(&self, session_id: &str, agent_did: &str) -> Result<()> {
+        let session_id = normalize_required("session_id", session_id)?;
+        let agent_did = normalize_required("agent_did", agent_did)?;
+        let peer_record = self
+            .peer_record_for_chat_write(&agent_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(&agent_did, peer_record.as_ref(), Utc::now())?;
         let request_key = format!("{}:{session_id}", self.local_peer_id());
         let requester_did = gents::graphql::escape_graphql_string(self.principal.did());
         let agent_did_gql = gents::graphql::escape_graphql_string(&agent_did);
@@ -1539,6 +1696,9 @@ impl ClientCore {
                         status: "pending",
                         status_detail: "",
                         served_doc_count: 0,
+                        served_manifest_json: "",
+                        outcome_signer_did: "",
+                        outcome_signature: "",
                         processed_at: null
                     }}
                 ) {{ _docID }}
@@ -1548,43 +1708,35 @@ impl ClientCore {
         if !response.errors.is_empty() {
             anyhow::bail!("upsert SessionHydrationRequest: {:?}", response.errors);
         }
-        publish_hydration_progress(
-            &self.hydration,
-            gents::agent::p2p_reconcile::session_hydration::begin_hydration_request(
-                &session_id,
-                &agent_did,
-            ),
-        );
         Ok(())
     }
 
-    pub async fn refresh_hydration_progress(
+    async fn load_hydration_progress(
         &self,
         session_id: &str,
         agent_did: &str,
-    ) -> Result<()> {
-        let merged = load_local_hydration_count(
+    ) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress> {
+        let merged = load_local_hydration_documents(
             self.node.as_ref(),
             self.principal.did(),
             session_id,
             agent_did,
         )
         .await?;
-        let (served, failed) =
-            load_hydration_server_state(self.node.as_ref(), self.local_peer_id(), session_id)
-                .await?;
-        publish_hydration_progress(
-            &self.hydration,
-            gents::agent::p2p_reconcile::session_hydration::observe_hydration_progress(
-                &self.hydration_progress(),
-                session_id,
-                agent_did,
-                merged,
-                served,
-                failed,
+        let request = load_hydration_server_state(
+            self.node.as_ref(),
+            self.local_peer_id(),
+            self.principal.did(),
+            session_id,
+            agent_did,
+            &self.principal,
+        )
+        .await?;
+        Ok(
+            gents::agent::p2p_reconcile::session_hydration::project_durable_hydration_progress(
+                session_id, agent_did, merged, request,
             ),
-        );
-        Ok(())
+        )
     }
 
     pub(super) fn clear_mutation_error(&self) {
@@ -1610,47 +1762,79 @@ struct HydrationDocIdRow {
     doc_id: Option<String>,
 }
 
-fn publish_hydration_progress(
-    sender: &tokio::sync::watch::Sender<
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
-    >,
-    next: gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
-) -> bool {
-    sender.send_if_modified(|current| {
-        if *current == next {
-            false
-        } else {
-            *current = next;
-            true
-        }
-    })
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LocalHydrationStartEvidence {
+    owned_session_present: bool,
+    nonterminal_request_present: bool,
 }
 
-fn should_write_session_hydration_request(
+#[derive(Deserialize)]
+struct HydrationLifecycleRow {
+    lifecycle_state: Option<String>,
+}
+
+fn should_start_session_hydration_request(
     progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
     session_id: &str,
     agent_did: &str,
 ) -> bool {
     use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
-    if progress.session_id != session_id || progress.agent_did != agent_did {
-        return true;
-    }
-    matches!(
-        progress.phase,
-        ClientHydrationPhase::Idle | ClientHydrationPhase::Failed
-    )
+    progress.session_id == session_id
+        && progress.agent_did == agent_did
+        && progress.phase == ClientHydrationPhase::Idle
 }
 
-async fn load_local_hydration_count(
+fn hydration_start_evidence_is_ready(
+    progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+    evidence: &LocalHydrationStartEvidence,
+) -> bool {
+    (evidence.owned_session_present || progress.merged_count > 0)
+        && !evidence.nonterminal_request_present
+}
+
+async fn load_local_hydration_start_evidence(
     node: &EmbeddedNode,
     requester_did: &str,
     session_id: &str,
     agent_did: &str,
-) -> Result<usize> {
+) -> Result<LocalHydrationStartEvidence> {
+    let requester_did = gents::graphql::escape_graphql_string(requester_did);
+    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let agent_did = gents::graphql::escape_graphql_string(agent_did);
+    let scope = format!(
+        "requester_did: {{ _eq: \"{requester_did}\" }}, agent_did: {{ _eq: \"{agent_did}\" }}, session_id: {{ _eq: \"{session_id}\" }}"
+    );
+    let response = node
+        .execute(&format!(
+            r#"{{
+                AgentSession(filter: {{ {scope} }}, limit: 1) {{ _docID }}
+                AgentRequest(filter: {{ {scope} }}) {{ lifecycle_state }}
+            }}"#
+        ))
+        .await;
+    gents::graphql::ensure_no_errors(&response, "query local hydration start evidence")?;
+    let owned_session_present =
+        !gents::graphql::rows::<HydrationDocIdRow>(&response, "AgentSession")?.is_empty();
+    let nonterminal_request_present =
+        gents::graphql::rows::<HydrationLifecycleRow>(&response, "AgentRequest")?
+            .iter()
+            .any(|row| !is_terminal_lifecycle_state(row.lifecycle_state.as_deref()));
+    Ok(LocalHydrationStartEvidence {
+        owned_session_present,
+        nonterminal_request_present,
+    })
+}
+
+async fn load_local_hydration_documents(
+    node: &EmbeddedNode,
+    requester_did: &str,
+    session_id: &str,
+    agent_did: &str,
+) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
     let query = local_hydration_query(requester_did, session_id, agent_did);
     let response = node.execute(&query).await;
     gents::graphql::ensure_no_errors(&response, "query local session hydration documents")?;
-    local_hydration_count_from_response(&response)
+    local_hydration_documents_from_response(&response)
 }
 
 fn local_hydration_query(requester_did: &str, session_id: &str, agent_did: &str) -> String {
@@ -1672,9 +1856,9 @@ fn local_hydration_query(requester_did: &str, session_id: &str, agent_did: &str)
     )
 }
 
-fn local_hydration_count_from_response(response: &defra_node::QueryResponse) -> Result<usize> {
-    use std::collections::BTreeSet;
-
+fn local_hydration_documents_from_response(
+    response: &defra_node::QueryResponse,
+) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
     let mut ids = BTreeSet::new();
     for collection in [
         "AgentRequest",
@@ -1686,51 +1870,128 @@ fn local_hydration_count_from_response(response: &defra_node::QueryResponse) -> 
     ] {
         for row in gents::graphql::rows::<HydrationDocIdRow>(response, collection)? {
             if let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) {
-                ids.insert((collection.to_string(), doc_id));
+                ids.insert(SessionHydrationDocumentKey {
+                    collection: collection.to_string(),
+                    doc_id,
+                });
             }
         }
     }
-    Ok(ids.len())
+    Ok(ids)
 }
 
 async fn load_hydration_server_state(
     node: &EmbeddedNode,
     peer_id: &str,
+    requester_did: &str,
     session_id: &str,
-) -> Result<(Option<usize>, bool)> {
-    let request_key = gents::graphql::escape_graphql_string(&format!("{peer_id}:{session_id}"));
+    agent_did: &str,
+    principal: &super::super::principal_identity::PrincipalIdentity,
+) -> Result<gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState> {
+    use gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
+    let expected_request_key = format!("{peer_id}:{session_id}");
+    let request_key = gents::graphql::escape_graphql_string(&expected_request_key);
     let query = format!(
         r#"{{ SessionHydrationRequest(filter: {{ request_key: {{ _eq: "{request_key}" }} }}) {{
-            status served_doc_count
+            request_key requester_did agent_did session_id status status_detail
+            served_doc_count served_manifest_json processed_at
+            outcome_signer_did outcome_signature
         }} }}"#
     );
     let response = node.execute(&query).await;
-    if !response.errors.is_empty() {
-        return Ok((None, false));
-    }
+    gents::graphql::ensure_no_errors(&response, "query session hydration request")?;
     let Some(data) = response.data else {
-        return Ok((None, false));
+        return Ok(ClientHydrationRequestState::Missing);
     };
     let rows = data
         .get("SessionHydrationRequest")
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
+    if rows.len() > 1 {
+        bail!("session hydration request key resolved to multiple rows");
+    }
     let Some(row) = rows.first() else {
-        return Ok((None, false));
+        return Ok(ClientHydrationRequestState::Missing);
     };
+    for (field, expected) in [
+        ("request_key", expected_request_key.as_str()),
+        ("requester_did", requester_did),
+        ("agent_did", agent_did),
+        ("session_id", session_id),
+    ] {
+        if row.get(field).and_then(|value| value.as_str()) != Some(expected) {
+            bail!("session hydration request {field} does not match the selected target");
+        }
+    }
     let status = row
         .get("status")
         .and_then(|value| value.as_str())
         .unwrap_or_default();
-    let served = row
+    if status == "pending" {
+        return Ok(ClientHydrationRequestState::Pending);
+    }
+    if !matches!(status, "served" | "rejected") {
+        bail!("unknown session hydration request status {status:?}");
+    }
+    let served_count = row
         .get("served_doc_count")
         .and_then(|value| value.as_i64())
-        .map(|value| value.max(0) as usize);
+        .map(usize::try_from)
+        .transpose()
+        .context("session hydration served_doc_count must be non-negative")?;
+    let manifest = decode_manifest_json(
+        row.get("served_manifest_json")
+            .and_then(|value| value.as_str())
+            .context("terminal hydration request is missing served_manifest_json")?,
+    )?;
+    if served_count != Some(manifest.len()) {
+        bail!("session hydration served_doc_count does not match signed manifest");
+    }
+    let signature = bs58::decode(
+        row.get("outcome_signature")
+            .and_then(|value| value.as_str())
+            .context("terminal hydration request is missing outcome_signature")?,
+    )
+    .into_vec()
+    .context("decode session hydration receipt signature")?;
+    let receipt = SessionHydrationReceipt {
+        version: SESSION_HYDRATION_RECEIPT_VERSION,
+        request_key: expected_request_key,
+        requester_did: requester_did.to_string(),
+        agent_did: agent_did.to_string(),
+        session_id: session_id.to_string(),
+        status: status.to_string(),
+        status_detail: row
+            .get("status_detail")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        served_manifest: manifest,
+        processed_at: row
+            .get("processed_at")
+            .and_then(|value| value.as_str())
+            .context("terminal hydration request is missing processed_at")?
+            .to_string(),
+        signer_did: row
+            .get("outcome_signer_did")
+            .and_then(|value| value.as_str())
+            .context("terminal hydration request is missing outcome_signer_did")?
+            .to_string(),
+        signature,
+    };
+    receipt.validate_shape()?;
+    if !principal
+        .verify(agent_did, &receipt.signing_payload()?, &receipt.signature)
+        .await?
+    {
+        bail!("session hydration receipt signature is invalid");
+    }
+    let documents = receipt.served_manifest.into_iter().collect::<BTreeSet<_>>();
     match status {
-        "served" => Ok((served.or(Some(0)), false)),
-        "rejected" => Ok((served, true)),
-        _ => Ok((None, false)),
+        "served" => Ok(ClientHydrationRequestState::Served(documents)),
+        "rejected" => Ok(ClientHydrationRequestState::Rejected(Some(documents))),
+        _ => unreachable!(),
     }
 }
 
@@ -1839,16 +2100,6 @@ fn complete_confirmed_delete(
     );
 }
 
-fn append_warning(warning: &mut Option<String>, message: String) {
-    match warning {
-        Some(existing) => {
-            existing.push_str("; ");
-            existing.push_str(&message);
-        }
-        None => *warning = Some(message),
-    }
-}
-
 #[cfg(test)]
 mod delete_source_tests {
     use super::*;
@@ -1866,11 +2117,16 @@ mod delete_source_tests {
             "CompactionEntry": [{ "_docID": "compaction-1" }]
         }));
 
-        assert_eq!(local_hydration_count_from_response(&response).unwrap(), 6);
+        assert_eq!(
+            local_hydration_documents_from_response(&response)
+                .unwrap()
+                .len(),
+            6
+        );
     }
 
     #[test]
-    fn hydration_watch_notifies_only_when_progress_changes() {
+    fn initial_hydration_request_is_written_only_for_observed_idle_target() {
         use gents::agent::p2p_reconcile::session_hydration::{
             ClientHydrationPhase, ClientHydrationProgress,
         };
@@ -1881,37 +2137,14 @@ mod delete_source_tests {
             phase: ClientHydrationPhase::Serving,
             merged_count: 3,
             served_count: Some(8),
+            ..ClientHydrationProgress::default()
         };
-        let (tx, mut rx) = tokio::sync::watch::channel(ClientHydrationProgress::default());
-        let _ = rx.borrow_and_update();
-
-        assert!(publish_hydration_progress(&tx, serving.clone()));
-        assert!(rx.has_changed().expect("hydration watch"));
-        let _ = rx.borrow_and_update();
-
-        assert!(!publish_hydration_progress(&tx, serving));
-        assert!(!rx.has_changed().expect("hydration watch"));
-    }
-
-    #[test]
-    fn hydration_request_is_written_only_for_idle_failed_or_session_change() {
-        use gents::agent::p2p_reconcile::session_hydration::{
-            ClientHydrationPhase, ClientHydrationProgress,
-        };
-
-        let serving = ClientHydrationProgress {
-            session_id: "session-1".into(),
-            agent_did: "did:agent".into(),
-            phase: ClientHydrationPhase::Serving,
-            merged_count: 3,
-            served_count: Some(8),
-        };
-        assert!(!should_write_session_hydration_request(
+        assert!(!should_start_session_hydration_request(
             &serving,
             "session-1",
             "did:agent",
         ));
-        assert!(should_write_session_hydration_request(
+        assert!(!should_start_session_hydration_request(
             &serving,
             "session-2",
             "did:agent",
@@ -1921,7 +2154,7 @@ mod delete_source_tests {
             phase: ClientHydrationPhase::Failed,
             ..serving.clone()
         };
-        assert!(should_write_session_hydration_request(
+        assert!(!should_start_session_hydration_request(
             &failed,
             "session-1",
             "did:agent",
@@ -1933,15 +2166,48 @@ mod delete_source_tests {
             served_count: Some(8),
             ..serving
         };
-        assert!(!should_write_session_hydration_request(
+        assert!(!should_start_session_hydration_request(
             &complete,
             "session-1",
             "did:agent",
         ));
-        assert!(should_write_session_hydration_request(
-            &ClientHydrationProgress::default(),
+        let idle = ClientHydrationProgress {
+            session_id: "session-1".into(),
+            agent_did: "did:agent".into(),
+            ..ClientHydrationProgress::default()
+        };
+        assert!(should_start_session_hydration_request(
+            &idle,
             "session-1",
             "did:agent",
+        ));
+        assert!(!hydration_start_evidence_is_ready(
+            &idle,
+            &LocalHydrationStartEvidence::default(),
+        ));
+        assert!(hydration_start_evidence_is_ready(
+            &ClientHydrationProgress {
+                merged_count: 1,
+                ..idle.clone()
+            },
+            &LocalHydrationStartEvidence::default(),
+        ));
+        assert!(hydration_start_evidence_is_ready(
+            &idle,
+            &LocalHydrationStartEvidence {
+                owned_session_present: true,
+                nonterminal_request_present: false,
+            },
+        ));
+        assert!(!hydration_start_evidence_is_ready(
+            &ClientHydrationProgress {
+                merged_count: 1,
+                ..idle
+            },
+            &LocalHydrationStartEvidence {
+                owned_session_present: true,
+                nonterminal_request_present: true,
+            },
         ));
     }
 
@@ -1978,18 +2244,21 @@ mod delete_source_tests {
         let mut record = PeerRecord::new("Amy", "endpoint-amy", "did:key:amy");
         record.source = source.map(str::to_owned);
         record.default_behavior_id = default_behavior_id.map(str::to_owned);
+        if source == Some("enrollment") {
+            record.pairing_network_id = Some("network-a".into());
+            record.enrollment_request_digest = Some("digest-a".into());
+            record.enrollment_authorization_sequence = Some(1);
+            record.enrollment_authorization_expires_at = Some("2099-09-29T00:00:00Z".into());
+        }
         record
     }
 
     #[test]
-    fn bearer_peer_signed_default_is_used_when_caller_omits_behavior() {
-        let mut peer = peer_record(
-            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
-            Some("default"),
-        );
+    fn enrolled_peer_default_is_used_when_caller_omits_behavior() {
+        let mut peer = peer_record(Some("enrollment"), Some("default"));
         peer.pairing_ready = true;
 
-        ensure_peer_chat_ready(&peer.agent_did, Some(&peer)).unwrap();
+        ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).unwrap();
         assert_eq!(
             behavior_id_for_write(None, Some(&peer)).as_deref(),
             Some("default")
@@ -2000,61 +2269,58 @@ mod delete_source_tests {
         );
     }
 
-    #[test]
-    fn machine_pairing_routes_non_owner_subagent_only_when_unambiguous() {
-        let mut machine = peer_record(
-            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
-            Some("default"),
+    #[tokio::test(start_paused = true)]
+    async fn expired_enrollment_cannot_admit_a_request_without_waiting_for_the_sweep() {
+        let mut peer = peer_record(Some("enrollment"), Some("default"));
+        peer.pairing_ready = true;
+        peer.enrollment_authorization_expires_at = Some("2026-08-30T12:00:01Z".into());
+        let before = "2026-08-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let expired = "2026-08-30T12:00:01Z".parse::<DateTime<Utc>>().unwrap();
+
+        assert!(ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), before).is_ok());
+        assert!(ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), expired).is_err());
+        assert!(
+            peer_record_owning_agent_at(std::slice::from_ref(&peer), &peer.agent_did, expired,)
+                .is_none()
         );
+    }
+
+    #[test]
+    fn machine_pairing_never_claims_an_unlisted_child_agent() {
+        let mut machine = peer_record(Some("enrollment"), Some("default"));
         machine.pairing_template = Some("machine".to_string());
         machine.pairing_ready = true;
-        assert_eq!(
-            peer_record_owning_agent(&[machine.clone()], "did:key:child")
-                .as_ref()
-                .map(|record| record.peer_id.as_str()),
-            Some(machine.peer_id.as_str())
-        );
-
-        let mut second = machine.clone();
-        second.peer_id = "second-machine".to_string();
-        second.agent_did = "did:key:second-host".to_string();
-        assert!(peer_record_owning_agent(&[machine, second], "did:key:child").is_none());
+        assert!(peer_record_owning_agent_at(&[machine], "did:key:child", Utc::now()).is_none());
     }
 
     #[test]
-    fn pending_bearer_peer_rejects_chat_writes() {
-        let peer = peer_record(
-            Some(super::super::bearer_pairing::BEARER_PAIRING_SOURCE),
-            Some("default"),
-        );
+    fn pending_enrollment_peer_rejects_chat_writes() {
+        let peer = peer_record(Some("enrollment"), Some("default"));
 
-        assert!(ensure_peer_chat_ready(&peer.agent_did, Some(&peer))
-            .unwrap_err()
-            .to_string()
-            .contains("route is not ready"));
+        assert!(
+            ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now())
+                .unwrap_err()
+                .to_string()
+                .contains("route is not ready")
+        );
     }
 
     #[test]
-    fn pending_server_status_and_missing_owner_reject_chat_writes() {
-        let peer = peer_record(Some("server-status"), Some("default"));
-        assert!(ensure_peer_chat_ready(&peer.agent_did, Some(&peer)).is_err());
-        assert!(ensure_peer_chat_ready("did:key:missing", None)
-            .unwrap_err()
-            .to_string()
-            .contains("no saved deployment route"));
+    fn malformed_source_and_missing_owner_reject_chat_writes() {
+        let peer = peer_record(None, Some("default"));
+        assert!(ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).is_err());
+        assert!(
+            ensure_peer_chat_ready_at("did:key:missing", None, Utc::now())
+                .unwrap_err()
+                .to_string()
+                .contains("no saved deployment route")
+        );
     }
 
     #[test]
     fn local_standard_is_explicitly_exempt_from_route_readiness() {
         let peer = peer_record(Some("local-standard"), Some("default"));
-        ensure_peer_chat_ready(&peer.agent_did, Some(&peer)).unwrap();
-    }
-
-    #[test]
-    fn unsigned_legacy_peer_default_is_not_trusted_for_routing() {
-        let peer = peer_record(Some("server-status"), Some("forged"));
-
-        assert_eq!(behavior_id_for_write(None, Some(&peer)), None);
+        ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).unwrap();
     }
 
     #[test]

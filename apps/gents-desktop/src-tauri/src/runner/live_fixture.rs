@@ -137,9 +137,12 @@ impl LiveBridgeFixture {
             remote_core.as_ref(),
             DEFAULT_DEPLOYMENT_LABEL,
         ))?;
-        let mut peer_record =
-            PeerRecord::new(DEFAULT_DEPLOYMENT_LABEL, &remote_addr, &running_agent.did);
-        peer_record.source = Some("local-standard".to_string());
+        let mut peer_record = PeerRecord::local_standard(
+            DEFAULT_DEPLOYMENT_LABEL,
+            &remote_addr,
+            &running_agent.did,
+            "http://127.0.0.1:1/graphql",
+        );
         // This fixture owns both nodes and installs both directional
         // replicators below. Keep the durable route truthful while the normal
         // supervisor is intentionally disabled for this manually managed
@@ -185,7 +188,6 @@ impl LiveBridgeFixture {
         let init_summary = DesktopInitSummary {
             status: "initialized",
             source: "bridge-runner",
-            status_endpoint: None,
             agent_home: agent_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
             peer_directory: desktop_paths.peer_directory_path().display().to_string(),
@@ -221,8 +223,7 @@ impl LiveBridgeFixture {
             let update_version = Arc::clone(&update_version);
             runtime.spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
-                let mut health_updates = desktop_core.p2p_health_updates();
-                let mut hydration_updates = desktop_core.hydration_progress_updates();
+                let mut sync_updates = desktop_core.sync_state_updates();
                 loop {
                     tokio::select! {
                         changed = store_updates.changed() => {
@@ -231,13 +232,7 @@ impl LiveBridgeFixture {
                             }
                             update_version.fetch_add(1, Ordering::SeqCst);
                         }
-                        changed = health_updates.changed() => {
-                            if changed.is_err() {
-                                break;
-                            }
-                            update_version.fetch_add(1, Ordering::SeqCst);
-                        }
-                        changed = hydration_updates.changed() => {
+                        changed = sync_updates.changed() => {
                             if changed.is_err() {
                                 break;
                             }
@@ -294,7 +289,6 @@ impl LiveBridgeFixture {
         let init_summary = DesktopInitSummary {
             status: "initialized",
             source: "bridge-runner-desktop-only",
-            status_endpoint: None,
             agent_home: agent_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
             peer_directory: desktop_paths.peer_directory_path().display().to_string(),
@@ -317,8 +311,7 @@ impl LiveBridgeFixture {
             let update_version = Arc::clone(&update_version);
             runtime.spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
-                let mut health_updates = desktop_core.p2p_health_updates();
-                let mut hydration_updates = desktop_core.hydration_progress_updates();
+                let mut sync_updates = desktop_core.sync_state_updates();
                 loop {
                     tokio::select! {
                         changed = store_updates.changed() => {
@@ -327,13 +320,7 @@ impl LiveBridgeFixture {
                             }
                             update_version.fetch_add(1, Ordering::SeqCst);
                         }
-                        changed = health_updates.changed() => {
-                            if changed.is_err() {
-                                break;
-                            }
-                            update_version.fetch_add(1, Ordering::SeqCst);
-                        }
-                        changed = hydration_updates.changed() => {
+                        changed = sync_updates.changed() => {
                             if changed.is_err() {
                                 break;
                             }
@@ -449,6 +436,7 @@ mod tests {
     use gents::default_behavior_id_for_agent;
     use gents::graphql::escape_graphql_string;
     use gents_desktop_core::client::ClientCore;
+    use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow};
     use serde_json::Value;
     use tokio::sync::oneshot;
 
@@ -737,49 +725,36 @@ mod tests {
         .await
     }
 
-    async fn wait_for_remote_runtime_generation(core: &ClientCore, agent_did: &str) -> Result<i64> {
+    async fn wait_for_remote_runtime_generation(core: &ClientCore, agent_did: &str) -> Result<u64> {
         wait_for_row(
-            "remote AgentRuntime generation",
+            "remote authoritative runtime generation",
             Duration::from_secs(60),
-            || async move { query_runtime_status_row(core, agent_did).await },
+            || async move { query_runtime_observation(core, agent_did).await },
         )
         .await
-        .and_then(|row| {
-            row.get("active_generation")
-                .and_then(Value::as_i64)
-                .context("AgentRuntime.active_generation missing")
-        })
+        .map(|observation| observation.active_generation)
     }
 
     async fn wait_for_remote_runtime_generation_after(
         core: &ClientCore,
         agent_did: &str,
-        previous_generation: i64,
+        previous_generation: u64,
     ) -> Result<()> {
         wait_for_condition(
-            "remote AgentRuntime generation advance",
+            "remote authoritative runtime generation advance",
             Duration::from_secs(90),
             || async move {
-                let Some(row) = query_runtime_status_row(core, agent_did).await? else {
+                let Some(observation) = query_runtime_observation(core, agent_did).await? else {
                     return Ok(false);
                 };
-                if row.get("last_reconcile_result").and_then(Value::as_str) == Some("error") {
+                if observation.last_reconcile_result == "error" {
                     bail!(
                         "runtime reconcile failed while waiting for skill binding: {}",
-                        row.get("last_reconcile_error")
-                            .and_then(Value::as_str)
-                            .unwrap_or("unknown error")
+                        observation.last_reconcile_error
                     );
                 }
-                let generation = row
-                    .get("active_generation")
-                    .and_then(Value::as_i64)
-                    .unwrap_or_default();
-                let phase = row
-                    .get("reconcile_phase")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                Ok(generation > previous_generation && phase == "idle")
+                Ok(observation.active_generation > previous_generation
+                    && observation.reconcile_phase == "idle")
             },
         )
         .await
@@ -832,23 +807,79 @@ mod tests {
         query_rows(core, &query, "AgentBehavior").await
     }
 
-    async fn query_runtime_status_row(core: &ClientCore, agent_did: &str) -> Result<Option<Value>> {
+    struct RemoteRuntimeObservation {
+        active_generation: u64,
+        reconcile_phase: String,
+        last_reconcile_result: String,
+        last_reconcile_error: String,
+    }
+
+    async fn query_runtime_observation(
+        core: &ClientCore,
+        agent_did: &str,
+    ) -> Result<Option<RemoteRuntimeObservation>> {
+        let expected_agent_did = agent_did.to_string();
         let agent_did = escape_graphql_string(agent_did);
         let query = format!(
             r#"{{
+                AgentBehaviorReadiness(
+                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    limit: 1
+                ) {{ agent_did snapshot_json updated_at }}
                 AgentRuntime(
                     filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
                     limit: 1
                 ) {{
-                    active_generation
                     reconcile_phase
                     last_reconcile_result
                     last_reconcile_error
                 }}
             }}"#
         );
-        let rows = query_rows(core, &query, "AgentRuntime").await?;
-        Ok(rows.into_iter().next())
+        let response = core.node().execute(&query).await;
+        if response.has_errors() {
+            bail!("query runtime observation failed: {:?}", response.errors);
+        }
+        let data = response
+            .data
+            .as_ref()
+            .context("runtime observation missing data")?;
+        let Some(readiness_value) = data
+            .get("AgentBehaviorReadiness")
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let readiness_row: AgentBehaviorReadinessRow = serde_json::from_value(readiness_value)?;
+        let readiness = decode_behavior_readiness_snapshot(&readiness_row, &expected_agent_did)
+            .map_err(|reason| anyhow::anyhow!("invalid behavior readiness: {reason:?}"))?;
+        let Some(runtime) = data
+            .get("AgentRuntime")
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+        else {
+            return Ok(None);
+        };
+        Ok(Some(RemoteRuntimeObservation {
+            active_generation: readiness.active_generation,
+            reconcile_phase: runtime
+                .get("reconcile_phase")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            last_reconcile_result: runtime
+                .get("last_reconcile_result")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            last_reconcile_error: runtime
+                .get("last_reconcile_error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+                .to_string(),
+        }))
     }
 
     async fn query_rows(core: &ClientCore, query: &str, collection: &str) -> Result<Vec<Value>> {
@@ -865,14 +896,14 @@ mod tests {
             .unwrap_or_default())
     }
 
-    async fn wait_for_row<F, Fut>(
+    async fn wait_for_row<T, F, Fut>(
         label: &'static str,
         timeout: Duration,
         mut check: F,
-    ) -> Result<Value>
+    ) -> Result<T>
     where
         F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<Option<Value>>>,
+        Fut: std::future::Future<Output = Result<Option<T>>>,
     {
         let deadline = Instant::now() + timeout;
         loop {

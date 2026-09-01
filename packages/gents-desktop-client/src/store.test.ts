@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { createDesktopClient } from "./client.js";
+import {
+  createDesktopClient,
+  EXPECTED_BRIDGE_WIRE_SCHEMA_HASH,
+  MINIMUM_BRIDGE_CONTRACT_VERSION,
+  PACKAGE_VERSION,
+} from "./client.js";
 import { createDesktopStore } from "./store.js";
 import { createMemoryTransport } from "./testing.js";
 
@@ -8,7 +13,38 @@ function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function compatibleBridgeContract() {
+  return {
+    contractVersion: MINIMUM_BRIDGE_CONTRACT_VERSION,
+    packageVersion: PACKAGE_VERSION,
+    wireSchemaHash: EXPECTED_BRIDGE_WIRE_SCHEMA_HASH,
+    events: [],
+    eventReasons: [],
+    errorCodes: [],
+    commands: [],
+    permissionSets: [],
+  };
+}
+
 describe("createDesktopStore", () => {
+  it("routes hydration retry through its explicit mutation command", async () => {
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_session_hydration_retry: () => undefined,
+      },
+    });
+    const client = createDesktopClient(transport);
+
+    await client.api.retrySessionHydration("session-1");
+
+    expect(transport.calls).toEqual([
+      {
+        command: "desktop_session_hydration_retry",
+        args: { sessionId: "session-1", agentDid: null },
+      },
+    ]);
+  });
+
   it("binds the full domain API to the injected transport", async () => {
     const transport = createMemoryTransport({
       handlers: {
@@ -34,15 +70,7 @@ describe("createDesktopStore", () => {
           await wait(5);
           return {};
         },
-        desktop_bridge_contract: () => ({
-          contractVersion: "0.7",
-          packageVersion: "0.14.0",
-          events: [],
-          eventReasons: [],
-          errorCodes: [],
-          commands: [],
-          permissionSets: [],
-        }),
+        desktop_bridge_contract: compatibleBridgeContract,
         desktop_client_snapshot: () => ({ bootstrap: {}, client: null }),
         desktop_client_shutdown: () => ({}),
       },
@@ -64,15 +92,7 @@ describe("createDesktopStore", () => {
     const transport = createMemoryTransport({
       handlers: {
         desktop_client_start: () => ({}),
-        desktop_bridge_contract: () => ({
-          contractVersion: "0.7",
-          packageVersion: "0.14.0",
-          events: [],
-          eventReasons: [],
-          errorCodes: [],
-          commands: [],
-          permissionSets: [],
-        }),
+        desktop_bridge_contract: compatibleBridgeContract,
         desktop_client_snapshot: () => ({
           bootstrap: {},
           client: null,

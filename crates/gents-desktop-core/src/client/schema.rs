@@ -53,6 +53,7 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
         .iter()
         .chain(ALL_COLLECTION_NAMES.iter())
         .filter(|name| !gents_protocol::schemas::is_local_audit_collection(name))
+        .filter(|name| !gents_protocol::schemas::is_local_only_collection(name))
         .copied()
         .collect()
 }
@@ -94,5 +95,34 @@ mod tests {
                 "{name} must be branchable for DAG sync"
             );
         }
+    }
+
+    #[test]
+    fn behavior_readiness_is_subscribed_but_not_in_broad_sync_inventory() {
+        let names = subscribed_collection_names();
+        assert!(names.contains(&"AgentBehaviorReadiness"));
+        assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&"AgentBehaviorReadiness"));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
+            .contains(&"AgentBehaviorReadiness"));
+    }
+
+    #[test]
+    fn local_admin_pin_is_never_subscribed_or_broad_synced() {
+        let names = subscribed_collection_names();
+        assert!(!names.contains(&"NetworkAdminPin"));
+        assert!(!names.contains(&"EnrollmentOperatorNonce"));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&"NetworkAdminPin"));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
+            .contains(&"EnrollmentOperatorNonce"));
+    }
+
+    #[test]
+    fn enrollment_receipt_is_subscribed_but_excluded_from_broad_sync() {
+        let names = subscribed_collection_names();
+        assert!(names.contains(&"NetworkEnrollmentRouteReceipt"));
+        assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES
+            .contains(&"NetworkEnrollmentRouteReceipt"));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
+            .contains(&"NetworkEnrollmentRouteReceipt"));
     }
 }

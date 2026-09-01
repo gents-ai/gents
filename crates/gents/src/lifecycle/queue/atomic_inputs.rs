@@ -24,28 +24,27 @@ pub(crate) async fn enqueue_background_completion_with_message(
         .filter(|key| !key.is_empty())
         .context("atomic background completion enqueue requires a queue key")?
         .to_string();
-    let parent = normalize_request_only_control_parent(node, parent).await?;
-    let behavior_id = parent_behavior_id(node, &parent).await?;
+    let behavior_id = parent_behavior_id(node, parent).await?;
     let request_id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let metadata = queue_metadata_json(&queue_hints);
     let request_mutation = session_request_create_mutation(
-        &parent,
+        parent,
         &behavior_id,
         wake_content,
         ExecutionOrigin::Scheduled,
         &metadata,
         &request_id,
         &now,
-        true,
-    )?;
+    )
+    .await?;
 
     let mut retry_index = 0;
     let mut enqueued = loop {
         let txn = ConfigApplyTxn::begin_local(node, None).await?;
         let attempt = background_completion_transaction_attempt(
             &txn,
-            &parent,
+            parent,
             notification_content,
             message_key,
             &queue_key,
@@ -186,34 +185,6 @@ async fn background_completion_transaction_attempt(
         message_sequence,
         created_request,
     })
-}
-
-pub(super) async fn normalize_request_only_control_parent(
-    node: &EmbeddedNode,
-    parent: &AgentRequest,
-) -> Result<AgentRequest> {
-    let mut normalized = parent.clone();
-    match (
-        normalized.caused_by_parent_request_id.as_deref(),
-        normalized.caused_by_parent_request_doc_id.as_deref(),
-    ) {
-        (Some(request_id), None) if !request_id.trim().is_empty() => {
-            normalized.caused_by_parent_request_doc_id =
-                Some(crate::request_binding::require_request_doc_id(node, request_id).await?);
-            tracing::warn!(
-                request_id = %normalized.request_id,
-                caused_by_parent_request_id = %request_id,
-                "recovered legacy logical-only control-continuation parent binding",
-            );
-        }
-        (Some(request_id), Some(request_doc_id))
-            if !request_id.trim().is_empty() && !request_doc_id.trim().is_empty() => {}
-        (None, None) => {}
-        _ => anyhow::bail!("cannot enqueue control continuation from incoherent parent linkage"),
-    }
-    normalized.caused_by_parent_tool_call_id = None;
-    normalized.caused_by_parent_tool_call_doc_id = None;
-    Ok(normalized)
 }
 
 pub(super) async fn steering_transaction_attempt(

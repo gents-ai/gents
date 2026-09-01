@@ -16,14 +16,11 @@ use super::super::query::load_full_snapshot_with_peer_records;
 use super::super::schema::{
     ensure_runtime_schemas, index_collection_names, subscribe_all_collections,
 };
-use super::bearer_pairing::{
-    install_bearer_replicator_for_record, is_bearer_peer, publish_local_endpoint,
-};
 use super::p2p_ops::{
     p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses, p2p_local_peer_id,
     p2p_sync_branchable_collection,
 };
-use super::route_manager::ClientRouteManager;
+use super::route_manager::{is_enrollment_peer, ClientRouteManager};
 use super::supervisor::spawn_p2p_supervisor_task;
 use super::{
     ClientCore, ClientCoreOptions, ClientPeerStatus, P2PHealth, BOOTSTRAP_OPERATION_BACKOFF,
@@ -59,11 +56,14 @@ impl ClientCore {
                 .context("starting embedded desktop node")?,
         );
 
-        let mut loaded_peer_directory = PeerDirectory::load(paths.peer_directory_path()).await?;
-        loaded_peer_directory
-            .clear_ephemeral_pairing_readiness()
-            .await?;
-        let peer_directory = Arc::new(tokio::sync::RwLock::new(loaded_peer_directory));
+        let loaded_peer_directory = PeerDirectory::open_writer(paths.peer_directory_path()).await?;
+        let sync_state = super::sync_state::ClientSyncStateOwner::new(
+            P2PHealth::default(),
+            loaded_peer_directory,
+            Vec::new(),
+        );
+        sync_state.clear_ephemeral_pairing_readiness().await?;
+        let records = sync_state.records();
         ensure_runtime_schemas(node.as_ref()).await?;
         ensure_desktop_schema_migrations(Arc::clone(&node)).await?;
         subscribe_all_collections(node.as_ref()).await?;
@@ -73,18 +73,9 @@ impl ClientCore {
         let (selected_agent_did, _) = watch::channel::<Option<String>>(None);
 
         let initial_snapshot = {
-            let records = peer_directory.read().await.records().to_vec();
             load_full_snapshot_with_peer_records(node.as_ref(), &records, principal.did()).await?
         };
         let (store, _store_updates) = ObservedStore::new(initial_snapshot);
-        let observer = spawn_observer_with_selection(
-            Arc::clone(&node),
-            Arc::clone(&store),
-            Arc::clone(&peer_directory),
-            principal.did().to_string(),
-            observer_subscription,
-            selected_agent_did.subscribe(),
-        );
 
         let p2p = node
             .p2p_arc()
@@ -102,25 +93,34 @@ impl ClientCore {
         ));
 
         let (peer_statuses, bootstrap_errors) = {
-            let records = peer_directory.read().await.records().to_vec();
             bootstrap_saved_peers(&node, &p2p, &records, &options, &principal, &route_manager).await
         };
-        let peer_statuses = Arc::new(std::sync::RwLock::new(peer_statuses));
-        let (p2p_health, _p2p_health_rx) = watch::channel(P2PHealth::default());
-        let (hydration, _hydration_rx) = watch::channel(
-            gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress::default(),
-        );
         let initial_health = super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
-        p2p_health.send_replace(initial_health);
+        for status in peer_statuses {
+            if let Some(expected) = records
+                .iter()
+                .find(|record| record.peer_id == status.peer_id)
+            {
+                sync_state.replace_peer(expected, status);
+            }
+        }
+        sync_state.replace_transport(initial_health);
+        let observer = spawn_observer_with_selection(
+            Arc::clone(&node),
+            Arc::clone(&store),
+            sync_state.clone(),
+            principal.did().to_string(),
+            observer_subscription,
+            selected_agent_did.subscribe(),
+        );
         let (p2p_control, p2p_control_rx) = mpsc::channel(8);
         let p2p_supervisor = spawn_p2p_supervisor_task(
             Arc::clone(&node),
             Arc::clone(&p2p),
-            Arc::clone(&peer_directory),
-            Arc::clone(&peer_statuses),
-            p2p_health.clone(),
+            sync_state.clone(),
             p2p_control_rx,
             Arc::new(principal.clone()),
+            local_peer_id.clone(),
             Arc::clone(&route_manager),
             options.install_replicators_on_bootstrap,
         );
@@ -130,14 +130,12 @@ impl ClientCore {
             principal,
             node,
             p2p,
-            peer_directory,
             route_manager,
             store,
             observer: tokio::sync::Mutex::new(Some(observer)),
-            peer_statuses,
+            sync_state,
             p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
-            p2p_health,
-            hydration,
+            hydration_transition: tokio::sync::Mutex::new(()),
             selected_agent_did,
             last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),
@@ -176,11 +174,11 @@ async fn ensure_desktop_schema_migrations(node: Arc<EmbeddedNode>) -> Result<()>
 }
 
 pub(super) async fn bootstrap_saved_peers(
-    node: &Arc<EmbeddedNode>,
+    _node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
     records: &[PeerRecord],
     options: &ClientCoreOptions,
-    actor: &PrincipalIdentity,
+    _actor: &PrincipalIdentity,
     route_manager: &Arc<ClientRouteManager>,
 ) -> (Vec<ClientPeerStatus>, Vec<String>) {
     let mut statuses = Vec::with_capacity(records.len());
@@ -196,37 +194,21 @@ pub(super) async fn bootstrap_saved_peers(
             last_error: None,
             pairing: Vec::new(),
             routes: Vec::new(),
-            chat_safe: record.pairing_ready,
         };
+
+        // Enrollment documents, including a current signed route receipt,
+        // are the sole authority for reconnecting this peer. The supervisor
+        // projects that authority after schemas and subscriptions are live.
+        if bootstrap_deferred_to_enrollment_authority(record) {
+            statuses.push(status);
+            continue;
+        }
 
         match connect_peer_with_retry(p2p, &record.addr, &record.label).await {
             Ok(()) => {
                 status.dial_succeeded = true;
 
-                if options.install_replicators_on_bootstrap && is_bearer_peer(record) {
-                    if let Err(error) = publish_local_endpoint(node.as_ref(), p2p, actor).await {
-                        let message = format!(
-                            "peer {} signed endpoint refresh failed: {}",
-                            record.label, error
-                        );
-                        status.last_error = Some(message.clone());
-                        errors.push(message);
-                        statuses.push(status);
-                        continue;
-                    }
-                    let replicator_result =
-                        install_bearer_replicator_for_record(p2p, record, actor.did()).await;
-                    if let Err(error) = replicator_result {
-                        let message = format!(
-                            "peer {} replicator bootstrap failed: {}",
-                            record.label, error
-                        );
-                        status.last_error = Some(message.clone());
-                        errors.push(message);
-                    }
-                }
-
-                if options.install_replicators_on_bootstrap && !is_bearer_peer(record) {
+                if options.install_replicators_on_bootstrap {
                     match route_manager.lock().await.configure(record).await {
                         Ok(()) => {}
                         Err(error) => {
@@ -251,6 +233,10 @@ pub(super) async fn bootstrap_saved_peers(
     }
 
     (statuses, errors)
+}
+
+fn bootstrap_deferred_to_enrollment_authority(record: &PeerRecord) -> bool {
+    is_enrollment_peer(record)
 }
 
 pub(super) async fn connect_peer_with_retry(
@@ -425,5 +411,13 @@ mod tests {
             config.max_doc_sync_request_doc_ids,
             p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS
         );
+    }
+
+    #[test]
+    fn stale_persisted_enrollment_is_not_activated_during_bootstrap() {
+        let mut record = PeerRecord::new("Enrollment", "endpoint", "did:key:server");
+        record.source = Some("enrollment".to_string());
+        record.pairing_ready = true;
+        assert!(bootstrap_deferred_to_enrollment_authority(&record));
     }
 }

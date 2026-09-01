@@ -4,34 +4,44 @@ import { createDesktopApiAdapter } from "./api/adapter.js";
 import type { DesktopApiAdapter } from "./api/types.js";
 import type { BridgeContract as GeneratedBridgeContract } from "./generated/BridgeContract.js";
 import type {
-  BearerPairingRequest,
-  BearerPairingResponse,
   ChatSendRequest,
   ChatSendResult,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
-  PeerAddRequest,
 } from "./types.js";
 
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.14.0";
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "0.7";
+// Runtime-authored behavior readiness is required and the duplicate runtime
+// counters are gone and status pairing is authenticated enrollment, so this
+// client requires the breaking 4.0 bridge.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "4.0";
+export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
+  "7a0203eda69c7fedd3f50f89b48af64e7aac23c86a92718742dc9417d8c6bc7a";
+
+function parseBridgeContractVersion(version: string): [number, number] | null {
+  const match = /^(\d+)\.(\d+)$/.exec(version);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return Number.isSafeInteger(major) && Number.isSafeInteger(minor)
+    ? [major, minor]
+    : null;
+}
 
 export function assertCompatibleBridgeContract(
   contract: DesktopBridgeContract,
 ) {
-  const [requiredMajor, requiredMinor] =
-    MINIMUM_BRIDGE_CONTRACT_VERSION.split(".").map(Number);
-  const [actualMajor, actualMinor] = contract.contractVersion
-    .split(".")
-    .map(Number);
-  if (
-    !Number.isInteger(actualMajor) ||
-    !Number.isInteger(actualMinor) ||
-    actualMajor !== requiredMajor ||
-    actualMinor < requiredMinor
-  ) {
+  const required = parseBridgeContractVersion(MINIMUM_BRIDGE_CONTRACT_VERSION);
+  const actual = parseBridgeContractVersion(contract.contractVersion);
+  if (!required) {
+    throw new Error(
+      `Invalid desktop client bridge requirement ${MINIMUM_BRIDGE_CONTRACT_VERSION}`,
+    );
+  }
+  const [requiredMajor, requiredMinor] = required;
+  if (!actual || actual[0] !== requiredMajor || actual[1] < requiredMinor) {
     throw new Error(
       `Incompatible Gents desktop bridge contract ${contract.contractVersion}; ` +
         `client requires ${requiredMajor}.${requiredMinor} or a newer compatible minor`,
@@ -40,6 +50,12 @@ export function assertCompatibleBridgeContract(
   if (contract.packageVersion !== PACKAGE_VERSION) {
     throw new Error(
       `Gents desktop package mismatch: bridge ${contract.packageVersion}, client ${PACKAGE_VERSION}`,
+    );
+  }
+  if (contract.wireSchemaHash !== EXPECTED_BRIDGE_WIRE_SCHEMA_HASH) {
+    throw new Error(
+      `Incompatible Gents desktop wire schema ${contract.wireSchemaHash}; ` +
+        `client requires ${EXPECTED_BRIDGE_WIRE_SCHEMA_HASH}`,
     );
   }
 }
@@ -63,14 +79,12 @@ export type DesktopClient = {
     agentDid?: string | null;
     requestId?: string | null;
   }): Promise<DesktopSessionSnapshot | null>;
-  peerPairBearer(request: BearerPairingRequest): Promise<BearerPairingResponse>;
-  peerAdd(request: PeerAddRequest): Promise<DesktopClientSnapshot>;
 };
 
 export function createDesktopClient(
   transport: DesktopTransport = tauriTransport(),
 ): DesktopClient {
-  const api = createDesktopApiAdapter(transport);
+  const rawApi = createDesktopApiAdapter(transport);
 
   async function invoke<T>(command: string, args?: unknown): Promise<T> {
     try {
@@ -80,11 +94,23 @@ export function createDesktopClient(
     }
   }
 
+  async function clientStart(): Promise<DesktopClientSnapshot> {
+    assertCompatibleBridgeContract(
+      await invoke<DesktopBridgeContract>("desktop_bridge_contract"),
+    );
+    return invoke("desktop_client_start");
+  }
+
+  const api: DesktopApiAdapter = {
+    ...rawApi,
+    startDesktopClient: clientStart,
+  };
+
   return {
     transport,
     api,
     invoke,
-    clientStart: () => invoke("desktop_client_start"),
+    clientStart,
     clientShutdown: () => invoke("desktop_client_shutdown"),
     clientSnapshot: () => invoke("desktop_client_snapshot"),
     bridgeContract: () => invoke("desktop_bridge_contract"),
@@ -95,8 +121,5 @@ export function createDesktopClient(
         agentDid: args.agentDid ?? null,
         requestId: args.requestId ?? null,
       }),
-    peerPairBearer: (request) =>
-      invoke("desktop_peer_pair_bearer", { request }),
-    peerAdd: (request) => invoke("desktop_peer_add", { request }),
   };
 }

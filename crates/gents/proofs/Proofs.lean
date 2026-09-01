@@ -17,7 +17,6 @@ import Proofs.RenderedCapture
 import Proofs.DurableLineage
 import Proofs.RuntimeReconcile
 import Proofs.PairingReconcile
-import Proofs.PeerRegistryDiscovery
 import Proofs.ScopeTemplates
 import Proofs.Triggers
 import Proofs.Goals
@@ -61,3 +60,5 @@ import Proofs.EventDelivery
 import Proofs.Conformance.EventDelivery
 import Proofs.GraphPipeline
 import Proofs.EthSubmission
+import Proofs.PeerRegistryDiscovery.DirectoryProjection
+import Proofs.PeerRegistryDiscovery.PersonaRequest

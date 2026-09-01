@@ -1,14 +1,19 @@
 use std::collections::HashMap;
 
+use chrono::Utc;
 use gents::{BashMode, FileToolMode};
-use gents_desktop_core::client::{ClientCore, ClientPeerStatus, PeerRecord};
+use gents_desktop_core::client::{ClientCore, ClientPeerStatus};
+use gents_protocol::row::{
+    AgentBehaviorReadinessRow, BehaviorReadinessUnknownReason, ProjectedBehaviorReadiness,
+};
 
 use super::super::types::{
     normalize_optional, turn_state_label, AgentPrincipalView, BehaviorEnvironmentView,
-    BehaviorView, ClientRouteStatusView, ConversationSummary, DeploymentView,
-    DesktopRuntimeSnapshot, EventTriggerView, InferenceBackendView, InferenceProfileView,
-    MailboxItemView, RuntimeView, ScheduleView, SkillView, TaskView, ToolSelectionView,
-    ToolServiceRegistryView,
+    BehaviorReadinessSourceView, BehaviorReadinessStatusView, BehaviorReadinessUnknownReasonView,
+    BehaviorReadinessView, BehaviorUnavailableReasonView, BehaviorView, ClientRouteStatusView,
+    ConversationSummary, DeploymentView, DesktopRuntimeSnapshot, EventTriggerView,
+    InferenceBackendView, InferenceProfileView, MailboxItemView, RuntimeView, ScheduleView,
+    SkillView, TaskView, ToolSelectionView, ToolServiceRegistryView,
 };
 use super::runtime_tasks::{
     conversation_task_tag, recent_runs_for_task_views, request_backed_conversation_summaries,
@@ -17,19 +22,30 @@ use super::runtime_tasks::{
 use super::to_health_view;
 
 pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
+    // Directory rows and transport status come from one watched revision.
+    // Reading `core.peer_records()` here would reintroduce a split sample where
+    // a readiness write wakes the bridge before the rebuilt view can see it.
+    let sync_state = core.sync_state();
     let store = core.store().snapshot();
-    let peer_records = core.peer_records().await;
-    let peer_statuses: HashMap<String, ClientPeerStatus> = core
-        .peer_statuses()
-        .into_iter()
+    // This preserves the existing deployment join until authenticated
+    // enrollment makes the directory identity unique and transport-bound.
+    // Duplicate or blank agent DIDs can still collide here; importantly, they
+    // grant no route or hydration authority; authenticated enrollment removes
+    // this legacy presentation seam.
+    let peer_statuses: HashMap<String, ClientPeerStatus> = sync_state
+        .peers
+        .iter()
+        .cloned()
         .map(|status| (status.agent_did.clone(), status))
         .collect();
 
-    let mut deployments = peer_records
+    let mut deployments = sync_state
+        .directory
+        .clone()
         .into_iter()
         .map(|peer| {
             let status = peer_statuses.get(&peer.agent_did);
-            let require_source_scope = peer.is_bearer_pairing()
+            let require_source_scope = peer.is_enrollment()
                 || peer
                     .graphql
                     .as_deref()
@@ -72,15 +88,12 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let mut runtime = store
                 .latest_runtime(&peer.agent_did)
                 .map(|row| RuntimeView {
-                    process_state: normalize_optional(row.process_state.as_deref()),
                     reconcile_phase: normalize_optional(row.reconcile_phase.as_deref()),
                     last_reconcile_result: normalize_optional(row.last_reconcile_result.as_deref()),
                     last_reconcile_error: normalize_optional(row.last_reconcile_error.as_deref()),
                     updated_at: normalize_optional(row.updated_at.as_deref()),
                     behavior_executor_capacity: row.behavior_executor_capacity,
                     behavior_executor_queue_depth: row.behavior_executor_queue_depth,
-                    runnable_behavior_count: row.runnable_behavior_count,
-                    unavailable_behavior_count: row.unavailable_behavior_count,
                 });
 
             let mut behaviors = store
@@ -103,43 +116,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     skill_excludes: row.skill_excludes.clone(),
                 })
                 .collect::<Vec<_>>();
-            if peer_can_infer_behaviors(&peer) && behaviors.is_empty() {
-                let behavior_ids = inferred_peer_behavior_ids(
-                    store
-                        .conversation_rows(&peer.agent_did)
-                        .into_iter()
-                        .filter_map(|row| row.behavior_id.as_deref())
-                        .chain(peer.default_behavior_id.as_deref()),
-                );
-                default_behavior_id = inferred_default_behavior_id(
-                    &peer.agent_did,
-                    default_behavior_id.as_deref(),
-                    &behavior_ids,
-                );
-                agent_principal.default_behavior_id = default_behavior_id.clone();
-                behaviors = behavior_ids
-                    .into_iter()
-                    .map(|behavior_id| BehaviorView {
-                        display_name: inferred_behavior_display_name(
-                            &behavior_id,
-                            &peer.label,
-                            default_behavior_id.as_deref() == Some(behavior_id.as_str()),
-                        ),
-                        is_default: default_behavior_id.as_deref() == Some(behavior_id.as_str()),
-                        behavior_id,
-                        system_prompt: None,
-                        backend_id: None,
-                        model_name: None,
-                        tool_selection_id: None,
-                        inference_profile_id: None,
-                        compaction_strategy: None,
-                        compaction_threshold: None,
-                        enabled: true,
-                        skill_refs: Vec::new(),
-                        skill_excludes: Vec::new(),
-                    })
-                    .collect();
-            }
             behaviors.sort_by(|left, right| {
                 right
                     .is_default
@@ -490,7 +466,18 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 &conversations,
             );
 
-            let pairing_ready = peer.is_chat_ready();
+            let pairing_ready = peer.is_chat_ready_at(Utc::now());
+            let behavior_readiness = redact_unpaired_behavior_readiness(
+                project_behavior_readiness(
+                    store.behavior_readiness(&peer.agent_did),
+                    &peer.agent_did,
+                    behaviors
+                        .iter()
+                        .map(|behavior| behavior.behavior_id.as_str()),
+                    default_behavior_id.as_deref(),
+                ),
+                pairing_ready,
+            );
             if !pairing_ready {
                 default_behavior_id = None;
                 agent_principal.default_behavior_id = None;
@@ -517,7 +504,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 graphql: peer.graphql,
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
                 pairing_ready,
-                chat_safe: status.is_some_and(|status| status.chat_safe),
+                chat_safe: pairing_ready,
                 routes: status
                     .map(|status| {
                         status
@@ -557,6 +544,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 default_behavior_id,
                 agent_principal,
                 runtime,
+                behavior_readiness,
                 behaviors,
                 behavior_environments,
                 inference_backends,
@@ -578,17 +566,135 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
     DesktopRuntimeSnapshot {
         local_peer_id: core.local_peer_id().to_string(),
         listen_addresses: core.listen_addresses().to_vec(),
-        p2p_health: to_health_view(&core.p2p_health()),
-        sync_health: Some(super::project_core_sync_health(core)),
+        p2p_health: to_health_view(&sync_state.transport),
+        sync_health: Some(super::project_client_sync_health(&sync_state)),
         bootstrap_errors: core.bootstrap_errors().to_vec(),
         last_mutation_error: core.last_mutation_error(),
         focused_request_id: core.store().focused_request_id(),
-        configured_peer_count: core.configured_peer_count(),
-        dialed_peer_count: core.dialed_peer_count(),
-        peer_issue_count: core.peer_issue_count(),
+        configured_peer_count: sync_state.peers.len(),
+        dialed_peer_count: sync_state
+            .peers
+            .iter()
+            .filter(|status| status.dial_succeeded)
+            .count(),
+        peer_issue_count: sync_state
+            .peers
+            .iter()
+            .filter(|status| status.last_error.is_some())
+            .count(),
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),
         deployments,
+    }
+}
+
+pub(crate) fn project_behavior_readiness<'a>(
+    row: Option<&AgentBehaviorReadinessRow>,
+    expected_agent_did: &str,
+    configured_behavior_ids: impl IntoIterator<Item = &'a str>,
+    configured_default_behavior_id: Option<&str>,
+) -> BehaviorReadinessView {
+    let projection = gents_protocol::row::project_behavior_readiness(
+        row,
+        expected_agent_did,
+        configured_behavior_ids,
+        configured_default_behavior_id,
+        Utc::now(),
+    );
+    BehaviorReadinessView {
+        source: match projection.unknown_reason {
+            Some(reason) => BehaviorReadinessSourceView::Unknown {
+                reason: reason.into(),
+            },
+            None => BehaviorReadinessSourceView::Current,
+        },
+        active_generation: projection.active_generation,
+        router_generation: projection.router_generation,
+        default_behavior_id: projection.default_behavior_id,
+        updated_at: normalize_optional(projection.updated_at.as_deref()),
+        behaviors: projection
+            .behaviors
+            .into_iter()
+            .map(|(behavior_id, state)| match state {
+                ProjectedBehaviorReadiness::Ready => {
+                    BehaviorReadinessStatusView::Ready { behavior_id }
+                }
+                ProjectedBehaviorReadiness::Unavailable(reason) => {
+                    BehaviorReadinessStatusView::Unavailable {
+                        behavior_id,
+                        reason: reason.into(),
+                    }
+                }
+                ProjectedBehaviorReadiness::Unknown(reason) => {
+                    BehaviorReadinessStatusView::Unknown {
+                        behavior_id,
+                        reason: reason.into(),
+                    }
+                }
+            })
+            .collect(),
+    }
+}
+
+fn redact_unpaired_behavior_readiness(
+    readiness: BehaviorReadinessView,
+    pairing_ready: bool,
+) -> BehaviorReadinessView {
+    pairing_ready.then_some(readiness).unwrap_or_default()
+}
+
+impl From<gents_protocol::row::BehaviorReadinessUnavailableReason>
+    for BehaviorUnavailableReasonView
+{
+    fn from(reason: gents_protocol::row::BehaviorReadinessUnavailableReason) -> Self {
+        match reason {
+            gents_protocol::row::BehaviorReadinessUnavailableReason::BehaviorDisabled => {
+                Self::BehaviorDisabled
+            }
+            gents_protocol::row::BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid => {
+                Self::RuntimeConfigurationInvalid
+            }
+            gents_protocol::row::BehaviorReadinessUnavailableReason::BackendNotConfigured => {
+                Self::BackendNotConfigured
+            }
+            gents_protocol::row::BehaviorReadinessUnavailableReason::BackendDisabled => {
+                Self::BackendDisabled
+            }
+            gents_protocol::row::BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable => {
+                Self::BackendTemporarilyUnavailable
+            }
+            gents_protocol::row::BehaviorReadinessUnavailableReason::CredentialsRequired => {
+                Self::CredentialsRequired
+            }
+            gents_protocol::row::BehaviorReadinessUnavailableReason::InferenceProfileInvalid => {
+                Self::InferenceProfileInvalid
+            }
+            gents_protocol::row::BehaviorReadinessUnavailableReason::ToolConfigurationInvalid => {
+                Self::ToolConfigurationInvalid
+            }
+            gents_protocol::row::BehaviorReadinessUnavailableReason::ToolSurfaceUnavailable => {
+                Self::ToolSurfaceUnavailable
+            }
+            gents_protocol::row::BehaviorReadinessUnavailableReason::ExecutorStartFailed => {
+                Self::ExecutorStartFailed
+            }
+        }
+    }
+}
+
+impl From<BehaviorReadinessUnknownReason> for BehaviorReadinessUnknownReasonView {
+    fn from(reason: BehaviorReadinessUnknownReason) -> Self {
+        match reason {
+            BehaviorReadinessUnknownReason::ReadinessMissing => Self::ReadinessMissing,
+            BehaviorReadinessUnknownReason::ReadinessMalformed => Self::ReadinessMalformed,
+            BehaviorReadinessUnknownReason::ReadinessVersionUnsupported => {
+                Self::ReadinessVersionUnsupported
+            }
+            BehaviorReadinessUnknownReason::ReadinessStale => Self::ReadinessStale,
+            BehaviorReadinessUnknownReason::ProcessNotReady => Self::ProcessNotReady,
+            BehaviorReadinessUnknownReason::RouterGenerationStale => Self::RouterGenerationStale,
+            BehaviorReadinessUnknownReason::BehaviorNotAssigned => Self::BehaviorNotAssigned,
+        }
     }
 }
 
@@ -730,138 +836,50 @@ fn conversation_is_active(conversation: &ConversationSummary) -> bool {
     )
 }
 
-fn peer_can_infer_behaviors(peer: &PeerRecord) -> bool {
-    (peer.is_bearer_pairing() && peer.pairing_ready)
-        || (peer.source.as_deref() == Some("server-status") && peer.default_behavior_id.is_some())
-}
-
-fn inferred_peer_behavior_ids<'a>(behavior_ids: impl Iterator<Item = &'a str>) -> Vec<String> {
-    let mut behavior_ids = behavior_ids
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    behavior_ids.sort();
-    behavior_ids.dedup();
-    behavior_ids
-}
-
-fn inferred_default_behavior_id(
-    agent_did: &str,
-    configured_default: Option<&str>,
-    behavior_ids: &[String],
-) -> Option<String> {
-    configured_default
-        .filter(|candidate| behavior_ids.iter().any(|value| value == candidate))
-        .or_else(|| {
-            behavior_ids
-                .iter()
-                .find(|value| value.as_str() == "default")
-                .map(String::as_str)
-        })
-        .or_else(|| {
-            let scoped_default = gents::default_behavior_id_for_agent(agent_did);
-            behavior_ids
-                .iter()
-                .find(|value| value.as_str() == scoped_default)
-                .map(String::as_str)
-        })
-        .or_else(|| behavior_ids.first().map(String::as_str))
-        .map(str::to_owned)
-}
-
-fn inferred_behavior_display_name(behavior_id: &str, peer_label: &str, is_default: bool) -> String {
-    if is_default {
-        return peer_label.to_string();
-    }
-    behavior_id
-        .split(['-', '_'])
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            chars
-                .next()
-                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[cfg(test)]
-mod inferred_peer_behavior_tests {
+mod behavior_readiness_conformance_tests {
     use super::*;
 
     #[test]
-    fn deduplicates_behavior_ids_and_prefers_named_default() {
-        let ids =
-            inferred_peer_behavior_ids(["session-classifier", "default", "default"].into_iter());
-
-        assert_eq!(ids, vec!["default", "session-classifier"]);
-        assert_eq!(
-            inferred_default_behavior_id("did:key:amy", None, &ids).as_deref(),
-            Some("default")
-        );
-    }
-
-    #[test]
-    fn labels_default_as_peer_and_humanizes_other_behaviors() {
-        assert_eq!(
-            inferred_behavior_display_name("default", "Amy", true),
-            "Amy"
-        );
-        assert_eq!(
-            inferred_behavior_display_name("session-classifier", "Amy", false),
-            "Session Classifier"
-        );
-    }
-
-    #[test]
-    fn signed_default_behavior_bootstraps_a_fresh_bearer_peer() {
-        let ids = inferred_peer_behavior_ids(std::iter::empty::<&str>().chain(Some("default")));
-
-        assert_eq!(ids, vec!["default"]);
-        assert_eq!(
-            inferred_default_behavior_id("did:key:amy", Some("default"), &ids).as_deref(),
-            Some("default")
-        );
-    }
-
-    #[test]
-    fn pending_bearer_peer_cannot_infer_chat_behavior() {
-        let mut peer = PeerRecord::new("Remote", "endpoint", "did:key:remote");
-        peer.source = Some("bearer-pairing".to_string());
-        peer.default_behavior_id = Some("default".to_string());
-
-        assert!(!peer_can_infer_behaviors(&peer));
-        peer.pairing_ready = true;
-        assert!(peer_can_infer_behaviors(&peer));
-    }
-
-    #[test]
-    fn status_peer_with_imported_default_can_render_a_behavior_before_snapshot_hydration() {
-        let mut peer = PeerRecord::new("Amy", "endpoint-amy", "did:key:amy");
-        peer.source = Some("server-status".to_string());
-        peer.default_behavior_id = Some("default".to_string());
-
-        assert!(peer_can_infer_behaviors(&peer));
-        assert_eq!(
-            inferred_peer_behavior_ids(
-                std::iter::empty::<&str>().chain(peer.default_behavior_id.as_deref())
-            ),
-            vec!["default"]
-        );
-    }
-
-    #[test]
-    fn p2p_config_without_legacy_source_tags_remains_visible() {
-        assert!(source_matches_agent(&[None], 0, "did:key:amy", false));
-        assert!(!source_matches_agent(
-            &[Some("did:key:other".to_string())],
-            0,
-            "did:key:amy",
-            false,
+    fn malformed_and_unpaired_observations_fail_closed_with_typed_reasons() {
+        let row = AgentBehaviorReadinessRow {
+            agent_did: "did:test:bad-readiness".to_string(),
+            snapshot_json: "not-json".to_string(),
+            updated_at: "2026-08-28T00:00:00Z".to_string(),
+        };
+        let malformed =
+            project_behavior_readiness(Some(&row), "did:test:agent", ["default"], Some("default"));
+        assert!(matches!(
+            malformed.behaviors.as_slice(),
+            [BehaviorReadinessStatusView::Unknown {
+                reason: BehaviorReadinessUnknownReasonView::ReadinessMalformed,
+                ..
+            }]
         ));
+        assert!(matches!(
+            malformed.source,
+            BehaviorReadinessSourceView::Unknown {
+                reason: BehaviorReadinessUnknownReasonView::ReadinessMalformed
+            }
+        ));
+    }
+
+    #[test]
+    fn unpaired_deployment_redacts_a_retained_current_readiness_snapshot() {
+        let retained = BehaviorReadinessView {
+            source: BehaviorReadinessSourceView::Current,
+            active_generation: Some(7),
+            router_generation: Some(7),
+            default_behavior_id: Some("private-default".to_string()),
+            updated_at: Some("2026-08-29T00:00:00Z".to_string()),
+            behaviors: vec![BehaviorReadinessStatusView::Ready {
+                behavior_id: "private-default".to_string(),
+            }],
+        };
+
+        let redacted = redact_unpaired_behavior_readiness(retained, false);
+
+        assert_eq!(redacted, BehaviorReadinessView::default());
     }
 }
 

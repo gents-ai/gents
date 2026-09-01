@@ -8,6 +8,7 @@ fn resolved_event_trigger(
     task: ResolvedTask,
 ) -> ResolvedEventTrigger {
     ResolvedEventTrigger {
+        trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -36,6 +37,7 @@ fn resolved_event_trigger_with_filter(
     filter: &str,
 ) -> ResolvedEventTrigger {
     ResolvedEventTrigger {
+        trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
         task_id: task.task_id.clone(),
         task,

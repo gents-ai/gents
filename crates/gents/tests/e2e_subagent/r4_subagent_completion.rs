@@ -23,7 +23,6 @@ use serde_json::json;
 use crate::support::fixtures::spawn_subagent_source;
 use crate::support::{first_row, test_db};
 
-const AGENT_DID: &str = "did:test:r4-subagent-completion";
 const PARENT_BEHAVIOR_ID: &str = "r4-completion-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4-completion-child";
 #[derive(Debug, Deserialize)]
@@ -63,14 +62,15 @@ struct ResponseStateRow {
 
 async fn setup_fixture(test_name: &str) -> (crate::support::TestDb, String, String) {
     let db = test_db(test_name).await;
+    let agent_did = db.node_identity.did().to_string();
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: format!("{test_name}-tools"),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.clone(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
-                AGENT_DID,
+                &agent_did,
                 CHILD_BEHAVIOR_ID,
                 None,
             )]),
@@ -85,7 +85,7 @@ async fn setup_fixture(test_name: &str) -> (crate::support::TestDb, String, Stri
         db.node.as_ref(),
         &AgentBehaviorDocument {
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.clone(),
             display_name: Some("R4 completion parent".to_string()),
             description: None,
             summary: None,
@@ -109,7 +109,7 @@ async fn setup_fixture(test_name: &str) -> (crate::support::TestDb, String, Stri
         db.node.as_ref(),
         &AgentBehaviorDocument {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.clone(),
             display_name: Some("R4 completion child".to_string()),
             description: None,
             summary: None,
@@ -132,7 +132,7 @@ async fn setup_fixture(test_name: &str) -> (crate::support::TestDb, String, Stri
 
     let session_id = format!("{test_name}-parent-session");
     let request_id = format!("{test_name}-parent-request");
-    create_parent_request(db.node.as_ref(), &request_id, &session_id).await;
+    create_parent_request(db.node.as_ref(), &agent_did, &request_id, &session_id).await;
     crate::support::create_agent_session(
         db.node.as_ref(),
         &session_id,
@@ -143,11 +143,16 @@ async fn setup_fixture(test_name: &str) -> (crate::support::TestDb, String, Stri
     (db, session_id, request_id)
 }
 
-async fn create_parent_request(node: &EmbeddedNode, request_id: &str, session_id: &str) {
+async fn create_parent_request(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+) {
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let behavior_id = escape_graphql_string(PARENT_BEHAVIOR_ID);
-    let agent_did = escape_graphql_string(AGENT_DID);
+    let agent_did = escape_graphql_string(agent_did);
     let now = chrono::Utc::now().to_rfc3339();
     let deadline = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
     let mutation = format!(
@@ -194,12 +199,22 @@ async fn create_child_and_bridge(
     let child_request_id = format!("{parent_request_id}-{tool_call_id}-child");
     let parent_request_doc_id =
         crate::support::exact_request_doc_id(node.as_ref(), parent_request_id).await;
+    let parent_request_id_escaped = escape_graphql_string(parent_request_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{parent_request_id_escaped}" }} }}, limit: 1) {{ agent_did }} }}"#
+        ))
+        .await;
+    let agent_did = response.data.expect("parent agent query data")["AgentRequest"][0]["agent_did"]
+        .as_str()
+        .expect("parent agent DID")
+        .to_string();
 
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        AGENT_DID.to_string(),
+        agent_did.clone(),
         tool_call_id.to_string(),
         message_sequence,
         "spawn_subagent".to_string(),
@@ -213,7 +228,7 @@ async fn create_child_and_bridge(
         await_mode,
         CancelPolicy::Cascade,
         child_request_id.clone(),
-        AGENT_DID.to_string(),
+        agent_did.clone(),
     )
     .with_request_doc_id(Some(parent_request_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
@@ -227,7 +242,7 @@ async fn create_child_and_bridge(
         tool_call_id.to_string(),
         parent_tool_call_doc_id,
         0,
-        AGENT_DID.to_string(),
+        agent_did,
         CHILD_BEHAVIOR_ID.to_string(),
         format!("prompt for {tool_call_id}"),
         Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
@@ -250,6 +265,20 @@ async fn child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String
         }}"#
     );
     first_row::<RequestSessionRow>(&node.execute(&query).await, "AgentRequest").session_id
+}
+
+async fn request_agent_did(node: &EmbeddedNode, request_id: &str) -> String {
+    let request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ agent_did }} }}"#
+    );
+    node.execute(&query)
+        .await
+        .data
+        .expect("request agent query data")["AgentRequest"][0]["agent_did"]
+        .as_str()
+        .expect("request agent DID")
+        .to_string()
 }
 
 async fn wait_for_child_for_tool(node: &EmbeddedNode, tool_call_id: &str) -> (String, String) {
@@ -343,7 +372,7 @@ async fn persist_child_completion(
         response.errors
     );
 
-    let escaped_agent_did = escape_graphql_string(AGENT_DID);
+    let escaped_agent_did = escape_graphql_string(&request_agent_did(node, child_request_id).await);
     let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let create_response = format!(
         r#"mutation {{
@@ -434,7 +463,7 @@ async fn create_streaming_child_response(
     let escaped_child_request_id = escape_graphql_string(child_request_id);
     let escaped_child_session_id = escape_graphql_string(child_session_id);
     let escaped_content = escape_graphql_string(content);
-    let escaped_agent_did = escape_graphql_string(AGENT_DID);
+    let escaped_agent_did = escape_graphql_string(&request_agent_did(node, child_request_id).await);
     let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
@@ -596,10 +625,13 @@ async fn background_completion_projects_bridge_notifies_and_enqueues_wake() {
     )
     .await;
 
-    let outcome =
-        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
-            .await
-            .unwrap();
+    let outcome = project_background_subagent_completion(
+        db.node.clone(),
+        &child_request_id,
+        db.node_identity.did(),
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         outcome,
         BackgroundCompletionOutcome::Projected { .. }
@@ -623,10 +655,13 @@ async fn background_completion_projects_bridge_notifies_and_enqueues_wake() {
     let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
     assert_eq!(wakes.len(), 1);
 
-    let again =
-        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
-            .await
-            .unwrap();
+    let again = project_background_subagent_completion(
+        db.node.clone(),
+        &child_request_id,
+        db.node_identity.did(),
+    )
+    .await
+    .unwrap();
     assert_eq!(again, BackgroundCompletionOutcome::AlreadyProjected);
     assert_eq!(
         fetch_parent_messages(db.node.as_ref(), &session_id)
@@ -677,10 +712,13 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
         .await
         .is_empty());
 
-    let outcome =
-        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
-            .await
-            .unwrap();
+    let outcome = project_background_subagent_completion(
+        db.node.clone(),
+        &child_request_id,
+        db.node_identity.did(),
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         outcome,
         BackgroundCompletionOutcome::Projected { .. }
@@ -697,10 +735,13 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
         1
     );
 
-    let again =
-        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
-            .await
-            .unwrap();
+    let again = project_background_subagent_completion(
+        db.node.clone(),
+        &child_request_id,
+        db.node_identity.did(),
+    )
+    .await
+    .unwrap();
     assert_eq!(again, BackgroundCompletionOutcome::AlreadyProjected);
     assert_eq!(
         fetch_parent_messages(db.node.as_ref(), &session_id)
@@ -721,7 +762,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     let (db, session_id, parent_request_id) = setup_fixture("background_completion_order").await;
     let _source = spawn_subagent_source(
         db.node.clone(),
-        AGENT_DID,
+        db.node_identity.did(),
         PARENT_BEHAVIOR_ID,
         CHILD_BEHAVIOR_ID,
     );
@@ -729,7 +770,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
         db.node.clone(),
         &session_id,
         PARENT_BEHAVIOR_ID,
-        AGENT_DID,
+        db.node_identity.did(),
         FailurePolicy::default(),
     )
     .await
@@ -763,9 +804,13 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
         "fast background child done",
     )
     .await;
-    project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
-        .await
-        .unwrap();
+    project_background_subagent_completion(
+        db.node.clone(),
+        &child_request_id,
+        db.node_identity.did(),
+    )
+    .await
+    .unwrap();
 
     let messages_before_parent_persists =
         fetch_parent_messages(db.node.as_ref(), &session_id).await;
@@ -841,10 +886,13 @@ async fn background_completion_compacts_multibyte_summary_without_panicking() {
     )
     .await;
 
-    let outcome =
-        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
-            .await
-            .unwrap();
+    let outcome = project_background_subagent_completion(
+        db.node.clone(),
+        &child_request_id,
+        db.node_identity.did(),
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         outcome,
         BackgroundCompletionOutcome::Projected { .. }
@@ -879,12 +927,14 @@ async fn multiple_background_completions_append_notifications_and_coalesce_wake(
     persist_child_completion(db.node.as_ref(), &child_a, &session_a, "child A done").await;
     persist_child_completion(db.node.as_ref(), &child_b, &session_b, "child B done").await;
 
-    let first = project_background_subagent_completion(db.node.clone(), &child_a, AGENT_DID)
-        .await
-        .unwrap();
-    let second = project_background_subagent_completion(db.node.clone(), &child_b, AGENT_DID)
-        .await
-        .unwrap();
+    let first =
+        project_background_subagent_completion(db.node.clone(), &child_a, db.node_identity.did())
+            .await
+            .unwrap();
+    let second =
+        project_background_subagent_completion(db.node.clone(), &child_b, db.node_identity.did())
+            .await
+            .unwrap();
     assert!(matches!(
         first,
         BackgroundCompletionOutcome::Projected { .. }
@@ -937,10 +987,13 @@ async fn background_completion_does_not_interrupt_active_foreground_parent() {
     )
     .await;
 
-    let outcome =
-        project_background_subagent_completion(db.node.clone(), &background_child, AGENT_DID)
-            .await
-            .unwrap();
+    let outcome = project_background_subagent_completion(
+        db.node.clone(),
+        &background_child,
+        db.node_identity.did(),
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         outcome,
         BackgroundCompletionOutcome::Projected { .. }
@@ -972,7 +1025,7 @@ async fn recovery_leaves_running_background_bridge_after_clean_parent_completion
     set_request_lifecycle(db.node.as_ref(), &child_request_id, "processing").await;
     set_request_lifecycle(db.node.as_ref(), &parent_request_id, "completed").await;
 
-    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), db.node_identity.did())
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 0);
@@ -1012,7 +1065,7 @@ async fn recovery_terminalizes_expired_background_child_before_projection() {
     )
     .await;
 
-    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(db.node.as_ref(), db.node_identity.did())
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 1);
@@ -1071,7 +1124,7 @@ async fn stale_hook_sequence_does_not_overwrite_background_notification() {
         db.node.clone(),
         &session_id,
         PARENT_BEHAVIOR_ID,
-        AGENT_DID,
+        db.node_identity.did(),
         FailurePolicy::default(),
     )
     .await
@@ -1093,9 +1146,13 @@ async fn stale_hook_sequence_does_not_overwrite_background_notification() {
         "notification must survive",
     )
     .await;
-    project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
-        .await
-        .unwrap();
+    project_background_subagent_completion(
+        db.node.clone(),
+        &child_request_id,
+        db.node_identity.did(),
+    )
+    .await
+    .unwrap();
 
     hook.persist_message(&Message::User {
         content: vec![UserContent::Text(Text {

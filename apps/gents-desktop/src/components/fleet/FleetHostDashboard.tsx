@@ -20,6 +20,7 @@ import type {
 
 import { ThemeToggle } from "../ThemeToggle";
 import { SyncHealthIndicator } from "../SyncHealthIndicator";
+import { isMobileTauriShell } from "../../lib/shellPlatform";
 import { BrandLockup } from "./BrandLockup";
 
 export type FleetHostDashboardProps = Omit<
@@ -53,6 +54,7 @@ export function FleetHostDashboard({
   syncHealth = null,
   ...fleetProps
 }: FleetHostDashboardProps) {
+  const supportsLocalRuntime = !isMobileTauriShell();
   const indicator = (
     <SyncHealthIndicator deployments={fleetProps.deployments} syncHealth={syncHealth} />
   );
@@ -65,15 +67,7 @@ export function FleetHostDashboard({
           {fleetProps.deployments.length === 0 ? indicator : null}
         </div>
       }
-      copy={{
-        ...fleetProps.copy,
-        pairingQrHint: fleetProps.copy?.pairingQrHint ?? (
-          <>
-            Point the camera at the QR code printed by{" "}
-            <code>gents p2p pairings invite --bearer --qr</code>.
-          </>
-        ),
-      }}
+      copy={fleetProps.copy}
       headerLeadingActions={
         <>
           {fleetProps.deployments.length > 0 ? indicator : null}
@@ -81,15 +75,17 @@ export function FleetHostDashboard({
         </>
       }
       localRuntimeSetup={
-        <LocalRuntimeConnect
-          bootstrap={fleetProps.bootstrap}
-          busy={fleetProps.addingPeer || fleetProps.starting}
-          loading={fleetProps.loading}
-          copy={fleetProps.copy}
-          onConnect={onInitLocalRuntime}
-          onStartServer={onStartManagedServer}
-          onCommitServerAutoStart={onCommitManagedServerAutoStart}
-        />
+        supportsLocalRuntime ? (
+          <LocalRuntimeConnect
+            bootstrap={fleetProps.bootstrap}
+            busy={fleetProps.addingPeer || fleetProps.starting}
+            loading={fleetProps.loading}
+            copy={fleetProps.copy}
+            onConnect={onInitLocalRuntime}
+            onStartServer={onStartManagedServer}
+            onCommitServerAutoStart={onCommitManagedServerAutoStart}
+          />
+        ) : undefined
       }
       renderInferenceSetup={(deployment, onClose) => (
         <InferenceSetupWizard

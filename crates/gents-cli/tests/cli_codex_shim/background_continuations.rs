@@ -23,6 +23,7 @@ async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() 
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let identity = identity_from_init(&init)?;
     let behavior_id = format!("{agent_did}:default");
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -60,7 +61,7 @@ async fn codex_shim_streams_claimed_background_completion_and_replays_it_once() 
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
     let wake_request_id =
-        seed_background_completion_wake(&graphql, &agent_did, &behavior_id, &thread_id).await?;
+        seed_background_completion_wake(&graphql, &identity, &behavior_id, &thread_id).await?;
 
     let started = tokio::time::timeout(Duration::from_secs(30), read_turn_started(&mut ws))
         .await
@@ -139,6 +140,7 @@ async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Re
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let identity = identity_from_init(&init)?;
     let behavior_id = format!("{agent_did}:default");
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -176,7 +178,7 @@ async fn codex_shim_resume_finishes_an_in_progress_background_completion() -> Re
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
     let wake_request_id =
-        seed_background_completion_wake(&graphql, &agent_did, &behavior_id, &thread_id).await?;
+        seed_background_completion_wake(&graphql, &identity, &behavior_id, &thread_id).await?;
 
     let started = tokio::time::timeout(Duration::from_secs(30), read_turn_started(&mut ws))
         .await

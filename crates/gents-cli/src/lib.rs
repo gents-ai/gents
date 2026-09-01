@@ -178,21 +178,17 @@ Examples:
   gents p2p peers --home /path/to/home
   gents p2p diagnose
 
-  # Declarative pairing (the normal path — the runtime reconciles these):
-  gents p2p pairings set --did <agent-did> --address <ticket-or-multiaddr> --template conversation
+  # Authenticated enrollment operator decisions and observation:
+  gents p2p enrollment approve <request-id>
+  gents p2p enrollment deny <request-id>
   gents p2p pairings list
-  gents p2p pairings rm --peer <peer-id>
-  gents p2p network create --name \"Fleet One\"
-  gents p2p network grant <member-did>
-  gents p2p pairings invite --member-did <member-did> --template network-control
-  gents p2p pairings join <invite-token>
 
   # Service discovery:
   gents p2p network register
   gents p2p network list
   gents p2p templates list
 
-  # Low-level live wiring (escape hatch — prefer `p2p pairings`):
+  # Low-level non-authoritative live wiring for diagnostics/repair:
   gents p2p admin connect --peer <peer-id-or-address>
   gents p2p admin replicators add --peer <peer-id-or-address> --collection AgentRequest --filter AgentRequest:agent_did=<agent-did>
   gents p2p admin documents sync --collection AgentRequest --doc-id <doc-id>";

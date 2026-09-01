@@ -53,6 +53,7 @@ export function useDesktopSessionProjection({
 
   async function refreshSession(
     nextSessionId: string | null,
+    agentDidOverride?: string | null,
   ): Promise<DesktopSessionSnapshot | null> {
     const currentRefresh = refreshSeq.current + 1;
     refreshSeq.current = currentRefresh;
@@ -63,7 +64,7 @@ export function useDesktopSessionProjection({
     try {
       const next = await api.fetchSessionSnapshot(
         nextSessionId,
-        selectedAgentDidRef.current,
+        agentDidOverride === undefined ? selectedAgentDidRef.current : agentDidOverride,
         selectedTrackedRequestIdRef.current,
         { limit: SESSION_TIMELINE_PAGE_SIZE },
       );
@@ -76,6 +77,25 @@ export function useDesktopSessionProjection({
       return next;
     } catch (error) {
       if (refreshSeq.current === currentRefresh) setError(String(error));
+      return null;
+    }
+  }
+
+  async function retrySessionHydration(
+    nextSessionId: string | null,
+  ): Promise<DesktopSessionSnapshot | null> {
+    if (!nextSessionId) return null;
+    const projected = sessionRef.current;
+    const agentDid =
+      projected?.sessionId === nextSessionId
+        ? (projected.agentDid ?? selectedAgentDidRef.current)
+        : null;
+    try {
+      setError(null);
+      await api.retrySessionHydration(nextSessionId, agentDid);
+      return await refreshSession(nextSessionId, agentDid);
+    } catch (error) {
+      setError(String(error));
       return null;
     }
   }
@@ -139,6 +159,7 @@ export function useDesktopSessionProjection({
     session,
     setSession,
     refreshSession,
+    retrySessionHydration,
     refreshSessionLiveDelta,
     loadOlderSessionTimeline,
   };

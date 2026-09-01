@@ -33,7 +33,6 @@ required-features = ["live-e2e"]
 anyhow.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 bs58 = "0.5"
-qrcode = { version = "0.14", default-features = false }
 chrono.workspace = true
 ciborium = "0.2"
 clap.workspace = true

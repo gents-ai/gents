@@ -7,6 +7,8 @@
 
 use std::collections::BTreeSet;
 
+pub use gents_protocol::session_hydration::SessionHydrationDocumentKey;
+
 pub const HYDRATION_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
@@ -180,6 +182,8 @@ pub struct ClientHydrationProgress {
     pub phase: ClientHydrationPhase,
     pub merged_count: usize,
     pub served_count: Option<usize>,
+    pub merged_documents: BTreeSet<SessionHydrationDocumentKey>,
+    pub served_documents: Option<BTreeSet<SessionHydrationDocumentKey>>,
 }
 
 impl Default for ClientHydrationProgress {
@@ -190,8 +194,23 @@ impl Default for ClientHydrationProgress {
             phase: ClientHydrationPhase::Idle,
             merged_count: 0,
             served_count: None,
+            merged_documents: BTreeSet::new(),
+            served_documents: None,
         }
     }
+}
+
+/// Durable request state for one exact `(session_id, agent_did)` target.
+///
+/// This is deliberately a query result rather than retained client state. A
+/// session snapshot derives progress from its own request row and locally
+/// merged documents, so observing one target cannot overwrite another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientHydrationRequestState {
+    Missing,
+    Pending,
+    Served(BTreeSet<SessionHydrationDocumentKey>),
+    Rejected(Option<BTreeSet<SessionHydrationDocumentKey>>),
 }
 
 /// Begin a new receiver attempt, clearing any terminal state and denominator
@@ -203,26 +222,45 @@ pub fn begin_hydration_request(session_id: &str, agent_did: &str) -> ClientHydra
         phase: ClientHydrationPhase::Requested,
         merged_count: 0,
         served_count: None,
+        merged_documents: BTreeSet::new(),
+        served_documents: None,
     }
 }
 
-fn merge_served(prev: Option<usize>, next: Option<usize>) -> Option<usize> {
+/// Retry admission is target-specific and terminal-state-specific.
+pub fn can_retry_hydration(
+    prev: &ClientHydrationProgress,
+    session_id: &str,
+    agent_did: &str,
+) -> bool {
+    prev.session_id == session_id
+        && prev.agent_did == agent_did
+        && prev.phase == ClientHydrationPhase::Failed
+}
+
+fn merge_served(
+    prev: Option<BTreeSet<SessionHydrationDocumentKey>>,
+    next: Option<BTreeSet<SessionHydrationDocumentKey>>,
+) -> Option<BTreeSet<SessionHydrationDocumentKey>> {
     next.or(prev)
 }
 
-fn can_complete(merged_count: usize, served_count: Option<usize>) -> bool {
-    served_count.is_some_and(|served| merged_count >= served)
+fn can_complete(
+    merged: &BTreeSet<SessionHydrationDocumentKey>,
+    served: Option<&BTreeSet<SessionHydrationDocumentKey>>,
+) -> bool {
+    served.is_some_and(|served| served.is_subset(merged))
 }
 
 /// Receiver-side progress. Completes only when unique locally merged
-/// documents cover the server's `served_doc_count`. Sender status alone
+/// documents cover the server's exact signed manifest. Sender status alone
 /// never completes a request.
 pub fn observe_hydration_progress(
     prev: &ClientHydrationProgress,
     session_id: &str,
     agent_did: &str,
-    merged_count: usize,
-    served_count: Option<usize>,
+    merged_documents: BTreeSet<SessionHydrationDocumentKey>,
+    served_documents: Option<BTreeSet<SessionHydrationDocumentKey>>,
     failed: bool,
 ) -> ClientHydrationProgress {
     let base = if prev.session_id == session_id && prev.agent_did == agent_did {
@@ -234,36 +272,48 @@ pub fn observe_hydration_progress(
             ..ClientHydrationProgress::default()
         }
     };
-    let merged = base.merged_count.max(merged_count);
-    let served = merge_served(base.served_count, served_count);
+    let merged = base
+        .merged_documents
+        .union(&merged_documents)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let served = merge_served(base.served_documents.clone(), served_documents);
+    let merged_count = merged.len();
+    let served_count = served.as_ref().map(BTreeSet::len);
     if failed || base.phase == ClientHydrationPhase::Failed {
         return ClientHydrationProgress {
             session_id: session_id.to_string(),
             agent_did: agent_did.to_string(),
             phase: ClientHydrationPhase::Failed,
-            merged_count: merged,
-            served_count: served,
+            merged_count,
+            served_count,
+            merged_documents: merged,
+            served_documents: served,
         };
     }
-    if can_complete(merged, served) {
+    if can_complete(&merged, served.as_ref()) {
         return ClientHydrationProgress {
             session_id: session_id.to_string(),
             agent_did: agent_did.to_string(),
             phase: ClientHydrationPhase::Complete,
-            merged_count: merged,
-            served_count: served,
+            merged_count,
+            served_count,
+            merged_documents: merged,
+            served_documents: served,
         };
     }
     if served.is_some()
         || base.phase == ClientHydrationPhase::Serving
-        || (base.phase == ClientHydrationPhase::Requested && merged > 0)
+        || (base.phase == ClientHydrationPhase::Requested && !merged.is_empty())
     {
         return ClientHydrationProgress {
             session_id: session_id.to_string(),
             agent_did: agent_did.to_string(),
             phase: ClientHydrationPhase::Serving,
-            merged_count: merged,
-            served_count: served,
+            merged_count,
+            served_count,
+            merged_documents: merged,
+            served_documents: served,
         };
     }
     ClientHydrationProgress {
@@ -274,7 +324,54 @@ pub fn observe_hydration_progress(
         } else {
             ClientHydrationPhase::Idle
         },
-        merged_count: merged,
-        served_count: served,
+        merged_count,
+        served_count,
+        merged_documents: merged,
+        served_documents: served,
     }
+}
+
+/// Project receiver progress from durable state for one exact target.
+///
+/// A pending row is the durable evidence that an attempt was started. A
+/// rejected row is terminal until the explicit retry command rewrites it to
+/// pending. No process-local progress survives or crosses target queries.
+pub fn project_durable_hydration_progress(
+    session_id: &str,
+    agent_did: &str,
+    merged_documents: BTreeSet<SessionHydrationDocumentKey>,
+    request: ClientHydrationRequestState,
+) -> ClientHydrationProgress {
+    let (base, served_documents, failed) = match request {
+        ClientHydrationRequestState::Missing => (
+            ClientHydrationProgress {
+                session_id: session_id.to_string(),
+                agent_did: agent_did.to_string(),
+                ..ClientHydrationProgress::default()
+            },
+            None,
+            false,
+        ),
+        ClientHydrationRequestState::Pending => {
+            (begin_hydration_request(session_id, agent_did), None, false)
+        }
+        ClientHydrationRequestState::Served(documents) => (
+            begin_hydration_request(session_id, agent_did),
+            Some(documents),
+            false,
+        ),
+        ClientHydrationRequestState::Rejected(documents) => (
+            begin_hydration_request(session_id, agent_did),
+            documents,
+            true,
+        ),
+    };
+    observe_hydration_progress(
+        &base,
+        session_id,
+        agent_did,
+        merged_documents,
+        served_documents,
+        failed,
+    )
 }

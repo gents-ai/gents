@@ -1,17 +1,21 @@
 import { expect, gotoHarness, PEER_ID, test } from "./desktopTest";
 
 test.describe("fleet deployment navigation", () => {
-  test("server status is the primary remote pairing flow", async ({ page }) => {
+  test("server status authors a pending authenticated enrollment", async ({ page }) => {
     await gotoHarness(page, "default");
     await page.getByRole("button", { name: "Add Agent", exact: true }).click();
 
     await page.getByTestId("fleet-add-server-address").fill("http://amy:9191");
     await page.getByTestId("fleet-fetch-status").click();
 
-    await expect(page.getByTestId(`fleet-row-${PEER_ID}`)).toContainText(
-      "Bombadil UI Agent",
+    await expect(page.getByTestId("fleet-import-status")).toContainText(
+      "Enrollment request enrollment-request-harness sent",
     );
-    await expect(page.getByTestId("fleet-add-server-address")).toHaveCount(0);
+    await expect(page.getByTestId("fleet-import-status")).toContainText(
+      "awaiting server approval",
+    );
+    await expect(page.getByTestId("fleet-add-server-address")).toBeVisible();
+    await expect(page.getByTestId(`fleet-row-${PEER_ID}`)).toHaveCount(1);
   });
 
   test("deployment row opens the chat workspace", async ({ page }) => {

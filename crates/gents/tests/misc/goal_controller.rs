@@ -10,19 +10,18 @@ use tokio_util::sync::CancellationToken;
 
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
 use crate::support::{
-    create_request, create_response_with_content_and_status, set_request_lifecycle_state, test_db,
-    TestDb, AGENT_DID,
+    create_request_for_agent_with_signed_fields, create_response_with_content_and_status,
+    set_request_lifecycle_state, test_db, TestDb,
 };
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
 
-fn snapshot() -> Arc<ActiveRuntimeSnapshot> {
+fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
         generation: 1,
         principal: None,
-        local_did: AGENT_DID.to_string(),
-        paired_peer_dids: HashSet::new(),
+        local_did: local_did.to_string(),
         default_behavior_id: crate::support::AGENT_NAME.to_string(),
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::new(),
@@ -40,7 +39,7 @@ fn snapshot() -> Arc<ActiveRuntimeSnapshot> {
 }
 
 fn source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
-    let (tx, rx) = watch::channel(snapshot());
+    let (tx, rx) = watch::channel(snapshot(db.node_identity.did()));
     let subscriptions: Arc<dyn UpdateSubscriptionSource> =
         Arc::new(MockUpdateSubscriptionSource::new());
     (
@@ -56,12 +55,17 @@ fn source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>
 }
 
 async fn seed_completed_request(db: &TestDb, request_id: &str) -> String {
-    let doc_id = create_request(
+    let doc_id = create_request_for_agent_with_signed_fields(
         db.node.as_ref(),
+        db.node_identity.did(),
         request_id,
         SESSION,
         "completed",
         "2026-07-15T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
     )
     .await;
     create_response_with_content_and_status(
@@ -121,7 +125,7 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
     seed_completed_request(&db, "parent-complete").await;
     let goal = set_goal(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         SESSION,
         Some("Finish the durable objective"),
         Some(GoalStatus::Active),
@@ -164,17 +168,22 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
 async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session() {
     let db = test_db("goal-session-idle").await;
     seed_completed_request(&db, "older-complete").await;
-    create_request(
+    create_request_for_agent_with_signed_fields(
         db.node.as_ref(),
+        db.node_identity.did(),
         "newer-manual",
         SESSION,
         "pending",
         "2026-07-15T00:01:00Z",
+        None,
+        None,
+        None,
+        None,
     )
     .await;
     set_goal(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         SESSION,
         Some("Wait for session idleness"),
         Some(GoalStatus::Active),
@@ -195,17 +204,22 @@ async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session
 #[tokio::test]
 async fn interrupted_terminal_pauses_instead_of_self_continuing() {
     let db = test_db("goal-interrupted").await;
-    create_request(
+    create_request_for_agent_with_signed_fields(
         db.node.as_ref(),
+        db.node_identity.did(),
         "parent-interrupted",
         SESSION,
         "interrupted",
         "2026-07-15T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
     )
     .await;
     set_goal(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         SESSION,
         Some("Respect human interruption"),
         Some(GoalStatus::Active),
@@ -220,7 +234,7 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
             .await
             .is_err()
     );
-    let goal = load_canonical_goal(db.node.as_ref(), AGENT_DID, SESSION)
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("load goal")
         .expect("goal exists");
@@ -260,7 +274,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
     set_goal(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         SESSION,
         Some("Stop at the durable budget"),
         Some(GoalStatus::Active),
@@ -299,7 +313,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             .await
             .is_err()
     );
-    let goal = load_canonical_goal(db.node.as_ref(), AGENT_DID, SESSION)
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("load goal")
         .expect("goal exists");
@@ -315,7 +329,7 @@ async fn resume_resets_blocked_audit_identity_and_count() {
     let db = test_db("goal-resume-audit-reset").await;
     let goal = set_goal(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         SESSION,
         Some("Resume with a fresh blocked audit"),
         Some(GoalStatus::Active),
@@ -333,7 +347,7 @@ async fn resume_resets_blocked_audit_identity_and_count() {
 
     let resumed = set_goal(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         SESSION,
         None,
         Some(GoalStatus::Active),
@@ -350,12 +364,17 @@ async fn resume_resets_blocked_audit_identity_and_count() {
 #[tokio::test]
 async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
     let db = test_db("goal-provider-usage-limit").await;
-    create_request(
+    create_request_for_agent_with_signed_fields(
         db.node.as_ref(),
+        db.node_identity.did(),
         "usage-limited-request",
         SESSION,
         "error",
         "2026-07-15T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
     )
     .await;
     let response = db
@@ -380,7 +399,7 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
     );
     set_goal(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         SESSION,
         Some("Stop on provider quota exhaustion"),
         Some(GoalStatus::Active),
@@ -395,7 +414,7 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
             .await
             .is_err()
     );
-    let goal = load_canonical_goal(db.node.as_ref(), AGENT_DID, SESSION)
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("load goal")
         .expect("goal exists");
@@ -412,7 +431,7 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
     seed_completed_request(&db, "parent-wrapup-retry").await;
     set_goal(
         db.node.as_ref(),
-        AGENT_DID,
+        db.node_identity.did(),
         SESSION,
         Some("Bound failed wrap-up retries"),
         Some(GoalStatus::Active),
@@ -447,7 +466,7 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
     for expected_children in 1..=3 {
         tokio::time::timeout(Duration::from_secs(2), source.next_fire())
             .await
-            .expect("goal source timed out")
+            .unwrap_or_else(|_| panic!("goal source timed out before child {expected_children}"))
             .expect("wrapup or retry intent");
         let children = goal_children(&db).await;
         assert_eq!(children.len(), expected_children);
@@ -464,7 +483,7 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
             .is_err(),
         "bounded failed wrap-up must not spawn a fourth child"
     );
-    let goal = load_canonical_goal(db.node.as_ref(), AGENT_DID, SESSION)
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("load goal")
         .expect("goal exists");

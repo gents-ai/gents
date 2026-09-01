@@ -42,13 +42,7 @@ pub(super) async fn load_runtime_row(
                 limit: 1
             ) {{
                 agent_did
-                process_state
                 reconcile_phase
-                active_generation
-                router_generation
-                default_behavior_id
-                runnable_behavior_count
-                unavailable_behavior_count
                 last_reconcile_result
                 last_reconcile_error
                 last_reconcile_completed_at

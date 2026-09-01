@@ -38,6 +38,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     session,
     setSession,
     refreshSession,
+    retrySessionHydration,
     refreshSessionLiveDelta,
     loadOlderSessionTimeline,
   } = useDesktopSessionProjection({
@@ -113,7 +114,9 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     setLocalWorkflow,
     optimisticPendingTurn,
     setOptimisticPendingTurn,
+    behaviorReadiness,
     shellProjection,
+    retryShellProjection,
     selectedTrackedRequestId,
   } = useDesktopChatProjectionState({
     clientAvailable: Boolean(snapshot?.client),
@@ -166,11 +169,9 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   });
 
   const {
-    onAddPeer,
     onFetchPeerStatus,
-    onProbePeerAddress,
+    onRequestStatusEnrollment,
     onInitLocalRuntime,
-    onPairBearer,
     onRemovePeer,
     onRenamePeer,
     onRepairP2P,
@@ -246,11 +247,11 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     onStartNewConversation,
   } = createDesktopShellChatActions({
     api,
+    behaviorReadiness,
     draft,
     newConversationAgentRef,
     refreshSession,
     refreshSnapshot,
-    selectedBehaviorId,
     selectedDeployment,
     selectedSessionId,
     pendingMailboxCauseId,
@@ -265,6 +266,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     setPendingMailboxCauseId,
     setSession,
     shellProjection,
+    retryShellProjection,
   });
 
   const {
@@ -323,6 +325,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
       shellProjection.workflow.kind === "awaitingObservation" ||
       shellProjection.workflow.kind === "turnInProgress",
     sendStatus: shellProjection.sendStatus,
+    retryStatus: retryShellProjection.nonEmptyContentSendStatus,
     setSelectedAgentDid: selectAgent,
     setSelectedSessionId: selectSession,
     setSelectedBehaviorId: selectBehavior,
@@ -333,14 +336,13 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     onSelectSession,
     onStartNewConversation,
     refreshSession,
+    retrySessionHydration,
     loadOlderSessionTimeline,
     refreshSnapshot,
-    onAddPeer,
-    onPairBearer,
     onRemovePeer,
     onRenamePeer,
     onFetchPeerStatus,
-    onProbePeerAddress,
+    onRequestStatusEnrollment,
     onInitLocalRuntime,
     onRepairP2P,
     onSendMessage,

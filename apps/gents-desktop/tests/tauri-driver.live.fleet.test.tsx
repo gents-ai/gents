@@ -37,7 +37,7 @@ describeLive("Tauri app live fleet add flow", () => {
     });
   }, 300_000);
 
-  it("keeps the add form usable after failed discovery and invalid manual input", async () => {
+  it("keeps authenticated status enrollment usable after failed discovery", async () => {
     await withLiveDesktop(async ({ runner, driver }) => {
       await driver.ready();
       const initialDeploymentCount =
@@ -58,18 +58,6 @@ describeLive("Tauri app live fleet add flow", () => {
       expect(driver.input("fleet-add-server-address")).toBeEnabled();
       expect(screen.getByTestId("fleet-fetch-status")).toBeEnabled();
 
-      await driver.user.click(screen.getByText("Enter connection details manually"));
-      await driver.replaceInput("fleet-add-label", "Invalid Peer");
-      await driver.replaceInput("fleet-add-agent-did", "   ");
-      await driver.replaceInput("fleet-add-addr", "iroh://invalid-peer");
-      await driver.user.click(screen.getByTestId("fleet-add-submit"));
-
-      await waitFor(() => {
-        expect(screen.getByText(/Agent DID is required/i)).toBeInTheDocument();
-      });
-      expect(driver.input("fleet-add-label")).toHaveValue("Invalid Peer");
-      expect(driver.input("fleet-add-agent-did")).toHaveValue("   ");
-      expect(screen.getByTestId("fleet-add-submit")).toBeEnabled();
       expect((await runner.fetchSnapshot()).client?.deployments.length ?? 0).toBe(
         initialDeploymentCount,
       );

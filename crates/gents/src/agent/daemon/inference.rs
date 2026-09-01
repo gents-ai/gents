@@ -800,7 +800,10 @@ mod tests {
         CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
     };
     use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use std::time::Duration;
 
     #[test]
@@ -845,6 +848,36 @@ mod tests {
                 Ok(RawStreamingChoice::FinalResponse(())),
             ];
             let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(items));
+            Ok(StreamingCompletionResponse::stream(inner))
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingReplyModel(Arc<AtomicUsize>);
+
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for CountingReplyModel {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            Self(Arc::new(AtomicUsize::new(0)))
+        }
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<()>, CompletionError> {
+            Err(CompletionError::ProviderError("unused".into()))
+        }
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
+                Ok(RawStreamingChoice::Message("admitted reply".to_string())),
+                Ok(RawStreamingChoice::FinalResponse(())),
+            ]));
             Ok(StreamingCompletionResponse::stream(inner))
         }
     }
@@ -899,40 +932,30 @@ mod tests {
     ) -> AgentRequest {
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
-        let created_at = chrono::Utc::now().to_rfc3339();
-        let escaped_request_id = crate::graphql::escape_graphql_string(&request_id);
-        let escaped_session_id = crate::graphql::escape_graphql_string(&session_id);
-        let escaped_agent_did = crate::graphql::escape_graphql_string(behavior.agent_did());
-        let escaped_requester_did = crate::graphql::escape_graphql_string(requester_did);
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentRequest(input: {{
-                    request_id: "{escaped_request_id}",
-                    agent_did: "{escaped_agent_did}",
-                    requester_did: "{escaped_requester_did}",
-                    behavior_id: "general",
-                    session_id: "{escaped_session_id}",
-                    retry_parent_request: "",
-                    retry_root_request: "{escaped_request_id}",
-                    superseded_by_request: "",
-                    content: "route this reply",
-                    status: "pending",
-                    lifecycle_state: "pending",
-                    backend_id: "backend-general",
-                    execution_origin: "interactive",
-                    failure_reason: "",
-                    created_at: "{created_at}",
-                    retry_count: 0,
-                    max_retries: 3,
-                    subagent_depth: 1,
-                    caused_by_parent_request_id: "parent-request",
-                    caused_by_parent_request_doc_id: "parent-request-doc",
-                    caused_by_parent_tool_call_id: "parent-tool-call",
-                    caused_by_parent_tool_call_doc_id: "parent-tool-call-doc"
-                }}) {{ _docID }}
-            }}"#
+        let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            request_id,
+            behavior.agent_did(),
+            requester_did,
+            &behavior.behavior_id,
+            session_id,
+            "route this reply",
+            "interactive",
+            created_at,
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                behavior.agent_did(),
+            ),
         );
-        let response = node.execute(&mutation).await;
+        create.backend_id = Some("backend-general".into());
+        create.subagent_depth = 1;
+        create.caused_by_parent_request_id = Some("parent-request".into());
+        create.caused_by_parent_request_doc_id = Some("parent-request-doc".into());
+        create.caused_by_parent_tool_call_id = Some("parent-tool-call".into());
+        create.caused_by_parent_tool_call_doc_id = Some("parent-tool-call-doc".into());
+        crate::sign_agent_request_create(behavior.principal_identity().as_ref(), &mut create)
+            .await
+            .unwrap();
+        let response = node.execute(&create.graphql_mutation().unwrap()).await;
         assert!(
             !response.has_errors(),
             "create routed AgentRequest failed: {:?}",
@@ -951,10 +974,11 @@ mod tests {
                 let query = format!(
                     r#"{{
                         AgentRequest(
-                            filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                            filter: {{ request_id: {{ _eq: "{}" }} }},
                             limit: 1
                         ) {{ _docID }}
-                    }}"#
+                    }}"#,
+                    crate::graphql::escape_graphql_string(&create.request_id),
                 );
                 let response = node.execute(&query).await;
                 assert!(
@@ -975,39 +999,63 @@ mod tests {
             }
         };
 
-        AgentRequest {
-            doc_id,
-            request_id,
-            agent_did: behavior.agent_did().to_string(),
-            requester_did: Some(requester_did.to_string()),
-            behavior_id: Some(behavior.behavior_id.clone()),
-            session_id,
-            content: "route this reply".to_string(),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
-            max_total_tokens: None,
-            metadata: None,
-            execution_origin: Some("interactive".to_string()),
-            created_at,
-            deadline: None,
-            subagent_depth: 1,
-            caused_by_parent_request_id: Some("parent-request".to_string()),
-            caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
-            caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
-            caused_by_parent_tool_call_doc_id: Some("parent-tool-call-doc".to_string()),
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_source_doc_id: None,
-            caused_by_correlation: None,
-            caused_by_trigger_context: None,
-            workspace_id: None,
-            workspace_authority: None,
-            workspace_owner_deployment_id: None,
-            workspace_seal_hash: None,
-        }
+        crate::request_admission::load_request_for_admission_test(node, &doc_id)
+            .await
+            .unwrap()
+    }
+
+    async fn create_enrollment_daemon_request(
+        node: &defra_node::EmbeddedNode,
+        behavior: &AgentBehavior,
+        member: &dyn AgentIdentity,
+        fence: &crate::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
+        suffix: &str,
+    ) -> AgentRequest {
+        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            format!("request-{suffix}"),
+            behavior.agent_did(),
+            member.did(),
+            &behavior.behavior_id,
+            format!("session-{suffix}"),
+            "run enrolled request",
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::enrollment(
+                member.did(),
+                &fence.request_id,
+                &fence.request_digest,
+                &fence.admin_did,
+                fence.authorization_sequence,
+                &fence.authorization_expires_at,
+            ),
+        );
+        create.backend_id = behavior.backend_id.clone();
+        crate::sign_agent_request_create(member, &mut create)
+            .await
+            .unwrap();
+        let response = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(
+            !response.has_errors(),
+            "create enrollment request: {:?}",
+            response.errors
+        );
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&create.request_id)
+        );
+        let response = node.execute(&query).await;
+        let doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("_docID"))
+            .and_then(|value| value.as_str())
+            .expect("enrollment request doc id");
+        crate::request_admission::load_request_for_admission_test(node, doc_id)
+            .await
+            .unwrap()
     }
 
     fn live_instruction_tree() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -1163,9 +1211,9 @@ mod tests {
             .await
             .expect("runtime schemas");
 
-        let requester_did = "did:test:coordinator";
         let behavior = test_behavior();
-        let request = create_routed_request(node.as_ref(), &behavior, requester_did).await;
+        let requester_did = behavior.agent_did().to_string();
+        let request = create_routed_request(node.as_ref(), &behavior, &requester_did).await;
         let prompt_builder = LayeredPromptBuilder::for_behavior(
             &behavior.system_prompt,
             &behavior.behavior_id,
@@ -1177,6 +1225,11 @@ mod tests {
         );
         let preamble = prompt_builder.preamble().to_string();
         let loop_tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(Vec::new());
+        let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            behavior.agent_did().to_string(),
+        );
+        let request_identity = behavior.principal_identity().clone();
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior,
@@ -1189,7 +1242,13 @@ mod tests {
             BackgroundToolRegistry::default(),
             BackgroundExecutionRegistry::default(),
             Arc::new(StartupBarrier::ready_for_test()),
-            Arc::new(crate::startup_readiness::StartupDemotions::new()),
+            runtime_status,
+            1,
+            crate::request_admission::AgentRequestAdmissionVerifier::new(
+                node.clone(),
+                request_identity,
+                crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+            ),
         );
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -1227,9 +1286,135 @@ mod tests {
                         .and_then(serde_json::Value::as_str)
                         .is_some_and(|content| content.contains("routed reply"))
                     && row.get("requester_did").and_then(serde_json::Value::as_str)
-                        == Some(requester_did)
+                        == Some(requester_did.as_str())
             }),
             "daemon-persisted assistant message must carry requester lineage; rows={rows:?}"
+        );
+
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(data_path);
+    }
+
+    #[tokio::test]
+    async fn daemon_final_claim_rechecks_revocation_and_accepts_exact_replacement() {
+        let data_path = std::env::temp_dir().join(format!(
+            "daemon-enrollment-final-claim-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(&data_path)
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let behavior = test_behavior();
+        let member_dir = tempfile::tempdir().unwrap();
+        let member: Arc<dyn AgentIdentity> = Arc::new(
+            KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
+        );
+        let fence = |sequence: u64, request_id: &str| {
+            crate::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence {
+                network_id: "network-1".into(),
+                request_id: request_id.into(),
+                admin_did: "did:key:admin".into(),
+                member_did: member.did().to_string(),
+                member_peer: "peer-member".into(),
+                member_ticket: "ticket-member".into(),
+                owner_agent: behavior.agent_did().to_string(),
+                request_digest: format!("digest-{sequence}"),
+                authorization_sequence: sequence,
+                authorization_expires_at: "2099-01-01T00:00:00Z".into(),
+            }
+        };
+        let generation_one = fence(1, "enrollment-1");
+        let revoked = create_enrollment_daemon_request(
+            node.as_ref(),
+            &behavior,
+            member.as_ref(),
+            &generation_one,
+            "revoked",
+        )
+        .await;
+        let (authority, authority_handle) =
+            crate::agent::p2p_reconcile::enrollment_reconcile::test_enrollment_authority(Some(
+                generation_one,
+            ));
+
+        let prompt_builder = LayeredPromptBuilder::for_behavior(
+            &behavior.system_prompt,
+            &behavior.behavior_id,
+            &[],
+            false,
+            behavior.context_window,
+            behavior.max_output_tokens,
+            &[],
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            behavior.agent_did().to_string(),
+        );
+        let request_identity = behavior.principal_identity().clone();
+        let mut daemon = BehaviorDaemon::new(
+            node.clone(),
+            behavior.clone(),
+            Arc::new(CountingReplyModel(calls.clone())),
+            prompt_builder.preamble().to_string(),
+            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+            prompt_builder,
+            FailurePolicy::default(),
+            None,
+            BackgroundToolRegistry::default(),
+            BackgroundExecutionRegistry::default(),
+            Arc::new(StartupBarrier::ready_for_test()),
+            runtime_status,
+            1,
+            crate::request_admission::AgentRequestAdmissionVerifier::new(
+                node.clone(),
+                request_identity,
+                authority_handle,
+            ),
+        );
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        authority.replace(None).await;
+        daemon
+            .process_request(revoked.clone(), shutdown_rx.clone())
+            .await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "revoked work reached provider"
+        );
+        let rejected = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ status lifecycle_state claimed_at }} }}"#,
+            crate::graphql::escape_graphql_string(&revoked.doc_id))).await;
+        let row = rejected
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .unwrap();
+        assert_eq!(row["status"], "error");
+        assert_eq!(row["lifecycle_state"], "failed");
+        assert!(row["claimed_at"].is_null());
+
+        let generation_two = fence(2, "enrollment-2");
+        authority.replace(Some(generation_two.clone())).await;
+        let replacement = create_enrollment_daemon_request(
+            node.as_ref(),
+            &behavior,
+            member.as_ref(),
+            &generation_two,
+            "replacement",
+        )
+        .await;
+        daemon.process_request(replacement, shutdown_rx).await;
+        assert!(
+            calls.load(Ordering::SeqCst) > 0,
+            "exact replacement did not reach provider"
         );
 
         node.shutdown().await;

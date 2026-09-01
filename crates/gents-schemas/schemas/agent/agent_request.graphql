@@ -1,28 +1,41 @@
 type AgentRequest @branchable {
-    request_id: String @index
+    request_id: String @index @immutable
     agent_did: String @index @immutable
     requester_did: String @index @immutable
-    behavior_id: String @index
-    session_id: String @index
-    retry_parent_request: String
+    admission_kind: String @index @immutable
+    admission_signer_did: String @index @immutable
+    admission_signature: String @immutable
+    enrollment_request_id: String @index @immutable
+    enrollment_request_digest: String @immutable
+    enrollment_admin_did: String @index @immutable
+    enrollment_authorization_sequence: Int @immutable
+    enrollment_authorization_expires_at: String @index @immutable
+    runtime_issuer_did: String @index @immutable
+    runtime_source_request_id: String @index @immutable
+    runtime_source_kind: String @index @immutable
+    runtime_bridge_author_did: String @index @immutable
+    behavior_id: String @index @immutable
+    session_id: String @index @immutable
+    retry_parent_request: String @immutable
     retry_parent_request_doc_id: String @index @immutable
-    retry_root_request: String
+    retry_root_request: String @immutable
     retry_key: String @index(unique: true) @immutable
     superseded_by_request: String
     superseded_by_request_doc_id: String @index
-    content: String
-    temperature: Float
-    top_p: Float
-    top_k: Int
-    seed: Int
-    max_tokens: Int
-    max_total_tokens: Int
-    metadata: String
+    content: String @immutable
+    temperature: Float @immutable
+    top_p: Float @immutable
+    top_k: Int @immutable
+    seed: Int @immutable
+    max_tokens: Int @immutable
+    max_total_tokens: Int @immutable
+    metadata: String @immutable
     status: String @index
     lifecycle_state: String @index
     backend_id: String @index
-    execution_origin: String
+    execution_origin: String @immutable
     caused_by_trigger_id: String @index @immutable
+    caused_by_trigger_doc_id: String @index @immutable
     caused_by_trigger_kind: String @index @immutable
     caused_by_correlation: String @index @immutable
     caused_by_trigger_context: String @immutable
@@ -30,19 +43,20 @@ type AgentRequest @branchable {
     failure_reason: String
     terminalized_at: String @index
     terminal_redrive_attempts: Int @index
-    created_at: String @index
+    created_at: String @index @immutable
     claimed_at: String
     background_completion_input_through_sequence: Int
     background_completion_notification_keys_json: String
+    # Runtime-derived execution deadline; intentionally excluded from requester signatures.
     deadline: String
-    retry_count: Int
-    max_retries: Int
+    retry_count: Int @immutable
+    max_retries: Int @immutable
     interrupt_requested_at: String       # NEW: RFC3339; null until interrupt requested
-    valid_until: String                  # NEW: RFC3339; null = no TTL
-    subagent_depth: Int
-    caused_by_parent_request_id: String @index
+    valid_until: String @immutable                  # RFC3339; null = no TTL
+    subagent_depth: Int @immutable
+    caused_by_parent_request_id: String @index @immutable
     caused_by_parent_request_doc_id: String @index @immutable
-    caused_by_parent_tool_call_id: String @index
+    caused_by_parent_tool_call_id: String @index @immutable
     caused_by_parent_tool_call_doc_id: String @index @immutable
     workspace_id: String @index @immutable
     workspace_authority: String @immutable

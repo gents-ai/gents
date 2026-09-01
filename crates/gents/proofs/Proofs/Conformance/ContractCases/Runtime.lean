@@ -110,12 +110,12 @@ def runtimeReconcileCases : List RuntimeReconcileCase :=
       "router_observe_published_generation"
       "routerObserve"
       runtimePublishedBeforeRouter
-      .routerObserve
+      (.routerObserve .ready)
   , runtimeCaseFromStep
       "accept_request_after_router_observe"
       "acceptRequest"
       runtimeRouterObserved
-      (.acceptRequest 100 500)
+      (.acceptRequest .ready 100 500)
       500
       100
   , runtimeCaseFromStep
@@ -129,7 +129,7 @@ def runtimeReconcileCases : List RuntimeReconcileCase :=
       "replayed_request_is_not_accepted_twice"
       "acceptRequest"
       { runtimeWithInFlight with inFlight := ∅ }
-      (.acceptRequest 100 500)
+      (.acceptRequest .ready 100 500)
       500
       100
   , runtimeCaseFromStep
@@ -150,6 +150,80 @@ def runtimeReconcileCases : List RuntimeReconcileCase :=
       , observedResolved := some runtimeResolvedMissingDependency
       }
       (.resolveVisible runtimeResolvedMissingDependency)
+  ]
+
+def clientBehaviorReadinessCase
+    (name : String)
+    (observationKind : String)
+    (process : ProcessState)
+    (activeGeneration routerGeneration : Generation)
+    (runnable unavailable startupDemoted : Bool)
+    (runtimeUnavailableReason : RuntimeState.RuntimeUnavailableReason := .backendTemporarilyUnavailable) :
+    ClientBehaviorReadinessCase :=
+  let runnableSet : Finset BehaviorId := if runnable then {20} else ∅
+  let unavailableSet : Finset BehaviorId := if unavailable then {20} else ∅
+  let demotedSet : Finset BehaviorId := if startupDemoted then {20} else ∅
+  let resolved : ResolvedSnapshot :=
+    { defaultBehavior := 20
+    , runnable := runnableSet
+    , unavailable := unavailableSet
+    , dependenciesSatisfied := runnableSet }
+  let state : RuntimeState :=
+    { runtimeBoot with
+      lastResolved := resolved
+    , active := resolved.activate activeGeneration
+    , routerObservedGeneration := routerGeneration
+    , startupDemoted := demotedSet
+    , readyGenerations := {activeGeneration, routerGeneration}
+    , liveGenerations := {activeGeneration, routerGeneration}
+    , sessionBehavior := Function.update runtimeBoot.sessionBehavior 100 (some 20) }
+  let observation := match observationKind with
+    | "observed" =>
+        RuntimeState.ClientBehaviorReadiness.ClientRuntimeObservation.observed process state
+    | "malformed" => .malformed
+    | "unsupported_version" => .unsupportedVersion
+    | _ => .missing
+  let projected := RuntimeState.ClientBehaviorReadiness.project
+    observation 20 runtimeUnavailableReason
+  { name
+  , observationPresent := observationKind != "missing"
+  , observationKind
+  , processState := process.toDefraDB
+  , activeGeneration
+  , routerGeneration
+  , runnable
+  , unavailable
+  , startupDemoted
+  , runtimeUnavailableReason := runtimeUnavailableReason.code
+  , expectedState := projected.stateString
+  , expectedReason := projected.reasonCode
+  , expectedRuntimeAdmissible :=
+      decide (RuntimeState.BehaviorAdmissible process state 20)
+  }
+
+def clientBehaviorReadinessCases : List ClientBehaviorReadinessCase :=
+  [ clientBehaviorReadinessCase "runtime_ready_same_generation" "observed" .ready 4 4 true false false
+  , clientBehaviorReadinessCase "runtime_explicitly_unavailable" "observed" .ready 4 4 false true false
+  , clientBehaviorReadinessCase "runtime_unavailable_wins_overlap" "observed" .ready 4 4 true true false
+  , clientBehaviorReadinessCase "startup_demotion_overrides_runnable" "observed" .ready 4 4 true false true
+  , clientBehaviorReadinessCase "missing_runtime_observation" "missing" .ready 4 4 true false false
+  , clientBehaviorReadinessCase "malformed_runtime_observation" "malformed" .ready 4 4 true false false
+  , clientBehaviorReadinessCase "unsupported_runtime_observation" "unsupported_version" .ready 4 4 true false false
+  , clientBehaviorReadinessCase "runtime_process_recovering" "observed" .recovering 4 4 true false false
+  , clientBehaviorReadinessCase "runtime_process_uninitialized" "observed" .uninitialized 4 4 true false false
+  , clientBehaviorReadinessCase "runtime_process_shutting_down" "observed" .shuttingDown 4 4 true false false
+  , clientBehaviorReadinessCase "runtime_process_shutdown" "observed" .shutdown 4 4 true false false
+  , clientBehaviorReadinessCase "router_generation_stale" "observed" .ready 5 4 true false false
+  , clientBehaviorReadinessCase "zero_generation_is_stale" "observed" .ready 0 0 true false false
+  , clientBehaviorReadinessCase "behavior_absent_from_runtime_projection" "observed" .ready 4 4 false false false
+  , clientBehaviorReadinessCase "disabled_behavior_is_unavailable" "observed" .ready 4 4 false true false .behaviorDisabled
+  , clientBehaviorReadinessCase "invalid_runtime_configuration_is_unavailable" "observed" .ready 4 4 false true false .runtimeConfigurationInvalid
+  , clientBehaviorReadinessCase "missing_backend_is_unavailable" "observed" .ready 4 4 false true false .backendNotConfigured
+  , clientBehaviorReadinessCase "disabled_backend_is_unavailable" "observed" .ready 4 4 false true false .backendDisabled
+  , clientBehaviorReadinessCase "missing_credential_is_unavailable" "observed" .ready 4 4 false true false .credentialsRequired
+  , clientBehaviorReadinessCase "invalid_inference_profile_is_unavailable" "observed" .ready 4 4 false true false .inferenceProfileInvalid
+  , clientBehaviorReadinessCase "invalid_tool_configuration_is_unavailable" "observed" .ready 4 4 false true false .toolConfigurationInvalid
+  , clientBehaviorReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
   ]
 
 end Conformance.ContractCases

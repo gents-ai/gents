@@ -1,7 +1,7 @@
 # Operations
 
 Operational reference beyond the [getting-started walkthrough](demo.md):
-desktop pairing, multi-runtime bring-up, and the operations API.
+desktop enrollment, multi-runtime bring-up, and the operations API.
 
 ## Container image
 
@@ -46,7 +46,7 @@ Build and install the desktop binaries:
 scripts/install-local.sh
 ```
 
-Pair and launch (with a `gents server` already running):
+Enroll and launch (with a `gents server` already running):
 
 ```bash
 gents-desktop init
@@ -65,7 +65,7 @@ gents-desktop init --status-endpoint http://agent-host:9191/status
 
 The discovery URL is used to read connection metadata; the saved deployment
 stores the runtime's P2P address and GraphQL endpoint. The desktop app
-completes the P2P pairing and replication bootstrap when it launches. For the
+completes the enrollment-owned P2P replication bootstrap when it launches. For the
 replicated chat demo, leave the desktop app open and wait for the status bar
 to show `replication: subscriptions armed` before sending prompts you expect
 to render in the UI.
@@ -87,7 +87,7 @@ node all use that directory when the variable is set.
 ## P2P defaults and pinning
 
 The standard server path always starts the IROH P2P transport for local
-desktop pairing. It binds to localhost on an ephemeral P2P port by default,
+desktop replication. It binds to localhost on an ephemeral P2P port by default,
 with relay and discovery disabled.
 
 To pin the local P2P socket:
@@ -110,9 +110,9 @@ shell escalates to the full topology:
 gents demo
 ```
 
-- `pair` brings up a 2nd node (the **Worker**), creates a signed
-  `network-control` network, enrolls the Worker, installs the conversation data
-  plane, and waits for both reconcilers to arm their replicators.
+- `pair` brings up a second node (the **Worker**), completes authenticated
+  enrollment, installs its owner-scoped routes, and waits for both reconcilers
+  to publish exact applied evidence.
 - `delegate` enables cross-node delegation: the **Orchestrator** delegates a
   child request that materializes and runs **on the Worker node** and replicates
   its result back. This uses background await (foreground remote spawns are
@@ -133,46 +133,27 @@ or a hosted preset (`gents demo --desktop --backend-preset openai --model gpt-5.
 with `OPENAI_API_KEY` in the environment). The first run offers an interactive
 backend picker and remembers the choice.
 
-To bring up two runtimes manually and enroll Coding into Amy's signed network:
+To enroll a desktop or mobile client into a running runtime, enter the
+runtime's address in **Add Agent**. The client authenticates the DID advertised
+by `/status`, persists one immutable enrollment request, and displays its
+request ID. Approve that exact request on the runtime host:
 
 ```bash
-gents init --home /tmp/amy --agent-name amy
-gents init --home /tmp/coding --agent-name coding
-
-gents server --home /tmp/amy --no-codex-shim \
-  --p2p-bind-addr 127.0.0.1 --p2p-port 4017 \
-  --p2p-relay-mode disabled --p2p-discovery disabled
-gents server --home /tmp/coding --no-codex-shim \
-  --p2p-bind-addr 127.0.0.1 --p2p-port 4018 \
-  --p2p-relay-mode disabled --p2p-discovery disabled
+gents p2p enrollment approve <request-id> --home /tmp/amy
 ```
 
-Create the network root on Amy, grant Coding's DID, then join Coding with a
-signed `network-control` invite:
+Denial uses the same signed operator path:
 
 ```bash
-CODING_DID=$(jq -r .agent_did /tmp/coding/init.json)
-
-gents p2p network create --home /tmp/amy --name "Two Node Demo"
-gents p2p network grant --home /tmp/amy "$CODING_DID"
-
-AMY_INVITE=$(
-  gents p2p pairings invite \
-    --home /tmp/amy \
-    --member-did "$CODING_DID" \
-    --template network-control \
-    | jq -r .token
-)
-
-gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
+gents p2p enrollment deny <request-id> --home /tmp/amy
 ```
 
-The join wires the narrow control-plane substrate only. To move chat,
-subagent, and trace rows, add `DataPlanePairingDesired` rows for the
-conversation edge. The scripted demo writes those rows and then proves
-replication by submitting a no-wait request on Coding and reading it from Amy.
+Approval does not make chat ready by itself. The runtime and client must apply
+both modeled route legs and the client must verify the runtime's signed,
+generation-bound route receipt. Revocation or a higher authorization generation
+retracts readiness until the new routes are applied.
 
-Inspect desired pairing rows and live connectivity from either runtime:
+Inspect enrollment-owned desired pairing rows and live connectivity from either runtime:
 
 ```bash
 gents p2p pairings list --home /tmp/amy --output table
@@ -191,78 +172,26 @@ walkthrough](demo.md#part-2--pair-a-second-node).
 
 The low-level `p2p admin` commands (`connect`, `collections`, `replicators`,
 `documents`) remain available for diagnostics and repair. They mutate live
-P2P state directly; normal pairing should go through `p2p pairings`
-(invite/join or `pairings set`).
+P2P state directly and never grant enrollment authority.
 
 ## Scope templates
 
-Scope templates are named pairing intents that bundle a fixed collection set, a
-per-collection scoping policy and a delivery mode (push or replicate). Use
-`--template` on `p2p pairings invite`, `join`, and
-`pairings set` instead of hand-authoring collection lists.
+Scope templates are runtime-owned route definitions. Enrollment selects the
+approved client route; callers cannot grant themselves a template or
+hand-author `PeerPairingDesired` rows.
 
 ```bash
 gents p2p templates list          # print the built-in catalog
 ```
 
-Built-in templates:
+The catalog remains observable for diagnostics:
 
 | Template | Collections | Scope | Delivery |
 |---|---|---|---|
-| `conversation` (default) | Requests, responses, messages, tool calls/results, sessions, conversations, compaction, pairing readiness | `requester_did` (readiness: `claimant_did`) | Push |
+| `conversation` | Requests, responses, messages, tool calls/results, sessions, conversations, compaction | Exact requester + agent scope | Push |
 | `agent-config` | Behaviors, tool selections, backends, profiles, tool services, skills | Unscoped | Replicate |
 | `backup` | Same collection set as `conversation` | Unscoped (all docs) | Replicate |
-| `discovery` | Network membership + agent config bootstrap docs | Unscoped | Replicate |
-| `network-control` | Network root, membership, endpoints, join requests | Unscoped | Replicate |
-| `machine` | Conversation collections + agent directory (fleet discovery) | Conversation scope + directory `source_did` equal to the home issuer | Push |
-
-Use `network-control` for signed fleet enrollment and `conversation` for
-application data-plane rows:
-
-```bash
-AMY_INVITE=$(
-  gents p2p pairings invite \
-    --member-did "$CODING_DID" \
-    --template network-control \
-    | jq -r .token
-)
-gents p2p pairings join --home /tmp/coding "$AMY_INVITE"
-# join reads the template from the token; pass --template only to override
-```
-
-## Bearer pairing and fleet discovery
-
-The examples above use `--member-did` for node-to-node enrollment. For
-audience-unbound, issuer-signed bearer pairing (for example via QR code), use
-`--bearer`:
-
-```bash
-gents p2p pairings invite --bearer --qr --template conversation
-gents p2p pairings invite --bearer --qr --template machine
-```
-
-### Fleet discovery (machine pairing)
-
-Mint the invite with the `machine` template to attach a client to the whole
-home rather than a single conversation:
-
-    gents p2p pairings invite --bearer --qr --template machine
-
-A machine claim behaves exactly like a conversation claim (membership +
-reciprocal conversation plane) and additionally replicates
-`AgentDirectoryEntry` — a live, read-only index of every enabled agent
-principal and enabled behavior on the home (display name, DID, behaviors,
-runtime state), including agents created after pairing. Rows are stamped with
-the home issuer DID, and replication selects only that source-owned partition.
-Clients render an agent picker from it and address
-`AgentRequest`s to the picked `agent_did`. Existing `conversation` pairings
-are unchanged; re-pair with a machine QR to opt in.
-
-> **Upgrade note:** A home initialized with the pre-fix `AgentDirectoryEntry`
-> schema retains mutable `source_did`; DefraDB cannot safely change an existing
-> field to immutable. Upgrading the binary alone does not repair that home.
-> Recreate the home (or manually recreate this derived collection) before using
-> a `machine` pairing. Fresh homes are unaffected.
+| `machine` | Conversation collections, exact persona request/outcome routes, agent directory | Requester + destination agent + source owner | Push |
 
 ## Admin filtered replication
 
@@ -285,33 +214,17 @@ empty component) are hard failures with a clear message.
 
 ## Service discovery and signed networks
 
-There are two related network surfaces:
-
-- `p2p network create|grant|revoke` writes the admin-signed
-  `AgentNetwork`/`NetworkMembership` control plane used by v5 invite/join.
-- `p2p network register|list|rm` writes and reads the `PeerRegistry`
-  discovery view: display names, offered templates, heartbeat freshness, and
-  pairing diagnostics.
+`p2p network list` is an informational view of the signed enrollment root,
+authorization revisions, endpoints, and applied pairing health. It cannot
+grant, revoke, or materialize routes.
 
 ```bash
-gents p2p network create --home /tmp/amy --name "Fleet One"
-gents p2p network grant --home /tmp/amy "$CODING_DID"
-
-gents p2p network register --home /tmp/amy --template conversation   # self-register in discovery
-gents p2p network list --home /tmp/coding --output table              # discovered members + liveness + paired/auto-pair
-gents p2p network rm --home /tmp/amy                                  # deregister this node's row
+gents p2p network list --home /tmp/amy --output table
 ```
 
-Auto-pairing of discovered members is **off by default**. Set the
-`GENTS_DISCOVERY_AUTO_PAIR=1` environment variable on `server` to have
-the discovery reconciler materialize registry-owned `PeerPairingDesired` rows
-(`source: "registry"`) for live members; with it unset, `network list` shows
-discovered peers and you pair explicitly. Registry-owned rows are retracted
-when their entry stales/removed and never touch operator-authored pairings.
-
-For the narrated walkthrough — the network-control and conversation data-plane
-layers — see [Part 3 of the getting-started
-walkthrough](demo.md#part-3--grow-the-link-into-a-fleet).
+Registry observations never auto-pair and never write desired route state.
+Only the authenticated enrollment reconciler may materialize
+`PeerPairingDesired`.
 
 ## Remote Codex clients
 

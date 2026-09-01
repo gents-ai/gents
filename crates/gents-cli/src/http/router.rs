@@ -10,6 +10,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
+use crate::http::enrollment::{EnrollmentDecisionServiceHandle, EnrollmentOfferIssuerHandle};
 use crate::http::fleet::load_fleet_snapshot;
 use crate::http::fleet_slots::load_fleet_slot_snapshot;
 use crate::http::healthz::render_healthz_payload;
@@ -42,6 +43,8 @@ pub(crate) struct RuntimeHttpState {
     /// HTTP surface is already serving (#699). `None` when the host does not run
     /// a shim at all (embedders, desktop).
     pub(crate) codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
+    pub(crate) enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
+    pub(crate) enrollment_decisions: EnrollmentDecisionServiceHandle,
 }
 
 pub(crate) fn runtime_contract_router(
@@ -55,6 +58,8 @@ pub(crate) fn runtime_contract_router(
     backend_health: Option<gents::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
     codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
+    enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
+    enrollment_decisions: EnrollmentDecisionServiceHandle,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
@@ -74,6 +79,8 @@ pub(crate) fn runtime_contract_router(
         p2p_metrics_cache: Arc::new(Mutex::new(None)),
         p2p_http_client,
         codex_shim_health,
+        enrollment_offer_issuer,
+        enrollment_decisions,
     };
 
     let mut router = Router::new()
@@ -81,6 +88,8 @@ pub(crate) fn runtime_contract_router(
         .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
         .route("/status", get(status_handler))
+        .route("/enrollment/decisions", post(enrollment_decision_handler))
+        .route("/enrollment/pending", post(enrollment_pending_handler))
         .route("/self", get(self_handler))
         .route("/sessions", get(sessions_handler))
         .route("/fleet", get(fleet_handler))
@@ -107,6 +116,58 @@ pub(crate) fn runtime_contract_router(
     }
 
     router.with_state(state)
+}
+
+async fn enrollment_decision_handler(
+    State(state): State<RuntimeHttpState>,
+    axum::Json(command): axum::Json<gents_protocol::enrollment::EnrollmentOperatorDecisionCommand>,
+) -> Response {
+    let Some(service) = state.enrollment_decisions.read().await.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error": "enrollment authority is not ready"})),
+        )
+            .into_response();
+    };
+    match service.decide(&command).await {
+        Ok(outcome) => (
+            StatusCode::OK,
+            axum::Json(json!({
+                "request_id": outcome.request_id,
+                "state": outcome.state,
+                "decision_doc_id": outcome.decision_doc_id,
+                "revision_doc_id": outcome.revision_doc_id,
+                "delivery_pending": outcome.delivery_pending,
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn enrollment_pending_handler(
+    State(state): State<RuntimeHttpState>,
+    axum::Json(command): axum::Json<gents_protocol::enrollment::EnrollmentOperatorQueryCommand>,
+) -> Response {
+    let Some(service) = state.enrollment_decisions.read().await.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error": "enrollment authority is not ready"})),
+        )
+            .into_response();
+    };
+    match service.pending(&command).await {
+        Ok(pending) => (StatusCode::OK, axum::Json(json!({"pending": pending}))).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
@@ -256,8 +317,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             let runtime = data
                 .agent_runtimes
                 .iter()
-                .find(|runtime| runtime.agent_did == state.agent_did)
-                .or_else(|| data.agent_runtimes.first());
+                .find(|runtime| runtime.agent_did == state.agent_did);
             json!({
                 "status": health.get("status").cloned().unwrap_or(Value::String("unknown".to_string())),
                 "ok": health.get("ok").cloned().unwrap_or(Value::Bool(false)),
@@ -306,6 +366,24 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     }
 
     if let Some(map) = body.as_object_mut() {
+        let enrollment = match state.enrollment_offer_issuer.read().await.clone() {
+            Some(issuer) => match issuer.mint().await {
+                Ok(offer) => crate::http::enrollment::EnrollmentStatus::Available {
+                    token: offer.token,
+                    offer: offer.offer,
+                },
+                Err(error) => {
+                    tracing::warn!(error = %error, "failed to mint authenticated enrollment offer");
+                    crate::http::enrollment::EnrollmentStatus::Unavailable {
+                        reason: "offer_mint_failed",
+                    }
+                }
+            },
+            None => crate::http::enrollment::EnrollmentStatus::Unavailable {
+                reason: "runtime_not_ready",
+            },
+        };
+        map.insert("enrollment".to_string(), json!(enrollment));
         crate::commands::p2p::flatten_p2p_fields(map, &p2p);
     }
 
@@ -313,7 +391,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
 }
 
 async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
-    let (health, runtime, status_code) =
+    let (health, runtime, readiness, status_code) =
         match load_metrics_query_data(&state.graphql, &state.agent_did).await {
             Ok(data) => {
                 let data = with_local_native_executors(data);
@@ -327,13 +405,17 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
                     .agent_runtimes
                     .iter()
                     .find(|runtime| runtime.agent_did == state.agent_did)
-                    .or_else(|| data.agent_runtimes.first())
                     .cloned();
-                (health, runtime, status_code)
+                let readiness = data
+                    .behavior_readiness
+                    .iter()
+                    .find(|row| row.agent_did == state.agent_did)
+                    .cloned();
+                (health, runtime, readiness, status_code)
             }
             Err(error) => {
                 let health = render_healthz_payload(&state, None, Some(error.to_string()));
-                (health, None, StatusCode::SERVICE_UNAVAILABLE)
+                (health, None, None, StatusCode::SERVICE_UNAVAILABLE)
             }
         };
 
@@ -343,6 +425,7 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
                 &state,
                 &health,
                 runtime.as_ref(),
+                readiness.as_ref(),
                 &behaviors,
                 &context_budget,
             );
@@ -394,15 +477,24 @@ fn render_self_payload(
     state: &RuntimeHttpState,
     health: &Value,
     runtime: Option<&MetricsRuntimeRow>,
+    readiness: Option<&gents_protocol::row::AgentBehaviorReadinessRow>,
     behaviors: &[SelfBehavior],
     context_budget: &ContextBudget,
 ) -> Value {
-    let process_state = runtime
-        .map(|runtime| runtime.process_state.as_str())
-        .filter(|state| !state.is_empty())
-        .or_else(|| health.get("status").and_then(Value::as_str))
+    let readiness = readiness.and_then(|row| {
+        gents_protocol::row::decode_behavior_readiness_snapshot(row, &state.agent_did).ok()
+    });
+    let process_state = readiness
+        .as_ref()
+        .map(|snapshot| snapshot.process_state.as_str())
         .unwrap_or("unknown");
-    let behavior = select_primary_behavior(behaviors)
+    let behavior = readiness
+        .as_ref()
+        .and_then(|snapshot| {
+            behaviors
+                .iter()
+                .find(|behavior| behavior.behavior_id == snapshot.default_behavior_id)
+        })
         .map(render_self_behavior)
         .unwrap_or(Value::Null);
     let behaviors = behaviors
@@ -426,13 +518,6 @@ fn render_self_payload(
         "behaviors": behaviors,
         "context_budget": context_budget,
     })
-}
-
-fn select_primary_behavior(behaviors: &[SelfBehavior]) -> Option<&SelfBehavior> {
-    behaviors
-        .iter()
-        .find(|behavior| behavior.enabled)
-        .or_else(|| behaviors.first())
 }
 
 fn render_self_behavior(behavior: &SelfBehavior) -> Value {
@@ -489,6 +574,10 @@ async fn mcp_pool_handler(State(state): State<RuntimeHttpState>) -> Response {
 mod tests {
     use std::time::Instant;
 
+    use gents_protocol::row::{
+        AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
+        BehaviorReadinessSnapshot, BehaviorReadinessState, BEHAVIOR_READINESS_FORMAT_VERSION,
+    };
     use serde_json::json;
 
     use super::*;
@@ -505,6 +594,8 @@ mod tests {
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             p2p_http_client: reqwest::Client::new(),
             codex_shim_health: None,
+            enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
+            enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
         }
     }
 
@@ -522,17 +613,32 @@ mod tests {
         }
     }
 
-    fn runtime(process_state: &str) -> MetricsRuntimeRow {
+    fn runtime() -> MetricsRuntimeRow {
         MetricsRuntimeRow {
             agent_did: "did:key:zAgent".to_string(),
-            process_state: process_state.to_string(),
             reconcile_phase: "idle".to_string(),
-            active_generation: 1,
-            router_generation: 1,
-            runnable_behavior_count: 1,
-            unavailable_behavior_count: 0,
             last_reconcile_result: "applied".to_string(),
             last_reconcile_completed_at: "2026-06-04T00:00:00Z".to_string(),
+        }
+    }
+
+    fn readiness(default_behavior_id: &str) -> AgentBehaviorReadinessRow {
+        AgentBehaviorReadinessRow {
+            agent_did: "did:key:zAgent".to_string(),
+            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
+                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
+                process_state: BehaviorReadinessProcessState::Ready,
+                active_generation: 1,
+                router_generation: 1,
+                default_behavior_id: default_behavior_id.to_string(),
+                behaviors: vec![BehaviorReadinessEntry {
+                    behavior_id: default_behavior_id.to_string(),
+                    state: BehaviorReadinessState::Ready,
+                    reason: None,
+                }],
+            })
+            .unwrap(),
+            updated_at: "2026-06-04T00:00:00Z".to_string(),
         }
     }
 
@@ -635,7 +741,8 @@ mod tests {
         let payload = render_self_payload(
             &state(),
             &json!({ "status": "ok", "ok": true }),
-            Some(&runtime("ready")),
+            Some(&runtime()),
+            Some(&readiness("default")),
             &behaviors,
             &ContextBudget::default(),
         );
@@ -680,11 +787,12 @@ mod tests {
     }
 
     #[test]
-    fn self_payload_falls_back_to_first_behavior_when_none_enabled() {
+    fn self_payload_does_not_invent_process_or_default_without_readiness() {
         let behaviors = vec![behavior("fallback", false, "minimax")];
         let payload = render_self_payload(
             &state(),
             &json!({ "status": "degraded", "ok": true }),
+            None,
             None,
             &behaviors,
             &ContextBudget::default(),
@@ -692,13 +800,8 @@ mod tests {
 
         assert_eq!(
             payload.get("process_state").and_then(Value::as_str),
-            Some("degraded")
+            Some("unknown")
         );
-        assert_eq!(
-            payload
-                .pointer("/behavior/behavior_id")
-                .and_then(Value::as_str),
-            Some("fallback")
-        );
+        assert_eq!(payload.get("behavior"), Some(&Value::Null));
     }
 }

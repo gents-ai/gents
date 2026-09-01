@@ -3,7 +3,7 @@
 # Proofs/PeerRegistryDiscovery/DirectoryProjection.lean).
 #
 # TRUST BASIS — pure derived state. Rows are a projection of
-# AgentPrincipal x AgentBehavior x AgentRuntime, rebuildable at any time;
+# AgentPrincipal x AgentBehavior x AgentBehaviorReadiness, rebuildable at any time;
 # clients treat them as read-only truth about the machine's fleet. A row
 # grants NOTHING: discovery is not a privilege boundary (a conversation-
 # paired member can already address any agent in the home); the directory

@@ -1,14 +1,9 @@
 mod access;
-mod claim;
 mod collections;
 mod connect;
 mod documents;
-mod invite;
-mod join;
-mod membership_records;
+mod enrollment_admin;
 mod network;
-mod network_admin;
-mod network_records;
 mod output;
 mod pairings;
 mod replicators;
@@ -18,8 +13,8 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::{
-    P2pAdminCommand, P2pCollectionsCommand, P2pCommand, P2pDocumentsCommand, P2pNetworkCommand,
-    P2pPairingsCommand, P2pReplicatorsCommand, P2pTemplatesCommand,
+    P2pAdminCommand, P2pCollectionsCommand, P2pCommand, P2pDocumentsCommand, P2pEnrollmentCommand,
+    P2pNetworkCommand, P2pPairingsCommand, P2pReplicatorsCommand, P2pTemplatesCommand,
 };
 
 pub(crate) use output::{
@@ -34,19 +29,37 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
         P2pCommand::Diagnose(args) => connect::p2p_diagnose(args).await,
         P2pCommand::Pairings { command } => match command {
             P2pPairingsCommand::List(args) => pairings::p2p_pairings_list(args).await,
-            P2pPairingsCommand::Set(args) => pairings::p2p_pairings_set(args).await,
-            P2pPairingsCommand::Remove(args) => pairings::p2p_pairings_remove(args).await,
-            P2pPairingsCommand::Invite(args) => invite::p2p_invite(args).await,
-            P2pPairingsCommand::Join(args) => join::p2p_join(args).await,
-            P2pPairingsCommand::Claim(args) => claim::p2p_claim(args).await,
+        },
+        P2pCommand::Enrollment { command } => match command {
+            P2pEnrollmentCommand::Pending(args) => {
+                enrollment_admin::pending_enrollments(args).await
+            }
+            P2pEnrollmentCommand::Approve(args) => {
+                enrollment_admin::decide_enrollment(
+                    args,
+                    gents_protocol::enrollment::EnrollmentOperatorAction::Approve,
+                )
+                .await
+            }
+            P2pEnrollmentCommand::Deny(args) => {
+                enrollment_admin::decide_enrollment(
+                    args,
+                    gents_protocol::enrollment::EnrollmentOperatorAction::Deny,
+                )
+                .await
+            }
+            P2pEnrollmentCommand::Revoke(args) => {
+                enrollment_admin::decide_enrollment(
+                    args,
+                    gents_protocol::enrollment::EnrollmentOperatorAction::Revoke,
+                )
+                .await
+            }
         },
         P2pCommand::Network { command } => match command {
             P2pNetworkCommand::Register(args) => network::p2p_network_register(args).await,
             P2pNetworkCommand::List(args) => network::p2p_network_list(args).await,
             P2pNetworkCommand::Rm(args) => network::p2p_network_rm(args).await,
-            P2pNetworkCommand::Create(args) => network_admin::p2p_network_create(args).await,
-            P2pNetworkCommand::Grant(args) => network_admin::p2p_network_grant(args).await,
-            P2pNetworkCommand::Revoke(args) => network_admin::p2p_network_revoke(args).await,
         },
         P2pCommand::Templates { command } => match command {
             P2pTemplatesCommand::List(args) => templates::p2p_templates_list(args).await,

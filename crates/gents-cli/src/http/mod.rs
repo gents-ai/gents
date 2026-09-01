@@ -1,3 +1,4 @@
+pub(crate) mod enrollment;
 pub(crate) mod fleet;
 pub(crate) mod fleet_slots;
 pub(crate) mod healthz;

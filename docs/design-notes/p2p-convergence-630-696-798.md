@@ -1,5 +1,10 @@
 # P2P convergence diagnosis: #630, #696, and #798
 
+> Historical diagnosis. The bearer invite/join, `NetworkMembership`, reciprocal
+> intent, and registry-driven authority described below were deleted by the
+> authenticated-enrollment clean break in #1312–#1313. This document preserves
+> the evidence for the older incident; it is not a current implementation guide.
+
 Qualified with this Gents candidate and merged DefraDB PR
 [#1502](https://github.com/sourcenetwork/defradb.rs/pull/1502) at `f928b300`.
 

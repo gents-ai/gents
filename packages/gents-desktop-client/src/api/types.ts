@@ -5,8 +5,6 @@ import type {
   AgentConfigSaveRequest,
   BackendDeleteRequest,
   BackendSaveRequest,
-  BearerPairingRequest,
-  BearerPairingResponse,
   BehaviorDeleteRequest,
   BehaviorSaveRequest,
   CascadeCancelPreview,
@@ -14,6 +12,7 @@ import type {
   CodexLoginResult,
   GrokLoginResult,
   DesktopClientSnapshot,
+  EnrollmentRequestView,
   DesktopInterruptRequestRequest,
   DesktopListSubagentTreeRequest,
   DesktopPreviewInterruptCascadeRequest,
@@ -30,7 +29,6 @@ import type {
   MCPServiceHealthView,
   McpServiceProbeResult,
   NetworkStatusView,
-  PeerAddRequest,
   RequestResendResult,
   RequestTimelineView,
   ScheduleDeleteRequest,
@@ -78,12 +76,12 @@ export type DesktopApiAdapter = {
     disableAutoStart: boolean,
   ) => Promise<ManagedServerStatus>;
   setSelectedAgent: (agentDid: string | null) => Promise<void>;
-  addPeer: (request: PeerAddRequest) => Promise<DesktopClientSnapshot>;
-  pairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   fetchPeerStatus: (peerId: string) => Promise<unknown>;
-  probePeerAddress: (serverAddress: string) => Promise<unknown>;
+  requestStatusEnrollment: (
+    serverAddress: string,
+  ) => Promise<EnrollmentRequestView>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
   fetchRequestTimeline: (
@@ -104,6 +102,10 @@ export type DesktopApiAdapter = {
       beforeItemKey?: string | null;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
+  retrySessionHydration: (
+    sessionId: string,
+    agentDid?: string | null,
+  ) => Promise<void>;
   fetchSessionLiveDelta?: (request: {
     sessionId: string;
     agentDid?: string | null;

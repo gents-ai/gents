@@ -71,8 +71,7 @@ abbrev Catalog := List Template
 
 def conversationTranscriptCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
-   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry",
-   "BearerPairingReady"]
+   "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry"]
 
 def agentConfigCollections : List String :=
   ["AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
@@ -92,12 +91,16 @@ def clientControlPlaneCollections : List String :=
    "Skill", "DatastoreToolSurface", "ChainKeyBinding", "EthTool", "Task",
    "Schedule", "EventTrigger"]
 
+def clientOwnerProjectionCollections : List String :=
+  ["AgentBehaviorReadiness"]
+
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
-    ["BearerPairingReady", "PeerEndpoint", "SessionHydrationRequest"]
+    ["PersonaConfigRequest", "PeerEndpoint", "SessionHydrationRequest"]
 
 def clientCollections : List String :=
-  clientToRuntimeCollections ++ clientControlPlaneCollections
+  clientToRuntimeCollections ++ clientControlPlaneCollections ++
+    clientOwnerProjectionCollections
 
 def clientRouteCollections : RouteDirection → List String
   | .clientToRuntime => clientToRuntimeCollections
@@ -105,16 +108,7 @@ def clientRouteCollections : RouteDirection → List String
 
 def machineCollections : List String :=
   conversationCollections ++
-    ["MailboxItem", "PersonaConfigRequest", "SessionHydrationRequest", "AgentDirectoryEntry"]
-
-def discoveryCollections : List String :=
-  ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest",
-   "AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
-   "ToolServiceRegistry", "Skill", "DatastoreToolSurface", "ChainKeyBinding",
-   "EthTool"]
-
-def networkControlCollections : List String :=
-  ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest"]
+    ["MailboxItem", "SessionHydrationRequest", "AgentDirectoryEntry"]
 
 def subagentHostCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall"]
@@ -130,13 +124,11 @@ def conversationRules : List CollectionRule :=
   , { collection := "AgentToolResult",   field := "requester_did", source := .peerDid }
   , { collection := "AgentSession",      field := "requester_did", source := .peerDid }
   , { collection := "AgentConversation", field := "requester_did", source := .peerDid }
-  , { collection := "CompactionEntry",   field := "requester_did", source := .peerDid }
-  , { collection := "BearerPairingReady", field := "claimant_did", source := .peerDid } ]
+  , { collection := "CompactionEntry",   field := "requester_did", source := .peerDid } ]
 
 def machineRules : List CollectionRule :=
   conversationRules ++
     [ { collection := "MailboxItem", field := "requester_did", source := .peerDid }
-    , { collection := "PersonaConfigRequest", field := "requester_did", source := .peerDid }
     , { collection := "SessionHydrationRequest", field := "requester_did", source := .peerDid }
     , { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
 
@@ -184,18 +176,6 @@ def backupTemplate : Template :=
   , scope := .unscoped
   , delivery := .replicate }
 
-def discoveryTemplate : Template :=
-  { id := "discovery"
-  , collections := discoveryCollections.toFinset
-  , scope := .unscoped
-  , delivery := .replicate }
-
-def networkControlTemplate : Template :=
-  { id := "network-control"
-  , collections := networkControlCollections.toFinset
-  , scope := .unscoped
-  , delivery := .replicate }
-
 def subagentCoordinatorTemplate : Template :=
   { id := "subagent-coordinator"
   , collections := ["AgentToolCall"].toFinset
@@ -235,8 +215,6 @@ def builtinCatalog : Catalog :=
   , clientTemplate
   , agentConfigTemplate
   , backupTemplate
-  , discoveryTemplate
-  , networkControlTemplate
   , subagentCoordinatorTemplate
   , subagentHostTemplate
   , appCollectionsTemplate

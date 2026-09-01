@@ -1,4 +1,6 @@
 import type {
+  BehaviorReadinessUnknownReasonView,
+  BehaviorUnavailableReasonView,
   ConversationSummary,
   DesktopSessionSnapshot,
   PendingTurnView,
@@ -49,6 +51,7 @@ export type TurnState =
 export type ChatBlockedReason =
   | "clientOffline"
   | "agentNotSelected"
+  | "routeNotReady"
   | "behaviorUnavailable"
   | "composerEmpty"
   | "submittingRequest"
@@ -83,6 +86,20 @@ export type SendStatus =
   | { kind: "ready" }
   | { kind: "disabled"; reason: ChatBlockedReason; hint: string };
 
+export type BehaviorReadinessDecision =
+  | { kind: "ready"; behaviorId: string; behaviorLabel: string }
+  | {
+      kind: "unavailable";
+      behaviorId: string;
+      behaviorLabel: string;
+      reason: BehaviorUnavailableReasonView;
+    }
+  | {
+      kind: "unknown";
+      behaviorId: string | null;
+      reason: BehaviorReadinessUnknownReasonView;
+    };
+
 type ProjectionInput = {
   clientAvailable: boolean;
   selectedAgentDid: string | null;
@@ -92,7 +109,8 @@ type ProjectionInput = {
   session: DesktopSessionSnapshot | null;
   selectedConversation: ConversationSummary | null;
   localWorkflow: ChatWorkflowState;
-  behaviorUnavailableHint?: string | null;
+  chatSafe: boolean;
+  behaviorReadiness: BehaviorReadinessDecision;
 };
 
 export type ChatShellProjection = {
@@ -183,6 +201,8 @@ function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
       return "Client offline";
     case "agentNotSelected":
       return "Select an agent before sending";
+    case "routeNotReady":
+      return "Agent route is not ready";
     case "behaviorUnavailable":
       return "The selected behavior is unavailable";
     case "composerEmpty":
@@ -203,6 +223,50 @@ function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
       return "Waiting for terminal turn reconciliation";
     case "inconsistentTurnObservation":
       return "Waiting for consistent turn observation";
+  }
+}
+
+function behaviorReadinessHint(decision: Exclude<BehaviorReadinessDecision, { kind: "ready" }>) {
+  if (decision.kind === "unknown") {
+    switch (decision.reason) {
+      case "readiness_missing":
+        return "Runtime readiness is not available yet";
+      case "readiness_malformed":
+        return "Runtime readiness is invalid";
+      case "readiness_version_unsupported":
+        return "Runtime readiness uses an unsupported format";
+      case "readiness_stale":
+        return "Runtime stopped reporting readiness; reconnect or restart it";
+      case "process_not_ready":
+        return "Runtime is not ready";
+      case "router_generation_stale":
+        return "Runtime is still applying its latest configuration";
+      case "behavior_not_assigned":
+        return "Behavior is not assigned to this runtime";
+    }
+  }
+
+  switch (decision.reason) {
+    case "behavior_disabled":
+      return `Behavior “${decision.behaviorLabel}” is disabled`;
+    case "runtime_configuration_invalid":
+      return `Behavior “${decision.behaviorLabel}” has an invalid runtime configuration`;
+    case "backend_not_configured":
+      return `Behavior “${decision.behaviorLabel}” has no inference backend configured`;
+    case "backend_disabled":
+      return `Behavior “${decision.behaviorLabel}” has a disabled inference backend`;
+    case "backend_temporarily_unavailable":
+      return `Behavior “${decision.behaviorLabel}” is temporarily unavailable`;
+    case "credentials_required":
+      return `Behavior “${decision.behaviorLabel}” requires inference credentials`;
+    case "inference_profile_invalid":
+      return `Behavior “${decision.behaviorLabel}” has an invalid inference profile`;
+    case "tool_configuration_invalid":
+      return `Behavior “${decision.behaviorLabel}” has an invalid tool configuration`;
+    case "tool_surface_unavailable":
+      return `Behavior “${decision.behaviorLabel}” cannot start its tool surface`;
+    case "executor_start_failed":
+      return `Behavior “${decision.behaviorLabel}” could not start`;
   }
 }
 
@@ -330,11 +394,18 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         hint: hintFor("agentNotSelected"),
       };
     }
-    if (input.behaviorUnavailableHint) {
+    if (!input.chatSafe) {
+      return {
+        kind: "disabled",
+        reason: "routeNotReady",
+        hint: hintFor("routeNotReady"),
+      };
+    }
+    if (input.behaviorReadiness.kind !== "ready") {
       return {
         kind: "disabled",
         reason: "behaviorUnavailable",
-        hint: input.behaviorUnavailableHint,
+        hint: behaviorReadinessHint(input.behaviorReadiness),
       };
     }
     if (composerEmpty) {

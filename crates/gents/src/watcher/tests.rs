@@ -497,6 +497,71 @@ async fn insert_agent_request_row(
         .expect("AgentRequest _docID")
 }
 
+async fn insert_malformed_agent_request_without_request_id(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    session_id: &str,
+) -> String {
+    let mutation = format!(
+        r#"mutation {{ create_AgentRequest(input: {{
+        agent_did: "{}", session_id: "{}", content: "malformed",
+        status: "pending", lifecycle_state: "pending",
+        execution_origin: "interactive", created_at: "2026-03-12T00:00:00Z"
+    }}) {{ _docID }} }}"#,
+        crate::graphql::escape_graphql_string(agent_did),
+        crate::graphql::escape_graphql_string(session_id)
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create malformed row: {:?}",
+        response.errors
+    );
+    let lookup = format!(
+        r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+        crate::graphql::escape_graphql_string(agent_did),
+        crate::graphql::escape_graphql_string(session_id)
+    );
+    let response = node.execute(&lookup).await;
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|value| value.as_str())
+        .expect("malformed row doc id")
+        .to_string()
+}
+
+async fn request_terminal_fields_by_doc_id(
+    node: &defra_node::EmbeddedNode,
+    doc_id: &str,
+) -> serde_json::Value {
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(
+        filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1
+    ) {{ status lifecycle_state failure_reason claimed_at }} }}"#,
+            crate::graphql::escape_graphql_string(doc_id)
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query malformed row: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("malformed terminal row")
+}
+
 async fn set_request_terminal_completed(node: &defra_node::EmbeddedNode, doc_id: &str) {
     let doc_id = crate::graphql::escape_graphql_string(doc_id);
     let mutation = format!(
@@ -555,41 +620,6 @@ async fn set_request_interrupt_requested_at(
     assert!(
         !response.has_errors(),
         "update_AgentRequest interrupt failed: {:?}",
-        response.errors
-    );
-}
-
-async fn mark_as_deprecated_background_completion_wakeup(
-    node: &defra_node::EmbeddedNode,
-    doc_id: &str,
-    session_id: &str,
-) {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
-    let metadata = serde_json::json!({
-        "queue": {
-            "source": "background_completion",
-            "policy": "coalesce",
-            "key": format!("background_completion:{session_id}"),
-            "queued_after_request_id": "legacy-parent"
-        }
-    })
-    .to_string();
-    let metadata = crate::graphql::escape_graphql_string(&metadata);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{
-                    execution_origin: "scheduled",
-                    metadata: "{metadata}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "mark legacy background completion wake failed: {:?}",
         response.errors
     );
 }
@@ -732,49 +762,6 @@ async fn pending_requests_include_interrupted_queued_rows_for_terminalization() 
 }
 
 #[tokio::test]
-async fn next_request_ignores_legacy_completion_wake_without_mutating_it() {
-    let node = test_node().await;
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
-    let agent_did = "did:key:z-watcher-retire-completion-wake";
-    let session_id = "sess-retire-completion-wake";
-    let wake_doc_id = insert_agent_request_row(
-        node.as_ref(),
-        agent_did,
-        "req-legacy-completion-wake",
-        session_id,
-        "pending",
-        "pending",
-        "2026-03-12T00:00:00Z",
-    )
-    .await;
-    mark_as_deprecated_background_completion_wakeup(node.as_ref(), &wake_doc_id, session_id).await;
-    insert_agent_request_row(
-        node.as_ref(),
-        agent_did,
-        "req-user",
-        session_id,
-        "pending",
-        "pending",
-        "2026-03-12T00:00:01Z",
-    )
-    .await;
-
-    let mut watcher = DefraWatcher::new(node.clone(), agent_did);
-    let request = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
-        .await
-        .expect("watcher should not wait on an ignored legacy wake")
-        .expect("watcher should remain open")
-        .expect("user request should load");
-    assert_eq!(request.request_id, "req-user");
-
-    let unchanged = request_terminal_fields(node.as_ref(), "req-legacy-completion-wake").await;
-    assert_eq!(unchanged["status"], "pending");
-    assert_eq!(unchanged["lifecycle_state"], "pending");
-    assert!(unchanged["failure_reason"].is_null());
-}
-
-#[tokio::test]
 async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -810,6 +797,43 @@ async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work()
     assert!(terminal["failure_reason"]
         .as_str()
         .is_some_and(|reason| reason.contains("incoherent durable lineage")));
+}
+
+#[tokio::test]
+async fn malformed_pending_row_terminalizes_by_doc_id_without_poisoning_valid_row() {
+    let node = test_node().await;
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let agent_did = "did:key:z-watcher-raw-quarantine";
+    let malformed_doc = insert_malformed_agent_request_without_request_id(
+        node.as_ref(),
+        agent_did,
+        "sess-malformed-a",
+    )
+    .await;
+    insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-valid-b",
+        "sess-valid-b",
+        "pending",
+        "pending",
+        "2026-03-12T00:00:01Z",
+    )
+    .await;
+
+    let watcher = DefraWatcher::new(node.clone(), agent_did);
+    let pending = watcher.pending_requests().await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|row| row.request_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["req-valid-b"]
+    );
+    let malformed = request_terminal_fields_by_doc_id(node.as_ref(), &malformed_doc).await;
+    assert_eq!(malformed["status"], "error");
+    assert_eq!(malformed["lifecycle_state"], "failed");
+    assert!(malformed["claimed_at"].is_null());
 }
 
 #[tokio::test]

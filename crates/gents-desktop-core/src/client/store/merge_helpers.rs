@@ -4,13 +4,6 @@ pub(super) fn row_agent_matches(row_agent_did: Option<&str>, agent_did: &str) ->
     row_agent_did.map_or(true, |row_agent_did| row_agent_did == agent_did)
 }
 
-pub fn is_deprecated_background_completion_request(request: &AgentRequestRow) -> bool {
-    gents::lifecycle::is_deprecated_background_completion_request(
-        request.execution_origin.as_deref(),
-        request.metadata.as_deref(),
-    )
-}
-
 pub(super) fn source_agent_matches(
     sources: &[Option<String>],
     row_index: usize,

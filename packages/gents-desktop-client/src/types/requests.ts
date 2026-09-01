@@ -1,7 +1,6 @@
 import type { AgentConfigSaveRequest as GeneratedAgentConfigSaveRequest } from "../generated/AgentConfigSaveRequest.js";
 import type { BackendDeleteRequest as GeneratedBackendDeleteRequest } from "../generated/BackendDeleteRequest.js";
 import type { BackendSaveRequest as GeneratedBackendSaveRequest } from "../generated/BackendSaveRequest.js";
-import type { BearerPairingRequest as GeneratedBearerPairingRequest } from "../generated/BearerPairingRequest.js";
 import type { BehaviorDeleteRequest as GeneratedBehaviorDeleteRequest } from "../generated/BehaviorDeleteRequest.js";
 import type { BehaviorSaveRequest as GeneratedBehaviorSaveRequest } from "../generated/BehaviorSaveRequest.js";
 import type { ChatSendRequest as GeneratedChatSendRequest } from "../generated/ChatSendRequest.js";
@@ -14,8 +13,7 @@ import type { InferenceProfileDeleteRequest as GeneratedInferenceProfileDeleteRe
 import type { InferenceProfileSaveRequest as GeneratedInferenceProfileSaveRequest } from "../generated/InferenceProfileSaveRequest.js";
 import type { InferenceProbeRequest as GeneratedInferenceProbeRequest } from "../generated/InferenceProbeRequest.js";
 import type { CodexLoginRequest as GeneratedCodexLoginRequest } from "../generated/CodexLoginRequest.js";
-import type { PeerAddRequest as GeneratedPeerAddRequest } from "../generated/PeerAddRequest.js";
-import type { PeerProbeRequest as GeneratedPeerProbeRequest } from "../generated/PeerProbeRequest.js";
+import type { EnrollmentStatusRequest as GeneratedEnrollmentStatusRequest } from "../generated/EnrollmentStatusRequest.js";
 import type { PeerStatusFetchRequest as GeneratedPeerStatusFetchRequest } from "../generated/PeerStatusFetchRequest.js";
 import type { ScheduleDeleteRequest as GeneratedScheduleDeleteRequest } from "../generated/ScheduleDeleteRequest.js";
 import type { ScheduleRunRequest as GeneratedScheduleRunRequest } from "../generated/ScheduleRunRequest.js";
@@ -41,7 +39,6 @@ export type AgentConfigSaveRequest =
   RequestInput<GeneratedAgentConfigSaveRequest>;
 export type BackendDeleteRequest = RequestInput<GeneratedBackendDeleteRequest>;
 export type BackendSaveRequest = RequestInput<GeneratedBackendSaveRequest>;
-export type BearerPairingRequest = RequestInput<GeneratedBearerPairingRequest>;
 export type BehaviorDeleteRequest =
   RequestInput<GeneratedBehaviorDeleteRequest>;
 export type BehaviorSaveRequest = RequestInput<GeneratedBehaviorSaveRequest>;
@@ -61,8 +58,8 @@ export type InferenceProfileSaveRequest =
 export type InferenceProbeRequest =
   RequestInput<GeneratedInferenceProbeRequest>;
 export type CodexLoginRequest = RequestInput<GeneratedCodexLoginRequest>;
-export type PeerAddRequest = RequestInput<GeneratedPeerAddRequest>;
-export type PeerProbeRequest = RequestInput<GeneratedPeerProbeRequest>;
+export type EnrollmentStatusRequest =
+  RequestInput<GeneratedEnrollmentStatusRequest>;
 export type PeerStatusFetchRequest =
   RequestInput<GeneratedPeerStatusFetchRequest>;
 export type ScheduleDeleteRequest =
