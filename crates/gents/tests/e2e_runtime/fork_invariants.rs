@@ -8,7 +8,13 @@ use gents::adapter_projection::{
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::run_timeline_fetch::load_run_timeline;
-use gents::session::{fork, fork_via_http, ForkError, ForkParams};
+use gents::llm::message::{
+    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
+    ToolResultContent, UserContent,
+};
+use gents::session::{
+    fork, fork_via_http, resolve_fork_at_last_human_user_turn, ForkError, ForkParams,
+};
 use serde::Deserialize;
 use tokio::net::TcpListener;
 
@@ -1612,4 +1618,191 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
     assert!(!grandchild_messages
         .iter()
         .any(|m| m.session_id == child_outcome.session_id));
+}
+
+#[tokio::test]
+async fn fork_at_last_human_user_turn_cuts_before_poisoned_partial_turn() {
+    let db = test_db("fork-last-human-user-turn").await;
+
+    let parent_session = "parent-last-human";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+
+    let prior_user = Message::User {
+        content: vec![UserContent::Text(Text {
+            text: "prior human".to_string(),
+        })],
+    };
+    let prior_assistant = Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::Text(Text {
+            text: "prior assistant".to_string(),
+        })],
+    };
+    let last_human = Message::User {
+        content: vec![UserContent::Text(Text {
+            text: "retry this human prompt".to_string(),
+        })],
+    };
+    let poisoned_assistant = Message::Assistant {
+        id: None,
+        content: vec![
+            AssistantContent::Reasoning(Reasoning::new("partial thought before RST")),
+            AssistantContent::ToolCall(ToolCall {
+                id: "call_poison".to_string(),
+                call_id: Some("call_poison".to_string()),
+                function: ToolFunction {
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({ "command": "echo poison" }),
+                },
+                signature: None,
+                additional_params: None,
+            }),
+        ],
+    };
+    let trailing_tool_result = Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: "call_poison".to_string(),
+            call_id: Some("call_poison".to_string()),
+            content: vec![ToolResultContent::Text(Text {
+                text: "poison tool output".to_string(),
+            })],
+        })],
+    };
+
+    create_agent_message(
+        &db.node,
+        parent_session,
+        1,
+        "user",
+        &serde_json::to_string(&prior_user).expect("serialize prior user"),
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        2,
+        "assistant",
+        &serde_json::to_string(&prior_assistant).expect("serialize prior assistant"),
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        3,
+        "user",
+        &serde_json::to_string(&last_human).expect("serialize last human"),
+        "2026-04-21T10:00:03Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        4,
+        "assistant",
+        &serde_json::to_string(&poisoned_assistant).expect("serialize poisoned assistant"),
+        "2026-04-21T10:00:04Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        5,
+        "user",
+        &serde_json::to_string(&trailing_tool_result).expect("serialize trailing tool result"),
+        "2026-04-21T10:00:05Z",
+    )
+    .await;
+    create_agent_tool_call(
+        &db.node,
+        parent_session,
+        4,
+        "call_poison",
+        "bash",
+        r#"{"command":"echo poison"}"#,
+        "poison tool output",
+        "completed",
+        "2026-04-21T10:00:04Z",
+        "2026-04-21T10:00:05Z",
+    )
+    .await;
+    create_agent_tool_result(
+        &db.node,
+        parent_session,
+        "bash",
+        r#"{"command":"echo poison"}"#,
+        "poison tool output",
+        "2026-04-21T10:00:05Z",
+    )
+    .await;
+
+    let cut = resolve_fork_at_last_human_user_turn(db.node.as_ref(), parent_session)
+        .await
+        .expect("resolve last human user turn");
+    assert_eq!(
+        cut, 1,
+        "last human is the second user row (index 1); trailing tool-result-only user is skipped"
+    );
+
+    let outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: cut,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("fork at last human user turn succeeds");
+
+    assert_eq!(outcome.copied_messages, 2);
+    assert_eq!(outcome.copied_tool_calls, 0);
+    assert_eq!(outcome.copied_tool_results, 0);
+
+    let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert_eq!(child_messages.len(), 2);
+    assert!(
+        child_messages[0].content.contains("prior human"),
+        "child keeps history before the last human prompt: {:?}",
+        child_messages[0].content
+    );
+    assert!(
+        child_messages[1].content.contains("prior assistant"),
+        "child keeps history before the last human prompt: {:?}",
+        child_messages[1].content
+    );
+    assert!(
+        !child_messages
+            .iter()
+            .any(|m| m.content.contains("retry this human prompt")),
+        "cut is before the last human prompt so the child can retry it"
+    );
+    assert!(
+        !child_messages
+            .iter()
+            .any(|m| m.content.contains("partial thought before RST")
+                || m.content.contains("call_poison")
+                || m.content.contains("poison tool output")),
+        "child must exclude poisoned partial assistant / in-turn tool rows"
+    );
+
+    let child_tool_calls =
+        fetch_tool_call_snapshots_for_session(&db.node, &outcome.session_id).await;
+    let child_tool_results =
+        fetch_tool_result_snapshots_for_session(&db.node, &outcome.session_id).await;
+    assert!(child_tool_calls.is_empty());
+    assert!(child_tool_results.is_empty());
+
+    let child_conv = fetch_conversation_snapshot(&db.node, &outcome.session_id)
+        .await
+        .expect("child conversation exists");
+    assert_eq!(
+        child_conv.forked_from_session_id.as_deref(),
+        Some(parent_session)
+    );
+    assert_eq!(child_conv.fork_at_user_turn, Some(1));
 }

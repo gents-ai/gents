@@ -293,7 +293,10 @@ Examples:
 const SESSION_AFTER_HELP: &str = "\
 Fork a conversation into a new session seeded from a user-turn prefix \
 of the source. Child inherits principal; behavior can be swapped with \
---behavior.";
+--behavior. Use --at-user-turn N for an explicit cut, or \
+--at-last-human-user-turn to retry the last human prompt after a system \
+failure (skips trailing tool-result-only user rows; does not resume the \
+tool loop).";
 const SUBAGENT_AFTER_HELP: &str = "\
 Examples:
   gents subagent list

@@ -130,12 +130,45 @@ pub enum ForkError {
     ForkSourceBusy,
     #[error("fork_at_user_turn={0} is out of range (parent has only {1} user messages)")]
     ForkAtUserTurnOutOfRange(u32, u32),
+    #[error("no human user turn found in fork source (only tool-result user rows, or none)")]
+    ForkNoHumanUserTurn,
     #[error("target behavior not found: {0}")]
     ForkBehaviorNotFound(String),
     #[error("target behavior {0} is not owned by principal {1}")]
     ForkBehaviorNotOwnedByPrincipal(String, String),
     #[error("fork copy step failed: {0}")]
     ForkCopyFailed(#[from] anyhow::Error),
+}
+
+/// A human user turn is a `role=user` message whose content is not
+/// tool-result-only. Tool-result rows are also stored as `role=user`, so
+/// `--at-user-turn` indexes them; retry-after-failure needs the last *human*
+/// prompt instead.
+pub fn is_human_user_message(message: &crate::llm::message::Message) -> bool {
+    match message {
+        crate::llm::message::Message::User { content } => content
+            .iter()
+            .any(|item| !matches!(item, crate::llm::message::UserContent::ToolResult(_))),
+        _ => false,
+    }
+}
+
+/// Resolve the 0-based index among **all** `role=user` rows for the last human
+/// user turn. That index is what `fork_at_user_turn` / `--at-user-turn` expect:
+/// the cut is *before* that row, so the child excludes the poisoned partial
+/// assistant (and any in-turn tool rows) that follow it.
+///
+/// `user_messages` must be in ascending sequence order and contain only
+/// decoded user-role messages (tool-result-only rows included).
+pub fn last_human_user_turn_index(
+    user_messages: &[crate::llm::message::Message],
+) -> Option<u32> {
+    user_messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| is_human_user_message(message))
+        .map(|(index, _)| index as u32)
 }
 
 async fn load_parent_conversation(
@@ -415,6 +448,52 @@ async fn compute_cut(
         .ok_or_else(|| anyhow::anyhow!("timestamp missing"))?
         .to_string();
     Ok(Ok((seq, ts)))
+}
+
+async fn resolve_last_human_user_turn_index(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    source_session_id: &str,
+) -> Result<Option<u32>> {
+    let escaped = escape_graphql_string(source_session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{
+                    session_id: {{ _eq: "{escaped}" }},
+                    role: {{ _eq: "user" }}
+                }},
+                order: {{ sequence: ASC }}
+            ) {{ content }}
+        }}"#
+    );
+    let resp = executor.execute_graphql(&query).await?;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "resolve_last_human_user_turn_index query failed: {}",
+            render_graphql_errors(&resp)
+        );
+    }
+    let user_messages: Vec<crate::llm::message::Message> = graphql_rows(&resp, "AgentMessage")
+        .into_iter()
+        .map(|row| {
+            let content = row
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            gents_protocol::transcript::decode_persisted_message("user", content)
+        })
+        .collect();
+    Ok(last_human_user_turn_index(&user_messages))
+}
+
+pub async fn resolve_fork_at_last_human_user_turn(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    source_session_id: &str,
+) -> Result<u32, ForkError> {
+    resolve_last_human_user_turn_index(executor, source_session_id)
+        .await
+        .map_err(ForkError::ForkCopyFailed)?
+        .ok_or(ForkError::ForkNoHumanUserTurn)
 }
 
 async fn compute_end_cut(
@@ -954,4 +1033,59 @@ fn json_string_array(value: &serde_json::Value) -> Option<Vec<String>> {
             .filter_map(|value| value.as_str().map(ToOwned::to_owned))
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_human_user_message, last_human_user_turn_index};
+    use crate::llm::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
+
+    fn human(text: &str) -> Message {
+        Message::User {
+            content: vec![UserContent::Text(Text {
+                text: text.to_string(),
+            })],
+        }
+    }
+
+    fn tool_result_only(call_id: &str) -> Message {
+        Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: call_id.to_string(),
+                call_id: Some(call_id.to_string()),
+                content: vec![ToolResultContent::Text(Text {
+                    text: "ok".to_string(),
+                })],
+            })],
+        }
+    }
+
+    #[test]
+    fn human_user_message_requires_non_tool_result_content() {
+        assert!(is_human_user_message(&human("retry")));
+        assert!(!is_human_user_message(&tool_result_only("c1")));
+        assert!(!is_human_user_message(&Message::Assistant {
+            id: None,
+            content: vec![],
+        }));
+    }
+
+    #[test]
+    fn last_human_user_turn_skips_trailing_tool_result_rows() {
+        let users = vec![
+            human("first"),
+            tool_result_only("c1"),
+            human("poisoned turn"),
+            tool_result_only("c2"),
+            tool_result_only("c3"),
+        ];
+        assert_eq!(last_human_user_turn_index(&users), Some(2));
+    }
+
+    #[test]
+    fn last_human_user_turn_none_when_only_tool_results() {
+        let users = vec![tool_result_only("c1"), tool_result_only("c2")];
+        assert_eq!(last_human_user_turn_index(&users), None);
+        assert_eq!(last_human_user_turn_index(&[]), None);
+    }
 }

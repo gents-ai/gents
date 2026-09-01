@@ -3289,9 +3289,14 @@ pub(crate) struct SessionForkArgs {
     #[arg(
         long,
         value_name = "N",
-        help = "0-based user-turn index; fork cuts before this user message"
+        help = "0-based user-turn index among all role=user rows (including tool-result-only); fork cuts before this user message. Mutex with --at-last-human-user-turn."
     )]
-    pub(crate) at_user_turn: u32,
+    pub(crate) at_user_turn: Option<u32>,
+    #[arg(
+        long,
+        help = "Cut before the last human user prompt (skips trailing tool-result-only user rows). Retries that user prompt; does not resume the tool loop. Mutex with --at-user-turn."
+    )]
+    pub(crate) at_last_human_user_turn: bool,
     #[arg(
         long,
         help = "Target behavior_id for the child; omit to inherit the parent's behavior"

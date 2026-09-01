@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
-use gents::session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
+use gents::session::{
+    fork, fork_via_http, resolve_fork_at_last_human_user_turn, ForkError, ForkOutcome, ForkParams,
+    HttpGraphqlExecutor,
+};
 use serde_json::{json, Value};
 
 use crate::cli::args::{ConfigListArgs, ConfigShowArgs, SessionCommand, SessionForkArgs};
@@ -77,13 +80,18 @@ async fn session_show(args: ConfigShowArgs) -> Result<()> {
 async fn session_fork(args: SessionForkArgs) -> Result<()> {
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
         .context("resolving caller agent_did")?;
+    let cut = resolve_session_fork_cut(&args)?;
 
     if let Some(graphql) = args.graphql.as_deref() {
+        let fork_at_user_turn =
+            resolve_fork_at_user_turn_via_executor(&HttpGraphqlExecutor::new(graphql), &args, cut)
+                .await
+                .map_err(|error| map_graphql_fork_error(error, graphql))?;
         let outcome = fork_via_http(
             graphql,
             ForkParams {
                 source_session_id: &args.from,
-                fork_at_user_turn: args.at_user_turn,
+                fork_at_user_turn,
                 caller_agent_did: &agent_did,
                 target_behavior_id: args.behavior.as_deref(),
             },
@@ -91,7 +99,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
         .await
         .map_err(|error| map_graphql_fork_error(error, graphql))?;
 
-        print_fork_outcome(&args, outcome)?;
+        print_fork_outcome(&args, fork_at_user_turn, outcome)?;
         return Ok(());
     }
 
@@ -116,11 +124,14 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
         .await
         .context("ensuring runtime schemas")?;
 
+    let fork_at_user_turn = resolve_fork_at_user_turn_via_executor(&node, &args, cut)
+        .await
+        .map_err(map_fork_error)?;
     let outcome = fork(
         &node,
         ForkParams {
             source_session_id: &args.from,
-            fork_at_user_turn: args.at_user_turn,
+            fork_at_user_turn,
             caller_agent_did: &agent_did,
             target_behavior_id: args.behavior.as_deref(),
         },
@@ -128,8 +139,42 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     .await
     .map_err(map_fork_error)?;
 
-    print_fork_outcome(&args, outcome)?;
+    print_fork_outcome(&args, fork_at_user_turn, outcome)?;
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum SessionForkCut {
+    AtUserTurn(u32),
+    AtLastHumanUserTurn,
+}
+
+fn resolve_session_fork_cut(args: &SessionForkArgs) -> Result<SessionForkCut> {
+    match (args.at_user_turn, args.at_last_human_user_turn) {
+        (Some(_), true) => anyhow::bail!(
+            "--at-user-turn and --at-last-human-user-turn are mutually exclusive; \
+             pick one cut. --at-last-human-user-turn retries the last human prompt \
+             and does not resume the tool loop."
+        ),
+        (None, false) => anyhow::bail!(
+            "session fork requires --at-user-turn N or --at-last-human-user-turn"
+        ),
+        (Some(at_user_turn), false) => Ok(SessionForkCut::AtUserTurn(at_user_turn)),
+        (None, true) => Ok(SessionForkCut::AtLastHumanUserTurn),
+    }
+}
+
+async fn resolve_fork_at_user_turn_via_executor(
+    executor: &(impl gents::session::GraphqlExecutor + ?Sized),
+    args: &SessionForkArgs,
+    cut: SessionForkCut,
+) -> Result<u32, ForkError> {
+    match cut {
+        SessionForkCut::AtUserTurn(at_user_turn) => Ok(at_user_turn),
+        SessionForkCut::AtLastHumanUserTurn => {
+            resolve_fork_at_last_human_user_turn(executor, &args.from).await
+        }
+    }
 }
 
 async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Result<Vec<Value>> {
@@ -290,11 +335,16 @@ fn print_table_row<const N: usize>(cells: &[&str; N], widths: &[usize; N]) {
     println!();
 }
 
-fn print_fork_outcome(args: &SessionForkArgs, outcome: ForkOutcome) -> Result<()> {
+fn print_fork_outcome(
+    args: &SessionForkArgs,
+    fork_at_user_turn: u32,
+    outcome: ForkOutcome,
+) -> Result<()> {
     print_json(&json!({
         "session_id": outcome.session_id,
         "source_session_id": args.from,
-        "fork_at_user_turn": args.at_user_turn,
+        "fork_at_user_turn": fork_at_user_turn,
+        "at_last_human_user_turn": args.at_last_human_user_turn,
         "copied_messages": outcome.copied_messages,
         "copied_tool_calls": outcome.copied_tool_calls,
         "copied_tool_results": outcome.copied_tool_results,
@@ -307,6 +357,7 @@ fn map_fork_error(error: ForkError) -> anyhow::Error {
     match error {
         ForkError::ForkSourceNotFound(_)
         | ForkError::ForkAtUserTurnOutOfRange(_, _)
+        | ForkError::ForkNoHumanUserTurn
         | ForkError::ForkBehaviorNotFound(_)
         | ForkError::ForkBehaviorNotOwnedByPrincipal(_, _)
         | ForkError::ForkNotSameAgent

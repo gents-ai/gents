@@ -29,8 +29,9 @@ pub(crate) use conversation::{
     CONVERSATION_TITLE_SOURCE_TASK,
 };
 pub use fork::{
-    fork, fork_via_http, ForkError, ForkOutcome, ForkParams, GraphqlExecuteResponse,
-    GraphqlExecutor, HttpGraphqlExecutor,
+    fork, fork_via_http, is_human_user_message, last_human_user_turn_index,
+    resolve_fork_at_last_human_user_turn, ForkError, ForkOutcome, ForkParams,
+    GraphqlExecuteResponse, GraphqlExecutor, HttpGraphqlExecutor,
 };
 pub use history::load_history;
 #[cfg(test)]
