@@ -4772,10 +4772,7 @@ mod tests {
                     integrate_record_trigger["filter"],
                     "{ kind: { _eq: \"integrator\" } }"
                 );
-                assert_eq!(
-                    integrate_record_trigger["workspace_authority"],
-                    "readOnly"
-                );
+                assert_eq!(integrate_record_trigger["workspace_authority"], "readOnly");
                 let route_review =
                     std::fs::read_to_string(pack.join("tasks/port-review-task/prompt.md"))
                         .expect("route review prompt should load");
@@ -4888,7 +4885,8 @@ mod tests {
                 assert!(implement_prompt.contains("request_helpers.rs:32-45,295-424"));
                 assert!(implement_prompt.contains("focused check that is meaningful"));
                 assert!(implement_prompt.contains("Do not repeatedly\nrerun Cargo"));
-                assert!(implement_prompt.contains("full combined compilation as deliberately\ndeferred"));
+                assert!(implement_prompt
+                    .contains("full combined compilation as deliberately\ndeferred"));
                 assert!(implement_prompt.contains("post-integration convergence agent"));
                 assert!(implement_prompt.contains("with_extension(\"lock\")"));
                 assert!(implement_prompt.contains("disconnect-before-id"));
