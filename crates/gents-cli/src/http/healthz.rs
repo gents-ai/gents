@@ -12,6 +12,15 @@ pub(crate) fn render_healthz_payload(
     data: Option<&MetricsQueryData>,
     error: Option<String>,
 ) -> Value {
+    render_healthz_payload_at(state, data, error, chrono::Utc::now())
+}
+
+fn render_healthz_payload_at(
+    state: &RuntimeHttpState,
+    data: Option<&MetricsQueryData>,
+    error: Option<String>,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> Value {
     let version = version_response();
     let uptime_seconds = state.started_instant.elapsed().as_secs();
 
@@ -28,7 +37,7 @@ pub(crate) fn render_healthz_payload(
             let readiness = project_behavior_readiness_summary(
                 local_readiness_row,
                 &state.agent_did,
-                chrono::Utc::now(),
+                observed_at,
             );
             let runtime_ready =
                 matches!(&readiness, ProjectedBehaviorReadinessSummary::Observed(_));
@@ -207,8 +216,14 @@ mod tests {
                 }],
             })
             .unwrap(),
-            updated_at: "2026-05-13T11:59:00Z".to_string(),
+            updated_at: "2026-05-13T11:59:30Z".to_string(),
         }
+    }
+
+    fn observed_at() -> chrono::DateTime<chrono::Utc> {
+        "2026-05-13T12:00:00Z"
+            .parse()
+            .expect("fixed health observation timestamp must parse")
     }
 
     fn healthy_backend() -> MetricsBackendRow {
@@ -259,7 +274,7 @@ mod tests {
             },
         };
 
-        let payload = render_healthz_payload(&state(), Some(&data), None);
+        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
 
         assert_eq!(
             payload.get("status").and_then(|v| v.as_str()),
@@ -295,7 +310,7 @@ mod tests {
             liveness: RuntimeLivenessSnapshot::default(),
         };
 
-        let payload = render_healthz_payload(&state(), Some(&data), None);
+        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
 
         assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
     }
@@ -304,7 +319,7 @@ mod tests {
     fn healthz_fails_closed_when_readiness_is_missing_or_malformed() {
         let mut missing = healthy_data();
         missing.behavior_readiness.clear();
-        let payload = render_healthz_payload(&state(), Some(&missing), None);
+        let payload = render_healthz_payload_at(&state(), Some(&missing), None, observed_at());
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
             Some("unhealthy")
@@ -320,7 +335,21 @@ mod tests {
 
         let mut malformed = healthy_data();
         malformed.behavior_readiness[0].snapshot_json = "{}".to_string();
-        let payload = render_healthz_payload(&state(), Some(&malformed), None);
+        let payload = render_healthz_payload_at(&state(), Some(&malformed), None, observed_at());
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("unhealthy")
+        );
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn healthz_fails_closed_when_readiness_is_stale() {
+        let mut data = healthy_data();
+        data.behavior_readiness[0].updated_at = "2026-05-13T11:59:00Z".to_string();
+
+        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
+
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
             Some("unhealthy")
@@ -333,7 +362,7 @@ mod tests {
         let mut data = healthy_data();
         data.agent_runtimes.clear();
 
-        let payload = render_healthz_payload(&state(), Some(&data), None);
+        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
 
         assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
         assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
@@ -359,7 +388,7 @@ mod tests {
         data.agent_runtimes[0].agent_did = "did:test:foreign".to_string();
         data.behavior_readiness[0].agent_did = "did:test:foreign".to_string();
 
-        let payload = render_healthz_payload(&state(), Some(&data), None);
+        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
 
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
@@ -409,7 +438,7 @@ mod tests {
             bound_behavior_id: "default".to_string(),
             reason: "no AgentBehavior document with that behavior_id exists".to_string(),
         });
-        let payload = render_healthz_payload(&state, Some(&healthy_data()), None);
+        let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
 
         assert_eq!(
             payload
@@ -438,7 +467,7 @@ mod tests {
             bound_agent_did: "did:key:agent".to_string(),
             bound_behavior_id: "did:key:agent:default".to_string(),
         });
-        let payload = render_healthz_payload(&state, Some(&healthy_data()), None);
+        let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
 
         assert_eq!(
             payload
@@ -464,7 +493,7 @@ mod tests {
     #[test]
     fn healthz_does_not_degrade_when_the_shim_is_switched_off() {
         let state = state_with_shim(crate::shared::CodexShimHealth::Off);
-        let payload = render_healthz_payload(&state, Some(&healthy_data()), None);
+        let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
 
         assert_eq!(
             payload
