@@ -75,7 +75,7 @@ mod tests {
         let data_dir = tempdir.path().join("data");
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::Lark)
+            .with_storage_backend(StorageBackend::Regolith)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
@@ -163,7 +163,7 @@ mod tests {
         let data_dir = tempdir.path().join("data");
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::Lark)
+            .with_storage_backend(StorageBackend::Regolith)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;
@@ -261,7 +261,7 @@ mod tests {
         let data_dir = tempdir.path().join("data");
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::Lark)
+            .with_storage_backend(StorageBackend::Regolith)
             .build()
             .await?;
         ensure_runtime_schemas(&node).await?;

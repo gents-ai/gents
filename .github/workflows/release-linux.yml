@@ -10,7 +10,7 @@ on:
         description: Release version without the v prefix; must match workspace.package.version.
         required: true
         type: string
-        default: "0.14.0"
+        default: "0.15.0"
 
 concurrency:
   group: release-linux-${{ github.ref }}

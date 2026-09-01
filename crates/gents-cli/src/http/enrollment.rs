@@ -477,7 +477,7 @@ mod tests {
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(path)
-                .with_storage_backend(StorageBackend::Lark)
+                .with_storage_backend(StorageBackend::Regolith)
                 .build()
                 .await
                 .expect("nonce test node"),

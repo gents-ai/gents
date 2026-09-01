@@ -1,7 +1,7 @@
 {
   "name": "@source-inc/review-demo-ui",
   "private": true,
-  "version": "0.14.0",
+  "version": "0.15.0",
   "type": "module",
   "scripts": {
     "dev": "vite --strictPort --host 127.0.0.1",
@@ -10,8 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@source-inc/gents-desktop-tokens": "0.14.0",
-    "@source-inc/gents-desktop-ui": "0.14.0",
+    "@source-inc/gents-desktop-tokens": "0.15.0",
+    "@source-inc/gents-desktop-ui": "0.15.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

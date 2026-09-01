@@ -36,7 +36,7 @@
 //!
 //! ```bash
 //! GENTS_D4F_LIVE=1 cargo test --test e2e_live \
-//!   --features defra-node/http,defra-node/p2p,lark \
+//!   --features defra-node/http,defra-node/p2p \
 //!   d4f_backend_probes_healthy_and_completes \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```

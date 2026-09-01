@@ -42,13 +42,13 @@ impl ClientCore {
         options: ClientCoreOptions,
     ) -> Result<Self> {
         paths.ensure_root_dirs().await?;
-        gents::storage_backend::reject_legacy_rocksdb_store(paths.node_data_dir())?;
+        gents::storage_backend::reject_legacy_store(paths.node_data_dir())?;
 
         let principal = PrincipalIdentity::load_or_create(&paths).await?;
         let node = Arc::new(
             NodeBuilder::default()
                 .data_path(paths.node_data_dir())
-                .with_storage_backend(StorageBackend::Lark)
+                .with_storage_backend(StorageBackend::Regolith)
                 .with_p2p(desktop_p2p_config(&paths, &options))
                 .with_node_identity_did(principal.did())
                 .build()
@@ -163,6 +163,10 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
         rate_limit_rate: options.rate_limit_rate,
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
         max_pending_dags: options.max_pending_dags,
+        // Desktop peers commonly sit behind a runtime relay. Re-announce only
+        // after DefraDB has verified and merged the block so downstream peers
+        // can fetch it from a transport-routable origin.
+        rebroadcast_on_merge: true,
     }
 }
 

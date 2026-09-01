@@ -182,7 +182,7 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
     // the P2P pending-DAG sweep loops (`run_pending_dag_resync`, 60s cadence,
     // spawned untracked in defra-node's `setup_p2p`), so the coordinator —
     // and through it the store — stays alive until the loop's next wake, and
-    // the in-process redb lock can lag shutdown by up to one sweep interval.
+    // the in-process storage lock can lag shutdown by up to one sweep interval.
     // A real process restart has no such lag (the OS drops the lock), so the
     // retry models process exit, not a race in the code under test.
     let reopen_deadline = Instant::now() + Duration::from_secs(90);

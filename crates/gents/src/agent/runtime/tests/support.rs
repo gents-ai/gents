@@ -569,7 +569,7 @@ pub(super) async fn wait_for_inference_call_state(
     loop {
         let query = format!(
             r#"{{
-                InferenceCall(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                InferenceCall(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{
                     call_state
                     failure_reason
                 }}
@@ -581,27 +581,30 @@ pub(super) async fn wait_for_inference_call_state(
             "InferenceCall query failed: {:?}",
             response.errors
         );
-        let row = response
+        let rows = response
             .data
             .as_ref()
             .and_then(|data| data.get("InferenceCall"))
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned();
-        let state = row
-            .as_ref()
-            .and_then(|row| row.get("call_state"))
-            .and_then(Value::as_str)
+            .cloned()
             .unwrap_or_default();
-        if state == expected_state {
+        // A request can own both its main inference and optional title call.
+        // Neither DefraDB nor this assertion promises an implicit row order,
+        // so observe the complete request-owned set instead of whichever row
+        // an unordered `limit: 1` happens to return.
+        if rows.iter().any(|row| {
+            row.get("call_state")
+                .and_then(Value::as_str)
+                .is_some_and(|state| state == expected_state)
+        }) {
             return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for InferenceCall request_id={} to reach call_state={}, last row={:?}",
+            "timed out waiting for InferenceCall request_id={} to reach call_state={}, last rows={:?}",
             request_id,
             expected_state,
-            row
+            rows
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

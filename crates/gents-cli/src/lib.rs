@@ -599,10 +599,10 @@ pub(crate) async fn resolve_config_access(
 }
 
 pub(crate) fn persistent_node_builder(data_dir: &Path) -> Result<NodeBuilder> {
-    gents::storage_backend::reject_legacy_rocksdb_store(data_dir)?;
+    gents::storage_backend::reject_legacy_store(data_dir)?;
     Ok(EmbeddedNode::builder()
         .data_path(data_dir)
-        .with_storage_backend(StorageBackend::Lark))
+        .with_storage_backend(StorageBackend::Regolith))
 }
 
 pub(crate) fn persistent_node_builder_with_stored_identity(

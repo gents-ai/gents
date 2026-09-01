@@ -370,7 +370,7 @@ mod tests {
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
                 .await
                 .expect("embedded node"),
@@ -436,11 +436,9 @@ mod tests {
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
-                // Explicit backend, matching this crate's convention
-                // (`persistent_node_builder`): the builder's default is Redb,
-                // whose defra-node feature is only transitively enabled — the
-                // CI cli shard builds without it.
-                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
+                // Pin the sole durable backend explicitly so this test cannot
+                // silently drift if another backend is introduced later.
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
                 .await
                 .expect("embedded node"),

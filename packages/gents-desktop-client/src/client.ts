@@ -12,7 +12,7 @@ import type {
 
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
-export const PACKAGE_VERSION = "0.14.0";
+export const PACKAGE_VERSION = "0.15.0";
 // Runtime-authored behavior readiness is required and the duplicate runtime
 // counters are gone and status pairing is authenticated enrollment, so this
 // client requires the breaking 4.0 bridge.

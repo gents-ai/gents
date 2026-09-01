@@ -868,7 +868,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let node = EmbeddedNode::builder()
             .data_path(temp.path().join("data"))
-            .with_storage_backend(defra_node::StorageBackend::Lark)
+            .with_storage_backend(defra_node::StorageBackend::Regolith)
             .build()
             .await
             .expect("node");
