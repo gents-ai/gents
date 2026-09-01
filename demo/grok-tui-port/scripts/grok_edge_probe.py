@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-DEFAULT_MODEL = "GLM-5.3-Flash-NVFP4"
+DEFAULT_MODEL = "GLM-5.3-NVFP4"
 DEFAULT_CONTEXT_WINDOW = 524_288
 MAX_FRAME = 64 * 1024 * 1024
 

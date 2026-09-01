@@ -18,7 +18,7 @@ Build the integrated CLI, initialize the run-owned live home against the
 declared model endpoint, and launch the integrated Grok leader/shim on the
 run-owned GraphQL port and socket, explicitly binding Grok turns to the
 `port-live` behavior. Verify that this bound behavior's effective model and
-context window are `live_model` and 524288 before accepting the catalog
+context window are `live_model` and 262144 before accepting the catalog
 advertisement. Discover the exact launch flags from the integrated `--help`
 and implementation; do not invent a protocol substitute.
 Wait for both HTTP readiness and socket readiness, track the exact child PID,

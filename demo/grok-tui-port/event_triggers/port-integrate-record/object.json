@@ -10,6 +10,7 @@
   "expected_count_field": null,
   "group_timeout_secs": null,
   "group_min_count": null,
+  "workspace_authority": "readOnly",
   "enabled": true,
   "concurrency": "parallel"
 }

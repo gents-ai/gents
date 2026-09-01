@@ -70,15 +70,15 @@ make grok-port
 Expects grok-build at `/Users/johnzampolin/go/src/github.com/xai-org/grok-build`.
 Override with `GROK_PORT_GROK_ROOT` / `GROK_PORT_CEILING`. Pin the workspace
 base with `GROK_PORT_BASE_SHA`. The PR head is `GROK_PORT_BRANCH`
-(default `agent/grok-tui-port`).
+(default `agent/grok-tui-port-pack8`).
 
 The default inference pool is workstation-1 at
-`http://100.73.235.38:8001/v1`, with one shared 32-request concurrency cap
+`http://100.73.235.38:8000/v1`, with one shared 16-request concurrency cap
 across coordinators, the eight concurrent implementers, the eight concurrent
 sealed reviewers, convergence, and the final review graph.
 
 `make grok-port` verifies its `/models` endpoint advertises
-`GLM-5.3-Flash-NVFP4` at context length 524288 before it seeds any documents.
+`GLM-5.3-NVFP4` at context length 262144 before it seeds any documents.
 
 Useful controls:
 
@@ -87,7 +87,7 @@ export GENTS_GROK_PORT_MIN_SURFACES=13
 export GENTS_GROK_PORT_MAX_SURFACES=13
 export GENTS_GROK_PORT_BASE_SHA=$(git rev-parse HEAD)
 export GENTS_GROK_PORT_PR_BASE=main
-export GENTS_GROK_PORT_BRANCH=agent/grok-tui-port
+export GENTS_GROK_PORT_BRANCH=agent/grok-tui-port-pack8
 export GENTS_GROK_PORT_PROMPT='Prioritize subagents, interrupts, and model name.'
 ```
 

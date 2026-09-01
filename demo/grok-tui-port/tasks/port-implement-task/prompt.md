@@ -16,10 +16,26 @@ the prior sealed workspace.
 
 This is one of eight simultaneous slices. Touch only the paths listed in the
 unit instructions. A change outside that list is a blocker. New sibling files
-will not exist in this isolated base, so do not run Cargo and do not treat
-cross-slice unresolved imports as a failure. Write focused unit tests in the
-owned file(s), use native file/LSP tools where helpful, and record compilation
-as deliberately deferred to the post-integration convergence agent.
+will not exist in this isolated base, so do not treat cross-slice unresolved
+imports as a failure. Shell and compiler tools are available inside this bound
+workspace: use them for purposeful inspection, formatting, parsing, and any
+focused check that is meaningful before sibling integration. Do not repeatedly
+rerun Cargo once a failure is established to come only from absent sibling
+modules. Write focused unit tests in the owned file(s), use native file/LSP
+tools where helpful, and record full combined compilation as deliberately
+deferred to the post-integration convergence agent.
+
+Tool progress discipline
+------------------------
+
+Use native `grep`, `read_file`, `glob`, and `list_files` for ordinary source
+inspection; shell access is for commands that materially help implementation.
+A no-match search is a completed observation, not a reason to issue the same
+search again. After any completed or denied tool result, do not repeat the same
+tool with identical arguments unless the underlying file changed. On policy
+denial, choose an advertised native tool or an allowed command instead of
+retrying the denied invocation. Once the fixed anchors and owned contract are
+understood, write the owned code and tests rather than continuing reconnaissance.
 
 Shared contract
 ---------------
@@ -124,5 +140,5 @@ owned slice.
 Finish with exactly one `write_port_implementation`, copying the work-unit id,
 logical-unit id, surface ids, attempt, and expected_total. `changed_paths` must equal the owned
 paths actually changed. In `tests_run`, list static/unit tests written and say
-`Cargo deferred by parallel-slice contract; combined convergence gate after
-integration`. Do not supply run_id or workspace_id.
+whether focused compiler checks ran; always note that the combined convergence
+gate follows integration. Do not supply run_id or workspace_id.

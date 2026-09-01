@@ -3,11 +3,11 @@
   "name": "Grok TUI port backend (workstation-1)",
   "provider_kind": "OpenAiCompatible",
   "openai_wire_api": "chat_completions",
-  "endpoint": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8001/v1}",
+  "endpoint": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8000/v1}",
   "api_key": null,
   "api_key_env_var": null,
-  "max_concurrent": ${GENTS_GROK_PORT_MAX_CONCURRENT_1:-32},
+  "max_concurrent": ${GENTS_GROK_PORT_MAX_CONCURRENT_1:-16},
   "max_queue_depth": 100,
-  "models": ["${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}"],
+  "models": ["${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}"],
   "enabled": true
 }

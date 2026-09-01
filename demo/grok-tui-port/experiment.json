@@ -2,15 +2,15 @@
   "name": "grok-tui-port",
   "description": "Map the Grok TUI wire, fan out eight path-disjoint GLM writers, retry rejected seals in fresh workspaces, record host-confirmed serial integration, semantically converge, full-review, live-prove, then open a PR",
   "init": {
-    "inference_url": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8001/v1}",
-    "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
+    "inference_url": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8000/v1}",
+    "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}",
     "tool_package": "write",
     "tool_root": "${GENTS_GROK_PORT_CEILING:-/Users/johnzampolin/go/src/github.com}",
     "tool_root_env_var": "GENTS_GROK_PORT_CEILING",
     "tool_root_markers": ["source-inc/gents/Cargo.toml", "xai-org/grok-build/Cargo.toml"],
     "backend_preset": "vllm",
     "openai_wire_api": "chat-completions",
-    "max_concurrent": ${GENTS_GROK_PORT_MAX_CONCURRENT_1:-32}
+    "max_concurrent": ${GENTS_GROK_PORT_MAX_CONCURRENT_1:-16}
   },
   "seed": {
     "collection": "GrokPortJob",
@@ -22,8 +22,8 @@
       "ceiling": "${GENTS_GROK_PORT_CEILING:-/Users/johnzampolin/go/src/github.com}",
       "surface_min": "${GENTS_GROK_PORT_MIN_SURFACES:-13}",
       "surface_max": "${GENTS_GROK_PORT_MAX_SURFACES:-13}",
-      "live_model": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
-      "live_endpoint": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8001/v1}",
+      "live_model": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}",
+      "live_endpoint": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8000/v1}",
       "orchestrator_home": "${GENTS_GROK_PORT_ORCHESTRATOR_HOME:-.gents/grok-port-home}",
       "orchestrator_graphql": "${GENTS_GROK_PORT_ORCHESTRATOR_GRAPHQL:-http://127.0.0.1:19195/api/v0/graphql}",
       "live_home": "${GENTS_GROK_PORT_LIVE_HOME:-.gents/grok-port-live-home}",
@@ -32,7 +32,7 @@
       "repository_id": "gents-checkout",
       "base_sha": "${GENTS_GROK_PORT_BASE_SHA:-HEAD}",
       "pr_base": "${GENTS_GROK_PORT_PR_BASE:-main}",
-      "branch": "${GENTS_GROK_PORT_BRANCH:-agent/grok-tui-port}"
+      "branch": "${GENTS_GROK_PORT_BRANCH:-agent/grok-tui-port-pack8}"
     }
   },
   "default_prompt": "${GENTS_GROK_PORT_PROMPT:-Map the Grok TUI wire from grok-build and implement a Gents-only thin client. Do not add DefraDB access control or Grok permission UI. Prove model name, context window, tool-call semantics, subprocesses, subagents, and interrupts with live GLM turns.}",
@@ -243,12 +243,12 @@
     "code-review": {
       "backend_id": "grok-port-backend-ws1",
       "profile_id": "grok-port-code-review-profile",
-      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
+      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}",
       "role_overrides": {
         "reviewer": {
           "backend_id": "grok-port-backend-ws1",
           "profile_id": "grok-port-code-review-scan-profile",
-          "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}"
+          "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}"
         }
       }
     }

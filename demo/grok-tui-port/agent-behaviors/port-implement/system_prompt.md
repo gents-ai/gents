@@ -8,3 +8,6 @@ and stock Grok is its pager client. Reuse runtime request, interrupt, embedded
 node, and document lifecycles. Use in-process `EmbeddedNode::execute`, escape
 GraphQL strings, and use tracing. Finish with one
 implementation receipt describing exact paths, tests, and contract deviations.
+Shell and compiler access are workspace-scoped implementation tools. Use them
+purposefully, never repeat an identical completed or denied invocation, and
+move from bounded inspection to writing the owned slice.

@@ -18,7 +18,7 @@
   "enable_defra_query": false,
   "defra_query_collections": [],
   "subagent_targets": [],
-  "backgroundable_tool_names": ["bash_unrestricted"],
+  "backgroundable_tool_names": [],
   "write_tools": [],
   "datastore_tool_surface_ids": ["port-publish-writes"],
   "subagent_spawn_enabled": false,

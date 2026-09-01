@@ -1,9 +1,9 @@
 {
   "selection_id": "port-integrate-tools",
   "agent_did": "did:key:zGrokTuiPortAgentPlaceholder00000000000000000000000",
-  "display_name": "Integrate: inspect sealed tree; host applies the diff",
-  "enable_file_tools": true,
-  "file_tools_mode": "ReadOnly",
+  "display_name": "Integrate: acknowledge sealed tree; host applies the diff",
+  "enable_file_tools": false,
+  "file_tools_mode": "Off",
   "file_tool_root": "${GENTS_GROK_PORT_GENTS_ROOT:-.}",
   "enable_bash": false,
   "bash_mode": "Off",

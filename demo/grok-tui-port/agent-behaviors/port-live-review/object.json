@@ -7,7 +7,7 @@
   "system_prompt": "./system_prompt.md",
   "request_context_template": null,
   "backend_id": "grok-port-backend-ws1",
-  "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
+  "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}",
   "tool_selection_id": "port-live-review-tools",
   "inference_profile_id": "grok-port-profile",
   "compaction_strategy": "StripThenSummarize",

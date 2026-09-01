@@ -4724,7 +4724,7 @@ mod tests {
                 assert!(!pack.join("event_triggers/port-revise").exists());
                 assert!(!pack.join("tasks/port-revise-task").exists());
                 assert_eq!(experiment["bundled_graph_packages"], json!(["code-review"]));
-                assert_eq!(experiment["init"]["max_concurrent"], 32);
+                assert_eq!(experiment["init"]["max_concurrent"], 16);
                 assert_eq!(
                     experiment["bundled_graph_bindings"]["code-review"]["backend_id"],
                     "grok-port-backend-ws1"
@@ -4806,6 +4806,10 @@ mod tests {
                 assert_eq!(
                     integrate_record_trigger["filter"],
                     "{ kind: { _eq: \"integrator\" } }"
+                );
+                assert_eq!(
+                    integrate_record_trigger["workspace_authority"],
+                    "readOnly"
                 );
                 let route_review =
                     std::fs::read_to_string(pack.join("tasks/port-review-task/prompt.md"))
@@ -4917,8 +4921,10 @@ mod tests {
                 assert!(implement_prompt.contains("`turn.rs` owns"));
                 assert!(implement_prompt.contains("`assembly_cli`"));
                 assert!(implement_prompt.contains("request_helpers.rs:32-45,295-424"));
-                assert!(implement_prompt.contains("do not run Cargo"));
-                assert!(implement_prompt.contains("combined convergence gate after\nintegration"));
+                assert!(implement_prompt.contains("focused check that is meaningful"));
+                assert!(implement_prompt.contains("Do not repeatedly\nrerun Cargo"));
+                assert!(implement_prompt.contains("full combined compilation as deliberately\ndeferred"));
+                assert!(implement_prompt.contains("post-integration convergence agent"));
                 assert!(implement_prompt.contains("with_extension(\"lock\")"));
                 assert!(implement_prompt.contains("disconnect-before-id"));
                 assert!(implement_prompt.contains("O_NOFOLLOW"));
