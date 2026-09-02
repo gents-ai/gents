@@ -736,6 +736,8 @@ pub(crate) fn tool_selection_for_package(
         command_network_mode: None,
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(profile.enable_meta_tools),
+        enable_goal_tools: None,
+        enable_goal_creation: None,
         allowed_mcp_service_ids: Some(Vec::new()),
         required_mcp_service_ids: Some(Vec::new()),
         backgroundable_tool_names: Some(default_backgroundable_tool_names(tool_package)),

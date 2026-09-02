@@ -410,6 +410,8 @@ pub struct GoalRow {
     pub session_id: String,
     pub agent_did: String,
     #[serde(default)]
+    pub creation_key: Option<String>,
+    #[serde(default)]
     pub objective: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
@@ -445,6 +447,19 @@ pub struct GoalRow {
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GoalCreationClaimRow {
+    pub creation_key: String,
+    pub goal_id: String,
+    pub session_id: String,
+    pub agent_did: String,
+    pub objective: String,
+    #[serde(default)]
+    pub token_budget: Option<i64>,
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -814,6 +829,10 @@ pub struct ToolSelectionRow {
     pub cli_tool_names: Vec<String>,
     #[serde(default)]
     pub enable_meta_tools: Option<bool>,
+    #[serde(default)]
+    pub enable_goal_tools: Option<bool>,
+    #[serde(default)]
+    pub enable_goal_creation: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub allowed_mcp_service_ids: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
@@ -1167,6 +1186,8 @@ mod tests {
             "enable_meta_tools": true
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
+        assert_eq!(row.enable_goal_tools, None);
+        assert_eq!(row.enable_goal_creation, None);
         assert!(row.cli_tool_names.is_empty());
         assert!(row.allowed_mcp_service_ids.is_empty());
         assert!(row.delegate_to.is_empty());
@@ -1174,6 +1195,22 @@ mod tests {
         assert!(row.subagent_targets.is_empty());
         assert!(row.write_tools.is_empty());
         assert_eq!(row.subagent_default_await_mode, None);
+    }
+
+    #[test]
+    fn tool_selection_row_round_trips_nullable_goal_capabilities() {
+        let json = r#"{
+            "selection_id": "sel-goals",
+            "enable_meta_tools": false,
+            "enable_goal_tools": true,
+            "enable_goal_creation": false
+        }"#;
+        let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
+        assert_eq!(row.enable_goal_tools, Some(true));
+        assert_eq!(row.enable_goal_creation, Some(false));
+        let encoded = serde_json::to_string(&row).expect("serialize");
+        let round: ToolSelectionRow = serde_json::from_str(&encoded).expect("reparse");
+        assert_eq!(round, row);
     }
 
     #[test]

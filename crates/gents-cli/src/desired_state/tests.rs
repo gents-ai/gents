@@ -368,6 +368,8 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         command_network_mode: None,
         cli_tool_names: Vec::new(),
         enable_meta_tools: true,
+        enable_goal_tools: None,
+        enable_goal_creation: None,
         allowed_mcp_service_ids: Vec::new(),
         required_mcp_service_ids: Vec::new(),
         delegate_to: Vec::new(),
@@ -673,6 +675,41 @@ fn tool_selection_round_trip_preserves_subagent_controls() {
         round_tripped_selection.cross_deployment_spawn_timeout_seconds,
         Some(90)
     );
+}
+
+#[test]
+fn tool_selection_round_trip_preserves_nullable_goal_capability_state() {
+    let mut manifest = empty_manifest("did:test:test");
+    let legacy = sample_tool_selection("legacy-tools");
+    manifest.tool_selections.push(legacy);
+    let mut explicit = sample_tool_selection("goal-tools");
+    explicit.enable_meta_tools = false;
+    explicit.enable_goal_tools = Some(true);
+    explicit.enable_goal_creation = Some(false);
+    manifest.tool_selections.push(explicit);
+
+    let bundle = export_bundle_from_manifest(&manifest, "local").expect("export bundle");
+    let rows = &bundle.as_bundle().tool_selections;
+    assert!(rows[0].get("enable_goal_tools").is_none());
+    assert!(rows[0].get("enable_goal_creation").is_none());
+    assert_eq!(rows[1]["enable_goal_tools"], json!(true));
+    assert_eq!(rows[1]["enable_goal_creation"], json!(false));
+
+    let round = manifest_from_export_bundle(bundle.as_bundle()).expect("import bundle");
+    let legacy = round
+        .tool_selections
+        .iter()
+        .find(|selection| selection.selection_id == "legacy-tools")
+        .expect("legacy selection");
+    assert_eq!(legacy.enable_goal_tools, None);
+    assert_eq!(legacy.enable_goal_creation, None);
+    let explicit = round
+        .tool_selections
+        .iter()
+        .find(|selection| selection.selection_id == "goal-tools")
+        .expect("explicit selection");
+    assert_eq!(explicit.enable_goal_tools, Some(true));
+    assert_eq!(explicit.enable_goal_creation, Some(false));
 }
 
 #[test]

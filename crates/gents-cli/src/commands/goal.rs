@@ -87,21 +87,44 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
         ConfigAccess::Graphql(_) => {
             let agent_did = escape_graphql_string(&agent_did);
             let session_id = escape_graphql_string(&args.scope.session);
-            let response = access
-                .execute(&format!(
-                    r#"mutation {{
+            let txn = access.begin_apply_txn().await?;
+            let result = async {
+                let response = txn
+                    .execute(&format!(
+                        r#"mutation {{
                         delete_Goal(filter: {{
+                            agent_did: {{ _eq: "{agent_did}" }},
+                            session_id: {{ _eq: "{session_id}" }}
+                        }}) {{ _docID }}
+                    }}"#
+                    ))
+                    .await?;
+                txn.execute(&format!(
+                    r#"mutation {{
+                        delete_GoalCreationClaim(filter: {{
                             agent_did: {{ _eq: "{agent_did}" }},
                             session_id: {{ _eq: "{session_id}" }}
                         }}) {{ _docID }}
                     }}"#
                 ))
                 .await?;
-            response.pointer("/data/delete_Goal").is_some_and(|value| {
-                value
-                    .as_array()
-                    .map_or_else(|| value.is_object(), |rows| !rows.is_empty())
-            })
+                Ok::<_, anyhow::Error>(response.pointer("/data/delete_Goal").is_some_and(|value| {
+                    value
+                        .as_array()
+                        .map_or_else(|| value.is_object(), |rows| !rows.is_empty())
+                }))
+            }
+            .await;
+            match result {
+                Ok(deleted) => {
+                    txn.commit().await?;
+                    deleted
+                }
+                Err(error) => {
+                    let _ = txn.discard().await;
+                    return Err(error);
+                }
+            }
         }
     };
     print_json(&serde_json::json!({

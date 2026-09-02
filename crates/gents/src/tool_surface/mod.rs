@@ -15,8 +15,8 @@ pub use policy::{
     TOOL_POLICY_V1,
 };
 pub use runtime_context::ToolRuntimeContext;
+pub use selection::{resolve_goal_capabilities, CustomToolFactory, ToolSelection};
 pub(crate) use selection::{BackgroundToolConfig, SubagentToolConfig};
-pub use selection::{CustomToolFactory, ToolSelection};
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -44,6 +44,8 @@ const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 pub struct ToolSurface {
     host_tools: ToolSet,
     include_meta_tools: bool,
+    include_goal_tools: bool,
+    include_goal_creation: bool,
     allowed_mcp_service_ids: Vec<String>,
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
@@ -124,6 +126,14 @@ impl ToolSurface {
         self.include_meta_tools
     }
 
+    pub fn includes_goal_tools(&self) -> bool {
+        self.include_goal_tools
+    }
+
+    pub fn includes_goal_creation(&self) -> bool {
+        self.include_goal_tools && self.include_goal_creation
+    }
+
     pub fn includes_skills(&self) -> bool {
         self.enable_skills
     }
@@ -191,9 +201,12 @@ impl ToolSurface {
         if self.lsp.is_some() {
             names.push(crate::toolset::lsp::LSP_TOOL_NAME.to_string());
         }
-        if self.include_meta_tools {
+        if self.include_goal_tools {
             names.push(crate::goal::GET_GOAL_TOOL_NAME.to_string());
             names.push(crate::goal::UPDATE_GOAL_TOOL_NAME.to_string());
+            if self.include_goal_creation {
+                names.push(crate::goal::CREATE_GOAL_TOOL_NAME.to_string());
+            }
         }
         names.extend(crate::self_config::self_config_tool_names(
             &self.self_config,
@@ -272,8 +285,8 @@ impl ToolSurface {
                 runtime.lsp_pool.clone(),
             )?));
         }
-        if self.include_meta_tools {
-            tools.extend(build_goal_tools());
+        if self.include_goal_tools {
+            tools.extend(build_goal_tools(self.include_goal_creation));
         }
         tools.extend(crate::self_config::build_self_config_tools(
             runtime.node.clone(),
@@ -351,6 +364,8 @@ impl std::fmt::Debug for ToolSurface {
         f.debug_struct("ToolSurface")
             .field("host_tools", &self.host_tools)
             .field("include_meta_tools", &self.include_meta_tools)
+            .field("include_goal_tools", &self.include_goal_tools)
+            .field("include_goal_creation", &self.include_goal_creation)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("subagent_tools", &self.subagent_tools)
             .field("background_tools", &self.background_tools)

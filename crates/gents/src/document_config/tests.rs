@@ -21,6 +21,8 @@ fn wide_open_preset_is_permissive_and_versioned() {
     // recomputes the same call). meta + DefraDB query on; everything privilege-bearing
     // backfills to secure (false).
     assert_eq!(preset.enable_meta_tools, Some(true));
+    assert_eq!(preset.enable_goal_tools, None);
+    assert_eq!(preset.enable_goal_creation, None);
     assert_eq!(preset.enable_defra_query, Some(true));
     // The third legacy default-true capability — must be backfilled too, else the
     // preset (and the secure-default-flip migration) silently drops it under V1.
@@ -54,6 +56,8 @@ fn tool_selection_document_accepts_empty_string_arrays() {
 
     assert_eq!(document.cli_tool_names, Some(Vec::new()));
     assert_eq!(document.allowed_mcp_service_ids, Some(Vec::new()));
+    assert_eq!(document.enable_goal_tools, None);
+    assert_eq!(document.enable_goal_creation, None);
 }
 
 #[test]
@@ -544,6 +548,16 @@ fn reserved_names_cover_native_and_meta_tools() {
         assert!(
             is_reserved_builtin_tool_name(meta),
             "meta tool {meta:?} must be reserved"
+        );
+    }
+    for goal in [
+        crate::goal::CREATE_GOAL_TOOL_NAME,
+        crate::goal::GET_GOAL_TOOL_NAME,
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+    ] {
+        assert!(
+            is_reserved_builtin_tool_name(goal),
+            "goal tool {goal:?} must be reserved"
         );
     }
 

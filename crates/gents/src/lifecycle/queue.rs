@@ -28,10 +28,12 @@ pub(crate) use atomic_inputs::enqueue_background_completion_with_message;
 #[cfg(test)]
 use atomic_inputs::transaction_created_doc_id;
 use atomic_inputs::{steering_transaction_attempt, steering_transaction_error_is_retryable};
+#[cfg(test)]
+use coalescing::lookup_request_doc_id_optional;
 pub use coalescing::reconcile_coalesced_pending_request;
 use coalescing::{
-    coalesce_key, lookup_request_doc_id, lookup_request_doc_id_optional, parent_behavior_id,
-    queue_row_to_enqueued_request, queue_source_and_key_match, PendingQueueRow,
+    coalesce_key, lookup_request_doc_id, parent_behavior_id, queue_row_to_enqueued_request,
+    queue_source_and_key_match, PendingQueueRow,
 };
 pub use draining::drain_automated_wakeups;
 pub(crate) use draining::drain_subagent_owned_queue;
@@ -44,6 +46,7 @@ pub(crate) use metadata::{
 };
 use mutation::session_request_create_mutation;
 
+#[derive(Debug)]
 pub(crate) struct EnqueuedBackgroundCompletionInput {
     pub(crate) request: EnqueuedAgentRequest,
     pub(crate) message_sequence: u32,

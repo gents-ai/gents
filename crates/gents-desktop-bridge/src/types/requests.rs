@@ -204,6 +204,10 @@ pub struct ToolSelectionSaveRequest {
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: Option<bool>,
     #[serde(default)]
+    pub enable_goal_tools: Option<bool>,
+    #[serde(default)]
+    pub enable_goal_creation: Option<bool>,
+    #[serde(default)]
     pub allowed_mcp_service_ids: Vec<String>,
     #[serde(default)]
     pub required_mcp_service_ids: Vec<String>,

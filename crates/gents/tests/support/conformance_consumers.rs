@@ -105,6 +105,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_transition_cases_fence_runtime_state_machine",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::goals::generated_goal_create_cases_fence_authority_and_idempotency",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/goals.rs",
+            module_path: "conformance::goals",
+            function: "generated_goal_create_cases_fence_authority_and_idempotency",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::goals::generated_goal_submission_cases_fence_atomic_visibility",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/goals.rs",
+            module_path: "conformance::goals",
+            function: "generated_goal_submission_cases_fence_atomic_visibility",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::goals::generated_goal_continuation_materialization_cases_fence_restart_idempotency",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/goals.rs",
+            module_path: "conformance::goals",
+            function: "generated_goal_continuation_materialization_cases_fence_restart_idempotency",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal_continuation_live::durable_goal_continues_with_real_inference_until_model_completes",
             package: "gents",
             source_path: "crates/gents/tests/e2e_live/goal_continuation_live.rs",
@@ -251,6 +272,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance.rs",
             module_path: "conformance",
             function: "generated_tool_policy_cases_match_lean_composition",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::generated_goal_capability_resolution_matches_rust_decoder",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_goal_capability_resolution_matches_rust_decoder",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::generated_lsp_action_cases_match_rust_authorization",

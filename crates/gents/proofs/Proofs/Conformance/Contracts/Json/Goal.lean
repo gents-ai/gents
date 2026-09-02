@@ -1,4 +1,5 @@
 import Proofs.Goals
+import Proofs.GoalAutomation
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
 
@@ -198,5 +199,161 @@ def goalTransitionCaseJson (w : GoalTransitionCase) : String :=
 
 def goalTransitionCasesJson : String :=
   jsonArray (goalTransitionCases.map goalTransitionCaseJson)
+
+structure GoalCreateCase where
+  name : String
+  request : GoalAutomation.CreateRequest
+  existing : Option GoalAutomation.Fingerprint
+
+def createRequest (owner session objective : String) (budget : Option Int := none)
+    (goalTools : Bool := true) (goalCreate : Bool := true) :
+    GoalAutomation.CreateRequest :=
+  { caller := owner, currentSession := session
+  , requestedOwner := owner, requestedSession := session
+  , objective := objective, objectiveNonempty := !objective.isEmpty
+  , tokenBudget := budget, goalTools := goalTools, goalCreate := goalCreate }
+
+def goalCreateCases : List GoalCreateCase :=
+  let base := createRequest "did:a" "session-a" "ship feature"
+  let mismatch : GoalAutomation.Fingerprint :=
+    { owner := "did:a", session := "session-a"
+    , objective := "different", tokenBudget := none }
+  let spaced := createRequest "did:a" "session-a" "  ship feature  "
+  let canonical : GoalAutomation.Fingerprint :=
+    { owner := "did:a", session := "session-a"
+    , objective := "ship feature", tokenBudget := none }
+  [ { name := "authorized_fresh", request := base, existing := none }
+  , { name := "authorized_duplicate_idempotent", request := base,
+      existing := some (GoalAutomation.createFingerprint base) }
+  , { name := "normalized_duplicate_idempotent", request := spaced,
+      existing := some canonical }
+  , { name := "duplicate_conflicting_objective", request := base,
+      existing := some mismatch }
+  , { name := "cross_did_denied",
+      request := { base with requestedOwner := "did:b" }, existing := none }
+  , { name := "cross_session_denied",
+      request := { base with requestedSession := "session-b" }, existing := none }
+  , { name := "goal_tools_denied",
+      request := { base with goalTools := false }, existing := none }
+  , { name := "goal_create_denied",
+      request := { base with goalCreate := false }, existing := none }
+  , { name := "blank_objective_invalid",
+      request := createRequest "did:a" "session-a" "", existing := none }
+  , { name := "whitespace_objective_invalid",
+      request := createRequest "did:a" "session-a" "   ", existing := none }
+  , { name := "zero_budget_invalid",
+      request := createRequest "did:a" "session-a" "ship" (some 0), existing := none }
+  , { name := "negative_budget_invalid",
+      request := createRequest "did:a" "session-a" "ship" (some (-1)), existing := none }
+  , { name := "maximum_budget_valid",
+      request := createRequest "did:a" "session-a" "ship"
+        (some GoalAutomation.maxTokenBudget), existing := none }
+  , { name := "overflow_budget_invalid",
+      request := createRequest "did:a" "session-a" "ship"
+        (some (GoalAutomation.maxTokenBudget + 1)), existing := none }
+  ]
+
+def createDispositionName : GoalAutomation.CreateDisposition → String
+  | .denied => "denied"
+  | .invalid => "invalid"
+  | .fresh => "fresh"
+  | .idempotent => "idempotent"
+  | .conflict => "conflict"
+
+def goalCreateCaseJson (w : GoalCreateCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"caller\":" ++ jsonString w.request.caller ++ ","
+    ++ "\"current_session\":" ++ jsonString w.request.currentSession ++ ","
+    ++ "\"requested_owner\":" ++ jsonString w.request.requestedOwner ++ ","
+    ++ "\"requested_session\":" ++ jsonString w.request.requestedSession ++ ","
+    ++ "\"objective\":" ++ jsonString w.request.objective ++ ","
+    ++ "\"objective_nonempty\":" ++ boolString w.request.objectiveNonempty ++ ","
+    ++ "\"token_budget\":" ++ (match w.request.tokenBudget with
+      | none => "null,"
+      | some value => toString value ++ ",")
+    ++ "\"goal_tools\":" ++ boolString w.request.goalTools ++ ","
+    ++ "\"goal_create\":" ++ boolString w.request.goalCreate ++ ","
+    ++ "\"existing\":" ++ boolString w.existing.isSome ++ ","
+    ++ "\"existing_matches\":" ++ boolString
+      (w.existing == some (GoalAutomation.createFingerprint w.request)) ++ ","
+    ++ "\"expected\":" ++ jsonString
+      (createDispositionName (GoalAutomation.decideCreate w.request w.existing))
+    ++ "}"
+
+def goalCreateCasesJson : String := jsonArray (goalCreateCases.map goalCreateCaseJson)
+
+structure GoalSubmissionCase where
+  name : String
+  state : GoalAutomation.SubmissionState
+  action : GoalAutomation.SubmissionAction
+
+def goalSubmissionCases : List GoalSubmissionCase :=
+  [ { name := "stage_goal_not_visible", state := ⟨false, false, false, false⟩,
+      action := .stageGoal }
+  , { name := "request_cannot_stage_without_goal", state := ⟨false, false, false, false⟩,
+      action := .stageRequest }
+  , { name := "commit_both_atomically", state := ⟨false, false, true, true⟩,
+      action := .commit }
+  , { name := "failure_between_writes_discards_staging", state := ⟨false, false, true, false⟩,
+      action := .crash }
+  , { name := "committed_retry_is_idempotent", state := ⟨true, true, false, false⟩,
+      action := .commit }
+  ]
+
+def submissionActionName : GoalAutomation.SubmissionAction → String
+  | .stageGoal => "stage_goal" | .stageRequest => "stage_request"
+  | .commit => "commit" | .abort => "abort" | .crash => "crash"
+
+def goalSubmissionCaseJson (w : GoalSubmissionCase) : String :=
+  let post := GoalAutomation.submissionStep w.state w.action
+  "{"
+    ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"durable_goal\":" ++ boolString w.state.durableGoal ++ ","
+    ++ "\"runnable_request\":" ++ boolString w.state.runnableRequest ++ ","
+    ++ "\"staged_goal\":" ++ boolString w.state.stagedGoal ++ ","
+    ++ "\"staged_request\":" ++ boolString w.state.stagedRequest ++ ","
+    ++ "\"action\":" ++ jsonString (submissionActionName w.action) ++ ","
+    ++ "\"expected_durable_goal\":" ++ boolString post.durableGoal ++ ","
+    ++ "\"expected_runnable_request\":" ++ boolString post.runnableRequest ++ ","
+    ++ "\"expected_staged_goal\":" ++ boolString post.stagedGoal ++ ","
+    ++ "\"expected_staged_request\":" ++ boolString post.stagedRequest
+    ++ "}"
+
+def goalSubmissionCasesJson : String :=
+  jsonArray (goalSubmissionCases.map goalSubmissionCaseJson)
+
+structure GoalContinuationMaterializationCase where
+  name : String
+  phase : GoalAutomation.ContinuationPhase
+  action : GoalAutomation.ContinuationAction
+
+def goalContinuationMaterializationCases : List GoalContinuationMaterializationCase :=
+  [ { name := "eligible_claim", phase := .unclaimed, action := .claim true }
+  , { name := "ineligible_claim_rejected", phase := .unclaimed, action := .claim false }
+  , { name := "crash_preserves_claim", phase := .claimed, action := .crash }
+  , { name := "restart_materializes_claimed_child", phase := .claimed, action := .reconcile }
+  , { name := "restart_does_not_duplicate_child", phase := .childPresent, action := .reconcile }
+  ]
+
+def continuationPhaseName : GoalAutomation.ContinuationPhase → String
+  | .unclaimed => "unclaimed" | .claimed => "claimed" | .childPresent => "child_present"
+
+def continuationActionName : GoalAutomation.ContinuationAction → String
+  | .claim true => "claim_eligible" | .claim false => "claim_ineligible"
+  | .materialize => "materialize" | .reconcile => "reconcile" | .crash => "crash"
+
+def goalContinuationMaterializationCaseJson
+    (w : GoalContinuationMaterializationCase) : String :=
+  let post := GoalAutomation.continuationStep w.phase w.action
+  "{"
+    ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"phase\":" ++ jsonString (continuationPhaseName w.phase) ++ ","
+    ++ "\"action\":" ++ jsonString (continuationActionName w.action) ++ ","
+    ++ "\"expected_phase\":" ++ jsonString (continuationPhaseName post)
+    ++ "}"
+
+def goalContinuationMaterializationCasesJson : String :=
+  jsonArray (goalContinuationMaterializationCases.map goalContinuationMaterializationCaseJson)
 
 end Conformance.Contracts

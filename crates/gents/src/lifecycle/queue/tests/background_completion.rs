@@ -195,6 +195,11 @@ async fn concurrent_notifications_converge_to_one_pending_wake() {
         .as_array()
         .unwrap();
     assert_eq!(
+        requests.len(),
+        1,
+        "the collision key must prevent duplicate wakes"
+    );
+    assert_eq!(
         requests
             .iter()
             .filter(|row| row["status"] == "pending" && row["lifecycle_state"] == "pending")
@@ -239,7 +244,60 @@ async fn concurrent_notifications_converge_to_one_pending_wake() {
             )
         })
         .collect::<std::collections::BTreeSet<_>>();
-    assert!(actual.is_subset(&persisted_bindings));
+    assert_eq!(actual, persisted_bindings);
+}
+
+#[tokio::test]
+async fn duplicate_notification_key_recovers_its_original_wake_binding() {
+    let db = test_db("atomic-background-idempotent-notification").await;
+    let parent = root_parent(
+        db.agent_did(),
+        "atomic-background-idempotent-notification-session",
+    );
+    let message_key = "background-completion-notification:idempotent:tool";
+    let first = enqueue_background_completion_with_message(
+        &db.node,
+        &parent,
+        "idempotent notification",
+        message_key,
+        "review notifications",
+        background_hints(&parent),
+    )
+    .await
+    .unwrap();
+    let retry = enqueue_background_completion_with_message(
+        &db.node,
+        &parent,
+        "idempotent notification",
+        message_key,
+        "review notifications",
+        background_hints(&parent),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(retry.request.doc_id, first.request.doc_id);
+    assert_eq!(retry.request.request_id, first.request.request_id);
+    assert_eq!(retry.request.session_id, first.request.session_id);
+    assert_eq!(retry.message_sequence, first.message_sequence);
+    assert!(!retry.created_request);
+
+    let conflict = enqueue_background_completion_with_message(
+        &db.node,
+        &parent,
+        "changed notification",
+        message_key,
+        "review notifications",
+        background_hints(&parent),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        conflict
+            .to_string()
+            .contains("conflicts with its persisted binding"),
+        "unexpected conflict: {conflict:#}"
+    );
 }
 
 #[tokio::test]
@@ -434,6 +492,19 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         first_lifecycle.claim_with_identity().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
+    crate::session::append_message_with_requester_did(
+        node.as_ref(),
+        &parent.session_id,
+        &parent.agent_did,
+        parent.requester_did.as_deref(),
+        "user",
+        "unrelated foreground input",
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     let second = enqueue_background_completion_with_message(
         node.as_ref(),
@@ -447,6 +518,34 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     .unwrap();
     assert!(second.created_request);
     assert_ne!(first.request.doc_id, second.request.doc_id);
+    let generation_query = format!(
+        r#"{{
+            AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ retry_key }}
+        }}"#,
+        escape_graphql_string(&parent.session_id)
+    );
+    let generation_response = node.execute(&generation_query).await;
+    assert!(
+        !generation_response.has_errors(),
+        "generation query: {:?}",
+        generation_response.errors
+    );
+    let mut retry_keys = generation_response.data.as_ref().unwrap()["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["retry_key"].as_str())
+        .filter(|key| key.starts_with("background-completion:"))
+        .collect::<Vec<_>>();
+    retry_keys.sort_unstable();
+    assert_eq!(retry_keys.len(), 2);
+    assert!(retry_keys[0].ends_with(":00000000000000000000"));
+    assert!(retry_keys[1].ends_with(":00000000000000000001"));
+    assert_eq!(
+        retry_keys[0].rsplit_once(':').unwrap().0,
+        retry_keys[1].rsplit_once(':').unwrap().0,
+        "unrelated transcript writes must not advance the queue-local generation"
+    );
     first_lifecycle
         .fail_with_reason("injected provider failure")
         .await

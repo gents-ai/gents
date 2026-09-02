@@ -396,6 +396,8 @@ pub async fn save_tool_selection_config(
             command_network_mode: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: Some(false),
+            enable_goal_tools: None,
+            enable_goal_creation: None,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
@@ -440,6 +442,8 @@ pub async fn save_tool_selection_config(
         .filter(|value| !value.is_empty())
         .collect();
     row.enable_meta_tools = request.enable_meta_tools.or(row.enable_meta_tools);
+    row.enable_goal_tools = request.enable_goal_tools.or(row.enable_goal_tools);
+    row.enable_goal_creation = request.enable_goal_creation.or(row.enable_goal_creation);
     row.allowed_mcp_service_ids = request
         .allowed_mcp_service_ids
         .into_iter()

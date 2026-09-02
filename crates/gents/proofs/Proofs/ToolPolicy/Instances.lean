@@ -15,6 +15,8 @@ def Surface.meet (a b : Surface) : Surface :=
   { file := a.file.meet b.file
   , bash := a.bash.meet b.bash
   , meta := a.meta && b.meta
+  , goalTools := a.goalTools && b.goalTools
+  , goalCreate := a.goalCreate && b.goalCreate
   , defraQuery := a.defraQuery && b.defraQuery
   , selfConfig := a.selfConfig && b.selfConfig
   , memory := a.memory && b.memory
@@ -60,6 +62,30 @@ theorem effective_meta_le_ceiling :
 
 theorem effective_meta_le_behavior :
     (effective behavior ceiling runtime).meta = true → behavior.meta = true := by
+  unfold effective Surface.meet
+  intro h
+  exact bool_and_left (bool_and_left h)
+
+theorem effective_goalTools_le_ceiling :
+    (effective behavior ceiling runtime).goalTools = true → ceiling.goalTools = true := by
+  unfold effective Surface.meet
+  intro h
+  exact bool_and_right (bool_and_left h)
+
+theorem effective_goalTools_le_behavior :
+    (effective behavior ceiling runtime).goalTools = true → behavior.goalTools = true := by
+  unfold effective Surface.meet
+  intro h
+  exact bool_and_left (bool_and_left h)
+
+theorem effective_goalCreate_le_ceiling :
+    (effective behavior ceiling runtime).goalCreate = true → ceiling.goalCreate = true := by
+  unfold effective Surface.meet
+  intro h
+  exact bool_and_right (bool_and_left h)
+
+theorem effective_goalCreate_le_behavior :
+    (effective behavior ceiling runtime).goalCreate = true → behavior.goalCreate = true := by
   unfold effective Surface.meet
   intro h
   exact bool_and_left (bool_and_left h)

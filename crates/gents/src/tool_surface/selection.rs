@@ -105,6 +105,13 @@ pub struct ToolSelection {
     pub command_policy: Option<CommandExecutionPolicy>,
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: bool,
+    /// Enables the session-owned durable goal read/update tools independently
+    /// of generic MCP discovery and dispatch.
+    pub enable_goal_tools: bool,
+    /// Enables model-originated durable goal creation. Creation is an
+    /// additional capability: it is effective only when `enable_goal_tools`
+    /// is also enabled.
+    pub enable_goal_creation: bool,
     pub allowed_mcp_service_ids: Vec<String>,
     pub required_mcp_service_ids: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
@@ -135,6 +142,11 @@ impl Default for ToolSelection {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
+            // Preserve the legacy surface: goal get/update historically rode
+            // with the generic meta-tool switch.
+            enable_goal_tools: true,
+            // Goal creation is new authority and must always be explicit.
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -168,6 +180,14 @@ impl ToolSelection {
         } else {
             BashMode::Off
         };
+        let enable_meta_tools = selection
+            .enable_meta_tools
+            .unwrap_or(policy_version.default_enabled(true));
+        let (enable_goal_tools, enable_goal_creation) = resolve_goal_capabilities(
+            enable_meta_tools,
+            selection.enable_goal_tools,
+            selection.enable_goal_creation,
+        );
         Ok(Self {
             file_tools: if selection.enable_file_tools.unwrap_or(false) {
                 FileToolMode::parse(selection.file_tools_mode.as_deref().unwrap_or("ReadOnly"))?
@@ -182,9 +202,13 @@ impl ToolSelection {
             bash,
             command_policy: command_policy_from_document(selection, bash)?,
             cli_tool_names: selection.cli_tool_names.clone().unwrap_or_default(),
-            enable_meta_tools: selection
-                .enable_meta_tools
-                .unwrap_or(policy_version.default_enabled(true)),
+            enable_meta_tools,
+            // An unset field preserves the historical coupling for existing
+            // documents. Once set, this capability is independent from meta.
+            enable_goal_tools,
+            // Model-facing creation never appears through compatibility
+            // decoding; it requires a new explicit grant.
+            enable_goal_creation,
             allowed_mcp_service_ids: selection
                 .allowed_mcp_service_ids
                 .clone()
@@ -228,6 +252,18 @@ impl ToolSelection {
             eth_calls: Vec::new(),
         })
     }
+}
+
+/// Decode the nullable compatibility fields before the authority meet.
+pub fn resolve_goal_capabilities(
+    enable_meta_tools: bool,
+    explicit_goal_tools: Option<bool>,
+    explicit_goal_creation: Option<bool>,
+) -> (bool, bool) {
+    (
+        explicit_goal_tools.unwrap_or(enable_meta_tools),
+        explicit_goal_creation.unwrap_or(false),
+    )
 }
 
 fn command_policy_from_document(

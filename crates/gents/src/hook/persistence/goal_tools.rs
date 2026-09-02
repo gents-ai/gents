@@ -2,17 +2,96 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::goal::{
-    load_canonical_goal, next_blocked_audit, refresh_goal_usage, update_goal_fields, GoalAction,
-    GoalSnapshot, GoalStatus, BLOCKED_AUDIT_THRESHOLD, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
+    create_goal_for_session, load_canonical_goal, next_blocked_audit, refresh_goal_usage,
+    update_goal_fields, CreateGoalForSessionError, GoalAction, GoalSnapshot, GoalStatus,
+    BLOCKED_AUDIT_THRESHOLD, CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
 };
 use crate::graphql::escape_graphql_string;
 use crate::llm::ToolCallHookAction;
 use crate::tool_call_lifecycle::ToolCallLifecycle;
-use crate::toolset::{GetGoalArgs, UpdateGoalArgs};
+use crate::toolset::{CreateGoalArgs, GetGoalArgs, UpdateGoalArgs};
 
 use super::DefraSessionHook;
 
 impl DefraSessionHook {
+    pub(super) async fn persist_create_goal_tool_call(
+        &self,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (session_id, request_id, deadline_at, sequence) =
+            self.ensure_assistant_turn_sequence().await?;
+        self.state.lock().await.register_tool_result_identity(
+            internal_call_id,
+            None,
+            tool_call_id.as_deref(),
+        );
+        let mut lifecycle = ToolCallLifecycle::new(
+            self.node.clone(),
+            request_id,
+            session_id.clone(),
+            self.agent_did.clone(),
+            internal_call_id.to_string(),
+            sequence,
+            CREATE_GOAL_TOOL_NAME.to_string(),
+            args.to_string(),
+            deadline_at,
+        )
+        .with_requester_did(self.active_requester_did().await)
+        .with_request_doc_id(self.active_request_doc_id().await);
+        lifecycle.start_running().await?;
+        let parsed = match serde_json::from_str::<CreateGoalArgs>(args) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                let result = json!({
+                    "accepted": false,
+                    "disposition": "invalid",
+                    "error": format!("invalid create_goal arguments: {error}"),
+                })
+                .to_string();
+                lifecycle.complete(&result).await?;
+                return Ok(self.skip_tool_result(CREATE_GOAL_TOOL_NAME, result));
+            }
+        };
+        let outcome = match create_goal_for_session(
+            &self.node,
+            &self.agent_did,
+            &session_id,
+            &parsed.objective,
+            parsed.token_budget,
+        )
+        .await
+        {
+            Ok(outcome) => json!({
+                "accepted": true,
+                "disposition": outcome.disposition(),
+                "goal": GoalSnapshot::from_document(outcome.goal(), Utc::now()),
+            }),
+            Err(
+                error @ (CreateGoalForSessionError::InvalidObjective
+                | CreateGoalForSessionError::InvalidBudget),
+            ) => json!({
+                "accepted": false,
+                "disposition": "invalid",
+                "error": error.to_string(),
+            }),
+            Err(error @ CreateGoalForSessionError::Conflict) => json!({
+                "accepted": false,
+                "disposition": "conflict",
+                "error": error.to_string(),
+            }),
+            Err(error @ CreateGoalForSessionError::Storage(_)) => json!({
+                "accepted": false,
+                "disposition": "error",
+                "error": error.to_string(),
+            }),
+        };
+        let result = serde_json::to_string_pretty(&outcome)?;
+        lifecycle.complete(&result).await?;
+        Ok(self.skip_tool_result(CREATE_GOAL_TOOL_NAME, result))
+    }
+
     pub(super) async fn persist_get_goal_tool_call(
         &self,
         tool_call_id: Option<String>,

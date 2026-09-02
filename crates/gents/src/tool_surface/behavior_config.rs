@@ -21,6 +21,8 @@ use crate::document_config::{QueryToolDecl, WriteToolDecl};
 pub struct BehaviorToolConfig {
     host_tools: ToolSet,
     enable_meta_tools: bool,
+    enable_goal_tools: bool,
+    enable_goal_creation: bool,
     allowed_mcp_service_ids: Vec<String>,
     required_mcp_service_ids: Vec<String>,
     subagent_tools: SubagentToolConfig,
@@ -50,6 +52,9 @@ impl BehaviorToolConfig {
         // selection can still enable it.
         let mut behavior_policy =
             ToolPolicySurface::legacy_non_host_wide(super::FileToolMode::Off, super::BashMode::Off);
+        // Preserve get/update compatibility while keeping the newly introduced
+        // model create authority opt-in even for programmatic defaults.
+        behavior_policy.goal_create = false;
         behavior_policy.defra_query = false;
         behavior_policy.defra_collections = EndpointScope::none();
         behavior_policy.self_config = false;
@@ -57,6 +62,8 @@ impl BehaviorToolConfig {
         Self {
             host_tools: ToolSet::meta_only(),
             enable_meta_tools: true,
+            enable_goal_tools: true,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             subagent_tools: SubagentToolConfig::default(),
@@ -174,6 +181,8 @@ impl BehaviorToolConfig {
             command_policy,
             cli_tool_names,
             enable_meta_tools: _,
+            enable_goal_tools: _,
+            enable_goal_creation: _,
             allowed_mcp_service_ids,
             required_mcp_service_ids,
             backgroundable_tool_names,
@@ -253,6 +262,8 @@ impl BehaviorToolConfig {
         Ok(Self {
             host_tools,
             enable_meta_tools: static_policy.meta,
+            enable_goal_tools: static_policy.include_goal_tools(),
+            enable_goal_creation: static_policy.include_goal_creation(),
             allowed_mcp_service_ids: effective_allowed_mcp_service_ids,
             required_mcp_service_ids,
             subagent_tools: SubagentToolConfig {
@@ -313,6 +324,14 @@ impl BehaviorToolConfig {
 
     pub fn meta_tools_requested(&self) -> bool {
         self.enable_meta_tools
+    }
+
+    pub fn goal_tools_requested(&self) -> bool {
+        self.enable_goal_tools
+    }
+
+    pub fn goal_creation_requested(&self) -> bool {
+        self.enable_goal_creation
     }
 
     pub(crate) fn memory_requested(&self) -> bool {
@@ -407,6 +426,8 @@ impl BehaviorToolConfig {
     ) -> ToolSurface {
         let effective_policy = self.static_policy.meet(&availability.policy);
         let include_meta_tools = effective_policy.include_meta_tools();
+        let include_goal_tools = effective_policy.include_goal_tools();
+        let include_goal_creation = effective_policy.include_goal_creation();
         let allowed_mcp_service_ids = effective_string_allowlist(
             self.allowed_mcp_service_ids.clone(),
             &effective_policy.mcp_services,
@@ -415,6 +436,8 @@ impl BehaviorToolConfig {
         ToolSurface {
             host_tools: self.host_tools.clone(),
             include_meta_tools,
+            include_goal_tools,
+            include_goal_creation,
             allowed_mcp_service_ids,
             subagent_tools,
             background_tools: self.background_tools.clone(),
@@ -612,6 +635,8 @@ impl std::fmt::Debug for BehaviorToolConfig {
         f.debug_struct("BehaviorToolConfig")
             .field("host_tools", &self.host_tools)
             .field("enable_meta_tools", &self.enable_meta_tools)
+            .field("enable_goal_tools", &self.enable_goal_tools)
+            .field("enable_goal_creation", &self.enable_goal_creation)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("required_mcp_service_ids", &self.required_mcp_service_ids)
             .field("subagent_tools", &self.subagent_tools)

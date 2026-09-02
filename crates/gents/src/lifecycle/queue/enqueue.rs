@@ -34,6 +34,7 @@ pub(crate) async fn enqueue_session_request(
         &metadata,
         &request_id,
         &now,
+        None,
     )
     .await?;
 
@@ -100,6 +101,7 @@ pub(crate) async fn enqueue_steering_request_with_message(
         &metadata,
         &request_id,
         &now,
+        None,
     )
     .await?;
     // Match the hook's canonical persisted representation so its

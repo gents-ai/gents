@@ -83,6 +83,48 @@ fn parse_server(extra: &[&str]) -> ServeArgs {
     }
 }
 
+#[test]
+fn chat_goal_submission_flags_are_opt_in_and_budget_requires_objective() {
+    let cli = Cli::try_parse_from([
+        "gents",
+        "chat",
+        "--session-id",
+        "durable-session",
+        "--goal-objective",
+        "Ship the durable feature",
+        "--goal-token-budget",
+        "1000",
+        "start",
+    ])
+    .expect("goal-backed chat should parse");
+    let Command::Chat(args) = cli.command else {
+        panic!("expected chat command")
+    };
+    assert_eq!(
+        args.goal_objective.as_deref(),
+        Some("Ship the durable feature")
+    );
+    assert_eq!(args.goal_token_budget, Some(1000));
+
+    assert!(Cli::try_parse_from(["gents", "chat", "--goal-objective", "Ship", "start",]).is_err());
+
+    assert!(
+        Cli::try_parse_from(["gents", "chat", "--goal-token-budget", "1000", "start",]).is_err()
+    );
+    assert!(Cli::try_parse_from([
+        "gents",
+        "chat",
+        "--session-id",
+        "durable-session",
+        "--goal-objective",
+        "Ship",
+        "--goal-token-budget",
+        "0",
+        "start",
+    ])
+    .is_err());
+}
+
 fn assert_task_run_args(args: ConfigTaskRunArgs) {
     assert_eq!(args.task_id.as_deref(), None);
     assert_eq!(args.task_id_flag.as_deref(), Some("host-check"));
@@ -265,6 +307,8 @@ fn subagent_tool_flags_preserve_when_omitted_and_parse_when_present() {
     assert_eq!(omitted.enable_file_tools, None);
     assert_eq!(omitted.enable_bash, None);
     assert_eq!(omitted.enable_meta_tools, None);
+    assert_eq!(omitted.enable_goal_tools, None);
+    assert_eq!(omitted.enable_goal_creation, None);
     assert!(omitted.subagent_targets.is_empty());
     assert!(!omitted.clear_subagent_targets);
     assert_eq!(omitted.subagent_spawn_enabled, None);
@@ -308,10 +352,16 @@ fn legacy_tool_bool_flags_are_patch_optional() {
         "false",
         "--enable-meta-tools",
         "false",
+        "--enable-goal-tools",
+        "true",
+        "--enable-goal-creation",
+        "false",
     ]);
     assert_eq!(explicit.enable_file_tools, Some(false));
     assert_eq!(explicit.enable_bash, Some(false));
     assert_eq!(explicit.enable_meta_tools, Some(false));
+    assert_eq!(explicit.enable_goal_tools, Some(true));
+    assert_eq!(explicit.enable_goal_creation, Some(false));
 }
 
 #[test]

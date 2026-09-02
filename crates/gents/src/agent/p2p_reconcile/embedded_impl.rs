@@ -1192,15 +1192,6 @@ mod tests {
 
         let collections = vec!["AgentRequest".to_string(), "AgentToolCall".to_string()];
         sender_admin
-            .add_p2p_collections(&collections)
-            .await
-            .expect("add sender p2p collections");
-        receiver_admin
-            .add_p2p_collections(&collections)
-            .await
-            .expect("add receiver p2p collections");
-
-        sender_admin
             .connect(&receiver_addresses)
             .await
             .expect("connect sender to receiver");

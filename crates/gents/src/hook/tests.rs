@@ -9,6 +9,160 @@ use crate::llm::{HookAction, ToolCallHookAction};
 use serde_json::json;
 
 use super::*;
+
+#[tokio::test]
+async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capability() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let denied = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    let denied_update = denied
+        .on_tool_call(
+            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            None,
+            "unadvertised-update",
+            r#"{"status":"complete"}"#,
+        )
+        .await;
+    assert!(
+        !matches!(denied_update, ToolCallHookAction::Skip { .. }),
+        "an unauthorized update must not enter the hook-managed mutation path"
+    );
+
+    let create_without_base = DefraSessionHook::with_identity(
+        node,
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    )
+    .with_goal_tool_authority(false, true);
+    let denied_create = create_without_base
+        .on_tool_call(
+            crate::goal::CREATE_GOAL_TOOL_NAME,
+            None,
+            "unadvertised-create",
+            r#"{"objective":"unauthorized"}"#,
+        )
+        .await;
+    assert!(
+        !matches!(denied_create, ToolCallHookAction::Skip { .. }),
+        "create without the base goal capability must not enter the hook-managed mutation path"
+    );
+}
+
+#[tokio::test]
+async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifecycle() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-goal-create-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:owner",
+        FailurePolicy::default(),
+    )
+    .with_goal_tool_authority(true, true);
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("start"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.unwrap();
+
+    let forged = hook
+        .on_tool_call(
+            crate::goal::CREATE_GOAL_TOOL_NAME,
+            None,
+            "goal-create-forged",
+            r#"{"objective":"ship","agent_did":"did:test:other","session_id":"other"}"#,
+        )
+        .await;
+    assert!(matches!(forged, ToolCallHookAction::Skip { .. }));
+    assert!(
+        crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let created = hook
+        .on_tool_call(
+            crate::goal::CREATE_GOAL_TOOL_NAME,
+            None,
+            "goal-create-valid",
+            r#"{"objective":"ship","token_budget":1000}"#,
+        )
+        .await;
+    assert!(matches!(created, ToolCallHookAction::Skip { .. }));
+    let goal = crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(goal.agent_did, "did:test:owner");
+    assert_eq!(goal.session_id, session_id);
+    assert_eq!(goal.objective, "ship");
+    assert_eq!(goal.token_budget, Some(1000));
+
+    let forged_update = hook
+        .on_tool_call(
+            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            None,
+            "goal-update-forged",
+            r#"{"status":"complete","session_id":"other"}"#,
+        )
+        .await;
+    assert!(matches!(forged_update, ToolCallHookAction::Skip { .. }));
+    assert_eq!(
+        crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .parsed_status(),
+        Some(crate::goal::GoalStatus::Active)
+    );
+
+    assert!(matches!(
+        hook.on_tool_call(
+            crate::goal::GET_GOAL_TOOL_NAME,
+            None,
+            "goal-get-valid",
+            "{}",
+        )
+        .await,
+        ToolCallHookAction::Skip { .. }
+    ));
+    assert!(matches!(
+        hook.on_tool_call(
+            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            None,
+            "goal-update-valid",
+            r#"{"status":"complete","reason":"done"}"#,
+        )
+        .await,
+        ToolCallHookAction::Skip { .. }
+    ));
+    assert_eq!(
+        crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .parsed_status(),
+        Some(crate::goal::GoalStatus::Complete)
+    );
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(data_path);
+}
 use crate::ensure_schemas;
 use crate::lean_vocab_test::{
     lean_persistence_failure_policy_cases, lean_storage_observation_runtime_cases,
@@ -779,7 +933,8 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
         "general",
         "did:test:general",
         FailurePolicy::default(),
-    );
+    )
+    .with_goal_tool_authority(true, false);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start goal"), &[])
             .await,

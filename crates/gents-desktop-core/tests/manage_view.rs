@@ -103,6 +103,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         command_network_mode: None,
         cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
         enable_meta_tools: Some(true),
+        enable_goal_tools: None,
+        enable_goal_creation: None,
         allowed_mcp_service_ids: Vec::new(),
         required_mcp_service_ids: Vec::new(),
         delegate_to: Vec::new(),

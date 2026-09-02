@@ -20,6 +20,7 @@ import Proofs.PairingReconcile
 import Proofs.ScopeTemplates
 import Proofs.Triggers
 import Proofs.Goals
+import Proofs.GoalAutomation
 import Proofs.Mailbox
 import Proofs.Client
 import Proofs.ClientShell

@@ -198,6 +198,8 @@ pub(crate) fn manifest_from_export_bundle(
                         "command_network_mode",
                         "cli_tool_names",
                         "enable_meta_tools",
+                        "enable_goal_tools",
+                        "enable_goal_creation",
                         "allowed_mcp_service_ids",
                         "required_mcp_service_ids",
                         "delegate_to",

@@ -8,6 +8,7 @@ pub(super) async fn session_request_create_mutation(
     metadata: &str,
     request_id: &str,
     created_at: &str,
+    retry_key: Option<&str>,
 ) -> Result<String> {
     anyhow::ensure!(
         !parent.request_id.trim().is_empty() && !parent.doc_id.trim().is_empty(),
@@ -30,6 +31,7 @@ pub(super) async fn session_request_create_mutation(
         admission,
     );
     create.metadata = Some(metadata.to_string());
+    create.retry_key = retry_key.map(ToOwned::to_owned);
     create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
     create.subagent_depth = parent.subagent_depth;
     create.caused_by_parent_request_id = Some(parent.request_id.clone());

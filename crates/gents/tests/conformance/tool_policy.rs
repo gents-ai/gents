@@ -1,4 +1,4 @@
-use crate::lean_vocab_test::lean_tool_policy_cases;
+use crate::lean_vocab_test::{lean_goal_capability_resolution_cases, lean_tool_policy_cases};
 
 #[path = "tool_policy_mirror.rs"]
 mod tool_policy_mirror;
@@ -23,6 +23,20 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
             assert!(
                 case.ceiling.mcp_permits,
                 "case {}: effective permits an MCP service the ceiling forbids",
+                case.name
+            );
+        }
+        if case.expected.goal_tools {
+            assert!(
+                case.behavior.goal_tools && case.ceiling.goal_tools && case.runtime.goal_tools,
+                "case {}: effective goal tools exceed an authority operand",
+                case.name
+            );
+        }
+        if case.expected.goal_create {
+            assert!(
+                case.behavior.goal_create && case.ceiling.goal_create && case.runtime.goal_create,
+                "case {}: effective goal creation exceeds an authority operand",
                 case.name
             );
         }
@@ -150,5 +164,23 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
             assert_eq!(case.expected.eth_query_methods_kind, "only");
             assert_eq!(case.expected.eth_call_tools_kind, "none");
         }
+    }
+}
+
+pub(super) fn generated_goal_capability_resolution_matches_rust_decoder() {
+    let cases = lean_goal_capability_resolution_cases();
+    assert_eq!(cases.len(), 6, "goal capability resolution matrix drifted");
+    for case in cases {
+        let (goal_tools, goal_creation) = gents::tool_surface::resolve_goal_capabilities(
+            case.meta,
+            case.explicit_goal_tools,
+            case.explicit_goal_create,
+        );
+        assert_eq!(
+            (goal_tools, goal_creation),
+            (case.expected_goal_tools, case.expected_goal_create),
+            "Lean capability resolution case {}",
+            case.name
+        );
     }
 }

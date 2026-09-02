@@ -30,6 +30,8 @@ pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
+pub const GOAL_CREATION_CLAIM_NAME: &str = "GoalCreationClaim";
+pub const GOAL_CREATION_CLAIM: &str = include_str!("../schemas/agent/goal_creation_claim.graphql");
 pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
 pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
@@ -169,6 +171,7 @@ pub const ALL: &[&str] = &[
     AGENT_TOOL_RESULT,
     AGENT_SESSION,
     GOAL,
+    GOAL_CREATION_CLAIM,
     MAILBOX_ITEM,
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
@@ -231,6 +234,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
+    GOAL_CREATION_CLAIM_NAME,
     MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
@@ -278,6 +282,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
+    GOAL_CREATION_CLAIM_NAME,
     MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,

@@ -22,6 +22,11 @@ type ToolSelection @branchable {
     command_network_mode: String
     cli_tool_names: [String]
     enable_meta_tools: Boolean
+    # Goal lifecycle tools are independently selectable from generic MCP
+    # discovery/describe/call meta tools. Null preserves legacy inheritance.
+    enable_goal_tools: Boolean
+    # Additional opt-in gate for model-facing create_goal. Null is disabled.
+    enable_goal_creation: Boolean
     allowed_mcp_service_ids: [String]
     # MCP services that must be measured available before this selection's
     # behavior is runnable. Unlike allowed_mcp_service_ids, this is a

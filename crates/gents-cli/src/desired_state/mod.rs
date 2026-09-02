@@ -198,6 +198,12 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) cli_tool_names: Vec<String>,
     pub(crate) enable_meta_tools: bool,
+    /// Null/absent inherits `enable_meta_tools` for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) enable_goal_tools: Option<bool>,
+    /// Model goal creation remains opt-in when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) enable_goal_creation: Option<bool>,
     #[serde(default)]
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[serde(default)]

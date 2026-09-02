@@ -101,6 +101,8 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -175,6 +177,8 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             ),
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -232,6 +236,8 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -279,6 +285,8 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -325,6 +333,8 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -370,6 +380,8 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -415,6 +427,8 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -458,6 +472,8 @@ fn readonly_ceiling_clamps_unrestricted_bash_policy() {
             ),
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -499,6 +515,8 @@ fn selection_without_root_inherits_operator_root() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -553,6 +571,8 @@ fn selection_cli_tools_require_ceiling_entries() {
             command_policy: None,
             cli_tool_names: vec!["rg".to_string()],
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -604,6 +624,8 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             command_policy: None,
             cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -654,6 +676,8 @@ fn selection_mcp_service_allowlist_is_deduped() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
+            enable_goal_tools: true,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: vec![
                 "x-data".to_string(),
                 "x-data".to_string(),
@@ -712,6 +736,8 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
         "investigator",
         ToolSelection {
             enable_meta_tools: true,
+            enable_goal_tools: true,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: vec!["research".to_string()],
             required_mcp_service_ids: vec!["research".to_string()],
             ..Default::default()
@@ -773,6 +799,8 @@ fn background_tool_allowlist_registers_r6_tools() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: vec!["bash".to_string(), "bash".to_string()],
@@ -815,6 +843,8 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: vec!["read_file".to_string()],
@@ -865,6 +895,8 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
@@ -1216,16 +1248,22 @@ fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
 fn memory_tool_defaults_disabled() {
     assert!(!ToolSelection::default().enable_memory);
     assert!(!ToolSelection::default().enable_session_history_tool);
+    assert!(!BehaviorToolConfig::meta_only().goal_creation_requested());
+    assert!(!BehaviorToolConfig::meta_only()
+        .static_policy()
+        .include_goal_creation());
 }
 
 #[tokio::test]
-async fn disabling_meta_tools_removes_goal_tools_from_names_and_runtime() {
+async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let surface = BehaviorToolConfig::from_selection(
         "benchmark",
         ToolSelection {
-            enable_meta_tools: false,
+            enable_meta_tools: true,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
             enable_context_budget: false,
             ..Default::default()
         },
@@ -1250,6 +1288,144 @@ async fn disabling_meta_tools_removes_goal_tools_from_names_and_runtime() {
         .collect::<Vec<_>>();
     assert!(!built_names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
     assert!(!built_names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
+}
+
+#[tokio::test]
+async fn goal_tools_are_independent_from_generic_meta_tools() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let surface = BehaviorToolConfig::from_selection(
+        "durable",
+        ToolSelection {
+            enable_meta_tools: false,
+            enable_goal_tools: true,
+            enable_goal_creation: false,
+            enable_context_budget: false,
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    let names = surface.tool_names();
+    assert!(!names.iter().any(|name| name == "discover_tools"));
+    assert!(names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
+    assert!(names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
+    assert!(!names.contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+}
+
+#[tokio::test]
+async fn goal_creation_requires_its_separate_capability() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    let without_create = BehaviorToolConfig::from_selection(
+        "durable",
+        ToolSelection {
+            enable_goal_tools: true,
+            enable_goal_creation: false,
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+    assert!(!without_create
+        .tool_names()
+        .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+
+    let with_create = BehaviorToolConfig::from_selection(
+        "durable",
+        ToolSelection {
+            enable_goal_tools: true,
+            enable_goal_creation: true,
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+    assert!(with_create
+        .tool_names()
+        .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+    let built_names = with_create
+        .build_tools(&ToolRuntimeContext::oneshot(node))
+        .unwrap()
+        .into_iter()
+        .map(|tool| tool.name())
+        .collect::<Vec<_>>();
+    assert!(built_names.contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+}
+
+#[tokio::test]
+async fn operator_ceiling_can_deny_goal_creation_only() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let mut ceiling_policy = ToolPolicySurface::runtime_all();
+    ceiling_policy.goal_create = false;
+    let ceiling = ToolCeiling::meta_only().with_policy(ceiling_policy);
+    let surface = BehaviorToolConfig::from_selection(
+        "durable",
+        ToolSelection {
+            enable_goal_tools: true,
+            enable_goal_creation: true,
+            ..Default::default()
+        },
+        &ceiling,
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    assert!(surface.includes_goal_tools());
+    assert!(!surface.includes_goal_creation());
+    assert!(!surface
+        .tool_names()
+        .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
+}
+
+#[tokio::test]
+async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let mut ceiling_policy = ToolPolicySurface::runtime_all();
+    ceiling_policy.goal_tools = false;
+    let ceiling = ToolCeiling::meta_only().with_policy(ceiling_policy);
+    let surface = BehaviorToolConfig::from_selection(
+        "durable",
+        ToolSelection {
+            enable_goal_tools: true,
+            enable_goal_creation: true,
+            ..Default::default()
+        },
+        &ceiling,
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    assert!(!surface.includes_goal_tools());
+    for denied in [
+        crate::goal::CREATE_GOAL_TOOL_NAME,
+        crate::goal::GET_GOAL_TOOL_NAME,
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+    ] {
+        assert!(!surface.tool_names().contains(&denied.to_string()));
+    }
 }
 
 #[test]
@@ -1403,6 +1579,8 @@ fn tool_policy_version_controls_nullable_default_decode() {
     };
     let legacy = ToolSelection::from_document(&legacy_doc).unwrap();
     assert!(legacy.enable_meta_tools);
+    assert!(legacy.enable_goal_tools);
+    assert!(!legacy.enable_goal_creation);
     // defra_query is opt-in for every policy version (#592): legacy docs are
     // NOT grandfathered; only the backfill's materialized `true` (below)
     // carries the historical permissive surface forward.
@@ -1421,11 +1599,25 @@ fn tool_policy_version_controls_nullable_default_decode() {
 
     let versioned_doc = crate::document_config::ToolSelectionDocument {
         tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
-        ..legacy_doc
+        ..legacy_doc.clone()
     };
     let versioned = ToolSelection::from_document(&versioned_doc).unwrap();
     assert!(!versioned.enable_meta_tools);
+    assert!(!versioned.enable_goal_tools);
+    assert!(!versioned.enable_goal_creation);
     assert!(!versioned.enable_defra_query);
+
+    let independently_enabled =
+        ToolSelection::from_document(&crate::document_config::ToolSelectionDocument {
+            enable_meta_tools: Some(false),
+            enable_goal_tools: Some(true),
+            enable_goal_creation: Some(true),
+            ..legacy_doc.clone()
+        })
+        .unwrap();
+    assert!(!independently_enabled.enable_meta_tools);
+    assert!(independently_enabled.enable_goal_tools);
+    assert!(independently_enabled.enable_goal_creation);
 }
 
 #[tokio::test]
@@ -1497,6 +1689,8 @@ fn init_like_tool_selection_document(
         command_network_mode: None,
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(enable_meta_tools),
+        enable_goal_tools: None,
+        enable_goal_creation: None,
         allowed_mcp_service_ids: Some(Vec::new()),
         required_mcp_service_ids: Some(Vec::new()),
         backgroundable_tool_names: Some(backgroundable_tool_names),
@@ -1764,6 +1958,8 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         command_network_mode: None,
         cli_tool_names: Some(Vec::new()),
         enable_meta_tools: Some(true),
+        enable_goal_tools: None,
+        enable_goal_creation: None,
         allowed_mcp_service_ids: Some(vec![
             "registry".to_string(),
             "registry".to_string(),

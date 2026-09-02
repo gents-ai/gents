@@ -542,6 +542,26 @@ def caseCoverage : List CoverageEntry :=
       "conformance::goals::generated_goal_transition_cases_fence_runtime_state_machine")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_create_cases"
+      "GoalCreateCases"
+      "conformance::goals::generated_goal_create_cases_fence_authority_and_idempotency")
+      "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_capability_resolution_cases"
+      "GoalCapabilityResolutionCases"
+      "conformance::generated_goal_capability_resolution_matches_rust_decoder")
+      "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_submission_cases"
+      "GoalSubmissionCases"
+      "conformance::goals::generated_goal_submission_cases_fence_atomic_visibility")
+      "durable-goals" [Surface.operatorCli, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_continuation_materialization_cases"
+      "GoalContinuationMaterializationCases"
+      "conformance::goals::generated_goal_continuation_materialization_cases_fence_restart_idempotency")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "session_hydration_cases"
       "SessionHydrationDecisionCases"
       "conformance::session_hydration::generated_session_hydration_cases_match_decision_core")

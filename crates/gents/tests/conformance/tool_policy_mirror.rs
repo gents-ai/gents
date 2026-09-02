@@ -177,6 +177,8 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
             deny_git_metadata_writes: false,
         },
         meta: view.meta,
+        goal_tools: view.goal_tools,
+        goal_create: view.goal_create,
         defra_query: view.defra_query,
         self_config: view.self_config,
         memory: view.memory,
@@ -251,6 +253,8 @@ fn view_from_surface(
     View {
         file_rank: file_rank(surface.file),
         meta: surface.meta,
+        goal_tools: surface.goal_tools,
+        goal_create: surface.goal_create,
         defra_query: surface.defra_query,
         self_config: surface.self_config,
         memory: surface.memory,

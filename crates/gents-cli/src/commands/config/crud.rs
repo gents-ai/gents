@@ -311,6 +311,8 @@ fn normalize_bundle_for_manifest(bundle: &mut ConfigExportBundle) {
             ensure_bool(object, "enable_bash", false);
             ensure_string(object, "bash_mode", "Off");
             ensure_bool(object, "enable_meta_tools", false);
+            // Keep the new nullable fields absent: absence is a compatibility
+            // state, not equivalent to materializing either boolean.
         }
     }
 }

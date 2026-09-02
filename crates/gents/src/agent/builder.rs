@@ -317,6 +317,16 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn enable_goal_tools(mut self, enable_goal_tools: bool) -> Self {
+        self.behavior.tool_selection.enable_goal_tools = enable_goal_tools;
+        self
+    }
+
+    pub fn enable_goal_creation(mut self, enable_goal_creation: bool) -> Self {
+        self.behavior.tool_selection.enable_goal_creation = enable_goal_creation;
+        self
+    }
+
     pub fn enable_defra_query(mut self, enable_defra_query: bool) -> Self {
         self.behavior.tool_selection.enable_defra_query = enable_defra_query;
         self

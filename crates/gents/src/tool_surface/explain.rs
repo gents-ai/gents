@@ -54,6 +54,7 @@ impl ToolSurfaceExplanation {
 
         builder.include_many("host", surface.host_tools.tool_names());
         explain_meta(config, surface, &mut builder);
+        explain_goals(config, surface, &mut builder);
         explain_subagents(config, surface, &mut builder);
         explain_background(config, surface, &mut builder);
         builder.include_many(
@@ -262,6 +263,32 @@ fn explain_meta(
     }
 }
 
+fn explain_goals(
+    config: &BehaviorToolConfig,
+    surface: &ToolSurface,
+    builder: &mut ExplanationBuilder,
+) {
+    for name in [
+        crate::goal::GET_GOAL_TOOL_NAME,
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+    ] {
+        if surface.includes_goal_tools() {
+            builder.include_many("goal", [name.to_string()]);
+        } else if config.goal_tools_requested() {
+            builder.unavailable("goal", name);
+        } else {
+            builder.exclude("goal", name);
+        }
+    }
+    if surface.includes_goal_creation() {
+        builder.include_many("goal", [crate::goal::CREATE_GOAL_TOOL_NAME.to_string()]);
+    } else if config.goal_creation_requested() {
+        builder.unavailable("goal", crate::goal::CREATE_GOAL_TOOL_NAME);
+    } else {
+        builder.exclude("goal", crate::goal::CREATE_GOAL_TOOL_NAME);
+    }
+}
+
 fn explain_subagents(
     config: &BehaviorToolConfig,
     surface: &ToolSurface,
@@ -420,6 +447,13 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         vec![
             format!("enabled:{}", policy.meta),
             format!("services:{}", policy.mcp_services.kind()),
+        ],
+    );
+    summary.insert(
+        "goal".to_string(),
+        vec![
+            format!("tools:{}", policy.goal_tools),
+            format!("create:{}", policy.goal_create),
         ],
     );
     summary.insert(

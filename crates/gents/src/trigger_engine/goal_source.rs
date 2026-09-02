@@ -17,9 +17,10 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::goal::{
-    claim_continuation, decide_goal_continuation, load_goal_by_id, load_goals_for_session,
-    refresh_goal_usage, update_goal_fields, GoalAction, GoalDecision, GoalDocument,
-    GoalRequestTerminal, GoalStatus, GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
+    claim_continuation, claim_retry_continuation, decide_goal_continuation, load_goal_by_id,
+    load_goals_for_session, refresh_goal_usage, update_goal_fields_if_status, GoalAction,
+    GoalDecision, GoalDocument, GoalRequestTerminal, GoalStatus, GOAL_TRIGGER_KIND,
+    MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::enqueue_goal_continuation;
@@ -262,9 +263,10 @@ impl GoalSource {
                 let now = Utc::now();
                 let active_time = goal.current_active_time_seconds(now);
                 let updated_at = escape_graphql_string(&now.to_rfc3339());
-                update_goal_fields(
+                let _ = update_goal_fields_if_status(
                     &self.node,
                     &goal,
+                    GoalStatus::Active,
                     &format!(
                         r#"status: "paused", active_time_seconds: {active_time}, active_started_at: null, last_failure: "duplicate non-canonical goal", updated_at: "{updated_at}""#
                     ),
@@ -294,6 +296,38 @@ impl GoalSource {
             .parsed_status()
             .context("active Goal candidate has an unknown status")?;
 
+        let already_claimed =
+            goal.last_continued_from_request_id.as_deref() == Some(latest.request_id.as_str());
+        let child_exists = self
+            .continuation_child_exists(&goal, &latest.request_id)
+            .await?;
+        if child_exists {
+            if !already_claimed {
+                let _ = claim_continuation(&self.node, &goal, &latest.request_id).await?;
+            }
+            return Ok(None);
+        }
+        if already_claimed {
+            // A crash may leave the durable claim without its child. Decision
+            // side effects (notably retry charging) were committed before the
+            // claim and must not be replayed. Reconstruct the already-claimed
+            // prompt solely from the persisted result and materialize it.
+            let retries = goal.infrastructure_retry_count.unwrap_or_default().max(0);
+            let retry_prefix = (retries > 0
+                && goal.last_failure.as_deref() == Some(terminal_name.as_str()))
+            .then(|| {
+                format!(
+                    "The previous request ended in infrastructure state {terminal_name}. Retry the goal from durable session state; this is recovery attempt {retries} of {MAX_INFRASTRUCTURE_RETRIES}."
+                )
+            });
+            let wrapup = status == GoalStatus::BudgetLimited
+                && goal.wrapup_requested.unwrap_or(false)
+                && !goal.wrapup_completed.unwrap_or(false);
+            return self
+                .materialize_claimed_continuation(goal, latest, retry_prefix, wrapup)
+                .await;
+        }
+
         if status == GoalStatus::Active
             && matches!(
                 terminal,
@@ -309,15 +343,19 @@ impl GoalSource {
                 let active_time = goal.current_active_time_seconds(now);
                 let updated_at = escape_graphql_string(&now.to_rfc3339());
                 let reason = escape_graphql_string(&reason);
-                update_goal_fields(
+                if !update_goal_fields_if_status(
                     &self.node,
                     &goal,
+                    GoalStatus::Active,
                     &format!(
                         r#"status: "{}", active_time_seconds: {active_time}, active_started_at: null, last_failure: "{reason}", updated_at: "{updated_at}""#,
                         post.status.as_str()
                     ),
                 )
-                .await?;
+                .await?
+                {
+                    return Ok(None);
+                }
                 return Ok(None);
             }
         }
@@ -329,28 +367,20 @@ impl GoalSource {
             }
             if request_is_wrapup && terminal == GoalRequestTerminal::Completed {
                 let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-                update_goal_fields(
+                if !update_goal_fields_if_status(
                     &self.node,
                     &goal,
+                    GoalStatus::BudgetLimited,
                     &format!(
                         r#"wrapup_completed: true, infrastructure_retry_count: 0, active_started_at: null, updated_at: "{updated_at}""#
                     ),
                 )
-                .await?;
+                .await?
+                {
+                    return Ok(None);
+                }
                 return Ok(None);
             }
-        }
-
-        let already_claimed =
-            goal.last_continued_from_request_id.as_deref() == Some(latest.request_id.as_str());
-        let child_exists = self
-            .continuation_child_exists(&goal, &latest.request_id)
-            .await?;
-        if child_exists {
-            if !already_claimed {
-                let _ = claim_continuation(&self.node, &goal, &latest.request_id).await?;
-            }
-            return Ok(None);
         }
 
         let has_activity = terminal != GoalRequestTerminal::Completed
@@ -362,6 +392,9 @@ impl GoalSource {
         let budget_reached = goal
             .token_budget
             .is_some_and(|budget| tokens_used >= budget);
+        let status = goal
+            .parsed_status()
+            .context("refreshed Goal candidate has an unknown status")?;
         let decision = decide_goal_continuation(
             status,
             terminal,
@@ -388,7 +421,9 @@ impl GoalSource {
                         "infrastructure retry budget exhausted"
                     }
                 };
-                self.pause_goal(&goal, reason).await?;
+                if !self.pause_goal(&goal, status, reason).await? {
+                    return Ok(None);
+                }
                 return Ok(None);
             }
             GoalDecision::Retry => {
@@ -396,30 +431,26 @@ impl GoalSource {
                     .infrastructure_retry_count
                     .unwrap_or_default()
                     .saturating_add(1);
-                let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-                update_goal_fields(
-                    &self.node,
-                    &goal,
-                    &format!(
-                        r#"infrastructure_retry_count: {retries}, last_failure: "{terminal_name}", updated_at: "{updated_at}""#
-                    ),
-                )
-                .await?;
                 goal.infrastructure_retry_count = Some(retries);
+                goal.last_failure = Some(terminal_name.clone());
                 Some(format!(
                     "The previous request ended in infrastructure state {terminal_name}. Retry the goal from durable session state; this is recovery attempt {retries} of {MAX_INFRASTRUCTURE_RETRIES}."
                 ))
             }
             GoalDecision::AbandonWrapup => {
                 let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-                update_goal_fields(
+                if !update_goal_fields_if_status(
                     &self.node,
                     &goal,
+                    status,
                     &format!(
                         r#"wrapup_completed: true, last_failure: "wrap-up {terminal_name} after {MAX_INFRASTRUCTURE_RETRIES} retries", updated_at: "{updated_at}""#
                     ),
                 )
-                .await?;
+                .await?
+                {
+                    return Ok(None);
+                }
                 return Ok(None);
             }
             GoalDecision::Continue | GoalDecision::Wrapup => {
@@ -427,14 +458,18 @@ impl GoalSource {
                     && goal.infrastructure_retry_count.unwrap_or_default() != 0
                 {
                     let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-                    update_goal_fields(
+                    if !update_goal_fields_if_status(
                         &self.node,
                         &goal,
+                        status,
                         &format!(
                             r#"infrastructure_retry_count: 0, last_failure: null, updated_at: "{updated_at}""#
                         ),
                     )
-                    .await?;
+                    .await?
+                    {
+                        return Ok(None);
+                    }
                     goal.infrastructure_retry_count = Some(0);
                 }
                 None
@@ -446,14 +481,18 @@ impl GoalSource {
             && goal.last_blocked_request_id.as_deref() != Some(latest.request_id.as_str())
         {
             let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-            update_goal_fields(
+            if !update_goal_fields_if_status(
                 &self.node,
                 &goal,
+                status,
                 &format!(
                     r#"consecutive_blocked_audits: 0, last_blocked_request_id: null, last_blocked_reason: null, updated_at: "{updated_at}""#
                 ),
             )
-            .await?;
+            .await?
+            {
+                return Ok(None);
+            }
             goal.consecutive_blocked_audits = Some(0);
             goal.last_blocked_request_id = None;
             goal.last_blocked_reason = None;
@@ -465,22 +504,51 @@ impl GoalSource {
             let now = Utc::now();
             let active_time = goal.current_active_time_seconds(now);
             let updated_at = escape_graphql_string(&now.to_rfc3339());
-            update_goal_fields(
+            if !update_goal_fields_if_status(
                 &self.node,
                 &goal,
+                GoalStatus::Active,
                 &format!(
                     r#"status: "budget_limited", wrapup_requested: true, active_time_seconds: {active_time}, active_started_at: null, updated_at: "{updated_at}""#
                 ),
             )
-            .await?;
+            .await?
+            {
+                return Ok(None);
+            }
             goal.status = GoalStatus::BudgetLimited.as_str().to_string();
             goal.wrapup_requested = Some(true);
         }
 
-        if !already_claimed && !claim_continuation(&self.node, &goal, &latest.request_id).await? {
-            return Ok(None);
+        if !already_claimed {
+            let claimed = if decision == GoalDecision::Retry {
+                claim_retry_continuation(
+                    &self.node,
+                    &goal,
+                    &latest.request_id,
+                    goal.infrastructure_retry_count.unwrap_or_default(),
+                    &terminal_name,
+                )
+                .await?
+            } else {
+                claim_continuation(&self.node, &goal, &latest.request_id).await?
+            };
+            if !claimed {
+                return Ok(None);
+            }
         }
 
+        self.materialize_claimed_continuation(goal, latest, retry_prefix, wrapup)
+            .await
+    }
+
+    async fn materialize_claimed_continuation(
+        &self,
+        mut goal: GoalDocument,
+        latest: RequestRow,
+        retry_prefix: Option<String>,
+        wrapup: bool,
+    ) -> Result<Option<FireIntent>> {
         let Some(still_latest) = self.latest_request_when_session_idle(&goal).await? else {
             return Ok(None);
         };
@@ -488,11 +556,21 @@ impl GoalSource {
             return Ok(None);
         }
 
-        let sequence = if already_claimed {
-            goal.continuation_sequence()
-        } else {
-            goal.continuation_sequence().saturating_add(1)
-        };
+        // The operator or model may have changed goal authority after the
+        // continuation decision. Re-read the claimed row before publication;
+        // the claim CAS itself also fences the expected status and sequence.
+        goal = load_goal_by_id(&self.node, &goal.agent_did, &goal.goal_id)
+            .await?
+            .context("claimed Goal row disappeared")?;
+        if !matches!(
+            goal.parsed_status(),
+            Some(GoalStatus::Active | GoalStatus::BudgetLimited)
+        ) || goal.last_continued_from_request_id.as_deref() != Some(latest.request_id.as_str())
+        {
+            return Ok(None);
+        }
+
+        let sequence = goal.continuation_sequence();
         let prompt = continuation_prompt(&goal, retry_prefix.as_deref(), wrapup);
         let parent = latest.into_agent_request();
         let child = enqueue_goal_continuation(
@@ -707,14 +785,20 @@ impl GoalSource {
             .map(ToOwned::to_owned))
     }
 
-    async fn pause_goal(&self, goal: &GoalDocument, reason: &str) -> Result<()> {
+    async fn pause_goal(
+        &self,
+        goal: &GoalDocument,
+        expected_status: GoalStatus,
+        reason: &str,
+    ) -> Result<bool> {
         let now = Utc::now();
         let active_time = goal.current_active_time_seconds(now);
         let reason = escape_graphql_string(reason);
         let updated_at = escape_graphql_string(&now.to_rfc3339());
-        update_goal_fields(
+        update_goal_fields_if_status(
             &self.node,
             goal,
+            expected_status,
             &format!(
                 r#"status: "paused", active_time_seconds: {active_time}, active_started_at: null, last_failure: "{reason}", updated_at: "{updated_at}""#
             ),

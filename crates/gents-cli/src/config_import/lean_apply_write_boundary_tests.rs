@@ -964,6 +964,8 @@ fn desired_tool_selection(
         command_network_mode: None,
         cli_tool_names: Vec::new(),
         enable_meta_tools: false,
+        enable_goal_tools: None,
+        enable_goal_creation: None,
         allowed_mcp_service_ids: doc
             .refs
             .iter()
