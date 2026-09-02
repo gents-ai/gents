@@ -320,9 +320,7 @@ pub(super) fn strip_idless_reasoning(messages: Vec<Message>) -> Vec<Message> {
     messages_only(strip_idless_reasoning_sourced(source_messages(messages)))
 }
 
-pub(super) fn strip_idless_reasoning_sourced(
-    messages: Vec<SourcedMessage>,
-) -> Vec<SourcedMessage> {
+pub(super) fn strip_idless_reasoning_sourced(messages: Vec<SourcedMessage>) -> Vec<SourcedMessage> {
     messages
         .into_iter()
         .filter_map(|sourced| {

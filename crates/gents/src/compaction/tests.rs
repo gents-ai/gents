@@ -2670,7 +2670,11 @@ fn sanitize_history_for_provider_strips_idless_reasoning() {
     ];
 
     let out = super::sanitize_history_for_provider(history);
-    assert_eq!(out.len(), 4, "id-less-only assistant row must be dropped: {out:?}");
+    assert_eq!(
+        out.len(),
+        4,
+        "id-less-only assistant row must be dropped: {out:?}"
+    );
 
     let Message::Assistant { content, .. } = &out[1] else {
         panic!("expected partial assistant at index 1, got {out:?}");

@@ -160,9 +160,7 @@ pub fn is_human_user_message(message: &crate::llm::message::Message) -> bool {
 ///
 /// `user_messages` must be in ascending sequence order and contain only
 /// decoded user-role messages (tool-result-only rows included).
-pub fn last_human_user_turn_index(
-    user_messages: &[crate::llm::message::Message],
-) -> Option<u32> {
+pub fn last_human_user_turn_index(user_messages: &[crate::llm::message::Message]) -> Option<u32> {
     user_messages
         .iter()
         .enumerate()

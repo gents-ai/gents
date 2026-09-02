@@ -7,11 +7,11 @@ use gents::adapter_projection::{
 };
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
-use gents::run_timeline_fetch::load_run_timeline;
 use gents::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
+use gents::run_timeline_fetch::load_run_timeline;
 use gents::session::{
     fork, fork_via_http, resolve_fork_at_last_human_user_turn, ForkError, ForkParams,
 };
