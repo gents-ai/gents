@@ -303,7 +303,7 @@ grok-port:
 	GENTS_GROK_PORT_MIN_SURFACES="$(GROK_PORT_MIN_SURFACES)" \
 	GENTS_GROK_PORT_MAX_SURFACES="$(GROK_PORT_MAX_SURFACES)" \
 	GENTS_GROK_PORT_MAX_CONCURRENT_1="$(GROK_PORT_MAX_CONCURRENT_1)" \
-	GENTS_GROK_PORT_ORCHESTRATOR_HOME="$(abspath $(GROK_PORT_GENTS_ROOT))/demo/grok-tui-port/runs/$$grok_port_job_id/home" \
+	GENTS_GROK_PORT_ORCHESTRATOR_HOME="$(CURDIR)/demo/grok-tui-port/runs/$$grok_port_job_id/home" \
 	GENTS_GROK_PORT_ORCHESTRATOR_GRAPHQL="http://127.0.0.1:$(GROK_PORT_PORT)/api/v0/graphql" \
 	GENTS_GROK_PORT_LIVE_HOME="$(abspath $(GROK_PORT_GENTS_ROOT))/demo/grok-tui-port/runs/$$grok_port_job_id/live-home" \
 	GENTS_GROK_PORT_LIVE_GRAPHQL="http://127.0.0.1:$(GROK_PORT_LIVE_PORT)/api/v0/graphql" \
