@@ -12,7 +12,8 @@ tool_call subprocess subagent interrupt`; extra areas are allowed. Confirm:
 - row count is within the job's inclusive `surface_min` / `surface_max`;
 - every mandatory area occurs at least once;
 - every `surface_id` is unique and every row uses an allowed verdict;
-- `grok_wire` is self-contained rather than path-only;
+- `grok_wire` plus optional `grok_wire_continuation` is self-contained rather
+  than path-only, and neither field exceeds the native 2000-byte string cap;
 - `evidence` contains quoted source text, not just citations;
 - every non-ignore row has a live probe and both wire/document evidence
   in `live_expect`;

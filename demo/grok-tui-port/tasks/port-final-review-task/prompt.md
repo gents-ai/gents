@@ -12,6 +12,10 @@ a green report, `live_result_count` (use 1 only if the executable count is
 zero). A non-green report uses `live_result_count=1` to close the blocked live
 sentinel path.
 
+If convergence is skipped or blocked before any executable unit integrates,
+`implement_surface_count` is `0`, not the sentinel document count, and
+`live_result_count` is `1` solely to close the downstream sentinel path.
+
 If convergence is not green, its head does not equal current exact HEAD, or
 the tracked worktree is dirty, do not review or modify source. Write one final
 report with `status=blocked`, zero rounds, the actual head and counts, and the

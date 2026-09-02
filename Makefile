@@ -54,14 +54,14 @@ DEFENDING_STREAM_LIVENESS_SECS ?= 1800
 DEFENDING_STREAM_BATCH_MS ?= 5000
 DEFENDING_RETRY_MAX_TRANSPORT ?= 720
 DEFENDING_RETRY_MAX_RESAMPLE ?= 32
-GROK_PORT_CEILING ?= /Users/johnzampolin/go/src/github.com
+GROK_PORT_CEILING ?= $(CURDIR)
 GROK_PORT_GENTS_ROOT ?= $(CURDIR)
-GROK_PORT_GROK_ROOT ?= /Users/johnzampolin/go/src/github.com/xai-org/grok-build
+GROK_PORT_GROK_ROOT ?= $(CURDIR)/demo/grok-tui-port/recon-input
 GROK_PORT_PROMPT ?= Map the Grok TUI wire from grok-build and implement a Gents-only thin client. Do not add DefraDB access control or Grok permission UI. Prove model name, context window, tool-call semantics, subprocesses, subagents, and interrupts with live GLM turns.
 GROK_PORT_BASE_SHA ?= HEAD
 GROK_PORT_PR_BASE ?= main
 GROK_PORT_BRANCH ?= agent/grok-tui-port-pack8
-GROK_PORT_ENDPOINT_1 ?= http://100.73.235.38:8000/v1
+GROK_PORT_ENDPOINT_1 ?= http://127.0.0.1:8000/v1
 GROK_PORT_MODEL ?= GLM-5.3-NVFP4
 GROK_PORT_MIN_SURFACES ?= 13
 GROK_PORT_MAX_SURFACES ?= 13
@@ -176,9 +176,8 @@ help:
 	@echo "Grok TUI port:"
 	@echo "  make grok-port             Map grok-build and implement a Gents-only Grok TUI shim"
 	@echo "    GROK_PORT_PROMPT='...'   Override the port focus"
-	@echo "    GROK_PORT_ENDPOINT_1=URL Set the workstation-1 inference endpoint"
+	@echo "    GROK_PORT_ENDPOINT_1=URL Set the OpenAI-compatible inference endpoint"
 	@echo "    GROK_PORT_MODEL=MODEL    Set the model (default GLM-5.3-NVFP4)"
-	@echo "    GROK_PORT_GROK_ROOT=DIR  Path to the grok-build checkout"
 	@echo "    GROK_PORT_KEEP_HOME=1    Keep the generated runtime home"
 	@echo
 	@echo "Worktrees:"
@@ -278,7 +277,6 @@ defend:
 .PHONY: grok-port
 grok-port:
 	@test -d "$(GROK_PORT_GENTS_ROOT)" || { echo "GROK_PORT_GENTS_ROOT is not a directory: $(GROK_PORT_GENTS_ROOT)" >&2; exit 2; }
-	@test -d "$(GROK_PORT_GROK_ROOT)" || { echo "GROK_PORT_GROK_ROOT is not a directory: $(GROK_PORT_GROK_ROOT)" >&2; exit 2; }
 	@test -d "$(GROK_PORT_CEILING)" || { echo "GROK_PORT_CEILING is not a directory: $(GROK_PORT_CEILING)" >&2; exit 2; }
 	@case "$(GROK_PORT_MIN_SURFACES)" in ''|*[!0-9]*) echo "GROK_PORT_MIN_SURFACES must be a positive integer: $(GROK_PORT_MIN_SURFACES)" >&2; exit 2;; esac
 	@case "$(GROK_PORT_MAX_SURFACES)" in ''|*[!0-9]*) echo "GROK_PORT_MAX_SURFACES must be a positive integer: $(GROK_PORT_MAX_SURFACES)" >&2; exit 2;; esac

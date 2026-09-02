@@ -33,7 +33,7 @@
       "tool_name": "read_port_surface",
       "collection": "PortSurface",
       "description": "Load audited combined protocol and document requirements.",
-      "fields": ["surface_id", "area", "verdict", "grok_wire", "gents_docs", "evidence"],
+      "fields": ["surface_id", "area", "verdict", "grok_wire", "grok_wire_continuation", "gents_docs", "evidence"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

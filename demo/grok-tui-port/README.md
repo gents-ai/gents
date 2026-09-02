@@ -22,7 +22,7 @@ ACP traffic onto Gents documents; it does not launch Grok's own leader process.
 
 ```text
 GrokPortJob
-  -> recon (ceiling: gents + grok-build) -> PortSurface*
+  -> recon (checked-in audited ledger, no grok-build checkout required) -> PortSurface* (13)
   -> recon-audit -> plan -> exactly 8 path-disjoint PortWorkUnits
   -> CallbackBinding CreateWorkspace per unit (8-way fanout)
        IsolatedWorkspace at <gents>/.gents/workspaces/gents-ws-<id>-<branch>
@@ -58,8 +58,8 @@ each of the eight logical slots. There is no arbitrary attempt ceiling.
 
 Recon is required to emit at least `attach`, `session`, `model`, `context`,
 `tool_call`, `subprocess`, `subagent`, and `interrupt`. Each `PortSurface`
-carries a self-contained `grok_wire` packet; later stages cannot open
-grok-build.
+carries a self-contained packet split, when needed, across `grok_wire` and
+`grok_wire_continuation`; later stages cannot open grok-build.
 
 ## Run
 
@@ -67,13 +67,13 @@ grok-build.
 make grok-port
 ```
 
-Expects grok-build at `/Users/johnzampolin/go/src/github.com/xai-org/grok-build`.
-Override with `GROK_PORT_GROK_ROOT` / `GROK_PORT_CEILING`. Pin the workspace
-base with `GROK_PORT_BASE_SHA`. The PR head is `GROK_PORT_BRANCH`
+The checked-in audited ledger is the recon source; a grok-build checkout is
+not required. `GROK_PORT_CEILING` defaults to this repository. Pin the
+workspace base with `GROK_PORT_BASE_SHA`. The PR head is `GROK_PORT_BRANCH`
 (default `agent/grok-tui-port-pack8`).
 
-The default inference pool is workstation-1 at
-`http://100.73.235.38:8000/v1`, with one shared 16-request concurrency cap
+The portable default inference endpoint is
+`http://127.0.0.1:8000/v1`, with one shared 16-request concurrency cap
 across coordinators, the eight concurrent implementers, the eight concurrent
 sealed reviewers, convergence, and the final review graph.
 
@@ -99,6 +99,7 @@ Every run lands under `demo/grok-tui-port/runs/<job-id>/`.
 a running integrated server:
 
 ```bash
+python3 demo/grok-tui-port/scripts/grok_edge_probe.py --edge offline
 python3 demo/grok-tui-port/scripts/grok_edge_probe.py \
   --socket /tmp/gents-grok-live.sock \
   --graphql http://127.0.0.1:19205/api/v0/graphql \

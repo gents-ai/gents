@@ -22,7 +22,8 @@
 //!   `{"version": <TOOL_META_VERSION>, "kind": "ActiveAgentMessage"}`) or
 //!   the title `send_subagent_message`, with rawInput
 //!   `{"subagent_id", "text"}`;
-//! - `available_commands_update` carries meta `{"tools": [...]}`;
+//! - `available_commands_update` carries an empty ACP command catalog plus
+//!   Grok's tool names in `_meta.tools`;
 //! - orphan `tool_call_update` values arriving before their `tool_call` are
 //!   merged into the pending base by `toolCallId` on arrival.
 //!
@@ -50,6 +51,8 @@ use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use super::nonempty;
+
 /// JSON-RPC error code the pager uses for a client method the client does
 /// not implement (method not supported by the connection).
 pub(crate) const JSONRPC_METHOD_NOT_SUPPORTED: i64 = -32601;
@@ -62,7 +65,7 @@ pub(crate) const JSONRPC_METHOD_NOT_SUPPORTED: i64 = -32601;
 /// when it sees it.
 pub(crate) const PAGER_WAIT_FOR_EXIT_MESSAGE: &str = "pager does not handle WaitForTerminalExit";
 
-/// Canonical tool meta envelope key the pager recognizes: the `meta` field
+/// Canonical tool meta envelope key the pager recognizes: the `_meta` field
 /// of a `tool_call` carries an envelope object whose `x.ai/tool` entry holds
 /// the canonical tool meta (`version`/`kind`), with a `subagentBackground`
 /// boolean sibling merged from the row's persisted `await_mode`.
@@ -170,8 +173,6 @@ pub(super) struct ToolCallRow {
     #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
-    child_request_id: Option<String>,
-    #[serde(default)]
     args: Option<String>,
     #[serde(default)]
     result: Option<String>,
@@ -212,7 +213,6 @@ const TOOL_CALL_FIELDS: &str = r#"
     tool_name
     status
     lifecycle_state
-    child_request_id
     args
     result
     selected_tool_name
@@ -292,7 +292,7 @@ impl ToolCallUpdate {
     }
 
     /// Render the `tool_call` payload. Optional absent objects
-    /// (`rawInput`/`rawOutput`/`meta`/`content`) are omitted entirely rather
+    /// (`rawInput`/`rawOutput`/`_meta`/`content`) are omitted entirely rather
     /// than sent as nulls, matching the pager decoder.
     pub fn to_payload(&self) -> Value {
         let mut payload = json!({
@@ -315,7 +315,7 @@ impl ToolCallUpdate {
             object.insert("rawOutput".to_string(), raw_output.clone());
         }
         if let Some(meta) = self.meta.as_ref() {
-            object.insert("meta".to_string(), meta.clone());
+            object.insert("_meta".to_string(), meta.clone());
         }
         payload
     }
@@ -330,16 +330,25 @@ pub(super) struct ToolCallFieldsUpdate {
 }
 
 impl ToolCallFieldsUpdate {
-    /// Render the `tool_call_update` payload. Test observation helper: the
-    /// projection engine renders the update directly from the cursor diff.
+    /// Render ACP's flattened `tool_call_update` payload.
     #[cfg(test)]
     pub fn to_payload(&self) -> Value {
-        json!({
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": self.tool_call_id,
-            "fields": self.fields,
-        })
+        tool_call_update_payload(&self.tool_call_id, &self.fields)
     }
+}
+
+/// Render ACP's flattened `tool_call_update` shape. The schema models the
+/// changed fields with `#[serde(flatten)]`, so nesting them below a synthetic
+/// `fields` key makes the pager silently ignore status/content revisions.
+pub(super) fn tool_call_update_payload(tool_call_id: &str, fields: &Value) -> Value {
+    let mut payload = json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": tool_call_id,
+    });
+    if let (Some(payload), Some(fields)) = (payload.as_object_mut(), fields.as_object()) {
+        payload.extend(fields.clone());
+    }
+    payload
 }
 
 /// An `available_commands_update` payload.
@@ -352,7 +361,8 @@ impl AvailableCommandsUpdate {
     pub fn to_payload(&self) -> Value {
         json!({
             "sessionUpdate": "available_commands_update",
-            "meta": {
+            "availableCommands": [],
+            "_meta": {
                 "tools": self.tools,
             },
         })
@@ -806,11 +816,6 @@ fn available_commands(rows: &[ToolCallRow]) -> Vec<String> {
     tools
 }
 
-fn nonempty(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
-}
-
 // ---------------------------------------------------------------------------
 // Terminal ACP client method stubs
 // ---------------------------------------------------------------------------
@@ -957,7 +962,6 @@ mod tests {
             tool_name: Some(tool_name.to_string()),
             status: None,
             lifecycle_state: lifecycle_state.map(ToOwned::to_owned),
-            child_request_id: None,
             args: Some(r#"{"command":"echo gents-subprocess-probe"}"#.to_string()),
             result: Some("gents-subprocess-probe".to_string()),
             selected_tool_name: None,
@@ -1048,7 +1052,8 @@ mod tests {
         let payload = update.to_payload();
         assert_eq!(payload["sessionUpdate"], "tool_call_update");
         assert_eq!(payload["toolCallId"], "call-bash");
-        assert_eq!(payload["fields"]["status"], "completed");
+        assert_eq!(payload["status"], "completed");
+        assert!(payload.get("fields").is_none());
     }
 
     #[test]
@@ -1126,7 +1131,7 @@ mod tests {
                 );
                 let payload = call.to_payload();
                 assert_eq!(
-                    payload["meta"]["subagentBackground"], expected,
+                    payload["_meta"]["subagentBackground"], expected,
                     "{name} payload must carry the explicit boolean"
                 );
             }
@@ -1161,8 +1166,8 @@ mod tests {
             );
             assert_eq!(meta["subagentBackground"], expected);
             let payload = call.to_payload();
-            assert_eq!(payload["meta"][TOOL_META_KEY], tool_meta);
-            assert_eq!(payload["meta"]["subagentBackground"], expected);
+            assert_eq!(payload["_meta"][TOOL_META_KEY], tool_meta);
+            assert_eq!(payload["_meta"]["subagentBackground"], expected);
         }
     }
 
@@ -1181,7 +1186,7 @@ mod tests {
         let meta = call.meta.as_ref().expect("background row carries meta");
         assert_eq!(meta["subagentBackground"], true);
         let payload = call.to_payload();
-        assert_eq!(payload["meta"]["subagentBackground"], true);
+        assert_eq!(payload["_meta"]["subagentBackground"], true);
 
         // A non-`background` await mode is foreground: explicit false, never
         // an omitted key.
@@ -1281,7 +1286,8 @@ mod tests {
         assert_eq!(update.tools, vec!["bash", "read_file"]);
         let payload = update.to_payload();
         assert_eq!(payload["sessionUpdate"], "available_commands_update");
-        assert_eq!(payload["meta"]["tools"], json!(["bash", "read_file"]));
+        assert_eq!(payload["availableCommands"], json!([]));
+        assert_eq!(payload["_meta"]["tools"], json!(["bash", "read_file"]));
     }
 
     #[test]

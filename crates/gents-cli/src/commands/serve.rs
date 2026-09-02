@@ -1126,27 +1126,44 @@ pub(crate) async fn serve_with_control(
         eprintln!("gents server is running local-only. Press Ctrl-C to stop.");
     }
 
-    // Hold the Grok leader for the lifetime of this function. `LeaderHandle`
-    // owns shutdown and the listener task (shared shim contract), so dropping
-    // it at return stops the listener and releases the exclusive leader lock;
-    // the leader is deliberately not a second join the operator has to reason
-    // about.
-    let _grok_leader = grok_shim_handle;
-
-    if let Some(handle) = codex_shim_handle.as_mut() {
+    let runtime_result = if let Some(handle) = codex_shim_handle.as_mut() {
         tokio::select! {
             result = &mut run_handle => {
-                result.context("joining gents runtime task")?
+                match result {
+                    Ok(result) => result,
+                    Err(error) => Err(anyhow::anyhow!("joining gents runtime task: {error}")),
+                }
             }
             result = handle => {
-                result.context("joining Codex shim task")?
-                    .context("Codex shim task failed")?;
-                Ok(())
+                match result {
+                    Ok(result) => result.context("Codex shim task failed"),
+                    Err(error) => Err(anyhow::anyhow!("joining Codex shim task: {error}")),
+                }
             }
         }
     } else {
-        run_handle.await.context("joining gents runtime task")?
+        match run_handle.await {
+            Ok(result) => result,
+            Err(error) => Err(anyhow::anyhow!("joining gents runtime task: {error}")),
+        }
+    };
+
+    // Production shutdown is explicit and awaited. Dropping the handle is an
+    // emergency abort path; awaiting here lets the leader publish its shutdown
+    // frames, drain connection state, unlink the socket, and release the lock
+    // before `serve` returns.
+    if let Some(handle) = grok_shim_handle.as_mut() {
+        if let Err(error) = handle.shutdown().await {
+            if runtime_result.is_ok() {
+                return Err(error).context("shutting down the Grok shim leader");
+            }
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "Grok shim leader shutdown also failed while the server was exiting with an error"
+            );
+        }
     }
+    runtime_result
 }
 
 struct ServerIdentity {

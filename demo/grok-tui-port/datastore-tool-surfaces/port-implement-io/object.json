@@ -17,7 +17,7 @@
       "tool_name": "read_port_surface",
       "collection": "PortSurface",
       "description": "Load mapped surfaces so the implementer can target Grok call sites, not Codex files.",
-      "fields": ["surface_id", "area", "verdict", "grok_call_sites", "grok_wire", "gents_docs", "live_prompt", "live_expect", "evidence"],
+      "fields": ["surface_id", "area", "verdict", "grok_call_sites", "grok_wire", "grok_wire_continuation", "gents_docs", "live_prompt", "live_expect", "evidence"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

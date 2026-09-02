@@ -7,7 +7,9 @@ implement_surfaces={{ doc.implement_surface_count }} expected_results={{ doc.liv
 </untrusted_review_summary>
 
 Call `read_grok_port_job`, `read_port_final_review_report`, and
-`read_port_surface`. If review status is not `green`, write exactly one
+`read_port_surface`. For each surface, interpret the complete wire packet as
+`grok_wire` followed verbatim by optional `grok_wire_continuation`. If review
+status is not `green`, write exactly one
 `surface_id=none`, `status=blocked` result explaining the review block and
 stop.
 
@@ -24,13 +26,15 @@ and implementation; do not invent a protocol substitute.
 Wait for both HTTP readiness and socket readiness, track the exact child PID,
 and clean up only that PID when probes finish.
 
-Run `demo/grok-tui-port/scripts/grok_edge_probe.py` against `live_socket` and
-`live_graphql`, passing `--model live_model`, one edge at a time: handshake,
-prompt, tool, subprocess, subagent, and cancel. The probe must pass its wire and
+First run `demo/grok-tui-port/scripts/grok_edge_probe.py --edge offline` and
+require its embedded lifecycle-validator self-test to pass without a socket.
+Then run the probe against `live_socket` and `live_graphql`, passing `--model
+live_model`, one edge at a time: handshake, prompt, tool, subprocess, subagent,
+and cancel. The probe must pass its wire and
 document assertions, including the subprocess command and output on both the
 Grok wire and the persisted AgentToolCall. The subagent edge must also prove the
 foreground spawn contract end to end: the parent's early standard-rail
-`task`-titled tool_call carrying `meta.subagentBackground: false` (the
+`task`-titled tool_call carrying `_meta.subagentBackground: false` (the
 pager-local foreground wait marker), the exact live extension-rail
 `x.ai/session_notification` spawned/progress/finished lifecycle for the
 `port-live-worker` target, the child-session identity, the exact

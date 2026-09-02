@@ -40,7 +40,8 @@
 //!   disconnect notification.
 //! * On a clean stop the accept loop announces `shutting_down` plus `shutdown`
 //!   to every live connection, releases the leader lock, and removes the
-//!   socket and lock file. [`LeaderHandle::shutdown`] awaits that clean stop.
+//!   socket. The private lock inode is retained to avoid split-lock races.
+//!   [`LeaderHandle::shutdown`] awaits that clean stop.
 //!   Dropping the handle without shutting down is the documented emergency
 //!   path: it aborts the listener task and unlinks the published socket, and
 //!   deliberately leaves the lock file for the next leader to reclaim, because
@@ -96,7 +97,6 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
-use tokio::net::unix::OwnedReadHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{JoinHandle, JoinSet};
@@ -104,7 +104,8 @@ use uuid::Uuid;
 
 use super::protocol::{
     read_client_envelope, write_server_envelope, ClientCapabilities, ClientEnvelope,
-    LeaderCapabilities, RegisterMode, ServerEnvelope, ShutdownReason, LEADER_PROTOCOL_VERSION,
+    LeaderCapabilities, ProtocolError, RegisterMode, ServerEnvelope, ShutdownReason,
+    LEADER_PROTOCOL_VERSION,
 };
 
 /// Tracing target for every log line this module emits.
@@ -146,9 +147,25 @@ const STAGING_ATTEMPTS: usize = 8;
 /// cannot stall a clean stop.
 const MAX_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
+/// Maximum number of complete outbound envelopes waiting behind a slow pager.
+const OUTBOUND_FRAME_CAPACITY: usize = 256;
+
+/// One decoded inbound envelope may wait while the connection loop services a
+/// lifecycle event. The dedicated reader retains partial frame bytes across
+/// `select!` cancellation in the connection loop.
+const INBOUND_FRAME_CAPACITY: usize = 1;
+
+/// Maximum concurrent ACP dispatches per connection. This still permits a
+/// prompt and its cancel to overlap without allowing an unbounded task fanout.
+const MAX_ACP_DISPATCH_TASKS: usize = 64;
+
+/// Attempts to acquire and revalidate one stable lock-file inode.
+const LOCK_ACQUIRE_ATTEMPTS: usize = 8;
+
 /// Published socket path length exercised by the near-limit tests. `sun_path`
 /// is 104 bytes on macOS and 108 on Linux, so 100 bytes of path is genuinely
 /// near the limit while remaining connectable on every supported target.
+#[cfg(test)]
 const NEAR_LIMIT_PATH_BYTES: usize = 100;
 
 /// `O_NOFOLLOW` for `OpenOptions::custom_flags`.
@@ -176,7 +193,35 @@ const O_NOFOLLOW: i32 = 0x0000_0040;
 /// after the connection closed is an error the caller may ignore.
 #[derive(Clone)]
 pub(crate) struct AcpOutbound {
-    frames: mpsc::UnboundedSender<ServerEnvelope>,
+    frames: FrameSender,
+}
+
+#[derive(Clone)]
+enum FrameSender {
+    Bounded(mpsc::Sender<ServerEnvelope>),
+    #[cfg(test)]
+    Unbounded(mpsc::UnboundedSender<ServerEnvelope>),
+}
+
+impl FrameSender {
+    fn send(&self, envelope: ServerEnvelope) -> Result<()> {
+        match self {
+            FrameSender::Bounded(frames) => {
+                frames.try_send(envelope).map_err(|error| match error {
+                    mpsc::error::TrySendError::Full(_) => {
+                        anyhow!("the grok shim leader outbound queue is full")
+                    }
+                    mpsc::error::TrySendError::Closed(_) => {
+                        anyhow!("the grok shim leader connection is closed")
+                    }
+                })
+            }
+            #[cfg(test)]
+            FrameSender::Unbounded(frames) => frames
+                .send(envelope)
+                .map_err(|_| anyhow!("the grok shim leader connection is closed")),
+        }
+    }
 }
 
 impl AcpOutbound {
@@ -187,16 +232,16 @@ impl AcpOutbound {
     /// a channel) can build one directly.
     #[cfg(test)]
     pub(crate) fn for_frames(frames: mpsc::UnboundedSender<ServerEnvelope>) -> Self {
-        Self { frames }
+        Self {
+            frames: FrameSender::Unbounded(frames),
+        }
     }
 
     /// Queue one ACP JSON-RPC line for the pager client.
     pub(crate) fn send(&self, payload: impl Into<String>) -> Result<()> {
-        self.frames
-            .send(ServerEnvelope::Acp {
-                payload: payload.into(),
-            })
-            .map_err(|_| anyhow!("the grok shim leader connection is closed"))
+        self.frames.send(ServerEnvelope::Acp {
+            payload: payload.into(),
+        })
     }
 }
 
@@ -288,42 +333,35 @@ impl LeaderServerConfig {
             shutdown_delay_ms: 0,
         }
     }
-
-    /// The sibling extension-swapped lock path for this socket.
-    pub(crate) fn lock_path(&self) -> PathBuf {
-        self.socket_path.with_extension("lock")
-    }
-
-    pub(crate) fn with_shutdown_delay_ms(mut self, delay_ms: u64) -> Self {
-        self.shutdown_delay_ms = delay_ms;
-        self
-    }
 }
 
 /// Handle to one spawned leader. Owns shutdown and the listener task.
 pub(crate) struct LeaderHandle {
     socket_path: PathBuf,
-    lock_path: PathBuf,
     shutdown_tx: watch::Sender<bool>,
     task: Option<JoinHandle<Result<()>>>,
 }
 
 impl LeaderHandle {
     /// Published socket path.
+    #[cfg(test)]
     pub(crate) fn socket_path(&self) -> &Path {
         &self.socket_path
     }
 
     /// Leader lock path (the socket path with its extension swapped to
     /// `lock`).
-    pub(crate) fn lock_path(&self) -> &Path {
-        &self.lock_path
+    #[cfg(test)]
+    pub(crate) fn lock_path(&self) -> PathBuf {
+        self.socket_path.with_extension("lock")
     }
 
     /// Request a clean stop and wait for the listener task to finish it.
     ///
-    /// On return the socket and lock file have been removed and the exclusive
-    /// leader lock has been released, so a new leader may take the socket.
+    /// On return the socket has been removed and the exclusive leader lock has
+    /// been released, so a new leader may take the socket. The private lock
+    /// inode remains in place deliberately: unlinking a flock file creates a
+    /// split-lock race with a concurrent opener.
     pub(crate) async fn shutdown(&mut self) -> Result<()> {
         let _ = self.shutdown_tx.send(true);
         self.join().await
@@ -353,7 +391,7 @@ impl Drop for LeaderHandle {
         // aborted task drops the guard the next `spawn_leader` reclaims it
         // safely, whereas unlinking a lock file this dropper may no longer
         // hold would let a concurrently starting leader lose exclusivity.
-        // `shutdown` is the clean path that also removes the lock file.
+        // `shutdown` is the clean path that releases the lock descriptor.
         if let Err(error) = std::fs::remove_file(&self.socket_path) {
             if error.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(
@@ -417,7 +455,6 @@ pub(crate) fn spawn_leader(
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (lifecycle_tx, _lifecycle_rx) = broadcast::channel::<ServerEnvelope>(16);
-    let lock_path = socket_path.with_extension("lock");
     let shutdown_delay_ms = config.shutdown_delay_ms;
     let task = tokio::spawn(accept_loop(
         listener,
@@ -433,7 +470,6 @@ pub(crate) fn spawn_leader(
 
     Ok(LeaderHandle {
         socket_path,
-        lock_path,
         shutdown_tx,
         task: Some(task),
     })
@@ -557,8 +593,7 @@ async fn accept_loop(
 
     drop(listener);
 
-    // Clean stop: remove the published socket, then release the leader lock
-    // (which removes the lock file while the exclusive lock is still held).
+    // Clean stop: remove the published socket, then release the leader lock.
     remove_published_socket(&socket_path);
     lock.release();
     tracing::info!(
@@ -601,7 +636,22 @@ async fn handle_connection(
     mut lifecycle: broadcast::Receiver<ServerEnvelope>,
 ) {
     let (mut reader, writer) = stream.into_split();
-    let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<ServerEnvelope>();
+    let (frames_tx, mut frames_rx) = mpsc::channel::<ServerEnvelope>(OUTBOUND_FRAME_CAPACITY);
+    let frames_tx = FrameSender::Bounded(frames_tx);
+    let (client_frames_tx, mut client_frames_rx) =
+        mpsc::channel::<std::result::Result<ClientEnvelope, ProtocolError>>(INBOUND_FRAME_CAPACITY);
+    // This task is the sole owner of the read half. The connection loop only
+    // selects on decoded-frame delivery, so dropping that receive future for a
+    // lifecycle event never drops a partially-read length prefix or payload.
+    let reader_task = tokio::spawn(async move {
+        loop {
+            let frame = read_client_envelope(&mut reader).await;
+            let terminal = frame.is_err();
+            if client_frames_tx.send(frame).await.is_err() || terminal {
+                break;
+            }
+        }
+    });
     let writer_task = tokio::spawn(async move {
         let mut writer = writer;
         while let Some(envelope) = frames_rx.recv().await {
@@ -619,17 +669,20 @@ async fn handle_connection(
     // Phase 1: the first frame must be a valid register; `registered` is only
     // written after it validates, and the connection's delegate is only
     // constructed after the register frame validates.
-    let registration = match register_client(&mut reader, &frames_tx, &mut lifecycle).await {
-        Ok(registration) => registration,
-        Err(()) => {
-            // register_client already logged the cause and, where the protocol
-            // demands it, wrote the error envelope. No delegate was ever
-            // constructed for this connection, so there is nothing to notify.
-            drop(frames_tx);
-            let _ = tokio::time::timeout(MAX_SHUTDOWN_GRACE, writer_task).await;
-            return;
-        }
-    };
+    let registration =
+        match register_client(&mut client_frames_rx, &frames_tx, &mut lifecycle).await {
+            Ok(registration) => registration,
+            Err(()) => {
+                // register_client already logged the cause and, where the protocol
+                // demands it, wrote the error envelope. No delegate was ever
+                // constructed for this connection, so there is nothing to notify.
+                drop(frames_tx);
+                reader_task.abort();
+                let _ = reader_task.await;
+                let _ = tokio::time::timeout(MAX_SHUTDOWN_GRACE, writer_task).await;
+                return;
+            }
+        };
 
     let delegate: Arc<dyn AcpDelegate> =
         match factory.create_delegate(client_id, &registration).await {
@@ -644,6 +697,8 @@ async fn handle_connection(
                     "grok shim leader could not construct an ACP delegate for a connection"
                 );
                 drop(frames_tx);
+                reader_task.abort();
+                let _ = reader_task.await;
                 let _ = tokio::time::timeout(MAX_SHUTDOWN_GRACE, writer_task).await;
                 return;
             }
@@ -674,6 +729,7 @@ async fn handle_connection(
     };
     let mut acp_tasks: JoinSet<()> = JoinSet::new();
     loop {
+        reap_acp_dispatches(&mut acp_tasks);
         tokio::select! {
             biased;
             lifecycle_frame = lifecycle.recv() => {
@@ -681,7 +737,9 @@ async fn handle_connection(
                     Ok(envelope) => {
                         // Forward `shutting_down` and `shutdown`; the closed
                         // channel below ends the loop.
-                        let _ = frames_tx.send(envelope);
+                        if frames_tx.send(envelope).is_err() {
+                            break;
+                        }
                     }
                     Err(broadcast::error::RecvError::Lagged(missed)) => {
                         tracing::warn!(
@@ -695,20 +753,43 @@ async fn handle_connection(
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
-            frame = read_client_envelope(&mut reader) => {
+            frame = client_frames_rx.recv() => {
                 match frame {
-                    Ok(ClientEnvelope::Ping) => {
-                        let _ = frames_tx.send(ServerEnvelope::Pong);
+                    Some(Ok(ClientEnvelope::Ping)) => {
+                        if frames_tx.send(ServerEnvelope::Pong).is_err() {
+                            break;
+                        }
                     }
-                    Ok(ClientEnvelope::Acp { payload }) => {
-                        spawn_acp_dispatch(
-                            &mut acp_tasks,
-                            delegate.clone(),
-                            outbound.clone(),
-                            payload,
-                        );
+                    Some(Ok(ClientEnvelope::Acp { payload })) => {
+                        if !acp_dispatch_has_capacity(&acp_tasks) {
+                            tracing::warn!(
+                                target: LOG_TARGET,
+                                client_id,
+                                active = acp_tasks.len(),
+                                "grok shim leader rejected ACP dispatch at the per-connection limit"
+                            );
+                            if let Some(response) = internal_error_response(&payload) {
+                                if outbound.send(response).is_err() {
+                                    break;
+                                }
+                            } else {
+                                // Notifications have no response channel on
+                                // which overload can be reported. Closing the
+                                // connection invokes `on_disconnect`, which
+                                // safely cancels every pending turn instead of
+                                // silently dropping a session/cancel.
+                                break;
+                            }
+                        } else {
+                            spawn_acp_dispatch(
+                                &mut acp_tasks,
+                                delegate.clone(),
+                                outbound.clone(),
+                                payload,
+                            );
+                        }
                     }
-                    Ok(ClientEnvelope::Control { request_id, command }) => {
+                    Some(Ok(ClientEnvelope::Control { request_id, command })) => {
                         tracing::warn!(
                             target: LOG_TARGET,
                             client_id,
@@ -716,22 +797,24 @@ async fn handle_connection(
                             command = %command,
                             "grok shim leader received an unsupported control command"
                         );
-                        let _ = frames_tx.send(ServerEnvelope::Error {
+                        if frames_tx.send(ServerEnvelope::Error {
                             code: ENVELOPE_ERROR_METHOD_NOT_FOUND,
                             message: format!(
                                 "the Gents leader shim does not implement control commands \
                                  (request {request_id:?}); leader_capabilities.control_v1 is false"
                             ),
-                        });
+                        }).is_err() {
+                            break;
+                        }
                     }
-                    Ok(ClientEnvelope::Register { .. }) => {
+                    Some(Ok(ClientEnvelope::Register { .. })) => {
                         protocol_violation(
                             &frames_tx,
                             "register is only valid as the first frame on a connection",
                         );
                         break;
                     }
-                    Ok(ClientEnvelope::Disconnect) => {
+                    Some(Ok(ClientEnvelope::Disconnect)) => {
                         tracing::debug!(
                             target: LOG_TARGET,
                             client_id,
@@ -739,8 +822,8 @@ async fn handle_connection(
                         );
                         break;
                     }
-                    Err(error) if error.is_connection_closed() => break,
-                    Err(error) => {
+                    Some(Err(error)) if error.is_connection_closed() => break,
+                    Some(Err(error)) => {
                         tracing::debug!(
                             target: LOG_TARGET,
                             client_id,
@@ -753,6 +836,7 @@ async fn handle_connection(
                         );
                         break;
                     }
+                    None => break,
                 }
             }
         }
@@ -772,8 +856,12 @@ async fn handle_connection(
             client_id,
             "grok shim leader closed a connection with ACP dispatch still running"
         );
+        acp_tasks.abort_all();
+        while acp_tasks.join_next().await.is_some() {}
     }
     drop(frames_tx);
+    reader_task.abort();
+    let _ = reader_task.await;
     let _ = tokio::time::timeout(MAX_SHUTDOWN_GRACE, writer_task).await;
 }
 
@@ -781,8 +869,8 @@ async fn handle_connection(
 /// connection must close; the error envelope (when the protocol requires one)
 /// has already been queued.
 async fn register_client(
-    reader: &mut OwnedReadHalf,
-    frames: &mpsc::UnboundedSender<ServerEnvelope>,
+    client_frames: &mut mpsc::Receiver<std::result::Result<ClientEnvelope, ProtocolError>>,
+    frames: &FrameSender,
     lifecycle: &mut broadcast::Receiver<ServerEnvelope>,
 ) -> std::result::Result<Registration, ()> {
     loop {
@@ -792,7 +880,10 @@ async fn register_client(
                 // The leader is stopping before this client registered.
                 return Err(());
             }
-            frame = read_client_envelope(reader) => frame,
+            frame = client_frames.recv() => match frame {
+                Some(frame) => frame,
+                None => return Err(()),
+            },
         };
         match frame {
             Ok(ClientEnvelope::Register {
@@ -852,12 +943,28 @@ fn validate_register(client_type: &str, _mode: &RegisterMode) -> Result<()> {
     Ok(())
 }
 
-fn protocol_violation(frames: &mpsc::UnboundedSender<ServerEnvelope>, message: &str) {
+fn protocol_violation(frames: &FrameSender, message: &str) {
     tracing::warn!(target: LOG_TARGET, message, "grok shim leader protocol violation");
     let _ = frames.send(ServerEnvelope::Error {
         code: ENVELOPE_ERROR_INVALID_REQUEST,
         message: message.to_string(),
     });
+}
+
+fn reap_acp_dispatches(tasks: &mut JoinSet<()>) {
+    while let Some(result) = tasks.try_join_next() {
+        if let Err(error) = result {
+            tracing::warn!(
+                target: LOG_TARGET,
+                %error,
+                "grok shim leader ACP dispatch task failed to join"
+            );
+        }
+    }
+}
+
+fn acp_dispatch_has_capacity(tasks: &JoinSet<()>) -> bool {
+    tasks.len() < MAX_ACP_DISPATCH_TASKS
 }
 
 fn spawn_acp_dispatch(
@@ -1046,70 +1153,61 @@ impl LeaderLock {
                 )
             })?;
         }
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(PRIVATE_FILE_MODE)
-            .custom_flags(O_NOFOLLOW)
-            .open(&path)
-            .with_context(|| format!("opening the grok shim leader lock {}", path.display()))?;
-        force_private_mode(&file, &path)?;
-        if let Err(error) = file.try_lock() {
-            if matches!(error, std::fs::TryLockError::WouldBlock) {
-                let holder = read_holder_pid(&path);
+        for _ in 0..LOCK_ACQUIRE_ATTEMPTS {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(PRIVATE_FILE_MODE)
+                .custom_flags(O_NOFOLLOW)
+                .open(&path)
+                .with_context(|| format!("opening the grok shim leader lock {}", path.display()))?;
+            if let Err(error) = file.try_lock() {
+                if matches!(error, std::fs::TryLockError::WouldBlock) {
+                    let holder = read_holder_pid(&path);
+                    return Err(anyhow!(
+                        "another grok leader already holds {} (last recorded holder pid: {})",
+                        path.display(),
+                        holder
+                            .map(|pid| pid.to_string())
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    ));
+                }
                 return Err(anyhow!(
-                    "another grok leader already holds {} (last recorded holder pid: {})",
-                    path.display(),
-                    holder
-                        .map(|pid| pid.to_string())
-                        .unwrap_or_else(|| "unknown".to_string()),
+                    "locking the grok shim leader lock {} failed: {error}",
+                    path.display()
                 ));
             }
-            return Err(anyhow!(
-                "locking the grok shim leader lock {} failed: {error}",
-                path.display()
-            ));
+            if file_identity(&file) != path_identity(&path) {
+                drop(file);
+                continue;
+            }
+            force_private_mode(&file, &path)?;
+            let mut file = file;
+            write_holder_pid(&mut file)
+                .with_context(|| format!("recording the leader pid in {}", path.display()))?;
+            // Revalidate after every mutation of the descriptor. A replaced
+            // pathname never becomes the published election point.
+            if file_identity(&file) != path_identity(&path) {
+                drop(file);
+                continue;
+            }
+            return Ok(Self { path, file });
         }
-        let mut file = file;
-        write_holder_pid(&mut file)
-            .with_context(|| format!("recording the leader pid in {}", path.display()))?;
-        Ok(Self { path, file })
+        bail!(
+            "the grok shim leader lock {} changed inode during acquisition",
+            path.display()
+        )
     }
 
-    /// Release the lock: remove the lock file while the exclusive lock is
-    /// still held, but only while the path still names the inode we locked.
-    /// Dropping the guard afterwards releases the exclusive lock.
+    /// Release the lock by dropping the descriptor while retaining the stable
+    /// private inode. Removing a flock file before dropping the descriptor
+    /// lets another leader create and lock a different inode; dropping first
+    /// and then unlinking can delete a new leader's lock. A persistent inode is
+    /// the only race-free pathname contract for advisory locks.
     fn release(self) {
-        let locked = file_identity(&self.file);
-        let on_path = std::fs::metadata(&self.path)
-            .ok()
-            .and_then(|metadata| Some((metadata.dev(), metadata.ino())));
-        match (locked, on_path) {
-            (Some(locked), Some(on_path)) if locked == on_path => {
-                match std::fs::remove_file(&self.path) {
-                    Ok(()) => tracing::debug!(
-                        target: LOG_TARGET,
-                        lock = %self.path.display(),
-                        "released the grok shim leader lock"
-                    ),
-                    Err(error) => tracing::warn!(
-                        target: LOG_TARGET,
-                        %error,
-                        lock = %self.path.display(),
-                        "failed to remove the grok shim leader lock on clean stop"
-                    ),
-                }
-            }
-            _ => {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    lock = %self.path.display(),
-                    "the grok shim leader lock path no longer names the locked inode; leaving it in place"
-                );
-            }
-        }
+        tracing::debug!(target: LOG_TARGET, lock = %self.path.display(), "released the grok shim leader lock");
         drop(self.file);
     }
 }
@@ -1163,6 +1261,14 @@ fn force_private_mode(file: &File, path: &Path) -> Result<()> {
 
 fn file_identity(file: &File) -> Option<(u64, u64)> {
     let metadata = file.metadata().ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+fn path_identity(path: &Path) -> Option<(u64, u64)> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return None;
+    }
     Some((metadata.dev(), metadata.ino()))
 }
 
@@ -1397,8 +1503,10 @@ impl StagingDir {
     }
 }
 
-/// Same-device ancestors of `final_parent`, ordered shortest (shallowest)
-/// first. Ancestors on a different device are skipped: publishing from them
+/// Same-device non-root ancestors of `final_parent`, ordered shortest
+/// (shallowest) first. `/` is never a staging candidate: a privileged process
+/// must not publish temporary shim directories at the filesystem root.
+/// Ancestors on a different device are skipped because publishing from them
 /// could not `rename(2)` onto the final path.
 fn staging_candidate_ancestors(final_parent: &Path) -> Vec<PathBuf> {
     let parent_dev = match std::fs::metadata(final_parent) {
@@ -1407,6 +1515,9 @@ fn staging_candidate_ancestors(final_parent: &Path) -> Vec<PathBuf> {
     };
     let mut candidates = Vec::new();
     for ancestor in final_parent.ancestors() {
+        if ancestor == Path::new("/") {
+            continue;
+        }
         if let Ok(metadata) = std::fs::metadata(ancestor) {
             if metadata.dev() == parent_dev {
                 candidates.push(ancestor.to_path_buf());
@@ -1433,7 +1544,7 @@ mod tests {
     use tokio::time::{sleep, timeout, Instant};
 
     use crate::commands::grok_shim::protocol::{read_server_envelope, write_client_envelope};
-    use tokio::net::unix::OwnedWriteHalf;
+    use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1462,10 +1573,6 @@ mod tests {
                 disconnects: AtomicUsize::new(0),
                 instance_id,
             })
-        }
-
-        fn with_late_push() -> Arc<Self> {
-            Self::new(true, 0)
         }
 
         fn disconnect_count(&self) -> usize {
@@ -1762,10 +1869,10 @@ mod tests {
             !handle.socket_path().exists(),
             "a clean stop must remove the published socket"
         );
-        assert!(
-            !handle.lock_path().exists(),
-            "a clean stop must remove the leader lock file"
-        );
+        let lock = std::fs::symlink_metadata(handle.lock_path())
+            .expect("a clean stop retains the stable leader lock inode");
+        assert!(lock.file_type().is_file());
+        assert_eq!(lock.permissions().mode() & 0o777, PRIVATE_FILE_MODE);
     }
 
     /// Drive one full pager exchange through the production leader: register,
@@ -1888,6 +1995,38 @@ mod tests {
     }
 
     #[test]
+    fn production_outbound_queue_is_bounded_and_fails_without_dropping_silently() {
+        let (frames, mut receiver) = mpsc::channel(1);
+        let outbound = AcpOutbound {
+            frames: FrameSender::Bounded(frames),
+        };
+        outbound.send("first").expect("first frame fits");
+        let error = outbound.send("second").expect_err("full queue must fail");
+        assert!(error.to_string().contains("outbound queue is full"));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ServerEnvelope::Acp { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn acp_dispatch_capacity_is_hard_bounded_and_completed_tasks_reap() {
+        let mut tasks = JoinSet::new();
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        for _ in 0..MAX_ACP_DISPATCH_TASKS {
+            let release = release.clone();
+            tasks.spawn(async move {
+                let _permit = release.acquire().await.expect("release semaphore");
+            });
+        }
+        assert!(!acp_dispatch_has_capacity(&tasks));
+        release.add_permits(MAX_ACP_DISPATCH_TASKS);
+        while tasks.join_next().await.is_some() {}
+        reap_acp_dispatches(&mut tasks);
+        assert!(acp_dispatch_has_capacity(&tasks));
+    }
+
+    #[test]
     fn staging_candidates_prefer_the_shortest_same_device_ancestor() {
         let root = unique_test_root("staging-order");
         let parent = root.join("a").join("b");
@@ -1896,6 +2035,12 @@ mod tests {
         assert!(
             !candidates.is_empty(),
             "at least the parent itself qualifies"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate != Path::new("/")),
+            "the filesystem root must never be used for staging"
         );
         let parent_dev = std::fs::metadata(&parent).expect("parent metadata").dev();
         for candidate in &candidates {
@@ -2354,10 +2499,19 @@ mod tests {
             std::fs::read_to_string(&socket).expect("the blocking file should be untouched"),
             "not a socket\n"
         );
+        let lock = socket.with_extension("lock");
         assert!(
-            !socket.with_extension("lock").exists(),
-            "a failed spawn must release and remove its lock file"
+            lock.exists(),
+            "a failed spawn retains the stable lock inode"
         );
+        let probe = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .expect("opening the released lock");
+        probe
+            .try_lock()
+            .expect("a failed spawn must release its lock");
         let _ = std::fs::remove_dir_all(&root);
     }
 

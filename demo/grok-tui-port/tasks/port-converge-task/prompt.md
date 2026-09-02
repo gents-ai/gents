@@ -10,6 +10,8 @@ Call `read_grok_port_job`, `read_port_integrate_result`,
 agent: the host has deterministically applied accepted sealed diffs in serial;
 you own reconciling the eight independently generated modules into one clean,
 compiling feature commit. Never push, open a PR, or merge a remote branch.
+For every mapped surface, the complete protocol evidence is `grok_wire`
+followed verbatim by optional `grok_wire_continuation`.
 
 Fail closed unless there are exactly eight integration rows with eight
 distinct `logical_unit_id` values, all with `status=applied`,

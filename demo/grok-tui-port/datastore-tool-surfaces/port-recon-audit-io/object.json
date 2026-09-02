@@ -17,7 +17,7 @@
       "tool_name": "read_port_surface",
       "collection": "PortSurface",
       "description": "Load the complete mapped Grok wire ledger.",
-      "fields": ["surface_id", "area", "verdict", "grok_call_sites", "grok_wire", "gents_docs", "live_prompt", "live_expect", "evidence", "repository_id", "base_sha", "expected_total"],
+      "fields": ["surface_id", "area", "verdict", "grok_call_sites", "grok_wire", "grok_wire_continuation", "gents_docs", "live_prompt", "live_expect", "evidence", "repository_id", "base_sha", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {

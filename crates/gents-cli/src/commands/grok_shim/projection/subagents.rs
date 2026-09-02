@@ -1,8 +1,8 @@
 //! Grok shim subagent projection.
 //!
-//! Runtime subagents are observed child `AgentRequest` rows linked to a parent
-//! request by `caused_by_parent_request_id` (and, when recorded, the spawn
-//! `AgentToolCall` via `caused_by_parent_tool_call_id` / `child_request_id`).
+//! Runtime subagents are observed child `AgentRequest` rows whose logical and
+//! physical parent/tool provenance passes the runtime timeline's shared
+//! `child_bridge_is_corroborated` rule.
 //! This leaf projects those durable rows into the Grok pager's
 //! `subagent_spawned` / `subagent_progress` / `subagent_finished`
 //! `session/update` notification payloads, routed by `childSessionId` on the
@@ -30,13 +30,17 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::run_timeline::{child_bridge_is_corroborated, TimelineRequestRow, TimelineToolCallRow};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::{effective_context_window_tokens, nonempty};
+
 /// Ext request methods routed to this leaf by the ACP service.
-pub(super) const SUBAGENT_GET_METHOD: &str = "x.ai/subagent/get";
-pub(super) const SUBAGENT_LIST_RUNNING_METHOD: &str = "x.ai/subagent/list_running";
-pub(super) const SUBAGENT_CANCEL_METHOD: &str = "x.ai/subagent/cancel";
+pub(crate) const SUBAGENT_GET_METHOD: &str = "x.ai/subagent/get";
+pub(crate) const SUBAGENT_LIST_RUNNING_METHOD: &str = "x.ai/subagent/list_running";
+pub(crate) const SUBAGENT_CANCEL_METHOD: &str = "x.ai/subagent/cancel";
 
 /// JSON-RPC code used for an unknown ext method. The three known subagent
 /// ext stubs return a *successful* result matching the generated Grok shell
@@ -112,6 +116,8 @@ impl SubagentFinishStatus {
 /// One child `AgentRequest` row linked to the projected parent request.
 #[derive(Clone, Debug, Deserialize)]
 struct ChildRequestRow {
+    #[serde(default, rename = "_docID")]
+    doc_id: Option<String>,
     request_id: String,
     session_id: String,
     #[serde(default)]
@@ -123,13 +129,17 @@ struct ChildRequestRow {
     #[serde(default)]
     failure_reason: Option<String>,
     #[serde(default)]
-    interrupt_requested_at: Option<String>,
-    #[serde(default)]
     terminalized_at: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
     caused_by_parent_request_id: Option<String>,
+    #[serde(default)]
+    caused_by_parent_request_doc_id: Option<String>,
+    #[serde(default)]
+    caused_by_parent_tool_call_id: Option<String>,
+    #[serde(default)]
+    caused_by_parent_tool_call_doc_id: Option<String>,
     #[serde(default)]
     metadata: Option<String>,
 }
@@ -151,7 +161,11 @@ struct ChildResponseRow {
 /// linking to the child request.
 #[derive(Clone, Debug, Deserialize)]
 struct SpawnToolRow {
+    #[serde(default, rename = "_docID")]
+    doc_id: Option<String>,
     request_id: String,
+    #[serde(default)]
+    request_doc_id: Option<String>,
     tool_call_id: String,
     #[serde(default)]
     child_request_id: Option<String>,
@@ -176,16 +190,19 @@ struct ChildToolRow {
 }
 
 const CHILD_REQUEST_FIELDS: &str = r#"
+    _docID
     request_id
     session_id
     behavior_id
     content
     lifecycle_state
     failure_reason
-    interrupt_requested_at
     terminalized_at
     created_at
     caused_by_parent_request_id
+    caused_by_parent_request_doc_id
+    caused_by_parent_tool_call_id
+    caused_by_parent_tool_call_doc_id
     metadata
 "#;
 
@@ -197,7 +214,9 @@ const CHILD_RESPONSE_FIELDS: &str = r#"
 "#;
 
 const SPAWN_TOOL_FIELDS: &str = r#"
+    _docID
     request_id
+    request_doc_id
     tool_call_id
     child_request_id
     args
@@ -337,13 +356,25 @@ pub(super) async fn project_subagents(
 ) -> Result<SubagentProjection> {
     let response = node.execute(&child_requests_query(parent_request_id)).await;
     ensure_no_errors(&response, "grok shim subagent child request query")?;
+    let parent_rows =
+        decode_rows::<TimelineRequestRow>(&response, "parent", "parent AgentRequest provenance");
+    let [parent] = parent_rows.as_slice() else {
+        tracing::debug!(
+            parent_request_id,
+            rows = parent_rows.len(),
+            "grok shim cannot uniquely corroborate the subagent parent document"
+        );
+        return Ok(SubagentProjection {
+            updates: Vec::new(),
+            chronology: Vec::new(),
+        });
+    };
     // Durable child chronology: `created_at`, then the child request id,
     // computed after decoding so equal-timestamp rows and any query
     // iteration order never decide the projected wire order.
-    let mut children = decode_child_rows(&response);
-    sort_child_rows(&mut children);
+    let candidate_children = decode_child_rows(&response);
 
-    if children.is_empty() {
+    if candidate_children.is_empty() {
         return Ok(SubagentProjection {
             updates: Vec::new(),
             chronology: Vec::new(),
@@ -359,6 +390,32 @@ pub(super) async fn project_subagents(
     // spawned-subagent event always follows its spawn tool call and
     // equal-sequence spawn rows never follow the query's iteration order.
     sort_spawn_rows(&mut spawn_tools);
+    let timeline_tools = spawn_tools
+        .iter()
+        .map(spawn_timeline_row)
+        .collect::<Vec<_>>();
+
+    // Use the runtime timeline's single provenance predicate verbatim. A
+    // logical parent id alone is never admission: tool-spawned children must
+    // bind the exact physical parent and tool documents, while the runtime's
+    // modeled request-only control continuations retain their shared rule.
+    let mut children = candidate_children
+        .into_iter()
+        .filter(|child| {
+            let Some(timeline_child) = child_timeline_row(child) else {
+                return false;
+            };
+            child_bridge_is_corroborated(parent, &timeline_child, &timeline_tools)
+        })
+        .collect::<Vec<_>>();
+    sort_child_rows(&mut children);
+
+    if children.is_empty() {
+        return Ok(SubagentProjection {
+            updates: Vec::new(),
+            chronology: Vec::new(),
+        });
+    }
 
     let child_request_ids = children.iter().map(|child| child.request_id.as_str());
 
@@ -474,6 +531,21 @@ fn project_child_rows(
         }
         let spawn_tool = spawn_tools.iter().find(|tool| {
             tool.request_id == parent_request_id
+                && tool.doc_id.as_deref().and_then(nonempty)
+                    == child
+                        .caused_by_parent_tool_call_doc_id
+                        .as_deref()
+                        .and_then(nonempty)
+                && tool.request_doc_id.as_deref().and_then(nonempty)
+                    == child
+                        .caused_by_parent_request_doc_id
+                        .as_deref()
+                        .and_then(nonempty)
+                && child
+                    .caused_by_parent_tool_call_id
+                    .as_deref()
+                    .and_then(nonempty)
+                    == Some(tool.tool_call_id.as_str())
                 && tool
                     .child_request_id
                     .as_deref()
@@ -599,11 +671,7 @@ fn progress_update(
         .and_then(|response| response.token_count)
         .and_then(|tokens| u64::try_from(tokens.max(0)).ok())
         .unwrap_or(0);
-    let context_window_tokens = if context_window_tokens == 0 {
-        DEFAULT_CONTEXT_WINDOW_TOKENS
-    } else {
-        context_window_tokens
-    };
+    let context_window_tokens = effective_context_window_tokens(context_window_tokens);
     SubagentProgressUpdate {
         subagent_id: subagent_id.to_string(),
         parent_session_id: parent_session_id.to_string(),
@@ -742,10 +810,6 @@ fn truncate_description(text: &str) -> String {
     trimmed.chars().take(MAX_DESCRIPTION_CHARS).collect()
 }
 
-/// Fallback context window when the bound configuration did not supply one;
-/// matches the model catalog's `totalContextTokens` default scale.
-const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 262_144;
-
 fn context_usage_pct(tokens_used: u64, context_window_tokens: u64) -> u8 {
     if context_window_tokens == 0 {
         return 0;
@@ -856,7 +920,11 @@ pub(crate) fn handle_subagent_ext_request(method: &str, params: &Value) -> Resul
 fn child_requests_query(parent_request_id: &str) -> String {
     format!(
         r#"{{
-            AgentRequest(
+            parent: AgentRequest(
+                filter: {{ request_id: {{ _eq: "{parent_request_id}" }} }},
+                limit: 2
+            ) {{ {CHILD_REQUEST_FIELDS} }}
+            children: AgentRequest(
                 filter: {{
                     caused_by_parent_request_id: {{ _eq: "{parent_request_id}" }}
                 }},
@@ -913,98 +981,73 @@ fn graphql_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String 
 }
 
 fn decode_child_rows(response: &defra_node::QueryResponse) -> Vec<ChildRequestRow> {
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|row| match serde_json::from_value::<ChildRequestRow>(row) {
-            Ok(row) => Some(row),
-            Err(error) => {
-                tracing::debug!(
-                    %error,
-                    "grok shim skipped an undecodable child AgentRequest row"
-                );
-                None
-            }
-        })
-        .collect()
+    decode_rows(response, "children", "child AgentRequest")
 }
 
 fn decode_spawn_rows(response: &defra_node::QueryResponse) -> Vec<SpawnToolRow> {
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|row| match serde_json::from_value::<SpawnToolRow>(row) {
-            Ok(row) => Some(row),
-            Err(error) => {
-                tracing::debug!(
-                    %error,
-                    "grok shim skipped an undecodable spawn AgentToolCall row"
-                );
-                None
-            }
-        })
-        .collect()
+    decode_rows(response, "AgentToolCall", "spawn AgentToolCall")
 }
 
 fn decode_response_rows(response: &defra_node::QueryResponse) -> Vec<ChildResponseRow> {
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(
-            |row| match serde_json::from_value::<ChildResponseRow>(row) {
-                Ok(row) => Some(row),
-                Err(error) => {
-                    tracing::debug!(
-                        %error,
-                        "grok shim skipped an undecodable child AgentResponse row"
-                    );
-                    None
-                }
-            },
-        )
-        .collect()
+    decode_rows(response, "AgentResponse", "child AgentResponse")
 }
 
 fn decode_child_tool_rows(response: &defra_node::QueryResponse) -> Vec<ChildToolRow> {
+    decode_rows(response, "AgentToolCall", "child AgentToolCall")
+}
+
+fn decode_rows<T: DeserializeOwned>(
+    response: &defra_node::QueryResponse,
+    collection: &str,
+    label: &str,
+) -> Vec<T> {
     response
         .data
         .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|data| data.get(collection))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|row| match serde_json::from_value::<ChildToolRow>(row) {
+        .filter_map(|row| match serde_json::from_value::<T>(row) {
             Ok(row) => Some(row),
             Err(error) => {
-                tracing::debug!(
-                    %error,
-                    "grok shim skipped an undecodable child AgentToolCall row"
-                );
+                tracing::debug!(%error, %label, "grok shim skipped an undecodable row");
                 None
             }
         })
         .collect()
 }
 
-fn nonempty(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
+fn child_timeline_row(child: &ChildRequestRow) -> Option<TimelineRequestRow> {
+    nonempty(&child.request_id)?;
+    Some(TimelineRequestRow {
+        doc_id: child.doc_id.clone(),
+        request_id: child.request_id.clone(),
+        session_id: Some(child.session_id.clone()),
+        metadata: child.metadata.clone(),
+        caused_by_parent_request_id: child.caused_by_parent_request_id.clone(),
+        caused_by_parent_request_doc_id: child.caused_by_parent_request_doc_id.clone(),
+        caused_by_parent_tool_call_id: child.caused_by_parent_tool_call_id.clone(),
+        caused_by_parent_tool_call_doc_id: child.caused_by_parent_tool_call_doc_id.clone(),
+        ..TimelineRequestRow::default()
+    })
+}
+
+/// Project the narrow spawn row into the runtime DTO used by the shared
+/// provenance rule. Do not deserialize the sparse query into the full DTO:
+/// unrelated nullable tool fields (for example `args`) are intentionally not
+/// selected and must not make otherwise complete bridge evidence undecodable.
+fn spawn_timeline_row(spawn: &SpawnToolRow) -> TimelineToolCallRow {
+    TimelineToolCallRow {
+        doc_id: spawn.doc_id.clone(),
+        request_id: Some(spawn.request_id.clone()),
+        request_doc_id: spawn.request_doc_id.clone(),
+        message_sequence: spawn.message_sequence,
+        tool_call_id: spawn.tool_call_id.clone(),
+        child_request_id: spawn.child_request_id.clone(),
+        ..TimelineToolCallRow::default()
+    }
 }
 
 #[cfg(test)]
@@ -1013,6 +1056,7 @@ mod tests {
 
     fn child_row(request_id: &str, lifecycle_state: Option<&str>) -> ChildRequestRow {
         ChildRequestRow {
+            doc_id: Some(format!("doc-{request_id}")),
             request_id: request_id.to_string(),
             session_id: format!("session-{request_id}"),
             behavior_id: Some("explore".to_string()),
@@ -1021,10 +1065,12 @@ mod tests {
                 .to_string(),
             lifecycle_state: lifecycle_state.map(ToOwned::to_owned),
             failure_reason: None,
-            interrupt_requested_at: None,
             terminalized_at: None,
             created_at: Some("2026-08-31T22:46:45Z".to_string()),
             caused_by_parent_request_id: Some("parent-request".to_string()),
+            caused_by_parent_request_doc_id: Some("doc-parent-request".to_string()),
+            caused_by_parent_tool_call_id: None,
+            caused_by_parent_tool_call_doc_id: None,
             metadata: None,
         }
     }
@@ -1237,8 +1283,7 @@ mod tests {
 
     #[test]
     fn interrupted_child_projects_cancelled_finish() {
-        let mut child = child_row("child-1", Some("interrupted"));
-        child.interrupt_requested_at = Some("2026-08-31T22:46:46Z".to_string());
+        let child = child_row("child-1", Some("interrupted"));
         let (updates, _chronology) = project_child_rows(
             &[child],
             &[],
@@ -1406,9 +1451,14 @@ mod tests {
 
     #[test]
     fn spawn_tool_row_supplies_description_but_not_the_subagent_id() {
-        let children = vec![child_row("child-1", Some("completed"))];
+        let mut child = child_row("child-1", Some("completed"));
+        child.caused_by_parent_tool_call_id = Some("call-9".to_string());
+        child.caused_by_parent_tool_call_doc_id = Some("doc-call-1".to_string());
+        let children = vec![child];
         let spawn_tools = vec![SpawnToolRow {
+            doc_id: Some("doc-call-1".to_string()),
             request_id: "parent-request".to_string(),
+            request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: "call-9".to_string(),
             child_request_id: Some("child-1".to_string()),
             args: Some(r#"{"name":"repo scout"}"#.to_string()),
@@ -1528,7 +1578,7 @@ mod tests {
         };
         assert_eq!(
             progress.context_window_tokens,
-            DEFAULT_CONTEXT_WINDOW_TOKENS
+            super::super::DEFAULT_CONTEXT_WINDOW_TOKENS
         );
     }
 
@@ -1587,7 +1637,14 @@ mod tests {
             "{query}"
         );
         assert!(query.contains("order: { created_at: ASC }"), "{query}");
-        assert!(query.contains("AgentRequest("), "{query}");
+        assert!(query.contains("parent: AgentRequest("), "{query}");
+        assert!(query.contains("children: AgentRequest("), "{query}");
+        assert!(query.contains("_docID"), "{query}");
+        assert!(query.contains("caused_by_parent_request_doc_id"), "{query}");
+        assert!(
+            query.contains("caused_by_parent_tool_call_doc_id"),
+            "{query}"
+        );
         assert!(!query.to_lowercase().contains("task("), "{query}");
     }
 
@@ -1844,7 +1901,9 @@ mod tests {
     #[test]
     fn spawn_rows_sort_by_sequence_then_stable_tool_identity() {
         let spawn = |tool_call_id: &str, sequence: Option<i64>, child: &str| SpawnToolRow {
+            doc_id: Some(format!("doc-{tool_call_id}")),
             request_id: "parent-request".to_string(),
+            request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: tool_call_id.to_string(),
             child_request_id: Some(child.to_string()),
             args: Some(r#"{"name":"scout"}"#.to_string()),
@@ -1886,17 +1945,25 @@ mod tests {
     fn same_sequence_spawns_and_equal_time_children_agree_on_order() {
         let mut child_a = child_row("child-a", Some("processing"));
         child_a.created_at = Some("2026-08-31T22:46:45Z".to_string());
+        child_a.caused_by_parent_tool_call_id = Some("call-a".to_string());
+        child_a.caused_by_parent_tool_call_doc_id = Some("doc-call-a".to_string());
         let mut child_z = child_row("child-z", Some("processing"));
         child_z.created_at = Some("2026-08-31T22:46:45Z".to_string());
+        child_z.caused_by_parent_tool_call_id = Some("call-z".to_string());
+        child_z.caused_by_parent_tool_call_doc_id = Some("doc-call-z".to_string());
         let spawn_a = SpawnToolRow {
+            doc_id: Some("doc-call-a".to_string()),
             request_id: "parent-request".to_string(),
+            request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: "call-a".to_string(),
             child_request_id: Some("child-a".to_string()),
             args: Some(r#"{"name":"scout a"}"#.to_string()),
             message_sequence: Some(5),
         };
         let spawn_z = SpawnToolRow {
+            doc_id: Some("doc-call-z".to_string()),
             request_id: "parent-request".to_string(),
+            request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: "call-z".to_string(),
             child_request_id: Some("child-z".to_string()),
             args: Some(r#"{"name":"scout z"}"#.to_string()),
@@ -1964,12 +2031,9 @@ mod tests {
         let escaped_parent = escape_graphql_string(parent_request_id);
         let escaped_child = escape_graphql_string(child_request_id);
         let escaped_session = escape_graphql_string(session_id);
-        // Two AgentRequest documents: the parent (plain, minimal) and the
-        // child linked by `caused_by_parent_request_id` whose canonical
-        // lifecycle is `interrupted` while its `interrupt_requested_at`
-        // stays null/absent. All interpolated values go through the escape
-        // helper; no empty list literal is ever emitted.
-        let seed = format!(
+        // Seed the parent first so both bridge rows can carry its physical
+        // document id, exactly as runtime admission persists them.
+        let seed_parent = format!(
             r#"mutation {{
                 parent: create_AgentRequest(input: {{
                     request_id: "{escaped_parent}"
@@ -1985,11 +2049,63 @@ mod tests {
                     retry_count: 0
                     max_retries: 3
                 }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&seed_parent).await;
+        assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+        let parent_doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/parent/0/_docID"))
+            .and_then(Value::as_str)
+            .expect("parent document id");
+        let escaped_parent_doc = escape_graphql_string(parent_doc_id);
+
+        let seed_tool = format!(
+            r#"mutation {{
+                bridge: create_AgentToolCall(input: {{
+                    tool_call_key: "{escaped_session}:call-child"
+                    request_id: "{escaped_parent}"
+                    request_doc_id: "{escaped_parent_doc}"
+                    session_id: "{escaped_session}"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    tool_call_id: "call-child"
+                    tool_name: "task"
+                    child_request_id: "{escaped_child}"
+                    lifecycle_state: "running"
+                    status: "running"
+                    result: ""
+                    message_sequence: 1
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&seed_tool).await;
+        assert!(
+            !response.has_errors(),
+            "bridge seed failed: {:?}",
+            response.errors
+        );
+        let tool_doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/bridge/0/_docID"))
+            .and_then(Value::as_str)
+            .expect("bridge document id");
+        let escaped_tool_doc = escape_graphql_string(tool_doc_id);
+
+        // Only the first child has the runtime's full logical+physical
+        // provenance. The forged logical-only sibling must not project.
+        let seed_children = format!(
+            r#"mutation {{
                 child: create_AgentRequest(input: {{
                     request_id: "{escaped_child}"
                     agent_did: "did:test:grok-shim"
                     session_id: "{escaped_session}"
                     caused_by_parent_request_id: "{escaped_parent}"
+                    caused_by_parent_request_doc_id: "{escaped_parent_doc}"
+                    caused_by_parent_tool_call_id: "call-child"
+                    caused_by_parent_tool_call_doc_id: "{escaped_tool_doc}"
                     content: "child work"
                     status: "processing"
                     lifecycle_state: "interrupted"
@@ -2001,10 +2117,29 @@ mod tests {
                     retry_count: 0
                     max_retries: 3
                 }}) {{ _docID }}
+                forged: create_AgentRequest(input: {{
+                    request_id: "forged-logical-child"
+                    agent_did: "did:test:grok-shim"
+                    session_id: "forged-child-session"
+                    caused_by_parent_request_id: "{escaped_parent}"
+                    content: "forged child"
+                    status: "processing"
+                    lifecycle_state: "processing"
+                    backend_id: ""
+                    execution_origin: "interactive"
+                    failure_reason: ""
+                    created_at: "2026-08-31T22:46:45Z"
+                    retry_count: 0
+                    max_retries: 3
+                }}) {{ _docID }}
             }}"#
         );
-        let response = node.execute(&seed).await;
-        assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+        let response = node.execute(&seed_children).await;
+        assert!(
+            !response.has_errors(),
+            "child seed failed: {:?}",
+            response.errors
+        );
 
         // The actual production query/decoder path, not hand-built rows.
         let projection = project_subagents(&node, parent_request_id, session_id, 262_144)
@@ -2026,5 +2161,9 @@ mod tests {
         };
         assert_eq!(finished.status, SubagentFinishStatus::Cancelled);
         assert_eq!(finished.child_session_id, session_id);
+        assert!(projection
+            .updates
+            .iter()
+            .all(|update| update.subagent_id() != "forged-child-session"));
     }
 }
