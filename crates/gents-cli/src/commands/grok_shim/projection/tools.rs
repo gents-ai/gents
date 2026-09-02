@@ -1646,7 +1646,7 @@ mod tests {
                 // test's lifetime, so the node's storage directory is
                 // deleted when the test ends — never abandoned or leaked.
                 .data_path(dir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
                 .await
                 .expect("embedded node"),

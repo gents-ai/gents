@@ -1879,14 +1879,18 @@ mod tests {
         format!("http://{addr}/")
     }
 
-    /// Build an embedded node with runtime schemas, matching the crate's
-    /// `persistent_node_builder` convention (Lark backend).
-    async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>) {
+    /// Build an embedded node with runtime schemas and an admitted test
+    /// principal/behavior, matching the production request boundary.
+    async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
         let tempdir = tempfile::tempdir().expect("tempdir");
+        let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
+            .expect("test signing identity");
+        let agent_did = gents::AgentIdentity::did(&identity).to_string();
+        let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
                 .await
                 .expect("embedded node"),
@@ -1894,13 +1898,33 @@ mod tests {
         gents::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
-        (tempdir, node)
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentPrincipal(input: {{
+                        agent_did: "{agent_did}"
+                        display_name: "Grok shim test"
+                        default_behavior_id: "{behavior_id}"
+                        enabled: true
+                    }}) {{ _docID }}
+                    create_AgentBehavior(input: {{
+                        behavior_id: "{behavior_id}"
+                        agent_did: "{agent_did}"
+                        display_name: "Grok shim test"
+                        enabled: true
+                    }}) {{ _docID }}
+                }}"#,
+            ))
+            .await;
+        gents::graphql::ensure_no_errors(&response, "seed admitted test behavior")
+            .expect("seed admitted test behavior");
+        (tempdir, node, agent_did)
     }
 
-    fn test_config(graphql: String) -> TurnManagerConfig {
+    fn test_config(graphql: String, agent_did: &str) -> TurnManagerConfig {
         TurnManagerConfig {
-            agent_did: "did:test:grok-shim".to_string(),
-            behavior_id: "did:test:grok-shim:default".to_string(),
+            agent_did: agent_did.to_string(),
+            behavior_id: gents::default_behavior_id_for_agent(agent_did),
             graphql,
         }
     }
@@ -2146,9 +2170,9 @@ mod tests {
     /// A prompt that terminalizes normally resolves `stopReason=end_turn`.
     #[tokio::test]
     async fn prompt_resolves_end_turn_after_terminalization() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
@@ -2205,9 +2229,12 @@ mod tests {
     /// duplicates even though the watch polls many times.
     #[tokio::test]
     async fn live_turn_streams_tool_subagent_and_message_updates_once_each() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
 
@@ -2329,9 +2356,9 @@ mod tests {
     /// dedup is by durable row key, never by content.
     #[tokio::test]
     async fn identical_text_distinct_rows_both_stream() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
         let engine = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
 
@@ -2382,9 +2409,12 @@ mod tests {
     /// accepts the next prompt immediately.
     #[tokio::test]
     async fn outbound_close_after_submission_interrupts_and_drains() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
         let engine = test_engine(node.clone());
         let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::commands::grok_shim::protocol::ServerEnvelope,
@@ -2534,7 +2564,7 @@ mod tests {
     /// lands in the before-request-id window.
     #[tokio::test]
     async fn cancel_before_request_id_resolves_cancelled_and_permits_reuse() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -2547,7 +2577,10 @@ mod tests {
             )),
         )
         .await;
-        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
@@ -2651,7 +2684,7 @@ mod tests {
     /// deterministically lands in the before-request-id window.
     #[tokio::test]
     async fn disconnect_before_request_id_resolves_cancelled() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -2664,7 +2697,10 @@ mod tests {
             )),
         )
         .await;
-        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
@@ -2722,7 +2758,7 @@ mod tests {
     /// terminal state. Fully deterministic: no sleeps.
     #[tokio::test]
     async fn disconnect_parked_before_latch_with_finishing_submission_failure_resolves_cancelled() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -2737,7 +2773,10 @@ mod tests {
             Some(submission_fail),
         )
         .await;
-        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
@@ -2861,7 +2900,7 @@ mod tests {
     /// `AgentRequest` rows. Fully deterministic: no sleeps.
     #[tokio::test]
     async fn cancel_parked_before_latch_with_finishing_submission_failure_resolves_cancelled() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -2876,7 +2915,10 @@ mod tests {
             Some(submission_fail),
         )
         .await;
-        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
@@ -3005,9 +3047,12 @@ mod tests {
     /// created. A duplicate disconnect stays idempotent.
     #[tokio::test]
     async fn prompt_gated_before_insertion_is_rejected_after_disconnect() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
@@ -3110,7 +3155,7 @@ mod tests {
     /// empty immediately, and a second duplicate disconnect is a no-op.
     #[tokio::test]
     async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_a_noop() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let submission_arrived = Arc::new(tokio::sync::Notify::new());
         let submission_release = Arc::new(tokio::sync::Notify::new());
         let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -3123,7 +3168,10 @@ mod tests {
             )),
         )
         .await;
-        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
         let engine = test_engine(node.clone());
         let (_buffer, sender) = buffer_sender();
 
@@ -3194,9 +3242,9 @@ mod tests {
     /// prompt surface the send failure.
     #[tokio::test]
     async fn send_failure_after_submission_interrupts_the_request() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = TurnManager::new(node.clone(), test_config(graphql));
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
         let engine = test_engine(node.clone());
         let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::commands::grok_shim::protocol::ServerEnvelope,
@@ -3255,9 +3303,12 @@ mod tests {
     /// does not disturb the live turn (one pending prompt per session).
     #[tokio::test]
     async fn second_prompt_for_live_session_is_rejected() {
-        let (_tempdir, node) = test_node().await;
+        let (_tempdir, node, agent_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
-        let manager = Arc::new(TurnManager::new(node.clone(), test_config(graphql)));
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
         let projections = test_engine(node.clone());
         let (buffer, sender) = buffer_sender();
 

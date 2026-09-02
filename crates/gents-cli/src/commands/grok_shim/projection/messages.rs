@@ -4026,7 +4026,7 @@ mod tests {
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(dir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
                 .await
                 .expect("embedded node"),
