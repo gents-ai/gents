@@ -323,6 +323,8 @@ pub(crate) fn manifest_from_export_bundle(
                         "description",
                         "behavior_id",
                         "prompt_template",
+                        "goal_objective_template",
+                        "goal_token_budget",
                         "enabled",
                         "output_schema_ref",
                     ],

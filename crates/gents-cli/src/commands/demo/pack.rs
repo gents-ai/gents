@@ -327,6 +327,8 @@ fn load_manifest_with(
     validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
     validate_prompt_tool_contracts_with(pack, &manifest, lookup)
         .with_context(|| format!("validating prompt/tool contracts in {}", path.display()))?;
+    validate_task_goal_declarations_with(pack, lookup)
+        .with_context(|| format!("validating task goal declarations in {}", path.display()))?;
     Ok(manifest)
 }
 
@@ -354,6 +356,111 @@ fn required_json_string<'a>(value: &'a Value, field: &str, path: &Path) -> Resul
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .with_context(|| format!("{} has no non-empty {field}", path.display()))
+}
+
+/// A Task goal declaration is controller-provisioned, so its behavior needs
+/// only the goal lifecycle tools. Model-facing goal creation must stay off:
+/// granting it would add unrelated authority and make provisioning ownership
+/// ambiguous.
+fn validate_task_goal_declarations_with(
+    pack: &Path,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<()> {
+    let tasks_dir = pack.join("tasks");
+    if !tasks_dir.is_dir() {
+        return Ok(());
+    }
+    for entry in
+        std::fs::read_dir(&tasks_dir).with_context(|| format!("reading {}", tasks_dir.display()))?
+    {
+        let task_path = entry?.path().join("object.json");
+        if !task_path.is_file() {
+            continue;
+        }
+        let task = read_pack_json_with(&task_path, lookup)?;
+        let Some(objective) = task
+            .get("goal_objective_template")
+            .filter(|value| !value.is_null())
+        else {
+            if task
+                .get("goal_token_budget")
+                .is_some_and(|value| !value.is_null())
+            {
+                bail!(
+                    "{} sets goal_token_budget without goal_objective_template",
+                    task_path.display()
+                );
+            }
+            continue;
+        };
+        let objective = objective.as_str().with_context(|| {
+            format!(
+                "{} goal_objective_template must be a string",
+                task_path.display()
+            )
+        })?;
+        if objective.trim().is_empty() {
+            bail!(
+                "{} goal_objective_template must be non-empty",
+                task_path.display()
+            );
+        }
+        if let Some(budget) = task
+            .get("goal_token_budget")
+            .filter(|value| !value.is_null())
+        {
+            let budget = budget.as_i64().with_context(|| {
+                format!(
+                    "{} goal_token_budget must be an integer",
+                    task_path.display()
+                )
+            })?;
+            if budget <= 0 {
+                bail!("{} goal_token_budget must be positive", task_path.display());
+            }
+        }
+
+        let behavior_id = required_json_string(&task, "behavior_id", &task_path)?;
+        let behavior_path = pack
+            .join("agent-behaviors")
+            .join(behavior_id)
+            .join("object.json");
+        let behavior = read_pack_json_with(&behavior_path, lookup)?;
+        let selection_id = required_json_string(&behavior, "tool_selection_id", &behavior_path)?;
+        let selection_path = pack
+            .join("tool-selections")
+            .join(selection_id)
+            .join("object.json");
+        let selection = read_pack_json_with(&selection_path, lookup)?;
+        let goal_tools_enabled = selection
+            .get("enable_goal_tools")
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| {
+                selection
+                    .get("enable_meta_tools")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            });
+        if !goal_tools_enabled {
+            bail!(
+                "{} declares a durable goal but {} does not enable goal tools",
+                task_path.display(),
+                selection_path.display()
+            );
+        }
+        if selection
+            .get("enable_goal_creation")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            bail!(
+                "{} declares a controller-provisioned durable goal but {} enables model goal creation",
+                task_path.display(),
+                selection_path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Keep model instructions coupled to the exact tools exposed by the pack.
@@ -4282,6 +4389,26 @@ mod tests {
         let manifest = load_manifest_defaults(&pack).expect("pipeline pack should load");
         assert_eq!(manifest.init.tool_package, "minimal");
         assert!(manifest.init.tool_root.is_none());
+    }
+
+    #[test]
+    fn pipeline_stage_declares_controller_owned_goal_with_least_privilege_tools() {
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
+        load_manifest_defaults(&pack).expect("pipeline pack should load");
+
+        let task = read_pack_json_defaults(&pack.join("tasks/exp-stage1-task/object.json"))
+            .expect("stage-1 task");
+        assert!(task["goal_objective_template"]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty()));
+        assert_eq!(task["goal_token_budget"], 50_000);
+
+        let selection =
+            read_pack_json_defaults(&pack.join("tool-selections/exp-tools-stage1/object.json"))
+                .expect("stage-1 tool selection");
+        assert_eq!(selection["enable_meta_tools"], false);
+        assert_eq!(selection["enable_goal_tools"], true);
+        assert_eq!(selection["enable_goal_creation"], false);
     }
 
     #[test]

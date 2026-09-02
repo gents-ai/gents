@@ -239,12 +239,15 @@ Examples:
   gents fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
 const TASK_AFTER_HELP: &str = "\
 Inspect configured Task documents and create pending AgentRequests with manual trigger lineage.
+For a Task with a durable-goal declaration, --session-id is a stable invocation key;
+the emitted session_id is the deterministic Task/fire session derived from it.
 
 Examples:
   gents task list
   gents task show host-check
   gents task run host-check
   gents task run host-check --args '{\"scope\":\"host\"}' --wait
+  gents task run durable-task --session-id stable-invocation-key --wait
   gents task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
 const SHOW_AFTER_HELP: &str = "\
 Examples:
@@ -397,7 +400,7 @@ pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
 pub(crate) const EXPORT_PROJECTION_ACP_BINDING_FIELDS: &str =
     "binding_id agent_did behavior_id projection_id policy_id staged_policy_id previous_policy_id resource_map_json publication_status published_at enabled created_at updated_at";
 pub(crate) const EXPORT_TASK_FIELDS: &str =
-    "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
+    "task_id name description behavior_id prompt_template goal_objective_template goal_token_budget enabled output_schema_ref created_at updated_at";
 pub(crate) const EXPORT_SCHEDULE_FIELDS: &str =
     "schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency created_at updated_at";
 pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =

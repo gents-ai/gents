@@ -110,9 +110,10 @@ def goalContinuation (subagentDepth : Nat) : RawLineage :=
   , controlAllowedAtDepthZero := true
   }
 
-/-- A durable-goal continuation preserves the same session behavior and depth,
-    and carries both the logical and physical parent request edge. It is
-    controller work, not a new subagent generation. -/
+/-- A durable-goal continuation preserves subagent depth and carries both the
+    logical and physical parent request edge. It is controller work, not a new
+    subagent generation. Session and behavior preservation are runtime request-
+    construction obligations outside `RawLineage`. -/
 theorem goal_continuation_is_admissible (depth : Nat) :
     admissible (goalContinuation depth) = true := by
   simp [admissible, edgePairsCoherent, pairCoherent, parentShapeCoherent,

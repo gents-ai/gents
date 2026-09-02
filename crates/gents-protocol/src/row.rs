@@ -684,6 +684,10 @@ pub struct TaskRow {
     #[serde(default)]
     pub prompt_template: Option<String>,
     #[serde(default)]
+    pub goal_objective_template: Option<String>,
+    #[serde(default)]
+    pub goal_token_budget: Option<i64>,
+    #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
     pub output_schema_ref: Option<String>,

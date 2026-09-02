@@ -85,6 +85,8 @@ pub struct ResolvedTask {
     pub name: Option<String>,
     pub behavior_id: String,
     pub prompt_template: String,
+    pub goal_objective_template: Option<String>,
+    pub goal_token_budget: Option<i64>,
     #[allow(dead_code)]
     pub output_schema_ref: Option<String>,
 }

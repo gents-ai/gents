@@ -114,4 +114,5 @@ new required field on a public config struct breaks there first.
 | Node | Task + behavior |
 | Edge | EventTrigger `event_kind: created` only |
 | Create tools | `DatastoreToolSurface` linked from `ToolSelection` |
+| Durable terminal condition | Optional Task goal declaration + goal lifecycle tools |
 | Kickoff | One GraphQL create of the pack’s seed collection |

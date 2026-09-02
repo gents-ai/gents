@@ -408,6 +408,54 @@ async fn tool_selection_migrations_preserve_existing_document() {
 }
 
 #[tokio::test]
+async fn task_goal_declaration_migration_preserves_existing_document() {
+    let node = fresh_node().await;
+    let baseline = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == gents_protocol::schemas::TASK_NAME)
+        .expect("Task baseline");
+    node.add_schema(baseline.sdl)
+        .await
+        .expect("register frozen Task baseline");
+
+    let response = node
+        .execute(
+            r#"mutation { create_Task(input: {
+                task_id: "existing-task"
+                name: "Existing"
+                behavior_id: "default"
+                prompt_template: "Do work"
+            }) { task_id name } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "seed Task: {:?}", response.errors);
+
+    ensure_migrations(node.as_ref())
+        .await
+        .expect("apply Task migration");
+    let response = node
+        .execute(
+            r#"{ Task(filter: {task_id: {_eq: "existing-task"}}) {
+                task_id name goal_objective_template goal_token_budget
+            } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "query Task: {:?}", response.errors);
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("Task"))
+        .and_then(serde_json::Value::as_array)
+        .expect("Task rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["task_id"], "existing-task");
+    assert_eq!(rows[0]["name"], "Existing");
+    assert!(rows[0]["goal_objective_template"].is_null());
+    assert!(rows[0]["goal_token_budget"].is_null());
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn goal_creation_key_migration_preserves_rows_and_claim_enforces_uniqueness() {
     let node = fresh_node().await;
     let baseline = gents_migration::DEFAULT_BASELINE

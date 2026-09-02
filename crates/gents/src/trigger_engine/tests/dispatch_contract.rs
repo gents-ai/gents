@@ -82,6 +82,7 @@ pub(super) async fn trigger_group_reconciliation_matches_lean_generated_contract
                 group_vars: Some(serde_json::json!({"count": case.actual_count})),
                 trigger_context: None,
                 args_vars: None,
+                durable_fire_key: "contract-fire".to_string(),
                 pre_materialized_request_id: None,
                 on_result: Box::new(|_| {}),
             })
@@ -188,6 +189,7 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
             group_vars: None,
             trigger_context: None,
             args_vars: None,
+            durable_fire_key: "contract-fire".to_string(),
             pre_materialized_request_id: None,
             on_result: Box::new(|_| {}),
         };

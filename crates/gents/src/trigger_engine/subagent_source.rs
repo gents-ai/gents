@@ -1010,6 +1010,8 @@ impl SubagentSource {
             )),
             behavior_id: spawn_args.behavior_id,
             prompt_template: spawn_args.prompt,
+            goal_objective_template: None,
+            goal_token_budget: None,
             output_schema_ref: None,
         };
         let event_vars = serde_json::json!({
@@ -1030,6 +1032,7 @@ impl SubagentSource {
             group_vars: None,
             trigger_context: None,
             args_vars: None,
+            durable_fire_key: crate::trigger_engine::durable_fire_key("subagent", &[&request_id]),
             pre_materialized_request_id: Some(request_id),
             on_result: Box::new(move |result| match result {
                 FireResult::Fired { request_id } => {

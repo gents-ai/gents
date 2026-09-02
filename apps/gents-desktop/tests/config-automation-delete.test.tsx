@@ -19,6 +19,8 @@ const task: TaskView = {
   name: "Nightly report",
   behaviorId: "default",
   promptTemplate: "Summarize the day.",
+  goalObjectiveTemplate: null,
+  goalTokenBudget: null,
   enabled: true,
   recentRuns: { totalFires: 0, runs: [] },
 } as unknown as TaskView;

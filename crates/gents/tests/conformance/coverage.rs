@@ -2,7 +2,7 @@ use super::*;
 use crate::lean_vocab_test::{
     lean_goal_capability_resolution_cases, lean_goal_continuation_materialization_cases,
     lean_goal_create_cases, lean_goal_decision_cases, lean_goal_submission_cases,
-    lean_goal_transition_cases,
+    lean_goal_transition_cases, lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
 };
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
@@ -1064,6 +1064,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalCreateCases".to_string(),
         ));
     }
+    if !lean_task_goal_publication_cases().is_empty() {
+        emitted.insert((
+            "task_goal_publication_cases".to_string(),
+            "TaskGoalPublicationCases".to_string(),
+        ));
+    }
+    if !lean_task_goal_recovery_cases().is_empty() {
+        emitted.insert((
+            "task_goal_recovery_cases".to_string(),
+            "TaskGoalRecoveryCases".to_string(),
+        ));
+    }
     if !lean_goal_submission_cases().is_empty() {
         emitted.insert((
             "goal_submission_cases".to_string(),
@@ -1208,6 +1220,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "goal_transition_cases",
         "goal_create_cases",
         "goal_capability_resolution_cases",
+        "task_goal_publication_cases",
+        "task_goal_recovery_cases",
         "goal_submission_cases",
         "goal_continuation_materialization_cases",
         "graph_pipeline_validation_cases",

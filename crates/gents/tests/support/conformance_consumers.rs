@@ -112,6 +112,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_create_cases_fence_authority_and_idempotency",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::goals::generated_task_goal_publication_cases_fence_atomic_selection",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/goals.rs",
+            module_path: "conformance::goals",
+            function: "generated_task_goal_publication_cases_fence_atomic_selection",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::goals::generated_task_goal_recovery_cases_fence_request_witness",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/goals.rs",
+            module_path: "conformance::goals",
+            function: "generated_task_goal_recovery_cases_fence_request_witness",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::goals::generated_goal_submission_cases_fence_atomic_visibility",
             package: "gents",
             source_path: "crates/gents/tests/conformance/goals.rs",

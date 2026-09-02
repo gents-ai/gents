@@ -179,6 +179,8 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let trigger = resolved_event_trigger("trigger-webhook", "WebhookEvent", task.clone());
@@ -259,6 +261,13 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         "fired_at should be a string, got {:?}",
         ev["fired_at"]
     );
+    assert_eq!(
+        intent.durable_fire_key,
+        crate::trigger_engine::durable_fire_key(
+            "event-document",
+            &["trigger-webhook", ev["source_doc_id"].as_str().unwrap()]
+        )
+    );
 }
 
 #[tokio::test]
@@ -296,6 +305,8 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
         name: None,
         behavior_id: "general".into(),
         prompt_template: "{{ group.correlation_value }} {{ group.count }}".into(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let trigger = ResolvedEventTrigger {
@@ -845,6 +856,8 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     // Trigger requires `kind == "signup"` — `other` events must not fire.
@@ -967,6 +980,8 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     // No filter on the trigger — every create fires, and the fire must
@@ -1109,6 +1124,8 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let trigger = resolved_event_trigger("trigger-fired", "WebhookEvent", task.clone());
@@ -1237,6 +1254,8 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "handle webhook".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let trigger = resolved_event_trigger("trigger-skip-err", "WebhookEvent", task.clone());

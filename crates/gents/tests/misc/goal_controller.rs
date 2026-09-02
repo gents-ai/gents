@@ -1074,15 +1074,16 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
 async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     let db = test_db("goal-budget-wrapup").await;
     seed_completed_request(&db, "parent-budget").await;
-    let usage = r#"mutation {
-        add_InferenceCall(input: {
+    let usage = format!(
+        r#"mutation {{
+        add_InferenceCall(input: {{
             call_id: "goal-budget-call",
             runtime_instance_id: "goal-test",
             request_id: "parent-budget",
             call_seq: 1,
             backend_id: "backend-test",
             behavior_id: "test",
-            agent_did: "did:test:test",
+            agent_did: "{}",
             call_kind: "inference",
             attempt: 1,
             call_state: "completed",
@@ -1096,9 +1097,33 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             prompt_tokens: 100,
             completion_tokens: 5,
             cached_input_tokens: 90
-        }) { _docID }
-    }"#;
-    let response = db.node.execute(usage).await;
+        }}) {{ _docID }}
+        add_InferenceCall(input: {{
+            call_id: "goal-budget-call-foreign",
+            runtime_instance_id: "goal-test-foreign",
+            request_id: "parent-budget",
+            call_seq: 1,
+            backend_id: "backend-test",
+            behavior_id: "test",
+            agent_did: "did:key:foreign-goal-owner",
+            call_kind: "inference",
+            attempt: 1,
+            call_state: "completed",
+            queued_at: "2026-07-15T00:00:00Z",
+            started_at: "2026-07-15T00:00:00Z",
+            ended_at: "2026-07-15T00:00:01Z",
+            priority: 0,
+            queue_depth_at_enqueue: 0,
+            controller_generation: 1,
+            backend_config_fingerprint: "goal-test",
+            prompt_tokens: 10000,
+            completion_tokens: 10000,
+            cached_input_tokens: 0
+        }}) {{ _docID }}
+    }}"#,
+        db.node_identity.did()
+    );
+    let response = db.node.execute(&usage).await;
     assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
     set_goal(
         db.node.as_ref(),
@@ -1269,20 +1294,22 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
     .expect("set goal");
     let response = db
         .node
-        .execute(
-            r#"mutation {
-                add_InferenceCall(input: {
+        .execute(&format!(
+            r#"mutation {{
+                add_InferenceCall(input: {{
                     call_id: "wrapup-budget-call",
                     request_id: "parent-wrapup-retry",
+                    agent_did: "{}",
                     call_seq: 1,
                     attempt: 1,
                     call_state: "completed",
                     prompt_tokens: 2,
                     completion_tokens: 0,
                     cached_input_tokens: 0
-                }) { _docID }
-            }"#,
-        )
+                }}) {{ _docID }}
+            }}"#,
+            db.node_identity.did()
+        ))
         .await;
     assert!(
         !response.has_errors(),

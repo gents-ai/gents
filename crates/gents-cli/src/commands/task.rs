@@ -10,7 +10,7 @@ use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access};
 
 const TASK_FIELDS: &str =
-    "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
+    "task_id name description behavior_id prompt_template goal_objective_template goal_token_budget enabled output_schema_ref created_at updated_at";
 const BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description summary backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
 const SCHEDULE_FIELDS: &str = "schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at";
 const EVENT_TRIGGER_FIELDS: &str = "trigger_id task_id source_collection event_kind filter correlation_field fire_mode expected_count expected_count_field group_timeout_secs group_min_count workspace_authority enabled concurrency last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at";
@@ -79,6 +79,8 @@ impl TaskInventory {
             "name": task.get("name").cloned().unwrap_or(Value::Null),
             "description": task.get("description").cloned().unwrap_or(Value::Null),
             "behavior_id": behavior_id,
+            "goal_objective_template": task.get("goal_objective_template").cloned().unwrap_or(Value::Null),
+            "goal_token_budget": task.get("goal_token_budget").cloned().unwrap_or(Value::Null),
             "enabled": bool_field(task, "enabled").unwrap_or(false),
             "runnable": runnable,
             "unavailable_reason": unavailable_reason,
@@ -291,6 +293,8 @@ mod tests {
                     "description": "Sweep host status",
                     "behavior_id": "default",
                     "prompt_template": "check",
+                    "goal_objective_template": "Finish host {{ args.host }}",
+                    "goal_token_budget": 12000,
                     "enabled": true,
                     "output_schema_ref": null,
                     "created_at": null,
@@ -361,6 +365,16 @@ mod tests {
             Some("host-check")
         );
         assert_eq!(summary.get("runnable").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            summary
+                .get("goal_objective_template")
+                .and_then(Value::as_str),
+            Some("Finish host {{ args.host }}")
+        );
+        assert_eq!(
+            summary.get("goal_token_budget").and_then(Value::as_i64),
+            Some(12_000)
+        );
         assert!(summary
             .get("unavailable_reason")
             .is_some_and(Value::is_null));

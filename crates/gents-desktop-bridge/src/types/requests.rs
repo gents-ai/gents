@@ -1,5 +1,13 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use ts_rs::TS;
+
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
 
 /// Local-runtime init request. Filesystem paths are **not** accepted from the
 /// webview — they come from `BridgeConfig` resolved at plugin init.
@@ -203,10 +211,12 @@ pub struct ToolSelectionSaveRequest {
     pub command_network_mode: Option<String>,
     pub cli_tool_names: Vec<String>,
     pub enable_meta_tools: Option<bool>,
-    #[serde(default)]
-    pub enable_goal_tools: Option<bool>,
-    #[serde(default)]
-    pub enable_goal_creation: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    #[ts(type = "boolean | null", optional)]
+    pub enable_goal_tools: Option<Option<bool>>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    #[ts(type = "boolean | null", optional)]
+    pub enable_goal_creation: Option<Option<bool>>,
     #[serde(default)]
     pub allowed_mcp_service_ids: Vec<String>,
     #[serde(default)]
@@ -271,6 +281,12 @@ pub struct TaskSaveRequest {
     pub description: Option<String>,
     pub behavior_id: String,
     pub prompt_template: String,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    #[ts(type = "string | null", optional)]
+    pub goal_objective_template: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    #[ts(type = "number | null", optional)]
+    pub goal_token_budget: Option<Option<i64>>,
     pub enabled: Option<bool>,
     pub output_schema_ref: Option<String>,
 }
@@ -404,7 +420,7 @@ pub struct DesktopProbeMcpServiceRequest {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::*;
 
@@ -421,6 +437,90 @@ mod tests {
             missing_source[$id_key] = json!($id);
             assert!(serde_json::from_value::<$request_type>(missing_source).is_err());
         }};
+    }
+
+    fn tool_selection_request() -> Value {
+        json!({
+            "agentDid": "did:test:agent",
+            "selectionId": "tools",
+            "displayName": "Tools",
+            "enableFileTools": false,
+            "fileToolsMode": "ReadOnly",
+            "fileToolRoot": null,
+            "enableBash": false,
+            "bashMode": "ReadOnly",
+            "cliToolNames": [],
+            "enableMetaTools": false,
+            "delegateTo": [],
+            "subagentSpawnEnabled": false,
+            "subagentSteeringEnabled": false,
+            "subagentBackgroundEnabled": false,
+            "subagentAllowCrossDeployment": false,
+            "crossDeploymentSpawnTimeoutSeconds": null,
+            "enableMemory": false
+        })
+    }
+
+    fn task_request() -> Value {
+        json!({
+            "taskId": "task-a",
+            "name": "Task A",
+            "description": null,
+            "behaviorId": "default",
+            "promptTemplate": "Do work",
+            "enabled": true,
+            "outputSchemaRef": null
+        })
+    }
+
+    #[test]
+    fn tool_goal_capabilities_distinguish_omitted_null_and_value() {
+        let omitted: ToolSelectionSaveRequest =
+            serde_json::from_value(tool_selection_request()).expect("omitted request");
+        assert_eq!(omitted.enable_goal_tools, None);
+        assert_eq!(omitted.enable_goal_creation, None);
+
+        let mut explicit_null = tool_selection_request();
+        explicit_null["enableGoalTools"] = Value::Null;
+        explicit_null["enableGoalCreation"] = Value::Null;
+        let explicit_null: ToolSelectionSaveRequest =
+            serde_json::from_value(explicit_null).expect("explicit-null request");
+        assert_eq!(explicit_null.enable_goal_tools, Some(None));
+        assert_eq!(explicit_null.enable_goal_creation, Some(None));
+
+        let mut explicit = tool_selection_request();
+        explicit["enableGoalTools"] = Value::Bool(true);
+        explicit["enableGoalCreation"] = Value::Bool(false);
+        let explicit: ToolSelectionSaveRequest =
+            serde_json::from_value(explicit).expect("explicit request");
+        assert_eq!(explicit.enable_goal_tools, Some(Some(true)));
+        assert_eq!(explicit.enable_goal_creation, Some(Some(false)));
+    }
+
+    #[test]
+    fn task_goal_fields_distinguish_omitted_null_and_value() {
+        let omitted: TaskSaveRequest =
+            serde_json::from_value(task_request()).expect("omitted request");
+        assert_eq!(omitted.goal_objective_template, None);
+        assert_eq!(omitted.goal_token_budget, None);
+
+        let mut explicit_null = task_request();
+        explicit_null["goalObjectiveTemplate"] = Value::Null;
+        explicit_null["goalTokenBudget"] = Value::Null;
+        let explicit_null: TaskSaveRequest =
+            serde_json::from_value(explicit_null).expect("explicit-null request");
+        assert_eq!(explicit_null.goal_objective_template, Some(None));
+        assert_eq!(explicit_null.goal_token_budget, Some(None));
+
+        let mut explicit = task_request();
+        explicit["goalObjectiveTemplate"] = Value::String("Finish work".to_string());
+        explicit["goalTokenBudget"] = Value::Number(10_000.into());
+        let explicit: TaskSaveRequest = serde_json::from_value(explicit).expect("explicit request");
+        assert_eq!(
+            explicit.goal_objective_template,
+            Some(Some("Finish work".to_string()))
+        );
+        assert_eq!(explicit.goal_token_budget, Some(Some(10_000)));
     }
 
     #[test]

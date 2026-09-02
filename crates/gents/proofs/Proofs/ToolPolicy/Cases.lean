@@ -220,7 +220,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , bash := bash
   , meta := meta
   , goalTools := meta
-  , goalCreate := false
+  , goalCreate := meta
   , defraQuery := defraQuery
   , selfConfig := defraQuery
   , memory := meta
@@ -463,6 +463,9 @@ def runtimeEthAll : Surface :=
   { wideOpen with ethQueryMethods := .all, ethCallTools := .all }
 
 def behaviorGoalOnly : Surface :=
+  { secureMinimal with goalTools := true, goalCreate := false }
+
+def behaviorGoalCreate : Surface :=
   { secureMinimal with goalTools := true, goalCreate := true }
 
 def ceilingDeniesGoalCreate : Surface :=
@@ -508,8 +511,10 @@ def cases : List Case :=
       behaviorEthA ceilingEthB runtimeEthAll "svc-a" probeWrite
   , mkCase "goal_tools_independent_from_meta"
       behaviorGoalOnly wideOpen wideOpen "svc-a" probeWrite
+  , mkCase "goal_create_granted_when_all_layers_allow"
+      behaviorGoalCreate wideOpen wideOpen "svc-a" probeWrite
   , mkCase "goal_create_clamped_by_ceiling"
-      behaviorGoalOnly ceilingDeniesGoalCreate wideOpen "svc-a" probeWrite
+      behaviorGoalCreate ceilingDeniesGoalCreate wideOpen "svc-a" probeWrite
   , mkCase "meta_does_not_force_explicitly_disabled_goals"
       behaviorMetaWithoutGoals wideOpen wideOpen "svc-a" probeWrite
   ]

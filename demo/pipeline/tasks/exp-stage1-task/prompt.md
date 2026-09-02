@@ -5,5 +5,7 @@ trigger {{ event.trigger_id }} on {{ event.source_collection }} doc
 
 {{ doc.prompt }}
 
-After answering, call the only available tool write_experiment_finding for
-job_id={{ doc.job_id }} (unique finding_id, content, stage="stage1").
+After answering, call write_experiment_finding for
+job_id={{ doc.job_id }} (unique finding_id, content, stage="stage1"). After
+that write succeeds, call update_goal with status="complete"; the Task's
+durable goal is the terminal condition for this stage.

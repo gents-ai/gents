@@ -835,6 +835,8 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
         name: Some(EVENT_SOURCE_TASK_ID.to_string()),
         behavior_id: AGENT_NAME.to_string(),
         prompt_template: "handle event delivery doc".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let trigger = ResolvedEventTrigger {

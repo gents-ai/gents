@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::convert::{
     export_bundle_from_manifest, manifest_from_export_bundle, tool_service_registry_from_live_value,
@@ -345,6 +345,8 @@ fn sample_task(task_id: &str) -> DesiredTask {
         description: None,
         behavior_id: "default".to_string(),
         prompt_template: "Do the thing.".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         enabled: true,
         output_schema_ref: None,
     }
@@ -684,9 +686,13 @@ fn tool_selection_round_trip_preserves_nullable_goal_capability_state() {
     manifest.tool_selections.push(legacy);
     let mut explicit = sample_tool_selection("goal-tools");
     explicit.enable_meta_tools = false;
-    explicit.enable_goal_tools = Some(true);
-    explicit.enable_goal_creation = Some(false);
+    explicit.enable_goal_tools = Some(Some(true));
+    explicit.enable_goal_creation = Some(Some(false));
     manifest.tool_selections.push(explicit);
+    let mut inherited = sample_tool_selection("inherited-goal-tools");
+    inherited.enable_goal_tools = Some(None);
+    inherited.enable_goal_creation = Some(None);
+    manifest.tool_selections.push(inherited);
 
     let bundle = export_bundle_from_manifest(&manifest, "local").expect("export bundle");
     let rows = &bundle.as_bundle().tool_selections;
@@ -694,6 +700,8 @@ fn tool_selection_round_trip_preserves_nullable_goal_capability_state() {
     assert!(rows[0].get("enable_goal_creation").is_none());
     assert_eq!(rows[1]["enable_goal_tools"], json!(true));
     assert_eq!(rows[1]["enable_goal_creation"], json!(false));
+    assert!(rows[2]["enable_goal_tools"].is_null());
+    assert!(rows[2]["enable_goal_creation"].is_null());
 
     let round = manifest_from_export_bundle(bundle.as_bundle()).expect("import bundle");
     let legacy = round
@@ -708,8 +716,124 @@ fn tool_selection_round_trip_preserves_nullable_goal_capability_state() {
         .iter()
         .find(|selection| selection.selection_id == "goal-tools")
         .expect("explicit selection");
-    assert_eq!(explicit.enable_goal_tools, Some(true));
-    assert_eq!(explicit.enable_goal_creation, Some(false));
+    assert_eq!(explicit.enable_goal_tools, Some(Some(true)));
+    assert_eq!(explicit.enable_goal_creation, Some(Some(false)));
+    let inherited = round
+        .tool_selections
+        .iter()
+        .find(|selection| selection.selection_id == "inherited-goal-tools")
+        .expect("inherited selection");
+    assert_eq!(inherited.enable_goal_tools, None);
+    assert_eq!(inherited.enable_goal_creation, None);
+}
+
+#[test]
+fn desired_documents_distinguish_absent_goal_fields_from_explicit_null() {
+    let mut selection_json = serde_json::to_value(sample_tool_selection("goal-tools"))
+        .expect("serialize tool selection");
+    selection_json["enable_goal_tools"] = Value::Null;
+    selection_json["enable_goal_creation"] = Value::Null;
+    let selection: DesiredToolSelection =
+        serde_json::from_value(selection_json).expect("deserialize tool selection");
+    assert_eq!(selection.enable_goal_tools, Some(None));
+    assert_eq!(selection.enable_goal_creation, Some(None));
+
+    let mut task_json = serde_json::to_value(sample_task("durable-task")).expect("serialize task");
+    task_json["goal_objective_template"] = Value::Null;
+    task_json["goal_token_budget"] = Value::Null;
+    let task: DesiredTask = serde_json::from_value(task_json).expect("deserialize task");
+    assert_eq!(task.goal_objective_template, Some(None));
+    assert_eq!(task.goal_token_budget, Some(None));
+}
+
+#[test]
+fn task_round_trip_preserves_optional_goal_declaration() {
+    let mut manifest = manifest_with_default_behavior();
+    manifest.tasks.push(sample_task("legacy-task"));
+    let mut durable = sample_task("durable-task");
+    durable.goal_objective_template = Some(Some("Finish {{ node.behavior_id }} work".to_string()));
+    durable.goal_token_budget = Some(Some(50_000));
+    manifest.tasks.push(durable);
+    let mut cleared = sample_task("cleared-task");
+    cleared.goal_objective_template = Some(None);
+    cleared.goal_token_budget = Some(None);
+    manifest.tasks.push(cleared);
+
+    let bundle = export_bundle_from_manifest(&manifest, "local").expect("export bundle");
+    let legacy = bundle
+        .as_bundle()
+        .tasks
+        .iter()
+        .find(|task| task["task_id"] == "legacy-task")
+        .expect("legacy task");
+    assert!(legacy.get("goal_objective_template").is_none());
+    assert!(legacy.get("goal_token_budget").is_none());
+    let durable = bundle
+        .as_bundle()
+        .tasks
+        .iter()
+        .find(|task| task["task_id"] == "durable-task")
+        .expect("durable task");
+    assert_eq!(
+        durable["goal_objective_template"],
+        "Finish {{ node.behavior_id }} work"
+    );
+    assert_eq!(durable["goal_token_budget"], 50_000);
+    let cleared = bundle
+        .as_bundle()
+        .tasks
+        .iter()
+        .find(|task| task["task_id"] == "cleared-task")
+        .expect("cleared task");
+    assert!(cleared["goal_objective_template"].is_null());
+    assert!(cleared["goal_token_budget"].is_null());
+
+    let round = manifest_from_export_bundle(bundle.as_bundle()).expect("import bundle");
+    let legacy = round
+        .tasks
+        .iter()
+        .find(|task| task.task_id == "legacy-task")
+        .expect("legacy task");
+    assert_eq!(legacy.goal_objective_template, None);
+    assert_eq!(legacy.goal_token_budget, None);
+    let durable = round
+        .tasks
+        .iter()
+        .find(|task| task.task_id == "durable-task")
+        .expect("durable task");
+    assert_eq!(
+        durable
+            .goal_objective_template
+            .as_ref()
+            .and_then(Option::as_deref),
+        Some("Finish {{ node.behavior_id }} work")
+    );
+    assert_eq!(durable.goal_token_budget, Some(Some(50_000)));
+    let cleared = round
+        .tasks
+        .iter()
+        .find(|task| task.task_id == "cleared-task")
+        .expect("cleared task");
+    assert_eq!(cleared.goal_objective_template, None);
+    assert_eq!(cleared.goal_token_budget, None);
+}
+
+#[test]
+fn normalize_trims_task_goal_objective() {
+    let mut manifest = empty_manifest("did:test:test");
+    let mut task = sample_task("durable-task");
+    task.goal_objective_template = Some(Some("  finish work  ".to_string()));
+    manifest.tasks.push(task);
+
+    super::normalize::normalize_manifest(&mut manifest);
+
+    assert_eq!(
+        manifest.tasks[0]
+            .goal_objective_template
+            .as_ref()
+            .and_then(Option::as_deref),
+        Some("finish work")
+    );
 }
 
 #[test]
@@ -788,7 +912,14 @@ fn round_trip_load_write_load_is_identity() {
     use tempfile::tempdir;
 
     let tmp = tempdir().unwrap();
-    let original = self::write_manifest_root::minimal_manifest();
+    let mut original = self::write_manifest_root::minimal_manifest();
+    original.tasks[0].goal_objective_template = Some(None);
+    original.tasks[0].goal_token_budget = Some(None);
+    let mut selection = sample_tool_selection("goal-tools");
+    selection.agent_did = original.agent_principal.agent_did.clone();
+    selection.enable_goal_tools = Some(None);
+    selection.enable_goal_creation = Some(None);
+    original.tool_selections.push(selection);
 
     write_manifest_root(tmp.path(), &original, false).unwrap();
     let (loaded, report) = load_manifest_root(tmp.path());
@@ -1442,6 +1573,59 @@ fn diff_manifests_marks_task_update_when_prompt_changes() {
 }
 
 #[test]
+fn diff_task_goal_fields_distinguish_omission_from_explicit_clear() {
+    let mut live = empty_manifest("did:test:test");
+    let mut live_task = sample_task("durable-task");
+    live_task.goal_objective_template = Some(Some("Finish the durable task".to_string()));
+    live_task.goal_token_budget = Some(Some(10_000));
+    live.tasks.push(live_task);
+
+    let mut omitted = empty_manifest("did:test:test");
+    omitted.tasks.push(sample_task("durable-task"));
+    let omitted_report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &omitted,
+        Some(&live.agent_principal),
+        &live,
+        false,
+    );
+    assert_eq!(
+        omitted_report.collections.tasks.unchanged,
+        vec!["durable-task"]
+    );
+
+    let mut cleared = omitted.clone();
+    cleared.tasks[0].goal_objective_template = Some(None);
+    cleared.tasks[0].goal_token_budget = Some(None);
+    let clear_report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &cleared,
+        Some(&live.agent_principal),
+        &live,
+        false,
+    );
+    assert_eq!(clear_report.collections.tasks.update, vec!["durable-task"]);
+
+    let mut null_live = omitted;
+    null_live.tasks[0].goal_objective_template = Some(None);
+    null_live.tasks[0].goal_token_budget = Some(None);
+    let settled_report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &cleared,
+        Some(&null_live.agent_principal),
+        &null_live,
+        false,
+    );
+    assert_eq!(
+        settled_report.collections.tasks.unchanged,
+        vec!["durable-task"]
+    );
+}
+
+#[test]
 fn diff_manifests_marks_tool_selection_update_when_mcp_allowlist_changes() {
     let mut desired = empty_manifest("did:test:test");
     let mut desired_selection = sample_tool_selection("service-tools");
@@ -1468,6 +1652,48 @@ fn diff_manifests_marks_tool_selection_update_when_mcp_allowlist_changes() {
     assert!(report.collections.tool_selections.create.is_empty());
     assert!(report.collections.tool_selections.unchanged.is_empty());
     assert_eq!(report.counts.tool_selections.update, 1);
+}
+
+#[test]
+fn diff_tool_goal_capabilities_distinguish_omission_from_explicit_clear() {
+    let mut live = empty_manifest("did:test:test");
+    let mut live_selection = sample_tool_selection("goal-tools");
+    live_selection.enable_goal_tools = Some(Some(true));
+    live_selection.enable_goal_creation = Some(Some(true));
+    live.tool_selections.push(live_selection);
+
+    let mut omitted = empty_manifest("did:test:test");
+    omitted
+        .tool_selections
+        .push(sample_tool_selection("goal-tools"));
+    let omitted_report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &omitted,
+        Some(&live.agent_principal),
+        &live,
+        false,
+    );
+    assert_eq!(
+        omitted_report.collections.tool_selections.unchanged,
+        vec!["goal-tools"]
+    );
+
+    let mut cleared = omitted.clone();
+    cleared.tool_selections[0].enable_goal_tools = Some(None);
+    cleared.tool_selections[0].enable_goal_creation = Some(None);
+    let clear_report = diff_manifests(
+        &PathBuf::from("/tmp/fake-root"),
+        "local",
+        &cleared,
+        Some(&live.agent_principal),
+        &live,
+        false,
+    );
+    assert_eq!(
+        clear_report.collections.tool_selections.update,
+        vec!["goal-tools"]
+    );
 }
 
 #[test]
@@ -1904,6 +2130,8 @@ pub(super) mod write_manifest_root {
                 description: None,
                 behavior_id: "default".to_string(),
                 prompt_template: "Check the fleet.".to_string(),
+                goal_objective_template: None,
+                goal_token_budget: None,
                 enabled: true,
                 output_schema_ref: None,
             }],
@@ -2207,6 +2435,19 @@ fn load_pipeline_two_stage_fixture_with_surface() {
         "stage-1 selection must reference surface and drop inline write_tools: {:?}",
         manifest.tool_selections
     );
+    let stage_one = manifest
+        .tasks
+        .iter()
+        .find(|task| task.task_id == "exp-stage1-task")
+        .expect("stage-1 task");
+    assert_eq!(
+        stage_one
+            .goal_objective_template
+            .as_ref()
+            .and_then(Option::as_deref),
+        Some("Complete pipeline stage 1 for job {{ doc.job_id }} and persist its finding.")
+    );
+    assert_eq!(stage_one.goal_token_budget, Some(Some(50_000)));
     let mut errors = Vec::new();
     validate_manifest(&manifest, &mut errors);
     // Backend/model offline endpoints may still pass static validate; surface links must not error.

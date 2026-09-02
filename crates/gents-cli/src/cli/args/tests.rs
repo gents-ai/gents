@@ -129,6 +129,7 @@ fn assert_task_run_args(args: ConfigTaskRunArgs) {
     assert_eq!(args.task_id.as_deref(), None);
     assert_eq!(args.task_id_flag.as_deref(), Some("host-check"));
     assert_eq!(args.args, r#"{"scope":"host"}"#);
+    assert_eq!(args.session_id, None);
     assert_eq!(
         args.graphql.as_deref(),
         Some("http://127.0.0.1:9191/api/v0/graphql")
@@ -411,10 +412,31 @@ fn top_level_task_run_accepts_positional_task_id_and_wait() {
             assert_eq!(args.task_id.as_deref(), Some("host-check"));
             assert_eq!(args.task_id_flag, None);
             assert_eq!(args.args, r#"{"scope":"host"}"#);
+            assert_eq!(args.session_id, None);
             assert!(args.wait);
             assert_eq!(args.timeout_secs, 60);
             assert_eq!(args.poll_secs, 2);
         }
+        _ => panic!("expected `task run`"),
+    }
+}
+
+#[test]
+fn top_level_task_run_accepts_stable_goal_session_id() {
+    let cli = Cli::try_parse_from([
+        "gents",
+        "task",
+        "run",
+        "durable-task",
+        "--session-id",
+        "pipeline-run-42",
+    ])
+    .expect("durable task run should parse");
+
+    match cli.command {
+        Command::Task {
+            command: TaskCommand::Run(args),
+        } => assert_eq!(args.session_id.as_deref(), Some("pipeline-run-42")),
         _ => panic!("expected `task run`"),
     }
 }

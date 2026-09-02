@@ -6,6 +6,8 @@ fn resolved_task_for_test(task_id: &str, behavior_id: &str, prompt_template: &st
         name: None,
         behavior_id: behavior_id.to_string(),
         prompt_template: prompt_template.to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     }
 }
@@ -60,6 +62,11 @@ async fn manual_source_run_task_now_yields_intent_with_args_vars() {
     assert_eq!(intent.task.task_id, "greet-user");
     assert_eq!(intent.event_vars["trigger_kind"].as_str(), Some("manual"));
     assert!(intent.doc_vars.is_none());
+    let invocation_id = intent
+        .durable_fire_key
+        .strip_prefix("6:manual:36:")
+        .expect("length-delimited manual fire key prefix");
+    uuid::Uuid::parse_str(invocation_id).expect("manual invocation key must be a UUID");
 }
 
 #[tokio::test]
@@ -125,6 +132,8 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
             None,
             None,
             "manual body",
+            None,
+            "manual-test-fire",
         )
         .await
         .expect("Manual materialize should succeed");
@@ -239,6 +248,8 @@ async fn production_materializer_persists_event_source_document_lineage() {
             None,
             None,
             "event body",
+            None,
+            "event-test-fire",
         )
         .await
         .expect("Event materialize should succeed");
@@ -337,6 +348,8 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
             None,
             None,
             "schedule body",
+            None,
+            "schedule-test-fire",
         )
         .await
         .unwrap();
@@ -388,6 +401,8 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
             None,
             None,
             "body",
+            None,
+            "invalid-event-test-fire",
         )
         .await
         .expect_err("Event materialization without a source document must fail closed");
@@ -403,6 +418,8 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
             None,
             None,
             "body",
+            None,
+            "invalid-schedule-test-fire",
         )
         .await
         .expect_err("non-Event materialization must reject source document lineage");
@@ -427,6 +444,8 @@ async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
             None,
             None,
             "manual body",
+            None,
+            "invalid-manual-test-fire",
         )
         .await
         .expect_err("Manual materialize with trigger_id must fail before persistence");
@@ -465,6 +484,7 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
         group_vars: None,
         trigger_context: None,
         args_vars: Some(serde_json::json!({"name": "Amy"})),
+        durable_fire_key: "manual-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -518,6 +538,7 @@ async fn dispatch_rejects_manual_intent_with_trigger_id() {
         group_vars: None,
         trigger_context: None,
         args_vars: Some(serde_json::json!({})),
+        durable_fire_key: "manual-invalid-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(move |r| {
             *capture.lock().unwrap() = Some(r);

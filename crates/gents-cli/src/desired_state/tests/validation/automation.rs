@@ -48,6 +48,65 @@ fn validate_rejects_duplicate_task_id() {
 }
 
 #[test]
+fn validate_accepts_task_goal_declaration() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("durable-task");
+    task.goal_objective_template = Some(Some("Finish {{ node.behavior_id }} work".to_string()));
+    task.goal_token_budget = Some(Some(50_000));
+    manifest.tasks.push(task);
+
+    let errors = validation_errors(&manifest);
+    assert!(errors.is_empty(), "valid task goal declaration: {errors:?}");
+}
+
+#[test]
+fn validate_rejects_invalid_task_goal_declarations() {
+    for (objective, budget, expected) in [
+        (
+            Some("objective"),
+            Some(0),
+            "goal_token_budget must be positive",
+        ),
+        (
+            Some("objective"),
+            Some(-1),
+            "goal_token_budget must be positive",
+        ),
+        (None, Some(100), "requires goal_objective_template"),
+        (Some("   "), None, "must be non-empty"),
+    ] {
+        let mut manifest = manifest_with_default_behavior();
+        let mut task = sample_task("durable-task");
+        task.goal_objective_template = Some(objective.map(str::to_string));
+        task.goal_token_budget = Some(budget);
+        manifest.tasks.push(task);
+
+        let errors = validation_errors(&manifest);
+        assert!(
+            errors.iter().any(|message| message.contains(expected)),
+            "expected {expected:?}, got {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn validate_rejects_invalid_task_goal_template() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("durable-task");
+    task.goal_objective_template = Some(Some("Finish {{ ctx.request_id }}".to_string()));
+    manifest.tasks.push(task);
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("goal_objective_template")
+                && message.contains("unavailable template variable")
+        }),
+        "expected goal template scope error, got {errors:?}"
+    );
+}
+
+#[test]
 fn validate_rejects_empty_schedule_id() {
     let mut manifest = manifest_with_default_behavior();
     manifest.tasks.push(sample_task("summarize-inbox"));
@@ -257,6 +316,28 @@ fn validate_rejects_schedule_task_template_referencing_args_scope() {
                 && message.contains("args")
         }),
         "expected schedule-scope rejection for args.*, got {errors:?}"
+    );
+}
+
+#[test]
+fn validate_rejects_schedule_goal_template_referencing_doc_scope() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut task = sample_task("summarize-inbox");
+    task.goal_objective_template = Some(Some("Finish {{ doc.foo }}".to_string()));
+    manifest.tasks.push(task);
+    manifest
+        .schedules
+        .push(sample_schedule("hourly", "summarize-inbox"));
+
+    let errors = validation_errors(&manifest);
+    assert!(
+        errors.iter().any(|message| {
+            message.contains("hourly")
+                && message.contains("goal_objective_template")
+                && message.contains("forbidden scope")
+                && message.contains("doc")
+        }),
+        "expected schedule goal scope rejection, got {errors:?}"
     );
 }
 

@@ -552,6 +552,16 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_goal_capability_resolution_matches_rust_decoder")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "task_goal_publication_cases"
+      "TaskGoalPublicationCases"
+      "conformance::goals::generated_task_goal_publication_cases_fence_atomic_selection")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "task_goal_recovery_cases"
+      "TaskGoalRecoveryCases"
+      "conformance::goals::generated_task_goal_recovery_cases_fence_request_witness")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_submission_cases"
       "GoalSubmissionCases"
       "conformance::goals::generated_goal_submission_cases_fence_atomic_visibility")

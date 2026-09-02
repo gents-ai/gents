@@ -123,6 +123,77 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     requester_did: Option<&str>,
     trigger_doc_id: Option<&str>,
 ) -> Result<EnqueuedAgentRequest> {
+    let request_id = request_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+        agent_did,
+        behavior_id,
+        content,
+        execution_origin,
+        trigger_lineage,
+        conversation_title,
+        workspace_lineage,
+        &request_id,
+        &session_id,
+        None,
+        requester_did,
+        trigger_doc_id,
+    )
+    .await?;
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+
+    // A trigger fire is not replayable: `event_kind: created` is first-seen, so
+    // dropping this create on a transient conflict loses the stage for good.
+    let response = crate::graphql::graphql_mutation_with_transaction_retry(
+        node,
+        &mutation,
+        "materialize_pending_agent_request",
+    )
+    .await?;
+
+    let doc_id = resolve_created_agent_request_doc_id(
+        node,
+        &response,
+        "create_AgentRequest",
+        &escaped_request_id,
+        "querying created pending AgentRequest doc id failed",
+        "pending AgentRequest create returned no _docID",
+    )
+    .await?;
+
+    Ok(EnqueuedAgentRequest {
+        doc_id,
+        request_id,
+        session_id,
+    })
+}
+
+/// Build and sign the canonical pending request used by trigger materialization.
+///
+/// Callers which need to stage additional controller documents in the same
+/// transaction can precompute the request/session/retry identity, then pass the
+/// returned immutable create document to their atomic submit seam. The ordinary
+/// trigger path above deliberately keeps its existing create behavior.
+#[allow(clippy::too_many_arguments)]
+pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+    agent_did: &str,
+    behavior_id: &str,
+    content: &str,
+    execution_origin: ExecutionOrigin,
+    trigger_lineage: TriggerLineage,
+    conversation_title: Option<&str>,
+    workspace_lineage: Option<&WorkspaceLineage>,
+    request_id: &str,
+    session_id: &str,
+    retry_key: Option<&str>,
+    requester_did: Option<&str>,
+    trigger_doc_id: Option<&str>,
+) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     validate_trigger_lineage(&trigger_lineage, trigger_doc_id)?;
     if trigger_lineage.trigger_kind.as_deref() == Some("manual")
         && trigger_lineage.trigger_id.is_some()
@@ -133,15 +204,16 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         workspace.require_authority_if_workspace_id()?;
     }
 
+    let request_id = request_id.trim();
+    let session_id = session_id.trim();
+    anyhow::ensure!(!request_id.is_empty(), "request_id must be non-empty");
+    anyhow::ensure!(!session_id.is_empty(), "session_id must be non-empty");
+    let retry_key = retry_key.map(str::trim);
+    anyhow::ensure!(
+        retry_key.is_none_or(|value| !value.is_empty()),
+        "retry_key must be non-empty when supplied"
+    );
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let request_id = request_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let session_id = uuid::Uuid::new_v4().to_string();
-
-    let escaped_request_id = escape_graphql_string(&request_id);
     let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
     let content = prompt_selection.prompt.as_str();
     let initial_status = if workspace_lineage.is_some_and(WorkspaceLineage::is_bound) {
@@ -181,11 +253,11 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         Some(kind) => anyhow::bail!("unsupported runtime request trigger kind {kind}"),
     };
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        request_id.clone(),
+        request_id,
         agent_did,
         agent_did,
         behavior_id,
-        session_id.clone(),
+        session_id,
         content,
         execution_origin.as_str(),
         now,
@@ -193,6 +265,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     );
     create.metadata =
         (!metadata.is_empty()).then(|| serde_json::Value::Object(metadata).to_string());
+    create.retry_key = retry_key.map(str::to_owned);
     create.initial_status = initial_status.to_string();
     create.caused_by_trigger_id = trigger_lineage.trigger_id.clone();
     create.caused_by_trigger_kind = trigger_lineage.trigger_kind.clone();
@@ -214,32 +287,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         );
     }
     crate::sign_agent_request_create_as_registered_target(&mut create).await?;
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-
-    // A trigger fire is not replayable: `event_kind: created` is first-seen, so
-    // dropping this create on a transient conflict loses the stage for good.
-    let response = crate::graphql::graphql_mutation_with_transaction_retry(
-        node,
-        &mutation,
-        "materialize_pending_agent_request",
-    )
-    .await?;
-
-    let doc_id = resolve_created_agent_request_doc_id(
-        node,
-        &response,
-        "create_AgentRequest",
-        &escaped_request_id,
-        "querying created pending AgentRequest doc id failed",
-        "pending AgentRequest create returned no _docID",
-    )
-    .await?;
-
-    Ok(EnqueuedAgentRequest {
-        doc_id,
-        request_id,
-        session_id,
-    })
+    Ok(create)
 }
 
 pub(crate) async fn activate_workspace_bound_request(
@@ -266,6 +314,37 @@ pub(crate) async fn activate_workspace_bound_request(
     )
     .await?;
     if crate::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none() {
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                status lifecycle_state workspace_id
+            }} }}"#,
+            doc_id = escape_graphql_string(request_doc_id),
+        );
+        let response = crate::graphql::graphql_with_transaction_retry(
+            node,
+            &query,
+            "recover workspace-bound request activation",
+        )
+        .await?;
+        let row = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(serde_json::Value::as_object);
+        let activation_already_visible = row.is_some_and(|row| {
+            row.get("workspace_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|workspace_id| !workspace_id.trim().is_empty())
+                && row
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|status| status != "workspace_binding_pending")
+        });
+        if activation_already_visible {
+            return Ok(());
+        }
         anyhow::bail!(
             "workspace-bound AgentRequest {request_doc_id} was not staged for activation"
         );

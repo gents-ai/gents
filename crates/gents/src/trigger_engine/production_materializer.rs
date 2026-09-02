@@ -21,13 +21,15 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::lifecycle::{
-    active_runtime_lifecycle_state_graphql_list, task_run_conversation_title,
+    active_runtime_lifecycle_state_graphql_list,
+    build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
+    task_goal_conversation_title, task_run_conversation_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
     TriggerLineage, WorkspaceLineage,
 };
@@ -210,6 +212,8 @@ impl MaterializerHandle for ProductionMaterializer {
         correlation: Option<&str>,
         trigger_context: Option<&str>,
         rendered_prompt: &str,
+        rendered_goal_objective: Option<&str>,
+        durable_fire_key: &str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>> {
         if matches!(trigger_kind, TriggerKind::Manual)
             && (trigger_id.is_some() || trigger_doc_id.is_some())
@@ -226,6 +230,9 @@ impl MaterializerHandle for ProductionMaterializer {
         let task_id = task.task_id.clone();
         let task_label = task.display_label().to_string();
         let rendered_prompt = rendered_prompt.to_string();
+        let rendered_goal_objective = rendered_goal_objective.map(str::to_owned);
+        let goal_token_budget = task.goal_token_budget;
+        let durable_fire_key = durable_fire_key.to_string();
         let trigger_id = trigger_id.map(str::to_owned);
         let trigger_doc_id = trigger_doc_id.map(str::to_owned);
         let source_doc_id = source_doc_id.map(str::to_owned);
@@ -295,12 +302,18 @@ impl MaterializerHandle for ProductionMaterializer {
                 correlation,
                 trigger_context,
             };
-            let conversation_title = task_run_conversation_title(&task_label);
             let workspace_ref = workspace.is_bound().then_some(&workspace);
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let enqueued =
-                write_pending_agent_request_with_lineage_workspace_and_conversation_title(
-                    node.as_ref(),
+            let (enqueued, conversation_title) = if let Some(objective) =
+                rendered_goal_objective.as_deref()
+            {
+                let identity = crate::goal::task_goal_fire_identity(
+                    &behavior_did,
+                    &task_id,
+                    &durable_fire_key,
+                );
+                let conversation_title =
+                    task_goal_conversation_title(&task_label, &identity.retry_key);
+                let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
                     &behavior_did,
                     &behavior_name,
                     &rendered_prompt,
@@ -308,15 +321,51 @@ impl MaterializerHandle for ProductionMaterializer {
                     lineage,
                     Some(&conversation_title),
                     workspace_ref,
-                    Some(&request_id),
+                    &identity.request_id,
+                    &identity.session_id,
+                    Some(&identity.retry_key),
                     requester_did,
                     trigger_doc_id.as_deref(),
                 )
                 .await?;
+                let enqueued = crate::goal::submit_goal_backed_request_local(
+                    node.as_ref(),
+                    &behavior_did,
+                    &identity.session_id,
+                    objective,
+                    goal_token_budget,
+                    &create,
+                )
+                .await?;
+                (enqueued, conversation_title)
+            } else {
+                anyhow::ensure!(
+                    goal_token_budget.is_none(),
+                    "goal token budget requires a goal objective template"
+                );
+                let request_id = uuid::Uuid::new_v4().to_string();
+                let conversation_title = task_run_conversation_title(&task_label);
+                let enqueued =
+                    write_pending_agent_request_with_lineage_workspace_and_conversation_title(
+                        node.as_ref(),
+                        &behavior_did,
+                        &behavior_name,
+                        &rendered_prompt,
+                        execution_origin,
+                        lineage,
+                        Some(&conversation_title),
+                        workspace_ref,
+                        Some(&request_id),
+                        requester_did,
+                        trigger_doc_id.as_deref(),
+                    )
+                    .await?;
+                (enqueued, conversation_title)
+            };
             if workspace_ref.is_some() {
                 crate::workspace::materialize_workspace_binding(
                     node.as_ref(),
-                    &request_id,
+                    &enqueued.request_id,
                     &enqueued.doc_id,
                     &behavior_did,
                     &workspace,
@@ -344,6 +393,7 @@ impl MaterializerHandle for ProductionMaterializer {
         trigger_id: &str,
         trigger_kind: TriggerKind,
         correlation: Option<&str>,
+        excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
         let node = self.node.clone();
         let escaped_agent_did = escape_graphql_string(agent_did);
@@ -352,6 +402,10 @@ impl MaterializerHandle for ProductionMaterializer {
         let correlation_filter = correlation
             .map(escape_graphql_string)
             .map(|value| format!(r#", caused_by_correlation: {{ _eq: "{value}" }}"#))
+            .unwrap_or_default();
+        let request_exclusion_filter = excluded_request_id
+            .map(escape_graphql_string)
+            .map(|value| format!(r#", request_id: {{ _neq: "{value}" }}"#))
             .unwrap_or_default();
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
@@ -378,7 +432,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         filter: {{
                             agent_did: {{ _eq: "{agent_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
-                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter},
+                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter}{request_exclusion_filter},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
                         }}
                     ) {{ _docID lifecycle_state deadline }}
@@ -387,6 +441,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 trigger_id = escaped_trigger_id,
                 trigger_kind = trigger_kind_str,
                 correlation_filter = correlation_filter,
+                request_exclusion_filter = request_exclusion_filter,
             );
             let resp = node.execute(&query).await;
             if resp.has_errors() {
@@ -413,6 +468,7 @@ impl MaterializerHandle for ProductionMaterializer {
         trigger_id: &str,
         trigger_kind: TriggerKind,
         correlation: Option<&str>,
+        excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + '_>> {
         let node = self.node.clone();
         let escaped_agent_did = escape_graphql_string(agent_did);
@@ -421,6 +477,10 @@ impl MaterializerHandle for ProductionMaterializer {
         let correlation_filter = correlation
             .map(escape_graphql_string)
             .map(|value| format!(r#", caused_by_correlation: {{ _eq: "{value}" }}"#))
+            .unwrap_or_default();
+        let request_exclusion_filter = excluded_request_id
+            .map(escape_graphql_string)
+            .map(|value| format!(r#", request_id: {{ _neq: "{value}" }}"#))
             .unwrap_or_default();
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
@@ -431,7 +491,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         filter: {{
                             agent_did: {{ _eq: "{agent_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
-                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter},
+                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter}{request_exclusion_filter},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
                         }},
                         input: {{
@@ -446,6 +506,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 trigger_id = escaped_trigger_id,
                 trigger_kind = trigger_kind_str,
                 correlation_filter = correlation_filter,
+                request_exclusion_filter = request_exclusion_filter,
             );
             let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
                 node.as_ref(),
@@ -470,6 +531,71 @@ impl MaterializerHandle for ProductionMaterializer {
                 );
             }
             Ok(count)
+        })
+    }
+
+    fn recover_goal_task_fire(
+        &self,
+        task: &ResolvedTask,
+        durable_fire_key: &str,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>> {
+        let node = self.node.clone();
+        let resolved = self.resolve_behavior(task);
+        let task_id = task.task_id.clone();
+        let durable_fire_key = durable_fire_key.to_string();
+        Box::pin(async move {
+            let (behavior_id, agent_did, _, _) = resolved?;
+            let identity =
+                crate::goal::task_goal_fire_identity(&agent_did, &task_id, &durable_fire_key);
+            let expected = crate::goal::TaskGoalRequestBinding {
+                agent_did: agent_did.clone(),
+                behavior_id,
+                session_id: identity.session_id,
+                request_id: identity.request_id,
+                retry_key: identity.retry_key,
+            };
+            let query = format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{
+                    request_id agent_did behavior_id session_id retry_key
+                }} }}"#,
+                escape_graphql_string(&expected.request_id),
+            );
+            let response = graphql_with_transaction_retry(
+                node.as_ref(),
+                &query,
+                "recover deterministic goal Task request",
+            )
+            .await?;
+            let requests = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentRequest"))
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            anyhow::ensure!(
+                requests.len() <= 1,
+                "deterministic goal Task request id is not unique"
+            );
+            let observed = requests
+                .first()
+                .cloned()
+                .map(serde_json::from_value::<crate::goal::TaskGoalRequestBinding>)
+                .transpose()
+                .context("decoding deterministic goal Task request binding")?;
+            let decision =
+                crate::goal::decide_task_goal_fire_recovery(&expected, observed.as_ref());
+            match decision.disposition {
+                crate::goal::TaskGoalFireRecoveryDisposition::Absent => Ok(None),
+                crate::goal::TaskGoalFireRecoveryDisposition::Recovered => {
+                    Ok(decision.recovered_request_id)
+                }
+                crate::goal::TaskGoalFireRecoveryDisposition::Conflict => {
+                    anyhow::bail!(
+                        "deterministic goal Task request identity conflicts with another binding"
+                    )
+                }
+            }
         })
     }
 

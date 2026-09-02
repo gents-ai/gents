@@ -1,9 +1,16 @@
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 
 const TASK_TITLE_LABEL_MAX_LEN: usize = 56;
 
 pub fn task_run_conversation_title(task_label: &str) -> String {
     task_run_conversation_title_at(task_label, Utc::now())
+}
+
+pub(crate) fn task_goal_conversation_title(task_label: &str, retry_key: &str) -> String {
+    let slug = slugify_task_label(task_label);
+    let digest = format!("{:x}", Sha256::digest(retry_key.as_bytes()));
+    format!("{slug}-goal-{}", &digest[..16])
 }
 
 pub(crate) fn task_run_conversation_title_at(task_label: &str, timestamp: DateTime<Utc>) -> String {
@@ -53,7 +60,7 @@ fn slugify_task_label(task_label: &str) -> String {
 mod tests {
     use chrono::{TimeZone, Utc};
 
-    use super::task_run_conversation_title_at;
+    use super::{task_goal_conversation_title, task_run_conversation_title_at};
 
     #[test]
     fn task_run_conversation_title_slugs_label_and_appends_timestamp() {
@@ -72,6 +79,18 @@ mod tests {
         assert_eq!(
             task_run_conversation_title_at(" :  ", timestamp),
             "task-20260430t180405z"
+        );
+    }
+
+    #[test]
+    fn task_goal_conversation_title_is_stable_for_a_durable_fire() {
+        let first = task_goal_conversation_title("Release Task", "task-goal-retry:fire-1");
+        let retry = task_goal_conversation_title("Release Task", "task-goal-retry:fire-1");
+        assert_eq!(first, retry);
+        assert!(first.starts_with("release-task-goal-"));
+        assert_ne!(
+            first,
+            task_goal_conversation_title("Release Task", "task-goal-retry:fire-2")
         );
     }
 }

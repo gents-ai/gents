@@ -65,6 +65,8 @@ def snapshotJson : String :=
     ++ "\"goal_transition_cases\":"
       ++ goalTransitionCasesJson ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
+    ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
+    ++ "\"task_goal_recovery_cases\":" ++ taskGoalRecoveryCasesJson ++ ","
     ++ "\"goal_submission_cases\":" ++ goalSubmissionCasesJson ++ ","
     ++ "\"goal_continuation_materialization_cases\":"
       ++ goalContinuationMaterializationCasesJson ++ ","

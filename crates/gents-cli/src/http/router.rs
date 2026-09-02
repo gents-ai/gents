@@ -644,58 +644,30 @@ mod tests {
 
     #[test]
     fn p2p_metrics_snapshot_decodes_pinned_live_sync_status() {
+        let mut sync_status = gents::P2pSyncStatusSnapshot::default();
+        sync_status.push_backlog.queued_items = 7;
+        sync_status.push_backlog.stale_head_retirements_total = 17;
+        sync_status.push_backlog.peer_capacity_parks_total = 13;
+        sync_status.push_backlog.per_peer = vec![gents::P2pPeerBacklogSnapshot {
+            peer_id: "peer-a".to_string(),
+            consecutive_failures: 3,
+            ..Default::default()
+        }];
+        sync_status.push_updates_coalesced_total = 43;
+        sync_status.persisted_pending_dags = 17;
+        sync_status.missing_link_retries = 23;
+        sync_status.gossip_direction_filtered_total = 47;
+        sync_status.pending_dag_capacity_shed = 59;
+        sync_status.next_pending_retry_in_ms = Some(71);
+        sync_status.pending_dag_terminal_quarantined = 73;
+        sync_status.quarantined_pending_dags = 79;
         let snapshot = p2p_metrics_from_status(
             &json!({
                 "enabled": true,
                 "p2p_connected_peers": ["peer-a", "peer-b"],
                 "p2p_replicator_count": 2,
-                "p2p_sync_status": {
-                    "push_backlog": {
-                        "queue_item_capacity": 128,
-                        "queue_byte_capacity": 1048576,
-                        "per_peer_active_cap": 2,
-                        "worker_count": 8,
-                        "queued_items": 7,
-                        "queued_bytes": 4096,
-                        "active_jobs": 3,
-                        "enqueued_total": 101,
-                        "coalesced_total": 11,
-                        "rejected_items_total": 5,
-                        "rejected_bytes_total": 2,
-                        "completed_total": 79,
-                        "failed_total": 4,
-                        "stale_head_retirements_total": 17,
-                        "peer_capacity_parks_total": 13,
-                        "per_peer": [{
-                            "peer_id": "peer-a",
-                            "queued_items": 4,
-                            "queued_bytes": 2048,
-                            "active_jobs": 1,
-                            "consecutive_failures": 3,
-                            "cooldown_remaining_ms": 750
-                        }]
-                    },
-                    "broadcast_coalesced_total": 41,
-                    "push_updates_coalesced_total": 43,
-                    "gossip_direction_filtered_total": 47,
-                    "pending_dags": 13,
-                    "pending_dag_capacity": 1000,
-                    "persisted_pending_dags": 17,
-                    "persisted_pending_dag_capacity": 4000,
-                    "pending_resync_in_flight": true,
-                    "retained_background_tasks": 6,
-                    "missing_link_retries": 23,
-                    "pending_dag_resolved": 29,
-                    "pending_dag_expired": 31,
-                    "single_flight_suppressed": 37,
-                    "already_merged_fast_path": 53,
-                    "pending_dag_capacity_shed": 59,
-                    "pending_dag_retry_dispatched": 61,
-                    "pending_dag_retry_suppressed": 67,
-                    "next_pending_retry_in_ms": 71,
-                    "pending_dag_terminal_quarantined": 73,
-                    "quarantined_pending_dags": 79
-                }
+                "p2p_sync_status": serde_json::to_value(sync_status)
+                    .expect("serialize pinned sync status")
             }),
             None,
         );

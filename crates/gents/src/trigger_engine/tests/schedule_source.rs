@@ -48,12 +48,18 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
 
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     create_schedule_with_next_run_at(node.as_ref(), "sched-1", "task-1", &past, "serial").await;
+    let persisted_next_run_at = load_schedule_next_run_at(node.as_ref(), "sched-1")
+        .await
+        .unwrap()
+        .unwrap();
 
     let task = ResolvedTask {
         task_id: "task-1".to_string(),
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "hi".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let snapshot = snapshot_with_schedules(HashMap::from([(
@@ -76,6 +82,10 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     assert_eq!(intent.task.task_id, "task-1");
     assert!(intent.doc_vars.is_none());
     assert!(intent.args_vars.is_none());
+    assert_eq!(
+        intent.durable_fire_key,
+        crate::trigger_engine::durable_fire_key("schedule", &["sched-1", &persisted_next_run_at])
+    );
 
     let ev = &intent.event_vars;
     assert_eq!(ev["trigger_id"].as_str(), Some("sched-1"));
@@ -116,6 +126,8 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "hi".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let schedule = resolved_schedule("sched-1", task);
@@ -347,6 +359,8 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         name: Some("Mini Host Health".to_string()),
         behavior_id: behavior.behavior_id.clone(),
         prompt_template: "integration fire".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let schedule = ResolvedSchedule {
@@ -517,6 +531,8 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "hi".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let snapshot = snapshot_with_schedules(HashMap::from([(
@@ -590,6 +606,8 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "hi".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let schedule = ResolvedSchedule {

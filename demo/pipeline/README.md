@@ -19,7 +19,7 @@ create ExperimentJob
 | --- | --- |
 | `schemas/` | Pack-scoped SDL (`ExperimentJob`, `ExperimentFinding`) — applied by `config apply` |
 | `datastore-tool-surfaces/experiment-writes/` | Create-tool grant → `ExperimentFinding` |
-| `tool-selections/exp-tools-stage1/` | Links surface only; every other tool off |
+| `tool-selections/exp-tools-stage1/` | Links the write surface plus goal lifecycle tools; discovery and model goal creation remain off |
 | `tool-selections/exp-tools-stage2/` | Zero tools |
 | `event_triggers/` | `exp-stage1` on job create; `exp-stage2` on finding create |
 | `runs/` | Gitignored exports |
@@ -28,11 +28,16 @@ create ExperimentJob
 
 | Behavior | Tools | Why |
 | --- | --- | --- |
-| stage-1 | `write_experiment_finding` only | Surface expands to one `BoundedWriteTool` create |
+| stage-1 | `write_experiment_finding`, `get_goal`, `update_goal` | The surface grants one bounded create; the Task goal declaration is controller-provisioned, so discovery and model-facing `create_goal` remain off |
 | stage-2 | none | Finding is already in the task prompt via `{{ doc.* }}` |
 
 Surfaces name a **collection already on the node** (string). Pack apply
 registers `schemas/` first so that name resolves.
+
+The stage-1 Task also demonstrates the graph composition boundary: a Task may
+declare a goal objective template and optional token budget, while its tool
+selection grants only lifecycle access to that controller-owned goal. The
+graph DSL still supplies the event topology; it does not own goal creation.
 
 ## Run (anyone with a gents install + a model endpoint)
 

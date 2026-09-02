@@ -149,7 +149,7 @@ pub async fn load_tasks(node: &EmbeddedNode) -> Result<Vec<TaskRow>> {
     load_rows(
         node,
         "Task",
-        "query { Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at } }",
+        "query { Task { task_id name description behavior_id prompt_template goal_objective_template goal_token_budget enabled output_schema_ref created_at updated_at } }",
     )
     .await
 }

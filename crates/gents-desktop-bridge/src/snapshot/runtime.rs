@@ -376,6 +376,10 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     description: normalize_optional(row.description.as_deref()),
                     behavior_id: normalize_optional(row.behavior_id.as_deref()),
                     prompt_template: normalize_optional(row.prompt_template.as_deref()),
+                    goal_objective_template: normalize_optional(
+                        row.goal_objective_template.as_deref(),
+                    ),
+                    goal_token_budget: row.goal_token_budget,
                     enabled: row.enabled,
                     output_schema_ref: normalize_optional(row.output_schema_ref.as_deref()),
                     recent_runs: recent_runs_for_task_views(

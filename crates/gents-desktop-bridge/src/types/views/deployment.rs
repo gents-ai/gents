@@ -314,6 +314,8 @@ pub struct TaskView {
     pub description: Option<String>,
     pub behavior_id: Option<String>,
     pub prompt_template: Option<String>,
+    pub goal_objective_template: Option<String>,
+    pub goal_token_budget: Option<i64>,
     pub enabled: Option<bool>,
     pub output_schema_ref: Option<String>,
     pub recent_runs: TaskRecentRunsView,

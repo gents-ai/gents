@@ -17,6 +17,26 @@ fn validate_event_kind(event_kind: &str) -> Result<()> {
     }
 }
 
+fn apply_task_goal_patch(
+    row: &mut TaskRow,
+    goal_objective_template: Option<Option<String>>,
+    goal_token_budget: Option<Option<i64>>,
+) -> Result<()> {
+    if let Some(goal_objective_template) = goal_objective_template {
+        row.goal_objective_template = trim_optional(goal_objective_template);
+    }
+    if let Some(goal_token_budget) = goal_token_budget {
+        if goal_token_budget.is_some_and(|budget| budget <= 0) {
+            bail!("goal_token_budget must be positive");
+        }
+        row.goal_token_budget = goal_token_budget;
+    }
+    if row.goal_objective_template.is_none() && row.goal_token_budget.is_some() {
+        bail!("goal_token_budget requires goal_objective_template");
+    }
+    Ok(())
+}
+
 async fn load_agent_request_by_doc_id(
     core: &ClientCore,
     request_doc_id: &str,
@@ -58,7 +78,6 @@ pub async fn save_task_config(core: &ClientCore, request: TaskSaveRequest) -> Re
     let name = require_trimmed("name", request.name)?;
     let behavior_id = require_trimmed("behavior_id", request.behavior_id)?;
     let prompt_template = require_trimmed("prompt_template", request.prompt_template)?;
-
     let store = core.store().snapshot();
     let mut row = store
         .tasks
@@ -71,6 +90,8 @@ pub async fn save_task_config(core: &ClientCore, request: TaskSaveRequest) -> Re
             description: None,
             behavior_id: None,
             prompt_template: None,
+            goal_objective_template: None,
+            goal_token_budget: None,
             enabled: Some(true),
             output_schema_ref: None,
             created_at: None,
@@ -80,6 +101,11 @@ pub async fn save_task_config(core: &ClientCore, request: TaskSaveRequest) -> Re
     row.description = trim_optional(request.description);
     row.behavior_id = Some(behavior_id);
     row.prompt_template = Some(prompt_template);
+    apply_task_goal_patch(
+        &mut row,
+        request.goal_objective_template,
+        request.goal_token_budget,
+    )?;
     row.enabled = request.enabled.or(row.enabled).or(Some(true));
     row.output_schema_ref = trim_optional(request.output_schema_ref);
     core.save_task(&row).await?;
@@ -221,4 +247,70 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
         status: row.status,
         lifecycle_state: row.lifecycle_state,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task_with_goal() -> TaskRow {
+        TaskRow {
+            task_id: "task-a".to_string(),
+            name: Some("Task A".to_string()),
+            description: None,
+            behavior_id: Some("default".to_string()),
+            prompt_template: Some("Do work".to_string()),
+            goal_objective_template: Some("Finish work".to_string()),
+            goal_token_budget: Some(10_000),
+            enabled: Some(true),
+            output_schema_ref: None,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn task_goal_patch_omission_preserves_stored_values() {
+        let mut row = task_with_goal();
+        apply_task_goal_patch(&mut row, None, None).expect("omitted patch");
+
+        assert_eq!(row.goal_objective_template.as_deref(), Some("Finish work"));
+        assert_eq!(row.goal_token_budget, Some(10_000));
+    }
+
+    #[test]
+    fn task_goal_patch_explicit_null_clears_stored_values() {
+        let mut row = task_with_goal();
+        apply_task_goal_patch(&mut row, Some(None), Some(None)).expect("clear patch");
+
+        assert_eq!(row.goal_objective_template, None);
+        assert_eq!(row.goal_token_budget, None);
+    }
+
+    #[test]
+    fn task_goal_patch_values_replace_stored_values() {
+        let mut row = task_with_goal();
+        apply_task_goal_patch(
+            &mut row,
+            Some(Some("  Finish replacement work  ".to_string())),
+            Some(Some(25_000)),
+        )
+        .expect("value patch");
+
+        assert_eq!(
+            row.goal_objective_template.as_deref(),
+            Some("Finish replacement work")
+        );
+        assert_eq!(row.goal_token_budget, Some(25_000));
+    }
+
+    #[test]
+    fn task_goal_patch_rejects_a_budget_without_an_effective_objective() {
+        let mut row = task_with_goal();
+        let error = apply_task_goal_patch(&mut row, Some(None), None)
+            .expect_err("clearing only the objective must fail while a budget remains");
+        assert!(error
+            .to_string()
+            .contains("goal_token_budget requires goal_objective_template"));
+    }
 }

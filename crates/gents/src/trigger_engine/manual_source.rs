@@ -64,6 +64,10 @@ impl ManualTriggerHandle {
             group_vars: None,
             trigger_context: None,
             args_vars: Some(args),
+            durable_fire_key: crate::trigger_engine::durable_fire_key(
+                "manual",
+                &[&uuid::Uuid::new_v4().to_string()],
+            ),
             pre_materialized_request_id: None,
             on_result: Box::new(move |result| {
                 let _ = result_tx.send(result);

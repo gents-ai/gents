@@ -95,6 +95,171 @@ theorem invalid_budget_never_creates (request : CreateRequest)
   split <;> simp_all
   split <;> simp_all
 
+/-- Optional durable-goal declaration carried by a reusable Task/demo-pack.
+    A budget has meaning only when the Task also declares a goal objective. -/
+structure TaskGoalDeclaration where
+  goalObjective : Option String
+  goalTokenBudget : Option Int
+  deriving DecidableEq, Repr
+
+def validTaskGoalDeclaration (declaration : TaskGoalDeclaration) : Bool :=
+  match declaration.goalObjective with
+  | none => declaration.goalTokenBudget.isNone
+  | some objective =>
+      !(canonicalObjective objective).isEmpty && validBudget declaration.goalTokenBudget
+
+/-- A durable trigger fire must supply a stable fire key. The runtime-facing
+    encoding is length-prefixed so the same principal/Task/fire tuple
+    deterministically recovers the same session and request retry identities
+    after a crash without colliding with another principal's Task. -/
+structure TaskFireIdentity where
+  sessionId : String
+  requestId : String
+  retryKey : String
+  deriving DecidableEq, Repr
+
+def taskFireScope (agentDid taskId fireKey : String) : String :=
+  toString agentDid.length ++ ":" ++ agentDid ++ ":" ++
+    toString taskId.length ++ ":" ++ taskId ++ ":" ++
+    toString fireKey.length ++ ":" ++ fireKey
+
+def taskFireIdentity (agentDid taskId fireKey : String) : TaskFireIdentity :=
+  let scope := taskFireScope agentDid taskId fireKey
+  { sessionId := "task-goal-session:" ++ scope
+  , requestId := "task-goal-request:" ++ scope
+  , retryKey := "task-goal-retry:" ++ scope }
+
+/-- The persisted request binding is the durable recovery witness. Goal and
+    GoalCreationClaim documents are creation-time state and may later be
+    removed without making an already-published request undiscoverable. -/
+structure TaskGoalRequestBinding where
+  agentDid : String
+  behaviorId : String
+  sessionId : String
+  requestId : String
+  retryKey : String
+  deriving DecidableEq, Repr
+
+def expectedTaskGoalRequestBinding (agentDid behaviorId taskId fireKey : String) :
+    TaskGoalRequestBinding :=
+  let identity := taskFireIdentity agentDid taskId fireKey
+  { agentDid, behaviorId
+  , sessionId := identity.sessionId
+  , requestId := identity.requestId
+  , retryKey := identity.retryKey }
+
+structure TaskFireRecoveryState where
+  request : Option TaskGoalRequestBinding
+  durableGoal : Bool
+  creationClaim : Bool
+  deriving DecidableEq, Repr
+
+inductive TaskFireRecoveryDisposition where
+  | absent
+  | recovered
+  | conflict
+  deriving DecidableEq, Repr
+
+structure TaskFireRecoveryDecision where
+  disposition : TaskFireRecoveryDisposition
+  recoveredRequestId : Option String
+  checkpointable : Bool
+  deriving DecidableEq, Repr
+
+/-- Classify the request returned by the globally deterministic request-id
+    lookup. Principal DID is part of the expected identity and binding, so a
+    foreign or otherwise mismatched row conflicts rather than being recovered
+    for the local principal. -/
+def decideTaskFireRecovery (expected : TaskGoalRequestBinding)
+    (state : TaskFireRecoveryState) : TaskFireRecoveryDecision :=
+  match state.request with
+  | none => ⟨.absent, none, false⟩
+  | some observed =>
+      if observed = expected then ⟨.recovered, some expected.requestId, true⟩
+      else ⟨.conflict, none, false⟩
+
+theorem matching_task_fire_request_is_recoverable
+    (expected : TaskGoalRequestBinding) (goalPresent claimPresent : Bool) :
+    let decision := decideTaskFireRecovery expected
+      ⟨some expected, goalPresent, claimPresent⟩
+    decision.disposition = .recovered ∧
+      decision.recoveredRequestId = some expected.requestId ∧
+      decision.checkpointable = true := by
+  simp [decideTaskFireRecovery]
+
+theorem matching_task_fire_request_survives_goal_metadata_deletion
+    (expected : TaskGoalRequestBinding) :
+    let decision := decideTaskFireRecovery expected ⟨some expected, false, false⟩
+    decision.disposition = .recovered ∧ decision.checkpointable = true := by
+  simp [decideTaskFireRecovery]
+
+theorem mismatched_task_fire_binding_conflicts
+    (expected observed : TaskGoalRequestBinding)
+    (hmismatch : observed ≠ expected) (goalPresent claimPresent : Bool) :
+    let decision := decideTaskFireRecovery expected
+      ⟨some observed, goalPresent, claimPresent⟩
+    decision.disposition = .conflict ∧ decision.checkpointable = false := by
+  simp [decideTaskFireRecovery, hmismatch]
+
+inductive TaskPublicationMode where
+  | invalid
+  | ordinary
+  | atomicGoalBacked
+  deriving DecidableEq, Repr
+
+structure TaskPublication where
+  mode : TaskPublicationMode
+  published : Bool
+  runnableRequest : Bool
+  durableGoal : Bool
+  sessionId : Option String
+  requestId : Option String
+  retryKey : Option String
+  deriving DecidableEq, Repr
+
+/-- Task publication is unchanged when no goal is declared. A valid goal
+    declaration switches publication to the atomic goal+request boundary and
+    carries deterministic identities for retry/reconciliation. -/
+def decideTaskPublication (declaration : TaskGoalDeclaration)
+    (agentDid taskId fireKey : String) : TaskPublication :=
+  if !validTaskGoalDeclaration declaration then
+    { mode := .invalid, published := false, runnableRequest := false, durableGoal := false
+    , sessionId := none, requestId := none, retryKey := none }
+  else match declaration.goalObjective with
+  | none =>
+      { mode := .ordinary, published := true, runnableRequest := true, durableGoal := false
+      , sessionId := none, requestId := none, retryKey := none }
+  | some _ =>
+      let identity := taskFireIdentity agentDid taskId fireKey
+      { mode := .atomicGoalBacked, published := true, runnableRequest := true, durableGoal := true
+      , sessionId := some identity.sessionId, requestId := some identity.requestId
+      , retryKey := some identity.retryKey }
+
+theorem task_goal_backed_runnable_implies_durable_goal
+    (declaration : TaskGoalDeclaration) (agentDid taskId fireKey : String)
+    (hmode : (decideTaskPublication declaration agentDid taskId fireKey).mode =
+      .atomicGoalBacked)
+    (hrunnable :
+      (decideTaskPublication declaration agentDid taskId fireKey).runnableRequest = true) :
+    (decideTaskPublication declaration agentDid taskId fireKey).durableGoal = true := by
+  by_cases hrun :
+      (decideTaskPublication declaration agentDid taskId fireKey).runnableRequest = true
+  · unfold decideTaskPublication at hmode ⊢
+    split <;> simp_all
+    split <;> simp_all
+  · exact (hrun hrunnable).elim
+
+theorem invalid_task_goal_declaration_cannot_publish
+    (declaration : TaskGoalDeclaration) (agentDid taskId fireKey : String)
+    (hinvalid : validTaskGoalDeclaration declaration = false) :
+    (decideTaskPublication declaration agentDid taskId fireKey).published = false ∧
+      (decideTaskPublication declaration agentDid taskId fireKey).runnableRequest = false := by
+  simp [decideTaskPublication, hinvalid]
+
+theorem task_without_goal_uses_ordinary_publication (agentDid taskId fireKey : String) :
+    (decideTaskPublication ⟨none, none⟩ agentDid taskId fireKey).mode = .ordinary := by
+  simp [decideTaskPublication, validTaskGoalDeclaration]
+
 structure SubmissionState where
   durableGoal : Bool
   runnableRequest : Bool

@@ -24,6 +24,14 @@ type TriggerLockKey = (String, String, TriggerKind, Option<String>);
 type TriggerLock = Arc<Mutex<()>>;
 type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
 
+pub(crate) fn durable_fire_key(namespace: &str, components: &[&str]) -> String {
+    let mut key = format!("{}:{namespace}", namespace.chars().count());
+    for component in components {
+        key.push_str(&format!(":{}:{component}", component.chars().count()));
+    }
+    key
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TriggerKind {
     Schedule,
@@ -54,12 +62,18 @@ pub struct FireIntent {
     pub group_vars: Option<serde_json::Value>,
     pub trigger_context: Option<String>,
     pub args_vars: Option<serde_json::Value>,
+    /// Stable identity of this logical source delivery. Goal-backed Tasks use
+    /// it with `task_id` to recover the same session/request after retries.
+    pub durable_fire_key: String,
     pub pre_materialized_request_id: Option<String>,
     pub on_result: Box<dyn FnOnce(FireResult) + Send>,
 }
 
 impl FireIntent {
     fn well_formed_error(&self) -> Option<&'static str> {
+        if self.durable_fire_key.trim().is_empty() {
+            return Some("Trigger fire intent must carry a durable fire key");
+        }
         match self.trigger_kind {
             TriggerKind::Manual if self.trigger_id.is_some() => {
                 Some("Manual trigger intent must not carry trigger_id")
@@ -131,6 +145,8 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         correlation: Option<&str>,
         trigger_context: Option<&str>,
         rendered_prompt: &str,
+        rendered_goal_objective: Option<&str>,
+        durable_fire_key: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 
     /// Check whether any active runtime `AgentRequest` of `agent_did` is
@@ -146,6 +162,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         trigger_id: &str,
         trigger_kind: TriggerKind,
         correlation: Option<&str>,
+        excluded_request_id: Option<&str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
     fn supersede_active_runtime_requests_for_trigger(
@@ -154,7 +171,16 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         trigger_id: &str,
         trigger_kind: TriggerKind,
         correlation: Option<&str>,
+        excluded_request_id: Option<&str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>;
+
+    fn recover_goal_task_fire(
+        &self,
+        task: &crate::runtime_snapshot::ResolvedTask,
+        durable_fire_key: &str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
+    >;
 
     fn has_materialized_group_request(
         &self,
@@ -245,6 +271,31 @@ impl TriggerEngine {
             return result;
         }
 
+        // Recovery is keyed by the durable Task/fire identity, not by the
+        // Task's current declaration. The goal, request, and claim may have
+        // committed before the source checkpoint did; if an operator removes
+        // the declaration before restart, that exact fire must still recover
+        // instead of falling through to a second ordinary request.
+        match self
+            .materializer
+            .recover_goal_task_fire(&intent.task, &intent.durable_fire_key)
+            .await
+        {
+            Ok(Some(request_id)) => {
+                let result = FireResult::Fired { request_id };
+                (intent.on_result)(result.clone());
+                return result;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let result = FireResult::Errored {
+                    error: format!("recover durable goal Task fire: {error}"),
+                };
+                (intent.on_result)(result.clone());
+                return result;
+            }
+        }
+
         let snapshot = self.snapshot_rx.borrow().clone();
 
         let trigger_doc_id = match intent.trigger_kind {
@@ -307,7 +358,36 @@ impl TriggerEngine {
                 return result;
             }
         };
-
+        let rendered_goal_objective = match intent.task.goal_objective_template.as_deref() {
+            Some(template) => match crate::template::render_template(template, &scope) {
+                Ok(objective) => Some(objective),
+                Err(error) => {
+                    let result = FireResult::Errored {
+                        error: format!("goal template: {error}"),
+                    };
+                    (intent.on_result)(result.clone());
+                    return result;
+                }
+            },
+            None if intent.task.goal_token_budget.is_some() => {
+                let result = FireResult::Errored {
+                    error: "goal token budget requires a goal objective template".to_string(),
+                };
+                (intent.on_result)(result.clone());
+                return result;
+            }
+            None => None,
+        };
+        if let Err(error) = crate::goal::validate_task_goal_declaration(
+            rendered_goal_objective.as_deref(),
+            intent.task.goal_token_budget,
+        ) {
+            let result = FireResult::Errored {
+                error: format!("goal declaration: {error}"),
+            };
+            (intent.on_result)(result.clone());
+            return result;
+        }
         let concurrency_agent_did = || {
             snapshot
                 .behavior(&intent.task.behavior_id)
@@ -321,16 +401,36 @@ impl TriggerEngine {
                         })
                 })
         };
+        let durable_goal_request_id = match rendered_goal_objective.as_ref() {
+            Some(_) => match concurrency_agent_did() {
+                Ok(agent_did) => Some(
+                    crate::goal::task_goal_fire_identity(
+                        &agent_did,
+                        &intent.task.task_id,
+                        &intent.durable_fire_key,
+                    )
+                    .request_id,
+                ),
+                Err(reason) => {
+                    let result = FireResult::Errored {
+                        error: format!("goal identity: {reason}"),
+                    };
+                    (intent.on_result)(result.clone());
+                    return result;
+                }
+            },
+            None => None,
+        };
         let Some(trigger_id) = intent.trigger_id.clone() else {
             return self
-                .materialize_after_lock(intent, trigger_doc_id, rendered)
+                .materialize_after_lock(intent, trigger_doc_id, rendered, rendered_goal_objective)
                 .await;
         };
         if intent.concurrency == crate::runtime_snapshot::ConcurrencyMode::Parallel
             && intent.group_vars.is_none()
         {
             return self
-                .materialize_after_lock(intent, trigger_doc_id, rendered)
+                .materialize_after_lock(intent, trigger_doc_id, rendered, rendered_goal_objective)
                 .await;
         }
         let agent_did = match concurrency_agent_did() {
@@ -421,6 +521,7 @@ impl TriggerEngine {
                     &trigger_id,
                     intent.trigger_kind,
                     concurrency_correlation.as_deref(),
+                    durable_goal_request_id.as_deref(),
                 )
                 .await
             {
@@ -452,6 +553,7 @@ impl TriggerEngine {
                         &trigger_id,
                         intent.trigger_kind,
                         concurrency_correlation.as_deref(),
+                        durable_goal_request_id.as_deref(),
                     )
                     .await
                 {
@@ -467,7 +569,7 @@ impl TriggerEngine {
         }
 
         let result = self
-            .materialize_after_lock(intent, trigger_doc_id, rendered)
+            .materialize_after_lock(intent, trigger_doc_id, rendered, rendered_goal_objective)
             .await;
         drop(guard);
         self.prune_trigger_lock(&lock_key, &lock).await;
@@ -490,6 +592,7 @@ impl TriggerEngine {
         intent: FireIntent,
         trigger_doc_id: Option<String>,
         rendered: String,
+        rendered_goal_objective: Option<String>,
     ) -> FireResult {
         let source_doc_id = if matches!(intent.trigger_kind, TriggerKind::Event) {
             intent
@@ -502,20 +605,31 @@ impl TriggerEngine {
         } else {
             None
         };
-        let result = fire_result_from_materialize(
-            self.materializer
-                .materialize(
-                    &intent.task,
-                    intent.trigger_id.as_deref(),
-                    intent.trigger_kind,
-                    trigger_doc_id.as_deref(),
-                    source_doc_id.as_deref(),
-                    intent.correlation.as_deref(),
-                    intent.trigger_context.as_deref(),
-                    &rendered,
-                )
-                .await,
-        );
+        let mut materialized = self
+            .materializer
+            .materialize(
+                &intent.task,
+                intent.trigger_id.as_deref(),
+                intent.trigger_kind,
+                trigger_doc_id.as_deref(),
+                source_doc_id.as_deref(),
+                intent.correlation.as_deref(),
+                intent.trigger_context.as_deref(),
+                &rendered,
+                rendered_goal_objective.as_deref(),
+                &intent.durable_fire_key,
+            )
+            .await;
+        if materialized.is_err() && rendered_goal_objective.is_some() {
+            if let Ok(Some(request_id)) = self
+                .materializer
+                .recover_goal_task_fire(&intent.task, &intent.durable_fire_key)
+                .await
+            {
+                materialized = Ok(request_id);
+            }
+        }
+        let result = fire_result_from_materialize(materialized);
         (intent.on_result)(result.clone());
         result
     }
@@ -540,6 +654,8 @@ pub async fn run_subagent_source_for_test(
             _correlation: Option<&str>,
             _trigger_context: Option<&str>,
             _rendered_prompt: &str,
+            _rendered_goal_objective: Option<&str>,
+            _durable_fire_key: &str,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>
         {
             Box::pin(async {
@@ -555,6 +671,7 @@ pub async fn run_subagent_source_for_test(
             _trigger_id: &str,
             _trigger_kind: TriggerKind,
             _correlation: Option<&str>,
+            _excluded_request_id: Option<&str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>
         {
             Box::pin(async { Ok(false) })
@@ -566,9 +683,20 @@ pub async fn run_subagent_source_for_test(
             _trigger_id: &str,
             _trigger_kind: TriggerKind,
             _correlation: Option<&str>,
+            _excluded_request_id: Option<&str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>
         {
             Box::pin(async { Ok(0) })
+        }
+
+        fn recover_goal_task_fire(
+            &self,
+            _task: &crate::runtime_snapshot::ResolvedTask,
+            _durable_fire_key: &str,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
+        > {
+            Box::pin(async { Ok(None) })
         }
 
         fn has_materialized_group_request(

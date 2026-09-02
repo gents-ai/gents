@@ -270,6 +270,7 @@ const INFERENCE_PROFILE_ADD_SEED_PATCH: &str = r#"[
 // known lineage instead of silently changing roots.
 const TOOL_SELECTION_BASELINE_SDL: &str = include_str!("baseline/tool_selection.graphql");
 const GOAL_BASELINE_SDL: &str = include_str!("baseline/goal.graphql");
+const TASK_BASELINE_SDL: &str = include_str!("baseline/task.graphql");
 const INFERENCE_CALL_BASELINE_SDL: &str = include_str!("baseline/inference_call.graphql");
 
 const INFERENCE_CALL_ADD_CONTEXT_ACCOUNTING_PATCH: &str = r#"[
@@ -301,6 +302,12 @@ const TOOL_SELECTION_ADD_GOAL_CAPABILITIES_PATCH: &str = r#"[
 
 const GOAL_ADD_CREATION_KEY_PATCH: &str = r#"[
   {"op":"add","path":"/Goal/Fields/-","value":{"Name":"creation_key","Kind":"String","Immutable":true}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
+const TASK_ADD_GOAL_DECLARATION_PATCH: &str = r#"[
+  {"op":"add","path":"/Task/Fields/-","value":{"Name":"goal_objective_template","Kind":"String"}},
+  {"op":"add","path":"/Task/Fields/-","value":{"Name":"goal_token_budget","Kind":"Int"}},
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
@@ -562,7 +569,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::TASK_NAME,
-        gents_protocol::schemas::TASK,
+        TASK_BASELINE_SDL,
         "bafyreih2yansmfmsye5xktsx2rbf7tri4zvtifselok46pdmm4qmde7blu"
     ),
     baseline_entry!(
@@ -771,6 +778,20 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         expected_version: Some("bafyreie4kcz64yk24nk35sbbnfczrkegwjrapfaakwe4xtl33lneium3my"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["creation_key"]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "task-add-goal-declaration",
+        collection: gents_protocol::schemas::TASK_NAME,
+        patch: TASK_ADD_GOAL_DECLARATION_PATCH,
+        lens: None,
+        // Authored by adding the optional durable-goal declaration fields to
+        // the frozen Task root.
+        expected_version: Some("bafyreiainbeubl2bupbo5xg7ry57f35ta4jnb2otsmzddyge3la4lsrxle"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&[
+            "goal_objective_template",
+            "goal_token_budget",
+        ]),
     },
     MigrationStep::PatchVersioned {
         id: "callback-result-add-binding-id",

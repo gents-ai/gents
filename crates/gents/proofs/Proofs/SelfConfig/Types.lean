@@ -104,6 +104,7 @@ def allFields : Target → List FieldKey
       , "updated_at" ]
   | .task =>
       [ "task_id", "name", "description", "behavior_id", "prompt_template"
+      , "goal_objective_template", "goal_token_budget"
       , "enabled", "output_schema_ref", "created_at", "updated_at" ]
   | .schedule =>
       [ "schedule_id", "task_id", "interval_secs", "cron", "timezone"
@@ -152,7 +153,8 @@ def writableFields : Target → List FieldKey
       [ "display_name", "description", "hostname", "tailscale_ip", "lan_ip"
       , "mcp_port", "mcp_path", "send_agent_did", "status" ]
   | .task =>
-      [ "name", "description", "prompt_template", "enabled"
+      [ "name", "description", "prompt_template", "goal_objective_template"
+      , "goal_token_budget", "enabled"
       , "output_schema_ref" ]
   | .schedule =>
       [ "task_id", "interval_secs", "cron", "timezone", "missed_run_policy"

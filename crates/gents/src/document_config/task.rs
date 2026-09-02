@@ -19,6 +19,8 @@ pub struct Task {
     pub description: Option<String>,
     pub behavior_id: Option<String>,
     pub prompt_template: Option<String>,
+    pub goal_objective_template: Option<String>,
+    pub goal_token_budget: Option<i64>,
     pub enabled: bool,
     pub output_schema_ref: Option<String>,
     pub created_at: Option<String>,
@@ -38,6 +40,8 @@ pub(crate) async fn list_task_records(node: &EmbeddedNode) -> Result<Vec<(String
                 description
                 behavior_id
                 prompt_template
+                goal_objective_template
+                goal_token_budget
                 enabled
                 output_schema_ref
                 created_at
@@ -74,6 +78,8 @@ pub(crate) async fn load_task_by_doc_id(
                 description
                 behavior_id
                 prompt_template
+                goal_objective_template
+                goal_token_budget
                 enabled
                 output_schema_ref
                 created_at

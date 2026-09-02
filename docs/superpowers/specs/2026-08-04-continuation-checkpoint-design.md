@@ -175,11 +175,23 @@ become visible to watchers without its goal. Exact retries use deterministic
 goal/submission keys scoped by the required stable session ID; rerun the same
 command with that ID after an ambiguous transport failure. A changed immutable
 objective, budget, prompt, or behavior is a conflict, and rollback never deletes
-a possibly committed goal.
+a possibly committed goal. `--goal-objective` is only for the initial atomic
+submission or its exact replay; omit it when sending later turns in that goal
+session.
 
-Feature-implementation graphs compose with this interface at the stage
-boundary: a stage's ordinary `ToolSelection` can enable goal tools (and, only
-when needed, creation) while leaving unrelated meta tools disabled. The stage
-request's DID/session owns the goal and the goal controller supplies the
-durable terminal condition. Graph edges remain document triggers; the graph DSL
-does not acquire or duplicate goal lifecycle authority.
+Feature-implementation graphs compose with this interface at the existing Task
+boundary. A Task may set `goal_objective_template` and an optional positive
+`goal_token_budget`. The trigger engine renders that objective from the same
+template scope as the request and atomically commits the creation claim, Goal,
+and first request under a deterministic per-fire session/retry identity. A
+retry of the same durable event or schedule fire therefore converges on the
+same pair; a watcher can never observe the request without its Goal.
+
+The stage's ordinary `ToolSelection` enables `get_goal`/`update_goal` while
+leaving generic meta tools and model-facing `create_goal` disabled. The runtime
+provisions the declared Goal, so granting creation would be redundant. The
+stage request's DID/session owns the Goal and the existing `GoalSource` plus
+goal-continuation queue supplies the durable terminal condition. Graph edges
+remain document triggers; the graph DSL does not acquire or duplicate Goal or
+steering lifecycle authority. `demo/pipeline` is the checked-in composition
+example.

@@ -40,6 +40,20 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
                 case.name
             );
         }
+        if case.name == "goal_create_granted_when_all_layers_allow" {
+            assert!(
+                case.expected.goal_create,
+                "positive goal-create case must retain authority granted by all three layers"
+            );
+        }
+        if case.name == "goal_create_clamped_by_ceiling" {
+            assert!(case.behavior.goal_create && case.runtime.goal_create);
+            assert!(!case.ceiling.goal_create && !case.expected.goal_create);
+        }
+        if case.name == "goal_tools_independent_from_meta" {
+            assert!(!case.behavior.meta && case.behavior.goal_tools);
+            assert!(case.expected.goal_tools && !case.expected.goal_create);
+        }
         if case.name == "disjoint_only_scopes_intersect_to_empty" {
             assert_eq!(case.behavior.mcp_scope_kind, "only");
             assert_eq!(case.ceiling.mcp_scope_kind, "only");

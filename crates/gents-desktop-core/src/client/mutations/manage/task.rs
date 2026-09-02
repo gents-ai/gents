@@ -65,6 +65,14 @@ pub async fn upsert_task(node: &EmbeddedNode, row: &TaskRow) -> Result<()> {
             "prompt_template",
             row.prompt_template.as_deref(),
         )),
+        Some(graphql_string_field(
+            "goal_objective_template",
+            row.goal_objective_template.as_deref(),
+        )),
+        Some(graphql_optional_int_field(
+            "goal_token_budget",
+            row.goal_token_budget,
+        )),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
         Some(graphql_string_field(
             "output_schema_ref",
@@ -92,6 +100,14 @@ pub async fn upsert_task(node: &EmbeddedNode, row: &TaskRow) -> Result<()> {
         Some(graphql_string_field(
             "prompt_template",
             row.prompt_template.as_deref(),
+        )),
+        Some(graphql_string_field(
+            "goal_objective_template",
+            row.goal_objective_template.as_deref(),
+        )),
+        Some(graphql_optional_int_field(
+            "goal_token_budget",
+            row.goal_token_budget,
         )),
         Some(graphql_optional_bool_field("enabled", row.enabled)),
         Some(graphql_string_field(
@@ -269,6 +285,73 @@ pub async fn fire_task_now(
         .unwrap_or(task_id);
     let conversation_title = task_run_conversation_title(task_label);
 
+    let goal_objective_template = task_row.goal_objective_template.as_deref();
+    gents::goal::validate_task_goal_declaration(
+        goal_objective_template,
+        task_row.goal_token_budget,
+    )?;
+    if let Some(goal_objective_template) = goal_objective_template {
+        let goal_objective_template = goal_objective_template.trim();
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        let (node_scope, ctx_scope) = gents::template::task_node_ctx(agent_did, behavior_id, &now);
+        let scope = gents::TemplateScope {
+            event: serde_json::json!({
+                "fired_at": now,
+                "trigger_id": serde_json::Value::Null,
+                "trigger_kind": "manual",
+            }),
+            doc: None,
+            args: Some(args),
+            group: None,
+            node: node_scope,
+            ctx: ctx_scope,
+        };
+        let content = gents::render_template(prompt_template, &scope)
+            .map_err(|error| anyhow!("render manual template for task {task_id}: {error}"))?;
+        let objective = gents::render_template(goal_objective_template, &scope)
+            .map_err(|error| anyhow!("render goal template for task {task_id}: {error}"))?;
+        if objective.trim().is_empty() {
+            bail!("task {task_id} rendered an empty goal objective");
+        }
+        let invocation_id = uuid::Uuid::new_v4().to_string();
+        let identity = gents::goal::task_goal_fire_identity(
+            agent_did,
+            task_id,
+            &format!("desktop-manual:{invocation_id}"),
+        );
+        let create = gents::build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+            agent_did,
+            behavior_id,
+            &content,
+            gents::lifecycle::ExecutionOrigin::Interactive,
+            gents::lifecycle::TriggerLineage {
+                trigger_id: None,
+                trigger_kind: Some("manual".to_string()),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+            },
+            Some(&conversation_title),
+            None,
+            &identity.request_id,
+            &identity.session_id,
+            Some(&identity.retry_key),
+            None,
+            None,
+        )
+        .await?;
+        let enqueued = gents::goal::submit_goal_backed_request_local(
+            node,
+            agent_did,
+            &identity.session_id,
+            &objective,
+            task_row.goal_token_budget,
+            &create,
+        )
+        .await?;
+        return Ok(enqueued.doc_id);
+    }
+
     write_manual_agent_request_with_conversation_title(
         node,
         agent_did,
@@ -312,6 +395,8 @@ pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) 
                 description
                 behavior_id
                 prompt_template
+                goal_objective_template
+                goal_token_budget
                 enabled
                 output_schema_ref
                 created_at

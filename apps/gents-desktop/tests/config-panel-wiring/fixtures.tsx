@@ -187,6 +187,8 @@ export const deployment: DeploymentView = {
       name: "Task A",
       behaviorId: "default",
       promptTemplate: "Run task A",
+      goalObjectiveTemplate: null,
+      goalTokenBudget: null,
       enabled: true,
       recentRuns: {
         totalFires: 0,
@@ -200,6 +202,8 @@ export const deployment: DeploymentView = {
       name: "Task B",
       behaviorId: "ops",
       promptTemplate: "Run task B",
+      goalObjectiveTemplate: null,
+      goalTokenBudget: null,
       enabled: true,
       recentRuns: {
         totalFires: 0,

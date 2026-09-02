@@ -17,10 +17,11 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
 use crate::goal::{
-    claim_continuation, claim_retry_continuation, decide_goal_continuation, load_goal_by_id,
-    load_goals_for_session, refresh_goal_usage, update_goal_fields_if_status, GoalAction,
-    GoalDecision, GoalDocument, GoalRequestTerminal, GoalStatus, GOAL_TRIGGER_KIND,
-    MAX_INFRASTRUCTURE_RETRIES,
+    claim_continuation, claim_retry_continuation, decide_goal_continuation,
+    goal_continuation_materialization_step, load_goal_by_id, load_goals_for_session,
+    refresh_goal_usage, update_goal_fields_if_status, GoalAction, GoalContinuationAction,
+    GoalContinuationPhase, GoalDecision, GoalDocument, GoalRequestTerminal, GoalStatus,
+    GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::enqueue_goal_continuation;
@@ -301,13 +302,30 @@ impl GoalSource {
         let child_exists = self
             .continuation_child_exists(&goal, &latest.request_id)
             .await?;
-        if child_exists {
+        let persisted_phase = if child_exists {
+            GoalContinuationPhase::ChildPresent
+        } else if already_claimed {
+            GoalContinuationPhase::Claimed
+        } else {
+            GoalContinuationPhase::Unclaimed
+        };
+        let reconciled_phase = goal_continuation_materialization_step(
+            persisted_phase,
+            GoalContinuationAction::Reconcile,
+        );
+        if persisted_phase == GoalContinuationPhase::ChildPresent {
+            if reconciled_phase != GoalContinuationPhase::ChildPresent {
+                bail!("goal continuation reconciliation rejected a persisted child");
+            }
             if !already_claimed {
                 let _ = claim_continuation(&self.node, &goal, &latest.request_id).await?;
             }
             return Ok(None);
         }
-        if already_claimed {
+        if persisted_phase == GoalContinuationPhase::Claimed {
+            if reconciled_phase != GoalContinuationPhase::ChildPresent {
+                return Ok(None);
+            }
             // A crash may leave the durable claim without its child. Decision
             // side effects (notably retry charging) were committed before the
             // claim and must not be replayed. Reconstruct the already-claimed
@@ -324,8 +342,17 @@ impl GoalSource {
                 && goal.wrapup_requested.unwrap_or(false)
                 && !goal.wrapup_completed.unwrap_or(false);
             return self
-                .materialize_claimed_continuation(goal, latest, retry_prefix, wrapup)
+                .materialize_claimed_continuation(
+                    goal,
+                    latest,
+                    retry_prefix,
+                    wrapup,
+                    reconciled_phase,
+                )
                 .await;
+        }
+        if reconciled_phase != GoalContinuationPhase::Unclaimed {
+            bail!("goal continuation reconciliation produced an invalid phase");
         }
 
         if status == GoalStatus::Active
@@ -520,26 +547,38 @@ impl GoalSource {
             goal.wrapup_requested = Some(true);
         }
 
-        if !already_claimed {
-            let claimed = if decision == GoalDecision::Retry {
-                claim_retry_continuation(
-                    &self.node,
-                    &goal,
-                    &latest.request_id,
-                    goal.infrastructure_retry_count.unwrap_or_default(),
-                    &terminal_name,
-                )
-                .await?
-            } else {
-                claim_continuation(&self.node, &goal, &latest.request_id).await?
-            };
-            if !claimed {
-                return Ok(None);
-            }
+        let claimed = if decision == GoalDecision::Retry {
+            claim_retry_continuation(
+                &self.node,
+                &goal,
+                &latest.request_id,
+                goal.infrastructure_retry_count.unwrap_or_default(),
+                &terminal_name,
+            )
+            .await?
+        } else {
+            claim_continuation(&self.node, &goal, &latest.request_id).await?
+        };
+        let claimed_phase = goal_continuation_materialization_step(
+            GoalContinuationPhase::Unclaimed,
+            GoalContinuationAction::Claim(claimed),
+        );
+        if claimed_phase != GoalContinuationPhase::Claimed {
+            return Ok(None);
         }
+        let materialization_phase = goal_continuation_materialization_step(
+            claimed_phase,
+            GoalContinuationAction::Materialize,
+        );
 
-        self.materialize_claimed_continuation(goal, latest, retry_prefix, wrapup)
-            .await
+        self.materialize_claimed_continuation(
+            goal,
+            latest,
+            retry_prefix,
+            wrapup,
+            materialization_phase,
+        )
+        .await
     }
 
     async fn materialize_claimed_continuation(
@@ -548,7 +587,11 @@ impl GoalSource {
         latest: RequestRow,
         retry_prefix: Option<String>,
         wrapup: bool,
+        authorized_phase: GoalContinuationPhase,
     ) -> Result<Option<FireIntent>> {
+        if authorized_phase != GoalContinuationPhase::ChildPresent {
+            return Ok(None);
+        }
         let Some(still_latest) = self.latest_request_when_session_idle(&goal).await? else {
             return Ok(None);
         };
@@ -590,6 +633,8 @@ impl GoalSource {
                 .clone()
                 .unwrap_or_else(|| "default".to_string()),
             prompt_template: prompt,
+            goal_objective_template: None,
+            goal_token_budget: None,
             output_schema_ref: None,
         };
         let goal_id = goal.goal_id.clone();
@@ -610,6 +655,10 @@ impl GoalSource {
             group_vars: None,
             trigger_context: parent.caused_by_trigger_context.clone(),
             args_vars: None,
+            durable_fire_key: crate::trigger_engine::durable_fire_key(
+                "goal-continuation",
+                &[&child.request_id],
+            ),
             pre_materialized_request_id: Some(child.request_id),
             on_result: Box::new(move |result| match result {
                 FireResult::Fired { request_id } => tracing::info!(

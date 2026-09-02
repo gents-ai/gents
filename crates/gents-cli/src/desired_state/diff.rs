@@ -42,7 +42,11 @@ pub(crate) fn diff_manifests(
             unchanged: Vec::new(),
             live_only: Vec::new(),
         },
-        tool_selections: diff_manifest_collection(&desired.tool_selections, &live.tool_selections),
+        tool_selections: diff_manifest_collection_by(
+            &desired.tool_selections,
+            &live.tool_selections,
+            tool_selection_matches_live,
+        ),
         inference_backends: diff_manifest_collection(
             &desired.inference_backends,
             &live.inference_backends,
@@ -59,7 +63,7 @@ pub(crate) fn diff_manifests(
             &desired.projection_acp_bindings,
             &live.projection_acp_bindings,
         ),
-        tasks: diff_manifest_collection(&desired.tasks, &live.tasks),
+        tasks: diff_manifest_collection_by(&desired.tasks, &live.tasks, task_matches_live),
         schedules: diff_manifest_collection(&desired.schedules, &live.schedules),
         event_triggers: diff_manifest_collection(&desired.event_triggers, &live.event_triggers),
     };
@@ -159,6 +163,17 @@ pub(crate) fn diff_collection<T>(
 where
     T: PartialEq,
 {
+    diff_collection_by(desired, live, |desired, live| desired == live)
+}
+
+fn diff_collection_by<T, F>(
+    desired: Vec<(String, &T)>,
+    live: Vec<(String, &T)>,
+    matches_live: F,
+) -> DesiredStateCollectionDiff
+where
+    F: Fn(&T, &T) -> bool,
+{
     let desired_map = desired
         .into_iter()
         .collect::<std::collections::BTreeMap<_, _>>();
@@ -178,7 +193,7 @@ where
     for id in all_ids {
         match (desired_map.get(&id), live_map.get(&id)) {
             (Some(desired), Some(live)) => {
-                if *desired == *live {
+                if matches_live(desired, live) {
                     unchanged.push(id);
                 } else {
                     update.push(id);
@@ -212,4 +227,69 @@ where
             .map(|value| (value.unique_id().to_string(), value))
             .collect(),
     )
+}
+
+fn diff_manifest_collection_by<T, F>(
+    desired: &[T],
+    live: &[T],
+    matches_live: F,
+) -> DesiredStateCollectionDiff
+where
+    T: HasUniqueId,
+    F: Fn(&T, &T) -> bool,
+{
+    diff_collection_by(
+        desired
+            .iter()
+            .map(|value| (value.unique_id().to_string(), value))
+            .collect(),
+        live.iter()
+            .map(|value| (value.unique_id().to_string(), value))
+            .collect(),
+        matches_live,
+    )
+}
+
+fn task_matches_live(desired: &super::DesiredTask, live: &super::DesiredTask) -> bool {
+    let mut comparable_desired = desired.clone();
+    let mut comparable_live = live.clone();
+    reconcile_present_option(
+        &mut comparable_desired.goal_objective_template,
+        &mut comparable_live.goal_objective_template,
+    );
+    reconcile_present_option(
+        &mut comparable_desired.goal_token_budget,
+        &mut comparable_live.goal_token_budget,
+    );
+    comparable_desired == comparable_live
+}
+
+fn tool_selection_matches_live(
+    desired: &super::DesiredToolSelection,
+    live: &super::DesiredToolSelection,
+) -> bool {
+    let mut comparable_desired = desired.clone();
+    let mut comparable_live = live.clone();
+    reconcile_present_option(
+        &mut comparable_desired.enable_goal_tools,
+        &mut comparable_live.enable_goal_tools,
+    );
+    reconcile_present_option(
+        &mut comparable_desired.enable_goal_creation,
+        &mut comparable_live.enable_goal_creation,
+    );
+    comparable_desired == comparable_live
+}
+
+fn reconcile_present_option<T: Clone + Eq>(
+    desired: &mut Option<Option<T>>,
+    live: &mut Option<Option<T>>,
+) {
+    match desired {
+        None => *desired = live.clone(),
+        Some(None) if live.as_ref().and_then(Option::as_ref).is_none() => {
+            *live = Some(None);
+        }
+        Some(_) => {}
+    }
 }

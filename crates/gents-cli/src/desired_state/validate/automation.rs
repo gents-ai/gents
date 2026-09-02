@@ -39,6 +39,29 @@ pub(super) fn validate_tasks(
             ));
         }
 
+        let goal_objective_template = task
+            .goal_objective_template
+            .as_ref()
+            .and_then(Option::as_ref);
+        let goal_token_budget = task.goal_token_budget.as_ref().and_then(|value| *value);
+        match (goal_objective_template, goal_token_budget) {
+            (Some(objective), _) if objective.trim().is_empty() => errors.push(format!(
+                "task {} goal_objective_template must be non-empty when set",
+                task.task_id
+            )),
+            (None, Some(_)) => errors.push(format!(
+                "task {} goal_token_budget requires goal_objective_template",
+                task.task_id
+            )),
+            _ => {}
+        }
+        if goal_token_budget.is_some_and(|budget| budget <= 0) {
+            errors.push(format!(
+                "task {} goal_token_budget must be positive",
+                task.task_id
+            ));
+        }
+
         validate_task_template_catalog_scope(task, errors);
     }
     task_ids
@@ -87,27 +110,30 @@ pub(super) fn validate_schedules(
 
         if !task_id.is_empty() {
             if let Some(task) = manifest.tasks.iter().find(|task| task.task_id == task_id) {
-                match parse_template_for_validation(&task.prompt_template) {
-                    Ok(refs) => {
-                        let mut reported: BTreeSet<&str> = BTreeSet::new();
-                        for var in &refs {
-                            if let Some(root) = var.root() {
-                                if (root == "doc" || root == "args" || root == "group")
-                                    && reported.insert(root)
-                                {
-                                    errors.push(format!(
-                                        "schedule {} prompt template references forbidden scope: {}; schedule scope only permits event.*, node.*, and ctx.now",
-                                        schedule.schedule_id,
-                                        format_variable_ref(var),
-                                    ));
+                for (field, template) in task_templates(task) {
+                    match parse_template_for_validation(template) {
+                        Ok(refs) => {
+                            let mut reported: BTreeSet<&str> = BTreeSet::new();
+                            for var in &refs {
+                                if let Some(root) = var.root() {
+                                    if (root == "doc" || root == "args" || root == "group")
+                                        && reported.insert(root)
+                                    {
+                                        errors.push(format!(
+                                            "schedule {} {} references forbidden scope: {}; schedule scope only permits event.*, node.*, and ctx.now",
+                                            schedule.schedule_id,
+                                            field,
+                                            format_variable_ref(var),
+                                        ));
+                                    }
                                 }
                             }
                         }
+                        Err(err) => errors.push(format!(
+                            "schedule {} {} failed to parse: {}",
+                            schedule.schedule_id, field, err
+                        )),
                     }
-                    Err(err) => errors.push(format!(
-                        "schedule {} prompt template failed to parse: {}",
-                        schedule.schedule_id, err
-                    )),
                 }
             }
         }
@@ -306,33 +332,35 @@ pub(super) fn validate_event_triggers(manifest: &DesiredStateManifest, errors: &
 
         if !task_id.is_empty() {
             if let Some(task) = manifest.tasks.iter().find(|t| t.task_id == task_id) {
-                match parse_template_for_validation(&task.prompt_template) {
-                    Ok(refs) => {
-                        let mut reported: BTreeSet<&str> = BTreeSet::new();
-                        for vref in &refs {
-                            if let Some(root) = vref.root() {
-                                if root == "args" && reported.insert("args") {
-                                    errors.push(format!(
-                                        "event_trigger {} prompt template references forbidden scope: args; event scope only permits event.*, doc.*, node.*, and ctx.now",
-                                        trigger.trigger_id
-                                    ));
-                                }
-                                if root == "group"
-                                    && fire_mode != "per_group"
-                                    && reported.insert("group")
-                                {
-                                    errors.push(format!(
-                                        "event_trigger {} prompt template references group.* outside per_group mode",
-                                        trigger.trigger_id
-                                    ));
+                for (field, template) in task_templates(task) {
+                    match parse_template_for_validation(template) {
+                        Ok(refs) => {
+                            let mut reported: BTreeSet<&str> = BTreeSet::new();
+                            for vref in &refs {
+                                if let Some(root) = vref.root() {
+                                    if root == "args" && reported.insert("args") {
+                                        errors.push(format!(
+                                            "event_trigger {} {} references forbidden scope: args; event scope only permits event.*, doc.*, node.*, and ctx.now",
+                                            trigger.trigger_id, field
+                                        ));
+                                    }
+                                    if root == "group"
+                                        && fire_mode != "per_group"
+                                        && reported.insert("group")
+                                    {
+                                        errors.push(format!(
+                                            "event_trigger {} {} references group.* outside per_group mode",
+                                            trigger.trigger_id, field
+                                        ));
+                                    }
                                 }
                             }
                         }
+                        Err(err) => errors.push(format!(
+                            "event_trigger {} {} failed to parse: {}",
+                            trigger.trigger_id, field, err
+                        )),
                     }
-                    Err(err) => errors.push(format!(
-                        "event_trigger {} prompt template failed to parse: {}",
-                        trigger.trigger_id, err
-                    )),
                 }
             }
         }
@@ -418,12 +446,32 @@ pub(super) fn validate_repository_placements(
 }
 
 fn validate_task_template_catalog_scope(task: &DesiredTask, errors: &mut Vec<String>) {
-    let refs = match parse_template_for_validation(&task.prompt_template) {
+    for (field, template) in task_templates(task) {
+        validate_template_catalog_scope(task, field, template, errors);
+    }
+}
+
+fn task_templates<'a>(task: &'a DesiredTask) -> impl Iterator<Item = (&'static str, &'a str)> + 'a {
+    std::iter::once(("prompt_template", task.prompt_template.as_str())).chain(
+        task.goal_objective_template
+            .as_ref()
+            .and_then(Option::as_deref)
+            .map(|template| ("goal_objective_template", template)),
+    )
+}
+
+fn validate_template_catalog_scope(
+    task: &DesiredTask,
+    field: &str,
+    template: &str,
+    errors: &mut Vec<String>,
+) {
+    let refs = match parse_template_for_validation(template) {
         Ok(refs) => refs,
         Err(error) => {
             errors.push(format!(
-                "task {} prompt template failed to parse: {}",
-                task.task_id, error
+                "task {} {} failed to parse: {}",
+                task.task_id, field, error
             ));
             return;
         }
@@ -443,9 +491,9 @@ fn validate_task_template_catalog_scope(task: &DesiredTask, errors: &mut Vec<Str
         }
         if reported.insert(full_ref.clone()) {
             errors.push(format!(
-            "task {} prompt_template references unavailable template variable {}; task scope permits node.node_did, node.behavior_id, and ctx.now",
-            task.task_id, full_ref
-        ));
+                "task {} {} references unavailable template variable {}; task scope permits node.node_did, node.behavior_id, and ctx.now",
+                task.task_id, field, full_ref
+            ));
         }
     }
 }

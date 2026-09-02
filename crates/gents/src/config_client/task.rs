@@ -11,8 +11,8 @@ use super::common::{
 /// Apply-path writer for the `Task` collection.
 ///
 /// All fields written by this path are apply-owned: `task_id`, `name`,
-/// `description`, `behavior_id`, `prompt_template`, `enabled`,
-/// `output_schema_ref`, `created_at`, `updated_at`. `Task` has no
+/// `description`, `behavior_id`, `prompt_template`, optional durable-goal
+/// declaration, `enabled`, `output_schema_ref`, `created_at`, `updated_at`. `Task` has no
 /// runtime-owned fields today; the runtime-owned lifecycle lives on
 /// `Schedule` and `Run`.
 pub async fn write_task_document(
@@ -176,6 +176,8 @@ async fn query_task_rows(
                 description
                 behavior_id
                 prompt_template
+                goal_objective_template
+                goal_token_budget
                 enabled
                 output_schema_ref
                 created_at

@@ -940,7 +940,7 @@ pub(crate) struct ChatArgs {
         long,
         value_name = "OBJECTIVE",
         requires = "session_id",
-        help = "Atomically create this durable session goal before publishing the first request"
+        help = "Atomically create this durable session goal before the first request; omit on later turns"
     )]
     pub(crate) goal_objective: Option<String>,
     #[arg(
@@ -2282,6 +2282,12 @@ pub(crate) struct ConfigTaskRunArgs {
     /// Example: `--args '{"name": "Amy"}'`.
     #[arg(long, default_value = "{}")]
     pub(crate) args: String,
+
+    /// Stable invocation key for a durable-goal Task run. Required when the
+    /// Task declares goal_objective_template; the output session_id is derived
+    /// deterministically from this key and the Task identity.
+    #[arg(long)]
+    pub(crate) session_id: Option<String>,
 
     /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
     #[arg(long)]

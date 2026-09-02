@@ -1078,6 +1078,8 @@ fn desired_task(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredTask {
         behavior_id: ref_id(doc, Collection::AgentBehavior)
             .unwrap_or_else(|| DEFAULT_BEHAVIOR_ID.to_string()),
         prompt_template: doc.content.clone(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         enabled: true,
         output_schema_ref: None,
     }
