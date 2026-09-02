@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { SyncHealthView } from "@source-inc/gents-desktop-client";
 import {
   formatElapsedSince,
+  projectSyncOperationalStatus,
   syncHealthDiagnostics,
-  syncHealthLabel,
   syncHealthState,
-} from "../src/lib/syncHealth";
+  type SyncHealthView,
+} from "@source-inc/gents-desktop-client";
 
 function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
@@ -23,30 +23,36 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   };
 }
 
-describe("syncHealthLabel", () => {
+describe("projectSyncOperationalStatus", () => {
   it("names healthy, syncing, stalled, offline-since, and failed", () => {
     const now = Date.parse("2026-08-27T12:00:00Z");
-    expect(syncHealthLabel(health(), now)).toBe("Sync healthy");
-    expect(syncHealthLabel(health({ state: "syncing" }), now)).toBe("Syncing");
+    expect(projectSyncOperationalStatus(health(), now)?.shortLabel).toBe(
+      "Sync healthy",
+    );
     expect(
-      syncHealthLabel(
+      projectSyncOperationalStatus(health({ state: "syncing" }), now)?.shortLabel,
+    ).toBe("Syncing");
+    expect(
+      projectSyncOperationalStatus(
         health({
           state: "stalled",
           stalledSince: "2026-08-27T11:50:00Z",
         }),
         now,
-      ),
+      )?.shortLabel,
     ).toBe("Sync stalled for 10m");
     expect(
-      syncHealthLabel(
+      projectSyncOperationalStatus(
         health({
           state: "offline",
           offlineSince: "2026-08-27T10:00:00Z",
         }),
         now,
-      ),
+      )?.shortLabel,
     ).toBe("Offline for 2h");
-    expect(syncHealthLabel(health({ state: "failed" }), now)).toBe("Sync failed");
+    expect(
+      projectSyncOperationalStatus(health({ state: "failed" }), now)?.shortLabel,
+    ).toBe("Sync failed");
     expect(syncHealthState(null)).toBeNull();
     expect(syncHealthState(health({ state: "future-state" }))).toBeNull();
     expect(formatElapsedSince("2026-08-27T11:59:20Z", now)).toBe("40s");

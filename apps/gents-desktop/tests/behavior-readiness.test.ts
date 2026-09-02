@@ -6,13 +6,14 @@ import type {
   BehaviorUnavailableReasonView,
   DeploymentView,
 } from "@source-inc/gents-desktop-client";
-import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import {
   behaviorReadinessCanConfigureInference,
   behaviorReadinessCanReconnect,
+  projectDeploymentOperationalState,
   selectedBehaviorIdForDeployment,
   selectedBehaviorReadinessDecision,
-} from "../src/lib/behaviorReadiness";
+} from "@source-inc/gents-desktop-client";
+import { projectChatShell } from "@source-inc/gents-desktop-chat";
 
 function deployment(
   status: BehaviorReadinessStatusView,
@@ -24,6 +25,8 @@ function deployment(
 ): DeploymentView {
   return {
     agentDid: "did:key:z6MkRemote",
+    dialSucceeded: true,
+    pairingReady: options.chatSafe ?? true,
     chatSafe: options.chatSafe ?? true,
     defaultBehaviorId: "default",
     behaviorReadiness: {
@@ -214,8 +217,7 @@ describe("selectedBehaviorReadinessDecision", () => {
         session: null,
         selectedConversation: null,
         localWorkflow: { kind: "ready" },
-        chatSafe: remote.chatSafe,
-        behaviorReadiness: selectedBehaviorReadinessDecision(remote, null),
+        operationalState: projectDeploymentOperationalState(remote),
       });
 
       if (blockedReason === null) {

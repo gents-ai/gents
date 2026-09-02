@@ -21,11 +21,6 @@ import { StartupScreen } from "./components/StartupScreen";
 import { useDesktopShell, type DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
-import {
-  behaviorReadinessCanConfigureInference,
-  behaviorReadinessCanReconnect,
-} from "./lib/behaviorReadiness";
-import { isLocalRuntimeSource } from "@source-inc/gents-desktop-fleet";
 import { isMobileTauriShell } from "./lib/shellPlatform";
 import "./App.css";
 
@@ -344,18 +339,13 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 interruptVisible={shell.interruptVisible}
                 onDraftChange={shell.setDraft}
                 onConfigureInference={
-                  shell.sendStatus.kind === "disabled" &&
-                  shell.sendStatus.reason === "behaviorUnavailable" &&
-                  isLocalRuntimeSource(shell.selectedDeployment?.source) &&
-                  behaviorReadinessCanConfigureInference(shell.behaviorReadiness)
+                  shell.operationalState?.admissionBlocker?.action ===
+                  "configureInference"
                     ? () => openConfig(shell.selectedDeployment?.agentDid, "backends")
                     : undefined
                 }
                 onReconnect={
-                  shell.sendStatus.kind === "disabled" &&
-                  (shell.sendStatus.reason === "routeNotReady" ||
-                    (shell.sendStatus.reason === "behaviorUnavailable" &&
-                      behaviorReadinessCanReconnect(shell.behaviorReadiness)))
+                  shell.operationalState?.admissionBlocker?.action === "reconnect"
                     ? shell.onRepairP2P
                     : undefined
                 }

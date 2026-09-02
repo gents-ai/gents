@@ -23,7 +23,7 @@ test.describe("desktop UI harness", () => {
 
     const status = page.getByTestId("composer-status");
     await expect(status).toHaveAttribute("data-activity-kind", "blocked");
-    await expect(status).toContainText("Agent is unavailable");
+    await expect(status).toContainText("Inference is unavailable");
     await expect(status).toContainText(
       "Behavior “Default” has a disabled inference backend",
     );

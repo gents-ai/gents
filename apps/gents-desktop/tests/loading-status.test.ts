@@ -1,21 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import type { BehaviorReadinessDecision } from "@source-inc/gents-desktop-chat";
 import type {
   DeploymentView,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
+import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
 import {
   projectConversationLoadingStatus,
   projectStartupLoadingStatus,
   type SessionLoadState,
 } from "../src/lib/loadingStatus";
-
-const ready: BehaviorReadinessDecision = {
-  kind: "ready",
-  behaviorId: "default",
-  behaviorLabel: "Default",
-};
 
 const loaded: SessionLoadState = {
   phase: "loaded",
@@ -30,7 +24,26 @@ function deployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
     agentDid: "did:test:agent",
     dialSucceeded: true,
     pairingReady: true,
+    chatSafe: true,
     source: "enrolled",
+    lastError: null,
+    runtime: null,
+    behaviors: [
+      {
+        behaviorId: "default",
+        displayName: "Default",
+        enabled: true,
+        isDefault: true,
+      },
+    ],
+    behaviorReadiness: {
+      source: { state: "current" },
+      activeGeneration: 1,
+      routerGeneration: 1,
+      defaultBehaviorId: "default",
+      updatedAt: "2026-09-02T00:00:00Z",
+      behaviors: [{ state: "ready", behaviorId: "default" }],
+    },
     ...overrides,
   } as DeploymentView;
 }
@@ -54,8 +67,7 @@ function project(
     selectedAgentDid: "did:test:agent",
     session: session(),
     sessionLoad: loaded,
-    deployment: deployment(),
-    behaviorReadiness: ready,
+    operationalState: projectDeploymentOperationalState(deployment()),
     ...overrides,
   });
 }
@@ -151,7 +163,9 @@ describe("conversation loading projection", () => {
   it("attributes requested hydration to P2P when the enrolled agent is offline", () => {
     expect(
       project({
-        deployment: deployment({ dialSucceeded: false }),
+        operationalState: projectDeploymentOperationalState(
+          deployment({ dialSucceeded: false }),
+        ),
         session: session({
           hydration: {
             sessionId: "session-1",
@@ -169,29 +183,41 @@ describe("conversation loading projection", () => {
   it("attributes missing or stale runtime readiness to runtime recovery", () => {
     expect(
       project({
-        behaviorReadiness: {
-          kind: "unknown",
-          behaviorId: "default",
-          reason: "readiness_stale",
-        },
+        operationalState: projectDeploymentOperationalState(
+          deployment({
+            behaviorReadiness: {
+              ...deployment().behaviorReadiness,
+              source: { state: "unknown", reason: "readiness_stale" },
+            },
+          }),
+        ),
       }),
     ).toMatchObject({ layer: "runtime", action: "reconnect" });
   });
 
   it("offers inference configuration only for an explicit local backend failure", () => {
-    const unavailable: BehaviorReadinessDecision = {
-      kind: "unavailable",
-      behaviorId: "default",
-      behaviorLabel: "Default",
-      reason: "backend_not_configured",
-    };
+    const unavailable = (source: string) =>
+      projectDeploymentOperationalState(
+        deployment({
+          source,
+          behaviorReadiness: {
+            ...deployment().behaviorReadiness,
+            behaviors: [
+              {
+                state: "unavailable",
+                behaviorId: "default",
+                reason: "backend_not_configured",
+              },
+            ],
+          },
+        }),
+      );
     expect(
       project({
-        deployment: deployment({ source: "local-standard" }),
-        behaviorReadiness: unavailable,
+        operationalState: unavailable("local-standard"),
       }),
     ).toMatchObject({ layer: "inference", action: "configureInference" });
-    expect(project({ behaviorReadiness: unavailable })).toMatchObject({
+    expect(project({ operationalState: unavailable("enrollment") })).toMatchObject({
       layer: "inference",
       action: null,
     });
@@ -200,12 +226,20 @@ describe("conversation loading projection", () => {
   it("does not mislabel a non-inference behavior failure", () => {
     expect(
       project({
-        behaviorReadiness: {
-          kind: "unavailable",
-          behaviorId: "default",
-          behaviorLabel: "Default",
-          reason: "behavior_disabled",
-        },
+        operationalState: projectDeploymentOperationalState(
+          deployment({
+            behaviorReadiness: {
+              ...deployment().behaviorReadiness,
+              behaviors: [
+                {
+                  state: "unavailable",
+                  behaviorId: "default",
+                  reason: "behavior_disabled",
+                },
+              ],
+            },
+          }),
+        ),
       }),
     ).toMatchObject({
       layer: "runtime",

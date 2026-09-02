@@ -36,19 +36,20 @@ describe("fleet health visibility", () => {
   });
 
   it("does not call a connected peer online when runtime readiness is stale", () => {
-    expect(
-      deploymentStatus({
-        ...deployment,
-        source: "enrollment",
-        dialSucceeded: true,
-        pairingReady: true,
-        lastError: null,
-        behaviorReadiness: {
-          ...deployment.behaviorReadiness,
-          source: { state: "unknown", reason: "readiness_stale" },
-        },
-      }).label,
-    ).toBe("Runtime stale");
+    const stale = {
+      ...deployment,
+      source: "enrollment",
+      dialSucceeded: true,
+      pairingReady: true,
+      lastError: null,
+      behaviorReadiness: {
+        ...deployment.behaviorReadiness,
+        source: { state: "unknown" as const, reason: "readiness_stale" as const },
+      },
+    };
+    expect(deploymentStatus(stale).label).toBe("Runtime stale");
+    renderRow(stale);
+    expect(screen.getByTestId("fleet-chat-peer-1")).toBeDisabled();
   });
 
   it("shows a visible error line with remediation-aware copy on failing rows", () => {

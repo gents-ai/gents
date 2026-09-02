@@ -5,7 +5,10 @@ import type {
   DesktopSessionSnapshot,
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
-import { displayConversationTitle } from "@source-inc/gents-desktop-client";
+import {
+  displayConversationTitle,
+  projectP2PTransportOperationalStatus,
+} from "@source-inc/gents-desktop-client";
 
 export type ChatHeaderProps = {
   behaviorLabel: string | null;
@@ -217,31 +220,16 @@ export function p2pConnectionDisplay(
   configuredPeerCount: number,
   dialedPeerCount: number,
 ) {
-  const status = runtimeHealth?.status ?? "unknown";
-  const title = runtimeHealth
-    ? `Transport ${status}; ${dialedPeerCount}/${configuredPeerCount} saved peers dialed; ${runtimeHealth.connectedPeerCount} active connections; ${runtimeHealth.replicatorCount} replicators`
-    : `Checking P2P transport; ${dialedPeerCount}/${configuredPeerCount} saved peers dialed`;
-
-  if (!runtimeHealth) {
-    return { label: "Checking sync", healthy: false, title };
-  }
-  if (runtimeHealth.status === "wedged") {
-    return { label: "P2P stalled", healthy: false, title };
-  }
-  if (runtimeHealth.status !== "healthy") {
-    return { label: "P2P retrying", healthy: false, title };
-  }
-  if (configuredPeerCount === 0) {
-    return { label: "Local", healthy: true, title };
-  }
-  if (dialedPeerCount < configuredPeerCount) {
-    return {
-      label: `Reconnecting ${dialedPeerCount}/${configuredPeerCount}`,
-      healthy: false,
-      title,
-    };
-  }
-  return { label: "Connected", healthy: true, title };
+  const status = projectP2PTransportOperationalStatus(
+    runtimeHealth,
+    configuredPeerCount,
+    dialedPeerCount,
+  );
+  return {
+    label: status.shortLabel,
+    healthy: status.kind === "ready",
+    title: status.detail,
+  };
 }
 
 export function ChatHeader({

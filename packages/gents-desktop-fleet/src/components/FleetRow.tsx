@@ -56,7 +56,7 @@ export function FleetRow({
   const status = deploymentStatus(deployment);
   const localRuntime = isLocalRuntimeSource(deployment.source);
   const remoteRuntime = deployment.source === "enrollment";
-  const chatReady = deployment.pairingReady;
+  const chatReady = status.chatReady;
 
   function commitRename() {
     const label = (editingLabel ?? "").trim();

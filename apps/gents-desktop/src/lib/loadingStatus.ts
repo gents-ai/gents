@@ -1,16 +1,8 @@
-import type { BehaviorReadinessDecision } from "@source-inc/gents-desktop-chat";
-import { behaviorReadinessHint } from "@source-inc/gents-desktop-chat";
 import type {
-  DeploymentView,
+  DeploymentOperationalState,
   DesktopSessionSnapshot,
+  OperationalStatus,
 } from "@source-inc/gents-desktop-client";
-import { isLocalRuntimeSource } from "@source-inc/gents-desktop-fleet";
-
-import {
-  behaviorReadinessCanConfigureInference,
-  behaviorReadinessCanReconnect,
-  behaviorReadinessIsInferenceFailure,
-} from "./behaviorReadiness";
 import { sessionHydrationLabel, visibleSessionHydration } from "./sessionHydration";
 
 export type DesktopStartupPhase =
@@ -122,8 +114,7 @@ type ConversationLoadingInput = {
   selectedAgentDid: string | null;
   session: DesktopSessionSnapshot | null;
   sessionLoad: SessionLoadState;
-  deployment: DeploymentView | null;
-  behaviorReadiness: BehaviorReadinessDecision;
+  operationalState: DeploymentOperationalState | null;
 };
 
 /**
@@ -136,8 +127,7 @@ export function projectConversationLoadingStatus({
   selectedAgentDid,
   session,
   sessionLoad,
-  deployment,
-  behaviorReadiness,
+  operationalState,
 }: ConversationLoadingInput): ConversationLoadingStatus | null {
   if (!selectedSessionId) return null;
 
@@ -204,12 +194,9 @@ export function projectConversationLoadingStatus({
     };
   }
   if (hydration?.phase === "requested") {
-    if (deployment && !deployment.dialSucceeded) {
-      return disconnectedStatus();
-    }
-    if (deployment && !deployment.pairingReady) {
-      return routePreparingStatus();
-    }
+    const routeBlocker = operationalState?.admissionBlocker;
+    if (routeBlocker?.layer === "p2p" || routeBlocker?.layer === "route")
+      return conversationStatusFromOperational(routeBlocker);
     return {
       layer: "sessionSync",
       phase: "loading",
@@ -220,58 +207,38 @@ export function projectConversationLoadingStatus({
   }
 
   if (!sessionMatches) {
-    if (deployment && !deployment.dialSucceeded) return disconnectedStatus();
-    if (deployment && !deployment.pairingReady) return routePreparingStatus();
+    const routeBlocker = operationalState?.admissionBlocker;
+    if (routeBlocker?.layer === "p2p" || routeBlocker?.layer === "route")
+      return conversationStatusFromOperational(routeBlocker);
     return {
       layer: "sessionSync",
       phase: "blocked",
       title: "Waiting for conversation history",
       detail:
         "No local messages were found yet. Waiting for the enrolled agent’s session projection.",
-      action: deployment ? "reconnect" : "retryLocal",
+      action: operationalState ? "reconnect" : "retryLocal",
     };
   }
 
-  if (behaviorReadiness.kind !== "ready") {
-    const inferenceFailure = behaviorReadinessIsInferenceFailure(behaviorReadiness);
-    const canConfigure =
-      isLocalRuntimeSource(deployment?.source) &&
-      behaviorReadinessCanConfigureInference(behaviorReadiness);
-    const canReconnect = behaviorReadinessCanReconnect(behaviorReadiness);
-    return {
-      layer: inferenceFailure ? "inference" : "runtime",
-      phase: "blocked",
-      title: inferenceFailure
-        ? "Inference is unavailable"
-        : behaviorReadiness.kind === "unavailable"
-          ? "This behavior is unavailable"
-          : "Waiting for the agent runtime",
-      detail: behaviorReadinessHint(behaviorReadiness),
-      action: canConfigure ? "configureInference" : canReconnect ? "reconnect" : null,
-    };
-  }
+  if (operationalState && operationalState.behavior.kind !== "ready")
+    return conversationStatusFromOperational(operationalState.behavior);
 
   return null;
 }
 
-function disconnectedStatus(): ConversationLoadingStatus {
+function conversationStatusFromOperational(
+  operational: OperationalStatus,
+): ConversationLoadingStatus {
   return {
-    layer: "p2p",
-    phase: "blocked",
-    title: "Agent connection is offline",
-    detail:
-      "Reconnect the secure P2P connection to continue loading this conversation.",
-    action: "reconnect",
-  };
-}
-
-function routePreparingStatus(): ConversationLoadingStatus {
-  return {
-    layer: "p2p",
-    phase: "loading",
-    title: "Preparing the secure route",
-    detail:
-      "The agent is connected, but its signed conversation route is not ready yet.",
-    action: "reconnect",
+    layer:
+      operational.layer === "p2p" || operational.layer === "route"
+        ? "p2p"
+        : operational.layer === "inference"
+          ? "inference"
+          : "runtime",
+    phase: operational.kind === "blocked" ? "blocked" : "loading",
+    title: operational.label,
+    detail: operational.detail,
+    action: operational.action,
   };
 }

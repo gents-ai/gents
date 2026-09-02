@@ -28,6 +28,7 @@ export {
 } from "./errors.js";
 export * from "./api.js";
 export * from "./events.js";
+export * from "./operationalState.js";
 export * from "./types.js";
 
 export const NARROW_BREAKPOINT_PX = 760;

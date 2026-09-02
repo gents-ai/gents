@@ -2,6 +2,12 @@ import type {
   DeploymentView,
   ToolSelectionView,
 } from "@source-inc/gents-desktop-client";
+import {
+  isLocalRuntimeSource,
+  projectDeploymentOperationalState,
+} from "@source-inc/gents-desktop-client";
+
+export { isLocalRuntimeSource } from "@source-inc/gents-desktop-client";
 
 export type StatusTone = "green" | "yellow" | "red";
 
@@ -18,81 +24,37 @@ export function deploymentStatus(deployment: DeploymentView): {
   tone: StatusTone;
   label: string;
   lastError: string | null;
+  chatReady: boolean;
 } {
-  const p2p = deployment.dialSucceeded ? "connected" : "saved";
-  const readinessSource = deployment.behaviorReadiness?.source;
-  const runtime =
-    readinessSource?.state === "current"
-      ? "ready"
-      : `unknown (${
-          readinessSource?.state === "unknown"
-            ? readinessSource.reason
-            : "readiness_missing"
-        })`;
-  const reconcile = deployment.runtime?.reconcilePhase ?? "unknown";
+  const operational = projectDeploymentOperationalState(deployment);
   const lastError =
     deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
   const title = [
-    `P2P ${p2p}`,
-    `runtime ${runtime}`,
-    `reconcile ${reconcile}`,
-    lastError ? `error ${lastError}` : null,
+    operational.transport.detail,
+    operational.route.detail,
+    operational.behavior.detail,
+    operational.reconcile.detail,
   ]
     .filter(Boolean)
     .join(" | ");
-
-  if (lastError) {
-    return { title, tone: "red", label: "Error", lastError };
-  }
-
-  if (!deployment.dialSucceeded) {
-    return { title, tone: "red", label: "Not connected", lastError };
-  }
-
-  if (!deployment.pairingReady) {
-    return {
-      title: `${title} | awaiting signed enrollment route and behavior readiness`,
-      tone: "yellow",
-      label: "Preparing",
-      lastError,
-    };
-  }
-
-  if (readinessSource?.state !== "current") {
-    const reason =
-      readinessSource?.state === "unknown"
-        ? readinessSource.reason
-        : "readiness_missing";
-    if (
-      reason === "readiness_malformed" ||
-      reason === "readiness_version_unsupported"
-    ) {
-      return {
-        title,
-        tone: "red",
-        label: "Runtime incompatible",
-        lastError,
-      };
-    }
-    return {
-      title,
-      tone: "yellow",
-      label:
-        reason === "readiness_stale" ? "Runtime stale" : "Waiting for runtime",
-      lastError,
-    };
-  }
-
-  if (reconcile !== "idle" && reconcile !== "unknown") {
-    return { title, tone: "yellow", label: "Syncing", lastError };
-  }
-
-  return { title, tone: "green", label: "Online", lastError };
+  return {
+    title,
+    tone:
+      operational.summary.kind === "ready"
+        ? "green"
+        : operational.summary.kind === "blocked"
+          ? "red"
+          : "yellow",
+    label: operational.summary.shortLabel,
+    lastError,
+    chatReady: operational.admissionBlocker === null,
+  };
 }
 
 export function inferenceBackendTitle(deployment: DeploymentView) {
   if (deployment.source === "enrollment") {
-    return deployment.behaviorReadiness?.source.state === "current"
+    return projectDeploymentOperationalState(deployment).behaviorReadiness
+      .kind !== "unknown"
       ? "Backend details stay on the agent host; this runtime reports authoritative behavior readiness"
       : "Backend details stay on the agent host; runtime readiness is currently unavailable";
   }
@@ -239,10 +201,6 @@ function uniqueValues(values: Array<string | null | undefined>) {
         .map((value) => value.trim()),
     ),
   ).sort();
-}
-
-export function isLocalRuntimeSource(source?: string | null): boolean {
-  return source === "local-standard";
 }
 
 export function formatRelativeTime(value?: string | null) {

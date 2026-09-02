@@ -1,9 +1,13 @@
 import type {
-  BehaviorReadinessUnknownReasonView,
-  BehaviorUnavailableReasonView,
   ConversationSummary,
+  DeploymentOperationalState,
   DesktopSessionSnapshot,
+  OperationalStatus,
   PendingTurnView,
+} from "@source-inc/gents-desktop-client";
+import {
+  projectClientOperationalStatus,
+  projectRouteOperationalStatus,
 } from "@source-inc/gents-desktop-client";
 
 export type OptimisticPendingTurn = PendingTurnView & { sessionId: string };
@@ -93,20 +97,6 @@ export type ChatActivityStatus = {
   animated: boolean;
 };
 
-export type BehaviorReadinessDecision =
-  | { kind: "ready"; behaviorId: string; behaviorLabel: string }
-  | {
-      kind: "unavailable";
-      behaviorId: string;
-      behaviorLabel: string;
-      reason: BehaviorUnavailableReasonView;
-    }
-  | {
-      kind: "unknown";
-      behaviorId: string | null;
-      reason: BehaviorReadinessUnknownReasonView;
-    };
-
 type ProjectionInput = {
   clientAvailable: boolean;
   selectedAgentDid: string | null;
@@ -116,8 +106,7 @@ type ProjectionInput = {
   session: DesktopSessionSnapshot | null;
   selectedConversation: ConversationSummary | null;
   localWorkflow: ChatWorkflowState;
-  chatSafe: boolean;
-  behaviorReadiness: BehaviorReadinessDecision;
+  operationalState: DeploymentOperationalState | null;
 };
 
 export type ChatShellProjection = {
@@ -234,56 +223,20 @@ function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
   }
 }
 
-export function behaviorReadinessHint(
-  decision: Exclude<BehaviorReadinessDecision, { kind: "ready" }>,
-) {
-  if (decision.kind === "unknown") {
-    switch (decision.reason) {
-      case "readiness_missing":
-        return "Waiting for the agent to report readiness";
-      case "readiness_malformed":
-        return "The agent reported invalid readiness data";
-      case "readiness_version_unsupported":
-        return "The agent uses an incompatible readiness format";
-      case "readiness_stale":
-        return "The agent stopped reporting readiness; reconnect it or restart its runtime";
-      case "process_not_ready":
-        return "The agent runtime is still starting";
-      case "router_generation_stale":
-        return "The agent is still applying its latest configuration";
-      case "behavior_not_assigned":
-        return "Behavior is not assigned to this runtime";
-    }
-  }
-
-  switch (decision.reason) {
-    case "behavior_disabled":
-      return `Behavior “${decision.behaviorLabel}” is disabled`;
-    case "runtime_configuration_invalid":
-      return `Behavior “${decision.behaviorLabel}” has an invalid runtime configuration`;
-    case "backend_not_configured":
-      return `Behavior “${decision.behaviorLabel}” has no inference backend configured`;
-    case "backend_disabled":
-      return `Behavior “${decision.behaviorLabel}” has a disabled inference backend`;
-    case "backend_temporarily_unavailable":
-      return `Inference backend for “${decision.behaviorLabel}” is temporarily unavailable`;
-    case "credentials_required":
-      return `Behavior “${decision.behaviorLabel}” requires inference credentials`;
-    case "inference_profile_invalid":
-      return `Behavior “${decision.behaviorLabel}” has an invalid inference profile`;
-    case "tool_configuration_invalid":
-      return `Behavior “${decision.behaviorLabel}” has an invalid tool configuration`;
-    case "tool_surface_unavailable":
-      return `Behavior “${decision.behaviorLabel}” cannot start its tool surface`;
-    case "executor_start_failed":
-      return `Behavior “${decision.behaviorLabel}” could not start`;
-  }
+function chatActivity(status: OperationalStatus): ChatActivityStatus | null {
+  if (status.kind === "ready") return null;
+  return {
+    kind: status.kind,
+    label: status.label,
+    detail: status.detail,
+    animated: status.animated,
+  };
 }
 
 function activityStatusFor(
   sendStatus: SendStatus,
   workflow: ChatWorkflowState,
-  behaviorReadiness: BehaviorReadinessDecision,
+  admissionStatus: OperationalStatus | null,
 ): ChatActivityStatus | null {
   if (sendStatus.kind === "ready") return null;
 
@@ -291,40 +244,10 @@ function activityStatusFor(
     case "composerEmpty":
       return null;
     case "clientOffline":
-      return {
-        kind: "blocked",
-        label: "Secure client is offline",
-        detail: sendStatus.hint,
-        animated: false,
-      };
     case "agentNotSelected":
-      return {
-        kind: "blocked",
-        label: "Select an agent",
-        detail: sendStatus.hint,
-        animated: false,
-      };
     case "routeNotReady":
-      return {
-        kind: "waiting",
-        label: "Waiting for the secure route…",
-        detail: sendStatus.hint,
-        animated: true,
-      };
     case "behaviorUnavailable":
-      return behaviorReadiness.kind === "unknown"
-        ? {
-            kind: "waiting",
-            label: "Waiting for the agent runtime…",
-            detail: sendStatus.hint,
-            animated: true,
-          }
-        : {
-            kind: "blocked",
-            label: "Agent is unavailable",
-            detail: sendStatus.hint,
-            animated: false,
-          };
+      return admissionStatus ? chatActivity(admissionStatus) : null;
     case "submittingRequest":
       return {
         kind: "syncing",
@@ -385,6 +308,15 @@ function activityStatusFor(
 }
 
 export function projectChatShell(input: ProjectionInput): ChatShellProjection {
+  const clientStatus = projectClientOperationalStatus(
+    input.clientAvailable,
+    Boolean(input.selectedAgentDid),
+  );
+  const deploymentStatus = input.selectedAgentDid
+    ? (input.operationalState?.admissionBlocker ??
+      (input.operationalState ? null : projectRouteOperationalStatus(false)))
+    : null;
+  const admissionStatus = clientStatus ?? deploymentStatus;
   const rawObservedTurnState =
     input.session?.turnState ?? input.selectedConversation?.turnState ?? null;
   const observedTurnState: TurnState | null = isTurnState(rawObservedTurnState)
@@ -494,32 +426,20 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   }
 
   function sendStatusFor(composerEmpty: boolean): SendStatus {
-    if (!input.clientAvailable) {
+    if (admissionStatus) {
+      const reason: ChatBlockedReason =
+        admissionStatus.layer === "client"
+          ? "clientOffline"
+          : admissionStatus.layer === "selection"
+            ? "agentNotSelected"
+            : admissionStatus.layer === "p2p" ||
+                admissionStatus.layer === "route"
+              ? "routeNotReady"
+              : "behaviorUnavailable";
       return {
         kind: "disabled",
-        reason: "clientOffline",
-        hint: hintFor("clientOffline"),
-      };
-    }
-    if (!input.selectedAgentDid) {
-      return {
-        kind: "disabled",
-        reason: "agentNotSelected",
-        hint: hintFor("agentNotSelected"),
-      };
-    }
-    if (!input.chatSafe) {
-      return {
-        kind: "disabled",
-        reason: "routeNotReady",
-        hint: hintFor("routeNotReady"),
-      };
-    }
-    if (input.behaviorReadiness.kind !== "ready") {
-      return {
-        kind: "disabled",
-        reason: "behaviorUnavailable",
-        hint: behaviorReadinessHint(input.behaviorReadiness),
+        reason,
+        hint: admissionStatus.detail,
       };
     }
     if (composerEmpty) {
@@ -578,7 +498,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     activityStatus: activityStatusFor(
       nonEmptyContentSendStatus,
       workflow,
-      input.behaviorReadiness,
+      admissionStatus,
     ),
     turnState: observedTurnState,
     activeRequestId,

@@ -1,10 +1,10 @@
-import type { DeploymentView, SyncHealthView } from "@source-inc/gents-desktop-client";
-
 import {
+  projectSyncOperationalStatus,
   syncHealthDiagnostics,
-  syncHealthLabel,
   syncHealthState,
-} from "../lib/syncHealth";
+  type DeploymentView,
+  type SyncHealthView,
+} from "@source-inc/gents-desktop-client";
 
 export type SyncHealthIndicatorProps = {
   deployments?: DeploymentView[];
@@ -17,7 +17,9 @@ export function SyncHealthIndicator({
 }: SyncHealthIndicatorProps) {
   const state = syncHealthState(syncHealth);
   if (!state) return null;
-  const label = syncHealthLabel(syncHealth);
+  const status = projectSyncOperationalStatus(syncHealth);
+  if (!status) return null;
+  const label = status.shortLabel;
   const diagnostics = syncHealthDiagnostics(syncHealth, deployments);
 
   return (

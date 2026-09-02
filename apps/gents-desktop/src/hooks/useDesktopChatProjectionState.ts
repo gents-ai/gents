@@ -12,7 +12,10 @@ import type {
   DeploymentView,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
-import { selectedBehaviorReadinessDecision } from "../lib/behaviorReadiness";
+import {
+  projectDeploymentOperationalState,
+  selectedBehaviorReadinessDecision,
+} from "@source-inc/gents-desktop-client";
 import { trackedRequestIdForSession } from "./desktopShellRuntime";
 
 type ChatProjectionStateOptions = {
@@ -43,16 +46,24 @@ export function useDesktopChatProjectionState({
   const [optimisticPendingTurn, setOptimisticPendingTurn] =
     useState<OptimisticPendingTurn | null>(null);
   const [draftsByContext, setDraftsByContext] = useState<Record<string, string>>({});
-  const behaviorReadiness = useMemo(
-    () => selectedBehaviorReadinessDecision(selectedDeployment, selectedBehaviorId),
+  const operationalState = useMemo(
+    () =>
+      selectedDeployment
+        ? projectDeploymentOperationalState(selectedDeployment, selectedBehaviorId)
+        : null,
     [selectedBehaviorId, selectedDeployment],
   );
-  const retryBehaviorReadiness = useMemo(
+  const behaviorReadiness =
+    operationalState?.behaviorReadiness ??
+    selectedBehaviorReadinessDecision(null, selectedBehaviorId);
+  const retryOperationalState = useMemo(
     () =>
-      selectedBehaviorReadinessDecision(
-        selectedDeployment,
-        session?.behaviorId ?? null,
-      ),
+      selectedDeployment
+        ? projectDeploymentOperationalState(
+            selectedDeployment,
+            session?.behaviorId ?? null,
+          )
+        : null,
     [selectedDeployment, session?.behaviorId],
   );
   const draftContextKey = JSON.stringify(
@@ -87,17 +98,15 @@ export function useDesktopChatProjectionState({
       session,
       selectedConversation,
       localWorkflow,
-      chatSafe: selectedDeployment?.chatSafe ?? false,
-      behaviorReadiness,
+      operationalState,
     });
   }, [
-    behaviorReadiness,
     clientAvailable,
     draft,
     localWorkflow,
     selectedAgentDid,
     selectedConversation,
-    selectedDeployment,
+    operationalState,
     selectedSessionId,
     sending,
     session,
@@ -112,13 +121,12 @@ export function useDesktopChatProjectionState({
       session,
       selectedConversation,
       localWorkflow,
-      chatSafe: selectedDeployment?.chatSafe ?? false,
-      behaviorReadiness: retryBehaviorReadiness,
+      operationalState: retryOperationalState,
     });
   }, [
     clientAvailable,
     localWorkflow,
-    retryBehaviorReadiness,
+    retryOperationalState,
     selectedAgentDid,
     selectedConversation,
     selectedDeployment,
@@ -158,6 +166,7 @@ export function useDesktopChatProjectionState({
     setLocalWorkflow,
     optimisticPendingTurn,
     setOptimisticPendingTurn,
+    operationalState,
     behaviorReadiness,
     shellProjection,
     retryShellProjection,

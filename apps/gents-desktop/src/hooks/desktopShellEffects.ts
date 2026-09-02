@@ -10,12 +10,12 @@ import type {
   DesktopSessionSnapshot,
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
+import { selectedBehaviorIdForDeployment } from "@source-inc/gents-desktop-client";
 import {
   logShellEvent,
   shouldAutoRestartP2P,
   timingConfig,
 } from "./desktopShellRuntime";
-import { selectedBehaviorIdForDeployment } from "../lib/behaviorReadiness";
 import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
 
 type DesktopShellEffectsArgs = {
