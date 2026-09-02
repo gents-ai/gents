@@ -4,7 +4,6 @@ import type {
   DeploymentView,
   SyncHealthView,
 } from "./types.js";
-import type { P2PHealth } from "./types/bootstrap.js";
 
 export type OperationalStatusKind =
   "ready" | "working" | "waiting" | "syncing" | "blocked";
@@ -330,16 +329,7 @@ export function projectDeploymentOperationalState(
         shortLabel: "Local",
         detail: "This runtime uses the local database directly.",
       })
-    : (projectSyncOperationalStatus(syncHealth) ??
-      status({
-        kind: "waiting",
-        layer: "sync",
-        reason: "sync_not_observed",
-        label: "Checking database sync",
-        shortLabel: "Checking sync",
-        detail:
-          "Waiting for the database sync coordinator's first observation.",
-      }));
+    : projectSyncOperationalStatus(syncHealth);
 
   const behaviorReadiness = selectedBehaviorReadinessDecision(
     deployment,
@@ -370,11 +360,7 @@ export function projectDeploymentOperationalState(
         });
 
   const behaviorBlocker =
-    behavior.kind === "ready"
-      ? null
-      : behaviorReadiness.kind === "unknown" && sync.kind !== "ready"
-        ? sync
-        : behavior;
+    behavior.kind === "ready" ? null : behavior;
   const admissionBlocker =
     transport.kind !== "ready"
       ? transport
@@ -447,80 +433,7 @@ export function projectClientOperationalStatus(
   return null;
 }
 
-export function projectP2PTransportOperationalStatus(
-  runtimeHealth: P2PHealth | null,
-  configuredPeerCount: number,
-  dialedPeerCount: number,
-): OperationalStatus {
-  const diagnostic = runtimeHealth
-    ? `Transport ${runtimeHealth.status}; ${dialedPeerCount}/${configuredPeerCount} saved peers dialed; ${runtimeHealth.connectedPeerCount} active connections; ${runtimeHealth.replicatorCount} replicators`
-    : `Checking P2P transport; ${dialedPeerCount}/${configuredPeerCount} saved peers dialed`;
-
-  if (!runtimeHealth) {
-    return status({
-      kind: "waiting",
-      layer: "p2p",
-      reason: "transport_unknown",
-      label: "Checking secure sync",
-      shortLabel: "Checking sync",
-      detail: diagnostic,
-    });
-  }
-  if (runtimeHealth.status === "wedged") {
-    return status({
-      kind: "blocked",
-      layer: "p2p",
-      reason: "transport_wedged",
-      label: "Secure sync is stalled",
-      shortLabel: "P2P stalled",
-      detail: diagnostic,
-      action: "reconnect",
-    });
-  }
-  if (runtimeHealth.status !== "healthy") {
-    return status({
-      kind: "syncing",
-      layer: "p2p",
-      reason: "transport_retrying",
-      label: "Retrying secure sync",
-      shortLabel: "P2P retrying",
-      detail: diagnostic,
-      action: "reconnect",
-    });
-  }
-  if (configuredPeerCount === 0) {
-    return status({
-      kind: "ready",
-      layer: "p2p",
-      reason: "local_only",
-      label: "Local runtime",
-      shortLabel: "Local",
-      detail: diagnostic,
-    });
-  }
-  if (dialedPeerCount < configuredPeerCount) {
-    return status({
-      kind: "syncing",
-      layer: "p2p",
-      reason: "peers_reconnecting",
-      label: `Reconnecting ${dialedPeerCount}/${configuredPeerCount} agents`,
-      shortLabel: `Reconnecting ${dialedPeerCount}/${configuredPeerCount}`,
-      detail: diagnostic,
-      action: "reconnect",
-    });
-  }
-  return status({
-    kind: "ready",
-    layer: "p2p",
-    reason: "transport_healthy",
-    label: "Secure sync is connected",
-    shortLabel: "Connected",
-    detail: diagnostic,
-  });
-}
-
-export type SyncHealthStateName =
-  "healthy" | "syncing" | "stalled" | "offline" | "failed";
+export type SyncHealthStateName = "healthy" | "syncing" | "offline" | "failed";
 
 export function syncHealthState(
   syncHealth: SyncHealthView | null | undefined,
@@ -528,7 +441,6 @@ export function syncHealthState(
   switch (syncHealth?.state) {
     case "healthy":
     case "syncing":
-    case "stalled":
     case "offline":
     case "failed":
       return syncHealth.state;
@@ -537,47 +449,28 @@ export function syncHealthState(
   }
 }
 
-export function formatElapsedSince(
-  iso: string | null | undefined,
-  now = Date.now(),
-): string | null {
-  if (!iso) return null;
-  const then = Date.parse(iso);
-  if (Number.isNaN(then)) return iso;
-  const elapsedMs = Math.max(0, now - then);
-  const seconds = Math.floor(elapsedMs / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
 export function projectSyncOperationalStatus(
   syncHealth: SyncHealthView | null | undefined,
-  now = Date.now(),
-): OperationalStatus | null {
+): OperationalStatus {
   const state = syncHealthState(syncHealth);
-  if (!state) return null;
-  const since =
-    state === "offline"
-      ? formatElapsedSince(syncHealth?.offlineSince ?? syncHealth?.since, now)
-      : null;
+  if (!state) {
+    return status({
+      kind: "waiting",
+      layer: "sync",
+      reason: "sync_not_observed",
+      label: "Checking database sync",
+      shortLabel: "Checking sync",
+      detail: "Waiting for the database sync coordinator's first observation.",
+    });
+  }
   const label =
     state === "healthy"
       ? "Sync is healthy"
       : state === "syncing"
         ? "Syncing"
-        : state === "stalled"
-          ? since
-            ? `Sync stalled for ${since}`
-            : "Sync stalled"
-          : state === "offline"
-            ? since
-              ? `Offline for ${since}`
-              : "Offline"
-            : "Sync failed";
+        : state === "offline"
+          ? "Offline"
+          : "Sync failed";
   return status({
     kind:
       state === "healthy"
@@ -591,11 +484,8 @@ export function projectSyncOperationalStatus(
     shortLabel: state === "healthy" ? "Sync healthy" : label,
     detail:
       syncHealth?.lastError ??
-      `Collection and route synchronization is ${state}.`,
-    action:
-      state === "offline" || state === "stalled" || state === "failed"
-        ? "reconnect"
-        : null,
+      `Database synchronization is ${state}.`,
+    action: state === "offline" || state === "failed" ? "reconnect" : null,
   });
 }
 
@@ -604,14 +494,12 @@ export function syncHealthDiagnostics(
 ) {
   return {
     state: syncHealthState(syncHealth),
-    since: syncHealth?.since ?? null,
-    offlineSince: syncHealth?.offlineSince ?? null,
     lastError: syncHealth?.lastError ?? null,
     connectedPeerCount: syncHealth?.connectedPeerCount ?? 0,
-    pendingDagCount: syncHealth?.pendingDagCount ?? 0,
-    persistedPendingDagCount: syncHealth?.persistedPendingDagCount ?? 0,
-    pushRetryMarkerCount: syncHealth?.pushRetryMarkerCount ?? 0,
-    exhaustedFetchCount: syncHealth?.exhaustedFetchCount ?? 0,
-    quarantinedDagCount: syncHealth?.quarantinedDagCount ?? 0,
+    pendingDagCount: syncHealth?.pendingDagCount ?? null,
+    persistedPendingDagCount: syncHealth?.persistedPendingDagCount ?? null,
+    pushRetryMarkerCount: syncHealth?.pushRetryMarkerCount ?? null,
+    exhaustedFetchCount: syncHealth?.exhaustedFetchCount ?? null,
+    quarantinedDagCount: syncHealth?.quarantinedDagCount ?? null,
   };
 }

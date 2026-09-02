@@ -270,7 +270,7 @@ test.describe("mobile viewport ownership", () => {
     expect(contextBounds.right).toBeLessThanOrEqual(8 + 360 - 13);
     expect(contextBounds.bottom).toBeLessThanOrEqual(24 + 500 - 34);
 
-    await gotoHarness(page, "sync-stalled");
+    await gotoHarness(page, "sync-failed");
     await setTestSafeArea(page);
     await page.getByTestId("sync-health-summary").click();
     const details = page.getByTestId("sync-health-details");

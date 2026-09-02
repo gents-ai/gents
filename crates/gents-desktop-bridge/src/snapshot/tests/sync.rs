@@ -4,8 +4,8 @@ use gents::agent::p2p_reconcile::session_hydration::{
     ClientHydrationPhase, ClientHydrationProgress,
 };
 use gents_desktop_core::client::{
-    project_sync_health, ClientSyncStateSnapshot, DatabaseSyncStatus, P2PHealth, P2PHealthStatus,
-    PairingCollectionStatus, SyncHealthState, STUCK_THRESHOLD_ATTEMPTS,
+    project_sync_health, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
+    P2pSyncStatusSnapshot, PairingCollectionStatus, SyncHealthState, STUCK_THRESHOLD_ATTEMPTS,
 };
 use gents_desktop_core::remote_admin::PairingErrorClass;
 use serde_json::json;
@@ -53,17 +53,19 @@ fn sync_health_view_keeps_database_quarantine_failed() {
             last_ok_at: Some(t(50)),
             last_failure_at: None,
         },
-        database_sync: Some(DatabaseSyncStatus {
+        database_sync: Some(P2pSyncStatusSnapshot {
             quarantined_pending_dags: 1,
-            ..DatabaseSyncStatus::default()
+            ..P2pSyncStatusSnapshot::default()
         }),
+        database_sync_error: None,
         directory: Vec::new(),
         peers: Vec::new(),
-    });
+    })
+    .unwrap();
     assert_eq!(health.state, SyncHealthState::Failed);
     let view = to_sync_health_view(&health);
     assert_eq!(view.state, "failed");
-    assert_eq!(view.quarantined_dag_count, 1);
+    assert_eq!(view.quarantined_dag_count, Some(1));
 }
 
 #[test]

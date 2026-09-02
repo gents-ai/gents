@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { PairingCollectionStatusView, SyncHealthView } from "./index.js";
 
 describe("sync health contract types", () => {
-  it("exports global pairing and derived sync views", () => {
+  it("exports separate pairing and sync views", () => {
     const pairing: PairingCollectionStatusView = {
       collectionId: "AgentSession",
       pairingRetryCount: 2,
@@ -12,9 +12,7 @@ describe("sync health contract types", () => {
       stuckSince: null,
     };
     const health: SyncHealthView = {
-      state: "stalled",
-      since: pairing.stuckSince,
-      offlineSince: null,
+      state: "syncing",
       lastError: null,
       connectedPeerCount: 1,
       pendingDagCount: 1,
@@ -23,7 +21,7 @@ describe("sync health contract types", () => {
       exhaustedFetchCount: 2,
       quarantinedDagCount: 0,
     };
-    expect(health.state).toBe("stalled");
+    expect(health.state).toBe("syncing");
     expect(pairing.pairingRetryCount).toBe(2);
   });
 });

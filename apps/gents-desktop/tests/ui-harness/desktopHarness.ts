@@ -49,7 +49,6 @@ export type DesktopUiHarnessScenario =
   | "mobile-performance"
   | "session-hydration"
   | "sync-offline"
-  | "sync-stalled"
   | "sync-failed";
 
 export type DesktopUiHarnessOptions = {
@@ -85,7 +84,6 @@ export type MobilePerformanceHarnessController = {
   recordCommit(commit: MobilePerformanceCommit): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
-  setP2PStatus(status: "healthy" | "degraded" | "wedged"): void;
 };
 
 export type SessionSyncHarnessController = {
@@ -882,7 +880,6 @@ export function createDesktopUiHarness(
       syncHealth = {
         ...syncHealth,
         state: "healthy",
-        offlineSince: null,
         connectedPeerCount: 1,
         lastError: null,
       };
@@ -1653,10 +1650,6 @@ export function createDesktopUiHarness(
             notifyBurst("store", count, true);
             return sequence;
           },
-          setP2PStatus(status) {
-            p2pStatus = status;
-            notify("health");
-          },
         }
       : null;
 
@@ -2133,8 +2126,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
   if (scenario === "sync-offline") {
     return {
       state: "offline",
-      since: STARTED_AT,
-      offlineSince: STARTED_AT,
       lastError: "fixture transport unavailable",
       connectedPeerCount: 0,
       pendingDagCount: 0,
@@ -2144,25 +2135,9 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       quarantinedDagCount: 0,
     };
   }
-  if (scenario === "sync-stalled") {
-    return {
-      state: "stalled",
-      since: STARTED_AT,
-      offlineSince: null,
-      lastError: "database provider fetch exhausted",
-      connectedPeerCount: 1,
-      pendingDagCount: 1,
-      persistedPendingDagCount: 1,
-      pushRetryMarkerCount: 0,
-      exhaustedFetchCount: 6,
-      quarantinedDagCount: 0,
-    };
-  }
   if (scenario === "sync-failed") {
     return {
       state: "failed",
-      since: STARTED_AT,
-      offlineSince: null,
       lastError: "database DAG quarantined",
       connectedPeerCount: 1,
       pendingDagCount: 1,
@@ -2175,8 +2150,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
   if (scenario === "session-hydration") {
     return {
       state: "healthy",
-      since: STARTED_AT,
-      offlineSince: null,
       lastError: null,
       connectedPeerCount: 1,
       pendingDagCount: 0,
@@ -2188,8 +2161,6 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
   }
   return {
     state: "healthy",
-    since: STARTED_AT,
-    offlineSince: null,
     lastError: null,
     connectedPeerCount: 1,
     pendingDagCount: 0,
@@ -2221,7 +2192,6 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "mobile-performance":
     case "session-hydration":
     case "sync-offline":
-    case "sync-stalled":
     case "sync-failed":
       return value;
     default:

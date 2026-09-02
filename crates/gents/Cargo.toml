@@ -107,6 +107,7 @@ acp.workspace = true
 axum = "0.8"
 defra-node.workspace = true
 proptest = "1"
+storage.workspace = true
 tar = "0.4"
 zstd = "0.13"
 gents-lean-contract.workspace = true

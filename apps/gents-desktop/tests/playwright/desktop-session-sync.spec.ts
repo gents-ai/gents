@@ -118,17 +118,15 @@ test.describe("mobile session sync fixture", () => {
     );
   });
 
-  test("global indicator distinguishes offline, stalled, and failed", async ({
-    page,
-  }) => {
+  test("global indicator distinguishes offline and failed", async ({ page }) => {
     await gotoHarness(page, "sync-offline");
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
       "offline",
     );
-    await expect(page.getByTestId("sync-health-summary")).toContainText("Offline for");
+    await expect(page.getByTestId("sync-health-summary")).toContainText("Offline");
 
-    await gotoHarness(page, "sync-stalled");
+    await gotoHarness(page, "sync-failed");
     await page.evaluate(() => {
       const root = document.documentElement;
       root.style.setProperty("--mobile-safe-area-top", "47px");
@@ -138,11 +136,11 @@ test.describe("mobile session sync fixture", () => {
     });
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
-      "stalled",
+      "failed",
     );
     await page.getByTestId("sync-health-summary").click();
     const details = page.getByTestId("sync-health-details");
-    await expect(details).toContainText("database provider fetch exhausted");
+    await expect(details).toContainText("database DAG quarantined");
     const bounds = await details.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return {
@@ -166,12 +164,6 @@ test.describe("mobile session sync fixture", () => {
       expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight - 34);
     }
     await expectNoPageHorizontalOverflow(page);
-
-    await gotoHarness(page, "sync-failed");
-    await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
-      "data-sync-state",
-      "failed",
-    );
   });
 
   test("offline recovers through the existing reconnect control", async ({ page }) => {

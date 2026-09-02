@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct P2pSyncStatusSnapshot {
     pub push_backlog: P2pPushBacklogSnapshot,
     pub push_retry_markers: P2pPushRetryMarkerSnapshot,
@@ -52,7 +52,7 @@ pub struct P2pSyncStatusSnapshot {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct P2pRequestDispatchSnapshot {
     pub request_capacity: usize,
     pub active_requests: usize,
@@ -72,7 +72,7 @@ pub struct P2pRequestDispatchSnapshot {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct P2pPushRetryMarkerSnapshot {
     pub document_markers: usize,
     pub collection_markers: usize,
@@ -81,7 +81,7 @@ pub struct P2pPushRetryMarkerSnapshot {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct P2pPushBacklogSnapshot {
     pub queue_item_capacity: usize,
     pub queue_byte_capacity: usize,
@@ -144,7 +144,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stage_three_diagnostics_decode_with_legacy_defaults() {
+    fn incomplete_status_is_rejected() {
         let upstream = serde_json::json!({
             "push_backlog": { "head_hints_acked_document": 13 },
             "push_retry_markers": {
@@ -164,19 +164,6 @@ mod tests {
             "pending_dag_fetch_exhausted": 5
         });
 
-        let snapshot = JsonP2pSyncStatusAdapter.adapt(&upstream).unwrap();
-
-        assert_eq!(snapshot.car_filtered_cids, 2);
-        assert_eq!(snapshot.provider_rotations, 3);
-        assert_eq!(snapshot.request_dispatch.request_capacity, 32);
-        assert_eq!(snapshot.request_dispatch.active_requests_high_water, 4);
-        assert_eq!(snapshot.request_dispatch.recovery_capacity, 8);
-        assert_eq!(snapshot.request_dispatch.active_recovery_high_water, 2);
-        assert_eq!(snapshot.pending_dag_fetch_deferred_unavailable, 4);
-        assert_eq!(snapshot.pending_dag_fetch_deferred_contention, 6);
-        assert_eq!(snapshot.pending_dag_fetch_exhausted, 5);
-        assert_eq!(snapshot.push_backlog.head_hints_acked_document, 13);
-        assert_eq!(snapshot.push_retry_markers.document_markers, 3);
-        assert_eq!(snapshot.push_retry_markers.scheduled_peers, 2);
+        assert!(JsonP2pSyncStatusAdapter.adapt(&upstream).is_err());
     }
 }

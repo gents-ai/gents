@@ -17,7 +17,7 @@ export const PACKAGE_VERSION = "0.15.0";
 // accepts the duplicated pairing/route retry wire fields.
 export const MINIMUM_BRIDGE_CONTRACT_VERSION = "5.0";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "7b2306a625f8b86d1fa8f31a1f783dd18d06d17536e95fd70952b0530d8e2f22";
+  "29bb972cc0e19f13eb99c5e899d5b5b2fdac647b452c7c954687ca12aaf41623";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);

@@ -4,7 +4,7 @@ import type {
   DeploymentView,
   DesktopApiAdapter,
   DesktopSessionSnapshot,
-  P2PHealth,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import { displayBehaviorLabel } from "@source-inc/gents-desktop-client";
 import {
@@ -34,11 +34,9 @@ export type ChatWorkspaceProps = {
   selectedSessionId: string | null;
   session: DesktopSessionSnapshot | null;
   optimisticPendingTurn?: OptimisticPendingTurn | null;
-  runtimeHealth: P2PHealth | null;
+  syncHealth: SyncHealthView | null;
   rowCount: number;
   approxSerializedBytes: number;
-  dialedPeerCount: number;
-  configuredPeerCount: number;
   canSend: boolean;
   retryUnavailableHint?: string | null;
   draft: string;
@@ -94,11 +92,9 @@ export function ActiveChatWorkspace({
   selectedSessionId,
   session,
   optimisticPendingTurn,
-  runtimeHealth,
+  syncHealth,
   rowCount,
   approxSerializedBytes,
-  dialedPeerCount,
-  configuredPeerCount,
   canSend,
   retryUnavailableHint,
   draft,
@@ -201,11 +197,9 @@ export function ActiveChatWorkspace({
     <>
       <ChatHeader
         behaviorLabel={behaviorLabel}
-        configuredPeerCount={configuredPeerCount}
         context={visibleSession?.context ?? null}
-        dialedPeerCount={dialedPeerCount}
         onOpenMobileNavigation={onOpenMobileNavigation}
-        runtimeHealth={runtimeHealth}
+        syncHealth={syncHealth}
         selectedConversationTitle={selectedConversationTitle}
         selectedSessionId={selectedSessionId}
         onRenameConversationTitle={onRenameConversationTitle}
@@ -241,8 +235,6 @@ export function ActiveChatWorkspace({
             approxSerializedBytes={approxSerializedBytes}
             behaviorLabel={behaviorLabel}
             canSend={canSend}
-            configuredPeerCount={configuredPeerCount}
-            dialedPeerCount={dialedPeerCount}
             draft={draft}
             interruptVisible={interruptVisible}
             rowCount={rowCount}

@@ -1,5 +1,6 @@
 use gents::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
 use p2p::sync::{DispatchSnapshot, PeerBacklogSnapshot, PushBacklogSnapshot, SyncStatus};
+use storage::stores::PushRetryMarkerStats;
 
 #[test]
 fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
@@ -93,7 +94,19 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
         quarantined_pending_dags: 79,
     };
 
-    let wire = serde_json::to_value(upstream).expect("serialize pinned DefraDB SyncStatus");
+    let mut wire = serde_json::to_value(upstream).expect("serialize pinned DefraDB SyncStatus");
+    wire.as_object_mut()
+        .expect("DefraDB sync status object")
+        .insert(
+            "push_retry_markers".into(),
+            serde_json::to_value(PushRetryMarkerStats {
+                document_markers: 3,
+                collection_markers: 5,
+                scheduled_peers: 2,
+                oldest_scheduled_retry_unix: Some(1_700_000_000),
+            })
+            .expect("serialize pinned DefraDB PushRetryMarkerStats"),
+        );
     let adapted = JsonP2pSyncStatusAdapter
         .adapt(&wire)
         .expect("adapt pinned DefraDB SyncStatus");
@@ -109,6 +122,8 @@ fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
     assert_eq!(adapted.push_backlog.per_peer[0].consecutive_failures, 3);
     assert_eq!(adapted.push_backlog.head_hints_enqueued_document, 103);
     assert_eq!(adapted.push_backlog.head_hints_acked_collection, 131);
+    assert_eq!(adapted.push_retry_markers.document_markers, 3);
+    assert_eq!(adapted.push_retry_markers.collection_markers, 5);
     assert_eq!(adapted.broadcast_coalesced_total, 41);
     assert_eq!(adapted.push_updates_coalesced_total, 43);
     assert_eq!(adapted.pending_dags, 13);

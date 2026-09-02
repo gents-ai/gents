@@ -50,23 +50,14 @@
     background: var(--color-info);
   }
 
-  .sync-health-indicator.is-stalled .sync-health-dot {
-    background: var(--color-warning);
-  }
-
   .sync-health-indicator.is-offline .sync-health-dot,
   .sync-health-indicator.is-failed .sync-health-dot {
     background: var(--color-error-strong);
   }
 
   .sync-health-indicator.is-failed > summary,
-  .sync-health-indicator.is-stalled > summary,
   .sync-health-indicator.is-offline > summary {
     border-color: rgb(var(--color-error-strong-rgb) / 0.35);
-  }
-
-  .sync-health-indicator.is-stalled > summary {
-    border-color: rgb(var(--color-warning-rgb) / 0.4);
   }
 
   .sync-health-details {

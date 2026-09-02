@@ -21,8 +21,6 @@ function renderComposer(
       approxSerializedBytes={21000}
       behaviorLabel="default"
       canSend
-      configuredPeerCount={1}
-      dialedPeerCount={1}
       draft=""
       interruptVisible={overrides.interruptVisible ?? false}
       rowCount={42}
@@ -145,8 +143,6 @@ describe("ChatComposer chrome", () => {
         approxSerializedBytes={0}
         behaviorLabel="default"
         canSend={false}
-        configuredPeerCount={1}
-        dialedPeerCount={0}
         draft=""
         interruptVisible={false}
         rowCount={0}

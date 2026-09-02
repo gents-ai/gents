@@ -16,7 +16,6 @@ export type HarnessScenario =
   | "coding"
   | "session-hydration"
   | "sync-offline"
-  | "sync-stalled"
   | "sync-failed";
 
 export const PEER_ID = "peer-bombadil-local";

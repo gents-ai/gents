@@ -7,8 +7,6 @@ import type { SyncHealthView } from "@source-inc/gents-desktop-client";
 function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
-    since: null,
-    offlineSince: null,
     lastError: null,
     connectedPeerCount: 1,
     pendingDagCount: 0,
@@ -23,10 +21,19 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
 describe("SyncHealthIndicator", () => {
   it("does not claim health before a known projection exists", () => {
     const { rerender } = render(<SyncHealthIndicator syncHealth={null} />);
-    expect(screen.queryByTestId("sync-health-indicator")).not.toBeInTheDocument();
+    expect(screen.getByTestId("sync-health-indicator")).toHaveAttribute(
+      "data-sync-state",
+      "checking",
+    );
+    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent(
+      "Checking sync",
+    );
 
     rerender(<SyncHealthIndicator syncHealth={health({ state: "future-state" })} />);
-    expect(screen.queryByTestId("sync-health-indicator")).not.toBeInTheDocument();
+    expect(screen.getByTestId("sync-health-indicator")).toHaveAttribute(
+      "data-sync-state",
+      "checking",
+    );
   });
 
   it("renders each product state and opens diagnostics", () => {
@@ -43,18 +50,14 @@ describe("SyncHealthIndicator", () => {
       "syncing",
     );
 
-    rerender(<SyncHealthIndicator syncHealth={health({ state: "stalled" })} />);
-    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent("Sync stalled");
-
     rerender(
       <SyncHealthIndicator
         syncHealth={health({
           state: "offline",
-          offlineSince: "2020-01-01T00:00:00Z",
         })}
       />,
     );
-    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent("Offline for");
+    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent("Offline");
 
     rerender(
       <SyncHealthIndicator

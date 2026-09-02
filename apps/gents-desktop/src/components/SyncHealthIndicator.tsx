@@ -10,10 +10,8 @@ export type SyncHealthIndicatorProps = {
 };
 
 export function SyncHealthIndicator({ syncHealth = null }: SyncHealthIndicatorProps) {
-  const state = syncHealthState(syncHealth);
-  if (!state) return null;
   const status = projectSyncOperationalStatus(syncHealth);
-  if (!status) return null;
+  const state = syncHealthState(syncHealth) ?? "checking";
   const label = status.shortLabel;
   const diagnostics = syncHealthDiagnostics(syncHealth);
 
@@ -43,14 +41,6 @@ export function SyncHealthIndicator({ syncHealth = null }: SyncHealthIndicatorPr
             <dd>{diagnostics.state}</dd>
           </div>
           <div>
-            <dt>Since</dt>
-            <dd>{diagnostics.since ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Offline since</dt>
-            <dd>{diagnostics.offlineSince ?? "—"}</dd>
-          </div>
-          <div>
             <dt>Last error</dt>
             <dd>{diagnostics.lastError ?? "—"}</dd>
           </div>
@@ -60,23 +50,23 @@ export function SyncHealthIndicator({ syncHealth = null }: SyncHealthIndicatorPr
           </div>
           <div>
             <dt>Pending receive DAGs</dt>
-            <dd>{diagnostics.pendingDagCount}</dd>
+            <dd>{diagnostics.pendingDagCount ?? "—"}</dd>
           </div>
           <div>
             <dt>Persisted pending DAGs</dt>
-            <dd>{diagnostics.persistedPendingDagCount}</dd>
+            <dd>{diagnostics.persistedPendingDagCount ?? "—"}</dd>
           </div>
           <div>
             <dt>Pending push retries</dt>
-            <dd>{diagnostics.pushRetryMarkerCount}</dd>
+            <dd>{diagnostics.pushRetryMarkerCount ?? "—"}</dd>
           </div>
           <div>
             <dt>Exhausted fetches (total)</dt>
-            <dd>{diagnostics.exhaustedFetchCount}</dd>
+            <dd>{diagnostics.exhaustedFetchCount ?? "—"}</dd>
           </div>
           <div>
             <dt>Quarantined DAGs</dt>
-            <dd>{diagnostics.quarantinedDagCount}</dd>
+            <dd>{diagnostics.quarantinedDagCount ?? "—"}</dd>
           </div>
         </dl>
       </div>

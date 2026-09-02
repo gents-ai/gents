@@ -101,8 +101,6 @@ describe("composer slash menu", () => {
         approxSerializedBytes={0}
         behaviorLabel="default"
         canSend
-        configuredPeerCount={1}
-        dialedPeerCount={1}
         draft={draft}
         interruptVisible={false}
         rowCount={0}

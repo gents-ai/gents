@@ -228,8 +228,6 @@ export function App() {
           approxSerializedBytes={runtime?.approxSerializedBytes ?? 0}
           behaviorLabel={selectedDeployment?.defaultBehaviorId ?? null}
           canSend={Boolean(selectedDeployment) && Boolean(draft.trim())}
-          configuredPeerCount={runtime?.configuredPeerCount ?? 0}
-          dialedPeerCount={runtime?.dialedPeerCount ?? 0}
           draft={draft}
           interruptVisible={false}
           rowCount={runtime?.rowCount ?? 0}

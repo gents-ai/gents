@@ -3,18 +3,16 @@ import type { FormEvent } from "react";
 
 import type {
   DesktopSessionSnapshot,
-  P2PHealth,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import {
   displayConversationTitle,
-  projectP2PTransportOperationalStatus,
+  projectSyncOperationalStatus,
 } from "@source-inc/gents-desktop-client";
 
 export type ChatHeaderProps = {
   behaviorLabel: string | null;
-  runtimeHealth: P2PHealth | null;
-  configuredPeerCount?: number;
-  dialedPeerCount?: number;
+  syncHealth: SyncHealthView | null;
   context?: DesktopSessionSnapshot["context"] | null;
   selectedConversationTitle: string | null;
   selectedSessionId: string | null;
@@ -215,39 +213,16 @@ function ContextMeter({
   );
 }
 
-export function p2pConnectionDisplay(
-  runtimeHealth: P2PHealth | null,
-  configuredPeerCount: number,
-  dialedPeerCount: number,
-) {
-  const status = projectP2PTransportOperationalStatus(
-    runtimeHealth,
-    configuredPeerCount,
-    dialedPeerCount,
-  );
-  return {
-    label: status.shortLabel,
-    healthy: status.kind === "ready",
-    title: status.detail,
-  };
-}
-
 export function ChatHeader({
   behaviorLabel,
-  runtimeHealth,
-  configuredPeerCount = 0,
-  dialedPeerCount = 0,
+  syncHealth,
   context,
   selectedConversationTitle,
   selectedSessionId,
   onRenameConversationTitle,
   onOpenMobileNavigation,
 }: ChatHeaderProps) {
-  const p2pDisplay = p2pConnectionDisplay(
-    runtimeHealth,
-    configuredPeerCount,
-    dialedPeerCount,
-  );
+  const syncStatus = projectSyncOperationalStatus(syncHealth);
   const visibleConversationTitle = selectedSessionId
     ? displayConversationTitle(selectedConversationTitle)
     : "Start a conversation";
@@ -344,10 +319,10 @@ export function ChatHeader({
         {behaviorLabel ? <span className="chip">{behaviorLabel}</span> : null}
         {context ? <ContextMeter context={context} /> : null}
         <span
-          className={p2pDisplay.healthy ? "chip chip-green" : "chip"}
-          title={p2pDisplay.title}
+          className={syncStatus.kind === "ready" ? "chip chip-green" : "chip"}
+          title={syncStatus.detail}
         >
-          {p2pDisplay.label}
+          {syncStatus.shortLabel}
         </span>
       </div>
     </header>

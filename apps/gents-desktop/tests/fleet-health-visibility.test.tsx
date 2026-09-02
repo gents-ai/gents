@@ -9,8 +9,6 @@ import { deployment } from "./config-panel-wiring/fixtures";
 function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
-    since: null,
-    offlineSince: null,
     lastError: null,
     connectedPeerCount: 1,
     pendingDagCount: 0,
@@ -70,13 +68,13 @@ describe("fleet health visibility", () => {
         source: { state: "unknown" as const, reason: "readiness_stale" as const },
       },
     };
-    const stalled = syncHealth({
-      state: "stalled",
+    const syncing = syncHealth({
+      state: "syncing",
       pendingDagCount: 1,
       exhaustedFetchCount: 1,
     });
-    expect(deploymentStatus(stale, stalled).label).toBe("Sync stalled");
-    renderRow(stale, stalled);
+    expect(deploymentStatus(stale, syncing).label).toBe("Runtime unavailable");
+    renderRow(stale, syncing);
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeDisabled();
   });
 

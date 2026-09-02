@@ -78,7 +78,6 @@ function workspace(
       activeRequestId={null}
       approxSerializedBytes={0}
       canSend
-      configuredPeerCount={1}
       conversationLoadingStatus={{
         layer: "sessionSync",
         phase: "loading",
@@ -87,7 +86,6 @@ function workspace(
         action: null,
       }}
       activityStatus={null}
-      dialedPeerCount={1}
       draft=""
       interruptVisible={false}
       onDraftChange={vi.fn()}

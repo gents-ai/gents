@@ -6,10 +6,7 @@ import type {
   DeploymentView,
   SyncHealthView,
 } from "./types.js";
-import {
-  projectDeploymentOperationalState,
-  projectP2PTransportOperationalStatus,
-} from "./operationalState.js";
+import { projectDeploymentOperationalState } from "./operationalState.js";
 
 function deployment(
   overrides: Partial<DeploymentView> & {
@@ -72,8 +69,6 @@ function deployment(
 function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
-    since: null,
-    offlineSince: null,
     lastError: null,
     connectedPeerCount: 1,
     pendingDagCount: 0,
@@ -124,21 +119,26 @@ describe("deployment operational state", () => {
     expect(state.admissionBlocker).toBe(state.route);
   });
 
-  it("waits for the sync owner's first observation instead of naming runtime stale", () => {
+  it("keeps stale runtime readiness attributed to the runtime", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         readinessSource: { state: "unknown", reason: "readiness_stale" },
       }),
     );
 
-    expect(state.admissionBlocker).toBe(state.sync);
-    expect(state.summary).toBe(state.sync);
+    expect(state.admissionBlocker).toBe(state.behavior);
+    expect(state.summary).toBe(state.behavior);
+    expect(state.behavior).toMatchObject({
+      layer: "runtime",
+      kind: "waiting",
+      reason: "readiness_stale",
+      shortLabel: "Runtime unavailable",
+      action: null,
+    });
     expect(state.sync).toMatchObject({
       layer: "sync",
-      kind: "waiting",
       reason: "sync_not_observed",
       shortLabel: "Checking sync",
-      action: null,
     });
   });
 
@@ -158,29 +158,31 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("uses database sync facts ahead of a stale readiness row", () => {
+  it("keeps database work separate from stale runtime readiness", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         readinessSource: { state: "unknown", reason: "readiness_stale" },
       }),
       null,
       syncHealth({
-        state: "stalled",
+        state: "syncing",
         pendingDagCount: 1,
         exhaustedFetchCount: 3,
-        lastError:
-          "DefraDB exhausted every provider for an unresolved document DAG",
       }),
     );
 
-    expect(state.admissionBlocker).toBe(state.sync);
-    expect(state.summary).toBe(state.sync);
+    expect(state.admissionBlocker).toBe(state.behavior);
+    expect(state.summary).toBe(state.behavior);
+    expect(state.behavior).toMatchObject({
+      layer: "runtime",
+      reason: "readiness_stale",
+      shortLabel: "Runtime unavailable",
+    });
     expect(state.sync).toMatchObject({
       layer: "sync",
-      kind: "blocked",
-      reason: "stalled",
-      shortLabel: "Sync stalled",
-      action: "reconnect",
+      kind: "syncing",
+      reason: "syncing",
+      shortLabel: "Syncing",
     });
   });
 
@@ -238,29 +240,5 @@ describe("deployment operational state", () => {
       kind: "blocked",
       shortLabel: "Unavailable",
     });
-  });
-});
-
-describe("P2P transport operational state", () => {
-  it("projects header density from the same typed status", () => {
-    expect(projectP2PTransportOperationalStatus(null, 2, 0)).toMatchObject({
-      kind: "waiting",
-      shortLabel: "Checking sync",
-    });
-    expect(
-      projectP2PTransportOperationalStatus(
-        {
-          status: "healthy",
-          connectedPeerCount: 1,
-          replicatorCount: 1,
-          consecutiveFailures: 0,
-          lastError: null,
-          lastOkAt: null,
-          lastFailureAt: null,
-        },
-        2,
-        1,
-      ),
-    ).toMatchObject({ kind: "syncing", shortLabel: "Reconnecting 1/2" });
   });
 });

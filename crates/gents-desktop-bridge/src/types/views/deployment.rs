@@ -22,32 +22,13 @@ pub struct P2PHealthView {
 #[serde(rename_all = "camelCase")]
 pub struct SyncHealthView {
     pub state: String,
-    pub since: Option<String>,
-    pub offline_since: Option<String>,
     pub last_error: Option<String>,
     pub connected_peer_count: usize,
-    pub pending_dag_count: usize,
-    pub persisted_pending_dag_count: usize,
-    pub push_retry_marker_count: usize,
-    pub exhausted_fetch_count: u64,
-    pub quarantined_dag_count: usize,
-}
-
-impl Default for SyncHealthView {
-    fn default() -> Self {
-        Self {
-            state: "healthy".into(),
-            since: None,
-            offline_since: None,
-            last_error: None,
-            connected_peer_count: 0,
-            pending_dag_count: 0,
-            persisted_pending_dag_count: 0,
-            push_retry_marker_count: 0,
-            exhausted_fetch_count: 0,
-            quarantined_dag_count: 0,
-        }
-    }
+    pub pending_dag_count: Option<usize>,
+    pub persisted_pending_dag_count: Option<usize>,
+    pub push_retry_marker_count: Option<usize>,
+    pub exhausted_fetch_count: Option<u64>,
+    pub quarantined_dag_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
@@ -549,8 +530,6 @@ pub struct DesktopRuntimeSnapshot {
     pub local_peer_id: String,
     pub listen_addresses: Vec<String>,
     pub p2p_health: P2PHealthView,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
     pub sync_health: Option<SyncHealthView>,
     pub bootstrap_errors: Vec<String>,
     pub last_mutation_error: Option<String>,

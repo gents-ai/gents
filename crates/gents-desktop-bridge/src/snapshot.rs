@@ -62,8 +62,6 @@ pub(crate) fn to_hydration_view(progress: &ClientHydrationProgress) -> SessionHy
 pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
     SyncHealthView {
         state: health.state.as_str().to_string(),
-        since: system_time_rfc3339(health.since),
-        offline_since: system_time_rfc3339(health.offline_since),
         last_error: health.last_error.clone(),
         connected_peer_count: health.connected_peer_count,
         pending_dag_count: health.pending_dag_count,
@@ -86,8 +84,8 @@ pub(crate) fn to_pairing_collection_view(
     }
 }
 
-pub(crate) fn project_client_sync_health(sync: &ClientSyncStateSnapshot) -> SyncHealthView {
-    to_sync_health_view(&project_sync_health(sync))
+pub(crate) fn project_client_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealthView> {
+    project_sync_health(sync).map(|health| to_sync_health_view(&health))
 }
 
 fn pairing_error_class_label(class: Option<PairingErrorClass>) -> Option<String> {

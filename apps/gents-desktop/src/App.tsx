@@ -333,8 +333,6 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 }
                 canSend={shell.canSendMessage}
                 conversationLoadingStatus={shell.conversationLoadingStatus}
-                configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
-                dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
                 draft={shell.draft}
                 interruptVisible={shell.interruptVisible}
                 onDraftChange={shell.setDraft}
@@ -364,7 +362,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 }
                 onLoadOlderTimeline={shell.loadOlderSessionTimeline}
                 rowCount={shell.snapshot?.client?.rowCount ?? 0}
-                runtimeHealth={shell.runtimeHealth}
+                syncHealth={shell.snapshot?.client?.syncHealth ?? null}
                 retryUnavailableHint={
                   shell.retryStatus.kind === "disabled" &&
                   shell.retryStatus.reason === "behaviorUnavailable"

@@ -18,8 +18,6 @@ export type ChatComposerProps = {
   approxSerializedBytes: number;
   behaviorLabel: string | null;
   canSend: boolean;
-  configuredPeerCount: number;
-  dialedPeerCount: number;
   draft: string;
   interruptVisible: boolean;
   rowCount: number;

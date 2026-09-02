@@ -63,8 +63,6 @@ const baseProps = {
   runtimeHealth: null,
   rowCount: 0,
   approxSerializedBytes: 0,
-  dialedPeerCount: 1,
-  configuredPeerCount: 1,
   canSend: false,
   draft: "",
   interruptVisible: true,

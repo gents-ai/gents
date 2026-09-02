@@ -180,7 +180,7 @@ describe("conversation loading projection", () => {
     ).toMatchObject({ layer: "p2p", phase: "blocked", action: "reconnect" });
   });
 
-  it("attributes stale readiness to the database sync owner", () => {
+  it("keeps stale readiness attributed to the runtime", () => {
     expect(
       project({
         operationalState: projectDeploymentOperationalState(
@@ -192,11 +192,8 @@ describe("conversation loading projection", () => {
           }),
           null,
           {
-            state: "stalled",
-            since: null,
-            offlineSince: null,
-            lastError:
-              "DefraDB exhausted every provider for an unresolved document DAG",
+            state: "syncing",
+            lastError: null,
             connectedPeerCount: 1,
             pendingDagCount: 1,
             persistedPendingDagCount: 1,
@@ -206,7 +203,7 @@ describe("conversation loading projection", () => {
           },
         ),
       }),
-    ).toMatchObject({ layer: "sync", action: "reconnect" });
+    ).toMatchObject({ layer: "runtime", action: null });
   });
 
   it("offers inference configuration only for an explicit local backend failure", () => {

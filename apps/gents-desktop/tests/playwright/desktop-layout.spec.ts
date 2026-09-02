@@ -28,7 +28,6 @@ const shellScenarios = [
   "save-error",
   "backend-health-error",
   "sync-offline",
-  "sync-stalled",
   "sync-failed",
 ] as const;
 

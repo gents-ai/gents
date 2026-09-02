@@ -27,16 +27,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
     // a readiness write wakes the bridge before the rebuilt view can see it.
     let sync_state = core.sync_state();
     let store = core.store().snapshot();
-    // This preserves the existing deployment join until authenticated
-    // enrollment makes the directory identity unique and transport-bound.
-    // Duplicate or blank agent DIDs can still collide here; importantly, they
-    // grant no route or hydration authority; authenticated enrollment removes
-    // this legacy presentation seam.
-    let peer_statuses: HashMap<String, ClientPeerStatus> = sync_state
+    let peer_statuses_by_id: HashMap<String, ClientPeerStatus> = sync_state
         .peers
         .iter()
         .cloned()
-        .map(|status| (status.agent_did.clone(), status))
+        .map(|status| (status.peer_id.clone(), status))
         .collect();
 
     let mut deployments = sync_state
@@ -44,7 +39,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .clone()
         .into_iter()
         .map(|peer| {
-            let status = peer_statuses.get(&peer.agent_did);
+            let status = peer_statuses_by_id.get(&peer.peer_id);
             let require_source_scope = peer.is_enrollment()
                 || peer
                     .graphql
@@ -567,7 +562,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         local_peer_id: core.local_peer_id().to_string(),
         listen_addresses: core.listen_addresses().to_vec(),
         p2p_health: to_health_view(&sync_state.transport),
-        sync_health: Some(super::project_client_sync_health(&sync_state)),
+        sync_health: super::project_client_sync_health(&sync_state),
         bootstrap_errors: core.bootstrap_errors().to_vec(),
         last_mutation_error: core.last_mutation_error(),
         focused_request_id: core.store().focused_request_id(),
