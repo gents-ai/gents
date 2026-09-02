@@ -142,7 +142,7 @@ test.describe("mobile session sync fixture", () => {
     );
     await page.getByTestId("sync-health-summary").click();
     const details = page.getByTestId("sync-health-details");
-    await expect(details).toContainText("RpcTimeout");
+    await expect(details).toContainText("database provider fetch exhausted");
     const bounds = await details.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return {
