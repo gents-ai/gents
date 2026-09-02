@@ -883,7 +883,6 @@ export function createDesktopUiHarness(
         ...syncHealth,
         state: "healthy",
         offlineSince: null,
-        stalledSince: null,
         connectedPeerCount: 1,
         lastError: null,
       };
@@ -1484,7 +1483,6 @@ export function createDesktopUiHarness(
         lastProbeAt: STARTED_AT,
         lastSeen: STARTED_AT,
         updatedAt: STARTED_AT,
-        lastErrorClass: null,
         lastErrorMessage: null,
       }));
       return services;
@@ -2137,12 +2135,13 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "offline",
       since: STARTED_AT,
       offlineSince: STARTED_AT,
-      stalledSince: null,
-      lastErrorClass: null,
       lastError: "fixture transport unavailable",
-      pairingRetryCount: 0,
-      routeRetryCount: 0,
       connectedPeerCount: 0,
+      pendingDagCount: 0,
+      persistedPendingDagCount: 0,
+      pushRetryMarkerCount: 0,
+      exhaustedFetchCount: 0,
+      quarantinedDagCount: 0,
     };
   }
   if (scenario === "sync-stalled") {
@@ -2150,12 +2149,13 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "stalled",
       since: STARTED_AT,
       offlineSince: null,
-      stalledSince: STARTED_AT,
-      lastErrorClass: "RpcTimeout",
-      lastError: "pairing retry exhausted",
-      pairingRetryCount: 6,
-      routeRetryCount: 6,
+      lastError: "database provider fetch exhausted",
       connectedPeerCount: 1,
+      pendingDagCount: 1,
+      persistedPendingDagCount: 1,
+      pushRetryMarkerCount: 0,
+      exhaustedFetchCount: 6,
+      quarantinedDagCount: 0,
     };
   }
   if (scenario === "sync-failed") {
@@ -2163,12 +2163,13 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "failed",
       since: STARTED_AT,
       offlineSince: null,
-      stalledSince: null,
-      lastErrorClass: "RemoteUnauthorized",
-      lastError: "permanently rejected",
-      pairingRetryCount: 1,
-      routeRetryCount: 1,
+      lastError: "database DAG quarantined",
       connectedPeerCount: 1,
+      pendingDagCount: 1,
+      persistedPendingDagCount: 1,
+      pushRetryMarkerCount: 0,
+      exhaustedFetchCount: 1,
+      quarantinedDagCount: 1,
     };
   }
   if (scenario === "session-hydration") {
@@ -2176,24 +2177,26 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
       state: "healthy",
       since: STARTED_AT,
       offlineSince: null,
-      stalledSince: null,
-      lastErrorClass: null,
       lastError: null,
-      pairingRetryCount: 0,
-      routeRetryCount: 0,
       connectedPeerCount: 1,
+      pendingDagCount: 0,
+      persistedPendingDagCount: 0,
+      pushRetryMarkerCount: 0,
+      exhaustedFetchCount: 0,
+      quarantinedDagCount: 0,
     };
   }
   return {
     state: "healthy",
     since: STARTED_AT,
     offlineSince: null,
-    stalledSince: null,
-    lastErrorClass: null,
     lastError: null,
-    pairingRetryCount: 0,
-    routeRetryCount: 0,
     connectedPeerCount: 1,
+    pendingDagCount: 0,
+    persistedPendingDagCount: 0,
+    pushRetryMarkerCount: 0,
+    exhaustedFetchCount: 0,
+    quarantinedDagCount: 0,
   };
 }
 

@@ -9,12 +9,13 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     state: "healthy",
     since: null,
     offlineSince: null,
-    stalledSince: null,
-    lastErrorClass: null,
     lastError: null,
-    pairingRetryCount: 0,
-    routeRetryCount: 0,
     connectedPeerCount: 1,
+    pendingDagCount: 0,
+    persistedPendingDagCount: 0,
+    pushRetryMarkerCount: 0,
+    exhaustedFetchCount: 0,
+    quarantinedDagCount: 0,
     ...overrides,
   };
 }
@@ -57,37 +58,18 @@ describe("SyncHealthIndicator", () => {
 
     rerender(
       <SyncHealthIndicator
-        deployments={[
-          {
-            label: "Studio",
-            agentDid: "did:test:agent",
-            dialSucceeded: false,
-            lastError: "unauthorized",
-            pairing: [
-              {
-                collectionId: "AgentSession",
-                pairingRetryCount: 1,
-                lastRetryAt: null,
-                lastRetryErrorClass: "RemoteUnauthorized",
-                stuckSince: null,
-              },
-            ],
-            routes: [],
-          } as never,
-        ]}
         syncHealth={health({
           state: "failed",
-          lastErrorClass: "RemoteUnauthorized",
-          lastError: "unauthorized",
+          lastError: "DefraDB quarantined a document DAG that could not be merged",
+          quarantinedDagCount: 1,
         })}
       />,
     );
     expect(screen.getByTestId("sync-health-summary")).toHaveTextContent("Sync failed");
     fireEvent.click(screen.getByTestId("sync-health-summary"));
     expect(screen.getByTestId("sync-health-details")).toHaveTextContent(
-      "RemoteUnauthorized",
+      "Quarantined DAGs1",
     );
-    expect(screen.getByTestId("sync-health-details")).toHaveTextContent("AgentSession");
-    expect(screen.getByTestId("sync-health-details")).toHaveTextContent("unauthorized");
+    expect(screen.getByTestId("sync-health-details")).toHaveTextContent("DefraDB");
   });
 });

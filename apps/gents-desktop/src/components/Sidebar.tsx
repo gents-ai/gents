@@ -75,7 +75,7 @@ export function Sidebar({
         onRepairP2P={onRepairP2P}
         repairingP2P={repairingP2P}
       />
-      <SyncHealthIndicator deployments={deployments} syncHealth={syncHealth} />
+      <SyncHealthIndicator syncHealth={syncHealth} />
 
       <div aria-label="Agent workspace" className="agent-section-tabs" role="group">
         <button

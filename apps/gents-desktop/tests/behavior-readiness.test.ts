@@ -8,7 +8,6 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import {
   behaviorReadinessCanConfigureInference,
-  behaviorReadinessCanReconnect,
   projectDeploymentOperationalState,
   selectedBehaviorIdForDeployment,
   selectedBehaviorReadinessDecision,
@@ -94,14 +93,11 @@ describe("selectedBehaviorReadinessDecision", () => {
         ),
       ),
     ).toBe(false);
+    expect(projectDeploymentOperationalState(missing).behavior.action).toBeNull();
     expect(
-      behaviorReadinessCanReconnect(selectedBehaviorReadinessDecision(missing, null)),
-    ).toBe(true);
-    expect(
-      behaviorReadinessCanReconnect(
-        selectedBehaviorReadinessDecision(unavailable("backend_disabled"), null),
-      ),
-    ).toBe(false);
+      projectDeploymentOperationalState(unavailable("backend_disabled")).behavior
+        .action,
+    ).toBeNull();
   });
 
   it("uses runtime readiness as the sole behavior authority", () => {

@@ -13,11 +13,11 @@ import type {
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.15.0";
-// Exact hydration coverage is part of the authoritative session-loading
-// projection, so this client requires the 4.2 bridge contract.
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "4.2";
+// Sync status consumes the database-owned gauges directly and no longer
+// accepts the duplicated pairing/route retry wire fields.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "5.0";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "187954fdf3363b27b6cded2459265ff5c7198b0756ab9c3289f0a7b1a5f94bff";
+  "7b2306a625f8b86d1fa8f31a1f783dd18d06d17536e95fd70952b0530d8e2f22";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);

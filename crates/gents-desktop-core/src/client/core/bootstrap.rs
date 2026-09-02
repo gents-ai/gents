@@ -95,7 +95,8 @@ impl ClientCore {
         let (peer_statuses, bootstrap_errors) = {
             bootstrap_saved_peers(&node, &p2p, &records, &options, &principal, &route_manager).await
         };
-        let initial_health = super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
+        let (initial_health, initial_database_sync) =
+            super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default(), None).await;
         for status in peer_statuses {
             if let Some(expected) = records
                 .iter()
@@ -104,7 +105,7 @@ impl ClientCore {
                 sync_state.replace_peer(expected, status);
             }
         }
-        sync_state.replace_transport(initial_health);
+        sync_state.replace_database_observation(initial_health, initial_database_sync);
         let observer = spawn_observer_with_selection(
             Arc::clone(&node),
             Arc::clone(&store),

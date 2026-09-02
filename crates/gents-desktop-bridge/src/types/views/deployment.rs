@@ -24,12 +24,13 @@ pub struct SyncHealthView {
     pub state: String,
     pub since: Option<String>,
     pub offline_since: Option<String>,
-    pub stalled_since: Option<String>,
-    pub last_error_class: Option<String>,
     pub last_error: Option<String>,
-    pub pairing_retry_count: u32,
-    pub route_retry_count: u32,
     pub connected_peer_count: usize,
+    pub pending_dag_count: usize,
+    pub persisted_pending_dag_count: usize,
+    pub push_retry_marker_count: usize,
+    pub exhausted_fetch_count: u64,
+    pub quarantined_dag_count: usize,
 }
 
 impl Default for SyncHealthView {
@@ -38,12 +39,13 @@ impl Default for SyncHealthView {
             state: "healthy".into(),
             since: None,
             offline_since: None,
-            stalled_since: None,
-            last_error_class: None,
             last_error: None,
-            pairing_retry_count: 0,
-            route_retry_count: 0,
             connected_peer_count: 0,
+            pending_dag_count: 0,
+            persisted_pending_dag_count: 0,
+            push_retry_marker_count: 0,
+            exhausted_fetch_count: 0,
+            quarantined_dag_count: 0,
         }
     }
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 
-use super::{ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
+use super::{ClientPeerStatus, ClientSyncStateSnapshot, DatabaseSyncStatus, P2PHealth};
 #[cfg(test)]
 use crate::client::load_peer_directory_snapshot;
 #[cfg(test)]
@@ -63,6 +63,7 @@ impl ClientSyncStateOwner {
         sort_statuses(&mut peers);
         let (tx, _) = watch::channel(ClientSyncStateSnapshot {
             transport,
+            database_sync: None,
             directory: records,
             peers,
         });
@@ -262,12 +263,17 @@ impl ClientSyncStateOwner {
         Ok(completed)
     }
 
-    pub(super) fn replace_transport(&self, transport: P2PHealth) {
+    pub(super) fn replace_database_observation(
+        &self,
+        transport: P2PHealth,
+        database_sync: Option<DatabaseSyncStatus>,
+    ) {
         self.tx.send_if_modified(|state| {
-            if state.transport == transport {
+            if state.transport == transport && state.database_sync == database_sync {
                 return false;
             }
             state.transport = transport;
+            state.database_sync = database_sync;
             true
         });
     }

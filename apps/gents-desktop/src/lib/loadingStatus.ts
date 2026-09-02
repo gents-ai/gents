@@ -96,7 +96,7 @@ export type SessionLoadState = {
 };
 
 export type ConversationLoadingLayer =
-  "localDatabase" | "p2p" | "sessionSync" | "runtime" | "inference";
+  "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
 
 export type ConversationLoadingAction =
   "retryLocal" | "retryHydration" | "reconnect" | "configureInference";
@@ -120,7 +120,7 @@ type ConversationLoadingInput = {
 /**
  * Sole projection for user-visible conversation waits. It does not invent
  * progress: every state comes from an in-flight local read, signed hydration
- * progress, P2P route facts, or runtime-authored behavior readiness.
+ * progress, the application sync owner, or runtime-authored behavior readiness.
  */
 export function projectConversationLoadingStatus({
   selectedSessionId,
@@ -220,8 +220,8 @@ export function projectConversationLoadingStatus({
     };
   }
 
-  if (operationalState && operationalState.behavior.kind !== "ready")
-    return conversationStatusFromOperational(operationalState.behavior);
+  if (operationalState?.admissionBlocker)
+    return conversationStatusFromOperational(operationalState.admissionBlocker);
 
   return null;
 }
@@ -233,9 +233,11 @@ function conversationStatusFromOperational(
     layer:
       operational.layer === "p2p" || operational.layer === "route"
         ? "p2p"
-        : operational.layer === "inference"
-          ? "inference"
-          : "runtime",
+        : operational.layer === "sync"
+          ? "sync"
+          : operational.layer === "inference"
+            ? "inference"
+            : "runtime",
     phase: operational.kind === "blocked" ? "blocked" : "loading",
     title: operational.label,
     detail: operational.detail,

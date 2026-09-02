@@ -268,6 +268,65 @@ pub struct P2PHealth {
     pub last_failure_at: Option<SystemTime>,
 }
 
+/// The DefraDB sync coordinator's current facts used by the application
+/// projection.  This is a typed view of `P2POperations::sync_status`; it owns
+/// no retry clocks, freshness thresholds, or shadow liveness state.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct DatabaseSyncStatus {
+    pub pending_dags: usize,
+    pub persisted_pending_dags: usize,
+    pub pending_resync_in_flight: bool,
+    pub next_pending_retry_in_ms: Option<u64>,
+    pub pending_dag_fetch_exhausted: u64,
+    pub pending_dag_terminal_merged: u64,
+    pub pending_dag_terminal_quarantined: u64,
+    pub quarantined_pending_dags: usize,
+    pub push_backlog: DatabasePushBacklogStatus,
+    pub push_retry_markers: DatabasePushRetryMarkerStatus,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct DatabasePushBacklogStatus {
+    pub queued_items: usize,
+    pub active_jobs: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct DatabasePushRetryMarkerStatus {
+    pub document_markers: usize,
+    pub collection_markers: usize,
+    pub scheduled_peers: usize,
+    pub oldest_scheduled_retry_unix: Option<u64>,
+}
+
+impl DatabaseSyncStatus {
+    pub fn push_retry_marker_count(&self) -> usize {
+        self.push_retry_markers
+            .document_markers
+            .saturating_add(self.push_retry_markers.collection_markers)
+    }
+
+    pub fn has_active_work(&self) -> bool {
+        self.pending_dags > 0
+            || self.persisted_pending_dags > 0
+            || self.push_retry_marker_count() > 0
+            || self.pending_resync_in_flight
+            || self.push_backlog.queued_items > 0
+            || self.push_backlog.active_jobs > 0
+    }
+
+    pub fn has_quarantined_work(&self) -> bool {
+        self.quarantined_pending_dags > 0
+    }
+
+    pub fn has_exhausted_unresolved_work(&self) -> bool {
+        (self.pending_dags > 0 || self.persisted_pending_dags > 0)
+            && self.pending_dag_fetch_exhausted > 0
+            && !self.pending_resync_in_flight
+            && self.next_pending_retry_in_ms.is_none()
+    }
+}
+
 impl Default for P2PHealth {
     fn default() -> Self {
         Self {
@@ -296,6 +355,9 @@ impl P2PHealth {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSyncStateSnapshot {
     pub transport: P2PHealth,
+    /// Exact sync-coordinator facts from the database. `None` means the
+    /// configured transport does not expose a sync coordinator.
+    pub database_sync: Option<DatabaseSyncStatus>,
     /// The exact durable configured-peer revision that caused this snapshot.
     /// Bridge projections consume this copy instead of racing a second
     /// directory read after receiving a sync update.

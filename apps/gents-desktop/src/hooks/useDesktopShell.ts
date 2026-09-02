@@ -141,6 +141,7 @@ export function useDesktopShell({
     selectedSessionId,
     sending,
     session: selectedSessionSnapshot,
+    syncHealth: snapshot?.client?.syncHealth ?? null,
   });
   const canSendMessage = shellProjection.sendStatus.kind === "ready";
   const conversationLoadingStatus = useMemo(

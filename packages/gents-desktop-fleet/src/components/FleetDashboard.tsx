@@ -6,6 +6,7 @@ import type {
   DeploymentView,
   EnrollmentRequestView,
   P2PHealth,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import type { FleetCopy } from "../copy.js";
 import { needsInferenceSetup } from "../fleetMetrics.js";
@@ -19,6 +20,7 @@ export type FleetDashboardProps = {
   deployments: DeploymentView[];
   loading: boolean;
   p2pHealth: P2PHealth | null;
+  syncHealth?: SyncHealthView | null;
   repairingP2P: boolean;
   starting: boolean;
   onRequestStatusEnrollment: AddPeerFormProps["onRequestStatusEnrollment"];
@@ -43,6 +45,7 @@ export function FleetDashboard({
   bootstrap,
   deployments,
   p2pHealth,
+  syncHealth = null,
   repairingP2P,
   starting,
   onRequestStatusEnrollment,
@@ -264,6 +267,7 @@ export function FleetDashboard({
               <FleetRow
                 bootstrap={bootstrap}
                 deployment={deployment}
+                syncHealth={syncHealth}
                 key={deployment.peerId}
                 onOpenChat={onOpenChat}
                 onOpenConfig={onOpenConfig}

@@ -11,6 +11,7 @@ import type {
   ConversationSummary,
   DeploymentView,
   DesktopSessionSnapshot,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import {
   projectDeploymentOperationalState,
@@ -27,6 +28,7 @@ type ChatProjectionStateOptions = {
   selectedSessionId: string | null;
   sending: boolean;
   session: DesktopSessionSnapshot | null;
+  syncHealth: SyncHealthView | null;
 };
 
 /** Own local compose state and reconcile it with the bounded durable projection. */
@@ -39,6 +41,7 @@ export function useDesktopChatProjectionState({
   selectedSessionId,
   sending,
   session,
+  syncHealth,
 }: ChatProjectionStateOptions) {
   const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({
     kind: "ready",
@@ -49,9 +52,13 @@ export function useDesktopChatProjectionState({
   const operationalState = useMemo(
     () =>
       selectedDeployment
-        ? projectDeploymentOperationalState(selectedDeployment, selectedBehaviorId)
+        ? projectDeploymentOperationalState(
+            selectedDeployment,
+            selectedBehaviorId,
+            syncHealth,
+          )
         : null,
-    [selectedBehaviorId, selectedDeployment],
+    [selectedBehaviorId, selectedDeployment, syncHealth],
   );
   const behaviorReadiness =
     operationalState?.behaviorReadiness ??
@@ -62,9 +69,10 @@ export function useDesktopChatProjectionState({
         ? projectDeploymentOperationalState(
             selectedDeployment,
             session?.behaviorId ?? null,
+            syncHealth,
           )
         : null,
-    [selectedDeployment, session?.behaviorId],
+    [selectedDeployment, session?.behaviorId, syncHealth],
   );
   const draftContextKey = JSON.stringify(
     selectedSessionId

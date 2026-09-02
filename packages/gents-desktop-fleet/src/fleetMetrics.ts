@@ -1,5 +1,6 @@
 import type {
   DeploymentView,
+  SyncHealthView,
   ToolSelectionView,
 } from "@source-inc/gents-desktop-client";
 import {
@@ -19,19 +20,27 @@ export type ToolIcon = {
   title: string;
 };
 
-export function deploymentStatus(deployment: DeploymentView): {
+export function deploymentStatus(
+  deployment: DeploymentView,
+  syncHealth: SyncHealthView | null = null,
+): {
   title: string;
   tone: StatusTone;
   label: string;
   lastError: string | null;
   chatReady: boolean;
 } {
-  const operational = projectDeploymentOperationalState(deployment);
+  const operational = projectDeploymentOperationalState(
+    deployment,
+    null,
+    syncHealth,
+  );
   const lastError =
     deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
   const title = [
     operational.transport.detail,
     operational.route.detail,
+    operational.sync.detail,
     operational.behavior.detail,
     operational.reconcile.detail,
   ]

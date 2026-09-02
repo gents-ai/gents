@@ -98,24 +98,6 @@
     overflow-wrap: anywhere;
   }
 
-  .sync-health-peers {
-    display: grid;
-    gap: 0.45rem;
-    margin: 0.75rem 0 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .sync-health-peers li {
-    display: grid;
-    gap: 0.15rem;
-  }
-
-  .sync-health-peers span {
-    color: var(--color-text-muted);
-    font-size: var(--text-sm);
-  }
-
   @media (max-width: 760px) {
     .sync-health-details {
       --mobile-popover-top-clearance: 4rem;

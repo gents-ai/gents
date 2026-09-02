@@ -4,6 +4,7 @@ import type {
   BehaviorReadinessSourceView,
   BehaviorReadinessStatusView,
   DeploymentView,
+  SyncHealthView,
 } from "./types.js";
 import {
   projectDeploymentOperationalState,
@@ -68,6 +69,22 @@ function deployment(
   };
 }
 
+function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
+  return {
+    state: "healthy",
+    since: null,
+    offlineSince: null,
+    lastError: null,
+    connectedPeerCount: 1,
+    pendingDagCount: 0,
+    persistedPendingDagCount: 0,
+    pushRetryMarkerCount: 0,
+    exhaustedFetchCount: 0,
+    quarantinedDagCount: 0,
+    ...overrides,
+  };
+}
+
 describe("deployment operational state", () => {
   it("projects one shared offline blocker and recovery action", () => {
     const state = projectDeploymentOperationalState(
@@ -107,21 +124,80 @@ describe("deployment operational state", () => {
     expect(state.admissionBlocker).toBe(state.route);
   });
 
-  it("uses the same stale-runtime reason for admission, recovery, and summary", () => {
+  it("waits for the sync owner's first observation instead of naming runtime stale", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         readinessSource: { state: "unknown", reason: "readiness_stale" },
       }),
     );
 
+    expect(state.admissionBlocker).toBe(state.sync);
+    expect(state.summary).toBe(state.sync);
+    expect(state.sync).toMatchObject({
+      layer: "sync",
+      kind: "waiting",
+      reason: "sync_not_observed",
+      shortLabel: "Checking sync",
+      action: null,
+    });
+  });
+
+  it("does not let unrelated database work block current signed readiness", () => {
+    const state = projectDeploymentOperationalState(
+      deployment(),
+      null,
+      syncHealth({ state: "syncing", pendingDagCount: 2 }),
+    );
+
+    expect(state.admissionBlocker).toBeNull();
+    expect(state.summary).toBe(state.sync);
+    expect(state.summary).toMatchObject({
+      layer: "sync",
+      kind: "syncing",
+      shortLabel: "Syncing",
+    });
+  });
+
+  it("uses database sync facts ahead of a stale readiness row", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({
+        readinessSource: { state: "unknown", reason: "readiness_stale" },
+      }),
+      null,
+      syncHealth({
+        state: "stalled",
+        pendingDagCount: 1,
+        exhaustedFetchCount: 3,
+        lastError:
+          "DefraDB exhausted every provider for an unresolved document DAG",
+      }),
+    );
+
+    expect(state.admissionBlocker).toBe(state.sync);
+    expect(state.summary).toBe(state.sync);
+    expect(state.sync).toMatchObject({
+      layer: "sync",
+      kind: "blocked",
+      reason: "stalled",
+      shortLabel: "Sync stalled",
+      action: "reconnect",
+    });
+  });
+
+  it("keeps stale runtime reporting distinct when database sync is healthy", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({
+        readinessSource: { state: "unknown", reason: "readiness_stale" },
+      }),
+      null,
+      syncHealth(),
+    );
+
     expect(state.admissionBlocker).toBe(state.behavior);
-    expect(state.summary).toBe(state.behavior);
     expect(state.behavior).toMatchObject({
       layer: "runtime",
-      kind: "waiting",
-      reason: "readiness_stale",
-      shortLabel: "Runtime stale",
-      action: "reconnect",
+      shortLabel: "Runtime unavailable",
+      action: null,
     });
   });
 

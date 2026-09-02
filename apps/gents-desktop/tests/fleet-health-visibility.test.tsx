@@ -3,13 +3,30 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FleetRow, type FleetRowProps } from "@source-inc/gents-desktop-fleet";
 import { deploymentStatus } from "@source-inc/gents-desktop-fleet";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { DeploymentView, SyncHealthView } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-function renderRow(dep: DeploymentView) {
+function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
+  return {
+    state: "healthy",
+    since: null,
+    offlineSince: null,
+    lastError: null,
+    connectedPeerCount: 1,
+    pendingDagCount: 0,
+    persistedPendingDagCount: 0,
+    pushRetryMarkerCount: 0,
+    exhaustedFetchCount: 0,
+    quarantinedDagCount: 0,
+    ...overrides,
+  };
+}
+
+function renderRow(dep: DeploymentView, sync = syncHealth()) {
   const props: FleetRowProps = {
     bootstrap: null,
     deployment: dep,
+    syncHealth: sync,
     onOpenChat: vi.fn(),
     onOpenConfig: vi.fn(),
   };
@@ -26,6 +43,12 @@ describe("fleet health visibility", () => {
   it("labels statuses instead of relying on a hover dot", () => {
     expect(
       deploymentStatus({ ...deployment, dialSucceeded: true, lastError: null }).label,
+    ).toBe("Checking sync");
+    expect(
+      deploymentStatus(
+        { ...deployment, dialSucceeded: true, lastError: null },
+        syncHealth(),
+      ).label,
     ).toBe("Online");
     expect(deploymentStatus({ ...deployment, dialSucceeded: false }).label).toBe(
       "Not connected",
@@ -47,8 +70,13 @@ describe("fleet health visibility", () => {
         source: { state: "unknown" as const, reason: "readiness_stale" as const },
       },
     };
-    expect(deploymentStatus(stale).label).toBe("Runtime stale");
-    renderRow(stale);
+    const stalled = syncHealth({
+      state: "stalled",
+      pendingDagCount: 1,
+      exhaustedFetchCount: 1,
+    });
+    expect(deploymentStatus(stale, stalled).label).toBe("Sync stalled");
+    renderRow(stale, stalled);
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeDisabled();
   });
 

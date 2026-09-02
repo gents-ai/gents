@@ -4,6 +4,7 @@ import { formatPeerConnectionError } from "../peerConnectionErrors.js";
 import type {
   BootstrapSummary,
   DeploymentView,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import {
@@ -35,6 +36,7 @@ function isTerminalTurnState(turnState?: string | null) {
 export type FleetRowProps = {
   bootstrap: BootstrapSummary | null;
   deployment: DeploymentView;
+  syncHealth?: SyncHealthView | null;
   onOpenChat: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
   onRemovePeer?: (peerId: string) => Promise<unknown> | void;
@@ -45,6 +47,7 @@ export type FleetRowProps = {
 export function FleetRow({
   bootstrap,
   deployment,
+  syncHealth = null,
   onOpenChat,
   onOpenConfig,
   onRemovePeer,
@@ -53,7 +56,7 @@ export function FleetRow({
 }: FleetRowProps) {
   const [editingLabel, setEditingLabel] = useState<string | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
-  const status = deploymentStatus(deployment);
+  const status = deploymentStatus(deployment, syncHealth);
   const localRuntime = isLocalRuntimeSource(deployment.source);
   const remoteRuntime = deployment.source === "enrollment";
   const chatReady = status.chatReady;

@@ -4,7 +4,7 @@ use gents::agent::p2p_reconcile::session_hydration::{
     ClientHydrationPhase, ClientHydrationProgress,
 };
 use gents_desktop_core::client::{
-    project_sync_health, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
+    project_sync_health, ClientSyncStateSnapshot, DatabaseSyncStatus, P2PHealth, P2PHealthStatus,
     PairingCollectionStatus, SyncHealthState, STUCK_THRESHOLD_ATTEMPTS,
 };
 use gents_desktop_core::remote_admin::PairingErrorClass;
@@ -30,19 +30,6 @@ fn serving_progress() -> ClientHydrationProgress {
     }
 }
 
-fn connected_peer(pairing: Vec<PairingCollectionStatus>) -> ClientPeerStatus {
-    ClientPeerStatus {
-        peer_id: "peer-1".into(),
-        label: "Studio".into(),
-        agent_did: "did:test:agent".into(),
-        addr: "/ip4/10.0.0.1/tcp/1".into(),
-        dial_succeeded: true,
-        last_error: None,
-        pairing,
-        routes: Vec::new(),
-    }
-}
-
 #[test]
 fn hydration_view_copies_receiver_counts_exactly() {
     let view = to_hydration_view(&serving_progress());
@@ -55,9 +42,7 @@ fn hydration_view_copies_receiver_counts_exactly() {
 }
 
 #[test]
-fn sync_health_view_keeps_failed_from_collapsing_into_syncing() {
-    let mut pairing = PairingCollectionStatus::new("AgentSession");
-    pairing.record_retry(PairingErrorClass::RemoteUnauthorized);
+fn sync_health_view_keeps_database_quarantine_failed() {
     let health = project_sync_health(&ClientSyncStateSnapshot {
         transport: P2PHealth {
             status: P2PHealthStatus::Healthy,
@@ -68,14 +53,17 @@ fn sync_health_view_keeps_failed_from_collapsing_into_syncing() {
             last_ok_at: Some(t(50)),
             last_failure_at: None,
         },
+        database_sync: Some(DatabaseSyncStatus {
+            quarantined_pending_dags: 1,
+            ..DatabaseSyncStatus::default()
+        }),
         directory: Vec::new(),
-        peers: vec![connected_peer(vec![pairing])],
+        peers: Vec::new(),
     });
     assert_eq!(health.state, SyncHealthState::Failed);
     let view = to_sync_health_view(&health);
     assert_eq!(view.state, "failed");
-    assert_eq!(view.last_error_class.as_deref(), Some("RemoteUnauthorized"));
-    assert_eq!(view.pairing_retry_count, 1);
+    assert_eq!(view.quarantined_dag_count, 1);
 }
 
 #[test]

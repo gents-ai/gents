@@ -13,12 +13,13 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     state: "healthy",
     since: null,
     offlineSince: null,
-    stalledSince: null,
-    lastErrorClass: null,
     lastError: null,
-    pairingRetryCount: 0,
-    routeRetryCount: 0,
     connectedPeerCount: 1,
+    pendingDagCount: 0,
+    persistedPendingDagCount: 0,
+    pushRetryMarkerCount: 0,
+    exhaustedFetchCount: 0,
+    quarantinedDagCount: 0,
     ...overrides,
   };
 }
@@ -33,14 +34,8 @@ describe("projectSyncOperationalStatus", () => {
       projectSyncOperationalStatus(health({ state: "syncing" }), now)?.shortLabel,
     ).toBe("Syncing");
     expect(
-      projectSyncOperationalStatus(
-        health({
-          state: "stalled",
-          stalledSince: "2026-08-27T11:50:00Z",
-        }),
-        now,
-      )?.shortLabel,
-    ).toBe("Sync stalled for 10m");
+      projectSyncOperationalStatus(health({ state: "stalled" }), now)?.shortLabel,
+    ).toBe("Sync stalled");
     expect(
       projectSyncOperationalStatus(
         health({
@@ -60,55 +55,21 @@ describe("projectSyncOperationalStatus", () => {
 });
 
 describe("syncHealthDiagnostics", () => {
-  it("exposes global pairing, route, error-class, and stuck-since counters", () => {
+  it("exposes the database gauges without rebuilding route retries", () => {
     const diagnostics = syncHealthDiagnostics(
       health({
         state: "stalled",
-        lastErrorClass: "RpcTimeout",
-        lastError: "timeout",
-        pairingRetryCount: 6,
-        stalledSince: "2026-08-27T11:00:00Z",
+        lastError: "provider exhaustion",
+        pendingDagCount: 2,
+        persistedPendingDagCount: 3,
+        pushRetryMarkerCount: 4,
+        exhaustedFetchCount: 5,
       }),
-      [
-        {
-          label: "Studio",
-          agentDid: "did:test:agent",
-          dialSucceeded: true,
-          lastError: null,
-          pairing: [
-            {
-              collectionId: "AgentSession",
-              pairingRetryCount: 6,
-              lastRetryAt: "2026-08-27T11:00:00Z",
-              lastRetryErrorClass: "RpcTimeout",
-              stuckSince: "2026-08-27T11:00:00Z",
-            },
-          ],
-          routes: [
-            {
-              routeId: "r1",
-              direction: "client-to-runtime",
-              directoryId: "peer-1",
-              transportPeerId: null,
-              address: null,
-              template: "machine",
-              desired: true,
-              applied: false,
-              liveMatch: false,
-              filterSummary: "machine",
-              lastError: "timeout",
-              retryCount: 2,
-              lastRetryAt: "2026-08-27T11:00:00Z",
-              lastRetryErrorClass: "RpcTimeout",
-            },
-          ],
-        } as never,
-      ],
     );
     expect(diagnostics.state).toBe("stalled");
-    expect(diagnostics.lastErrorClass).toBe("RpcTimeout");
-    expect(diagnostics.pairingRetryCount).toBe(6);
-    expect(diagnostics.peers[0]?.pairing[0]?.stuckSince).toBe("2026-08-27T11:00:00Z");
-    expect(diagnostics.peers[0]?.routes[0]?.retryCount).toBe(2);
+    expect(diagnostics.pendingDagCount).toBe(2);
+    expect(diagnostics.persistedPendingDagCount).toBe(3);
+    expect(diagnostics.pushRetryMarkerCount).toBe(4);
+    expect(diagnostics.exhaustedFetchCount).toBe(5);
   });
 });

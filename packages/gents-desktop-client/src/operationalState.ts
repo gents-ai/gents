@@ -51,6 +51,7 @@ export type BehaviorReadinessDecision =
 export type DeploymentOperationalState = {
   transport: OperationalStatus;
   route: OperationalStatus;
+  sync: OperationalStatus;
   behavior: OperationalStatus;
   reconcile: OperationalStatus;
   /** First status that prevents a chat request from being admitted. */
@@ -165,16 +166,6 @@ export function behaviorReadinessCanConfigureInference(
   return behaviorReadinessIsInferenceFailure(decision);
 }
 
-export function behaviorReadinessCanReconnect(
-  decision: BehaviorReadinessDecision,
-): boolean {
-  return (
-    decision.kind === "unknown" &&
-    (decision.reason === "readiness_missing" ||
-      decision.reason === "readiness_stale")
-  );
-}
-
 export function behaviorReadinessDetail(
   decision: Exclude<BehaviorReadinessDecision, { kind: "ready" }>,
 ): string {
@@ -187,7 +178,7 @@ export function behaviorReadinessDetail(
       case "readiness_version_unsupported":
         return "The agent uses an incompatible readiness format";
       case "readiness_stale":
-        return "The agent stopped reporting readiness; reconnect it or restart its runtime";
+        return "The latest runtime readiness observation is older than expected";
       case "process_not_ready":
         return "The agent runtime is still starting";
       case "router_generation_stale":
@@ -243,7 +234,6 @@ export function projectBehaviorOperationalStatus(
       decision.reason === "readiness_version_unsupported");
   const stale =
     decision.kind === "unknown" && decision.reason === "readiness_stale";
-  const reconnect = behaviorReadinessCanReconnect(decision);
   return status({
     kind: decision.kind === "unknown" && !incompatible ? "waiting" : "blocked",
     layer: inferenceFailure ? "inference" : "runtime",
@@ -255,7 +245,7 @@ export function projectBehaviorOperationalStatus(
         : decision.kind === "unavailable"
           ? "This behavior is unavailable"
           : stale
-            ? "Runtime readiness is stale"
+            ? "Runtime is not reporting readiness"
             : "Waiting for the agent runtime",
     shortLabel: inferenceFailure
       ? "Inference unavailable"
@@ -264,15 +254,10 @@ export function projectBehaviorOperationalStatus(
         : decision.kind === "unavailable"
           ? "Unavailable"
           : stale
-            ? "Runtime stale"
+            ? "Runtime unavailable"
             : "Waiting for runtime",
     detail: behaviorReadinessDetail(decision),
-    action:
-      inferenceFailure && localRuntime
-        ? "configureInference"
-        : reconnect
-          ? "reconnect"
-          : null,
+    action: inferenceFailure && localRuntime ? "configureInference" : null,
   });
 }
 
@@ -326,6 +311,7 @@ export function projectRouteOperationalStatus(
 export function projectDeploymentOperationalState(
   deployment: DeploymentView,
   selectedBehaviorId: string | null = null,
+  syncHealth: SyncHealthView | null = null,
 ): DeploymentOperationalState {
   const transport = projectDeploymentTransportStatus(deployment.dialSucceeded);
 
@@ -334,6 +320,26 @@ export function projectDeploymentOperationalState(
   // closed while the newer half of the snapshot catches up.
   const routeReady = deployment.pairingReady && deployment.chatSafe;
   const route = projectRouteOperationalStatus(routeReady);
+  const localRuntime = isLocalRuntimeSource(deployment.source);
+  const sync = localRuntime
+    ? status({
+        kind: "ready",
+        layer: "sync",
+        reason: "local_runtime",
+        label: "Local database",
+        shortLabel: "Local",
+        detail: "This runtime uses the local database directly.",
+      })
+    : (projectSyncOperationalStatus(syncHealth) ??
+      status({
+        kind: "waiting",
+        layer: "sync",
+        reason: "sync_not_observed",
+        label: "Checking database sync",
+        shortLabel: "Checking sync",
+        detail:
+          "Waiting for the database sync coordinator's first observation.",
+      }));
 
   const behaviorReadiness = selectedBehaviorReadinessDecision(
     deployment,
@@ -341,7 +347,7 @@ export function projectDeploymentOperationalState(
   );
   const behavior = projectBehaviorOperationalStatus(
     behaviorReadiness,
-    isLocalRuntimeSource(deployment.source),
+    localRuntime,
   );
   const reconcilePhase = deployment.runtime?.reconcilePhase ?? "unknown";
   const reconcile =
@@ -363,14 +369,18 @@ export function projectDeploymentOperationalState(
           detail: "No runtime configuration reconciliation is pending.",
         });
 
+  const behaviorBlocker =
+    behavior.kind === "ready"
+      ? null
+      : behaviorReadiness.kind === "unknown" && sync.kind !== "ready"
+        ? sync
+        : behavior;
   const admissionBlocker =
     transport.kind !== "ready"
       ? transport
       : route.kind !== "ready"
         ? route
-        : behavior.kind !== "ready"
-          ? behavior
-          : null;
+        : behaviorBlocker;
 
   const error =
     deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
@@ -385,6 +395,7 @@ export function projectDeploymentOperationalState(
         action: "reconnect",
       })
     : (admissionBlocker ??
+      (sync.kind !== "ready" ? sync : null) ??
       (reconcile.kind !== "ready"
         ? reconcile
         : status({
@@ -400,6 +411,7 @@ export function projectDeploymentOperationalState(
   return {
     transport,
     route,
+    sync,
     behavior,
     reconcile,
     admissionBlocker,
@@ -551,9 +563,7 @@ export function projectSyncOperationalStatus(
   const since =
     state === "offline"
       ? formatElapsedSince(syncHealth?.offlineSince ?? syncHealth?.since, now)
-      : state === "stalled"
-        ? formatElapsedSince(syncHealth?.stalledSince ?? syncHealth?.since, now)
-        : null;
+      : null;
   const label =
     state === "healthy"
       ? "Sync is healthy"
@@ -591,25 +601,17 @@ export function projectSyncOperationalStatus(
 
 export function syncHealthDiagnostics(
   syncHealth: SyncHealthView | null | undefined,
-  deployments: DeploymentView[],
 ) {
   return {
     state: syncHealthState(syncHealth),
     since: syncHealth?.since ?? null,
     offlineSince: syncHealth?.offlineSince ?? null,
-    stalledSince: syncHealth?.stalledSince ?? null,
-    lastErrorClass: syncHealth?.lastErrorClass ?? null,
     lastError: syncHealth?.lastError ?? null,
-    pairingRetryCount: syncHealth?.pairingRetryCount ?? 0,
-    routeRetryCount: syncHealth?.routeRetryCount ?? 0,
     connectedPeerCount: syncHealth?.connectedPeerCount ?? 0,
-    peers: deployments.map((deployment) => ({
-      label: deployment.label,
-      agentDid: deployment.agentDid,
-      dialSucceeded: deployment.dialSucceeded,
-      lastError: deployment.lastError ?? null,
-      pairing: deployment.pairing ?? [],
-      routes: deployment.routes ?? [],
-    })),
+    pendingDagCount: syncHealth?.pendingDagCount ?? 0,
+    persistedPendingDagCount: syncHealth?.persistedPendingDagCount ?? 0,
+    pushRetryMarkerCount: syncHealth?.pushRetryMarkerCount ?? 0,
+    exhaustedFetchCount: syncHealth?.exhaustedFetchCount ?? 0,
+    quarantinedDagCount: syncHealth?.quarantinedDagCount ?? 0,
   };
 }

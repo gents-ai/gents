@@ -56,11 +56,12 @@ export function FleetHostDashboard({
 }: FleetHostDashboardProps) {
   const supportsLocalRuntime = !isMobileTauriShell();
   const indicator = (
-    <SyncHealthIndicator deployments={fleetProps.deployments} syncHealth={syncHealth} />
+    <SyncHealthIndicator syncHealth={syncHealth} />
   );
   return (
     <FleetDashboard
       {...fleetProps}
+      syncHealth={syncHealth}
       brand={
         <div className="fleet-brand-row">
           <BrandLockup />

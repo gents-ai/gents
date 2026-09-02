@@ -2,25 +2,20 @@ import {
   projectSyncOperationalStatus,
   syncHealthDiagnostics,
   syncHealthState,
-  type DeploymentView,
   type SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 
 export type SyncHealthIndicatorProps = {
-  deployments?: DeploymentView[];
   syncHealth?: SyncHealthView | null;
 };
 
-export function SyncHealthIndicator({
-  deployments = [],
-  syncHealth = null,
-}: SyncHealthIndicatorProps) {
+export function SyncHealthIndicator({ syncHealth = null }: SyncHealthIndicatorProps) {
   const state = syncHealthState(syncHealth);
   if (!state) return null;
   const status = projectSyncOperationalStatus(syncHealth);
   if (!status) return null;
   const label = status.shortLabel;
-  const diagnostics = syncHealthDiagnostics(syncHealth, deployments);
+  const diagnostics = syncHealthDiagnostics(syncHealth);
 
   return (
     <details
@@ -56,59 +51,34 @@ export function SyncHealthIndicator({
             <dd>{diagnostics.offlineSince ?? "—"}</dd>
           </div>
           <div>
-            <dt>Stalled since</dt>
-            <dd>{diagnostics.stalledSince ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Error class</dt>
-            <dd>{diagnostics.lastErrorClass ?? "—"}</dd>
-          </div>
-          <div>
             <dt>Last error</dt>
             <dd>{diagnostics.lastError ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Collection sync retries</dt>
-            <dd>{diagnostics.pairingRetryCount}</dd>
-          </div>
-          <div>
-            <dt>Route retries</dt>
-            <dd>{diagnostics.routeRetryCount}</dd>
           </div>
           <div>
             <dt>Connected peers</dt>
             <dd>{diagnostics.connectedPeerCount}</dd>
           </div>
+          <div>
+            <dt>Pending receive DAGs</dt>
+            <dd>{diagnostics.pendingDagCount}</dd>
+          </div>
+          <div>
+            <dt>Persisted pending DAGs</dt>
+            <dd>{diagnostics.persistedPendingDagCount}</dd>
+          </div>
+          <div>
+            <dt>Pending push retries</dt>
+            <dd>{diagnostics.pushRetryMarkerCount}</dd>
+          </div>
+          <div>
+            <dt>Exhausted fetches (total)</dt>
+            <dd>{diagnostics.exhaustedFetchCount}</dd>
+          </div>
+          <div>
+            <dt>Quarantined DAGs</dt>
+            <dd>{diagnostics.quarantinedDagCount}</dd>
+          </div>
         </dl>
-        {diagnostics.peers.length > 0 ? (
-          <ul className="sync-health-peers">
-            {diagnostics.peers.map((peer) => (
-              <li key={peer.agentDid}>
-                <strong>{peer.label}</strong>
-                <span>
-                  {peer.dialSucceeded ? "connected" : "not connected"}
-                  {peer.lastError ? ` · ${peer.lastError}` : ""}
-                </span>
-                {peer.pairing.map((pairing) => (
-                  <span key={`${peer.agentDid}:${pairing.collectionId}`}>
-                    {pairing.collectionId}: retries {pairing.pairingRetryCount}
-                    {pairing.lastRetryErrorClass
-                      ? ` · ${pairing.lastRetryErrorClass}`
-                      : ""}
-                    {pairing.stuckSince ? ` · stuck since ${pairing.stuckSince}` : ""}
-                  </span>
-                ))}
-                {peer.routes.map((route) => (
-                  <span key={route.routeId}>
-                    {route.direction}: retries {route.retryCount}
-                    {route.lastRetryErrorClass ? ` · ${route.lastRetryErrorClass}` : ""}
-                    {route.lastError ? ` · ${route.lastError}` : ""}
-                  </span>
-                ))}
-              </li>
-            ))}
-          </ul>
-        ) : null}
       </div>
     </details>
   );

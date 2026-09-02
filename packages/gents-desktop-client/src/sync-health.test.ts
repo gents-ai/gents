@@ -15,12 +15,13 @@ describe("sync health contract types", () => {
       state: "stalled",
       since: pairing.stuckSince,
       offlineSince: null,
-      stalledSince: "2026-08-25T12:00:00Z",
-      lastErrorClass: "RpcTimeout",
       lastError: null,
-      pairingRetryCount: 2,
-      routeRetryCount: 0,
       connectedPeerCount: 1,
+      pendingDagCount: 1,
+      persistedPendingDagCount: 1,
+      pushRetryMarkerCount: 0,
+      exhaustedFetchCount: 2,
+      quarantinedDagCount: 0,
     };
     expect(health.state).toBe("stalled");
     expect(pairing.pairingRetryCount).toBe(2);
