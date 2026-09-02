@@ -1,25 +1,50 @@
 use super::*;
 
-fn background_completion_enqueue_gate(
-    node: &EmbeddedNode,
-) -> std::sync::Arc<tokio::sync::Mutex<()>> {
-    type Gate = tokio::sync::Mutex<()>;
-    static GATES: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::BTreeMap<usize, std::sync::Weak<Gate>>>,
-    > = std::sync::OnceLock::new();
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 
-    let node_key = node as *const EmbeddedNode as usize;
+use tokio::sync::Mutex;
+
+type BackgroundCompletionGate = Mutex<()>;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct BackgroundCompletionGateKey {
+    node: usize,
+    session_id: String,
+    agent_did: String,
+    queue_key: String,
+}
+
+/// Serialize the read/create/reconcile path for one local coalescing domain.
+/// The weak registry does not retain either nodes or idle gates; stale entries
+/// are pruned whenever another enqueue resolves a gate.
+fn background_completion_gate(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    queue_key: &str,
+) -> Arc<BackgroundCompletionGate> {
+    static GATES: OnceLock<
+        StdMutex<HashMap<BackgroundCompletionGateKey, Weak<BackgroundCompletionGate>>>,
+    > = OnceLock::new();
+
+    let key = BackgroundCompletionGateKey {
+        node: node as *const EmbeddedNode as usize,
+        session_id: session_id.to_string(),
+        agent_did: agent_did.to_string(),
+        queue_key: queue_key.to_string(),
+    };
     let mut gates = GATES
-        .get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
+        .get_or_init(|| StdMutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(gate) = gates.get(&node_key).and_then(std::sync::Weak::upgrade) {
+    if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
         return gate;
     }
 
     gates.retain(|_, gate| gate.strong_count() > 0);
-    let gate = std::sync::Arc::new(Gate::new(()));
-    gates.insert(node_key, std::sync::Arc::downgrade(&gate));
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(key, Arc::downgrade(&gate));
     gate
 }
 
@@ -47,18 +72,22 @@ pub(crate) async fn enqueue_background_completion_with_message(
         .filter(|key| !key.is_empty())
         .context("atomic background completion enqueue requires a queue key")?
         .to_string();
-
-    // The proven queue transition is sequential: one coalescing enqueue must
-    // observe the pending entry created by the previous transition. DefraDB
-    // transactions conflict only when they touch the same document, so two
-    // empty reads could otherwise create disjoint requests and return before
-    // duplicate reconciliation converges them. Serialize this boundary per
-    // embedded node; cross-process duplicates still converge below.
-    let gate = background_completion_enqueue_gate(node);
-    let _enqueue_guard = gate.lock().await;
-
+    let gate = background_completion_gate(node, &parent.session_id, &parent.agent_did, &queue_key);
+    let _guard = gate.lock().await;
     let behavior_id = parent_behavior_id(node, parent).await?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let metadata = queue_metadata_json(&queue_hints);
+    let request_mutation = session_request_create_mutation(
+        parent,
+        &behavior_id,
+        wake_content,
+        ExecutionOrigin::Scheduled,
+        &metadata,
+        &request_id,
+        &now,
+    )
+    .await?;
 
     let mut retry_index = 0;
     let mut enqueued = loop {
@@ -69,9 +98,8 @@ pub(crate) async fn enqueue_background_completion_with_message(
             notification_content,
             message_key,
             &queue_key,
-            &behavior_id,
-            wake_content,
-            &metadata,
+            &request_id,
+            &request_mutation,
         )
         .await;
         let result = match attempt {
@@ -95,7 +123,7 @@ pub(crate) async fn enqueue_background_completion_with_message(
                 let backoff = defradb_conflict_retry_backoff(retry_index);
                 retry_index += 1;
                 tracing::warn!(
-                    queue_key,
+                    request_id,
                     attempt = retry_index,
                     backoff_ms = backoff.as_millis() as u64,
                     error = %error,
@@ -132,39 +160,15 @@ async fn background_completion_transaction_attempt(
     content: &str,
     message_key: &str,
     queue_key: &str,
-    behavior_id: &str,
-    wake_content: &str,
-    metadata: &str,
+    request_id: &str,
+    request_mutation: &str,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
-    use sha2::{Digest, Sha256};
-
     let escaped_session_id = escape_graphql_string(&parent.session_id);
     let escaped_agent_did = escape_graphql_string(&parent.agent_did);
-    let escaped_message_key = escape_graphql_string(message_key);
-    let mut scope_hasher = Sha256::new();
-    for component in [&parent.agent_did, &parent.session_id, queue_key] {
-        scope_hasher.update((component.len() as u64).to_be_bytes());
-        scope_hasher.update(component.as_bytes());
-    }
-    let queue_scope = format!("{:x}", scope_hasher.finalize());
-    let retry_key_prefix = format!("background-completion:{queue_scope}:");
-    let escaped_retry_key_pattern = escape_graphql_string(&format!("{retry_key_prefix}%"));
     let response = txn
         .execute(&format!(
             r#"{{
-                notification: AgentMessage(
-                    filter: {{ message_key: {{ _eq: "{escaped_message_key}" }} }},
-                    limit: 2
-                ) {{
-                    session_id
-                    agent_did
-                    request_id
-                    request_doc_id
-                    sequence
-                    role
-                    content
-                }}
-                pending: AgentRequest(
+                AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
                         agent_did: {{ _eq: "{escaped_agent_did}" }},
@@ -178,91 +182,10 @@ async fn background_completion_transaction_attempt(
                     session_id
                     metadata
                 }}
-                generations: AgentRequest(
-                    filter: {{
-                        session_id: {{ _eq: "{escaped_session_id}" }},
-                        agent_did: {{ _eq: "{escaped_agent_did}" }},
-                        retry_key: {{ _like: "{escaped_retry_key_pattern}" }}
-                    }}
-                ) {{
-                    retry_key
-                }}
             }}"#
         ))
         .await?;
-    let notifications = response["data"]["notification"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    anyhow::ensure!(
-        notifications.len() <= 1,
-        "background completion notification key resolved to multiple rows"
-    );
-    if let Some(notification) = notifications.first() {
-        let persisted_session = notification["session_id"].as_str().unwrap_or_default();
-        let persisted_did = notification["agent_did"].as_str().unwrap_or_default();
-        let persisted_role = notification["role"].as_str().unwrap_or_default();
-        let persisted_content = notification["content"].as_str().unwrap_or_default();
-        let persisted_request_id = notification["request_id"].as_str().unwrap_or_default();
-        let persisted_request_doc_id = notification["request_doc_id"].as_str().unwrap_or_default();
-        let persisted_sequence = notification["sequence"]
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok());
-        anyhow::ensure!(
-            persisted_session == parent.session_id
-                && persisted_did == parent.agent_did
-                && persisted_role == "user"
-                && persisted_content == content
-                && !persisted_request_id.is_empty()
-                && !persisted_request_doc_id.is_empty()
-                && persisted_sequence.is_some(),
-            "background completion notification key conflicts with its persisted binding"
-        );
-        let binding_response = txn
-            .execute(&format!(
-                r#"{{
-                    AgentRequest(
-                        filter: {{ _docID: {{ _eq: "{}" }} }},
-                        limit: 2
-                    ) {{
-                        _docID
-                        request_id
-                        agent_did
-                        session_id
-                        metadata
-                    }}
-                }}"#,
-                escape_graphql_string(persisted_request_doc_id)
-            ))
-            .await?;
-        let bindings = binding_response["data"]["AgentRequest"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        anyhow::ensure!(
-            bindings.len() == 1
-                && bindings[0]["request_id"].as_str() == Some(persisted_request_id)
-                && bindings[0]["agent_did"].as_str() == Some(parent.agent_did.as_str())
-                && bindings[0]["session_id"].as_str() == Some(parent.session_id.as_str())
-                && queue_source_and_key_match(
-                    bindings[0]["metadata"].as_str(),
-                    QueueSource::BackgroundCompletion,
-                    queue_key,
-                ),
-            "background completion notification key references an invalid wake binding"
-        );
-        return Ok(EnqueuedBackgroundCompletionInput {
-            request: EnqueuedAgentRequest {
-                doc_id: persisted_request_doc_id.to_string(),
-                request_id: persisted_request_id.to_string(),
-                session_id: persisted_session.to_string(),
-            },
-            message_sequence: persisted_sequence.expect("validated sequence"),
-            created_request: false,
-        });
-    }
-
-    let pending = response["data"]["pending"]
+    let pending = response["data"]["AgentRequest"]
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -276,59 +199,23 @@ async fn background_completion_transaction_attempt(
             )
         })
         .and_then(|row| queue_row_to_enqueued_request(&row));
-    let message_sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
-    let mut max_generation = None::<u64>;
-    for row in response["data"]["generations"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        let retry_key = row["retry_key"]
-            .as_str()
-            .context("background completion generation row has no retry key")?;
-        let generation = retry_key
-            .strip_prefix(&retry_key_prefix)
-            .context("background completion generation row has the wrong scope")?
-            .parse::<u64>()
-            .context("background completion generation row is malformed")?;
-        max_generation = Some(max_generation.map_or(generation, |current| current.max(generation)));
-    }
-    let next_generation = match max_generation {
-        Some(generation) => generation
-            .checked_add(1)
-            .context("background completion queue generation overflow")?,
-        None => 0,
-    };
 
     let (request, created_request) = match pending {
         Some(request) => (request, false),
         None => {
-            let request_id = format!("background-completion-{queue_scope}-{next_generation:020}");
-            let retry_key = format!("{retry_key_prefix}{next_generation:020}");
-            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            let request_mutation = session_request_create_mutation(
-                parent,
-                behavior_id,
-                wake_content,
-                ExecutionOrigin::Scheduled,
-                metadata,
-                &request_id,
-                &now,
-                Some(&retry_key),
-            )
-            .await?;
-            let response = txn.execute(&request_mutation).await?;
+            let response = txn.execute(request_mutation).await?;
             let doc_id = transaction_created_doc_id(&response, "AgentRequest")?;
             (
                 EnqueuedAgentRequest {
                     doc_id,
-                    request_id,
+                    request_id: request_id.to_string(),
                     session_id: parent.session_id.clone(),
                 },
                 true,
             )
         }
     };
+    let message_sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
     let message_mutation = session::create_message_mutation(
         &parent.session_id,
         &parent.agent_did,

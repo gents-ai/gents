@@ -220,7 +220,7 @@ impl PromptSender {
     /// the submitted request.
     pub(super) async fn send_line(&self, line: String) -> Result<()> {
         match self {
-            PromptSender::Live { outbound } => outbound.send(line),
+            PromptSender::Live { outbound } => outbound.send(line).await,
             #[cfg(test)]
             PromptSender::Buffer { buffer } => {
                 buffer.lock().await.push(line);
@@ -577,19 +577,21 @@ impl TurnManager {
                 // cancelled — even when it has not published the drained
                 // entry's latch yet — and so must an explicit cancel: while
                 // `submit_request` is awaited, only cancel or disconnect can
-                // remove this entry (every other removal runs in the
+                // remove this generation (every other removal runs in the
                 // submitter's own task after the request id is known), so a
-                // missing entry means the turn was cancelled. Ordinary
+                // missing or replacement generation means this turn was
+                // cancelled. Removal is guarded by the Arc generation token:
+                // a peer may already have reused the exact key, and the old
+                // failed submitter must never delete that replacement.
+                // Ordinary
                 // non-disconnect GraphQL failures (state open, entry present,
                 // latch unset) stay surfaced as errors.
-                let (entry_was_present, state_closed) = {
-                    let mut state = self.state.lock().await;
-                    let entry_was_present = state.entries.remove(&key).is_some();
-                    (entry_was_present, state.is_closed())
-                };
+                let (own_entry, state_closed) =
+                    self.take_entry_if_generation(&key, &cancel_before_id).await;
+                let own_entry_was_present = own_entry.is_some();
                 let cancelled_by_latch = cancel_before_id.lock().await.is_cancelled();
-                let cancelled_by_disconnect = state_closed && !entry_was_present;
-                let cancelled_by_drain = !entry_was_present;
+                let cancelled_by_disconnect = state_closed && !own_entry_was_present;
+                let cancelled_by_drain = !own_entry_was_present;
                 drop(response_rx);
                 if cancelled_by_disconnect || cancelled_by_drain || cancelled_by_latch {
                     tracing::info!(
@@ -597,7 +599,7 @@ impl TurnManager {
                         session_id = %request.session_id,
                         prompt_id = %prompt_id,
                         state_closed,
-                        entry_was_present,
+                        own_entry_was_present,
                         cancelled_by_latch,
                         "Grok shim prompt submission failed into a cancelled/disconnected turn; resolving cancelled"
                     );
@@ -618,7 +620,9 @@ impl TurnManager {
         // itself fails, interrupt immediately and resolve cancelled.
         let drained_during_submission = {
             let state = self.state.lock().await;
-            state.entries.get(&key).is_none_or(|entry| entry.drained)
+            state.entries.get(&key).is_none_or(|entry| {
+                !Arc::ptr_eq(&entry.cancel_before_id, &cancel_before_id) || entry.drained
+            })
         };
         if drained_during_submission {
             self.interrupt_submitted(&request_id).await;
@@ -651,7 +655,8 @@ impl TurnManager {
                 // request, drain the entry, and surface the failure. The
                 // common send path already rolled the reservation back, so
                 // the failed echo consumed no event id.
-                self.interrupt_and_drain(&key, &request_id).await;
+                self.interrupt_and_drain(&key, &request_id, &cancel_before_id)
+                    .await;
                 drop(response_rx);
                 tracing::warn!(
                     %error,
@@ -675,6 +680,7 @@ impl TurnManager {
                 &request_id,
                 &request.session_id,
                 &prompt_id,
+                &cancel_before_id,
                 sender,
                 projections,
                 response_rx,
@@ -808,10 +814,42 @@ impl TurnManager {
         entry.request_id.clone()
     }
 
-    /// Interrupt the submitted request and drain the pending entry.
-    async fn interrupt_and_drain(&self, key: &(String, String), request_id: &str) {
-        self.drain_entry(key, StopReason::Cancelled).await;
+    /// Interrupt the submitted request and drain only its pending generation.
+    async fn interrupt_and_drain(
+        &self,
+        key: &(String, String),
+        request_id: &str,
+        generation: &Arc<Mutex<CancelBeforeIdLatch>>,
+    ) {
+        if let (Some(mut entry), _) = self.take_entry_if_generation(key, generation).await {
+            let _first_cancel = entry.cancel_before_id.lock().await.cancel();
+            entry.resolve(Ok(json!({
+                "stopReason": StopReason::Cancelled.wire_name(),
+            })));
+        }
         self.interrupt_submitted(request_id).await;
+    }
+
+    /// Atomically take only the caller's pending-entry generation and observe
+    /// the connection latch under the same state lock. A peer can reuse an
+    /// exact `(sessionId, promptId)` key immediately after cancel, so key
+    /// equality alone is never authority for submitter-owned cleanup.
+    async fn take_entry_if_generation(
+        &self,
+        key: &(String, String),
+        generation: &Arc<Mutex<CancelBeforeIdLatch>>,
+    ) -> (Option<PendingPrompt>, bool) {
+        let mut state = self.state.lock().await;
+        let owns_current_generation = state
+            .entries
+            .get(key)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.cancel_before_id, generation));
+        let entry = if owns_current_generation {
+            state.entries.remove(key)
+        } else {
+            None
+        };
+        (entry, state.is_closed())
     }
 
     async fn interrupt_submitted(&self, request_id: &str) {
@@ -942,6 +980,7 @@ impl TurnManager {
         request_id: &str,
         session_id: &str,
         prompt_id: &str,
+        generation: &Arc<Mutex<CancelBeforeIdLatch>>,
         sender: &PromptSender,
         projections: &ProjectionEngine,
         mut response_rx: oneshot::Receiver<Result<Value>>,
@@ -995,7 +1034,7 @@ impl TurnManager {
                 Err(error) => {
                     // A terminal query failure after submission must not
                     // leak the submitted request.
-                    self.interrupt_and_drain(key, request_id).await;
+                    self.interrupt_and_drain(key, request_id, generation).await;
                     drop(response_rx);
                     tracing::warn!(
                         %error,
@@ -1050,7 +1089,7 @@ impl TurnManager {
                 Err(error) => {
                     // A send failure or projection query failure after
                     // submission must not leak the submitted request.
-                    self.interrupt_and_drain(key, request_id).await;
+                    self.interrupt_and_drain(key, request_id, generation).await;
                     drop(response_rx);
                     tracing::warn!(
                         %error,
@@ -1067,7 +1106,7 @@ impl TurnManager {
                 // Terminalized: the final projection pass above already
                 // flushed the stream. Remove the pending entry; the response
                 // value is built by the caller from the returned stop reason.
-                self.state.lock().await.entries.remove(key);
+                self.take_entry_if_generation(key, generation).await;
                 return Ok(stop_reason);
             }
             tokio::select! {
@@ -2972,6 +3011,133 @@ mod tests {
         .expect("cancel replacement");
         manager
             .handle_cancel(cancel_replacement)
+            .await
+            .expect("cancel replacement");
+        let replacement_result = tokio::time::timeout(Duration::from_secs(30), replacement)
+            .await
+            .expect("replacement resolves")
+            .expect("replacement task")
+            .expect("replacement result");
+        assert_eq!(replacement_result["stopReason"], json!("cancelled"));
+    }
+
+    /// The failure half of the exact-key generation race: after cancellation
+    /// removes the first entry, a peer may immediately reuse the same key.
+    /// When the old gated submission then fails, its cleanup must recognize
+    /// the Arc generation mismatch and leave the replacement entry intact.
+    #[tokio::test]
+    async fn failed_submission_cannot_remove_an_exact_key_replacement() {
+        let (_tempdir, node, agent_did) = test_node().await;
+        let submission_arrived = Arc::new(tokio::sync::Notify::new());
+        let submission_release = Arc::new(tokio::sync::Notify::new());
+        let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let submission_fail = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let graphql = spawn_gated_mock_graphql_with_failure(
+            node.clone(),
+            Some((
+                submission_arrived.clone(),
+                submission_release.clone(),
+                gate_armed,
+            )),
+            Some(submission_fail),
+        )
+        .await;
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
+        let engine = test_engine(node.clone());
+        let (_buffer, sender) = buffer_sender();
+        let prompt = || {
+            parse_prompt_request(
+                &json!({
+                    "sessionId": "session-failed-reuse",
+                    "prompt": [text_block("hello")],
+                    "_meta": {"promptId": "same-prompt"},
+                }),
+                Some(json!(1)),
+            )
+            .expect("prompt")
+        };
+
+        let first = tokio::spawn({
+            let manager = manager.clone();
+            let sender = sender.clone();
+            let engine = engine.clone();
+            let prompt = prompt();
+            async move { manager.handle_prompt(prompt, &sender, &engine).await }
+        });
+        tokio::time::timeout(Duration::from_secs(30), submission_arrived.notified())
+            .await
+            .expect("first submission reached gate");
+
+        manager
+            .handle_cancel(
+                parse_cancel_notification(&json!({
+                    "sessionId": "session-failed-reuse",
+                    "_meta": {"promptId": "same-prompt"},
+                }))
+                .expect("cancel first"),
+            )
+            .await
+            .expect("cancel first");
+
+        let replacement = tokio::spawn({
+            let manager = manager.clone();
+            let sender = sender.clone();
+            let engine = engine.clone();
+            let prompt = prompt();
+            async move { manager.handle_prompt(prompt, &sender, &engine).await }
+        });
+        let key = (
+            "session-failed-reuse".to_string(),
+            "same-prompt".to_string(),
+        );
+        let replacement_request_id = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if let Some(request_id) = manager
+                    .state
+                    .lock()
+                    .await
+                    .entries
+                    .get(&key)
+                    .and_then(|entry| entry.request_id.clone())
+                {
+                    break request_id;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replacement request id registered");
+
+        submission_release.notify_one();
+        let first_result = tokio::time::timeout(Duration::from_secs(30), first)
+            .await
+            .expect("old prompt resolves")
+            .expect("old prompt task")
+            .expect("old failed submission resolves as cancelled");
+        assert_eq!(first_result["stopReason"], json!("cancelled"));
+        assert_eq!(
+            manager
+                .state
+                .lock()
+                .await
+                .entries
+                .get(&key)
+                .and_then(|entry| entry.request_id.as_deref()),
+            Some(replacement_request_id.as_str()),
+            "the failed old generation must not remove its replacement"
+        );
+
+        manager
+            .handle_cancel(
+                parse_cancel_notification(&json!({
+                    "sessionId": "session-failed-reuse",
+                    "_meta": {"promptId": "same-prompt"},
+                }))
+                .expect("cancel replacement"),
+            )
             .await
             .expect("cancel replacement");
         let replacement_result = tokio::time::timeout(Duration::from_secs(30), replacement)

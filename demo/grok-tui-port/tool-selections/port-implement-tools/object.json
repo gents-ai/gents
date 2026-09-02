@@ -7,7 +7,7 @@
   "file_tool_root": "${GENTS_GROK_PORT_GENTS_ROOT:-.}",
   "enable_bash": true,
   "bash_mode": "Unrestricted",
-  "command_execution_policy": "unrestricted",
+  "command_execution_policy": "workspace_write",
   "command_allowed_argv_prefixes": [
     "[\"/bin/sh\",\"-lc\",\"RUSTC_WRAPPER= TMPDIR=\\\"$PWD/target\\\" cargo test -p gents-cli --lib grok_shim\"]",
     "rg",

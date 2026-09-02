@@ -4827,6 +4827,7 @@ mod tests {
                 let recon = std::fs::read_to_string(pack.join("tasks/port-recon-task/prompt.md"))
                     .expect("recon prompt should load");
                 assert!(recon.contains("`grok_wire_continuation`"));
+                assert!(recon.contains("preserve both wire fields verbatim"));
                 let recon_tools = read_pack_json_defaults(
                     &pack.join("tool-selections/port-recon-tools/object.json"),
                 )
@@ -4877,6 +4878,29 @@ mod tests {
                         .count(),
                     12
                 );
+                let subagent_surface = audited_surfaces
+                    .iter()
+                    .find(|surface| {
+                        surface["surface_id"]
+                            .as_str()
+                            .is_some_and(|id| id.ends_with(":subagent:lifecycle"))
+                    })
+                    .expect("audited subagent lifecycle surface should exist");
+                let subagent_wire = subagent_surface["grok_wire"]
+                    .as_str()
+                    .expect("subagent lifecycle wire head should be text");
+                let subagent_wire_continuation = subagent_surface["grok_wire_continuation"]
+                    .as_str()
+                    .expect("subagent lifecycle wire continuation should be text");
+                assert!(!subagent_wire.is_empty() && subagent_wire.len() <= 2_000);
+                assert!(
+                    !subagent_wire_continuation.is_empty()
+                        && subagent_wire_continuation.len() <= 2_000
+                );
+                let complete_subagent_wire = format!("{subagent_wire}{subagent_wire_continuation}");
+                for lifecycle in ["subagent_spawned", "subagent_progress", "subagent_finished"] {
+                    assert!(complete_subagent_wire.contains(lifecycle));
+                }
                 for surface in audited_surfaces {
                     for field in [
                         "evidence",
@@ -4947,6 +4971,46 @@ mod tests {
                 assert_eq!(implement_profile["max_turns"], 1_000_000);
                 assert_eq!(implement_profile["max_output_tokens"], 65536);
                 assert_eq!(implement_profile["retry_max_resample"], 2);
+                for selection in [
+                    "port-implement-tools",
+                    "port-converge-tools",
+                    "port-final-review-tools",
+                ] {
+                    let tools = read_pack_json_defaults(
+                        &pack
+                            .join("tool-selections")
+                            .join(selection)
+                            .join("object.json"),
+                    )
+                    .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
+                    assert_eq!(
+                        tools["enable_bash"], true,
+                        "{selection} needs compiler shell"
+                    );
+                    assert_eq!(tools["bash_mode"], "Unrestricted");
+                    assert_eq!(tools["file_tools_mode"], "ReadWrite");
+                    assert_eq!(tools["command_execution_policy"], "workspace_write");
+                    assert_eq!(tools["command_network_mode"], "disabled");
+                    assert_ne!(
+                        (
+                            tools["command_execution_policy"].as_str(),
+                            tools["command_network_mode"].as_str(),
+                        ),
+                        (Some("unrestricted"), Some("disabled")),
+                        "{selection} must not request the unenforceable unrestricted+disabled pair"
+                    );
+                }
+                for selection in ["port-live-tools", "port-publish-tools"] {
+                    let tools = read_pack_json_defaults(
+                        &pack
+                            .join("tool-selections")
+                            .join(selection)
+                            .join("object.json"),
+                    )
+                    .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
+                    assert_eq!(tools["command_execution_policy"], "unrestricted");
+                    assert_eq!(tools["command_network_mode"], "enabled");
+                }
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
                 assert!(plan.contains("only a compact, sorted `[surface_id=<id>]` index"));
