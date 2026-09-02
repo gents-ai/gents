@@ -16,7 +16,7 @@ import {
   NEEDS_TRIAGE,
 } from "./reconcile.mjs";
 
-const REPO = "source-inc/gents";
+const REPO = "gents-ai/gents";
 const BOT = DEFAULT_BOT_LOGINS[0];
 
 const issue = (number, labels = [], state = "open") => ({ number, state, labels });

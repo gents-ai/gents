@@ -11,7 +11,7 @@ llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 
 # Install the Codex CLI separately and make sure `codex` is on PATH.
 
-gh release download --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
+gh release download --repo gents-ai/gents -p 'gents-aarch64-apple-darwin.tar.gz'
 tar -xzf gents-aarch64-apple-darwin.tar.gz
 sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
 
@@ -56,7 +56,7 @@ curl -s http://127.0.0.1:8080/v1/models | head -c 200
 Download the signed, notarized binary from the release:
 
 ```bash
-gh release download --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
+gh release download --repo gents-ai/gents -p 'gents-aarch64-apple-darwin.tar.gz'
 tar -xzf gents-aarch64-apple-darwin.tar.gz
 sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
 ```

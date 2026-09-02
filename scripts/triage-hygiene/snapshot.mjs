@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 
 // GITHUB_REPOSITORY wins when both are set: it is the name Actions and run.mjs
 // use, so an ambient GH_REPO left over in a shell cannot redirect a restore.
-const DEFAULT_REPO = process.env.GITHUB_REPOSITORY ?? process.env.GH_REPO ?? "source-inc/gents";
+const DEFAULT_REPO = process.env.GITHUB_REPOSITORY ?? process.env.GH_REPO ?? "gents-ai/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
 // Labels this migration renames or deletes; the blast radius to capture.
 const DOOMED = [

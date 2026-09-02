@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { restore } from "./snapshot.mjs";
 
-const REPO = "source-inc/gents";
+const REPO = "gents-ai/gents";
 
 const snapshotFile = (snap) => {
   const dir = mkdtempSync(join(tmpdir(), "triage-snap-"));

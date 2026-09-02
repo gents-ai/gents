@@ -6,13 +6,13 @@ desktop enrollment, multi-runtime bring-up, and the operations API.
 ## Container image
 
 Each published release includes a multi-platform image for Linux amd64 and
-arm64 at `ghcr.io/source-inc/gents`. Stable releases also update the major,
+arm64 at `ghcr.io/gents-ai/gents`. Stable releases also update the major,
 major/minor, and `latest` tags. Pin the published digest instead of a tag when
 the deployment must be byte-for-byte immutable.
 
 ```bash
-docker pull ghcr.io/source-inc/gents:v0.15.0
-docker run --rm ghcr.io/source-inc/gents:v0.15.0 version
+docker pull ghcr.io/gents-ai/gents:v0.15.0
+docker run --rm ghcr.io/gents-ai/gents:v0.15.0 version
 ```
 
 The image runs as the non-root `gents` user. Persist its default home across
@@ -22,13 +22,13 @@ container replacements with a named volume:
 docker volume create gents-home
 docker run --rm -it \
   -v gents-home:/home/gents/.gents \
-  ghcr.io/source-inc/gents:v0.15.0 \
+  ghcr.io/gents-ai/gents:v0.15.0 \
   init --inference-url http://host.docker.internal:8000/v1 --model-name MODEL
 
 docker run --rm -it \
   -v gents-home:/home/gents/.gents \
   -p 9191:9191 \
-  ghcr.io/source-inc/gents:v0.15.0 \
+  ghcr.io/gents-ai/gents:v0.15.0 \
   server --http-addr 0.0.0.0 --no-codex-shim
 ```
 

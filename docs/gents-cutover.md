@@ -19,7 +19,7 @@ version.
 
 | Before the cutover | Gents |
 | --- | --- |
-| Repository `sourcenetwork/defra-agent` or `source-inc/defra-agent` | `source-inc/gents` |
+| Repository `sourcenetwork/defra-agent` or `source-inc/defra-agent` | `gents-ai/gents` |
 | CLI binary and package `defra-agent` | `gents` and `gents-cli` |
 | Native filesystem runner `defra-native-fs-runner` | `gents-fs-runner` |
 | Runtime, protocol, schema, proof, lens, CLI, and desktop crate prefixes `defra-agent-*` | `gents-*` |
@@ -57,7 +57,7 @@ bundle identifier, or keychain service.
   retention policy.
 - Treat every Gents principal as a new principal with a new DID. Reissue grants,
   manifests, enrollment authorizations, and peer relationships against that DID.
-- Use only `source-inc/gents` as the canonical repository coordinate. Redirects
+- Use only `gents-ai/gents` as the canonical repository coordinate. Redirects
   are discovery aids, not configuration.
 
 `--home <path>` remains an explicit operator escape hatch. You may point an
@@ -77,7 +77,7 @@ Complete these once for the fleet:
 - [ ] Stop configuration changes and peer enrollment until the Gents fleet is
   healthy.
 - [ ] Confirm the signed Gents artifact and checksum came from
-  `source-inc/gents` and that `gents version` succeeds.
+  `gents-ai/gents` and that `gents version` succeeds.
 - [ ] Prepare a portable manifest root for each host. Keep secrets out of the
   manifest and record how each host receives them.
 - [ ] Provision the GitHub Actions secret `GENTS_API_KEY` for live smoke. Do
@@ -265,7 +265,7 @@ After all five records are populated:
 - [ ] Confirm the desktop app uses `com.source-inc.gents` and fresh
   `<data_local>/gents/desktop` state.
 - [ ] Update clones, automation, package references, and links to
-  `source-inc/gents`; do not configure redirects as canonical remotes.
+  `gents-ai/gents`; do not configure redirects as canonical remotes.
 - [ ] Record explicit follow-up issues for any Source-owned repository or
   automation reference that cannot be updated in the cutover window.
 

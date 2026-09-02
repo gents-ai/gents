@@ -15,7 +15,7 @@ llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf   # local inference on :808
 # Install the Codex CLI separately and make sure `codex` is on PATH.
 # `gents chat` remains the dependency-free fallback UI.
 
-gh release download --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
+gh release download --repo gents-ai/gents -p 'gents-aarch64-apple-darwin.tar.gz'
 tar -xzf gents-aarch64-apple-darwin.tar.gz
 sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
 
