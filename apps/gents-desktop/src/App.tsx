@@ -332,6 +332,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 activeRequestId={
                   shell.activeRequestId ?? shell.session?.latestRequestId ?? null
                 }
+                activityStatus={shell.activityStatus}
                 approxSerializedBytes={
                   shell.snapshot?.client?.approxSerializedBytes ?? 0
                 }
@@ -374,9 +375,6 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 onLoadOlderTimeline={shell.loadOlderSessionTimeline}
                 rowCount={shell.snapshot?.client?.rowCount ?? 0}
                 runtimeHealth={shell.runtimeHealth}
-                sendHint={
-                  shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
-                }
                 retryUnavailableHint={
                   shell.retryStatus.kind === "disabled" &&
                   shell.retryStatus.reason === "behaviorUnavailable"

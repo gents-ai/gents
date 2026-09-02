@@ -215,6 +215,16 @@ export function App() {
         />
         <ChatComposer
           activeRequestId={session?.latestRequestId ?? null}
+          activityStatus={
+            selectedDeployment
+              ? null
+              : {
+                  kind: "blocked",
+                  label: "Pair an agent",
+                  detail: "Pair an agent before sending.",
+                  animated: false,
+                }
+          }
           approxSerializedBytes={runtime?.approxSerializedBytes ?? 0}
           behaviorLabel={selectedDeployment?.defaultBehaviorId ?? null}
           canSend={Boolean(selectedDeployment) && Boolean(draft.trim())}
@@ -223,7 +233,6 @@ export function App() {
           draft={draft}
           interruptVisible={false}
           rowCount={runtime?.rowCount ?? 0}
-          sendHint={selectedDeployment ? null : "Pair an agent before sending"}
           sending={busy}
           turnState={session?.turnState ?? null}
           onDraftChange={setDraft}

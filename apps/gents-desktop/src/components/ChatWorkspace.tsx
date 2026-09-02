@@ -11,6 +11,7 @@ import {
   CascadeCancelDialog,
   interruptChatRequest,
   previewChatInterruptCascade,
+  type ChatActivityStatus,
   type OptimisticPendingTurn,
 } from "@source-inc/gents-desktop-chat";
 import {
@@ -26,6 +27,7 @@ import { ConversationLoadingStatus } from "./ConversationLoadingStatus";
 export type ChatWorkspaceProps = {
   api?: DesktopApiAdapter;
   activeRequestId: string | null;
+  activityStatus: ChatActivityStatus | null;
   selectedDeployment: DeploymentView | null;
   selectedConversationTitle: string | null;
   selectedBehaviorId: string | null;
@@ -38,7 +40,6 @@ export type ChatWorkspaceProps = {
   dialedPeerCount: number;
   configuredPeerCount: number;
   canSend: boolean;
-  sendHint: string | null;
   retryUnavailableHint?: string | null;
   draft: string;
   interruptVisible: boolean;
@@ -86,6 +87,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 export function ActiveChatWorkspace({
   api: explicitApi,
   activeRequestId,
+  activityStatus,
   selectedDeployment,
   selectedConversationTitle,
   selectedBehaviorId,
@@ -98,7 +100,6 @@ export function ActiveChatWorkspace({
   dialedPeerCount,
   configuredPeerCount,
   canSend,
-  sendHint,
   retryUnavailableHint,
   draft,
   interruptVisible,
@@ -236,6 +237,7 @@ export function ActiveChatWorkspace({
 
           <ChatComposer
             activeRequestId={activeRequestId}
+            activityStatus={activityStatus}
             approxSerializedBytes={approxSerializedBytes}
             behaviorLabel={behaviorLabel}
             canSend={canSend}
@@ -244,7 +246,6 @@ export function ActiveChatWorkspace({
             draft={draft}
             interruptVisible={interruptVisible}
             rowCount={rowCount}
-            sendHint={sendHint}
             sending={sending}
             turnState={turnState}
             onDraftChange={onDraftChange}

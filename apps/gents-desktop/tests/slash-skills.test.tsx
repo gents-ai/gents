@@ -97,6 +97,7 @@ describe("composer slash menu", () => {
     render(
       <ChatComposer
         activeRequestId={null}
+        activityStatus={null}
         approxSerializedBytes={0}
         behaviorLabel="default"
         canSend
@@ -105,7 +106,6 @@ describe("composer slash menu", () => {
         draft={draft}
         interruptVisible={false}
         rowCount={0}
-        sendHint={null}
         sending={false}
         turnState={null}
         onDraftChange={onDraftChange}

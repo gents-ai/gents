@@ -86,6 +86,7 @@ function workspace(
         detail: "Fetching session history · 2 of 6",
         action: null,
       }}
+      activityStatus={null}
       dialedPeerCount={1}
       draft=""
       interruptVisible={false}
@@ -99,7 +100,6 @@ function workspace(
       selectedDeployment={deployment}
       selectedSessionId={selectedSessionId}
       sending={false}
-      sendHint={null}
       session={session}
       turnState={null}
     />

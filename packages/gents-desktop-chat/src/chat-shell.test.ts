@@ -473,6 +473,45 @@ describe("projectChatShell", () => {
       reason: "awaitingTurnTerminality",
       hint: "Turn still streaming",
     });
+    expect(projection.activityStatus).toEqual({
+      kind: "working",
+      label: "Agent is working…",
+      detail: "This turn must finish before another message can be sent.",
+      animated: true,
+    });
+  });
+
+  test("does not let an empty draft mask an active turn", () => {
+    const projection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      draft: "",
+      sending: false,
+      selectedConversation: conversation({ turnState: "waitingForClaim" }),
+      session: session({
+        turnState: "waitingForClaim",
+        latestRequestId: "req-1",
+      }),
+      localWorkflow: { kind: "ready" },
+    });
+
+    expect(projection.sendStatus).toEqual({
+      kind: "disabled",
+      reason: "composerEmpty",
+      hint: "Type a message to send",
+    });
+    expect(projection.nonEmptyContentSendStatus).toEqual({
+      kind: "disabled",
+      reason: "awaitingTurnTerminality",
+      hint: "Waiting for the active turn to start",
+    });
+    expect(projection.activityStatus).toEqual({
+      kind: "waiting",
+      label: "Waiting for the agent…",
+      detail: "Your message is queued until the enrolled agent claims it.",
+      animated: true,
+    });
   });
 
   test("uses tracked request before observed latest request catches up", () => {
@@ -598,6 +637,13 @@ describe("projectChatShell", () => {
       kind: "disabled",
       reason: "waitingForRequestObservation",
       hint: "Waiting for request observation",
+    });
+    expect(projection.activityStatus).toEqual({
+      kind: "syncing",
+      label: "Syncing message…",
+      detail:
+        "Your request was created; waiting for it to appear in the shared conversation.",
+      animated: true,
     });
   });
 

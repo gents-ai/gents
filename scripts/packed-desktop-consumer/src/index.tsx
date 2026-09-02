@@ -29,6 +29,7 @@ const timestamp = formatMessageTime("2026-07-27T00:00:00Z");
 const publicComponents: ReactNode[] = [
   <ChatComposer
     activeRequestId={null}
+    activityStatus={null}
     approxSerializedBytes={0}
     behaviorLabel={null}
     canSend={false}
@@ -37,7 +38,6 @@ const publicComponents: ReactNode[] = [
     draft=""
     interruptVisible={false}
     rowCount={0}
-    sendHint={null}
     sending={false}
     turnState={null}
     onDraftChange={() => undefined}

@@ -1,14 +1,14 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ChatComposer } from "@source-inc/gents-desktop-chat";
+import { ChatComposer, type ChatActivityStatus } from "@source-inc/gents-desktop-chat";
 
 function renderComposer(
   overrides: {
     activeRequestId?: string | null;
+    activityStatus?: ChatActivityStatus | null;
     interruptVisible?: boolean;
     turnState?: string | null;
-    sendHint?: string | null;
     onConfigureInference?: () => void;
     onReconnect?: () => void;
     reconnecting?: boolean;
@@ -17,6 +17,7 @@ function renderComposer(
   return render(
     <ChatComposer
       activeRequestId={overrides.activeRequestId ?? null}
+      activityStatus={overrides.activityStatus ?? null}
       approxSerializedBytes={21000}
       behaviorLabel="default"
       canSend
@@ -25,7 +26,6 @@ function renderComposer(
       draft=""
       interruptVisible={overrides.interruptVisible ?? false}
       rowCount={42}
-      sendHint={overrides.sendHint ?? null}
       sending={false}
       turnState={overrides.turnState ?? null}
       onDraftChange={vi.fn()}
@@ -46,16 +46,37 @@ describe("ChatComposer chrome", () => {
     );
   });
 
-  it("translates turn states into operator language, never raw enums", () => {
-    renderComposer({ turnState: "waitingForClaim" });
+  it("shows why a queued turn is waiting", () => {
+    renderComposer({
+      turnState: "waitingForClaim",
+      activityStatus: {
+        kind: "waiting",
+        label: "Waiting for the agent…",
+        detail: "Your message is queued until the enrolled agent claims it.",
+        animated: true,
+      },
+    });
     const status = screen.getByTestId("composer-status");
-    expect(status).toHaveTextContent("Working…");
+    expect(status).toHaveTextContent("Waiting for the agent…");
+    expect(status).toHaveTextContent("Your message is queued");
+    expect(status).toHaveAttribute("data-activity-kind", "waiting");
     expect(status).not.toHaveTextContent("waitingForClaim");
   });
 
-  it("shows Responding… while streaming", () => {
-    renderComposer({ turnState: "streaming" });
-    expect(screen.getByTestId("composer-status")).toHaveTextContent("Responding…");
+  it("shows when the agent is working and why sending is blocked", () => {
+    renderComposer({
+      turnState: "streaming",
+      activityStatus: {
+        kind: "working",
+        label: "Agent is working…",
+        detail: "This turn must finish before another message can be sent.",
+        animated: true,
+      },
+    });
+    const status = screen.getByTestId("composer-status");
+    expect(status).toHaveTextContent("Agent is working…");
+    expect(status).toHaveTextContent("before another message can be sent");
+    expect(status).toHaveAttribute("data-activity-kind", "working");
   });
 
   it("shows Interrupt while a submitted request awaits remote observation", () => {
@@ -67,17 +88,29 @@ describe("ChatComposer chrome", () => {
     expect(screen.getByRole("button", { name: "Interrupt" })).toBeEnabled();
   });
 
-  it("lets a disabled-send hint take precedence", () => {
-    renderComposer({ sendHint: "Connect an agent first" });
-    expect(screen.getByTestId("composer-status")).toHaveTextContent(
-      "Connect an agent first",
-    );
+  it("announces message synchronization", () => {
+    renderComposer({
+      activityStatus: {
+        kind: "syncing",
+        label: "Syncing message…",
+        detail: "Waiting for it to appear in the shared conversation.",
+        animated: true,
+      },
+    });
+    const status = screen.getByTestId("composer-status");
+    expect(status).toHaveTextContent("Syncing message…");
+    expect(status).toHaveAttribute("data-activity-kind", "syncing");
   });
 
   it("offers a direct inference configuration recovery action", () => {
     const onConfigureInference = vi.fn();
     renderComposer({
-      sendHint: "Behavior backend is unavailable",
+      activityStatus: {
+        kind: "blocked",
+        label: "Agent is unavailable",
+        detail: "Behavior backend is unavailable",
+        animated: false,
+      },
       onConfigureInference,
     });
 
@@ -88,7 +121,12 @@ describe("ChatComposer chrome", () => {
   it("offers a distinct connection recovery action", () => {
     const onReconnect = vi.fn();
     const { rerender } = renderComposer({
-      sendHint: "The agent stopped reporting readiness",
+      activityStatus: {
+        kind: "waiting",
+        label: "Waiting for the agent runtime…",
+        detail: "The agent stopped reporting readiness",
+        animated: true,
+      },
       onReconnect,
     });
 
@@ -98,6 +136,12 @@ describe("ChatComposer chrome", () => {
     rerender(
       <ChatComposer
         activeRequestId={null}
+        activityStatus={{
+          kind: "waiting",
+          label: "Reconnecting…",
+          detail: "Restoring the secure agent connection.",
+          animated: true,
+        }}
         approxSerializedBytes={0}
         behaviorLabel="default"
         canSend={false}
@@ -106,7 +150,6 @@ describe("ChatComposer chrome", () => {
         draft=""
         interruptVisible={false}
         rowCount={0}
-        sendHint="Reconnecting"
         sending={false}
         turnState={null}
         onDraftChange={vi.fn()}

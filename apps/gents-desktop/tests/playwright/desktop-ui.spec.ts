@@ -21,7 +21,10 @@ test.describe("desktop UI harness", () => {
     await page.getByTestId("inference-wizard-close").click();
     await openChat(page);
 
-    await expect(page.getByTestId("composer-status")).toHaveText(
+    const status = page.getByTestId("composer-status");
+    await expect(status).toHaveAttribute("data-activity-kind", "blocked");
+    await expect(status).toContainText("Agent is unavailable");
+    await expect(status).toContainText(
       "Behavior “Default” has a disabled inference backend",
     );
     await expect(page.getByTestId("composer-input")).toBeEditable();
@@ -283,6 +286,20 @@ test.describe("desktop UI harness", () => {
       0,
     );
     await expect(page.getByTestId("transcript-panel")).toBeVisible();
+  });
+
+  test("active turn explains why the composer cannot send", async ({ page }) => {
+    await gotoHarness(page, "active-turn");
+    await openChat(page);
+
+    const status = page.getByTestId("composer-status");
+    await expect(status).toHaveAttribute("data-activity-kind", "working");
+    await expect(status).toContainText("Agent is working…");
+    await expect(status).toContainText(
+      "This turn must finish before another message can be sent.",
+    );
+    await expect(page.getByTestId("composer-input")).toBeEditable();
+    await expect(page.getByTestId("composer-send")).toBeDisabled();
   });
 
   test("interrupt cancellation handles direct and cascade flows", async ({ page }) => {

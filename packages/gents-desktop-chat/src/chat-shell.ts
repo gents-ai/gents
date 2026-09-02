@@ -86,6 +86,13 @@ export type SendStatus =
   | { kind: "ready" }
   | { kind: "disabled"; reason: ChatBlockedReason; hint: string };
 
+export type ChatActivityStatus = {
+  kind: "working" | "waiting" | "syncing" | "blocked";
+  label: string;
+  detail: string;
+  animated: boolean;
+};
+
 export type BehaviorReadinessDecision =
   | { kind: "ready"; behaviorId: string; behaviorLabel: string }
   | {
@@ -117,6 +124,7 @@ export type ChatShellProjection = {
   workflow: ChatWorkflowState;
   sendStatus: SendStatus;
   nonEmptyContentSendStatus: SendStatus;
+  activityStatus: ChatActivityStatus | null;
   turnState: TurnState | null;
   activeRequestId: string | null;
 };
@@ -269,6 +277,110 @@ export function behaviorReadinessHint(
       return `Behavior “${decision.behaviorLabel}” cannot start its tool surface`;
     case "executor_start_failed":
       return `Behavior “${decision.behaviorLabel}” could not start`;
+  }
+}
+
+function activityStatusFor(
+  sendStatus: SendStatus,
+  workflow: ChatWorkflowState,
+  behaviorReadiness: BehaviorReadinessDecision,
+): ChatActivityStatus | null {
+  if (sendStatus.kind === "ready") return null;
+
+  switch (sendStatus.reason) {
+    case "composerEmpty":
+      return null;
+    case "clientOffline":
+      return {
+        kind: "blocked",
+        label: "Secure client is offline",
+        detail: sendStatus.hint,
+        animated: false,
+      };
+    case "agentNotSelected":
+      return {
+        kind: "blocked",
+        label: "Select an agent",
+        detail: sendStatus.hint,
+        animated: false,
+      };
+    case "routeNotReady":
+      return {
+        kind: "waiting",
+        label: "Waiting for the secure route…",
+        detail: sendStatus.hint,
+        animated: true,
+      };
+    case "behaviorUnavailable":
+      return behaviorReadiness.kind === "unknown"
+        ? {
+            kind: "waiting",
+            label: "Waiting for the agent runtime…",
+            detail: sendStatus.hint,
+            animated: true,
+          }
+        : {
+            kind: "blocked",
+            label: "Agent is unavailable",
+            detail: sendStatus.hint,
+            animated: false,
+          };
+    case "submittingRequest":
+      return {
+        kind: "syncing",
+        label: "Sending message…",
+        detail: "Creating the request in the secure conversation.",
+        animated: true,
+      };
+    case "waitingForRequestObservation":
+      return {
+        kind: "syncing",
+        label: "Syncing message…",
+        detail:
+          "Your request was created; waiting for it to appear in the shared conversation.",
+        animated: true,
+      };
+    case "conversationMissingFromSnapshot":
+      return {
+        kind: "syncing",
+        label: "Loading conversation…",
+        detail:
+          "Reading local conversation state before another message can be sent.",
+        animated: true,
+      };
+    case "awaitingTurnTerminality": {
+      const turnState =
+        workflow.kind === "turnInProgress" ? workflow.turnState : null;
+      if (turnState === "waitingForClaim") {
+        return {
+          kind: "waiting",
+          label: "Waiting for the agent…",
+          detail: "Your message is queued until the enrolled agent claims it.",
+          animated: true,
+        };
+      }
+      if (turnState === "streaming") {
+        return {
+          kind: "working",
+          label: "Agent is working…",
+          detail: "This turn must finish before another message can be sent.",
+          animated: true,
+        };
+      }
+      return {
+        kind: "syncing",
+        label: "Finishing turn sync…",
+        detail: sendStatus.hint,
+        animated: true,
+      };
+    }
+    case "inconsistentTurnObservation":
+      return {
+        kind: "syncing",
+        label: "Syncing turn status…",
+        detail: "Waiting for local and replicated turn records to agree.",
+        animated: true,
+      };
   }
 }
 
@@ -463,6 +575,11 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     workflow,
     sendStatus,
     nonEmptyContentSendStatus,
+    activityStatus: activityStatusFor(
+      nonEmptyContentSendStatus,
+      workflow,
+      input.behaviorReadiness,
+    ),
     turnState: observedTurnState,
     activeRequestId,
   };

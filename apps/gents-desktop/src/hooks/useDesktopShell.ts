@@ -359,6 +359,7 @@ export function useDesktopShell({
     interruptVisible:
       shellProjection.workflow.kind === "awaitingObservation" ||
       shellProjection.workflow.kind === "turnInProgress",
+    activityStatus: shellProjection.activityStatus,
     sendStatus: shellProjection.sendStatus,
     retryStatus: retryShellProjection.nonEmptyContentSendStatus,
     setSelectedAgentDid: selectAgent,

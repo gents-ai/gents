@@ -42,6 +42,10 @@
     gap: var(--space-5);
   }
 
+  .composer-footer {
+    flex-wrap: wrap;
+  }
+
   .chat-status {
     flex-wrap: wrap;
   }
@@ -191,6 +195,70 @@
   .composer-actions {
     display: flex;
     gap: var(--space-3);
+  }
+
+  .composer-status {
+    display: inline-flex;
+    flex: 1 1 24rem;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    line-height: 1.35;
+  }
+
+  .composer-status-copy {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.1rem var(--space-2);
+    min-width: 0;
+  }
+
+  .composer-status-copy strong {
+    color: var(--color-text-warm);
+    font-weight: 650;
+  }
+
+  .composer-status-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    flex: 0 0 auto;
+    border-radius: var(--radius-pill);
+    background: var(--color-warning);
+  }
+
+  .composer-status.is-working .composer-status-dot {
+    background: var(--color-accent);
+  }
+
+  .composer-status.is-syncing .composer-status-dot {
+    background: var(--color-info);
+  }
+
+  .composer-status.is-blocked .composer-status-dot {
+    background: var(--color-error);
+  }
+
+  .composer-status-dot.is-animated {
+    animation: composer-status-pulse var(--motion-pulse) ease-out infinite;
+  }
+
+  .composer-idle-hint {
+    color: var(--color-text-muted);
+  }
+
+  @keyframes composer-status-pulse {
+    50% {
+      opacity: 0.25;
+      transform: scale(0.75);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .composer-status-dot.is-animated {
+      animation: none;
+    }
   }
 
   .composer-panel {
@@ -424,6 +492,14 @@
     .composer-panel {
       gap: var(--space-3);
       padding: var(--space-3);
+    }
+
+    .composer-status {
+      flex-basis: 100%;
+    }
+
+    .composer-actions {
+      margin-left: auto;
     }
 
     .composer-input {

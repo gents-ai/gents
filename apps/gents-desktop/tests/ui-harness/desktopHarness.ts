@@ -228,7 +228,7 @@ export function createDesktopUiHarness(
     updatedAt: TWO_HOURS_AGO,
     previewText: greeting,
     status: activeTurn ? "processing" : "completed",
-    turnState: activeTurn ? "processing" : "completed",
+    turnState: activeTurn ? "streaming" : "completed",
     latestRequestId: "request-intro",
     latestResponse: {
       status: activeTurn ? "streaming" : "completed",
