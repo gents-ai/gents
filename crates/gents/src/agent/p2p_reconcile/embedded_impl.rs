@@ -1196,9 +1196,6 @@ mod tests {
         wait_for_active_peer(&sender_admin).await;
         wait_for_active_peer(&receiver_admin).await;
 
-        // This is a push-only route. Whole-collection subscriptions would
-        // gossip unfiltered rows before the per-peer replicator is installed,
-        // so the reciprocal replicators below are the only data channels.
         // Receiver-side authorization mirrors the production embedded P2P setup;
         // the data flow asserted below is still sender -> receiver.
         receiver_admin

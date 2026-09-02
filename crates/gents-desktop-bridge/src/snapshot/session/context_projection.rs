@@ -113,7 +113,21 @@ pub(super) fn build_session_context_view(
     let active_provider_messages = if usable_cursor.is_some() {
         provider_messages
     } else {
-        gents::compaction::active_provider_history(provider_messages, total_compacted_messages)
+        match gents::compaction::active_provider_history(
+            provider_messages.clone(),
+            total_compacted_messages,
+        ) {
+            Ok(messages) => messages,
+            Err(error) => {
+                tracing::warn!(
+                    session_id,
+                    total_compacted_messages,
+                    error = %error,
+                    "session context projection retained full provider history because its legacy compaction prefix was invalid"
+                );
+                provider_messages
+            }
+        }
     };
     let summaries = compaction_rows
         .iter()
@@ -143,7 +157,7 @@ pub(super) fn build_session_context_view(
         estimated_conversation_tokens: usize_to_i64(estimated_conversation_tokens),
         context_window: usize_to_i64(context_window),
         compaction_threshold,
-        compaction_threshold_tokens: usize_to_i64(gents::compaction::threshold_budget(
+        compaction_threshold_tokens: usize_to_i64(gents::provider_budget::threshold_budget(
             context_window,
             compaction_threshold,
         )),

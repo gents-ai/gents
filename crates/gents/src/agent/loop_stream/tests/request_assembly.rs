@@ -814,14 +814,59 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
         },
     ];
     let mut new_messages = Vec::new();
-    super::repair_provider_input(&mut history, &mut new_messages);
-    let [Message::Assistant { content, .. }, Message::User { .. }] = history.as_slice() else {
-        panic!("repair must rewrite payloads only, never rows: {history:?}");
+    super::repair_provider_input(&mut history, &mut new_messages).unwrap();
+    let repaired = history
+        .iter()
+        .chain(new_messages.iter())
+        .collect::<Vec<_>>();
+    let [Message::Assistant { content, .. }, Message::User { .. }] = repaired.as_slice() else {
+        panic!("repair must rewrite payloads only, never rows: {repaired:?}");
     };
     let [AssistantContent::ToolCall(tool_call)] = content.as_slice() else {
         panic!("repair dropped the tool call: {content:?}");
     };
     tool_call.function.arguments.clone()
+}
+
+#[test]
+fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
+    let mut history = vec![Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall {
+            id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            function: crate::llm::message::ToolFunction {
+                name: "echo".to_string(),
+                arguments: serde_json::json!({ "text": "bad\nvalue" }),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    }];
+    let mut new_messages = vec![Message::User {
+        content: vec![UserContent::ToolResult(crate::llm::message::ToolResult {
+            id: "call-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            content: vec![ToolResultContent::Text(crate::llm::message::Text {
+                text: "done".to_string(),
+            })],
+        })],
+    }];
+
+    super::repair_provider_input(&mut history, &mut new_messages).unwrap();
+
+    assert!(matches!(history.as_slice(), [Message::Assistant { .. }]));
+    assert!(matches!(new_messages.as_slice(), [Message::User { .. }]));
+    let joined = history
+        .iter()
+        .chain(new_messages.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        crate::compaction::sanitize_history_for_provider(joined.clone()),
+        joined,
+        "repair must retain the closed pair across rig's carrier boundary"
+    );
 }
 
 /// Fences Lean `PromptAssembly.repairArgs` — `repair_is_payload_only` (repair

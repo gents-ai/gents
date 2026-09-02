@@ -3,7 +3,7 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, AdmissionCallContext, CallKind};
-use crate::compaction::{self, Compactor};
+use crate::compaction::{self, ReductionEngine};
 use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
@@ -212,31 +212,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         );
                     }
 
-                    // Drop in the space the count was measured in.
-                    //
-                    // Re-narrowing afterwards is provably free for counts this
-                    // runtime wrote — their boundary is always `pair_safe_boundary`,
-                    // so the drop lands on a turn boundary and the tail is already
-                    // provider-valid (`Compaction.sanitize_drop_noop`). It is not
-                    // free for counts written *before* the pair-safe splitter
-                    // existed: those used an arbitrary budget index and carry no
-                    // version marker, so an upgraded session can drop into the
-                    // middle of a turn. Without this the orphan would reach
-                    // `compact()`, which re-normalizes its input and would then
-                    // record its count in a shifted space — reopening the very
-                    // accounting defect this change closes, for exactly the sessions
-                    // that predate it.
-                    // A proven cursor already excluded the raw compacted prefix at
-                    // query time. Legacy/null cursors retain the old full-load and
-                    // provider-space drop exactly.
-                    let mut history = if prior_cursor.is_some() {
-                        provider_history
-                    } else {
-                        compaction::active_provider_history(
-                            provider_history,
-                            total_compacted_messages,
-                        )
-                    };
+                    let active_history =
+                        compaction_state.apply_to_provider_history(provider_history)?;
+                    let prior_provider_prefix = active_history.prior_provider_prefix;
+                    let mut history = active_history.messages;
                     let mut summaries = compaction_state
                         .summaries
                         .into_iter()
@@ -265,11 +244,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             aggregate_token_budget.clone(),
                         )
                         .await?;
-                    let over_threshold = compaction::input_exceeds_budget(
+                    let reduction_admission = compaction::ReductionAdmission::for_input(
                         complete_input_tokens,
                         self.behavior.context_window,
                         self.behavior.compaction_threshold,
                     );
+                    let over_threshold = reduction_admission.is_some();
                     // Runtime counterpart of Lean `PromptView.safeToReduce`,
                     // resolved at session scope: while any response in this session
                     // is still streaming, a turn is still being written into the
@@ -316,6 +296,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         false
                     };
                     if may_reduce {
+                        let admission = reduction_admission
+                            .expect("may_reduce is true only for an admitted reduction");
                         let mut options = self.compaction_options_for_request(
                             lifecycle.claimed_deadline_at(),
                             aggregate_token_budget.clone(),
@@ -323,78 +305,55 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         );
                         options.keep_recent_tokens = self.compactor.retention_target(
                             options.keep_recent_tokens,
-                            complete_input_tokens,
                             &history,
-                            self.behavior.context_window,
-                            self.behavior.compaction_threshold,
+                            admission,
                         )?;
                         let result = admission::scope_call(
                             CallKind::Compaction,
                             1,
-                            self.compactor.compact(
+                            self.compactor.reduce(
                                 history,
                                 self.behavior.context_window,
                                 &options,
+                                admission,
                             ),
                         )
                         .await?;
 
-                        history = result.messages;
-                        if let Some(summary) = result.summary {
-                            let cumulative_provider_prefix = if prior_cursor.is_some() {
-                                result.messages_compacted as usize
-                            } else {
-                                total_compacted_messages
-                                    .checked_add(result.messages_compacted as usize)
-                                    .ok_or_else(|| {
-                                        anyhow::anyhow!(
-                                            "session compaction provider-prefix count overflow: \
-                                             prior={}, added={}",
-                                            total_compacted_messages,
-                                            result.messages_compacted,
-                                        )
-                                    })?
-                            };
-                            let candidate_cursor =
-                                compaction::compacted_through_sequence(
-                                    &sequenced_history
-                                        .iter()
-                                        .map(|row| (row.sequence, row.message.clone()))
-                                        .collect::<Vec<_>>(),
-                                    cumulative_provider_prefix,
-                                );
-                            let compacted_through_sequence = candidate_cursor.filter(|cursor| {
-                                let suffix = sequenced_history
-                                    .iter()
-                                    .filter(|row| row.sequence > *cursor)
-                                    .map(|row| row.message.clone())
-                                    .collect::<Vec<_>>();
-                                compaction::provider_view(suffix).0 == history
-                            });
-                            if compacted_through_sequence.is_none() {
-                                tracing::warn!(
-                                    request_id = %request.request_id,
-                                    session_id = %request.session_id,
-                                    provider_prefix = cumulative_provider_prefix,
-                                    "compaction succeeded without a provable canonical cursor; future requests will use the legacy full-history projection"
-                                );
-                            }
-                            if compaction_generation_is_latest {
-                                match session::save_compaction_entry_with_requester_did(
+                        history = result.provider_messages()?.to_vec();
+                        if let Some(exact) = result.exact_reduction() {
+                            let summary = exact.checkpoint;
+                            let sequence_rows = sequenced_history
+                                .iter()
+                                .map(|row| (row.sequence, row.message.clone()))
+                                .collect::<Vec<_>>();
+                            let compacted_through_sequence =
+                                compaction::session_cursor_for_reduction(
+                                    &sequence_rows,
+                                    prior_provider_prefix,
+                                    exact,
+                                )?;
+                            if compaction_generation_is_latest
+                                && compacted_through_sequence.is_some()
+                            {
+                                let compacted_through_sequence = compacted_through_sequence
+                                    .expect("the persistence branch requires a proven cursor");
+                                match session::save_exact_compaction_entry(
                                     &self.node,
-                                    &request.session_id,
-                                    &request.agent_did,
-                                    request.requester_did.as_deref(),
-                                    &request.request_id,
-                                    &request.doc_id,
-                                    &summary,
-                                    &result.files_read,
-                                    &result.files_modified,
-                                    result.messages_compacted,
-                                    compacted_through_sequence,
-                                    result.original_token_estimate,
-                                    result.compacted_token_estimate,
-                                    &compaction_generation,
+                                    session::NewExactSessionCompaction {
+                                        session_id: &request.session_id,
+                                        agent_did: &request.agent_did,
+                                        requester_did: request.requester_did.as_deref(),
+                                        request_id: &request.request_id,
+                                        request_doc_id: &request.doc_id,
+                                        files_read: &result.files_read,
+                                        files_modified: &result.files_modified,
+                                        compacted_through_sequence,
+                                        original_tokens: result.original_token_estimate,
+                                        compacted_tokens: result.compacted_token_estimate,
+                                        expected_generation: &compaction_generation,
+                                    },
+                                    exact,
                                 )
                                 .await
                                 {
@@ -418,10 +377,25 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             session_id = %request.session_id,
                                             "compaction generation advanced twice; using the verified request-local compaction without appending it"
                                         );
-                                        summaries.push(compaction::bounded_summary(summary));
+                                        summaries.push(compaction::bounded_summary(summary.to_string()));
                                     }
                                     Err(error) => return Err(error),
                                 }
+                            } else if compacted_through_sequence.is_none() {
+                                // A session checkpoint and its raw transcript
+                                // cursor are one atomic durable fact. If the
+                                // exact provider prefix cannot be denoted in
+                                // raw sequence space, use the reduction only
+                                // for this request and leave the generation
+                                // untouched so a later request can retry.
+                                tracing::warn!(
+                                    request_id = %request.request_id,
+                                    session_id = %request.session_id,
+                                    provider_prefix = prior_provider_prefix
+                                        .saturating_add(exact.compacted_prefix.len()),
+                                    "using non-durable request-local compaction because no canonical session cursor could be proven"
+                                );
+                                summaries.push(compaction::bounded_summary(summary.to_string()));
                             } else {
                                 // A background request may be bound to an older
                                 // compatible transcript/compaction generation. Its
@@ -432,7 +406,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     session_id = %request.session_id,
                                     "using request-local compaction for an older background snapshot"
                                 );
-                                summaries.push(compaction::bounded_summary(summary));
+                                summaries.push(compaction::bounded_summary(summary.to_string()));
                             }
                         }
 
@@ -701,11 +675,14 @@ mod budget_contract_tests {
             // bypassed.
             let threshold = case.threshold_basis_points as f64 / 10_000.0;
             // Drive the production helper, not a formula duplicated here.
-            let configured = crate::compaction::threshold_budget(case.context_window, threshold);
-            let effective =
-                crate::compaction::effective_input_budget(case.context_window, threshold);
+            let configured =
+                crate::provider_input::budget::threshold_budget(case.context_window, threshold);
+            let effective = crate::provider_input::budget::effective_input_budget(
+                case.context_window,
+                threshold,
+            );
             let input_tokens = case.prompt_tokens.saturating_add(case.request_tokens);
-            let effective_output = crate::compaction::effective_output_budget(
+            let effective_output = crate::provider_input::budget::effective_output_budget(
                 input_tokens,
                 case.context_window,
                 case.max_output_tokens,
@@ -733,7 +710,7 @@ mod budget_contract_tests {
                 case.name
             );
             assert_eq!(
-                crate::compaction::can_dispatch(
+                crate::provider_input::budget::can_dispatch(
                     input_tokens,
                     case.context_window,
                     case.max_output_tokens,
@@ -743,11 +720,12 @@ mod budget_contract_tests {
                 case.name
             );
             assert_eq!(
-                crate::compaction::input_exceeds_budget(
+                crate::compaction::ReductionAdmission::for_input(
                     input_tokens,
                     case.context_window,
                     threshold,
-                ),
+                )
+                .is_some(),
                 case.should_compact,
                 "{}: production compaction trigger drifted from Lean",
                 case.name

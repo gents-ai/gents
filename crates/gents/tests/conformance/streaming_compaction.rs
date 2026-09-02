@@ -1213,7 +1213,8 @@ fn generated_compaction_cursor_cases_pin_contract() {
             );
             assert_eq!(
                 filtered,
-                gents::compaction::active_provider_history(full, case.compacted),
+                gents::compaction::active_provider_history(full, case.compacted)
+                    .expect("Lean cursor witness has a valid provider prefix"),
                 "{}: cursor query must equal full-load-plus-drop",
                 case.name
             );

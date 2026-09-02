@@ -14,15 +14,12 @@ private def boolArray (values : List Bool) : String :=
 def rollingCompactionCaseJson (witness : RollingCompactionCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"before_cursor\":" ++ toString witness.beforeCursor ++ ","
     ++ "\"target_messages\":" ++ toString witness.targetMessages ++ ","
     ++ "\"chunk_messages\":" ++ natArray witness.chunkMessages ++ ","
     ++ "\"chunk_pair_closed\":" ++ boolArray witness.chunkPairClosed ++ ","
     ++ "\"chunk_can_dispatch\":" ++ boolArray witness.chunkCanDispatch ++ ","
     ++ "\"checkpoint_covered\":" ++ toString witness.checkpointCovered ++ ","
-    ++ "\"completed\":" ++ boolString witness.completed ++ ","
     ++ "\"plan_valid\":" ++ boolString witness.planValid ++ ","
-    ++ "\"cursor_after\":" ++ toString witness.cursorAfter ++ ","
     ++ "\"prior_payload\":" ++ jsonOptionalNat witness.priorPayload ++ ","
     ++ "\"next_chunk\":" ++ natArray witness.nextChunk ++ ","
     ++ "\"step_input\":" ++ natArray witness.stepInput

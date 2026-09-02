@@ -5,6 +5,24 @@ use crate::test_support::first_content;
 use gents_protocol::transcript::decode_persisted_message;
 
 #[test]
+fn prompt_compaction_state_rejects_an_impossible_provider_prefix() {
+    let state = PromptCompactionState {
+        summaries: Vec::new(),
+        total_messages_compacted: 2,
+        compacted_through_sequence: None,
+        generation: String::new(),
+        is_latest_generation: true,
+    };
+    let error = state
+        .apply_to_provider_history(vec![Message::user("only active row")])
+        .err()
+        .expect("an overlong durable prefix must fail closed");
+    assert!(error
+        .to_string()
+        .contains("session compaction prefix exceeds the canonical provider history"));
+}
+
+#[test]
 fn test_load_history_deserializes_plain_text() {
     let user_msg = Message::User {
         content: vec![UserContent::Text(Text {

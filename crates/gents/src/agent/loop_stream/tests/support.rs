@@ -22,6 +22,8 @@ pub(super) struct ScriptedModel {
     seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
     /// Effective per-turn output caps after the provider-input budget clamp.
     seen_max_tokens: Arc<Mutex<Vec<Option<u64>>>>,
+    /// Exact request snapshots consumed by the mock transport.
+    seen_requests: Arc<Mutex<Vec<CompletionRequest>>>,
     /// When set, every turn's stream yields its scripted chunks then hangs
     /// (never reaches EOF), simulating a provider that stalls mid-turn.
     stall_after_chunks: bool,
@@ -42,6 +44,7 @@ impl ScriptedModel {
             seen_histories: Arc::new(Mutex::new(Vec::new())),
             seen_tools: Arc::new(Mutex::new(Vec::new())),
             seen_max_tokens: Arc::new(Mutex::new(Vec::new())),
+            seen_requests: Arc::new(Mutex::new(Vec::new())),
             stall_after_chunks: false,
         }
     }
@@ -63,6 +66,10 @@ impl ScriptedModel {
 
     pub(super) async fn seen_max_tokens(&self) -> Vec<Option<u64>> {
         self.seen_max_tokens.lock().await.clone()
+    }
+
+    pub(super) async fn seen_requests(&self) -> Vec<CompletionRequest> {
+        self.seen_requests.lock().await.clone()
     }
 }
 
@@ -87,23 +94,21 @@ impl CompletionModel for ScriptedModel {
 
     async fn stream(
         &self,
-        _request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        self.seen_requests.lock().await.push(request.clone());
         self.seen_histories.lock().await.push(
-            _request
+            request
                 .chat_history
                 .iter()
                 .map(crate::llm::rig_compat::from_rig_message)
                 .collect(),
         );
-        self.seen_tools.lock().await.push(
-            _request
-                .tools
-                .iter()
-                .map(|tool| tool.name.clone())
-                .collect(),
-        );
-        self.seen_max_tokens.lock().await.push(_request.max_tokens);
+        self.seen_tools
+            .lock()
+            .await
+            .push(request.tools.iter().map(|tool| tool.name.clone()).collect());
+        self.seen_max_tokens.lock().await.push(request.max_tokens);
         let call = self
             .calls
             .lock()

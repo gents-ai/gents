@@ -17,8 +17,13 @@ use summary::{
     compaction_request_prompt, format_summary, parse_fallback_checkpoint, ContinuationCheckpoint,
 };
 
+use crate::provider_input::budget::{
+    compaction_retention_target, configured_output_ceiling, rolling_summary_input_budget,
+    summary_output_ceiling, threshold_decision, ThresholdDecision,
+};
+
 #[derive(Debug, thiserror::Error)]
-pub enum CompactionError {
+pub(crate) enum ReductionError {
     #[error("compaction_deadline_elapsed_before_summary_dispatch")]
     DeadlineElapsed,
     #[error(
@@ -38,19 +43,8 @@ pub enum CompactionError {
     ExactCountOverflow { field: &'static str, value: usize },
     #[error("compaction_invalid_rolling_plan")]
     InvalidRollingPlan,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum ContextBudgetError {
-    #[error(
-        "provider_input_has_no_output_capacity: estimated_input_tokens={estimated_input_tokens}, \
-         context_window={context_window}, effective_max_output_tokens={effective_max_output_tokens}"
-    )]
-    NoOutputCapacity {
-        estimated_input_tokens: usize,
-        context_window: usize,
-        effective_max_output_tokens: usize,
-    },
+    #[error("compaction_cannot_fit_provider_visible_history")]
+    CannotFit,
 }
 
 pub(crate) fn rolling_plan_is_valid(
@@ -78,25 +72,21 @@ pub(crate) fn rolling_step_input<T>(prior_checkpoint: Option<T>, chunk: Vec<T>) 
 }
 
 #[derive(Debug, Clone)]
-pub struct CompactionOptions {
-    pub threshold: f64,
-    pub tool_result_max_chars: usize,
-    pub keep_recent_tokens: usize,
-    pub strategy: CompactionStrategy,
+pub(crate) struct ReductionOptions {
+    pub(crate) tool_result_max_chars: usize,
+    pub(crate) keep_recent_tokens: usize,
+    pub(crate) mode: ReductionMode,
     /// Output budget for the internal summary completion. Deliberately
     /// independent of the user turn's max_output_tokens (#1017).
-    pub summary_max_output_tokens: usize,
+    pub(crate) summary_max_output_tokens: usize,
     /// Most file paths rendered per list in the formatted summary.
-    pub summary_file_list_max: usize,
-    /// The caller has already established that the complete provider input is
-    /// over budget. Skip the history-only threshold recheck and summarize.
-    pub force_summarize: bool,
+    pub(crate) summary_file_list_max: usize,
     /// The claimed deadline of the request this compaction serves. The
     /// compactor's stored config is daemon-lifetime and carries no deadline,
     /// so this is the only path by which the internal retry ladder's
     /// deadline fail-fast can engage (#1016); `None` leaves recovery bounded
     /// only by the ladder itself.
-    pub deadline: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) deadline: Option<chrono::DateTime<chrono::Utc>>,
     /// Request-scoped provider budget shared with the outer owned loop. This
     /// is crate-private because callers cannot safely mint or replace it.
     pub(crate) aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
@@ -104,20 +94,120 @@ pub struct CompactionOptions {
     pub(crate) sampling_seed: Option<i64>,
 }
 
-impl Default for CompactionOptions {
+impl Default for ReductionOptions {
     fn default() -> Self {
         Self {
-            threshold: 0.75,
             tool_result_max_chars: 2000,
             keep_recent_tokens: 20000,
-            strategy: CompactionStrategy::StripThenSummarize,
+            mode: ReductionMode::Summarize,
             summary_max_output_tokens: crate::config::DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
             summary_file_list_max: crate::config::DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX,
-            force_summarize: false,
             deadline: None,
             aggregate_token_budget: None,
             sampling_seed: None,
         }
+    }
+}
+
+/// Proof-carrying admission for the input-driven threshold gate. The reducer
+/// cannot be called from production without a value constructed by the one
+/// equality-sensitive decision owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReductionAdmission {
+    input_tokens: usize,
+    effective_input_budget: usize,
+    threshold_decision: ThresholdDecision,
+}
+
+impl ReductionAdmission {
+    pub(crate) fn for_input(
+        input_tokens: usize,
+        context_window: usize,
+        threshold: f64,
+    ) -> Option<Self> {
+        let effective_input_budget =
+            crate::provider_input::budget::effective_input_budget(context_window, threshold);
+        matches!(
+            threshold_decision(input_tokens, effective_input_budget),
+            ThresholdDecision::ReduceEligible
+        )
+        .then_some(Self {
+            input_tokens,
+            effective_input_budget,
+            threshold_decision: ThresholdDecision::ReduceEligible,
+        })
+    }
+
+    fn decision<C>(self, can_fit: bool, prefix_len: usize, checkpoint: C) -> ReductionDecision<C> {
+        reduction_decision(self.threshold_decision, can_fit, prefix_len, checkpoint)
+    }
+
+    pub(crate) fn input_tokens(self) -> usize {
+        self.input_tokens
+    }
+
+    pub(crate) fn effective_input_budget(self) -> usize {
+        self.effective_input_budget
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReductionDecision<C> {
+    NotNeeded,
+    CannotFit,
+    Reduce { prefix_len: usize, checkpoint: C },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReductionOutcome<T, C> {
+    NotNeeded {
+        messages: Vec<T>,
+    },
+    CannotFit,
+    Reduced {
+        compacted_prefix: Vec<T>,
+        retained_suffix: Vec<T>,
+        checkpoint: C,
+    },
+}
+
+pub(crate) fn reduction_decision<C>(
+    threshold: ThresholdDecision,
+    can_fit: bool,
+    prefix_len: usize,
+    checkpoint: C,
+) -> ReductionDecision<C> {
+    match threshold {
+        ThresholdDecision::NotNeeded => ReductionDecision::NotNeeded,
+        ThresholdDecision::ReduceEligible if can_fit => ReductionDecision::Reduce {
+            prefix_len,
+            checkpoint,
+        },
+        ThresholdDecision::ReduceEligible => ReductionDecision::CannotFit,
+    }
+}
+
+/// Apply a scope-independent reduction decision exactly once. Invalid or empty
+/// prefixes fail closed instead of being clamped into a different boundary.
+pub(crate) fn apply_reduction_decision<T, C>(
+    mut source: Vec<T>,
+    decision: ReductionDecision<C>,
+) -> ReductionOutcome<T, C> {
+    match decision {
+        ReductionDecision::NotNeeded => ReductionOutcome::NotNeeded { messages: source },
+        ReductionDecision::CannotFit => ReductionOutcome::CannotFit,
+        ReductionDecision::Reduce {
+            prefix_len,
+            checkpoint,
+        } if prefix_len > 0 && prefix_len <= source.len() => {
+            let retained_suffix = source.split_off(prefix_len);
+            ReductionOutcome::Reduced {
+                compacted_prefix: source,
+                retained_suffix,
+                checkpoint,
+            }
+        }
+        ReductionDecision::Reduce { .. } => ReductionOutcome::CannotFit,
     }
 }
 
@@ -126,6 +216,15 @@ pub enum CompactionStrategy {
     StripToolResults,
     Summarize,
     StripThenSummarize,
+}
+
+/// Canonical runtime behavior after accepting the durable configuration
+/// vocabulary. `Summarize` and `StripThenSummarize` remain valid external
+/// spellings, but they do not survive as duplicate branches in the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReductionMode {
+    StripOnly,
+    Summarize,
 }
 
 impl Default for CompactionStrategy {
@@ -140,6 +239,13 @@ impl CompactionStrategy {
             Self::StripToolResults => "StripToolResults",
             Self::Summarize => "Summarize",
             Self::StripThenSummarize => "StripThenSummarize",
+        }
+    }
+
+    pub(crate) const fn reduction_mode(&self) -> ReductionMode {
+        match self {
+            Self::StripToolResults => ReductionMode::StripOnly,
+            Self::Summarize | Self::StripThenSummarize => ReductionMode::Summarize,
         }
     }
 }
@@ -157,33 +263,121 @@ impl FileActivity {
 }
 
 #[derive(Debug, Clone)]
-pub struct CompactionResult {
-    pub messages: Vec<Message>,
-    pub summary: Option<String>,
+pub(crate) struct ReductionResult {
+    state: ReductionResultState,
     pub original_token_estimate: usize,
     pub compacted_token_estimate: usize,
     pub files_read: Vec<String>,
     pub files_modified: Vec<String>,
-    pub messages_compacted: u32,
 }
 
-pub trait Compactor: Send + Sync {
-    fn compact(
+/// Provider-view repair precedes the formal threshold/reduction decision and
+/// carries no durable checkpoint. Keeping it outside `ReductionOutcome`
+/// prevents an admitted reduction from fabricating the model's `NotNeeded`
+/// decision while still allowing tool-result stripping to rescue a request.
+#[derive(Debug, Clone)]
+enum ReductionResultState {
+    ProviderViewRepaired { messages: Vec<Message> },
+    Decided(ReductionOutcome<Message, String>),
+}
+
+impl ReductionResult {
+    pub(crate) fn provider_messages(&self) -> Result<&[Message]> {
+        match &self.state {
+            ReductionResultState::ProviderViewRepaired { messages } => Ok(messages),
+            ReductionResultState::Decided(outcome) => match outcome {
+                ReductionOutcome::NotNeeded { messages } => Ok(messages),
+                ReductionOutcome::Reduced {
+                    retained_suffix, ..
+                } => Ok(retained_suffix),
+                ReductionOutcome::CannotFit => Err(ReductionError::CannotFit.into()),
+            },
+        }
+    }
+
+    pub(crate) fn exact_reduction(&self) -> Option<ExactReduction<'_>> {
+        match &self.state {
+            ReductionResultState::Decided(ReductionOutcome::Reduced {
+                compacted_prefix,
+                retained_suffix,
+                checkpoint,
+            }) => Some(ExactReduction {
+                compacted_prefix,
+                retained_suffix,
+                checkpoint,
+            }),
+            ReductionResultState::ProviderViewRepaired { .. }
+            | ReductionResultState::Decided(
+                ReductionOutcome::NotNeeded { .. } | ReductionOutcome::CannotFit,
+            ) => None,
+        }
+    }
+
+    pub(crate) fn cannot_fit(&self) -> bool {
+        matches!(
+            self.state,
+            ReductionResultState::Decided(ReductionOutcome::CannotFit)
+        )
+    }
+}
+
+impl ReductionResultState {
+    fn decided(outcome: ReductionOutcome<Message, String>) -> Self {
+        Self::Decided(outcome)
+    }
+
+    fn provider_view_repaired(messages: Vec<Message>) -> Self {
+        Self::ProviderViewRepaired { messages }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ExactReduction<'a> {
+    pub(crate) compacted_prefix: &'a [Message],
+    pub(crate) retained_suffix: &'a [Message],
+    pub(crate) checkpoint: &'a str,
+}
+
+impl ExactReduction<'_> {
+    pub(crate) fn messages_compacted(&self) -> Result<u32> {
+        u32::try_from(self.compacted_prefix.len()).map_err(|_| {
+            ReductionError::ExactCountOverflow {
+                field: "messages_compacted",
+                value: self.compacted_prefix.len(),
+            }
+            .into()
+        })
+    }
+
+    pub(crate) fn checkpoint_messages(&self) -> Vec<Message> {
+        let mut messages = crate::prompt::compaction_summary_message(std::slice::from_ref(
+            &self.checkpoint.trim().to_string(),
+        ))
+        .into_iter()
+        .collect::<Vec<_>>();
+        messages.extend_from_slice(self.retained_suffix);
+        messages
+    }
+}
+
+pub(crate) trait ReductionEngine: Send + Sync {
+    fn reduce(
         &self,
         messages: Vec<Message>,
         context_window: usize,
-        options: &CompactionOptions,
-    ) -> impl std::future::Future<Output = Result<CompactionResult>> + Send;
+        options: &ReductionOptions,
+        admission: ReductionAdmission,
+    ) -> impl std::future::Future<Output = Result<ReductionResult>> + Send;
 }
 
 #[derive(Clone)]
-pub struct DefraCompactor<M: CompletionModel> {
+pub(crate) struct ProviderReductionEngine<M: CompletionModel> {
     model: Arc<M>,
     config: crate::agent::loop_stream::LoopConfig,
     now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
 }
 
-impl<M: CompletionModel> DefraCompactor<M> {
+impl<M: CompletionModel> ProviderReductionEngine<M> {
     pub(crate) fn new(model: Arc<M>, mut config: crate::agent::loop_stream::LoopConfig) -> Self {
         // Compaction is an internal, non-persisting sub-completion, not a user
         // execution origin; it must not inherit the parent's retry ladder (which
@@ -205,20 +399,20 @@ impl<M: CompletionModel> DefraCompactor<M> {
     pub(crate) fn retention_target(
         &self,
         configured_keep_recent: usize,
-        complete_input_tokens: usize,
         compactable_messages: &[Message],
-        context_window: usize,
-        threshold: f64,
+        admission: ReductionAdmission,
     ) -> Result<usize> {
         let compactable_input_tokens = self
             .config
             .provider_input_counter
             .estimate_message_request(compactable_messages)
             .context("projecting compactable provider messages")?;
-        let fixed_input_tokens = complete_input_tokens.saturating_sub(compactable_input_tokens);
+        let fixed_input_tokens = admission
+            .input_tokens()
+            .saturating_sub(compactable_input_tokens);
         Ok(compaction_retention_target(
             configured_keep_recent,
-            effective_input_budget(context_window, threshold),
+            admission.effective_input_budget(),
             fixed_input_tokens,
         ))
     }
@@ -233,73 +427,37 @@ impl<M: CompletionModel> DefraCompactor<M> {
     }
 }
 
-impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
-    async fn compact(
+impl<M: CompletionModel + 'static> ReductionEngine for ProviderReductionEngine<M> {
+    async fn reduce(
         &self,
         messages: Vec<Message>,
         context_window: usize,
-        options: &CompactionOptions,
-    ) -> Result<CompactionResult> {
+        options: &ReductionOptions,
+        admission: ReductionAdmission,
+    ) -> Result<ReductionResult> {
         let counter = self.config.provider_input_counter.as_ref();
         let original_token_estimate = counter
             .estimate_message_request(&messages)
             .context("projecting original compaction input")?;
 
-        // Normalize to the canonical provider view so `messages_compacted`
-        // indexes the same list `drop_compacted_prefix` will later index,
-        // whoever the caller is. Idempotent, so this is a no-op when the caller
-        // already passed a provider view — which the daemon always does.
-        //
-        // This makes `CompactionStrategy::Summarize` and `StripThenSummarize`
-        // behave identically. They already did on the daemon path, which strips
-        // unconditionally before calling here; the variant is retained for
-        // config compatibility.
-        let row_count = messages.len();
+        // Narrow once to the canonical provider view. Every downstream split,
+        // checkpoint, durable count, and returned suffix is expressed in this
+        // one coordinate system; callers never reconstruct it from a scalar.
         let (stripped_messages, stripped_activity) = provider_view(messages);
-
-        // `messages_compacted` is an *index* into this list, so normalization
-        // removing rows means the caller did not hand us a provider view and any
-        // count taken here would be measured in a shifted space — silently
-        // dropping rows the reader never summarized. Refuse loudly instead.
-        //
-        // For a provider view this is unreachable
-        // (`Compaction.providerView_idempotent`). It is a real guard for legacy
-        // compaction entries whose boundary predates the pair-safe splitter, and
-        // for any future caller passing a raw transcript.
-        let normalization_removed_rows = stripped_messages.len() != row_count;
-        if normalization_removed_rows {
-            tracing::warn!(
-                row_count,
-                normalized_count = stripped_messages.len(),
-                "compaction skipped: input was not a provider view, so a compacted-prefix \
-                 count taken here would not name the rows the next request drops"
-            );
-        }
 
         let stripped_token_estimate = counter
             .estimate_message_request(&stripped_messages)
             .context("projecting normalized compaction input")?;
-        // `normalization_removed_rows` stays the outermost refusal: it means any
-        // count taken here would be measured in a shifted space, which
-        // `force_summarize` must not override — the caller established that the
-        // input is over budget, not that the row indices are trustworthy.
-        if normalization_removed_rows
-            || matches!(options.strategy, CompactionStrategy::StripToolResults)
-            || (!options.force_summarize
-                && !input_exceeds_budget(
-                    stripped_token_estimate,
-                    context_window,
-                    options.threshold,
-                ))
-        {
-            return Ok(CompactionResult {
-                messages: stripped_messages,
-                summary: None,
+        // Admission owns the complete provider-input threshold decision. The
+        // reducer receives only eligible work and never rechecks a narrower
+        // history-only estimate.
+        if matches!(options.mode, ReductionMode::StripOnly) {
+            return Ok(ReductionResult {
+                state: ReductionResultState::provider_view_repaired(stripped_messages),
                 original_token_estimate,
                 compacted_token_estimate: stripped_token_estimate,
                 files_read: stripped_activity.files_read,
                 files_modified: stripped_activity.files_modified,
-                messages_compacted: 0,
             });
         }
 
@@ -309,14 +467,25 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             counter,
         )?;
         if old_messages.is_empty() {
-            return Ok(CompactionResult {
-                messages: stripped_messages,
-                summary: None,
+            // Provider-view stripping is itself a useful non-durable repair.
+            // The caller rebuilds and projects the complete request before it
+            // decides whether that repair satisfied the threshold. If the
+            // provider-visible estimate did not improve, the indivisible
+            // canonical view cannot fit this admitted reduction.
+            let state = if stripped_token_estimate < original_token_estimate {
+                ReductionResultState::provider_view_repaired(stripped_messages)
+            } else {
+                ReductionResultState::decided(apply_reduction_decision(
+                    stripped_messages,
+                    admission.decision(false, 0, String::new()),
+                ))
+            };
+            return Ok(ReductionResult {
+                state,
                 original_token_estimate,
                 compacted_token_estimate: stripped_token_estimate,
                 files_read: stripped_activity.files_read,
                 files_modified: stripped_activity.files_modified,
-                messages_compacted: 0,
             });
         }
 
@@ -376,7 +545,7 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             // attempt here as well: a prior chunk may have consumed the shared
             // request deadline while producing a valid checkpoint.
             if deadline_elapsed(summary_config.deadline, self.now.as_ref()) {
-                return Err(CompactionError::DeadlineElapsed.into());
+                return Err(ReductionError::DeadlineElapsed.into());
             }
             let remaining = &old_messages[consumed..];
             let (chunk_len, chunk_input_tokens) = largest_fitting_summary_chunk(
@@ -409,13 +578,13 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             consumed =
                 consumed
                     .checked_add(chunk_len)
-                    .ok_or(CompactionError::ExactCountOverflow {
+                    .ok_or(ReductionError::ExactCountOverflow {
                         field: "messages_compacted",
                         value: old_messages.len(),
                     })?;
             chunk_messages.push(chunk_len);
             chunk_pair_closed.push(pair_closed);
-            chunk_can_dispatch.push(crate::compaction::can_dispatch(
+            chunk_can_dispatch.push(crate::provider_input::budget::can_dispatch(
                 chunk_input_tokens,
                 context_window,
                 configured_output,
@@ -435,7 +604,13 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             )));
         }
 
-        let summary = rolling_summary.expect("non-empty old prefix produces a checkpoint");
+        let summary = rolling_summary
+            .expect("non-empty old prefix produces a checkpoint")
+            .trim()
+            .to_string();
+        if summary.is_empty() {
+            return Err(ReductionError::InvalidRollingPlan.into());
+        }
         if !rolling_plan_is_valid(
             old_messages.len(),
             &chunk_messages,
@@ -443,7 +618,7 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             &chunk_can_dispatch,
             consumed,
         ) {
-            return Err(CompactionError::InvalidRollingPlan.into());
+            return Err(ReductionError::InvalidRollingPlan.into());
         }
         let mut compacted_projection =
             crate::prompt::compaction_summary_message(std::slice::from_ref(&summary))
@@ -453,19 +628,24 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         let compacted_token_estimate = counter
             .estimate_message_request(&compacted_projection)
             .context("projecting final compacted provider input")?;
-        let messages_compacted =
-            u32::try_from(old_messages.len()).map_err(|_| CompactionError::ExactCountOverflow {
-                field: "messages_compacted",
-                value: old_messages.len(),
-            })?;
-        Ok(CompactionResult {
-            messages: recent_messages,
-            summary: Some(summary),
+        let prefix_len = old_messages.len();
+        u32::try_from(prefix_len).map_err(|_| ReductionError::ExactCountOverflow {
+            field: "messages_compacted",
+            value: prefix_len,
+        })?;
+        let outcome = apply_reduction_decision(
+            stripped_messages,
+            admission.decision(true, prefix_len, summary),
+        );
+        if matches!(outcome, ReductionOutcome::CannotFit) {
+            return Err(ReductionError::InvalidRollingPlan.into());
+        }
+        Ok(ReductionResult {
+            state: ReductionResultState::decided(outcome),
             original_token_estimate,
             compacted_token_estimate,
             files_read,
             files_modified,
-            messages_compacted,
         })
     }
 }
@@ -475,7 +655,7 @@ async fn largest_fitting_summary_chunk<M: CompletionModel>(
     remaining: &[Message],
     prior_summary: Option<&str>,
     summary_config: &crate::agent::loop_stream::LoopConfig,
-    options: &CompactionOptions,
+    options: &ReductionOptions,
     absolute_start: usize,
     context_window: usize,
 ) -> Result<(usize, usize)> {
@@ -487,12 +667,12 @@ async fn largest_fitting_summary_chunk<M: CompletionModel>(
             summary_candidate_tokens(model, remaining, prior_summary, summary_config, options)
                 .await?;
         let absolute_end = absolute_start.checked_add(remaining.len()).ok_or(
-            CompactionError::ExactCountOverflow {
+            ReductionError::ExactCountOverflow {
                 field: "indivisible_unit_end",
                 value: absolute_start,
             },
         )?;
-        return Err(CompactionError::IndivisibleUnitCannotFit {
+        return Err(ReductionError::IndivisibleUnitCannotFit {
             start: absolute_start,
             end: absolute_end,
             estimated_input_tokens,
@@ -524,7 +704,11 @@ async fn largest_fitting_summary_chunk<M: CompletionModel>(
         // coexist with input. The owned loop still applies the dynamic output
         // clamp immediately before dispatch.
         if estimate <= input_budget
-            && crate::compaction::can_dispatch(estimate, context_window, configured_output)
+            && crate::provider_input::budget::can_dispatch(
+                estimate,
+                context_window,
+                configured_output,
+            )
         {
             best = Some((boundary, estimate));
             low = middle + 1;
@@ -548,11 +732,11 @@ async fn largest_fitting_summary_chunk<M: CompletionModel>(
     let absolute_end =
         absolute_start
             .checked_add(first_boundary)
-            .ok_or(CompactionError::ExactCountOverflow {
+            .ok_or(ReductionError::ExactCountOverflow {
                 field: "indivisible_unit_end",
                 value: absolute_start,
             })?;
-    Err(CompactionError::IndivisibleUnitCannotFit {
+    Err(ReductionError::IndivisibleUnitCannotFit {
         start: absolute_start,
         end: absolute_end,
         estimated_input_tokens,
@@ -568,7 +752,7 @@ async fn summary_candidate_tokens<M: CompletionModel>(
     chunk: &[Message],
     prior_summary: Option<&str>,
     summary_config: &crate::agent::loop_stream::LoopConfig,
-    options: &CompactionOptions,
+    options: &ReductionOptions,
 ) -> Result<usize> {
     let prepared_chunk = pretruncate_tool_results(chunk.to_vec(), options.tool_result_max_chars);
     let prior_checkpoint = prior_summary.and_then(|summary| {
@@ -601,7 +785,7 @@ async fn summarize_checkpoint<M: CompletionModel + 'static>(
     // Candidate construction is asynchronous. Re-check at the actual owned
     // loop boundary so expiry during projection cannot leak one provider call.
     if deadline_elapsed(summary_config.deadline, now.as_ref()) {
-        return Err(CompactionError::DeadlineElapsed.into());
+        return Err(ReductionError::DeadlineElapsed.into());
     }
     let guided_result = crate::agent::loop_stream::run_loop_to_typed(
         model.clone(),
@@ -723,7 +907,7 @@ pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
 /// another was defect 3 of #993.
 ///
 /// Modelled as `Compaction.providerView`, proven idempotent by
-/// `Compaction.providerView_idempotent` — which is what lets [`Compactor::compact`]
+/// `Compaction.providerView_idempotent` — which is what lets [`ReductionEngine::reduce`]
 /// re-normalize its own input for free.
 pub fn provider_view(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
     let (stripped, activity) = strip_tool_results(messages);
@@ -756,10 +940,15 @@ fn provider_view_with_sources(
 pub fn active_provider_history(
     mut provider_history: Vec<Message>,
     compacted_messages: usize,
-) -> Vec<Message> {
-    let drain_count = compacted_messages.min(provider_history.len());
-    provider_history.drain(..drain_count);
-    sanitize_history_for_provider(provider_history)
+) -> Result<Vec<Message>> {
+    anyhow::ensure!(
+        compacted_messages <= provider_history.len(),
+        "session compaction prefix exceeds the canonical provider history: compacted={}, available={}",
+        compacted_messages,
+        provider_history.len()
+    );
+    let active = provider_history.split_off(compacted_messages);
+    Ok(sanitize_history_for_provider(active))
 }
 
 /// Find the inclusive canonical message cursor that denotes a provider-view
@@ -812,8 +1001,49 @@ pub fn compacted_through_sequence(
     }
 }
 
+/// Resolve the session-specific raw cursor for one exact provider reduction.
+/// Persistence-specific prefix offsets are contained here; request assembly
+/// and the shared reducer deal only in canonical provider views.
+pub(crate) fn session_cursor_for_reduction(
+    rows: &[(u32, Message)],
+    prior_provider_prefix: usize,
+    reduction: ExactReduction<'_>,
+) -> Result<Option<u32>> {
+    let durable_messages = rows
+        .iter()
+        .map(|(_, message)| message.clone())
+        .collect::<Vec<_>>();
+    let mut full_provider_view = provider_view(durable_messages).0;
+    anyhow::ensure!(
+        prior_provider_prefix <= full_provider_view.len(),
+        "session compaction prefix exceeds the canonical provider history"
+    );
+    let active = sanitize_history_for_provider(full_provider_view.split_off(prior_provider_prefix));
+    anyhow::ensure!(
+        reduction
+            .compacted_prefix
+            .iter()
+            .chain(reduction.retained_suffix.iter())
+            .eq(active.iter()),
+        "exact reduction does not partition the active session provider view"
+    );
+
+    let cumulative_prefix = prior_provider_prefix
+        .checked_add(reduction.compacted_prefix.len())
+        .context("session compaction provider-prefix count overflow")?;
+    let candidate = compacted_through_sequence(rows, cumulative_prefix);
+    Ok(candidate.filter(|cursor| {
+        let suffix = rows
+            .iter()
+            .filter(|(sequence, _)| sequence > cursor)
+            .map(|(_, message)| message.clone())
+            .collect::<Vec<_>>();
+        provider_view(suffix).0 == reduction.retained_suffix
+    }))
+}
+
 /// Greatest `j <= limit` at which no tool call is awaiting its result — the
-/// index [`Compactor::compact`] retreats its token-budget split to.
+/// index [`ReductionEngine::reduce`] retreats its token-budget split to.
 ///
 /// Re-exported so the generated conformance cases can check the production
 /// boundary against `Compaction.pairSafeBoundary`.
@@ -821,7 +1051,7 @@ pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
     history::pair_safe_boundary(messages, limit)
 }
 
-/// The real split [`Compactor::compact`] performs: everything before the
+/// The real split [`ReductionEngine::reduce`] performs: everything before the
 /// boundary is summarized, everything from it is retained.
 ///
 /// Exported so the generated conformance cases can sweep budgets against the
@@ -965,126 +1195,4 @@ pub fn bounded_summary(summary: String) -> String {
         &crate::truncation::TruncationLimits::default(),
     );
     bounded
-}
-
-/// A fractional threshold as integer basis points.
-///
-/// The configuration surface carries the threshold as `f64` (CLI, desired
-/// state, schema), but the *budget* must not be computed in floating point:
-/// `(context_window as f64 * threshold) as usize` truncates, and disagrees with
-/// exact integer division for thresholds that are not exactly representable in
-/// binary. 57% of 10,000 yields 5,699 that way rather than 5,700 (#1008).
-///
-/// Rounding recovers the intended basis points — `0.57 * 10_000` is
-/// `5699.999999999999`, which rounds back to `5700` — so this is exact for any
-/// threshold that originated as a percentage or basis-point value.
-pub fn threshold_basis_points(threshold: f64) -> u64 {
-    if !threshold.is_finite() || threshold <= 0.0 {
-        return 0;
-    }
-    (threshold * 10_000.0).round().min(10_000.0) as u64
-}
-
-/// Tokens a fractional threshold allows within a context window, in exact
-/// integer arithmetic. Mirrors Lean `PromptAssembly.Budget.configuredThresholdBudget`.
-pub fn threshold_budget(context_window: usize, threshold: f64) -> usize {
-    let basis_points = u128::from(threshold_basis_points(threshold));
-    ((context_window as u128 * basis_points) / 10_000) as usize
-}
-
-/// Provider input available before compaction. The configured output value is
-/// a ceiling, not a reservation: each completion dispatch clamps that ceiling
-/// with [`effective_output_budget`]. Mirrors Lean
-/// `PromptAssembly.Budget.effectiveInputBudget`.
-pub fn effective_input_budget(context_window: usize, threshold: f64) -> usize {
-    threshold_budget(context_window, threshold).min(context_window)
-}
-
-/// Preserve one interpretation of an optional provider output ceiling across
-/// pointer widths. `None` retains the historical provider-unbounded meaning;
-/// the owned dispatch path always replaces it with an explicit dynamic clamp.
-pub(crate) fn configured_output_ceiling(max_tokens: Option<u64>) -> usize {
-    max_tokens
-        .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
-        .unwrap_or(usize::MAX)
-}
-
-/// Recent-message retention target after fixed provider layers. One quarter
-/// of the remaining message budget is reserved for the generated checkpoint
-/// and projection drift. Mirrors Lean
-/// `PromptAssembly.Budget.compactionRetentionTarget`.
-pub(crate) fn compaction_retention_target(
-    configured_keep_recent: usize,
-    effective_input_budget: usize,
-    fixed_input_tokens: usize,
-) -> usize {
-    let message_budget = effective_input_budget.saturating_sub(fixed_input_tokens);
-    configured_keep_recent.min(((message_budget as u128 * 3) / 4) as usize)
-}
-
-/// Bound an internal summary's output ceiling to one rounded-up quarter of
-/// its actual context window. This makes the ceiling usable on small-context
-/// models while leaving ordinary completion ceilings untouched. Mirrors Lean
-/// `PromptAssembly.Budget.summaryOutputCeiling`.
-pub(crate) fn summary_output_ceiling(
-    configured_max_output_tokens: usize,
-    context_window: usize,
-) -> usize {
-    configured_max_output_tokens.min(context_window.div_ceil(4).max(1))
-}
-
-/// Maximum rolling-summary input that preserves a useful dynamic output
-/// allowance. The already-bounded ceiling is reserved when it is smaller than
-/// the context. A ceiling equal to the whole tiny context cannot coexist with
-/// nonempty summary input, so that degenerate configuration falls back to the
-/// ordinary dynamic dispatch rule. This policy is local to internal summary
-/// chunk sizing and does not change ordinary turns' dynamic output ceilings.
-/// Mirrors Lean
-/// `PromptAssembly.Budget.rollingSummaryInputBudget`.
-pub(crate) fn rolling_summary_input_budget(
-    context_window: usize,
-    configured_max_output_tokens: usize,
-) -> usize {
-    if configured_max_output_tokens < context_window {
-        context_window - configured_max_output_tokens
-    } else {
-        context_window
-    }
-}
-
-/// Per-turn output allowance after the assembled provider input is known.
-/// This preserves a large configured ceiling for short prompts without forcing
-/// every turn to reserve it in advance. Mirrors Lean
-/// `PromptAssembly.Budget.effectiveOutputBudget`.
-pub fn effective_output_budget(
-    input_tokens: usize,
-    context_window: usize,
-    configured_max_output_tokens: usize,
-) -> usize {
-    configured_max_output_tokens.min(context_window.saturating_sub(input_tokens))
-}
-
-/// Whether an assembled provider request has a legal, strictly positive
-/// dynamic output allowance. The checked sum is intentionally retained even
-/// though the clamp makes overflow unreachable for ordinary values: estimates
-/// that saturated at `usize::MAX` must fail closed. Mirrors Lean
-/// `PromptAssembly.Budget.CanDispatch`.
-pub fn can_dispatch(
-    input_tokens: usize,
-    context_window: usize,
-    configured_max_output_tokens: usize,
-) -> bool {
-    let output_tokens =
-        effective_output_budget(input_tokens, context_window, configured_max_output_tokens);
-    output_tokens > 0
-        && input_tokens
-            .checked_add(output_tokens)
-            .is_some_and(|total| total <= context_window)
-}
-
-/// The shared provider-dispatch gate. It is deliberately expressed over an
-/// already-assembled input estimate so callers at request entry and inside the
-/// owned completion loop apply exactly the same threshold rule.
-pub fn input_exceeds_budget(input_tokens: usize, context_window: usize, threshold: f64) -> bool {
-    input_tokens > effective_input_budget(context_window, threshold)
 }

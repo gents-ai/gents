@@ -1,3 +1,5 @@
+import Proofs.Compaction.ReductionEngine
+
 /-!
 # Atomic rolling compaction
 
@@ -9,6 +11,8 @@ prefix. Durable state changes once, after that final checkpoint exists.
 -/
 
 namespace Compaction.Rolling
+
+open Compaction.ReductionEngine
 
 structure Checkpoint where
   payload : Nat
@@ -44,38 +48,22 @@ instance (plan : Plan) : Decidable plan.Valid := by
   unfold Plan.Valid
   infer_instance
 
-structure DurableState where
-  checkpoint : Option Checkpoint
-  cursor : Nat
-  deriving DecidableEq, Repr
-
-inductive Result where
-  | failed (completedSteps : Nat)
-  | complete (plan : Plan) (valid : plan.Valid)
-
-/-- Only a valid complete rolling plan is eligible for the single durable commit. -/
-def commit (before : DurableState) : Result → DurableState
-  | .failed _ => before
-  | .complete plan _ =>
-      { checkpoint := some plan.checkpoint
-      , cursor := plan.checkpoint.messagesCovered }
-
 /-- A failure at chunk N cannot expose any earlier in-memory checkpoint or
 advance the durable cursor. -/
 theorem chunk_failure_preserves_durable_state
-    (before : DurableState) (completedSteps : Nat) :
-    commit before (.failed completedSteps) = before := by
-  rfl
+    (before : SessionState) :
+    commitSession before .cannotFit = before := by
+  exact (session_noop_does_not_commit before []).2
 
-/-- A successful roll publishes exactly the final checkpoint and advances to
-the complete target prefix, never an intermediate step. -/
+/-- A successful roll delegates its one durable cursor transition to the
+shared exact-reduction owner. The cursor advances relative to the prior
+checkpoint; rolling compaction never replaces it with a local chunk count. -/
 theorem complete_commits_exact_target
-    (before : DurableState) (plan : Plan) (valid : plan.Valid) :
-    commit before (.complete plan valid) =
-      { checkpoint := some plan.checkpoint
-      , cursor := plan.targetMessages } := by
-  simp only [commit]
-  rw [valid.2.2.2]
+    (before : SessionState) (plan : Plan) (_valid : plan.Valid) :
+    (commitSession before
+      (.reduced (List.replicate plan.targetMessages 0) [] plan.checkpoint.payload)).cursor =
+      before.cursor + plan.targetMessages := by
+  simp [commitSession]
 
 /-- Every chunk in a valid completed roll is non-empty, pair-closed, and has
 strictly positive provider output capacity. -/

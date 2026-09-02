@@ -71,6 +71,7 @@ function ContextMeter({
     ? ({
         below_threshold: "Below threshold",
         compacted: "Compacted",
+        provider_view_repaired: "Provider view repaired",
         compactor_unavailable: "Compactor unavailable",
       }[lastRequest.compactionReason] ?? lastRequest.compactionReason)
     : null;

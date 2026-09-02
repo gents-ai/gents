@@ -12,7 +12,7 @@ mod request;
 mod title;
 
 use super::runtime::StartupBarrier;
-use crate::compaction::{CompactionOptions, DefraCompactor};
+use crate::compaction::{ProviderReductionEngine, ReductionOptions};
 use crate::config::AgentBehavior;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
@@ -92,8 +92,8 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
     prompt_builder: LayeredPromptBuilder,
     stream_writer: DefraStreamWriter,
-    compactor: DefraCompactor<M>,
-    compaction_options: CompactionOptions,
+    compactor: ProviderReductionEngine<M>,
+    compaction_options: ReductionOptions,
     hook_failure_policy: FailurePolicy,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
@@ -145,10 +145,9 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             crate::rendered_request::CaptureScopeKind::Compaction,
         );
         compaction_config.max_turns = 0;
-        let compactor = DefraCompactor::new(model.clone(), compaction_config);
-        let compaction_options = CompactionOptions {
-            threshold: behavior.compaction_threshold,
-            strategy: behavior.compaction_strategy.clone(),
+        let compactor = ProviderReductionEngine::new(model.clone(), compaction_config);
+        let compaction_options = ReductionOptions {
+            mode: behavior.compaction_strategy.reduction_mode(),
             ..Default::default()
         };
 
@@ -194,9 +193,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         deadline: Option<chrono::DateTime<chrono::Utc>>,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         sampling_seed: Option<i64>,
-    ) -> CompactionOptions {
-        CompactionOptions {
-            force_summarize: true,
+    ) -> ReductionOptions {
+        ReductionOptions {
             deadline,
             aggregate_token_budget,
             sampling_seed,

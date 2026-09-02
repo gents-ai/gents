@@ -22,15 +22,21 @@ pub(crate) type RenderedRequestSink = Arc<
 #[derive(Clone, Debug)]
 pub(crate) struct TurnCompactionRequest {
     pub(crate) messages: Vec<Message>,
-    pub(crate) estimated_input_tokens: usize,
+    pub(crate) admission: crate::compaction::ReductionAdmission,
     pub(crate) turn_index: usize,
     pub(crate) prior_reduction_keys: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct TurnCompactionOutcome {
-    pub(crate) messages: Vec<Message>,
-    pub(crate) reduction_key: String,
+pub(crate) enum TurnCompactionOutcome {
+    ProviderViewRepaired {
+        messages: Vec<Message>,
+    },
+    Reduced {
+        messages: Vec<Message>,
+        reduction_key: String,
+    },
+    CannotFit,
 }
 
 pub(crate) type TurnCompactor = Arc<

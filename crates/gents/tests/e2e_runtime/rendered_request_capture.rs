@@ -821,7 +821,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     // per token keeps this payload near that boundary without copying the
     // threshold formula or reintroducing floating-point budget arithmetic.
     let budget_chars =
-        gents::compaction::effective_input_budget(CONTEXT_WINDOW, COMPACTION_THRESHOLD)
+        gents::provider_budget::effective_input_budget(CONTEXT_WINDOW, COMPACTION_THRESHOLD)
             .saturating_mul(4);
 
     let big_output = format!("{BIG_MARKER}{}", "x".repeat(BIG_OUTPUT_CHARS));
@@ -1090,30 +1090,60 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     .await
     .unwrap();
     let request_local_checkpoint = vec![Message::user("REQUEST_LOCAL_ONLY_SENTINEL")];
-    gents::provider_context_reduction::persist(
-        db.node.as_ref(),
-        gents::provider_context_reduction::NewProviderContextReduction {
-            agent_did: &agent.agent_did,
-            requester_did: None,
-            session_id,
-            request_id: "req-capture-seed",
-            request_doc_id: &seed_doc,
-            request_commit_cid: &seed_commit.cid,
-            reduction_index: 1,
-            turn_index: 0,
-            parent_reduction_key: None,
-            producer_call: None,
-            source_boundary: &boundary,
-            compacted_prefix: &[],
-            retained_suffix: &request_local_checkpoint,
-            checkpoint_messages: &request_local_checkpoint,
-            summary: "",
-            original_tokens: 10,
-            compacted_tokens: 10,
-        },
+    // Seed the historical incident shape as a raw fixture. Production has no
+    // public scalar writer: all new request-local reductions must consume the
+    // shared exact reduction artifact.
+    let reduction_key = gents::provider_context_reduction::reduction_key(
+        &agent.agent_did,
+        session_id,
+        &seed_doc,
+        0,
+        1,
     )
-    .await
-    .expect("persist incident-shaped request-local reduction");
+    .unwrap();
+    let boundary_json = serde_json::to_string(&boundary).unwrap();
+    let empty_prefix_json = serde_json::to_string(&Vec::<Message>::new()).unwrap();
+    let checkpoint_json = serde_json::to_string(&request_local_checkpoint).unwrap();
+    let fixture = format!(
+        r#"mutation {{ create_ProviderContextReduction(input: {{
+            reduction_key: "{reduction_key}"
+            agent_did: "{agent_did}"
+            requester_did: null
+            session_id: "{session_id}"
+            request_id: "req-capture-seed"
+            request_doc_id: "{request_doc_id}"
+            request_commit_cid: "{request_commit_cid}"
+            reduction_index: 1
+            turn_index: 0
+            parent_reduction_key: null
+            producer_call_id: null
+            producer_call_seq: null
+            source_boundary_json: "{boundary_json}"
+            compacted_prefix_json: "{empty_prefix_json}"
+            retained_suffix_json: "{checkpoint_json}"
+            pair_closed: true
+            checkpoint_messages_json: "{checkpoint_json}"
+            summary: ""
+            messages_compacted: 0
+            original_tokens: 10
+            compacted_tokens: 10
+            created_at: "2026-09-02T00:00:00Z"
+        }}) {{ _docID }} }}"#,
+        reduction_key = gents::graphql::escape_graphql_string(&reduction_key),
+        agent_did = gents::graphql::escape_graphql_string(&agent.agent_did),
+        session_id = gents::graphql::escape_graphql_string(session_id),
+        request_doc_id = gents::graphql::escape_graphql_string(&seed_doc),
+        request_commit_cid = gents::graphql::escape_graphql_string(&seed_commit.cid),
+        boundary_json = gents::graphql::escape_graphql_string(&boundary_json),
+        empty_prefix_json = gents::graphql::escape_graphql_string(&empty_prefix_json),
+        checkpoint_json = gents::graphql::escape_graphql_string(&checkpoint_json),
+    );
+    let response = db.node.execute(&fixture).await;
+    assert!(
+        !response.has_errors(),
+        "seed incident-shaped request-local reduction: {:?}",
+        response.errors
+    );
 
     let follow_up_doc = create_runtime_request(
         db.node.as_ref(),

@@ -14,6 +14,8 @@ use serde_json::{Map, Value};
 use crate::backend_provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
 
+pub(crate) mod budget;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProviderInputProfile {
     OpenAiChatCompletions,

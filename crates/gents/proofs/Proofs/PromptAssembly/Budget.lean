@@ -41,7 +41,7 @@ instance (inputTokens contextWindow configuredMaxOutputTokens : Nat) :
 arithmetic over basis points.
 
 The configuration surface carries the threshold as a float, but the budget is
-*computed* from basis points on both sides (`compaction::threshold_budget`), so
+*computed* from basis points on both sides (`provider_input::budget::threshold_budget`), so
 this model is exact for every threshold rather than only for those exactly
 representable in binary. Computing it as `contextWindow × threshold` in floating
 point and truncating disagrees with this for e.g. 57% of 10,000 — 5,699 rather
@@ -131,18 +131,37 @@ theorem rolling_summary_preserves_configured_output
   apply Nat.min_eq_left
   omega
 
+/-- The sole threshold decision used by prompt assembly and reduction.
+Equality is admitted; only input strictly above the effective budget is
+eligible for reduction. -/
+inductive ThresholdDecision where
+  | notNeeded
+  | reduceEligible
+  deriving DecidableEq, Repr
+
+def decideThreshold (inputTokens effectiveInputBudget : Nat) : ThresholdDecision :=
+  if inputTokens ≤ effectiveInputBudget then .notNeeded else .reduceEligible
+
 /-- The assembled prompt and the incoming request no longer fit beneath the
-effective input budget. Equality is admitted; one token beyond it compacts. -/
+effective input budget. This proposition is a view of the canonical decision,
+not a second threshold formula. -/
 def ExceedsInputBudget
     (promptTokens requestTokens configuredThresholdBudget contextWindow : Nat) : Prop :=
-  effectiveInputBudget configuredThresholdBudget contextWindow <
-    promptTokens + requestTokens
+  decideThreshold (promptTokens + requestTokens)
+    (effectiveInputBudget configuredThresholdBudget contextWindow) = .reduceEligible
 
 instance (promptTokens requestTokens configuredThresholdBudget contextWindow : Nat) :
     Decidable (ExceedsInputBudget promptTokens requestTokens configuredThresholdBudget
       contextWindow) := by
   unfold ExceedsInputBudget
   infer_instance
+
+theorem exceeds_input_budget_iff
+    (promptTokens requestTokens configuredThresholdBudget contextWindow : Nat) :
+    ExceedsInputBudget promptTokens requestTokens configuredThresholdBudget contextWindow ↔
+      effectiveInputBudget configuredThresholdBudget contextWindow <
+        promptTokens + requestTokens := by
+  simp [ExceedsInputBudget, decideThreshold, Nat.not_le]
 
 theorem effective_input_le_configured
     (configuredThresholdBudget contextWindow : Nat) :
@@ -223,7 +242,9 @@ theorem not_exceeds_is_provider_safe
     promptTokens + requestTokens +
       effectiveOutputBudget (promptTokens + requestTokens) contextWindow
         configuredMaxOutputTokens ≤ contextWindow := by
-  exact within_effective_is_provider_safe (Nat.le_of_not_gt hnot)
+  apply within_effective_is_provider_safe
+  rw [exceeds_input_budget_iff] at hnot
+  exact Nat.le_of_not_gt hnot
 
 /-! ## Owned-loop turn safety
 

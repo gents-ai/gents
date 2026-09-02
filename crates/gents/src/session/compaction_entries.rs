@@ -259,8 +259,50 @@ pub async fn load_compaction_entries(
     Ok(entries)
 }
 
+pub(crate) struct NewExactSessionCompaction<'a> {
+    pub(crate) session_id: &'a str,
+    pub(crate) agent_did: &'a str,
+    pub(crate) requester_did: Option<&'a str>,
+    pub(crate) request_id: &'a str,
+    pub(crate) request_doc_id: &'a str,
+    pub(crate) files_read: &'a [String],
+    pub(crate) files_modified: &'a [String],
+    pub(crate) compacted_through_sequence: u32,
+    pub(crate) original_tokens: usize,
+    pub(crate) compacted_tokens: usize,
+    pub(crate) expected_generation: &'a str,
+}
+
+/// Commit the shared exact reduction as one session-prefix fact. The summary
+/// and compacted count are derived from the artifact, so callers cannot pair a
+/// cursor with a different split or checkpoint.
+pub(crate) async fn save_exact_compaction_entry(
+    node: &EmbeddedNode,
+    input: NewExactSessionCompaction<'_>,
+    reduction: crate::compaction::ExactReduction<'_>,
+) -> Result<CompactionEntry> {
+    save_compaction_entry_with_requester_did(
+        node,
+        input.session_id,
+        input.agent_did,
+        input.requester_did,
+        input.request_id,
+        input.request_doc_id,
+        reduction.checkpoint,
+        input.files_read,
+        input.files_modified,
+        reduction.messages_compacted()?,
+        Some(input.compacted_through_sequence),
+        input.original_tokens,
+        input.compacted_tokens,
+        input.expected_generation,
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
-pub async fn save_compaction_entry(
+#[cfg(test)]
+pub(crate) async fn save_compaction_entry(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,

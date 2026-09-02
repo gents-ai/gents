@@ -1078,12 +1078,17 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "durable_reduction_cases"
       "DurableReductionCases"
-      "conformance::durable_reduction::generated_durable_reduction_cases_pin_identity_and_persist_before_send")
+      "provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_identity_and_persist_before_send")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "rolling_compaction_cases"
       "RollingCompactionCases"
       "compaction::tests::generated_rolling_cases_drive_the_production_commit_precondition")
+      "compaction" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "reduction_engine_cases"
+      "ReductionEngineCases"
+      "compaction::tests::generated_reduction_engine_cases_drive_shared_decision_outcome")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "rendered_capture_cases"

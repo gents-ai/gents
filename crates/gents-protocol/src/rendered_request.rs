@@ -417,6 +417,10 @@ pub enum ContextCompactionReason {
     /// The input exceeded the threshold and a durable
     /// `ProviderContextReduction` was activated before this dispatch.
     Compacted,
+    /// A request-local, non-durable repair (currently completed tool-result
+    /// stripping) made the provider view fit without creating a reduction
+    /// checkpoint.
+    ProviderViewRepaired,
     /// This completion loop had no per-turn compactor. Used by internal and
     /// one-shot loops where compaction is deliberately unavailable.
     CompactorUnavailable,

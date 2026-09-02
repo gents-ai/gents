@@ -564,8 +564,6 @@ async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
 mod apply_reconcile;
 #[path = "conformance/docs.rs"]
 mod docs;
-#[path = "conformance/durable_reduction.rs"]
-mod durable_reduction;
 #[path = "conformance/edit_match.rs"]
 mod edit_match;
 #[path = "conformance/identity.rs"]

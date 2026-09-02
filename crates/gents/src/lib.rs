@@ -3,6 +3,9 @@
 //! This crate owns request execution, lifecycle enforcement, persistence,
 //! identity, tools, networking, and provider-input assembly.
 
+#[cfg(test)]
+extern crate self as gents;
+
 pub mod adapter_projection;
 pub(crate) mod admission;
 pub mod agent;
@@ -47,6 +50,11 @@ pub mod oauth_credential;
 pub mod openai_wire;
 pub mod p2p_observability;
 pub(crate) mod provider_input;
+/// Exact provider context-window budget policy shared by compaction,
+/// diagnostics, and the final dispatch gate.
+pub mod provider_budget {
+    pub use crate::provider_input::budget::{effective_input_budget, threshold_budget};
+}
 pub(crate) mod provider_usage;
 pub mod startup_readiness;
 pub mod startup_recovery;

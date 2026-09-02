@@ -21,6 +21,7 @@ import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
 import Proofs.Conformance.Contracts.Json.AggregateBudget
 import Proofs.Conformance.Contracts.Json.RollingCompaction
+import Proofs.Conformance.Contracts.Json.ReductionEngine
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.Triggers.Groups
@@ -276,6 +277,8 @@ def snapshotJson : String :=
       ++ durableReductionCasesJson ++ ","
     ++ "\"rolling_compaction_cases\":"
       ++ rollingCompactionCasesJson ++ ","
+    ++ "\"reduction_engine_cases\":"
+      ++ reductionEngineCasesJson ++ ","
     ++ "\"rendered_capture_key_cases\":"
       ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"capture_scope_cases\":"
