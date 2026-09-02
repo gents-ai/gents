@@ -881,43 +881,6 @@ pub(crate) async fn serve_with_control(
             }
         };
 
-    // The Grok TUI leader socket is opt-in: stock Grok attaches to it as the
-    // pager client. Binding resolves the bound behavior/model/context from the
-    // same in-process node before the socket is published, so a misconfigured
-    // home fails fast instead of serving a fabricated model catalog.
-    let grok_shim_socket_path = args
-        .grok_shim
-        .then(|| resolve_grok_shim_socket_path(args.grok_shim_socket_path.as_deref()));
-    let mut grok_shim_handle = None;
-    if let Some(socket_path) = grok_shim_socket_path.as_ref() {
-        match bind_grok_shim(GrokShimBindArgs {
-            node: node.clone(),
-            graphql: graphql_url.clone(),
-            behavior_id: args.grok_shim_behavior_id.clone(),
-            agent_did: identity.did().to_string(),
-            agent_name: agent_name.clone(),
-            socket_path: socket_path.clone(),
-        })
-        .await
-        {
-            Ok(handle) => grok_shim_handle = Some(handle),
-            Err(error) => {
-                tracing::error!(
-                    socket = %socket_path.display(),
-                    error = %format!("{error:#}"),
-                    "Grok TUI endpoint disabled: the leader could not bind"
-                );
-            }
-        }
-    }
-    let grok_shim_output = grok_shim_socket_path.as_ref().map(|socket_path| {
-        let bound = grok_shim_handle.is_some();
-        json!({
-            "socket": socket_path,
-            "bound": bound,
-        })
-    });
-
     // Optional pack apply against the same in-process node (schemas/ first,
     // then desired-state). Uses Local access so collection registration works
     // without a separate home open / remote schema API.
@@ -1068,6 +1031,42 @@ pub(crate) async fn serve_with_control(
             p2p_admission: p2p_admission_state,
         },
     )?;
+
+    // The Grok TUI leader socket is opt-in: stock Grok attaches to it as the
+    // pager client. Binding follows pack apply and readiness fencing so a
+    // fresh home can receive the selected behavior in this invocation.
+    let grok_shim_socket_path = args
+        .grok_shim
+        .then(|| resolve_grok_shim_socket_path(args.grok_shim_socket_path.as_deref()));
+    let mut grok_shim_handle = None;
+    if let Some(socket_path) = grok_shim_socket_path.as_ref() {
+        match bind_grok_shim(GrokShimBindArgs {
+            node: node.clone(),
+            graphql: graphql_url.clone(),
+            behavior_id: args.grok_shim_behavior_id.clone(),
+            agent_did: identity.did().to_string(),
+            agent_name: agent_name.clone(),
+            socket_path: socket_path.clone(),
+        })
+        .await
+        {
+            Ok(handle) => grok_shim_handle = Some(handle),
+            Err(error) => {
+                tracing::error!(
+                    socket = %socket_path.display(),
+                    error = %format!("{error:#}"),
+                    "Grok TUI endpoint disabled: the leader could not bind"
+                );
+            }
+        }
+    }
+    let grok_shim_output = grok_shim_socket_path.as_ref().map(|socket_path| {
+        let bound = grok_shim_handle.is_some();
+        json!({
+            "socket": socket_path,
+            "bound": bound,
+        })
+    });
 
     let output = json!({
         "status": "serving",

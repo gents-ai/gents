@@ -379,7 +379,7 @@ pub(crate) fn spawn_leader(
     config: LeaderServerConfig,
     factory: Arc<dyn AcpDelegateFactory>,
 ) -> Result<LeaderHandle> {
-    let socket_path = config.socket_path.clone();
+    let socket_path = normalize_platform_temp_root(&config.socket_path)?;
     if socket_path.file_name().is_none_or(|name| name.is_empty()) {
         bail!(
             "the grok shim leader socket path {} must name a socket file",
@@ -411,13 +411,13 @@ pub(crate) fn spawn_leader(
     tracing::info!(
         target: LOG_TARGET,
         socket = %socket_path.display(),
-        lock = %config.lock_path().display(),
+        lock = %socket_path.with_extension("lock").display(),
         "grok shim leader listening for the pager client"
     );
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (lifecycle_tx, _lifecycle_rx) = broadcast::channel::<ServerEnvelope>(16);
-    let lock_path = config.lock_path();
+    let lock_path = socket_path.with_extension("lock");
     let shutdown_delay_ms = config.shutdown_delay_ms;
     let task = tokio::spawn(accept_loop(
         listener,
@@ -437,6 +437,47 @@ pub(crate) fn spawn_leader(
         shutdown_tx,
         task: Some(task),
     })
+}
+
+/// Resolve the two system temporary-directory aliases macOS installs at the
+/// filesystem root (`/tmp -> /private/tmp` and `/var -> /private/var`). The
+/// strict parent walk below must still reject every operator-controlled or
+/// nested symlink; resolving only these OS-owned root aliases keeps that
+/// security boundary while allowing `std::env::temp_dir()` and the documented
+/// `/tmp/gents-grok.sock` fallback to work on macOS.
+fn normalize_platform_temp_root(path: &Path) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    for root in [Path::new("/tmp"), Path::new("/var")] {
+        if !path.starts_with(root) {
+            continue;
+        }
+        let metadata = match std::fs::symlink_metadata(root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("inspecting platform temporary root {}", root.display())
+                });
+            }
+        };
+        if !metadata.file_type().is_symlink() {
+            return Ok(path.to_path_buf());
+        }
+        let canonical = std::fs::canonicalize(root).with_context(|| {
+            format!("resolving platform temporary root alias {}", root.display())
+        })?;
+        let suffix = path.strip_prefix(root).with_context(|| {
+            format!(
+                "removing platform temporary root {} from {}",
+                root.display(),
+                path.display()
+            )
+        })?;
+        return Ok(canonical.join(suffix));
+    }
+    Ok(path.to_path_buf())
 }
 
 // ---------------------------------------------------------------------------

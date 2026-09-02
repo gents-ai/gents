@@ -45,6 +45,8 @@ pub(crate) mod tools;
 /// Wire name of the ACP `session/update` notification every projection
 /// payload is wrapped in.
 pub(crate) const SESSION_UPDATE_METHOD: &str = "session/update";
+/// Live xAI extension rail used by Grok for subagent lifecycle events.
+pub(crate) const SUBAGENT_NOTIFICATION_METHOD: &str = "x.ai/session_notification";
 
 /// Default context window reported when the bound configuration does not
 /// supply one. Mirrors the model catalog's `totalContextTokens` default scale
@@ -301,6 +303,19 @@ pub(crate) fn stamp_update_meta(
 /// `contentBlock`); the leaves own that shape and this wrapper only adds the
 /// session envelope and the stamped `_meta`.
 pub(crate) fn session_update_notification(session_id: &str, update: Value, meta: Value) -> Value {
+    session_notification_for_method(SESSION_UPDATE_METHOD, session_id, update, meta)
+}
+
+/// Wrap a projected payload on its protocol rail. Standard ACP updates use
+/// `session/update`; live subagent lifecycle updates use Grok's
+/// `x.ai/session_notification` extension rail (the similarly named
+/// `x.ai/session/update` is a replay alias, not the live method).
+pub(crate) fn session_notification_for_method(
+    method: &str,
+    session_id: &str,
+    update: Value,
+    meta: Value,
+) -> Value {
     let mut params = Map::new();
     params.insert(
         "sessionId".to_string(),
@@ -310,7 +325,7 @@ pub(crate) fn session_update_notification(session_id: &str, update: Value, meta:
     params.insert("_meta".to_string(), meta);
     json!({
         "jsonrpc": "2.0",
-        "method": SESSION_UPDATE_METHOD,
+        "method": method,
         "params": Value::Object(params),
     })
 }
@@ -544,7 +559,7 @@ impl ProjectionEngine {
 
     /// Poll the durable request-scoped projections and return only the
     /// *novel* events this cursor has not emitted yet, merged across
-    /// families into durable transcript chronology (see step 4 below).
+    /// families into durable transcript chronology (see step 5 below).
     ///
     /// The poll itself is read-only: it observes every projection leaf, picks
     /// the events whose durable identity is new or changed relative to this
@@ -557,6 +572,22 @@ impl ProjectionEngine {
     /// successful send.
     ///
     /// Ordering and identity rules:
+    /// - live tails: the `AgentResponse` live `content`/`reasoning` tails
+    ///   (the streaming snapshot of the *current* assistant segment) plan
+    ///   deltas against a shadow copy of the live cursors, so several
+    ///   candidates in one poll each see the preceding planned advances and
+    ///   a failed send re-plans the identical candidate next poll. The rails
+    ///   differ (see [`LiveSegmentCursor::plan`]): on the reasoning rail an
+    ///   identical observation with an advanced `reasoning_progress_seq` is
+    ///   a genuine later identical rewrite that streams in full, and a
+    ///   non-prefix change continues the segment only when it is a proven
+    ///   bounded-window rollover with an advanced seq; on the content rail
+    ///   an identical observation with an advanced `progress_seq` is an
+    ///   ordinary lifecycle boundary (nothing new — the counter is
+    ///   boundary-scoped, not per-write), and any non-prefix change closes
+    ///   the segment and re-emits the whole new snapshot. See
+    ///   [`LiveSegmentCursor`] for the documented append-only / no-loss
+    ///   policy on divergence.
     /// - tool calls: the first observation of a `tool_call` base emits the
     ///   full tracker registration; a later change to the tracked fields
     ///   (`title`/`kind`/`status`/`content`/`rawInput`/`rawOutput`/`meta`)
@@ -569,10 +600,17 @@ impl ProjectionEngine {
     ///   `<sessionUpdate kind>:<subagentId>`; a still-running child's
     ///   `durationMs` is 0 (the elapsed computation needs a terminal bound),
     ///   so running progress payloads are stable across polls.
-    /// - messages: one event per durable `AgentMessage` row ordinal, so
-    ///   distinct rows with identical text both emit. The synthetic
-    ///   `user_message_chunk` echo of the current prompt's user row is
-    ///   skipped — the turn already echoed the prompt blocks directly.
+    /// - durable messages: each `AgentMessage`-derived chunk keeps a
+    ///   delivered-length state keyed by `(message_key, update kind,
+    ///   ordinal)`; an upserted/grown row re-projects and emits only the
+    ///   newly proven suffix, never "seen forever" after its first
+    ///   observation. The durable view reconciles against the live view: a
+    ///   durable final row bound by `materialized_message_sequence` emits
+    ///   only the bytes the live cursor has not already sent of the same
+    ///   logical segment, and live bytes already covering a row suppress its
+    ///   replay. The synthetic `user_message_chunk` echo of the current
+    ///   prompt's user row is skipped — the turn already echoed the prompt
+    ///   blocks directly.
     ///
     /// The message projection's per-request `token_count` observation is
     /// applied here — at poll time, not send time — through
@@ -586,25 +624,220 @@ impl ProjectionEngine {
         request_id: &str,
         token_high_water: &mut u64,
         cursor: &mut RequestCursor,
-    ) -> Result<Vec<NovelProjectionEvent>> {
+    ) -> Result<ProjectionBatch> {
         // Each family projects independently (one bounded query set per
         // leaf), then the novel events merge into one chronology below.
         let mut merged: Vec<MergedEvent> = Vec::new();
 
-        // 1. Tools (lifecycle of the request's tool calls).
+        // 1. Messages leaf query (live tail + durable rows). The live tails
+        //    plan against a shadow copy of the live cursors; the durable
+        //    rows reconcile against that planned state below.
+        let floor = earliest_live_anchor(&cursor.history_observation, &cursor.live_cursors);
+        cursor.history_observation.retain_from(floor.as_deref());
+        let message_sequence_high_water = cursor.message_sequence_high_water;
+        let messages = messages::project_messages(
+            &self.node,
+            &mut cursor.history_observation,
+            message_sequence_high_water,
+            request_id,
+            self.bound.effective_context_window(),
+        )
+        .await?;
+        self.sequencer.apply_token_observation(
+            session_id,
+            token_high_water,
+            messages.total_tokens,
+            self.bound.effective_context_window(),
+        );
+
+        let durable_rows = durable_row_views(&messages);
+        let history_rows = messages
+            .history
+            .as_deref()
+            .map(|history| infer_history_row_bindings(history, &durable_rows))
+            .unwrap_or_default();
+
+        // 2. Replay every validated response snapshot after each rail's
+        // send-success anchor. Observation may already be at the newest
+        // durable head; delivery remains an independent sequential prefix.
+        let response_doc_changed =
+            messages.response_doc_id.as_deref() != cursor.delivered_response_doc.as_deref();
+        let mut planned_live = if response_doc_changed {
+            LiveCursorPair::default()
+        } else {
+            cursor.live_cursors.clone()
+        };
+        if let Some(history) = messages.history.as_deref() {
+            let reasoning_start =
+                replay_start(history, planned_live.reasoning.absorbed_commit.as_deref());
+            let content_start =
+                replay_start(history, planned_live.content.absorbed_commit.as_deref());
+            for (snapshot_index, snapshot) in history.iter().enumerate() {
+                let inferred_row = history_rows.get(&snapshot_index).cloned();
+                for (kind, observed, progress_seq, is_reasoning) in [
+                    (
+                        messages::AGENT_THOUGHT_CHUNK,
+                        snapshot.reasoning(),
+                        snapshot.reasoning_progress_seq(),
+                        true,
+                    ),
+                    (
+                        messages::AGENT_MESSAGE_CHUNK,
+                        snapshot.content(),
+                        snapshot.progress_seq(),
+                        false,
+                    ),
+                ] {
+                    let live = if is_reasoning {
+                        &mut planned_live.reasoning
+                    } else {
+                        &mut planned_live.content
+                    };
+                    let start = if is_reasoning {
+                        reasoning_start
+                    } else {
+                        content_start
+                    };
+                    let Some(start) = start else {
+                        // A same-document delivery anchor absent from the
+                        // retained chain is unprovable. Leave the rail
+                        // untouched; a later sound observation may recover.
+                        continue;
+                    };
+                    if snapshot_index < start {
+                        continue;
+                    }
+                    let before = live.clone();
+                    let (delta, mut plan) = live
+                        .plan(observed, progress_seq, is_reasoning, true)
+                        .unwrap_or_else(|| (String::new(), live.anchor_plan(&snapshot.cid)));
+                    plan.absorbed_commit = Some(snapshot.cid.clone());
+
+                    // A reset/divergence closes exactly the preceding
+                    // delivered segment. Preserve it in order for later
+                    // exact durable-row reconciliation.
+                    if !before.sent_bytes.is_empty()
+                        && plan.completed_sent_bytes == before.sent_bytes
+                        && (plan.observed.is_empty()
+                            || !plan.sent_bytes.starts_with(&before.sent_bytes))
+                    {
+                        plan.closed_evidence.push(ClosedEvidence {
+                            sent_bytes: before.sent_bytes.clone(),
+                            materialized_sequence: snapshot.materialized_message_sequence(),
+                            bound_row: row_for_materialized_sequence(
+                                snapshot.materialized_message_sequence(),
+                                &durable_rows,
+                            )
+                            .or_else(|| inferred_row.clone()),
+                            history_height: snapshot.height,
+                        });
+                    }
+                    // A final/interrupted materialization stamp can bind the
+                    // still-open segment before the following reset commit.
+                    if let Some(sequence) = snapshot.materialized_message_sequence() {
+                        if !plan.sent_bytes.is_empty()
+                            && !plan.closed_evidence.iter().any(|evidence| {
+                                evidence.materialized_sequence == Some(sequence)
+                                    && evidence.sent_bytes == plan.sent_bytes
+                            })
+                        {
+                            plan.closed_evidence.push(ClosedEvidence {
+                                sent_bytes: plan.sent_bytes.clone(),
+                                materialized_sequence: Some(sequence),
+                                bound_row: row_for_materialized_sequence(
+                                    Some(sequence),
+                                    &durable_rows,
+                                ),
+                                history_height: snapshot.height,
+                            });
+                        }
+                    }
+                    // An in-flight assistant row is persisted before tool
+                    // execution, while the response tail is still open and
+                    // carries no materialization stamp. A globally unique,
+                    // order-preserving segment-to-row match is sufficient to
+                    // bind that open evidence. The binding travels only in
+                    // this plan/trailing advance, so it cannot suppress the
+                    // durable row unless the live send succeeded.
+                    if let Some(row) = inferred_row.clone() {
+                        if !plan.sent_bytes.is_empty() {
+                            upsert_bound_evidence(
+                                &mut plan.closed_evidence,
+                                plan.sent_bytes.clone(),
+                                snapshot.materialized_message_sequence(),
+                                row,
+                                snapshot.height,
+                            );
+                        }
+                    }
+                    live.commit(plan.clone(), progress_seq);
+                    if delta.is_empty() {
+                        continue;
+                    }
+                    let advance = if is_reasoning {
+                        CursorAdvance::LiveReasoning { plan, progress_seq }
+                    } else {
+                        CursorAdvance::LiveContent { plan, progress_seq }
+                    };
+                    let chronology = inferred_row
+                        .as_ref()
+                        .map(|row| row.sequence)
+                        .or(snapshot.materialized_message_sequence())
+                        // Only the current open tip may use the latest
+                        // assistant-row position. Applying this fallback to
+                        // older retained snapshots would reorder historical
+                        // segments around intervening tools.
+                        .or_else(|| {
+                            (snapshot_index + 1 == history.len())
+                                .then_some(messages.live_tail.assistant_sequence)
+                                .flatten()
+                        });
+                    merged.push(MergedEvent {
+                        event: NovelProjectionEvent {
+                            method: SESSION_UPDATE_METHOD,
+                            payload: messages::MessageUpdate::chunk_payload(kind, delta),
+                            advance,
+                        },
+                        chronology,
+                        family_rank: FAMILY_RANK_MESSAGE,
+                        family_ordinal: merged
+                            .iter()
+                            .filter(|item| item.family_rank == FAMILY_RANK_MESSAGE)
+                            .count(),
+                    });
+                }
+            }
+        }
+        cursor.planned_live_cursors = Some(planned_live.clone());
+
+        // 4. Tools (lifecycle of the request's tool calls).
         let tools = tools::project_tools(&self.node, request_id, session_id).await?;
+        let mut terminal_covered_by_base_diff = std::collections::BTreeSet::new();
         for (index, update) in tools.updates.iter().enumerate() {
             let chronology = tools.chronology.get(index).copied().flatten();
             match update {
                 tools::ToolUpdate::ToolCall(base) => {
                     let payload = base.to_payload();
-                    let Some((emitted, advance)) =
+                    let previously_seen = cursor.tool_bases.contains_key(&base.tool_call_id);
+                    let Some((emitted, mut advance)) =
                         cursor.tool_base_novel(&base.tool_call_id, &payload)
                     else {
                         continue;
                     };
+                    if previously_seen && base.status.is_completed() {
+                        let status = base.status.wire_name().to_string();
+                        advance = CursorAdvance::Many(vec![
+                            advance,
+                            CursorAdvance::ToolTerminal {
+                                tool_call_id: base.tool_call_id.clone(),
+                                status,
+                            },
+                        ]);
+                        terminal_covered_by_base_diff.insert(base.tool_call_id.clone());
+                    }
                     merged.push(MergedEvent {
                         event: NovelProjectionEvent {
+                            method: SESSION_UPDATE_METHOD,
                             payload: emitted,
                             advance,
                         },
@@ -616,10 +849,36 @@ impl ProjectionEngine {
                             .count(),
                     });
                 }
-                tools::ToolUpdate::ToolCallUpdate(_) => {
-                    // Redundant with the base payload's current status: the
-                    // base-derived diff above is the single source of tool
-                    // lifecycle updates.
+                tools::ToolUpdate::ToolCallUpdate(update) => {
+                    if terminal_covered_by_base_diff.contains(&update.tool_call_id) {
+                        continue;
+                    }
+                    let status = update
+                        .fields
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let Some(advance) = cursor.tool_terminal_novel(&update.tool_call_id, status)
+                    else {
+                        continue;
+                    };
+                    merged.push(MergedEvent {
+                        event: NovelProjectionEvent {
+                            method: SESSION_UPDATE_METHOD,
+                            payload: json!({
+                                "sessionUpdate": "tool_call_update",
+                                "toolCallId": update.tool_call_id,
+                                "fields": update.fields,
+                            }),
+                            advance,
+                        },
+                        chronology,
+                        family_rank: FAMILY_RANK_TOOL,
+                        family_ordinal: merged
+                            .iter()
+                            .filter(|item| item.family_rank == FAMILY_RANK_TOOL)
+                            .count(),
+                    });
                 }
                 tools::ToolUpdate::AvailableCommands(update) => {
                     let payload = update.to_payload();
@@ -628,7 +887,11 @@ impl ProjectionEngine {
                         continue;
                     };
                     merged.push(MergedEvent {
-                        event: NovelProjectionEvent { payload, advance },
+                        event: NovelProjectionEvent {
+                            method: SESSION_UPDATE_METHOD,
+                            payload,
+                            advance,
+                        },
                         chronology,
                         family_rank: FAMILY_RANK_TOOL,
                         family_ordinal: merged
@@ -657,7 +920,11 @@ impl ProjectionEngine {
                 continue;
             };
             merged.push(MergedEvent {
-                event: NovelProjectionEvent { payload, advance },
+                event: NovelProjectionEvent {
+                    method: SUBAGENT_NOTIFICATION_METHOD,
+                    payload,
+                    advance,
+                },
                 chronology,
                 family_rank: FAMILY_RANK_SUBAGENT,
                 family_ordinal: merged
@@ -667,51 +934,186 @@ impl ProjectionEngine {
             });
         }
 
-        // 3. Messages (assistant/user transcript chunks). The user echo of
-        // the current prompt is skipped: the turn already sent it directly.
-        let messages = messages::project_messages(
-            &self.node,
-            request_id,
-            self.bound.effective_context_window(),
-        )
-        .await?;
-        self.sequencer.apply_token_observation(
-            session_id,
-            token_high_water,
-            messages.total_tokens,
-            self.bound.effective_context_window(),
-        );
-        for (index, update) in messages.updates.iter().enumerate() {
-            if matches!(update, messages::MessageUpdate::UserMessageChunk { .. }) {
-                continue;
+        // 5. Durable messages (assistant transcript chunks), reconciled
+        //    against the live view planned above. The user echo of the
+        //    current prompt is skipped: the turn already sent it directly.
+        //    The durable pass plans against the same shadow state the live
+        //    pass advanced (plus a shadow of the durable chunk states), so
+        //    live and durable observations of the same logical segment never
+        //    duplicate and a failed send replans the identical candidates.
+        //    Intermediate rows (without the materialization pointer) are
+        //    reconsidered for upsert growth in transcript order.
+        let mut durable_trailing = Vec::new();
+        {
+            let mut planned_durable = cursor.durable_chunks.clone();
+            // Aggregate each durable row/rail before applying live evidence:
+            // one live segment spans all text blocks of that rail, so
+            // comparing evidence independently to each block would duplicate
+            // multi-block rows.
+            let mut row_texts: BTreeMap<(DurableRowIdentity, EvidenceRail), String> =
+                BTreeMap::new();
+            for (index, update) in messages.updates.iter().enumerate() {
+                let Some(sequence) = messages.chronology.get(index).copied().flatten() else {
+                    continue;
+                };
+                let (rail, text) = match update {
+                    messages::MessageUpdate::AgentMessageChunk { text } => {
+                        (EvidenceRail::Content, text)
+                    }
+                    messages::MessageUpdate::AgentThoughtChunk { text } => {
+                        (EvidenceRail::Reasoning, text)
+                    }
+                    messages::MessageUpdate::UserMessageChunk { .. } => continue,
+                };
+                let Some(key) = messages.update_keys.get(index) else {
+                    continue;
+                };
+                let Some(message_key) = durable_message_key(key, update.session_update_kind())
+                else {
+                    continue;
+                };
+                row_texts
+                    .entry((
+                        DurableRowIdentity {
+                            sequence,
+                            message_key: message_key.to_string(),
+                        },
+                        rail,
+                    ))
+                    .or_default()
+                    .push_str(text);
             }
-            let Some(key) = messages.update_keys.get(index) else {
-                continue;
-            };
-            if key.trim().is_empty() {
-                continue;
-            }
-            if cursor.message_seen(key) {
-                continue;
-            }
-            let chronology = messages.chronology.get(index).copied().flatten();
-            merged.push(MergedEvent {
-                event: NovelProjectionEvent {
-                    payload: update.to_payload(),
-                    advance: CursorAdvance::MessageChunk {
+
+            // Bind exact materialization stamps first. For unstamped
+            // intermediate rows, accept only a globally unique assignment
+            // whose row identities increase with the history order. A
+            // locally unique match is insufficient: A/B evidence against
+            // rows B/A would otherwise cross-bind and hide durable order.
+            bind_durable_evidence(
+                &mut planned_live.content,
+                EvidenceRail::Content,
+                &durable_rows,
+            );
+            bind_durable_evidence(
+                &mut planned_live.reasoning,
+                EvidenceRail::Reasoning,
+                &durable_rows,
+            );
+
+            let mut row_offsets: BTreeMap<(DurableRowIdentity, EvidenceRail), usize> =
+                BTreeMap::new();
+            for (index, update) in messages.updates.iter().enumerate() {
+                if matches!(update, messages::MessageUpdate::UserMessageChunk { .. }) {
+                    continue;
+                }
+                let Some(key) = messages.update_keys.get(index) else {
+                    continue;
+                };
+                if key.trim().is_empty() {
+                    continue;
+                }
+                let chronology = messages.chronology.get(index).copied().flatten();
+                let (rail, text) = match update {
+                    messages::MessageUpdate::AgentMessageChunk { text } => {
+                        (EvidenceRail::Content, text)
+                    }
+                    messages::MessageUpdate::AgentThoughtChunk { text } => {
+                        (EvidenceRail::Reasoning, text)
+                    }
+                    messages::MessageUpdate::UserMessageChunk { .. } => continue,
+                };
+                // Reconcile live against durable. A final row bound by
+                // `materialized_message_sequence` is the same logical segment
+                // the live tail streamed: the bytes the live cursor already
+                // sent of that segment are a prefix of the row's text, and
+                // only the remaining suffix is durable-novel. Intermediate
+                // rows are durable observations of already-completed segments
+                // (persisted before the tail reset), so live bytes of a
+                // *later* segment never suppress them; their delivered state
+                // is purely the per-chunk cursor.
+                let live = match rail {
+                    EvidenceRail::Reasoning => &planned_live.reasoning,
+                    EvidenceRail::Content => &planned_live.content,
+                };
+                let row_identity = chronology.and_then(|sequence| {
+                    durable_message_key(key, update.session_update_kind()).map(|message_key| {
+                        DurableRowIdentity {
+                            sequence,
+                            message_key: message_key.to_string(),
+                        }
+                    })
+                });
+                let evidence = chronology
+                    .and_then(|_| {
+                        live.closed_evidence
+                            .iter()
+                            .find(|evidence| evidence.bound_row.as_ref() == row_identity.as_ref())
+                    })
+                    .map(|evidence| evidence.sent_bytes.as_str())
+                    .unwrap_or_default();
+                let row_offset = row_identity
+                    .clone()
+                    .map(|identity| {
+                        let offset = row_offsets.entry((identity, rail)).or_default();
+                        let current = *offset;
+                        *offset = offset.saturating_add(text.len());
+                        current
+                    })
+                    .unwrap_or_default();
+                let evidence_covered = evidence.len().saturating_sub(row_offset).min(text.len());
+                let planned = planned_durable.entry(key.clone()).or_default();
+                let mut sent_len = if text.starts_with(&planned.sent_text) {
+                    planned.sent_text.len()
+                } else {
+                    // A replacement/shrink/divergence is not growth. Never
+                    // slice an unrelated UTF-8 value at a stale byte offset;
+                    // project the new authoritative value in full.
+                    0
+                };
+                if evidence_covered > sent_len
+                    && text.is_char_boundary(evidence_covered)
+                    && row_identity
+                        .as_ref()
+                        .and_then(|identity| row_texts.get(&(identity.clone(), rail)))
+                        .is_some_and(|row_text| row_text.starts_with(evidence))
+                {
+                    sent_len = evidence_covered;
+                }
+                if sent_len >= text.len() {
+                    planned.sent_text = text.clone();
+                    durable_trailing.push(CursorAdvance::DurableChunk {
                         message_key: key.clone(),
+                        sent_text: text.clone(),
+                    });
+                    continue;
+                }
+                // UTF-8 safety: `sent_len` is either zero, a previously
+                // observed chunk-text length of this same row, or a
+                // live-prefix length of the same logical segment's bytes —
+                // all char boundaries of `text`.
+                let suffix = text[sent_len..].to_string();
+                let payload_kind = update.session_update_kind();
+                merged.push(MergedEvent {
+                    event: NovelProjectionEvent {
+                        method: SESSION_UPDATE_METHOD,
+                        payload: messages::MessageUpdate::chunk_payload(payload_kind, suffix),
+                        advance: CursorAdvance::DurableChunk {
+                            message_key: key.clone(),
+                            sent_text: text.clone(),
+                        },
                     },
-                },
-                chronology,
-                family_rank: FAMILY_RANK_MESSAGE,
-                family_ordinal: merged
-                    .iter()
-                    .filter(|item| item.family_rank == FAMILY_RANK_MESSAGE)
-                    .count(),
-            });
+                    chronology,
+                    family_rank: FAMILY_RANK_MESSAGE,
+                    family_ordinal: merged
+                        .iter()
+                        .filter(|item| item.family_rank == FAMILY_RANK_MESSAGE)
+                        .count(),
+                });
+                planned.sent_text = text.clone();
+            }
         }
 
-        // 4. Cross-family merge: emit in durable chronology order, never
+        // 6. Cross-family merge: emit in durable chronology order, never
         // family-batched. The primary key is the durable transcript position
         // each family shares (tool `message_sequence`, message `sequence`,
         // and the subagent's spawn-tool `message_sequence` all allocate from
@@ -730,7 +1132,41 @@ impl ProjectionEngine {
         // subagents without a spawn row) sort after every positioned event
         // of their family, preserving each family's own emission order.
         merged.sort_by(|a, b| family_sort_key(a).cmp(&family_sort_key(b)));
-        Ok(merged.into_iter().map(|item| item.event).collect())
+        let mut events: Vec<NovelProjectionEvent> =
+            merged.into_iter().map(|item| item.event).collect();
+        let mut trailing_advances = durable_trailing;
+        if let Some(sequence) = messages.message_sequence_high_water {
+            trailing_advances.push(CursorAdvance::MessageHighWater { sequence });
+        }
+        // The final shadow rail states include every no-byte commit and every
+        // evidence binding. They are the batch suffix and commit only after
+        // all wire events succeed.
+        if let Some(cid) = planned_live.reasoning.absorbed_commit.clone() {
+            trailing_advances.push(CursorAdvance::LiveReasoning {
+                plan: planned_live.reasoning.anchor_plan(&cid),
+                progress_seq: planned_live.reasoning.progress_seq,
+            });
+        }
+        if let Some(cid) = planned_live.content.absorbed_commit.clone() {
+            trailing_advances.push(CursorAdvance::LiveContent {
+                plan: planned_live.content.anchor_plan(&cid),
+                progress_seq: planned_live.content.progress_seq,
+            });
+        }
+        if response_doc_changed {
+            if let Some(doc_id) = messages.response_doc_id.clone() {
+                let reset = CursorAdvance::ResponseDocument { doc_id };
+                if let Some(first) = events.first_mut() {
+                    first.advance = CursorAdvance::Many(vec![reset, first.advance.clone()]);
+                } else {
+                    trailing_advances.insert(0, reset);
+                }
+            }
+        }
+        Ok(ProjectionBatch {
+            events,
+            trailing_advances,
+        })
     }
 }
 
@@ -769,6 +1205,8 @@ fn family_sort_key(event: &MergedEvent) -> (i64, u8, usize) {
 /// advance that records its durable identity once the send succeeds.
 #[derive(Debug, Clone)]
 pub(crate) struct NovelProjectionEvent {
+    /// JSON-RPC notification method for this event's protocol family.
+    pub(crate) method: &'static str,
     /// The `session/update` payload (`sessionUpdate` object) to wrap and
     /// send.
     pub(crate) payload: Value,
@@ -776,36 +1214,931 @@ pub(crate) struct NovelProjectionEvent {
     pub(crate) advance: CursorAdvance,
 }
 
+/// One fully planned projection poll.
+///
+/// Byte-carrying advances travel with their outbound event. State changes
+/// which intentionally carry no wire bytes (for example a tail-reset
+/// snapshot) are held in `trailing_advances` and committed only after every
+/// event in this batch was sent successfully. This keeps an unsent earlier
+/// byte event from being leapfrogged by a later reset/no-op observation.
+#[derive(Debug, Default)]
+pub(crate) struct ProjectionBatch {
+    pub(crate) events: Vec<NovelProjectionEvent>,
+    pub(crate) trailing_advances: Vec<CursorAdvance>,
+}
+
+impl std::ops::Deref for ProjectionBatch {
+    type Target = [NovelProjectionEvent];
+
+    fn deref(&self) -> &Self::Target {
+        &self.events
+    }
+}
+
 /// The recorded identity of one novel projection event. Recorded only after
 /// the corresponding notification line was successfully sent.
 #[derive(Debug, Clone)]
 pub(crate) enum CursorAdvance {
+    /// Apply several infallible cursor transitions in order at one delivery
+    /// commit point.
+    Many(Vec<CursorAdvance>),
+    /// Adopt a replacement response document generation before applying
+    /// live-tail advances from it.
+    ResponseDocument { doc_id: String },
     /// The full base payload of a tool call was observed (first time or
     /// changed tracked fields).
     ToolBase {
         tool_call_id: String,
         payload: Value,
     },
+    /// A terminal same-id tool update was delivered (needed separately from
+    /// the base registration so a first-observed-terminal task clears the
+    /// pager's foreground wait).
+    ToolTerminal {
+        tool_call_id: String,
+        status: String,
+    },
     /// A distinct visible tool list was observed.
     Commands { fingerprint: u64 },
     /// A distinct subagent payload was observed for its key.
     Subagent { key: String, fingerprint: u64 },
-    /// A durable message row was observed by its key.
-    MessageChunk { message_key: String },
+    /// A live response tail delta was planned and sent. The `plan` is the
+    /// post-send cursor state (including the history anchor it absorbed);
+    /// `progress_seq` is the durable progress counter observed with this
+    /// snapshot, recorded so an identical later rewrite (advanced seq) is
+    /// distinguishable from a stale identical read (unchanged seq).
+    LiveContent {
+        plan: LiveSegmentPlan,
+        progress_seq: Option<u64>,
+    },
+    /// Same as [`CursorAdvance::LiveContent`] for the reasoning tail.
+    LiveReasoning {
+        plan: LiveSegmentPlan,
+        progress_seq: Option<u64>,
+    },
+    /// A durable message chunk's exact delivered text advanced after send.
+    DurableChunk {
+        message_key: String,
+        sent_text: String,
+    },
+    /// Inclusive durable transcript query cursor. This advances only after
+    /// the complete projection batch succeeds, so a leaf/send failure re-reads
+    /// every still-undelivered row.
+    MessageHighWater { sequence: i64 },
 }
 
-/// The tool-call fields the live poll tracks for diffs. A change to any of
-/// these emits a `tool_call_update` carrying exactly the changed fields; a
-/// first observation emits the full `tool_call` registration.
-const TRACKED_TOOL_FIELDS: [&str; 7] = [
-    "title",
-    "kind",
-    "status",
-    "content",
-    "rawInput",
-    "rawOutput",
-    "meta",
-];
+/// The post-send state of one live tail cursor, carried inside a
+/// [`CursorAdvance`] so the send-success `record` path is the only mutator of
+/// the real cursor's *delivered* state.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LiveSegmentPlan {
+    /// The observed tail snapshot after this send.
+    observed: String,
+    /// How many bytes of the current segment's logical stream were
+    /// successfully sent (including this delta).
+    sent_len: usize,
+    /// The exact bytes of the current segment already sent, retained so the
+    /// durable reconciliation can prove a live prefix covers a durable row's
+    /// start even after the observed window rolls or the tail resets.
+    sent_bytes: String,
+    /// The exact bytes already sent of the most recently *closed* segment.
+    /// A tail reset (or a divergence close) ends the current segment while
+    /// its delivered bytes stay delivered: they are retained here as the
+    /// reconciliation evidence for the closed segment's materialized row,
+    /// which is exactly the row `materialized_message_sequence` binds.
+    completed_sent_bytes: String,
+    /// Delivered closed segments awaiting (or carrying) an exact durable-row
+    /// binding. This queue is never arbitrarily capped: dropping an older
+    /// entry could make a later durable row duplicate bytes already sent.
+    closed_evidence: Vec<ClosedEvidence>,
+    /// The reasoning preview advanced without any overlap with the preceding
+    /// persisted window. Bytes between the windows are not reconstructable
+    /// from response history, so this rail stays deferred until the durable
+    /// assistant row supplies the authoritative full reasoning text.
+    unproven_gap: bool,
+    /// The composite commit tip this plan absorbed: recorded into the
+    /// cursor's `absorbed_commit` only when the send succeeds, so the
+    /// next poll proves continuity against the exact history slice past
+    /// that commit. `None` when the observation carried no readable
+    /// history (the cursor's absorbed commit then stands unchanged — never
+    /// regressed).
+    absorbed_commit: Option<String>,
+}
+
+/// A request-local live response tail cursor for one logical byte stream
+/// (`content` or `reasoning` of the current `AgentResponse`).
+///
+/// The `AgentResponse` live tails are *segment-local*, not
+/// request-cumulative: the runtime clears them on ToolResult,
+/// FinalResponse materialization, TurnRetracted, OutputObligationPending,
+/// and interrupted/error partial persistence. Within one segment the tail
+/// grows by exact prefix append. This cursor tracks:
+///
+/// - `observed`: the most recent snapshot of the tail (for reasoning, the
+///   rolling 64-KiB preview — the *preview window*, not the logical stream);
+/// - `sent_len` / `sent_bytes`: how many bytes of the current segment's
+///   logical stream have been *successfully sent*, and their exact bytes;
+/// - `progress_seq`: the durable progress counter observed with the last
+///   snapshot, used to distinguish a stale identical read from a genuine
+///   later identical rewrite.
+///
+/// ## Append-only / no-loss policy (documented contract)
+///
+/// ACP chunks are append-only: bytes that were already sent can never be
+/// retracted. A divergence — the freshly observed tail no longer starts with
+/// the previously observed snapshot (a TurnRetracted, a retracted turn, or a
+/// racing retry-replaced response row) — therefore never slices into the
+/// sent prefix and never pretends already-sent bytes can be taken back.
+/// Instead the divergence *closes* the current segment and the whole freshly
+/// observed snapshot opens a new segment: the un-sent remainder of the old
+/// segment is deliberately dropped (the runtime retracted it), while the new
+/// observation is streamed in full — no part of what the durable row now
+/// shows is ever lost.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LiveSegmentCursor {
+    /// The most recently observed snapshot of the live tail.
+    observed: String,
+    /// How many bytes of the current segment's logical stream were already
+    /// successfully sent.
+    sent_len: usize,
+    /// The exact already-sent bytes of the current segment (evidence for
+    /// live/durable reconciliation after a window roll or tail reset).
+    sent_bytes: String,
+    /// The exact already-sent bytes of the most recently closed segment
+    /// (reconciliation evidence: the closed segment's materialized row is
+    /// the row `materialized_message_sequence` binds).
+    completed_sent_bytes: String,
+    /// Ordered delivered evidence for every closed logical segment.
+    closed_evidence: Vec<ClosedEvidence>,
+    /// See [`LiveSegmentPlan::unproven_gap`]. While set, later live previews
+    /// only advance the history anchor; none can prove the missing bytes.
+    unproven_gap: bool,
+    /// The durable progress counter observed with the last snapshot.
+    progress_seq: Option<u64>,
+    /// The CID of the last composite commit of the response document's
+    /// history whose snapshot this cursor has fully absorbed (planned *and*
+    /// recorded — send-success). Continuity of the next observation is
+    /// proven against the history slice past this commit: any intervening
+    /// tail-reset commit (empty tail, unchanged seqs) breaks continuity and
+    /// forces a fresh segment, while intervening no-op rewrites extend it.
+    /// `None` before the first observation of the turn.
+    absorbed_commit: Option<String>,
+}
+
+/// The request-local pair of live tail cursors: reasoning and content.
+#[derive(Clone, Debug, Default)]
+struct LiveCursorPair {
+    reasoning: LiveSegmentCursor,
+    content: LiveSegmentCursor,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct DurableRowIdentity {
+    sequence: i64,
+    message_key: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ClosedEvidence {
+    sent_bytes: String,
+    materialized_sequence: Option<i64>,
+    bound_row: Option<DurableRowIdentity>,
+    history_height: i64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct DurableRowView {
+    identity: DurableRowIdentity,
+    content: String,
+    reasoning: String,
+}
+
+fn durable_message_key<'a>(update_key: &'a str, kind: &str) -> Option<&'a str> {
+    let (prefix, ordinal) = update_key.rsplit_once(':')?;
+    ordinal.parse::<u64>().ok()?;
+    prefix.strip_suffix(&format!(":{kind}"))
+}
+
+fn durable_row_views(messages: &messages::MessageProjection) -> Vec<DurableRowView> {
+    let mut rows: BTreeMap<DurableRowIdentity, DurableRowView> = BTreeMap::new();
+    for (index, update) in messages.updates.iter().enumerate() {
+        let Some(sequence) = messages.chronology.get(index).copied().flatten() else {
+            continue;
+        };
+        let Some(update_key) = messages.update_keys.get(index) else {
+            continue;
+        };
+        let kind = update.session_update_kind();
+        let Some(message_key) = durable_message_key(update_key, kind) else {
+            continue;
+        };
+        let identity = DurableRowIdentity {
+            sequence,
+            message_key: message_key.to_string(),
+        };
+        let row = rows
+            .entry(identity.clone())
+            .or_insert_with(|| DurableRowView {
+                identity,
+                ..DurableRowView::default()
+            });
+        match update {
+            messages::MessageUpdate::AgentMessageChunk { text } => row.content.push_str(text),
+            messages::MessageUpdate::AgentThoughtChunk { text } => row.reasoning.push_str(text),
+            messages::MessageUpdate::UserMessageChunk { .. } => {}
+        }
+    }
+    rows.into_values().collect()
+}
+
+fn row_for_materialized_sequence(
+    sequence: Option<i64>,
+    rows: &[DurableRowView],
+) -> Option<DurableRowIdentity> {
+    let sequence = sequence?;
+    let mut matches = rows
+        .iter()
+        .filter(|row| row.identity.sequence == sequence)
+        .map(|row| row.identity.clone());
+    let only = matches.next()?;
+    matches.next().is_none().then_some(only)
+}
+
+#[derive(Default)]
+struct HistorySegmentSketch {
+    snapshot_indices: Vec<usize>,
+    content: Option<String>,
+    reasoning: Option<String>,
+    reasoning_window: String,
+    reasoning_seq: Option<u64>,
+}
+
+/// Infer exact row identities for history segments only when the complete
+/// segment-to-row assignment is unique and strictly increasing. Any
+/// ambiguity or inversion returns no inferred bindings; durable projection
+/// then remains authoritative and may duplicate rather than hide bytes.
+fn infer_history_row_bindings(
+    history: &[messages::CompositeSnapshot],
+    rows: &[DurableRowView],
+) -> BTreeMap<usize, DurableRowIdentity> {
+    let mut segments: Vec<HistorySegmentSketch> = Vec::new();
+    let mut current: Option<usize> = None;
+    for (index, snapshot) in history.iter().enumerate() {
+        let content = snapshot.content();
+        let reasoning = snapshot.reasoning();
+        if content.is_empty() && reasoning.is_empty() {
+            if let Some(segment) = current.take() {
+                segments[segment].snapshot_indices.push(index);
+            }
+            continue;
+        }
+        let segment = *current.get_or_insert_with(|| {
+            segments.push(HistorySegmentSketch {
+                content: Some(String::new()),
+                reasoning: Some(String::new()),
+                ..HistorySegmentSketch::default()
+            });
+            segments.len() - 1
+        });
+        let sketch = &mut segments[segment];
+        sketch.snapshot_indices.push(index);
+        if !content.is_empty() {
+            sketch.content = match sketch.content.take() {
+                Some(previous) if content.starts_with(&previous) => Some(content.to_string()),
+                Some(previous) if previous.is_empty() => Some(content.to_string()),
+                _ => None,
+            };
+        }
+        if !reasoning.is_empty() {
+            let next_seq = snapshot.reasoning_progress_seq();
+            sketch.reasoning = match sketch.reasoning.take() {
+                Some(mut known) if sketch.reasoning_window.is_empty() => {
+                    known.push_str(reasoning);
+                    Some(known)
+                }
+                Some(mut known) if reasoning.starts_with(&sketch.reasoning_window) => {
+                    known.push_str(&reasoning[sketch.reasoning_window.len()..]);
+                    Some(known)
+                }
+                Some(mut known)
+                    if matches!((sketch.reasoning_seq, next_seq), (Some(old), Some(new)) if new > old)
+                        && proven_reasoning_rollover(&sketch.reasoning_window, reasoning)
+                            .is_some() =>
+                {
+                    let overlap = proven_reasoning_rollover(&sketch.reasoning_window, reasoning)
+                        .expect("checked above");
+                    known.push_str(&reasoning[overlap..]);
+                    Some(known)
+                }
+                _ => None,
+            };
+            sketch.reasoning_window = reasoning.to_string();
+            sketch.reasoning_seq = next_seq;
+        }
+    }
+
+    let mut singleton_rows = Vec::new();
+    for segment in &segments {
+        let candidates: Vec<_> = rows
+            .iter()
+            .filter(|row| {
+                let content_matches = segment
+                    .content
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map_or(true, |value| row.content.starts_with(value));
+                let reasoning_matches = segment
+                    .reasoning
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map_or(true, |value| row.reasoning.starts_with(value));
+                let has_evidence = segment
+                    .content
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+                    || segment
+                        .reasoning
+                        .as_deref()
+                        .is_some_and(|value| !value.is_empty());
+                has_evidence && content_matches && reasoning_matches
+            })
+            .collect();
+        let [row] = candidates.as_slice() else {
+            return BTreeMap::new();
+        };
+        singleton_rows.push((*row).identity.clone());
+    }
+    if singleton_rows.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return BTreeMap::new();
+    }
+    let mut bindings = BTreeMap::new();
+    for (segment, row) in segments.iter().zip(singleton_rows) {
+        for index in &segment.snapshot_indices {
+            bindings.insert(*index, row.clone());
+        }
+    }
+    bindings
+}
+
+fn upsert_bound_evidence(
+    evidence: &mut Vec<ClosedEvidence>,
+    sent_bytes: String,
+    materialized_sequence: Option<i64>,
+    row: DurableRowIdentity,
+    history_height: i64,
+) {
+    if let Some(existing) = evidence
+        .iter_mut()
+        .find(|item| item.bound_row.as_ref() == Some(&row))
+    {
+        if sent_bytes.starts_with(&existing.sent_bytes) {
+            existing.sent_bytes = sent_bytes;
+        }
+        existing.materialized_sequence = existing.materialized_sequence.or(materialized_sequence);
+        return;
+    }
+    evidence.push(ClosedEvidence {
+        sent_bytes,
+        materialized_sequence,
+        bound_row: Some(row),
+        history_height,
+    });
+}
+
+fn bind_durable_evidence(
+    live: &mut LiveSegmentCursor,
+    rail: EvidenceRail,
+    rows: &[DurableRowView],
+) {
+    for evidence in &mut live.closed_evidence {
+        if evidence.bound_row.is_none() {
+            evidence.bound_row =
+                row_for_materialized_sequence(evidence.materialized_sequence, rows);
+        }
+    }
+    let unbound: Vec<usize> = live
+        .closed_evidence
+        .iter()
+        .enumerate()
+        .filter_map(|(index, evidence)| evidence.bound_row.is_none().then_some(index))
+        .collect();
+    let already_bound: std::collections::BTreeSet<_> = live
+        .closed_evidence
+        .iter()
+        .filter_map(|evidence| evidence.bound_row.clone())
+        .collect();
+    let mut tentative = Vec::new();
+    for index in &unbound {
+        let evidence = &live.closed_evidence[*index];
+        let candidates: Vec<_> = rows
+            .iter()
+            .filter(|row| !already_bound.contains(&row.identity))
+            .filter(|row| {
+                let text = match rail {
+                    EvidenceRail::Content => &row.content,
+                    EvidenceRail::Reasoning => &row.reasoning,
+                };
+                !evidence.sent_bytes.is_empty() && text.starts_with(&evidence.sent_bytes)
+            })
+            .map(|row| row.identity.clone())
+            .collect();
+        let [row] = candidates.as_slice() else {
+            return;
+        };
+        tentative.push((*index, row.clone()));
+    }
+    let mut ordered: Vec<_> = live
+        .closed_evidence
+        .iter()
+        .enumerate()
+        .filter_map(|(index, evidence)| {
+            evidence
+                .bound_row
+                .clone()
+                .map(|row| (evidence.history_height, index, row))
+        })
+        .chain(tentative.iter().map(|(index, row)| {
+            (
+                live.closed_evidence[*index].history_height,
+                *index,
+                row.clone(),
+            )
+        }))
+        .collect();
+    ordered.sort_by_key(|(height, index, _)| (*height, *index));
+    if ordered.windows(2).any(|pair| pair[0].2 >= pair[1].2) {
+        return;
+    }
+    for (index, row) in tentative {
+        live.closed_evidence[index].bound_row = Some(row);
+    }
+}
+
+impl LiveSegmentCursor {
+    /// Plan the novel delta of one freshly observed tail snapshot.
+    ///
+    /// Planning is a pure function of `(self, observed, progress_seq, rail,
+    /// history_continuity)`, so a failed send (plan never recorded)
+    /// re-plans the byte-identical candidate on the next poll. The poll
+    /// plans each candidate against a shadow copy of the cursor advanced
+    /// by the preceding planned candidates of the same poll.
+    ///
+    /// Returns the delta to emit plus the post-send cursor state.
+    /// `None` means nothing novel and no state change.
+    ///
+    /// `history_continuity` is the composite-history gate: `true` when no
+    /// tail-reset commit (an empty-tail snapshot with unchanged progress
+    /// counters) intervenes in the response document's commit history
+    /// between this cursor's `absorbed_commit` and the tip this poll
+    /// observed — or when the tail is being observed for the first time.
+    /// `false` when a reset intervened (a missed poll window: the segment
+    /// closed and a new one began) or the history could not be read. It is
+    /// the *only* sound discriminator between a no-op identical rewrite
+    /// (continuity: absorb, emit nothing) and a missed reset followed by a
+    /// byte-identical new segment (no continuity: re-emit in full) — the
+    /// progress counters alone cannot separate them, because a no-op
+    /// `write_reasoning` bumps its counter without changing bytes.
+    ///
+    /// The rails differ, and `plan` is rail-aware through the
+    /// `reasoning_tail` flag:
+    ///
+    /// - **reasoning** (`reasoning_tail = true`): `reasoning_progress_seq`
+    ///   advances on *every* `write_reasoning` append (including a no-op
+    ///   append of empty bytes). With continuity, an advance on
+    ///   byte-identical bytes is therefore a no-op rewrite: the bytes were
+    ///   already delivered and must not duplicate on the wire — the commit
+    ///   is absorbed and nothing streams. Without continuity the identical
+    ///   bytes are a new segment's and stream in full. The reasoning tail
+    ///   is also a bounded rolling preview (`MAX_LIVE_REASONING_BYTES`): a
+    ///   non-prefix change is accepted as continuity only when it is
+    ///   *proven* a window rollover — the previous observation was
+    ///   at/near the bound, the new observation is bounded by it, the new
+    ///   observation starts with the longest retained suffix of the
+    ///   previous window, *and* the history continuity holds. Any other
+    ///   divergence closes the segment and re-emits the whole new snapshot.
+    /// - **content** (`reasoning_tail = false`): `progress_seq` is a
+    ///   *lifecycle boundary* counter (first visible text, tool call, tool
+    ///   result, final response), so an advance on byte-identical bytes is
+    ///   the ordinary same-segment case (a boundary landed that did not
+    ///   touch the tail) — nothing new, never a re-emit. The content tail
+    ///   is segment-cumulative, never windowed: only exact prefix growth
+    ///   (with continuity) continues a segment; any shrink, non-prefix
+    ///   growth, divergence, or broken continuity closes the segment and
+    ///   re-emits the whole new snapshot.
+    ///
+    /// The fresh-segment plan for one whole observed snapshot: the new
+    /// segment's logical text starts at the snapshot, the previous
+    /// segment's delivered bytes close into `completed_sent_bytes` (they
+    /// stay delivered as that segment's reconciliation evidence), and the
+    /// history absorption is left to the caller (the tip commit it planned
+    /// against — every rebase must re-stamp it, never inherit a stale one).
+    fn fresh_segment_plan(&self, observed: &str) -> LiveSegmentPlan {
+        LiveSegmentPlan {
+            observed: observed.to_string(),
+            sent_len: observed.len(),
+            sent_bytes: observed.to_string(),
+            completed_sent_bytes: self.sent_bytes.clone(),
+            closed_evidence: self.closed_evidence.clone(),
+            unproven_gap: false,
+            absorbed_commit: None,
+        }
+    }
+
+    fn plan(
+        &self,
+        observed: &str,
+        progress_seq: Option<u64>,
+        reasoning_tail: bool,
+        history_continuity: bool,
+    ) -> Option<(String, LiveSegmentPlan)> {
+        let seq_advanced = match (self.progress_seq, progress_seq) {
+            (Some(previous), Some(current)) => current > previous,
+            _ => false,
+        };
+        // The reset observation and every divergence/close rebase the
+        // segment: the plan's post-send `absorbed_commit` is set by the
+        // caller (the history tip it planned against); no plan here may
+        // leave a stale absorbed commit from an earlier segment.
+        let plan_absorbs = |observed: String,
+                            sent_len: usize,
+                            sent_bytes: String,
+                            completed: String|
+         -> LiveSegmentPlan {
+            LiveSegmentPlan {
+                observed,
+                sent_len,
+                sent_bytes,
+                completed_sent_bytes: completed,
+                closed_evidence: self.closed_evidence.clone(),
+                unproven_gap: self.unproven_gap,
+                absorbed_commit: None,
+            }
+        };
+
+        // An observed empty tail after a non-empty observation is the
+        // runtime's reset-tail write: it closes the current segment (the
+        // rebase for the next observation) and emits nothing. The plan is
+        // still returned so the reset is recorded — without it, the next
+        // poll would replay the closed segment's bytes as a fresh prefix.
+        if observed.is_empty() {
+            if self.observed.is_empty()
+                && self.sent_bytes.is_empty()
+                && self.completed_sent_bytes.is_empty()
+            {
+                return None;
+            }
+            // The closed segment's delivered bytes stay delivered: retained
+            // as the reconciliation evidence for its materialized row.
+            return Some((
+                String::new(),
+                LiveSegmentPlan {
+                    observed: String::new(),
+                    sent_len: 0,
+                    sent_bytes: String::new(),
+                    completed_sent_bytes: self.sent_bytes.clone(),
+                    closed_evidence: self.closed_evidence.clone(),
+                    unproven_gap: false,
+                    absorbed_commit: None,
+                },
+            ));
+        }
+
+        if self.observed.is_empty() {
+            // Fresh segment (or the first observation of the turn): the whole
+            // snapshot is the segment's new logical text. An already-closed
+            // earlier segment's evidence stays retained.
+            return Some((observed.to_string(), self.fresh_segment_plan(observed)));
+        }
+
+        // Once a persisted reasoning preview jumps beyond the overlap that
+        // history can prove, subsequent windows cannot repair the missing
+        // middle. Absorb their commits without emitting bytes; the durable
+        // assistant row is the only authoritative recovery source.
+        if reasoning_tail && self.unproven_gap {
+            return Some((
+                String::new(),
+                LiveSegmentPlan {
+                    observed: observed.to_string(),
+                    sent_len: self.sent_len,
+                    sent_bytes: self.sent_bytes.clone(),
+                    completed_sent_bytes: self.completed_sent_bytes.clone(),
+                    closed_evidence: self.closed_evidence.clone(),
+                    unproven_gap: true,
+                    absorbed_commit: None,
+                },
+            ));
+        }
+
+        if let Some(suffix) = observed.strip_prefix(self.observed.as_str()) {
+            if suffix.is_empty() {
+                // Identical bytes. Three cases, resolved by history:
+                //
+                // 1. *No continuity* (a tail-reset commit intervened since
+                //    the cursor's absorbed commit, or the history could not
+                //    be read): the identical bytes are a *new segment's*
+                //    bytes that happen to equal the old segment's — a
+                //    durably-recoverable rewrite that must stream in full
+                //    (Blocker: never suppress a recoverable byte).
+                // 2. *Continuity, unchanged seq*: a stale identical read —
+                //    nothing novel.
+                // 3. *Continuity, advanced seq*: a genuine no-op identical
+                //    rewrite (the runtime's `write_reasoning("")` bumps
+                //    `reasoning_progress_seq` but writes the same bytes).
+                //    The bytes were already delivered; re-emitting would
+                //    duplicate them. The rewrite is absorbed (the commit
+                //    tip advances) and nothing streams.
+                if !history_continuity {
+                    return Some((observed.to_string(), self.fresh_segment_plan(observed)));
+                }
+                if !seq_advanced {
+                    return None;
+                }
+                return Some((
+                    String::new(),
+                    LiveSegmentPlan {
+                        observed: observed.to_string(),
+                        sent_len: self.sent_len,
+                        sent_bytes: self.sent_bytes.clone(),
+                        completed_sent_bytes: self.completed_sent_bytes.clone(),
+                        closed_evidence: self.closed_evidence.clone(),
+                        unproven_gap: self.unproven_gap,
+                        absorbed_commit: None,
+                    },
+                ));
+            }
+            // Exact prefix growth within the segment: only the suffix is new.
+            // A broken history continuity (an intervening reset commit) means
+            // even prefix-shaped growth is a *new segment's* coincidence: the
+            // old segment closed and this observation starts fresh — stream
+            // the whole snapshot.
+            if !history_continuity {
+                return Some((observed.to_string(), self.fresh_segment_plan(observed)));
+            }
+            let mut sent_bytes = self.sent_bytes.clone();
+            sent_bytes.push_str(suffix);
+            return Some((
+                suffix.to_string(),
+                plan_absorbs(
+                    observed.to_string(),
+                    self.sent_len + suffix.len(),
+                    sent_bytes,
+                    self.completed_sent_bytes.clone(),
+                ),
+            ));
+        }
+
+        // Non-prefix change. On the content rail this is always a divergence
+        // (the content tail is segment-cumulative, never windowed): even an
+        // accidental byte overlap — 'abc' → 'cdef' — must not slice into it;
+        // the segment closes and the whole new snapshot streams in full.
+        if !reasoning_tail {
+            return Some((observed.to_string(), self.fresh_segment_plan(observed)));
+        }
+
+        // Reasoning rail: a non-prefix change continues the segment only when
+        // it is *proven* a bounded-window rollover — the runtime's
+        // `MAX_LIVE_REASONING_BYTES` rolling preview dropped head bytes and
+        // appended a suffix — *and* the `reasoning_progress_seq` advanced
+        // (every rollover is caused by a `write_reasoning` append, which
+        // bumps the counter before the flush; a non-prefix change with an
+        // unchanged seq cannot be an append and must be treated as a
+        // divergence) — *and* the history continuity holds (an intervening
+        // reset commit means the observation is a new segment, not a
+        // rollover of the old one). Anything else (a diverging rewrite, a
+        // shrink that is not a window trim, a mid-window corruption, an
+        // accidental byte coincidence) closes the segment and re-emits the
+        // whole snapshot.
+        if seq_advanced && history_continuity {
+            if let Some(overlap) = proven_reasoning_rollover(&self.observed, observed) {
+                let delta = observed[overlap..].to_string();
+                let mut sent_bytes = self.sent_bytes.clone();
+                sent_bytes.push_str(&delta);
+                return Some((
+                    delta,
+                    plan_absorbs(
+                        observed.to_string(),
+                        self.sent_len + observed.len() - overlap,
+                        sent_bytes,
+                        self.completed_sent_bytes.clone(),
+                    ),
+                ));
+            }
+            if observed.len() == MAX_LIVE_REASONING_WINDOW_BYTES {
+                // This is still the same history segment (no reset
+                // intervened), and a full preview with no overlap proves at
+                // least one whole window vanished between snapshots.
+                // Re-emitting it would omit that gap and later duplicate its
+                // tail when the durable row repairs it.
+                return Some((
+                    String::new(),
+                    LiveSegmentPlan {
+                        observed: observed.to_string(),
+                        sent_len: self.sent_len,
+                        sent_bytes: self.sent_bytes.clone(),
+                        completed_sent_bytes: self.completed_sent_bytes.clone(),
+                        closed_evidence: self.closed_evidence.clone(),
+                        unproven_gap: true,
+                        absorbed_commit: None,
+                    },
+                ));
+            }
+        }
+        // Shrink or divergence: close the segment and rebase onto the whole
+        // new snapshot. This is the documented append-only/no-loss policy
+        // (see the type docs) — already-sent bytes are never sliced or
+        // retracted, and the new observation streams in full on a fresh
+        // segment.
+        Some((observed.to_string(), self.fresh_segment_plan(observed)))
+    }
+
+    /// Commit one planned (and successfully sent) state into this cursor.
+    fn commit(&mut self, plan: LiveSegmentPlan, progress_seq: Option<u64>) {
+        self.observed = plan.observed;
+        self.sent_len = plan.sent_len;
+        self.sent_bytes = plan.sent_bytes;
+        self.completed_sent_bytes = plan.completed_sent_bytes;
+        self.closed_evidence = plan.closed_evidence;
+        self.unproven_gap = plan.unproven_gap;
+        self.progress_seq = progress_seq;
+        // Absorb the history tip the plan carried: the cursor's continuity
+        // anchor advances exactly with delivery. `None` leaves the anchor
+        // standing (an observation without a readable history never
+        // regresses it), so the next poll re-proves continuity against the
+        // same anchor.
+        if let Some(cid) = plan.absorbed_commit {
+            self.absorbed_commit = Some(cid);
+        }
+    }
+
+    /// Full cursor state as a no-byte plan, used to advance a validated
+    /// composite anchor without inventing a wire update.
+    fn anchor_plan(&self, cid: &str) -> LiveSegmentPlan {
+        LiveSegmentPlan {
+            observed: self.observed.clone(),
+            sent_len: self.sent_len,
+            sent_bytes: self.sent_bytes.clone(),
+            completed_sent_bytes: self.completed_sent_bytes.clone(),
+            closed_evidence: self.closed_evidence.clone(),
+            unproven_gap: self.unproven_gap,
+            absorbed_commit: Some(cid.to_string()),
+        }
+    }
+}
+
+/// First retained snapshot not yet absorbed by one delivery rail. `None`
+/// means a nonempty anchor was absent from this same-document chain.
+fn replay_start(history: &[messages::CompositeSnapshot], anchor: Option<&str>) -> Option<usize> {
+    match anchor {
+        None => Some(0),
+        Some(anchor) => history
+            .iter()
+            .position(|snapshot| snapshot.cid == anchor)
+            .map(|index| index + 1),
+    }
+}
+
+/// Earliest send-success rail anchor retained for the next observation.
+/// Both rails must have an anchor before old snapshots can be discarded.
+fn earliest_live_anchor(
+    observation: &messages::HistoryObservation,
+    cursors: &LiveCursorPair,
+) -> Option<String> {
+    let content = cursors.content.absorbed_commit.as_deref()?;
+    let reasoning = cursors.reasoning.absorbed_commit.as_deref()?;
+    let chain = observation.retained_chain();
+    let content_index = chain.iter().position(|snapshot| snapshot.cid == content)?;
+    let reasoning_index = chain
+        .iter()
+        .position(|snapshot| snapshot.cid == reasoning)?;
+    Some(chain[content_index.min(reasoning_index)].cid.clone())
+}
+
+/// The runtime's live reasoning preview bound (`MAX_LIVE_REASONING_BYTES` in
+/// `gents::streaming`): the durable `AgentResponse.reasoning` tail is a
+/// rolling window that never exceeds this many bytes. Duplicated here
+/// because the projection must prove a rollover against the same bound the
+/// runtime trims to; the two constants must move together.
+const MAX_LIVE_REASONING_WINDOW_BYTES: usize = 64 * 1024;
+
+/// Proof that `(previous, current)` is a bounded-window rollover of the
+/// runtime's live reasoning preview: the runtime's
+/// `append_live_reasoning_preview` drops head bytes only when
+/// `previous.len() + appended > MAX_LIVE_REASONING_WINDOW_BYTES`, and then
+/// the new window is exactly the retained suffix plus the appended bytes.
+///
+/// The proof therefore requires every fact of that shape:
+///
+/// - both windows are bounded by the runtime constant (a larger observation
+///   is corruption, not a window);
+/// - the head actually dropped (`overlap < previous.len()` — this is the
+///   near-bound condition: `dropped = previous.len() + appended - MAX ≥ 1`);
+/// - bytes actually appended (`current.len() > overlap` — the runtime never
+///   shrinks the window without an append);
+/// - `current` starts with the longest UTF-8-safe suffix of `previous`
+///   (the retained overlap after the head drop).
+///
+/// Returns the retained overlap length, or `None` when the pair is not a
+/// proven rollover. The caller must additionally require an advanced
+/// `reasoning_progress_seq`: a rollover is always caused by a
+/// `write_reasoning` append, which bumps the counter before the flush, so a
+/// genuine rollover observed across two polls always carries an advanced
+/// seq. An unproven non-prefix change could be a diverging rewrite or a
+/// mid-window corruption; slicing into unproven continuity would silently
+/// drop bytes that were never sent (Blocker: overlap must be gated on
+/// proven rollover, never on an accidental byte coincidence).
+fn proven_reasoning_rollover(previous: &str, current: &str) -> Option<usize> {
+    if previous.len() > MAX_LIVE_REASONING_WINDOW_BYTES
+        || current.len() > MAX_LIVE_REASONING_WINDOW_BYTES
+    {
+        return None;
+    }
+    // The retained-overlap lower bound: the runtime's trim keeps exactly
+    // `previous.len() + appended - MAX` bytes of the old window (where
+    // `appended = current.len() - overlap`), so an overlap shorter than the
+    // genuine trim can never be the transform's retained window (an
+    // `abc` -> `cdef` coincidence with a 1-byte "overlap" would emit only
+    // `def` and lose bytes that were never delivered — see the unit tests).
+    // Computed as `previous.len() - tail_keep` in usize so a pair that
+    // never crossed the bound cannot underflow.
+    let overlap = suffix_prefix_overlap(previous, current);
+    if overlap == 0 || overlap >= previous.len() || overlap >= current.len() {
+        return None;
+    }
+    let appended = current.len() - overlap;
+    let kept = previous.len() + appended;
+    if kept <= MAX_LIVE_REASONING_WINDOW_BYTES {
+        // The pair never crossed the bound: the runtime appends without
+        // trimming, so a non-prefix change here is a divergence, not a
+        // rollover.
+        return None;
+    }
+    if !current.is_char_boundary(overlap) {
+        return None;
+    }
+    // Exact-transform proof. The runtime's append is exactly
+    // `new_window = tail(previous, MAX - |appended|) ++ appended`, so the
+    // pair is a proven rollover if and only if taking `appended` as the
+    // bytes past the retained overlap and running the runtime's own
+    // transform over `previous` reproduces `current` byte for byte. An
+    // `abc -> cdef` coincidence, a diverging rewrite, or a mid-window
+    // corruption fails here and the caller closes the segment instead of
+    // slicing into unproven continuity.
+    let appended_text = &current[overlap..];
+    let expected = format!(
+        "{}{}",
+        tail_bytes(
+            previous,
+            MAX_LIVE_REASONING_WINDOW_BYTES - appended_text.len()
+        ),
+        appended_text
+    );
+    if expected != current {
+        return None;
+    }
+    Some(overlap)
+}
+
+/// The runtime's UTF-8-safe tail window (`tail_window` in
+/// `gents::streaming`): the last `max_bytes` bytes of `value`, advanced to
+/// the nearest character boundary when the cut lands mid-character.
+/// Duplicated here because the rollover proof must run the exact transform
+/// the runtime applies; the two implementations must move together.
+fn tail_bytes(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut start = value.len() - max_bytes;
+    while !value.is_char_boundary(start) {
+        start += 1;
+    }
+    &value[start..]
+}
+
+/// The UTF-8-safe length of the longest suffix of `previous` that is a
+/// prefix of `current` (linear KMP over the combined byte string; the
+/// sentinel byte cannot occur in either UTF-8 text). Used to advance through
+/// a rolling bounded preview without re-streaming already-delivered bytes.
+fn suffix_prefix_overlap(previous: &str, current: &str) -> usize {
+    if previous.is_empty() || current.is_empty() {
+        return 0;
+    }
+    let mut combined = Vec::with_capacity(current.len() + 1 + previous.len());
+    combined.extend_from_slice(current.as_bytes());
+    combined.push(0xff);
+    combined.extend_from_slice(previous.as_bytes());
+    let mut prefix = vec![0usize; combined.len()];
+    for index in 1..combined.len() {
+        let mut candidate = prefix[index - 1];
+        while candidate > 0 && combined[index] != combined[candidate] {
+            candidate = prefix[candidate - 1];
+        }
+        if combined[index] == combined[candidate] {
+            candidate += 1;
+        }
+        prefix[index] = candidate.min(current.len());
+    }
+    prefix.last().copied().unwrap_or_default()
+}
 
 /// Request-local dedup cursor for one live turn's projection poll.
 ///
@@ -820,22 +2153,54 @@ const TRACKED_TOOL_FIELDS: [&str; 7] = [
 /// - available commands: the last-sent tool-list fingerprint;
 /// - subagents: the last-sent payload fingerprint per
 ///   `<sessionUpdate kind>:<subagentId>`;
-/// - messages: the set of durable `AgentMessage` keys already streamed.
+/// - live tails: one [`LiveSegmentCursor`] per stream (content, reasoning);
+/// - durable message chunks: a delivered-length state per
+///   `(message_key, update kind, ordinal)` chunk key, so an upserted/grown
+///   row re-projects and emits only the newly proven suffix.
 ///
-/// The poll computes novel events against the cursor without mutating it;
-/// the caller records each advance after the send succeeds, so a send
-/// failure replays the same events on the next poll instead of dropping
-/// them.
+/// The poll computes novel events against *shadow copies* of the live and
+/// durable chunk states (never mutating the cursor); each shadow advance is
+/// carried inside its [`CursorAdvance`] and the caller records it only after
+/// the corresponding send succeeded, so a send failure replays the identical
+/// candidates on the next poll instead of dropping or duplicating them.
 #[derive(Debug, Default)]
 pub(crate) struct RequestCursor {
+    /// Validated, request-local response history cache. Observation advances
+    /// independently of outbound delivery; the per-rail live cursors below
+    /// remain the send-success anchors into this retained chain.
+    history_observation: messages::HistoryObservation,
+    /// Response document generation whose live delivery cursors are active.
+    delivered_response_doc: Option<String>,
     /// Last-sent base payload per tool call id.
     tool_bases: BTreeMap<String, Value>,
+    /// Last delivered terminal status update per tool call.
+    tool_terminal_states: BTreeMap<String, String>,
     /// Last-sent visible tool list fingerprint.
     commands_state: Option<u64>,
     /// Last-sent payload fingerprint per subagent key.
     subagent_states: BTreeMap<String, u64>,
-    /// Durable message keys already streamed.
-    message_chunks: BTreeMap<String, ()>,
+    /// The committed (send-success) state of the live tail cursors.
+    live_cursors: LiveCursorPair,
+    /// The live cursor state this poll planned against. Not durable state:
+    /// refreshed every poll and only promoted into `live_cursors` through
+    /// `record` as each planned event's send succeeds.
+    planned_live_cursors: Option<LiveCursorPair>,
+    /// The committed (send-success) delivered length per durable chunk key.
+    /// The durable pass plans against a per-poll shadow of this map; an
+    /// advance is promoted into it only through `record` after the
+    /// corresponding send succeeded, so a failed send replans the identical
+    /// durable candidate on the next poll.
+    durable_chunks: BTreeMap<String, DurableChunkState>,
+    /// Last transcript sequence whose complete projection batch succeeded.
+    /// Queries include this row because the current assistant row may grow.
+    message_sequence_high_water: Option<i64>,
+}
+
+/// The rail one row's live evidence streamed on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum EvidenceRail {
+    Content,
+    Reasoning,
 }
 
 impl RequestCursor {
@@ -880,6 +2245,22 @@ impl RequestCursor {
         Some(CursorAdvance::Commands { fingerprint })
     }
 
+    fn tool_terminal_novel(&self, tool_call_id: &str, status: &str) -> Option<CursorAdvance> {
+        if status.is_empty()
+            || self
+                .tool_terminal_states
+                .get(tool_call_id)
+                .map(String::as_str)
+                == Some(status)
+        {
+            return None;
+        }
+        Some(CursorAdvance::ToolTerminal {
+            tool_call_id: tool_call_id.to_string(),
+            status: status.to_string(),
+        })
+    }
+
     /// Whether the subagent payload is novel for its key.
     fn subagent_changed(&mut self, key: &str, fingerprint: u64) -> Option<CursorAdvance> {
         if self.subagent_states.get(key) == Some(&fingerprint) {
@@ -891,19 +2272,32 @@ impl RequestCursor {
         })
     }
 
-    /// Whether the durable message key has not been streamed yet.
-    fn message_seen(&mut self, message_key: &str) -> bool {
-        self.message_chunks.contains_key(message_key)
-    }
-
     /// Record one delivered event after its send succeeded.
     pub(crate) fn record(&mut self, advance: CursorAdvance) {
         match advance {
+            CursorAdvance::Many(advances) => {
+                for advance in advances {
+                    self.record(advance);
+                }
+            }
+            CursorAdvance::ResponseDocument { doc_id } => {
+                if self.delivered_response_doc.as_deref() != Some(&doc_id) {
+                    self.delivered_response_doc = Some(doc_id);
+                    self.live_cursors = LiveCursorPair::default();
+                    self.planned_live_cursors = None;
+                }
+            }
             CursorAdvance::ToolBase {
                 tool_call_id,
                 payload,
             } => {
                 self.tool_bases.insert(tool_call_id, payload);
+            }
+            CursorAdvance::ToolTerminal {
+                tool_call_id,
+                status,
+            } => {
+                self.tool_terminal_states.insert(tool_call_id, status);
             }
             CursorAdvance::Commands { fingerprint } => {
                 self.commands_state = Some(fingerprint);
@@ -911,12 +2305,58 @@ impl RequestCursor {
             CursorAdvance::Subagent { key, fingerprint } => {
                 self.subagent_states.insert(key, fingerprint);
             }
-            CursorAdvance::MessageChunk { message_key } => {
-                self.message_chunks.insert(message_key, ());
+            CursorAdvance::LiveContent { plan, progress_seq } => {
+                self.live_cursors.content.commit(plan, progress_seq);
+            }
+            CursorAdvance::LiveReasoning { plan, progress_seq } => {
+                self.live_cursors.reasoning.commit(plan, progress_seq);
+            }
+            CursorAdvance::DurableChunk {
+                message_key,
+                sent_text,
+            } => {
+                self.durable_chunks
+                    .entry(message_key)
+                    .or_default()
+                    .sent_text = sent_text;
+            }
+            CursorAdvance::MessageHighWater { sequence } => {
+                self.message_sequence_high_water = Some(
+                    self.message_sequence_high_water
+                        .map_or(sequence, |high| high.max(sequence)),
+                );
             }
         }
     }
 }
+
+/// A per durable chunk delivery state: how much of the chunk's logical
+/// text has already been *successfully sent*.
+///
+/// A durable `AgentMessage` row can appear before the request
+/// terminalizes and be upserted (same `message_key`/sequence, growing
+/// content), so the cursor must never mark a row "seen forever" after its
+/// first observation. Instead each chunk keeps the exact delivered length
+/// of its text and a re-projection emits only the newly proven suffix.
+#[derive(Clone, Debug, Default)]
+struct DurableChunkState {
+    /// Exact logical text of this chunk already successfully sent. Prefix
+    /// equality, not length alone, proves a later observation is growth.
+    sent_text: String,
+}
+
+/// The tool-call fields the live poll tracks for diffs. A change to any of
+/// these emits a `tool_call_update` carrying exactly the changed fields; a
+/// first observation emits the full `tool_call` registration.
+const TRACKED_TOOL_FIELDS: [&str; 7] = [
+    "title",
+    "kind",
+    "status",
+    "content",
+    "rawInput",
+    "rawOutput",
+    "meta",
+];
 
 /// The tracked tool-call fields that differ between the last-sent base and
 /// the freshly observed payload, as a JSON object for a `tool_call_update`.
@@ -1952,7 +3392,9 @@ mod tests {
                 "agent_thought_chunk".to_string(),
                 "agent_message_chunk".to_string(),
                 "tool_call".to_string(),
+                "tool_call_update".to_string(),
                 "tool_call".to_string(),
+                "tool_call_update".to_string(),
                 "subagent_spawned".to_string(),
                 "subagent_progress".to_string(),
                 "available_commands_update".to_string(),
@@ -1981,9 +3423,8 @@ mod tests {
         assert_eq!(spawned.payload["subagent_id"], "s-chron-child");
 
         // Failed later send: record only the first three advances (thought,
-        // text, tool a). The remaining events — tool z, spawned, progress,
-        // commands — must reappear in the same deterministic order on the
-        // next poll, with the delivered events never duplicated.
+        // text, tool-a base). Its terminal update and all later events must
+        // reappear in the same deterministic order on the next poll.
         for advance in first.iter().take(3).map(|event| event.advance.clone()) {
             cursor.record(advance);
         }
@@ -1995,17 +3436,26 @@ mod tests {
         assert_eq!(
             retry_kinds,
             vec![
+                "tool_call_update".to_string(),
                 "tool_call".to_string(),
+                "tool_call_update".to_string(),
                 "subagent_spawned".to_string(),
                 "subagent_progress".to_string(),
                 "available_commands_update".to_string(),
             ],
             "the failed events reappear in the same deterministic remaining order; the delivered ones never duplicate"
         );
-        let retry_tool_id = second[0].payload["toolCallId"]
-            .as_str()
-            .expect("toolCallId");
-        assert_eq!(retry_tool_id, "call-z");
+        let retry_tool_ids: Vec<&str> = second
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload["sessionUpdate"].as_str(),
+                    Some("tool_call") | Some("tool_call_update")
+                )
+            })
+            .map(|event| event.payload["toolCallId"].as_str().expect("toolCallId"))
+            .collect();
+        assert_eq!(retry_tool_ids, vec!["call-a", "call-z", "call-z"]);
 
         // Deliver the rest; a final poll is empty.
         for advance in second.iter().map(|event| event.advance.clone()) {
@@ -2016,5 +3466,1028 @@ mod tests {
             .await
             .expect("third poll");
         assert!(third.is_empty(), "every event is now delivered");
+    }
+
+    // -------------------------------------------------------------------
+    // Live-tail streaming reconciliation regressions
+    // -------------------------------------------------------------------
+    //
+    // Every test below drives the production path: durable rows seeded
+    // into an embedded node with runtime schemas, projected through
+    // `ProjectionEngine::project_request_updates` with a real
+    // `RequestCursor`, advances recorded exactly as the send loop does
+    // (only after a successful send).
+
+    /// One live/terminal `AgentResponse` row for the request: the live tail
+    /// snapshot (`content`/`reasoning`), the progress counters, and the
+    /// materialization pointer. `status: "streaming"` keeps the request
+    /// non-terminal so the live path (not the stop-reason projection) owns
+    /// the turn.
+    async fn seed_response_row(
+        engine: &ProjectionEngine,
+        session_id: &str,
+        request_id: &str,
+        content: &str,
+        reasoning: &str,
+        progress_seq: i64,
+        reasoning_progress_seq: i64,
+        materialized_message_sequence: Option<i64>,
+    ) {
+        let escaped_session = gents::graphql::escape_graphql_string(session_id);
+        let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let escaped_content = gents::graphql::escape_graphql_string(content);
+        let escaped_reasoning = gents::graphql::escape_graphql_string(reasoning);
+        let materialized_field = materialized_message_sequence
+            .map(|seq| format!("materialized_message_sequence: {seq}"))
+            .unwrap_or_default();
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentResponse(input: {{
+                    response_key: "{escaped_request}"
+                    request_id: "{escaped_request}"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    session_id: "{escaped_session}"
+                    content: "{escaped_content}"
+                    reasoning: "{escaped_reasoning}"
+                    status: "streaming"
+                    token_count: 0
+                    progress_seq: {progress_seq}
+                    reasoning_progress_seq: {reasoning_progress_seq}
+                    created_at: "2026-08-31T23:00:00Z"
+                    {materialized_field}
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = engine.node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "seed response failed: {:?}",
+            response.errors
+        );
+    }
+
+    /// Replace the seeded response row's live tail and progress counters —
+    /// the exact shape of the runtime's streaming flush mutation.
+    async fn update_response_tail(
+        engine: &ProjectionEngine,
+        request_id: &str,
+        content: &str,
+        reasoning: &str,
+        progress_seq: i64,
+        reasoning_progress_seq: i64,
+    ) {
+        let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let escaped_content = gents::graphql::escape_graphql_string(content);
+        let escaped_reasoning = gents::graphql::escape_graphql_string(reasoning);
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ request_id: {{ _eq: "{escaped_request}" }} }},
+                    input: {{
+                        content: "{escaped_content}"
+                        reasoning: "{escaped_reasoning}"
+                        progress_seq: {progress_seq}
+                        reasoning_progress_seq: {reasoning_progress_seq}
+                    }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = engine.node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "update response tail failed: {:?}",
+            response.errors
+        );
+    }
+
+    /// One assistant `AgentMessage` row with a single text block, the exact
+    /// envelope shape the runtime persists.
+    async fn seed_assistant_text_row(
+        engine: &ProjectionEngine,
+        session_id: &str,
+        request_id: &str,
+        sequence: i64,
+        text: &str,
+    ) {
+        let message = serde_json::to_string(&gents_protocol::message::Message::Assistant {
+            id: None,
+            content: vec![gents_protocol::message::AssistantContent::text(text)],
+        })
+        .expect("serialize assistant message");
+        let escaped_message = gents::graphql::escape_graphql_string(&message);
+        let escaped_session = gents::graphql::escape_graphql_string(session_id);
+        let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "{escaped_request}:{sequence}"
+                    session_id: "{escaped_session}"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    request_id: "{escaped_request}"
+                    sequence: {sequence}
+                    role: "assistant"
+                    content: "{escaped_message}"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = engine.node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "seed assistant row failed: {:?}",
+            response.errors
+        );
+    }
+
+    /// Grow one seeded assistant row's text in place (an upserted/grown
+    /// intermediate row), keeping the same `message_key` and sequence.
+    async fn grow_assistant_text_row(
+        engine: &ProjectionEngine,
+        request_id: &str,
+        sequence: i64,
+        text: &str,
+    ) {
+        let message = serde_json::to_string(&gents_protocol::message::Message::Assistant {
+            id: None,
+            content: vec![gents_protocol::message::AssistantContent::text(text)],
+        })
+        .expect("serialize assistant message");
+        let escaped_message = gents::graphql::escape_graphql_string(&message);
+        let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentMessage(
+                    filter: {{ message_key: {{ _eq: "{escaped_request}:{sequence}" }} }},
+                    input: {{ content: "{escaped_message}" }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = engine.node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "grow assistant row failed: {:?}",
+            response.errors
+        );
+    }
+
+    /// Deliver every event of one poll (the send loop's success path).
+    async fn deliver(
+        engine: &ProjectionEngine,
+        session_id: &str,
+        request_id: &str,
+        token_high_water: &mut u64,
+        cursor: &mut RequestCursor,
+    ) -> Vec<NovelProjectionEvent> {
+        let batch = engine
+            .project_request_updates(session_id, request_id, token_high_water, cursor)
+            .await
+            .expect("poll");
+        for event in &batch.events {
+            cursor.record(event.advance.clone());
+        }
+        for advance in batch.trailing_advances {
+            cursor.record(advance);
+        }
+        batch.events
+    }
+
+    /// `(sessionUpdate kind, text)` of one poll's events.
+    fn chunk_texts(events: &[NovelProjectionEvent]) -> Vec<(String, String)> {
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload["sessionUpdate"].as_str(),
+                    Some("agent_message_chunk") | Some("agent_thought_chunk")
+                )
+            })
+            .map(|event| {
+                (
+                    event.payload["sessionUpdate"]
+                        .as_str()
+                        .expect("sessionUpdate")
+                        .to_string(),
+                    event.payload["content"]["text"]
+                        .as_str()
+                        .expect("chunk text")
+                        .to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// 1. Live content deltas stream incrementally: `Hel` then `lo` before
+    /// the request terminalizes, never the whole text replayed per poll.
+    #[tokio::test]
+    async fn live_content_streams_incremental_deltas_before_terminal() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-live";
+        let request_id = "req-live";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "Hel", "", 1, 0, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "Hel".into())],
+            "the first live tail observation streams the whole snapshot"
+        );
+
+        update_response_tail(&engine, request_id, "Hello", "", 2, 0).await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&second),
+            vec![("agent_message_chunk".into(), "lo".into())],
+            "prefix growth emits only the new suffix"
+        );
+
+        // An unchanged tail re-poll emits nothing.
+        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(third.is_empty(), "an unchanged tail is not novel");
+    }
+
+    /// 2. A missed poll window (the live tail reset before the final row was
+    /// observed) plus the durable final row emits only the never-sent
+    /// suffix, never a replay of the already-sent prefix.
+    #[tokio::test]
+    async fn missed_reset_plus_durable_final_row_emits_only_the_unsent_suffix() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-reset";
+        let request_id = "req-reset";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        // Poll 1 sees the live prefix "He" and delivers it.
+        seed_response_row(&engine, session_id, request_id, "He", "", 1, 0, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "He".into())]
+        );
+
+        // Between polls the runtime reset the tail (empty) and materialized
+        // the final row "Hello" — the projection never observed "Hello"
+        // live. The materialization pointer binds the row to the live
+        // segment whose prefix was delivered, so the durable pass must emit
+        // only "llo".
+        seed_assistant_text_row(&engine, session_id, request_id, 5, "Hello").await;
+        update_response_tail(&engine, request_id, "", "", 1, 0).await;
+        update_materialized_sequence(&engine, request_id, 5).await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&second),
+            vec![("agent_message_chunk".into(), "llo".into())],
+            "the durable final row emits only the bytes the live cursor never sent"
+        );
+
+        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(third.is_empty(), "the final row is fully delivered");
+    }
+
+    /// 3. The whole live text was sent, then the durable final row appears:
+    /// nothing replays. The live `sent_bytes` prove the row is covered.
+    #[tokio::test]
+    async fn fully_sent_live_tail_suppresses_the_durable_final_row_replay() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-full";
+        let request_id = "req-full";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "Hello", "", 1, 0, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "Hello".into())]
+        );
+
+        // Materialization: the tail cleared and the final row carries the
+        // same text, bound by materialized_message_sequence.
+        seed_assistant_text_row(&engine, session_id, request_id, 5, "Hello").await;
+        update_response_tail(&engine, request_id, "", "", 1, 0).await;
+        update_materialized_sequence(&engine, request_id, 5).await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(
+            second.is_empty(),
+            "a fully live-sent final row never replays durably"
+        );
+    }
+
+    /// 4. An inflight durable row grows (the same key/sequence upserted with
+    /// longer text): the poll emits exactly the growth suffix.
+    #[tokio::test]
+    async fn inflight_durable_row_growth_emits_only_the_suffix() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-grow";
+        let request_id = "req-grow";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_assistant_text_row(&engine, session_id, request_id, 2, "Hel").await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "Hel".into())]
+        );
+
+        grow_assistant_text_row(&engine, request_id, 2, "Hello").await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&second),
+            vec![("agent_message_chunk".into(), "lo".into())],
+            "row growth emits only the newly proven suffix"
+        );
+
+        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(third.is_empty(), "the grown row is fully delivered");
+    }
+
+    /// A durable row replacement that is not an append cannot reuse a byte
+    /// offset from the old value. In particular, a one-byte ASCII value
+    /// replaced by multibyte UTF-8 must emit the authoritative replacement
+    /// whole and never slice through a code point.
+    #[tokio::test]
+    async fn durable_non_prefix_utf8_replacement_emits_whole_without_panicking() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-durable-utf8";
+        let request_id = "req-durable-utf8";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_assistant_text_row(&engine, session_id, request_id, 2, "a").await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "a".into())]
+        );
+
+        grow_assistant_text_row(&engine, request_id, 2, "日x").await;
+        let replacement = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&replacement),
+            vec![("agent_message_chunk".into(), "日x".into())]
+        );
+    }
+
+    /// 5. An old segment closed by a reset, then a *new* segment whose text
+    /// happens to start with the old segment's text: the new segment streams
+    /// in full — live bytes of the old segment never suppress it.
+    #[tokio::test]
+    async fn new_segment_after_reset_is_not_suppressed_by_an_accidental_prefix() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-seg";
+        let request_id = "req-seg";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        // Old segment: "Hello" delivered live.
+        seed_response_row(&engine, session_id, request_id, "Hello", "", 1, 0, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "Hello".into())]
+        );
+
+        // Reset, then a new segment "Hello world" — its prefix collides with
+        // the old segment but it is a *different* logical segment.
+        update_response_tail(&engine, request_id, "", "", 1, 0).await;
+        let reset = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(reset.is_empty(), "the reset itself emits nothing");
+
+        update_response_tail(&engine, request_id, "Hello world", "", 3, 0).await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&second),
+            vec![("agent_message_chunk".into(), "Hello world".into())],
+            "the new segment streams in full; old-segment bytes never suppress it"
+        );
+    }
+
+    /// A single poll can observe several durable response snapshots. A
+    /// reset between two non-empty segments must replay both segments in
+    /// commit order, even when no poll happened at the reset boundary.
+    #[tokio::test]
+    async fn one_poll_replays_growth_reset_and_new_segment_in_order() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-missed-reset";
+        let request_id = "req-missed-reset";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "A", "", 1, 0, None).await;
+        update_response_tail(&engine, request_id, "", "", 1, 0).await;
+        update_response_tail(&engine, request_id, "B", "", 2, 0).await;
+
+        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&events),
+            vec![
+                ("agent_message_chunk".into(), "A".into()),
+                ("agent_message_chunk".into(), "B".into()),
+            ]
+        );
+        assert!(
+            deliver(&engine, session_id, request_id, &mut tokens, &mut cursor)
+                .await
+                .is_empty()
+        );
+    }
+
+    /// Identical bytes on either side of a missed reset are two logical
+    /// segments. History, not byte equality, preserves the second segment.
+    #[tokio::test]
+    async fn one_poll_replays_identical_segments_separated_by_reset() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-identical-reset";
+        let request_id = "req-identical-reset";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "same", "", 1, 0, None).await;
+        update_response_tail(&engine, request_id, "", "", 1, 0).await;
+        update_response_tail(&engine, request_id, "same", "", 2, 0).await;
+
+        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&events),
+            vec![
+                ("agent_message_chunk".into(), "same".into()),
+                ("agent_message_chunk".into(), "same".into()),
+            ]
+        );
+    }
+
+    /// Historical live segments carry the chronology of the durable row they
+    /// materialized into. Replaying two segments around a tool must therefore
+    /// preserve text(3) -> tool(4) -> text(6), rather than assigning both
+    /// segments the newest assistant sequence.
+    #[tokio::test]
+    async fn retained_segments_sort_around_an_intervening_tool() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-history-order";
+        let request_id = "req-history-order";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "first", "", 1, 0, None).await;
+        update_response_tail(&engine, request_id, "", "", 1, 0).await;
+        update_response_tail(&engine, request_id, "second", "", 2, 0).await;
+        seed_assistant_text_row(&engine, session_id, request_id, 3, "first").await;
+        seed_tool_call_row(
+            &engine,
+            session_id,
+            request_id,
+            "call-middle",
+            "bash",
+            4,
+            None,
+        )
+        .await;
+        seed_assistant_text_row(&engine, session_id, request_id, 6, "second").await;
+
+        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let ordered: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event.payload["sessionUpdate"].as_str() {
+                Some("agent_message_chunk") => event.payload["content"]["text"]
+                    .as_str()
+                    .map(ToOwned::to_owned),
+                Some("tool_call") => Some("tool-base".to_string()),
+                Some("tool_call_update") => Some("tool-terminal".to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ordered,
+            vec!["first", "tool-base", "tool-terminal", "second"]
+        );
+    }
+
+    /// The runtime can persist an in-flight assistant row while its matching
+    /// response tail remains open. The live send is the one wire delivery;
+    /// the same row must not immediately replay the text durably.
+    #[tokio::test]
+    async fn uniquely_matching_open_durable_row_is_suppressed_after_live_delivery() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-open-row";
+        let request_id = "req-open-row";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "hello", "", 1, 0, None).await;
+        seed_assistant_text_row(&engine, session_id, request_id, 3, "hello").await;
+        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&events),
+            vec![("agent_message_chunk".into(), "hello".into())]
+        );
+        assert!(
+            deliver(&engine, session_id, request_id, &mut tokens, &mut cursor)
+                .await
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn unstamped_evidence_never_cross_binds_reversed_rows() {
+        let mut live = LiveSegmentCursor {
+            closed_evidence: vec![
+                ClosedEvidence {
+                    sent_bytes: "A".into(),
+                    materialized_sequence: None,
+                    bound_row: None,
+                    history_height: 2,
+                },
+                ClosedEvidence {
+                    sent_bytes: "B".into(),
+                    materialized_sequence: None,
+                    bound_row: None,
+                    history_height: 4,
+                },
+            ],
+            ..LiveSegmentCursor::default()
+        };
+        let rows = vec![
+            DurableRowView {
+                identity: DurableRowIdentity {
+                    sequence: 3,
+                    message_key: "row-b".into(),
+                },
+                content: "B".into(),
+                reasoning: String::new(),
+            },
+            DurableRowView {
+                identity: DurableRowIdentity {
+                    sequence: 5,
+                    message_key: "row-a".into(),
+                },
+                content: "A".into(),
+                reasoning: String::new(),
+            },
+        ];
+        bind_durable_evidence(&mut live, EvidenceRail::Content, &rows);
+        assert!(
+            live.closed_evidence
+                .iter()
+                .all(|evidence| evidence.bound_row.is_none()),
+            "a locally unique but globally inverted assignment must fail closed"
+        );
+    }
+
+    /// 6. Identical reasoning with an unchanged `reasoning_progress_seq` is a
+    /// stale read (nothing novel); with an advanced seq it is a genuine
+    /// later identical rewrite — and since no new bytes exist, still nothing
+    /// new streams (the rewrite stands, never re-sent).
+    #[tokio::test]
+    async fn identical_reasoning_is_stale_without_seq_advance_and_genuine_with_it() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-reason";
+        let request_id = "req-reason";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "", "thinking", 0, 1, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_thought_chunk".into(), "thinking".into())]
+        );
+
+        // Stale identical read: same bytes, same seq. Nothing novel.
+        let stale = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(
+            stale.is_empty(),
+            "identical bytes with an unchanged seq are stale"
+        );
+
+        // Genuine later identical rewrite: same bytes, advanced seq. The
+        // rewrite stands on the wire already; no new bytes exist to emit.
+        update_response_tail(&engine, request_id, "", "thinking", 0, 2).await;
+        let rewrite = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(
+            rewrite.is_empty(),
+            "an identical rewrite carries no new bytes; the sent text stands"
+        );
+
+        // A rewrite to *different* bytes does stream: the divergence closes
+        // the segment and the new observation streams in full.
+        update_response_tail(&engine, request_id, "", "revised", 0, 3).await;
+        let diverged = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&diverged),
+            vec![("agent_thought_chunk".into(), "revised".into())],
+            "a diverging rewrite closes the segment and streams the new snapshot"
+        );
+    }
+
+    /// 7. Reasoning's bounded 64-KiB rolling preview drops its head: the
+    /// rollover emits exactly the newly appended suffix, once, without
+    /// re-streaming the window's retained bytes.
+    #[tokio::test]
+    async fn reasoning_window_rollover_emits_the_new_suffix_once() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-roll";
+        let request_id = "req-roll";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        // A full first window with a distinct head that the runtime will
+        // trim when 16 new bytes arrive.
+        let head = format!("{}{}", "x".repeat(16), "y".repeat(64 * 1024 - 16));
+        seed_response_row(&engine, session_id, request_id, "", &head, 0, 1, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first).len(),
+            1,
+            "the first window streams once"
+        );
+
+        // The runtime appended past the bound: the preview dropped its head
+        // but keeps continuity — the suffix past the overlap is the new text.
+        let rolled = format!("{}{}", "y".repeat(64 * 1024 - 16), "z".repeat(16));
+        update_response_tail(&engine, request_id, "", &rolled, 0, 2).await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&second),
+            vec![("agent_thought_chunk".into(), "z".repeat(16))],
+            "the rollover emits only the bytes past the retained overlap"
+        );
+
+        // Re-observing the same window is not novel.
+        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(third.is_empty(), "the rolled window is fully delivered");
+    }
+
+    /// A persisted reasoning preview can jump by more than one whole window
+    /// between polls. With no overlap the missing middle is unprovable: do not
+    /// emit the new tail as if it were a fresh segment. The later durable row
+    /// emits exactly the authoritative suffix after the already-sent prefix.
+    #[tokio::test]
+    async fn no_overlap_reasoning_jump_defers_to_the_durable_row() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-reason-gap";
+        let request_id = "req-reason-gap";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+        let first_window = "a".repeat(MAX_LIVE_REASONING_WINDOW_BYTES);
+        let latest_window = "z".repeat(MAX_LIVE_REASONING_WINDOW_BYTES);
+
+        seed_response_row(
+            &engine,
+            session_id,
+            request_id,
+            "",
+            &first_window,
+            0,
+            1,
+            None,
+        )
+        .await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(chunk_texts(&first)[0].1, first_window);
+
+        update_response_tail(&engine, request_id, "", &latest_window, 0, 2).await;
+        let deferred = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(
+            chunk_texts(&deferred).is_empty(),
+            "an unproved window jump must not emit a lossy tail"
+        );
+
+        let missing_suffix = format!("{}{}", "middle", latest_window);
+        let full_reasoning = format!("{}{}", first_window, missing_suffix);
+        seed_assistant_thought_row(&engine, session_id, request_id, 5, &full_reasoning).await;
+        update_materialized_sequence(&engine, request_id, 5).await;
+        let recovered = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&recovered),
+            vec![("agent_thought_chunk".into(), missing_suffix)]
+        );
+    }
+
+    /// 8. A multibyte UTF-8 chunk appended at a poll boundary never splits a
+    /// character: the delta is a whole sequence of chars.
+    #[tokio::test]
+    async fn multibyte_utf8_appends_never_split_a_character() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-utf8";
+        let request_id = "req-utf8";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "日", "", 1, 0, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "日".into())]
+        );
+
+        update_response_tail(&engine, request_id, "日本語テキスト", "", 2, 0).await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&second),
+            vec![("agent_message_chunk".into(), "本語テキスト".into())],
+            "the multibyte suffix streams whole, never sliced mid-character"
+        );
+
+        // A 4-byte emoji append at the boundary.
+        update_response_tail(&engine, request_id, "日本語テキスト🚀", "", 3, 0).await;
+        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&third),
+            vec![("agent_message_chunk".into(), "🚀".into())]
+        );
+    }
+
+    /// 9. Whitespace-only growth (a newline between words) streams verbatim:
+    /// no trim logic may corrupt the concatenation.
+    #[tokio::test]
+    async fn whitespace_only_growth_streams_verbatim() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-ws";
+        let request_id = "req-ws";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "one", "", 1, 0, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "one".into())]
+        );
+
+        update_response_tail(&engine, request_id, "one\ntwo", "", 2, 0).await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&second),
+            vec![("agent_message_chunk".into(), "\ntwo".into())],
+            "the whitespace-only part of the growth streams verbatim"
+        );
+    }
+
+    /// 10. A failed send never advances the live cursor: the identical delta
+    /// re-plans on the next poll, and after it is delivered nothing
+    /// duplicates.
+    #[tokio::test]
+    async fn failed_send_never_advances_the_live_cursor() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-fail";
+        let request_id = "req-fail";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "Hel", "", 1, 0, None).await;
+        // Poll but record nothing (every send failed).
+        let first = engine
+            .project_request_updates(session_id, request_id, &mut tokens, &mut cursor)
+            .await
+            .expect("poll");
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "Hel".into())]
+        );
+
+        update_response_tail(&engine, request_id, "Hello", "", 2, 0).await;
+        // Second poll: the cursor never advanced, so the complete validated
+        // history after its anchor is replayed in order: the exact failed
+        // "Hel" event followed by the newly observed "lo" suffix.
+        let second = engine
+            .project_request_updates(session_id, request_id, &mut tokens, &mut cursor)
+            .await
+            .expect("poll");
+        assert_eq!(
+            chunk_texts(&second),
+            vec![
+                ("agent_message_chunk".into(), "Hel".into()),
+                ("agent_message_chunk".into(), "lo".into()),
+            ],
+            "a failed send replays the exact failed event, then the ordered catch-up suffix"
+        );
+
+        // Deliver it; a final poll is empty.
+        let delivered = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&delivered),
+            vec![
+                ("agent_message_chunk".into(), "Hel".into()),
+                ("agent_message_chunk".into(), "lo".into()),
+            ]
+        );
+        let final_poll = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(final_poll.is_empty(), "nothing replays after delivery");
+    }
+
+    /// 11. Reasoning plans before body text in one poll (thought-before-text
+    /// matching the durable row order), and each keeps its own cursor.
+    #[tokio::test]
+    async fn reasoning_plans_before_body_text_in_one_poll() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-order";
+        let request_id = "req-order";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(
+            &engine, session_id, request_id, "answer", "thought", 1, 1, None,
+        )
+        .await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![
+                ("agent_thought_chunk".into(), "thought".into()),
+                ("agent_message_chunk".into(), "answer".into()),
+            ],
+            "reasoning plans first, then the body, in one poll"
+        );
+
+        // Independent growth of each stream emits independent suffixes.
+        update_response_tail(&engine, request_id, "answered", "thought through", 2, 2).await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&second),
+            vec![
+                ("agent_thought_chunk".into(), " through".into()),
+                ("agent_message_chunk".into(), "ed".into()),
+            ]
+        );
+    }
+
+    /// 12. Live text sorts before the same-poll tool call by the assistant
+    /// row's sequence (cross-family chronology keeps holding for live
+    /// events).
+    #[tokio::test]
+    async fn live_text_sorts_before_the_same_poll_tool_call() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-tool";
+        let request_id = "req-tool";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        // The assistant row exists at sequence 3 (the live segment's
+        // position) and a tool call at sequence 4.
+        seed_assistant_text_row(&engine, session_id, request_id, 3, "").await;
+        seed_tool_call_row(&engine, session_id, request_id, "call-x", "bash", 4, None).await;
+        seed_response_row(
+            &engine,
+            session_id,
+            request_id,
+            "running a tool",
+            "",
+            1,
+            0,
+            None,
+        )
+        .await;
+
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let kinds: Vec<String> = first.iter().map(update_kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "agent_message_chunk".to_string(),
+                "tool_call".to_string(),
+                "tool_call_update".to_string(),
+                "available_commands_update".to_string(),
+            ],
+            "live text at the assistant row's sequence precedes the sequence-4 tool call; the positionless commands tail is last"
+        );
+    }
+
+    /// Durable transcript query progress is a delivery cursor, not an
+    /// observation cursor: abandoning a batch (the send-failure case) must
+    /// cause every undelivered row to be queried and planned again.
+    #[tokio::test]
+    async fn durable_message_query_high_water_commits_only_after_the_batch() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-durable-retry";
+        let request_id = "req-durable-retry";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+        seed_assistant_text_row(&engine, session_id, request_id, 3, "durable").await;
+
+        let abandoned = engine
+            .project_request_updates(session_id, request_id, &mut tokens, &mut cursor)
+            .await
+            .expect("first projection");
+        assert_eq!(
+            chunk_texts(&abandoned.events),
+            vec![("agent_message_chunk".into(), "durable".into())]
+        );
+        assert_eq!(cursor.message_sequence_high_water, None);
+
+        let retry = engine
+            .project_request_updates(session_id, request_id, &mut tokens, &mut cursor)
+            .await
+            .expect("retry projection");
+        assert_eq!(
+            chunk_texts(&retry.events),
+            vec![("agent_message_chunk".into(), "durable".into())]
+        );
+        for event in retry.events {
+            cursor.record(event.advance);
+        }
+        for advance in retry.trailing_advances {
+            cursor.record(advance);
+        }
+        assert_eq!(cursor.message_sequence_high_water, Some(3));
+    }
+
+    /// 13. A live reasoning tail and a durable reasoning row of the same
+    /// text reconcile: the fully-sent live reasoning suppresses the durable
+    /// thought row's replay (the reasoning stream is one logical stream).
+    #[tokio::test]
+    async fn fully_sent_live_reasoning_suppresses_the_durable_thought_row_replay() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-thought";
+        let request_id = "req-thought";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "", "thinking", 0, 1, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_thought_chunk".into(), "thinking".into())]
+        );
+
+        // Materialization: the reasoning tail cleared and the durable row
+        // carries the same thought text, bound by
+        // materialized_message_sequence.
+        seed_assistant_thought_row(&engine, session_id, request_id, 5, "thinking").await;
+        update_response_tail(&engine, request_id, "", "", 0, 1).await;
+        update_materialized_sequence(&engine, request_id, 5).await;
+        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(
+            second.iter().all(|event| !matches!(
+                event.payload["sessionUpdate"].as_str(),
+                Some("agent_thought_chunk") | Some("agent_message_chunk")
+            )),
+            "a fully live-sent thought never replays from the durable row"
+        );
+    }
+
+    /// Stamp `materialized_message_sequence` on the request's response row.
+    async fn update_materialized_sequence(
+        engine: &ProjectionEngine,
+        request_id: &str,
+        sequence: i64,
+    ) {
+        let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentResponse(
+                    filter: {{ request_id: {{ _eq: "{escaped_request}" }} }},
+                    input: {{ materialized_message_sequence: {sequence} }}
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = engine.node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "stamp materialized_message_sequence failed: {:?}",
+            response.errors
+        );
+    }
+
+    /// One assistant `AgentMessage` row with a single reasoning block.
+    async fn seed_assistant_thought_row(
+        engine: &ProjectionEngine,
+        session_id: &str,
+        request_id: &str,
+        sequence: i64,
+        text: &str,
+    ) {
+        let message = serde_json::to_string(&gents_protocol::message::Message::Assistant {
+            id: None,
+            content: vec![gents_protocol::message::AssistantContent::Reasoning(
+                gents_protocol::message::Reasoning::new(text),
+            )],
+        })
+        .expect("serialize assistant message");
+        let escaped_message = gents::graphql::escape_graphql_string(&message);
+        let escaped_session = gents::graphql::escape_graphql_string(session_id);
+        let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "{escaped_request}:{sequence}"
+                    session_id: "{escaped_session}"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    request_id: "{escaped_request}"
+                    sequence: {sequence}
+                    role: "assistant"
+                    content: "{escaped_message}"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = engine.node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "seed assistant thought row failed: {:?}",
+            response.errors
+        );
     }
 }

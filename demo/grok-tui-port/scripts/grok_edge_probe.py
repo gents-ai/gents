@@ -247,7 +247,6 @@ def probe_handshake(
         {
             "sessionId": session_id,
             "modelId": client.model,
-            "_meta": {"reasoningEffort": "high"},
         },
     )
     require("error" not in switched, f"session/set_model failed: {switched}")
@@ -288,21 +287,20 @@ def probe_handshake(
     subagent, _ = client.request(
         "x.ai/subagent/get", {"sessionId": session_id, "subagentId": "missing"}
     )
-    # Exact real Grok DTO: the generated `GetSubagentResponse` serializes a
-    # missing id as a single nullable snapshot — `{"snapshot": null}` — with
-    # no invented subagentId echo and no outcome wrapper.
-    require(
-        subagent.get("result") == {"snapshot": None},
-        f"x.ai/subagent/get must answer {{\"snapshot\": null}}, got: {subagent}",
-    )
+    # Exact real Grok DTO, checked by the ONE shared method-discriminated
+    # validator (`require_exact_stub_result`) that the inline self-test
+    # also measures its fixtures through: the generated
+    # `GetSubagentResponse` serializes a missing id as a single nullable
+    # snapshot — `{"snapshot": null}` — with no invented subagentId echo
+    # and no outcome wrapper.
+    require("result" in subagent, f"x.ai/subagent/get returned no result: {subagent}")
+    require_exact_stub_result("x.ai/subagent/get", subagent.get("result"))
     running, _ = client.request("x.ai/subagent/list_running", {"sessionId": session_id})
-    # Exact real Grok DTO: the generated `ListRunningSubagentsResponse`
-    # serializes the empty list under `subagents` — `{"subagents": []}` —
-    # never a `running` key.
-    require(
-        running.get("result") == {"subagents": []},
-        f"x.ai/subagent/list_running must answer {{\"subagents\": []}}, got: {running}",
-    )
+    # Exact real Grok DTO through the same shared validator: the generated
+    # `ListRunningSubagentsResponse` serializes the empty list under
+    # `subagents` — `{"subagents": []}` — never a `running` key.
+    require("result" in running, f"x.ai/subagent/list_running returned no result: {running}")
+    require_exact_stub_result("x.ai/subagent/list_running", running.get("result"))
     # The ext cancel control is exercised live here, separately from the
     # standard-rail session/cancel notification used by the cancel edge:
     # x.ai/subagent/cancel is a request (not a notification) whose params
@@ -312,11 +310,8 @@ def probe_handshake(
     cancel, _ = client.request(
         "x.ai/subagent/cancel", {"sessionId": session_id, "subagentId": "missing"}
     )
-    require(
-        cancel.get("result")
-        == {"subagentId": "missing", "cancelled": False, "outcome": {"kind": "not_found"}},
-        f"x.ai/subagent/cancel must answer the exact missing-child result, got: {cancel}",
-    )
+    require("result" in cancel, f"x.ai/subagent/cancel returned no result: {cancel}")
+    require_exact_stub_result("x.ai/subagent/cancel", cancel.get("result"))
 
     # `terminal/wait_for_exit` is exercised on its own: the reference pager
     # answers it with the exact METHOD_NOT_FOUND message
@@ -355,6 +350,80 @@ def require_u64(value: Any, what: str) -> int:
         f"{what} must be an unsigned u64 integer in [0, 2**64-1]; got {value!r}",
     )
     return value
+
+
+# The exact audited result shapes of the three stub self-test methods,
+# keyed by method name. The live handshake (`probe_handshake`) and the
+# inline self-test both route every get/list_running/cancel result through
+# the SAME method-discriminated validator, so the self-test evidence is
+# measured by the real contract check — never by a bare inequality.
+STUB_METHOD_AUDITED_RESULTS: dict[str, dict[str, Any]] = {
+    # x.ai/subagent/get missing id: the generated GetSubagentResponse is a
+    # single nullable snapshot — no outcome wrapper, no id echo.
+    "x.ai/subagent/get": {"snapshot": None},
+    # The list_running empty result is keyed `subagents` — never `running`
+    # and never an outcome wrapper.
+    "x.ai/subagent/list_running": {"subagents": []},
+    # x.ai/subagent/cancel missing id: the direct camelCase
+    # CancelSubagentResponse echoes the requested id, cancelled is false,
+    # and the outcome kind is not_found.
+    "x.ai/subagent/cancel": {
+        "subagentId": "missing",
+        "cancelled": False,
+        "outcome": {"kind": "not_found"},
+    },
+}
+
+
+def require_exact_stub_result(
+    method: str, result: Any, subagent_id: str = "missing"
+) -> None:
+    """Assert one stub get/list_running/cancel result is the exact audited
+    DTO for that method.
+
+    This is the ONE shared validator used by BOTH the live handshake
+    (`probe_handshake`) and the inline self-test: the live edge and the
+    fixture evidence cannot drift apart, because they run the same
+    method-discriminated check. The cancel result echoes the requested
+    `subagent_id` (the live handshake probes a missing child; the
+    self-test fixtures pin their own id), and every other field is
+    compared for exact equality against the audited shape.
+    """
+    require(
+        method in STUB_METHOD_AUDITED_RESULTS,
+        f"unknown stub result method {method!r}; expected one of "
+        f"{sorted(STUB_METHOD_AUDITED_RESULTS)}",
+    )
+    expected = STUB_METHOD_AUDITED_RESULTS[method]
+    if method == "x.ai/subagent/cancel":
+        require(
+            isinstance(result, dict),
+            f"{method} result must be an object; got {result!r}",
+        )
+        require(
+            result.get("subagentId") == subagent_id,
+            f"{method} result must echo subagentId {subagent_id!r}; got "
+            f"{result.get('subagentId')!r}",
+        )
+        require(
+            result.get("cancelled") is False,
+            f"{method} result cancelled must be false; got {result.get('cancelled')!r}",
+        )
+        require(
+            result.get("outcome") == {"kind": "not_found"},
+            f"{method} result outcome must be the exact not_found outcome; got "
+            f"{result.get('outcome')!r}",
+        )
+        require(
+            set(result.keys()) == set(expected.keys()),
+            f"{method} result keys must be exactly {sorted(expected.keys())}; got "
+            f"{sorted(result.keys())}",
+        )
+        return
+    require(
+        result == expected,
+        f"{method} result must be the exact audited shape {expected!r}; got {result!r}",
+    )
 
 
 def event_sequence(update: dict[str, Any]) -> int:
@@ -397,7 +466,11 @@ class SessionHighWater:
     observed `totalTokens` must never decrease. The standard rail demands a
     `totalTokens` value wherever the contract carries it; the extension rail
     may omit `totalTokens` entirely (and transient progress may carry no
-    metadata at all), so a missing value there is simply not folded.
+    metadata at all), so a missing value there is simply not folded. An
+    extension envelope may omit `_meta` or the `eventId` key — absent means
+    skipped — but a PRESENT `eventId` must be a non-empty string whose
+    counter parses through `event_sequence` as a bounded u64; a malformed
+    present id rejects and is never silently skipped.
     """
 
     def __init__(self) -> None:
@@ -408,46 +481,51 @@ class SessionHighWater:
         """Fold one notification into its own rail's high-water state.
 
         The standard rail requires a well-formed `eventId`; the extension
-        rail tolerates envelopes without event metadata (an absent or
-        malformed `eventId` is skipped rather than failing the probe).
+        rail tolerates envelopes without event metadata — `_meta` or the
+        `eventId` key may be absent, and an absent eventId is simply
+        skipped. But a PRESENT `eventId` is contract, not best-effort: it
+        must be a non-empty string whose counter parses through
+        `event_sequence` as a bounded u64, and a malformed present id is
+        never caught or skipped.
         """
         rail = message_rail(message)
         require(rail is not None, "observe() called with a non-rail message")
         assert rail is not None
         meta = message.get("params", {}).get("_meta", {})
-        if rail == "extension":
-            event_id = meta.get("eventId")
-            if not isinstance(event_id, str) or not event_id:
-                # Transient extension progress may omit metadata entirely;
-                # there is no counter to fold.
-                return
-            try:
-                counter = event_sequence(message)
-            except AssertionError:
-                # An absent or malformed extension eventId is skipped rather
-                # than failing the probe (transient progress metadata is
-                # best-effort), but a well-formed counter must still be a u64.
-                return
-        else:
+        counter: int | None = None
+        if rail != "extension" or (isinstance(meta, dict) and "eventId" in meta):
+            # A PRESENT eventId must be well-formed: a non-empty string
+            # whose counter half follows a single separator and parses as
+            # a bounded u64. Malformed present ids reject right here.
             counter = event_sequence(message)
-        last = self.last_counter[rail]
-        require(
-            last is None or counter > last,
-            f"{rail} rail eventId counter {counter} did not strictly exceed the "
-            f"previous high-water {last}",
-        )
-        self.last_counter[rail] = counter
-        total_tokens = meta.get("totalTokens")
+
+        total_tokens = meta.get("totalTokens") if isinstance(meta, dict) else None
         if total_tokens is not None:
             # Explicit u64 validation: negative, overflowing, and boolean
             # values are rejected before the high-water comparison runs.
             require_u64(total_tokens, f"{rail} rail _meta.totalTokens")
+
+        # Validate both independently present fields before mutating either
+        # high-water, so a bad total cannot partially fold a valid eventId
+        # (and an absent extension eventId never skips a present total).
+        if counter is not None:
+            last = self.last_counter[rail]
+            require(
+                last is None or counter > last,
+                f"{rail} rail eventId counter {counter} did not strictly exceed the "
+                f"previous high-water {last}",
+            )
+        if total_tokens is not None:
             high = self.last_total_tokens[rail]
             require(
                 high is None or total_tokens >= high,
                 f"{rail} rail totalTokens {total_tokens} moved backwards "
                 f"(high-water {high})",
             )
+
+        if counter is not None:
+            self.last_counter[rail] = counter
+        if total_tokens is not None:
             self.last_total_tokens[rail] = total_tokens
 
     def observe_all(self, notifications: list[dict[str, Any]]) -> None:
@@ -672,13 +750,16 @@ SUBAGENT_MARKER = "port-live-worker"
 
 # The exact outer `SessionNotification` envelope of a live subagent
 # lifecycle event, as audited against the Grok pager's ACP handler: the
-# camelCase outer params are exactly the required `sessionId` and `update`
-# plus the optional `_meta` — nothing else. This LIVE probe accepts only
-# the exact live method `x.ai/session_notification`; `x.ai/session/update`
-# remains documented as replay-path compatibility and is never accepted
-# here.
+# JSON-RPC notification top level is exactly `{jsonrpc, method, params}`
+# with `jsonrpc == "2.0"` and no `id`, and the camelCase outer params are
+# exactly the required `sessionId` and `update` plus the optional `_meta`
+# — nothing else. This LIVE probe accepts only the exact live method
+# `x.ai/session_notification`; `x.ai/session/update` remains documented as
+# replay-path compatibility and is never accepted here.
 SESSION_NOTIFICATION_REQUIRED_PARAMS = ("sessionId", "update")
 SESSION_NOTIFICATION_OPTIONAL_PARAMS = ("_meta",)
+SESSION_NOTIFICATION_TOP_LEVEL_KEYS = ("jsonrpc", "method", "params")
+JSONRPC_VERSION = "2.0"
 
 
 def require_exact_session_notification_envelope(
@@ -687,19 +768,41 @@ def require_exact_session_notification_envelope(
     """Assert the exact outer `SessionNotification` envelope of one live
     subagent lifecycle event, and return its `update` object.
 
-    The method must be the exact live `x.ai/session_notification` (the
-    replay alias `x.ai/session/update` is never accepted by this live
-    probe). `params` keys are exactly required `sessionId`, `update` plus
-    optional `_meta`; `sessionId` must be a non-empty string equal to the
-    parent probe session; `update` must be an object. Wrong `session_id`
-    casing, a wrong or missing parent session, unknown extras, a wrong
-    method, and the replay alias are all rejected.
+    The JSON-RPC notification TOP LEVEL is validated exactly, not just
+    `params`: the message is an object with exactly the keys
+    `{jsonrpc, method, params}`, `jsonrpc` is the exact string `"2.0"`,
+    there is no `id` (a notification is never a request — `id: null` is
+    still an `id` and rejects), and no extra top-level key survives. The
+    method must be the exact live `x.ai/session_notification` (the replay
+    alias `x.ai/session/update` is never accepted by this live probe).
+    `params` keys are exactly required `sessionId`, `update` plus optional
+    `_meta`; `sessionId` must be a non-empty string equal to the parent
+    probe session; `update` must be an object. Wrong `session_id` casing,
+    a wrong or missing parent session, unknown extras, a wrong `jsonrpc`
+    version, any `id`, extra top-level keys, a wrong method, and the
+    replay alias are all rejected.
     """
     require(
         isinstance(message, dict),
         f"lifecycle notification must be a JSON object; got {message!r}",
     )
-    method = message.get("method")
+    top_level = set(message.keys())
+    require(
+        top_level == set(SESSION_NOTIFICATION_TOP_LEVEL_KEYS),
+        f"lifecycle notification top level must be exactly "
+        f"{list(SESSION_NOTIFICATION_TOP_LEVEL_KEYS)}; got: {sorted(top_level)}",
+    )
+    require(
+        "id" not in message,
+        f"a JSON-RPC notification carries no id; got id: {message.get('id')!r}",
+    )
+    jsonrpc = message["jsonrpc"]
+    require(
+        jsonrpc == JSONRPC_VERSION,
+        f"lifecycle notification jsonrpc must be the exact string "
+        f"{JSONRPC_VERSION!r}; got {jsonrpc!r}",
+    )
+    method = message["method"]
     require(
         method == EXT_SESSION_NOTIFICATION_METHOD,
         f"live subagent lifecycle event must ride the exact live method "
@@ -760,9 +863,11 @@ def extract_subagent_lifecycle(
     `SessionNotification` validator
     (`require_exact_session_notification_envelope`) — method, exact params
     key set, non-empty parent-equal `sessionId`, object `update` — and
-    only then are the inner spawned/progress/finished DTO validators run
-    by the caller. Returns the correlated wire evidence keyed by lifecycle
-    stage plus the observation order so callers can assert chronology.
+    then the matching exact inner DTO validator runs for EVERY candidate,
+    including repeated progress updates. After the scan, every candidate
+    is correlated to the same parent and spawned child. Returns the first
+    correlated wire evidence for each stage plus the observation order so
+    callers can assert chronology.
     """
     lifecycle: dict[str, Any] = {
         "spawned": None,
@@ -770,6 +875,11 @@ def extract_subagent_lifecycle(
         "finished": None,
         "task_tool_call": None,
         "observation_index": {},
+    }
+    candidates: dict[str, list[dict[str, Any]]] = {
+        "spawned": [],
+        "progress": [],
+        "finished": [],
     }
     for index, message in enumerate(notifications):
         update = message.get("params", {}).get("update", {})
@@ -784,8 +894,16 @@ def extract_subagent_lifecycle(
                 message, parent_session_id
             )
             stage = kind.removeprefix("subagent_")
+            if stage == "spawned":
+                require_exact_spawned_dto(envelope_update)
+            elif stage == "progress":
+                require_exact_progress_dto(envelope_update)
+            else:
+                require_exact_finished_dto(envelope_update)
+            candidate = {"method": method, "update": envelope_update}
+            candidates[stage].append(candidate)
             if lifecycle[stage] is None:
-                lifecycle[stage] = {"method": method, "update": envelope_update}
+                lifecycle[stage] = candidate
                 lifecycle["observation_index"][stage] = index
         elif (
             method == STANDARD_UPDATE_METHOD
@@ -795,6 +913,35 @@ def extract_subagent_lifecycle(
         ):
             lifecycle["task_tool_call"] = update
             lifecycle["observation_index"]["task_tool_call"] = index
+
+    if any(candidates.values()):
+        require(
+            bool(candidates["spawned"]),
+            "subagent progress/finished lifecycle appeared without a spawned event",
+        )
+        child_session_id = candidates["spawned"][0]["update"]["child_session_id"]
+        for candidate in candidates["spawned"]:
+            update = candidate["update"]
+            require(
+                update["parent_session_id"] == parent_session_id
+                and update["child_session_id"] == child_session_id,
+                f"subagent_spawned candidate drifted from parent/child correlation: {update}",
+            )
+        for candidate in candidates["progress"]:
+            update = candidate["update"]
+            require(
+                update["parent_session_id"] == parent_session_id
+                and update["subagent_id"] == child_session_id
+                and update["child_session_id"] == child_session_id,
+                f"subagent_progress candidate drifted from parent/child correlation: {update}",
+            )
+        for candidate in candidates["finished"]:
+            update = candidate["update"]
+            require(
+                update["subagent_id"] == child_session_id
+                and update["child_session_id"] == child_session_id,
+                f"subagent_finished candidate drifted from child correlation: {update}",
+            )
     return lifecycle
 
 
@@ -1129,6 +1276,7 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
         "u64_validator_rejected": 0,
         "high_water_rejected": 0,
         "stub_result_accepted": 0,
+        "stub_result_rejected": 0,
     }
 
     def accepted(update: dict[str, Any]) -> None:
@@ -1218,9 +1366,24 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
             return
         raise AssertionError("high-water fixture must be rejected")
 
-    def stub_result_accepted(actual: Any, expected: Any, what: str) -> None:
-        require(actual == expected, f"{what}: expected {expected!r}, got {actual!r}")
+    def stub_result_accepted(method: str, result: Any, what: str) -> None:
+        # The good fixtures run through the SAME shared validator the live
+        # handshake uses — an accept is only counted when the real
+        # contract check passes, never by bare equality bookkeeping.
+        require_exact_stub_result(method, result, subagent_id="missing-child-1")
         counters["stub_result_accepted"] += 1
+
+    def stub_result_rejected(method: str, result: Any, what: str) -> None:
+        # A wrong fixture is only a MEASURED reject when the shared exact
+        # validator itself rejects it — never merely because
+        # `wrong != expected` (that comparison proves nothing about the
+        # validator and would count drift as evidence).
+        try:
+            require_exact_stub_result(method, result, subagent_id="missing-child-1")
+        except AssertionError:
+            counters["stub_result_rejected"] += 1
+            return
+        raise AssertionError(f"stub result fixture must be rejected: {what}: {result!r}")
 
     def mutate(base: dict[str, Any], **changes: Any) -> dict[str, Any]:
         clone = dict(base)
@@ -1432,11 +1595,14 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
     ]
 
     # ------------------------------------------------------------------
-    # The exact outer SessionNotification envelope (live rail only).
+    # The exact outer SessionNotification envelope (live rail only). The
+    # JSON-RPC notification top level is exactly {jsonrpc, method, params}
+    # with jsonrpc "2.0" and no id.
     # ------------------------------------------------------------------
     envelope_parent = "probe-parent-1"
     envelope_update = {"sessionUpdate": "subagent_spawned", "subagent_id": "sa-1"}
     good_envelope = {
+        "jsonrpc": JSONRPC_VERSION,
         "method": EXT_SESSION_NOTIFICATION_METHOD,
         "params": {"sessionId": envelope_parent, "update": envelope_update},
     }
@@ -1471,6 +1637,26 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
         (mutate(good_envelope, method=STANDARD_UPDATE_METHOD), envelope_parent),
         (mutate(good_envelope, method="x.ai/session/notif"), envelope_parent),
         (mutate(good_envelope, method=None), envelope_parent),
+        # missing jsonrpc (the top level is no longer exact).
+        (
+            {key: value for key, value in good_envelope.items() if key != "jsonrpc"},
+            envelope_parent,
+        ),
+        # wrong jsonrpc version.
+        (mutate(good_envelope, jsonrpc="1.0"), envelope_parent),
+        (mutate(good_envelope, jsonrpc="2"), envelope_parent),
+        (mutate(good_envelope, jsonrpc=2.0), envelope_parent),
+        # non-string jsonrpc.
+        (mutate(good_envelope, jsonrpc=2), envelope_parent),
+        (mutate(good_envelope, jsonrpc=None), envelope_parent),
+        (mutate(good_envelope, jsonrpc=True), envelope_parent),
+        # any id — a notification is never a request; id: null is still an id.
+        (mutate(good_envelope, id=None), envelope_parent),
+        (mutate(good_envelope, id=1), envelope_parent),
+        (mutate(good_envelope, id="req-1"), envelope_parent),
+        # extra top-level keys.
+        (mutate(good_envelope, extra="x"), envelope_parent),
+        (mutate(good_envelope, result={}), envelope_parent),
         # wrong session_id casing.
         (
             mutate(good_envelope, params={"session_id": envelope_parent, "update": envelope_update}),
@@ -1521,9 +1707,12 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
     # The extractor runs the same outer validator for every lifecycle kind
     # before any inner DTO validator: a well-formed lifecycle batch with
     # the exact envelope yields all three stages in order.
+    lifecycle_spawned = mutate(spawned_good, parent_session_id=envelope_parent)
+    lifecycle_progress = mutate(progress_good, parent_session_id=envelope_parent)
     lifecycle_batch = [
-        {"method": "x.ai/models/update", "params": {"models": {}}},
+        {"jsonrpc": JSONRPC_VERSION, "method": "x.ai/models/update", "params": {"models": {}}},
         {
+            "jsonrpc": JSONRPC_VERSION,
             "method": STANDARD_UPDATE_METHOD,
             "params": {
                 "sessionId": envelope_parent,
@@ -1539,8 +1728,14 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
                 "_meta": {},
             },
         },
-        mutate(good_envelope, params={"sessionId": envelope_parent, "update": spawned_good, "_meta": {}}),
-        mutate(good_envelope, params={"sessionId": envelope_parent, "update": progress_good, "_meta": {}}),
+        mutate(
+            good_envelope,
+            params={"sessionId": envelope_parent, "update": lifecycle_spawned, "_meta": {}},
+        ),
+        mutate(
+            good_envelope,
+            params={"sessionId": envelope_parent, "update": lifecycle_progress, "_meta": {}},
+        ),
         mutate(good_envelope, params={"sessionId": envelope_parent, "update": finished_completed, "_meta": {}}),
     ]
     # The extractor rejects the replay alias and a wrong parent session:
@@ -1548,11 +1743,40 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
     extractor_reject_batches = [
         [
             {
+                "jsonrpc": JSONRPC_VERSION,
                 "method": EXT_SESSION_UPDATE_ALIAS_METHOD,
                 "params": {"sessionId": envelope_parent, "update": spawned_good},
             }
         ],
-        [mutate(good_envelope, params={"sessionId": "other", "update": spawned_good})],
+        [mutate(good_envelope, params={"sessionId": "other", "update": lifecycle_spawned})],
+        # A malformed later progress update must not hide behind the first
+        # retained good progress DTO.
+        lifecycle_batch
+        + [
+            mutate(
+                good_envelope,
+                params={
+                    "sessionId": envelope_parent,
+                    "update": mutate(lifecycle_progress, tokens_used=True),
+                },
+            )
+        ],
+        # Every well-shaped repeated update must still correlate to the
+        # spawned child, not merely pass its local DTO schema.
+        lifecycle_batch
+        + [
+            mutate(
+                good_envelope,
+                params={
+                    "sessionId": envelope_parent,
+                    "update": mutate(
+                        lifecycle_progress,
+                        subagent_id="other-child",
+                        child_session_id="other-child",
+                    ),
+                },
+            )
+        ],
     ]
 
     # ------------------------------------------------------------------
@@ -1606,10 +1830,68 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
     # contributes two u64 accepts below.
     rail_max_fixtures = [(f"s-{U64_MAX}", U64_MAX, U64_MAX, U64_MAX)]
 
+    def fresh_extension(
+        event_id: Any = ..., include_meta: bool = True, total_tokens: Any = None
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "sessionId": "s-1",
+            "update": {"sessionUpdate": "subagent_progress"},
+        }
+        meta: dict[str, Any] = {}
+        if event_id is not ...:
+            meta["eventId"] = event_id
+        if total_tokens is not None:
+            meta["totalTokens"] = total_tokens
+        if include_meta:
+            params["_meta"] = meta
+        return {"method": EXT_SESSION_NOTIFICATION_METHOD, "params": params}
+
+    # Extension-rail eventId contract: `_meta` and the `eventId` key may be
+    # ABSENT (transient progress — accepted and skipped), but a PRESENT
+    # `eventId` must be a non-empty string whose counter parses through
+    # `event_sequence` as a bounded u64. Every malformed present id below
+    # must REJECT — the old code caught and skipped exactly these.
+    # Each accept fixture is a distinct real case: (include_meta, event_id)
+    # — no `_meta` at all, `_meta` present with no `eventId` key, and a
+    # well-formed present `eventId`.
+    extension_event_id_accept_fixtures = [
+        # absent _meta entirely.
+        (False, ...),
+        # present _meta with no eventId key.
+        (True, ...),
+        # a well-formed present eventId folds its counter.
+        (True, "s-1"),
+    ]
+    extension_event_id_reject_fixtures = [
+        # counter overflow beyond u64.
+        f"s-{U64_MAX + 1}",
+        # bool eventId (non-string).
+        True,
+        # non-string eventId.
+        7,
+        # empty-string eventId.
+        "",
+        # doubled separator smuggling a negative counter.
+        "s--1",
+        # malformed text: no separator, non-digit tail, bare prefix.
+        "no-separator-here",
+        "s-1.5",
+        "s-",
+    ]
+    # A transient extension notification may omit eventId while still
+    # carrying totalTokens. That independently present value remains a
+    # bounded, monotonic u64 and must never be skipped with the counter.
+    extension_absent_event_total_accept_fixtures = [0, U64_MAX]
+    extension_absent_event_total_reject_fixtures = [-1, U64_MAX + 1, True]
+    extension_absent_event_total_sequence_reject_fixtures = [(10, 9)]
+
     # ------------------------------------------------------------------
     # Exact stub result fixtures (get / list_running / cancel), pinned to
     # the shim's own generated-contract shapes so casing or shape drift in
-    # either direction fails this gate.
+    # either direction fails this gate. Every fixture — good and wrong —
+    # runs through the SAME shared method-discriminated validator
+    # (`require_exact_stub_result`) that the live handshake uses, so the
+    # self-test evidence is measured by the real contract check.
     # ------------------------------------------------------------------
     # x.ai/subagent/get missing id: the generated GetSubagentResponse is a
     # single nullable snapshot — no outcome wrapper, no id echo. The
@@ -1625,38 +1907,56 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
         "outcome": {"kind": "not_found"},
     }
     stub_exact_fixtures = [
-        ("x.ai/subagent/get missing-id result fixture", get_audited_result),
-        ("x.ai/subagent/list_running empty-list result fixture", list_audited_result),
-        ("x.ai/subagent/cancel missing-child result fixture", cancel_audited_result),
+        ("x.ai/subagent/get missing-id result fixture", "x.ai/subagent/get", get_audited_result),
+        (
+            "x.ai/subagent/list_running empty-list result fixture",
+            "x.ai/subagent/list_running",
+            list_audited_result,
+        ),
+        (
+            "x.ai/subagent/cancel missing-child result fixture",
+            "x.ai/subagent/cancel",
+            cancel_audited_result,
+        ),
     ]
-    # Drift guards: each wrong shape must differ from the audited result,
-    # so casing or shape drift in either direction fails this gate.
+    # Drift guards: each wrong shape must be REJECTED BY THE SHARED
+    # VALIDATOR ITSELF (a measured reject), so casing or shape drift in
+    # either direction fails this gate. A wrong fixture is never counted
+    # as evidence merely because it differs from the audited result.
     stub_drift_fixtures = [
-        ("get", {"snapshot": None, "subagentId": "missing-child-1"}, get_audited_result),
-        ("get", {"outcome": {"kind": "not_found"}}, get_audited_result),
-        ("get", {"snapshot": {}}, get_audited_result),
-        ("get", {"running": []}, get_audited_result),
-        ("list_running", {"running": []}, list_audited_result),
-        ("list_running", {"subagents": None}, list_audited_result),
-        ("list_running", {"outcome": {"kind": "not_found"}}, list_audited_result),
+        ("get", "x.ai/subagent/get", {"snapshot": None, "subagentId": "missing-child-1"}),
+        ("get", "x.ai/subagent/get", {"outcome": {"kind": "not_found"}}),
+        ("get", "x.ai/subagent/get", {"snapshot": {}}),
+        ("get", "x.ai/subagent/get", {"running": []}),
+        ("list_running", "x.ai/subagent/list_running", {"running": []}),
+        ("list_running", "x.ai/subagent/list_running", {"subagents": None}),
+        ("list_running", "x.ai/subagent/list_running", {"outcome": {"kind": "not_found"}}),
         # missing id echo.
-        ("cancel", {"cancelled": False, "outcome": {"kind": "not_found"}}, cancel_audited_result),
+        (
+            "cancel",
+            "x.ai/subagent/cancel",
+            {"cancelled": False, "outcome": {"kind": "not_found"}},
+        ),
         # missing outcome.
-        ("cancel", {"subagentId": "missing-child-1", "cancelled": False}, cancel_audited_result),
+        (
+            "cancel",
+            "x.ai/subagent/cancel",
+            {"subagentId": "missing-child-1", "cancelled": False},
+        ),
         # wrong casing: snake_case id, not the direct camelCase result.
         (
             "cancel",
+            "x.ai/subagent/cancel",
             {"subagent_id": "missing-child-1", "cancelled": False, "outcome": {"kind": "not_found"}},
-            cancel_audited_result,
         ),
         # wrong outcome kind.
         (
             "cancel",
+            "x.ai/subagent/cancel",
             {"subagentId": "missing-child-1", "cancelled": False, "outcome": {"kind": "cancelled"}},
-            cancel_audited_result,
         ),
         # outcome-wrapper drift: the result is direct, not nested.
-        ("cancel", {"result": dict(cancel_audited_result)}, cancel_audited_result),
+        ("cancel", "x.ai/subagent/cancel", {"result": dict(cancel_audited_result)}),
     ]
 
     # ------------------------------------------------------------------
@@ -1764,6 +2064,52 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
             )
         )
 
+    # Extension-rail eventId contract, measured through the REAL observe:
+    # absent `_meta`/`eventId` accepts and folds nothing; a well-formed
+    # present eventId folds its counter; every malformed present id
+    # REJECTS (never caught, never skipped).
+    for include_meta, event_id in extension_event_id_accept_fixtures:
+        rail = SessionHighWater()
+        rail.observe(fresh_extension(event_id, include_meta=include_meta))
+        if event_id is ...:
+            require(
+                rail.last_counter["extension"] is None,
+                "absent extension eventId must not fold a counter",
+            )
+        else:
+            require(
+                rail.last_counter["extension"] is not None,
+                f"well-formed extension eventId must fold: {event_id!r}",
+            )
+    for event_id in extension_event_id_reject_fixtures:
+        high_water_rejected(
+            lambda event_id=event_id: SessionHighWater().observe(fresh_extension(event_id))
+        )
+    for total_tokens in extension_absent_event_total_accept_fixtures:
+        rail = SessionHighWater()
+        rail.observe(fresh_extension(total_tokens=total_tokens))
+        require(
+            rail.last_counter["extension"] is None,
+            "absent extension eventId must not invent a counter",
+        )
+        require(
+            rail.last_total_tokens["extension"] == total_tokens,
+            f"present extension totalTokens must fold without eventId: {total_tokens!r}",
+        )
+    for total_tokens in extension_absent_event_total_reject_fixtures:
+        high_water_rejected(
+            lambda total_tokens=total_tokens: SessionHighWater().observe(
+                fresh_extension(total_tokens=total_tokens)
+            )
+        )
+    for first, second in extension_absent_event_total_sequence_reject_fixtures:
+        def observe_extension_totals(first: int = first, second: int = second) -> None:
+            rail = SessionHighWater()
+            rail.observe(fresh_extension(total_tokens=first))
+            rail.observe(fresh_extension(total_tokens=second))
+
+        high_water_rejected(observe_extension_totals)
+
     def observe_all(rail: SessionHighWater, sequence: list[tuple[Any, Any]]) -> None:
         for event_id, total_tokens in sequence:
             rail.observe(fresh_standard(event_id, total_tokens))
@@ -1823,14 +2169,23 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
     )
     require(no_meta.last_counter["extension"] is None, "metadata-less progress must not fold")
 
-    for what, audited_result in stub_exact_fixtures:
-        stub_result_accepted(audited_result, audited_result, what)
-    for what, wrong_result, audited_result in stub_drift_fixtures:
+    for what, method, audited_result in stub_exact_fixtures:
+        # The good fixtures run through the SAME shared validator the live
+        # handshake uses — an accept is only counted when the real
+        # contract check passes, never by bare equality bookkeeping.
+        try:
+            stub_result_accepted(method, audited_result, what)
+        except AssertionError as error:
+            raise AssertionError(f"{what} must be accepted by the shared validator: {error}") from error
+    for what, method, wrong_result in stub_drift_fixtures:
+        # Each wrong fixture is a MEASURED reject: the shared validator
+        # itself must reject it. The drift guard below is only a fixture
+        # sanity check — it never counts as evidence on its own.
         require(
-            wrong_result != audited_result,
+            wrong_result != STUB_METHOD_AUDITED_RESULTS[method],
             f"{what} drift guard collided: {wrong_result}",
         )
-        counters["stub_result_accepted"] += 1
+        stub_result_rejected(method, wrong_result, what)
 
     # ------------------------------------------------------------------
     # Honest evidence: the expected totals below are derived from the
@@ -1853,8 +2208,12 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
         "high_water_rejected": len(bad_event_ids)
         + len(extractor_reject_batches)
         + len(rail_reject_fixtures)
-        + len(rail_sequence_reject_fixtures),
-        "stub_result_accepted": len(stub_exact_fixtures) + len(stub_drift_fixtures),
+        + len(rail_sequence_reject_fixtures)
+        + len(extension_event_id_reject_fixtures)
+        + len(extension_absent_event_total_reject_fixtures)
+        + len(extension_absent_event_total_sequence_reject_fixtures),
+        "stub_result_accepted": len(stub_exact_fixtures),
+        "stub_result_rejected": len(stub_drift_fixtures),
     }
     drifted = {
         key: (counters[key], expected)
