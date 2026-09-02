@@ -68,11 +68,13 @@ The deliberate attach duplication supplies contract evidence to transport,
 server, and assembly writers; it does not permit overlapping files. Exclude
 the ignored permission-gate row from every unit.
 
-For every unit, concatenate the complete mapped surface values in sorted
-surface-id order into `grok_call_sites`, `grok_wire`, `gents_docs`,
-`live_prompt`, `live_expect`, and `evidence`. Prefix each value with
-`[surface_id=<id>]`; never paraphrase or truncate it. Copy `repository_id` and
-the pinned `base_sha` from the surfaces.
+The `PortSurface` rows are the authoritative evidence ledger. For every unit,
+put only a compact, sorted `[surface_id=<id>]` index in each of
+`grok_call_sites`, `grok_wire`, `gents_docs`, `live_prompt`, `live_expect`, and
+`evidence`; never concatenate the evidence prose into a `PortWorkUnit` string.
+The writer must read the mapped `PortSurface` rows and concatenate each row's
+`grok_wire` plus optional `grok_wire_continuation` before implementing. Copy
+`repository_id` and the pinned `base_sha` from the surfaces.
 
 Call `write_port_work_unit` exactly eight times for those units. Then call
 `write_port_plan` once with

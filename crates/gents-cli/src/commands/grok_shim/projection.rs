@@ -54,6 +54,24 @@ pub(crate) const SUBAGENT_NOTIFICATION_METHOD: &str = "x.ai/session_notification
 /// window still reports a truthful, bounded value instead of zero.
 pub(crate) const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 262_144;
 
+/// Normalize a configured context window for every Grok-facing consumer.
+/// Older profiles use zero for "unspecified", but the wire catalog and token
+/// projection both require the same positive effective value.
+pub(crate) fn effective_context_window_tokens(configured: u64) -> u64 {
+    if configured == 0 {
+        DEFAULT_CONTEXT_WINDOW_TOKENS
+    } else {
+        configured
+    }
+}
+
+/// Return a trimmed non-empty string. Projection leaves share this helper so
+/// optional identity fields cannot drift subtly by row family.
+pub(super) fn nonempty(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
 /// Bound model/context configuration the shim was assembled with.
 ///
 /// Model and context-window values come from the bound `AgentBehavior` and its
@@ -84,11 +102,7 @@ impl BoundModelContext {
     /// Fall back to the catalog default when the bound profile did not pin a
     /// context window.
     pub(crate) fn effective_context_window(&self) -> u64 {
-        if self.total_context_tokens == 0 {
-            DEFAULT_CONTEXT_WINDOW_TOKENS
-        } else {
-            self.total_context_tokens
-        }
+        effective_context_window_tokens(self.total_context_tokens)
     }
 }
 
@@ -302,6 +316,7 @@ pub(crate) fn stamp_update_meta(
 /// The Grok decoder expects the chunk field name `content` (not
 /// `contentBlock`); the leaves own that shape and this wrapper only adds the
 /// session envelope and the stamped `_meta`.
+#[cfg(test)]
 pub(crate) fn session_update_notification(session_id: &str, update: Value, meta: Value) -> Value {
     session_notification_for_method(SESSION_UPDATE_METHOD, session_id, update, meta)
 }
@@ -374,6 +389,7 @@ impl SessionUpdateChannel {
     }
 
     /// The connection's projection sequencer.
+    #[cfg(test)]
     pub(crate) fn sequencer(&self) -> &ProjectionSequencer {
         &self.sequencer
     }
@@ -553,6 +569,7 @@ impl ProjectionEngine {
 
     /// The connection's projection sequencer as a shared handle, for tests
     /// that inspect per-session counters.
+    #[cfg(test)]
     pub(crate) fn sequencer_arc(&self) -> Arc<ProjectionSequencer> {
         self.sequencer.clone()
     }
@@ -808,8 +825,6 @@ impl ProjectionEngine {
                 }
             }
         }
-        cursor.planned_live_cursors = Some(planned_live.clone());
-
         // 4. Tools (lifecycle of the request's tool calls).
         let tools = tools::project_tools(&self.node, request_id, session_id).await?;
         let mut terminal_covered_by_base_diff = std::collections::BTreeSet::new();
@@ -865,11 +880,10 @@ impl ProjectionEngine {
                     merged.push(MergedEvent {
                         event: NovelProjectionEvent {
                             method: SESSION_UPDATE_METHOD,
-                            payload: json!({
-                                "sessionUpdate": "tool_call_update",
-                                "toolCallId": update.tool_call_id,
-                                "fields": update.fields,
-                            }),
+                            payload: tools::tool_call_update_payload(
+                                &update.tool_call_id,
+                                &update.fields,
+                            ),
                             advance,
                         },
                         chronology,
@@ -1923,7 +1937,7 @@ impl LiveSegmentCursor {
                     ),
                 ));
             }
-            if observed.len() == MAX_LIVE_REASONING_WINDOW_BYTES {
+            if reasoning_window_is_saturated(observed) {
                 // This is still the same history segment (no reset
                 // intervened), and a full preview with no overlap proves at
                 // least one whole window vanished between snapshots.
@@ -2019,6 +2033,13 @@ fn earliest_live_anchor(
 /// because the projection must prove a rollover against the same bound the
 /// runtime trims to; the two constants must move together.
 const MAX_LIVE_REASONING_WINDOW_BYTES: usize = 64 * 1024;
+
+/// `tail_window` advances a cut inside a four-byte scalar by at most three
+/// bytes, so a saturated UTF-8 preview may be `MAX-3..=MAX` bytes long.
+fn reasoning_window_is_saturated(value: &str) -> bool {
+    (MAX_LIVE_REASONING_WINDOW_BYTES.saturating_sub(3)..=MAX_LIVE_REASONING_WINDOW_BYTES)
+        .contains(&value.len())
+}
 
 /// Proof that `(previous, current)` is a bounded-window rollover of the
 /// runtime's live reasoning preview: the runtime's
@@ -2181,10 +2202,6 @@ pub(crate) struct RequestCursor {
     subagent_states: BTreeMap<String, u64>,
     /// The committed (send-success) state of the live tail cursors.
     live_cursors: LiveCursorPair,
-    /// The live cursor state this poll planned against. Not durable state:
-    /// refreshed every poll and only promoted into `live_cursors` through
-    /// `record` as each planned event's send succeeds.
-    planned_live_cursors: Option<LiveCursorPair>,
     /// The committed (send-success) delivered length per durable chunk key.
     /// The durable pass plans against a per-poll shadow of this map; an
     /// advance is promoted into it only through `record` after the
@@ -2226,11 +2243,7 @@ impl RequestCursor {
             Some(last_sent) => {
                 let fields = changed_tool_fields(last_sent, payload)?;
                 Some((
-                    json!({
-                        "sessionUpdate": "tool_call_update",
-                        "toolCallId": tool_call_id,
-                        "fields": fields,
-                    }),
+                    tools::tool_call_update_payload(tool_call_id, &fields),
                     advance,
                 ))
             }
@@ -2284,7 +2297,6 @@ impl RequestCursor {
                 if self.delivered_response_doc.as_deref() != Some(&doc_id) {
                     self.delivered_response_doc = Some(doc_id);
                     self.live_cursors = LiveCursorPair::default();
-                    self.planned_live_cursors = None;
                 }
             }
             CursorAdvance::ToolBase {
@@ -2355,7 +2367,7 @@ const TRACKED_TOOL_FIELDS: [&str; 7] = [
     "content",
     "rawInput",
     "rawOutput",
-    "meta",
+    "_meta",
 ];
 
 /// The tracked tool-call fields that differ between the last-sent base and
@@ -3213,15 +3225,24 @@ mod tests {
         engine: &ProjectionEngine,
         session_id: &str,
         request_id: &str,
+        request_doc_id: Option<&str>,
         tool_call_id: &str,
         tool_name: &str,
         message_sequence: i64,
         child_request_id: Option<&str>,
-    ) {
+    ) -> String {
         let escaped_session = gents::graphql::escape_graphql_string(session_id);
         let escaped_request = gents::graphql::escape_graphql_string(request_id);
         let escaped_id = gents::graphql::escape_graphql_string(tool_call_id);
         let escaped_name = gents::graphql::escape_graphql_string(tool_name);
+        let request_doc_field = request_doc_id
+            .map(|id| {
+                format!(
+                    r#"request_doc_id: "{}""#,
+                    gents::graphql::escape_graphql_string(id)
+                )
+            })
+            .unwrap_or_default();
         let child_field = child_request_id
             .map(|id| {
                 format!(
@@ -3232,9 +3253,10 @@ mod tests {
             .unwrap_or_else(|| r#"child_request_id: """#.to_string());
         let mutation = format!(
             r#"mutation {{
-                create_AgentToolCall(input: {{
+                tool: create_AgentToolCall(input: {{
                     tool_call_key: "{escaped_session}:{escaped_id}"
                     request_id: "{escaped_request}"
+                    {request_doc_field}
                     session_id: "{escaped_session}"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
@@ -3253,6 +3275,13 @@ mod tests {
             "seed tool call failed: {:?}",
             response.errors
         );
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/tool/0/_docID"))
+            .and_then(Value::as_str)
+            .expect("seeded tool call document id")
+            .to_string()
     }
 
     /// Seed one runtime child `AgentRequest` row linked to the parent
@@ -3260,10 +3289,16 @@ mod tests {
     async fn seed_child_request_row(
         engine: &ProjectionEngine,
         parent_request_id: &str,
+        parent_request_doc_id: &str,
+        parent_tool_call_id: &str,
+        parent_tool_call_doc_id: &str,
         child_request_id: &str,
         created_at: &str,
     ) {
         let escaped_parent = gents::graphql::escape_graphql_string(parent_request_id);
+        let escaped_parent_doc = gents::graphql::escape_graphql_string(parent_request_doc_id);
+        let escaped_tool_call = gents::graphql::escape_graphql_string(parent_tool_call_id);
+        let escaped_tool_doc = gents::graphql::escape_graphql_string(parent_tool_call_doc_id);
         let escaped_child = gents::graphql::escape_graphql_string(child_request_id);
         let escaped_created = gents::graphql::escape_graphql_string(created_at);
         let mutation = format!(
@@ -3273,6 +3308,9 @@ mod tests {
                     agent_did: "did:test:grok-shim"
                     session_id: "s-chron-child"
                     caused_by_parent_request_id: "{escaped_parent}"
+                    caused_by_parent_request_doc_id: "{escaped_parent_doc}"
+                    caused_by_parent_tool_call_id: "{escaped_tool_call}"
+                    caused_by_parent_tool_call_doc_id: "{escaped_tool_doc}"
                     content: "child work"
                     status: "pending"
                     lifecycle_state: "processing"
@@ -3323,6 +3361,38 @@ mod tests {
         let session_id = "s-chron";
         let request_id = "req-chron";
 
+        let seed_parent = format!(
+            r#"mutation {{
+                parent: create_AgentRequest(input: {{
+                    request_id: "{request_id}"
+                    agent_did: "did:test:grok-shim"
+                    session_id: "{session_id}"
+                    content: "parent work"
+                    status: "processing"
+                    lifecycle_state: "processing"
+                    backend_id: ""
+                    execution_origin: "interactive"
+                    failure_reason: ""
+                    created_at: "2026-08-31T22:46:44Z"
+                    retry_count: 0
+                    max_retries: 3
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = engine.node.execute(&seed_parent).await;
+        assert!(
+            !response.has_errors(),
+            "seed parent failed: {:?}",
+            response.errors
+        );
+        let parent_doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/parent/0/_docID"))
+            .and_then(Value::as_str)
+            .expect("seeded parent document id")
+            .to_string();
+
         // The assistant turn's durable message: reasoning before text.
         let message = serde_json::to_string(&gents_protocol::message::Message::Assistant {
             id: None,
@@ -3362,11 +3432,22 @@ mod tests {
         // first is the spawn tool (a recognized spawn verb via its recorded
         // `child_request_id`, not the family-suppressed `task` name), so it
         // keeps its rendered `tool_call` block and links the child.
-        seed_tool_call_row(&engine, session_id, request_id, "call-z", "bash", 4, None).await;
         seed_tool_call_row(
             &engine,
             session_id,
             request_id,
+            Some(&parent_doc_id),
+            "call-z",
+            "bash",
+            4,
+            None,
+        )
+        .await;
+        let spawn_tool_doc_id = seed_tool_call_row(
+            &engine,
+            session_id,
+            request_id,
+            Some(&parent_doc_id),
             "call-a",
             "spawn_subagent",
             4,
@@ -3377,7 +3458,16 @@ mod tests {
         // unlinked-by-tool child that shares its timestamp, both tied so
         // only the durable sorts can decide order. Only the spawn-linked
         // child projects (the query filter keeps the family scoped).
-        seed_child_request_row(&engine, request_id, "child-chron", "2026-08-31T22:46:45Z").await;
+        seed_child_request_row(
+            &engine,
+            request_id,
+            &parent_doc_id,
+            "call-a",
+            &spawn_tool_doc_id,
+            "child-chron",
+            "2026-08-31T22:46:45Z",
+        )
+        .await;
 
         let mut token_high_water = 0u64;
         let mut cursor = RequestCursor::new();
@@ -3939,6 +4029,7 @@ mod tests {
             &engine,
             session_id,
             request_id,
+            None,
             "call-middle",
             "bash",
             4,
@@ -4118,6 +4209,39 @@ mod tests {
         // Re-observing the same window is not novel.
         let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
         assert!(third.is_empty(), "the rolled window is fully delivered");
+    }
+
+    #[test]
+    fn utf8_short_saturated_reasoning_window_defers_an_unproven_jump() {
+        for size in
+            MAX_LIVE_REASONING_WINDOW_BYTES.saturating_sub(3)..=MAX_LIVE_REASONING_WINDOW_BYTES
+        {
+            assert!(reasoning_window_is_saturated(&"x".repeat(size)));
+        }
+        assert!(!reasoning_window_is_saturated(
+            &"x".repeat(MAX_LIVE_REASONING_WINDOW_BYTES - 4)
+        ));
+
+        let mut cursor = LiveSegmentCursor::default();
+        let first = "a".repeat(MAX_LIVE_REASONING_WINDOW_BYTES);
+        let (_, first_plan) = cursor
+            .plan(&first, Some(1), true, true)
+            .expect("first reasoning window");
+        cursor.commit(first_plan, Some(1));
+
+        // The runtime's UTF-8-safe cut begins one byte inside a four-byte
+        // scalar and advances three bytes, producing a saturated MAX-3 tail.
+        let source = format!("💡{}", "z".repeat(MAX_LIVE_REASONING_WINDOW_BYTES - 3));
+        let saturated = tail_bytes(&source, MAX_LIVE_REASONING_WINDOW_BYTES);
+        assert_eq!(saturated.len(), MAX_LIVE_REASONING_WINDOW_BYTES - 3);
+        let (delta, plan) = cursor
+            .plan(saturated, Some(2), true, true)
+            .expect("advanced saturated reasoning observation");
+        assert!(
+            delta.is_empty(),
+            "the missing middle is not reconstructable"
+        );
+        assert!(plan.unproven_gap, "the rail waits for its durable row");
     }
 
     /// A persisted reasoning preview can jump by more than one whole window
@@ -4328,7 +4452,10 @@ mod tests {
         // The assistant row exists at sequence 3 (the live segment's
         // position) and a tool call at sequence 4.
         seed_assistant_text_row(&engine, session_id, request_id, 3, "").await;
-        seed_tool_call_row(&engine, session_id, request_id, "call-x", "bash", 4, None).await;
+        seed_tool_call_row(
+            &engine, session_id, request_id, None, "call-x", "bash", 4, None,
+        )
+        .await;
         seed_response_row(
             &engine,
             session_id,

@@ -5,6 +5,7 @@ type PortSurface {
   verdict: String @immutable
   grok_call_sites: String @immutable
   grok_wire: String @immutable
+  grok_wire_continuation: String @immutable
   gents_docs: String @immutable
   live_prompt: String @immutable
   live_expect: String @immutable

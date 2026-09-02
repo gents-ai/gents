@@ -69,8 +69,13 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use serde_json::{json, Value};
 
-use super::projection::stamp_update_meta;
-use super::projection::{AsyncCommit, ProjectionEngine};
+use super::projection::subagents::{
+    SUBAGENT_CANCEL_METHOD, SUBAGENT_GET_METHOD, SUBAGENT_LIST_RUNNING_METHOD,
+};
+use super::projection::{
+    effective_context_window_tokens, stamp_update_meta, AsyncCommit, ProjectionEngine,
+    SESSION_UPDATE_METHOD,
+};
 use super::protocol::{ClientCapabilities, RegisterMode};
 use super::server::{AcpDelegate, AcpOutbound};
 use super::turn::{
@@ -131,25 +136,6 @@ pub(crate) const COMPACT_CONVERSATION_METHOD: &str = "x.ai/compact_conversation"
 /// Ext notification method emitted after a model catalog switch.
 pub(crate) const MODELS_UPDATE_METHOD: &str = "x.ai/models/update";
 
-/// Session notification method carrying every session update, including the
-/// `current_mode_update` this module emits.
-pub(crate) const SESSION_UPDATE_METHOD: &str = "session/update";
-
-/// Wire name of the `x.ai/subagent/get` ext request. The shaped stub
-/// itself lives in [`super::projection::subagents`]; this local wire name is
-/// what exact-method routing and `params`-validation here key on.
-const SUBAGENT_GET_EXT_METHOD: &str = "x.ai/subagent/get";
-
-/// Wire name of the `x.ai/subagent/list_running` ext request. The shaped
-/// stub itself lives in [`super::projection::subagents`]; this local wire
-/// name is what exact-method routing and `params`-validation here key on.
-const SUBAGENT_LIST_RUNNING_EXT_METHOD: &str = "x.ai/subagent/list_running";
-
-/// Wire name of the `x.ai/subagent/cancel` ext request. The shaped stub
-/// itself lives in [`super::projection::subagents`]; this local wire name is
-/// what `params`-validation here keys on.
-const SUBAGENT_CANCEL_EXT_METHOD: &str = "x.ai/subagent/cancel";
-
 // ---------------------------------------------------------------------------
 // Bound configuration
 // ---------------------------------------------------------------------------
@@ -174,6 +160,10 @@ pub(crate) struct BoundModel {
 }
 
 impl BoundModel {
+    pub(crate) fn effective_context_window(&self) -> u64 {
+        effective_context_window_tokens(self.total_context_tokens)
+    }
+
     /// Serialize this entry into the pager's `availableModels` item shape.
     ///
     /// The capability keys are the audited truth, not an aspiration: the
@@ -188,7 +178,7 @@ impl BoundModel {
             "modelId": self.model_id,
             "name": self.name,
             "meta": {
-                "totalContextTokens": self.total_context_tokens,
+                "totalContextTokens": self.effective_context_window(),
                 "acceptsImages": false,
                 "inputModalities": ["text"],
                 "supportsReasoningEffort": false,
@@ -603,9 +593,7 @@ impl AcpService {
             // through to the typed `ShapedMethodNotFound` arm below so it
             // answers the exact `-32601`, never the sibling leaf's generic
             // (type-only-classified, hence `-32603`) anyhow error.
-            SUBAGENT_GET_EXT_METHOD
-            | SUBAGENT_LIST_RUNNING_EXT_METHOD
-            | SUBAGENT_CANCEL_EXT_METHOD => {
+            SUBAGENT_GET_METHOD | SUBAGENT_LIST_RUNNING_METHOD | SUBAGENT_CANCEL_METHOD => {
                 self.handle_subagent_ext_request(request.method.as_str(), request)
                     .await
             }
@@ -657,9 +645,11 @@ impl AcpService {
                     "setMode": true,
                     "setModel": true,
                 },
-                "authMethods": [
-                    { "id": GENTS_AUTH_METHOD_ID, "description": "Gents runtime identity" }
-                ],
+                "authMethods": [{
+                    "id": GENTS_AUTH_METHOD_ID,
+                    "name": "Gents runtime",
+                    "description": "Gents runtime identity",
+                }],
             }),
         })
     }
@@ -841,10 +831,11 @@ impl AcpService {
         // Empty result per the audited wire; the catalog refresh rides the
         // x.ai/models/update ext notification emitted before the response.
         Ok(RequestOutcome {
-            notifications: vec![json!({
-                "__method": MODELS_UPDATE_METHOD,
-                "models": self.config.models_object(),
-            })],
+            notifications: vec![{
+                let mut notification = self.config.models_object();
+                notification["__method"] = json!(MODELS_UPDATE_METHOD);
+                notification
+            }],
             result: json!({}),
         })
     }
@@ -922,7 +913,7 @@ impl AcpService {
                             "sessionId": session_id,
                             "update": {
                                 "sessionUpdate": "current_mode_update",
-                                "currentMode": mode_id,
+                                "currentModeId": mode_id,
                             },
                             "_meta": meta,
                         },
@@ -998,7 +989,7 @@ impl AcpService {
         request: &AcpRequest,
     ) -> Result<RequestOutcome> {
         required_session_id(&request.params)?;
-        if method == SUBAGENT_CANCEL_EXT_METHOD {
+        if method == SUBAGENT_CANCEL_METHOD {
             let id = request.params.get("subagentId");
             match id {
                 None | Some(Value::Null) => {
@@ -1730,6 +1721,20 @@ mod tests {
     }
 
     #[test]
+    fn model_catalog_normalizes_an_unspecified_context_window() {
+        let mut model = bound_model();
+        model.total_context_tokens = 0;
+        assert_eq!(
+            model.models_object()["availableModels"][0]["meta"]["totalContextTokens"],
+            super::super::projection::DEFAULT_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(
+            model.effective_context_window(),
+            super::super::projection::DEFAULT_CONTEXT_WINDOW_TOKENS
+        );
+    }
+
+    #[test]
     fn catalog_entry_has_no_leading_underscore_keys() {
         let entry = bound_model().catalog_entry();
         assert!(entry.get("meta").is_some());
@@ -1915,6 +1920,10 @@ mod tests {
             false
         );
         assert_eq!(response["result"]["authMethods"][0]["id"], "gents.runtime");
+        assert_eq!(
+            response["result"]["authMethods"][0]["name"],
+            "Gents runtime"
+        );
     }
 
     #[tokio::test]
@@ -2390,10 +2399,8 @@ mod tests {
         assert_eq!(dispatch.notifications.len(), 1);
         let notification = parse_response(&dispatch.notifications[0]);
         assert_eq!(notification["method"], "x.ai/models/update");
-        assert_eq!(
-            notification["params"]["models"]["currentModelId"],
-            "GLM-5.3-NVFP4"
-        );
+        assert_eq!(notification["params"]["currentModelId"], "GLM-5.3-NVFP4");
+        assert!(notification["params"].get("models").is_none());
         let response = parse_response(dispatch.response.as_deref().expect("response line"));
         assert_eq!(response["result"], json!({}), "set_model result is empty");
     }
@@ -2468,7 +2475,7 @@ mod tests {
             notification["params"]["update"]["sessionUpdate"],
             "current_mode_update"
         );
-        assert_eq!(notification["params"]["update"]["currentMode"], "yolo");
+        assert_eq!(notification["params"]["update"]["currentModeId"], "yolo");
         assert_eq!(notification["params"]["sessionId"], "s-set-mode");
         assert!(
             notification["params"]["_meta"]["eventId"]

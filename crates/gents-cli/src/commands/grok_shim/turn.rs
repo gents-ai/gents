@@ -66,12 +66,14 @@ use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use serde_json::{json, Value};
 use tokio::sync::{oneshot, Mutex};
 
-use super::projection::{AsyncCommit, AsyncSendLine, CursorAdvance, ProjectionEngine};
-use super::projection::{RequestCursor, SessionUpdateChannel};
+use super::projection::{
+    AsyncCommit, AsyncSendLine, CursorAdvance, ProjectionEngine, RequestCursor,
+    SessionUpdateChannel, SESSION_UPDATE_METHOD,
+};
 use super::server::AcpOutbound;
-
-/// JSON-RPC method names on the Grok pager wire.
-pub(super) const SESSION_UPDATE_METHOD: &str = "session/update";
+use crate::request_helpers::{
+    graphql_error_is_transient, transient_graphql_retry_delay, MAX_TRANSIENT_GRAPHQL_RETRIES,
+};
 
 /// Poll cadence for watching the durable request terminalize. The embedded
 /// node exposes no subscription seam to the shim, so terminalization is
@@ -208,6 +210,7 @@ pub(super) enum PromptSender {
     /// Collects serialized notification lines in memory (tests, headless
     /// capture). The buffer never fails, so a test can simulate a send
     /// failure only through the Live variant.
+    #[cfg(test)]
     Buffer { buffer: Arc<Mutex<Vec<String>>> },
 }
 
@@ -218,6 +221,7 @@ impl PromptSender {
     pub(super) async fn send_line(&self, line: String) -> Result<()> {
         match self {
             PromptSender::Live { outbound } => outbound.send(line),
+            #[cfg(test)]
             PromptSender::Buffer { buffer } => {
                 buffer.lock().await.push(line);
                 Ok(())
@@ -232,6 +236,7 @@ impl PromptSender {
     pub(super) async fn take_lines(&self) -> Vec<String> {
         match self {
             PromptSender::Live { .. } => Vec::new(),
+            #[cfg(test)]
             PromptSender::Buffer { buffer } => {
                 let mut buffer = buffer.lock().await;
                 std::mem::take(&mut *buffer)
@@ -530,11 +535,35 @@ impl TurnManager {
         let submission = self.submit_request(&request, &prompt_id).await;
         let request_id = match submission {
             Ok(request_id) => {
-                {
+                let registered_own_entry = {
                     let mut state = self.state.lock().await;
-                    if let Some(entry) = state.entries.get_mut(&key) {
-                        entry.request_id = Some(request_id.clone());
+                    match state.entries.get_mut(&key) {
+                        Some(entry) if Arc::ptr_eq(&entry.cancel_before_id, &cancel_before_id) => {
+                            entry.request_id = Some(request_id.clone());
+                            true
+                        }
+                        _ => false,
                     }
+                };
+                let cancelled_before_id = cancel_before_id.lock().await.is_cancelled();
+                if !registered_own_entry || cancelled_before_id {
+                    // The original entry was drained while submission was in
+                    // flight. A later prompt may already have reused the same
+                    // peer-supplied (session, promptId) key, so entry presence
+                    // alone is not proof that this submission still owns it.
+                    // The per-instance latch/Arc identity is the generation
+                    // token: never stamp or stream through a replacement.
+                    self.interrupt_submitted(&request_id).await;
+                    drop(response_rx);
+                    tracing::info!(
+                        session_id = %request.session_id,
+                        prompt_id = %prompt_id,
+                        request_id = %request_id,
+                        registered_own_entry,
+                        cancelled_before_id,
+                        "Grok shim prompt was drained during submission; interrupting submitted request"
+                    );
+                    return Ok(json!({"stopReason": StopReason::Cancelled.wire_name()}));
                 }
                 request_id
             }
@@ -864,19 +893,28 @@ impl TurnManager {
         if request.send_now {
             metadata["sendNow"] = json!(true);
         }
+        let stable_request_id = uuid::Uuid::new_v4().to_string();
         let options = crate::RequestSubmitOptions {
             metadata: Some(metadata.to_string()),
             ..Default::default()
         };
-        let submitted = crate::create_agent_request(
+        let submitted = crate::create_agent_request_retrying_transient(
             self.config.graphql.as_ref(),
             self.config.agent_did.as_str(),
             &content,
             Some(request.session_id.as_str()),
             Some(self.config.behavior_id.as_str()),
+            stable_request_id.clone(),
             options,
         )
-        .await?;
+        .await;
+        let submitted = match submitted {
+            Ok(submitted) => submitted,
+            Err(error) => {
+                self.interrupt_submitted(&stable_request_id).await;
+                return Err(error);
+            }
+        };
         Ok(submitted.request_id)
     }
 
@@ -892,10 +930,11 @@ impl TurnManager {
     /// terminal `stopReason` response is produced, so the pager observes
     /// the full stream strictly before the response.
     ///
-    /// Every failure after submission (a send failure on the outbound, a
-    /// projection query error, or a terminal query error) interrupts the
-    /// submitted request and drains the pending entry, so no submitted
-    /// request is ever leaked by a failed turn.
+    /// Outbound failures and non-transient read failures interrupt and drain
+    /// the submitted request. DefraDB contention errors from the terminal or
+    /// projection reads receive a bounded number of consecutive retries; a
+    /// complete successful poll resets that budget, so an otherwise healthy
+    /// request is never interrupted by an isolated read conflict.
     #[allow(clippy::too_many_arguments)]
     async fn watch_terminal(
         &self,
@@ -913,6 +952,7 @@ impl TurnManager {
         // the session total without double-counting and a retry-replaced
         // (smaller) observation can never decrease it.
         let mut token_high_water = 0u64;
+        let mut consecutive_transient_read_failures = 0usize;
         loop {
             // A cancel/disconnect that drained the entry resolves the
             // response before (or between) terminalization polls.
@@ -928,6 +968,30 @@ impl TurnManager {
             }
             let terminal = match self.request_stop_reason(request_id).await {
                 Ok(terminal) => terminal,
+                Err(error)
+                    if register_transient_read_retry(
+                        &error,
+                        &mut consecutive_transient_read_failures,
+                    ) =>
+                {
+                    tracing::warn!(
+                        %error,
+                        session_id,
+                        prompt_id,
+                        request_id,
+                        retry = consecutive_transient_read_failures,
+                        "retrying transient Grok shim terminal query failure"
+                    );
+                    if let Some(stop_reason) = wait_for_retry_or_cancel(
+                        &mut response_rx,
+                        transient_graphql_retry_delay(consecutive_transient_read_failures),
+                    )
+                    .await?
+                    {
+                        return Ok(stop_reason);
+                    }
+                    continue;
+                }
                 Err(error) => {
                     // A terminal query failure after submission must not
                     // leak the submitted request.
@@ -959,6 +1023,30 @@ impl TurnManager {
                 .await
             {
                 Ok(()) => {}
+                Err(error)
+                    if register_transient_read_retry(
+                        &error,
+                        &mut consecutive_transient_read_failures,
+                    ) =>
+                {
+                    tracing::warn!(
+                        %error,
+                        session_id,
+                        prompt_id,
+                        request_id,
+                        retry = consecutive_transient_read_failures,
+                        "retrying transient Grok shim projection read failure"
+                    );
+                    if let Some(stop_reason) = wait_for_retry_or_cancel(
+                        &mut response_rx,
+                        transient_graphql_retry_delay(consecutive_transient_read_failures),
+                    )
+                    .await?
+                    {
+                        return Ok(stop_reason);
+                    }
+                    continue;
+                }
                 Err(error) => {
                     // A send failure or projection query failure after
                     // submission must not leak the submitted request.
@@ -974,6 +1062,7 @@ impl TurnManager {
                     return Err(error);
                 }
             }
+            consecutive_transient_read_failures = 0;
             if let Some(stop_reason) = terminal {
                 // Terminalized: the final projection pass above already
                 // flushed the stream. Remove the pending entry; the response
@@ -1134,6 +1223,36 @@ impl TurnManager {
             interrupted_at.as_deref(),
         ))
     }
+}
+
+/// Wait between transient read attempts without delaying an explicit cancel
+/// or disconnect that already resolved the pending turn.
+async fn wait_for_retry_or_cancel(
+    response_rx: &mut oneshot::Receiver<Result<Value>>,
+    delay: Duration,
+) -> Result<Option<StopReason>> {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => Ok(None),
+        result = response_rx => {
+            let value = match result {
+                Ok(result) => result?,
+                Err(_) => return Ok(Some(StopReason::Cancelled)),
+            };
+            let stop_reason = value
+                .get("stopReason")
+                .and_then(Value::as_str)
+                .unwrap_or(StopReason::Cancelled.wire_name());
+            Ok(Some(stop_reason_from_wire(stop_reason)))
+        }
+    }
+}
+
+fn register_transient_read_retry(error: &anyhow::Error, consecutive: &mut usize) -> bool {
+    if !graphql_error_is_transient(error) || *consecutive >= MAX_TRANSIENT_GRAPHQL_RETRIES {
+        return false;
+    }
+    *consecutive += 1;
+    true
 }
 
 /// Map a wire `stopReason` back onto the enum (used by the drain branch).
@@ -1563,6 +1682,21 @@ mod tests {
         assert!(latch.is_cancelled());
         assert!(!latch.cancel());
         assert!(latch.is_cancelled());
+    }
+
+    #[test]
+    fn transient_read_retry_budget_is_consecutive_and_bounded() {
+        let transient = anyhow::anyhow!("database is locked");
+        let fatal = anyhow::anyhow!("invalid query");
+        let mut consecutive = 0;
+        for expected in 1..=MAX_TRANSIENT_GRAPHQL_RETRIES {
+            assert!(register_transient_read_retry(&transient, &mut consecutive));
+            assert_eq!(consecutive, expected);
+        }
+        assert!(!register_transient_read_retry(&transient, &mut consecutive));
+        consecutive = 0; // the production loop resets after a complete poll
+        assert!(register_transient_read_retry(&transient, &mut consecutive));
+        assert!(!register_transient_read_retry(&fatal, &mut consecutive));
     }
 
     /// A pending entry resolves its deferred response exactly once.
@@ -2039,12 +2173,32 @@ mod tests {
         tool_name: &str,
         lifecycle_state: &str,
         result: &str,
+        child_request_id: Option<&str>,
     ) {
         let escaped_request = escape_graphql_string(request_id);
         let escaped_id = escape_graphql_string(tool_call_id);
         let escaped_name = escape_graphql_string(tool_name);
         let escaped_state = escape_graphql_string(lifecycle_state);
         let escaped_result = escape_graphql_string(result);
+        let parent = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request}" }} }}, limit: 1) {{ _docID }} }}"#
+            ))
+            .await;
+        ensure_no_errors(&parent, "test load parent doc id").expect("parent doc id query");
+        let parent_doc_id = parent
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/AgentRequest/0/_docID"))
+            .and_then(Value::as_str)
+            .expect("parent doc id");
+        let escaped_parent_doc = escape_graphql_string(parent_doc_id);
+        let child_field = child_request_id.map_or_else(String::new, |child_request_id| {
+            format!(
+                "child_request_id: \"{}\"",
+                escape_graphql_string(child_request_id)
+            )
+        });
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolCall(input: {{
@@ -2053,10 +2207,12 @@ mod tests {
                     session_id: "session-1"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
+                    request_doc_id: "{escaped_parent_doc}"
                     tool_call_id: "{escaped_id}"
                     tool_name: "{escaped_name}"
                     lifecycle_state: "{escaped_state}"
                     result: "{escaped_result}"
+                    {child_field}
                 }}) {{ _docID }}
             }}"#
         );
@@ -2075,6 +2231,29 @@ mod tests {
         let escaped_parent = escape_graphql_string(parent_request_id);
         let escaped_child = escape_graphql_string(child_request_id);
         let escaped_state = escape_graphql_string(lifecycle_state);
+        let bridge = node
+            .execute(&format!(
+                r#"{{
+                    parent: AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_parent}" }} }}, limit: 1) {{ _docID }}
+                    tool: AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped_parent}" }}, tool_call_id: {{ _eq: "call-1" }} }}, limit: 1) {{ _docID }}
+                }}"#
+            ))
+            .await;
+        ensure_no_errors(&bridge, "test load spawn bridge ids").expect("spawn bridge ids");
+        let parent_doc_id = bridge
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/parent/0/_docID"))
+            .and_then(Value::as_str)
+            .expect("parent doc id");
+        let tool_doc_id = bridge
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/tool/0/_docID"))
+            .and_then(Value::as_str)
+            .expect("tool doc id");
+        let escaped_parent_doc = escape_graphql_string(parent_doc_id);
+        let escaped_tool_doc = escape_graphql_string(tool_doc_id);
         let now = chrono::Utc::now().to_rfc3339();
         let escaped_now = escape_graphql_string(&now);
         let mutation = format!(
@@ -2084,6 +2263,9 @@ mod tests {
                     agent_did: "did:test:grok-shim"
                     session_id: "session-1-child"
                     caused_by_parent_request_id: "{escaped_parent}"
+                    caused_by_parent_request_doc_id: "{escaped_parent_doc}"
+                    caused_by_parent_tool_call_id: "call-1"
+                    caused_by_parent_tool_call_doc_id: "{escaped_tool_doc}"
                     content: "child work"
                     status: "pending"
                     lifecycle_state: "{escaped_state}"
@@ -2264,6 +2446,7 @@ mod tests {
                 "read_file",
                 "running",
                 "",
+                Some("child-1"),
             )
             .await;
             seed_child_request(&node_for_seed, &request_id, "child-1", "processing").await;
@@ -2439,14 +2622,18 @@ mod tests {
         // closed outbound, which must interrupt the request and drain the
         // entry.
         let mut frames_rx = frames_rx;
+        let outbound_closed = Arc::new(tokio::sync::Notify::new());
+        let closed_signal = outbound_closed.clone();
         let closer = tokio::spawn(async move {
             // Wait for the echo frame, then close the channel.
             let _ = frames_rx.recv().await;
             drop(frames_rx);
+            closed_signal.notify_one();
         });
         let node_for_seed = node.clone();
         let seed_handle = tokio::spawn(async move {
             let request_id = wait_for_pending_request(&node_for_seed).await;
+            outbound_closed.notified().await;
             seed_tool_call(
                 &node_for_seed,
                 &request_id,
@@ -2454,6 +2641,7 @@ mod tests {
                 "read_file",
                 "running",
                 "",
+                None,
             )
             .await;
         });
@@ -2676,6 +2864,122 @@ mod tests {
         .expect("second prompt should succeed");
         assert_eq!(result["stopReason"], json!("cancelled"));
         terminalize_handle.abort();
+    }
+
+    /// A peer may reuse the exact `(sessionId, promptId)` immediately after
+    /// cancelling a submission whose request id is still unknown. When the old
+    /// submission later succeeds, its Arc latch identity must not register the
+    /// old request id on, drain, or stream through the replacement entry.
+    #[tokio::test]
+    async fn cancelled_submission_cannot_capture_an_exact_key_replacement() {
+        let (_tempdir, node, agent_did) = test_node().await;
+        let submission_arrived = Arc::new(tokio::sync::Notify::new());
+        let submission_release = Arc::new(tokio::sync::Notify::new());
+        let gate_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let graphql = spawn_gated_mock_graphql(
+            node.clone(),
+            Some((
+                submission_arrived.clone(),
+                submission_release.clone(),
+                gate_armed,
+            )),
+        )
+        .await;
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
+        let engine = test_engine(node.clone());
+        let (_buffer, sender) = buffer_sender();
+
+        let prompt = || {
+            parse_prompt_request(
+                &json!({
+                    "sessionId": "session-reuse",
+                    "prompt": [text_block("hello")],
+                    "_meta": {"promptId": "same-prompt"},
+                }),
+                Some(json!(1)),
+            )
+            .expect("prompt")
+        };
+        let first = tokio::spawn({
+            let manager = manager.clone();
+            let sender = sender.clone();
+            let engine = engine.clone();
+            let prompt = prompt();
+            async move { manager.handle_prompt(prompt, &sender, &engine).await }
+        });
+        tokio::time::timeout(Duration::from_secs(30), submission_arrived.notified())
+            .await
+            .expect("first submission reached gate");
+
+        let cancel = parse_cancel_notification(&json!({
+            "sessionId": "session-reuse",
+            "_meta": {"promptId": "same-prompt"},
+        }))
+        .expect("cancel");
+        manager.handle_cancel(cancel).await.expect("cancel first");
+
+        let replacement = tokio::spawn({
+            let manager = manager.clone();
+            let sender = sender.clone();
+            let engine = engine.clone();
+            let prompt = prompt();
+            async move { manager.handle_prompt(prompt, &sender, &engine).await }
+        });
+        let replacement_request_id = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let request_id = manager
+                    .state
+                    .lock()
+                    .await
+                    .entries
+                    .get(&("session-reuse".to_string(), "same-prompt".to_string()))
+                    .and_then(|entry| entry.request_id.clone());
+                if let Some(request_id) = request_id {
+                    break request_id;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replacement request id registered");
+
+        submission_release.notify_one();
+        let first_result = tokio::time::timeout(Duration::from_secs(30), first)
+            .await
+            .expect("old prompt resolves")
+            .expect("old prompt task")
+            .expect("old prompt result");
+        assert_eq!(first_result["stopReason"], json!("cancelled"));
+        assert_eq!(
+            manager
+                .state
+                .lock()
+                .await
+                .entries
+                .get(&("session-reuse".to_string(), "same-prompt".to_string()))
+                .and_then(|entry| entry.request_id.as_deref()),
+            Some(replacement_request_id.as_str()),
+            "the old generation must not overwrite the exact-key replacement"
+        );
+
+        let cancel_replacement = parse_cancel_notification(&json!({
+            "sessionId": "session-reuse",
+            "_meta": {"promptId": "same-prompt"},
+        }))
+        .expect("cancel replacement");
+        manager
+            .handle_cancel(cancel_replacement)
+            .await
+            .expect("cancel replacement");
+        let replacement_result = tokio::time::timeout(Duration::from_secs(30), replacement)
+            .await
+            .expect("replacement resolves")
+            .expect("replacement task")
+            .expect("replacement result");
+        assert_eq!(replacement_result["stopReason"], json!("cancelled"));
     }
 
     /// Disconnect before the request id is registered: the entry is drained

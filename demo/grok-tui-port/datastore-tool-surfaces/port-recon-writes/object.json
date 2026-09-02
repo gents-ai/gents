@@ -16,6 +16,7 @@
         {"name": "verdict", "required": true},
         {"name": "grok_call_sites", "required": true},
         {"name": "grok_wire", "required": true},
+        {"name": "grok_wire_continuation", "required": false},
         {"name": "gents_docs", "required": true},
         {"name": "live_prompt", "required": true},
         {"name": "live_expect", "required": true},

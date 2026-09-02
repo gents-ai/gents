@@ -10,8 +10,9 @@ Parse the prior numeric `attempt`, add one, and call `write_port_work_unit`
 exactly once to create the new attempt:
 
 - Keep the same `logical_unit_id`, surface ids, area, title, ownership
-  instructions, complete mapped evidence, repository, pinned base, and
-  expected total.
+  instructions, compact surface-id evidence indexes, repository, pinned base,
+  and expected total. The authoritative complete evidence stays on the mapped
+  `PortSurface` rows, including `grok_wire_continuation`.
 - Set `work_unit_id=<logical_unit_id>:attempt-<next>`, `attempt=<next>`,
   `status=ready`, and `verdict=implement`.
 - Use a new Git-safe branch ending in `-attempt-<next>`; never reuse the sealed

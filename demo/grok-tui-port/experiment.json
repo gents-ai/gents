@@ -2,12 +2,12 @@
   "name": "grok-tui-port",
   "description": "Map the Grok TUI wire, fan out eight path-disjoint GLM writers, retry rejected seals in fresh workspaces, record host-confirmed serial integration, semantically converge, full-review, live-prove, then open a PR",
   "init": {
-    "inference_url": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8000/v1}",
+    "inference_url": "${GENTS_GROK_PORT_ENDPOINT_1:-http://127.0.0.1:8000/v1}",
     "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}",
     "tool_package": "write",
-    "tool_root": "${GENTS_GROK_PORT_CEILING:-/Users/johnzampolin/go/src/github.com}",
+    "tool_root": "${GENTS_GROK_PORT_CEILING:-.}",
     "tool_root_env_var": "GENTS_GROK_PORT_CEILING",
-    "tool_root_markers": ["source-inc/gents/Cargo.toml", "xai-org/grok-build/Cargo.toml"],
+    "tool_root_markers": ["Cargo.toml"],
     "backend_preset": "vllm",
     "openai_wire_api": "chat-completions",
     "max_concurrent": ${GENTS_GROK_PORT_MAX_CONCURRENT_1:-16}
@@ -18,12 +18,12 @@
     "prompt_field": "focus",
     "fields": {
       "gents_root": "${GENTS_GROK_PORT_GENTS_ROOT:-.}",
-      "grok_root": "${GENTS_GROK_PORT_GROK_ROOT:-/Users/johnzampolin/go/src/github.com/xai-org/grok-build}",
-      "ceiling": "${GENTS_GROK_PORT_CEILING:-/Users/johnzampolin/go/src/github.com}",
+      "grok_root": "${GENTS_GROK_PORT_GROK_ROOT:-demo/grok-tui-port/recon-input}",
+      "ceiling": "${GENTS_GROK_PORT_CEILING:-.}",
       "surface_min": "${GENTS_GROK_PORT_MIN_SURFACES:-13}",
       "surface_max": "${GENTS_GROK_PORT_MAX_SURFACES:-13}",
       "live_model": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}",
-      "live_endpoint": "${GENTS_GROK_PORT_ENDPOINT_1:-http://100.73.235.38:8000/v1}",
+      "live_endpoint": "${GENTS_GROK_PORT_ENDPOINT_1:-http://127.0.0.1:8000/v1}",
       "orchestrator_home": "${GENTS_GROK_PORT_ORCHESTRATOR_HOME:-.gents/grok-port-home}",
       "orchestrator_graphql": "${GENTS_GROK_PORT_ORCHESTRATOR_GRAPHQL:-http://127.0.0.1:19195/api/v0/graphql}",
       "live_home": "${GENTS_GROK_PORT_LIVE_HOME:-.gents/grok-port-live-home}",
@@ -160,11 +160,20 @@
         "required_tool_names": ["read_grok_port_job", "read_port_live_report", "read_port_final_review_report", "write_port_pull_request"]
       }
     ],
-    "stage_tool_sequences": [],
+    "stage_tool_sequences": [
+      {
+        "trigger_id": "port-recon",
+        "boundary_tool_name": "write_port_surface",
+        "max_calls_before_boundary": 32,
+        "max_calls_per_message_before_boundary": 20,
+        "exact_boundary_calls": 13,
+        "allowed_at_or_after_boundary": ["write_port_surface"]
+      }
+    ],
     "source_edges": [],
     "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
     "collection_counts": {
-      "PortSurface": 1,
+      "PortSurface": 13,
       "PortReconAudit": 1,
       "PortPlan": 1,
       "PortIntegrateResult": 8,
@@ -188,7 +197,7 @@
       {
         "collection": "PortSurface",
         "correlation_field": "run_id",
-        "fields": ["surface_id", "area", "verdict", "grok_wire", "gents_docs", "live_prompt", "live_expect", "evidence"]
+        "fields": ["surface_id", "area", "verdict", "grok_wire", "grok_wire_continuation", "gents_docs", "live_prompt", "live_expect", "evidence"]
       },
       {
         "collection": "PortWorkUnit",

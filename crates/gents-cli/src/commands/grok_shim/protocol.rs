@@ -12,19 +12,13 @@
 //! `gents-<version>` [`LEADER_BINARY_VERSION`]), `leader_ready` gating,
 //! `ping` / `pong`, `acp` pass-through (one raw JSON-RPC 2.0 line per frame),
 //! `control`, `shutting_down` + `shutdown`, and `error`. ACP payloads are
-//! never parsed by the frame layer beyond the JSON-RPC 2.0 id/payload types
-//! in this module; the shim imports no Grok code.
-//!
-//! Internal agent methods are wire-named with a leading underscore so a
-//! decoder routes them to ext method/notification handling:
-//! `_x.ai/internal/auth_cleared`, `_x.ai/internal/evict_sessions`, ...
-//! (see [`INTERNAL_AGENT_METHODS`] and [`internal_method_wire_name`]).
+//! opaque to this frame layer; [`super::acp`] owns their JSON-RPC decoding.
+//! The shim imports no Grok code.
 
-use std::borrow::Cow;
 use std::fmt;
 
-use serde::de::{self, DeserializeOwned, Deserializer};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -41,33 +35,6 @@ pub const LEADER_PROTOCOL_VERSION: u32 = 1;
 /// Leader binary version reported in `registered`, verbatim from the wire
 /// contract: `format!("gents-{}", env!("CARGO_PKG_VERSION"))`.
 pub const LEADER_BINARY_VERSION: &str = concat!("gents-", env!("CARGO_PKG_VERSION"));
-
-/// JSON-RPC 2.0 protocol tag.
-pub const JSONRPC_VERSION: &str = "2.0";
-
-/// JSON-RPC 2.0 error codes used by the shim's shaped responses.
-pub const JSONRPC_PARSE_ERROR: i64 = -32700;
-pub const JSONRPC_INVALID_REQUEST: i64 = -32600;
-pub const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
-pub const JSONRPC_INVALID_PARAMS: i64 = -32602;
-pub const JSONRPC_INTERNAL_ERROR: i64 = -32603;
-
-/// Leading underscore the leader wire protocol puts on internal agent
-/// methods so decoders route them to ext method/notification handling.
-pub const INTERNAL_WIRE_PREFIX: char = '_';
-
-/// Internal agent method names (without the wire prefix). Wire form is
-/// [`internal_method_wire_name`]: `_x.ai/internal/auth_cleared`, etc.
-pub const INTERNAL_AGENT_METHODS: [&str; 8] = [
-    "x.ai/internal/auth_cleared",
-    "x.ai/internal/evict_sessions",
-    "x.ai/internal/reload_all_mcp_servers",
-    "x.ai/internal/reload_models",
-    "x.ai/internal/reload_models_cache",
-    "x.ai/internal/reload_project_mcp_servers",
-    "x.ai/internal/reload_skills",
-    "x.ai/internal/reload_workflows",
-];
 
 // ---------------------------------------------------------------------------
 // Frame errors
@@ -233,6 +200,7 @@ where
 }
 
 /// Encode a value into frame body bytes.
+#[cfg(test)]
 pub fn encode_frame<T>(value: &T) -> Result<Vec<u8>, ProtocolError>
 where
     T: Serialize,
@@ -249,6 +217,7 @@ where
 }
 
 /// Read one server (leader → pager) envelope.
+#[cfg(test)]
 pub async fn read_server_envelope<R>(reader: &mut R) -> Result<ServerEnvelope, ProtocolError>
 where
     R: AsyncRead + Unpin,
@@ -257,6 +226,7 @@ where
 }
 
 /// Write one client (pager → leader) envelope.
+#[cfg(test)]
 pub async fn write_client_envelope<W>(
     writer: &mut W,
     envelope: &ClientEnvelope,
@@ -329,6 +299,7 @@ pub struct ClientCapabilities {
     pub status_line: bool,
 }
 
+#[cfg(test)]
 impl ClientCapabilities {
     /// True when the registering client asked for approve-all execution.
     pub fn is_always_approve(&self) -> bool {
@@ -379,17 +350,8 @@ pub enum ClientEnvelope {
     Disconnect,
 }
 
+#[cfg(test)]
 impl ClientEnvelope {
-    /// Build an `acp` pass-through envelope from any JSON-RPC payload.
-    pub fn acp<T>(payload: &T) -> Result<Self, ProtocolError>
-    where
-        T: Serialize,
-    {
-        Ok(ClientEnvelope::Acp {
-            payload: encode_acp_payload(payload)?,
-        })
-    }
-
     /// The raw JSON-RPC payload, for `acp` envelopes only.
     pub fn acp_payload(&self) -> Option<&str> {
         match self {
@@ -430,14 +392,6 @@ pub struct LeaderCapabilities {
     pub relaunch_v1: bool,
 }
 
-impl LeaderCapabilities {
-    /// Profile formats the v1 shim supports: none, since CPU profiling is
-    /// not wired. Kept explicit so `registered` always carries the key.
-    pub fn profile_formats(&self) -> &[String] {
-        &self.profile_formats
-    }
-}
-
 /// Why the leader is shutting down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -447,6 +401,7 @@ pub enum ShutdownReason {
     IdleTimeout,
 }
 
+#[cfg(test)]
 impl ShutdownReason {
     pub fn wire_name(self) -> &'static str {
         match self {
@@ -504,6 +459,7 @@ pub enum ServerEnvelope {
     Shutdown,
 }
 
+#[cfg(test)]
 impl ServerEnvelope {
     /// Build the `registered` answer for a client id and readiness flag,
     /// stamping the shim's protocol and binary versions.
@@ -517,16 +473,6 @@ impl ServerEnvelope {
         }
     }
 
-    /// Build an `acp` pass-through envelope from any JSON-RPC payload.
-    pub fn acp<T>(payload: &T) -> Result<Self, ProtocolError>
-    where
-        T: Serialize,
-    {
-        Ok(ServerEnvelope::Acp {
-            payload: encode_acp_payload(payload)?,
-        })
-    }
-
     /// Build a protocol-level `error` envelope.
     pub fn error(code: i32, message: impl Into<String>) -> Self {
         ServerEnvelope::Error {
@@ -538,14 +484,6 @@ impl ServerEnvelope {
     /// Build the `shutting_down` announcement that precedes `shutdown`.
     pub fn shutting_down(reason: ShutdownReason, delay_ms: u64) -> Self {
         ServerEnvelope::ShuttingDown { reason, delay_ms }
-    }
-
-    /// The raw JSON-RPC payload, for `acp` envelopes only.
-    pub fn acp_payload(&self) -> Option<&str> {
-        match self {
-            ServerEnvelope::Acp { payload } => Some(payload.as_str()),
-            _ => None,
-        }
     }
 
     /// The client id, for `registered` envelopes only.
@@ -564,269 +502,6 @@ impl ServerEnvelope {
             self,
             ServerEnvelope::Registered { ready: true, .. } | ServerEnvelope::LeaderReady
         )
-    }
-}
-
-/// Encode a JSON-RPC payload into the string carried by an `acp` envelope.
-pub fn encode_acp_payload<T>(payload: &T) -> Result<String, ProtocolError>
-where
-    T: Serialize,
-{
-    serde_json::to_string(payload).map_err(ProtocolError::from)
-}
-
-/// Decode the string carried by an `acp` envelope into a JSON-RPC payload.
-pub fn decode_acp_payload<T>(payload: &str) -> Result<T, ProtocolError>
-where
-    T: DeserializeOwned,
-{
-    serde_json::from_str(payload).map_err(ProtocolError::from)
-}
-
-// ---------------------------------------------------------------------------
-// Internal agent method routing
-// ---------------------------------------------------------------------------
-
-/// Wire name of an internal agent method: a leading underscore so a decoder
-/// routes it to ext method/notification handling.
-pub fn internal_method_wire_name(method: &str) -> String {
-    format!("{INTERNAL_WIRE_PREFIX}{method}")
-}
-
-/// Strip the internal wire prefix, if present.
-pub fn strip_internal_wire_prefix(wire_method: &str) -> Option<&str> {
-    wire_method.strip_prefix(INTERNAL_WIRE_PREFIX)
-}
-
-/// True when the method carries the internal wire prefix.
-pub fn is_internal_wire_method(wire_method: &str) -> bool {
-    wire_method.starts_with(INTERNAL_WIRE_PREFIX)
-}
-
-/// True when the wire method is one of the known internal agent methods
-/// (underscore-prefixed on the wire, e.g. `_x.ai/internal/reload_skills`).
-pub fn is_known_internal_agent_method(wire_method: &str) -> bool {
-    match strip_internal_wire_prefix(wire_method) {
-        Some(name) => INTERNAL_AGENT_METHODS.contains(&name),
-        None => false,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// JSON-RPC 2.0 ids and payloads
-// ---------------------------------------------------------------------------
-
-/// A JSON-RPC 2.0 id: a string, an integer, or null (used only when echoing a
-/// peer's null id). Other shapes are rejected at decode time.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum JsonRpcId {
-    Number(i64),
-    String(String),
-    Null,
-}
-
-impl JsonRpcId {
-    /// Render the id as a JSON value.
-    pub fn to_value(&self) -> Value {
-        match self {
-            JsonRpcId::Number(number) => Value::from(*number),
-            JsonRpcId::String(text) => Value::from(text.as_str()),
-            JsonRpcId::Null => Value::Null,
-        }
-    }
-}
-
-impl fmt::Display for JsonRpcId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            JsonRpcId::Number(number) => write!(f, "{number}"),
-            JsonRpcId::String(text) => write!(f, "{text}"),
-            JsonRpcId::Null => write!(f, "null"),
-        }
-    }
-}
-
-impl Serialize for JsonRpcId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            JsonRpcId::Number(number) => serializer.serialize_i64(*number),
-            JsonRpcId::String(text) => serializer.serialize_str(text),
-            JsonRpcId::Null => serializer.serialize_unit(),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for JsonRpcId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        match value {
-            Value::Null => Ok(JsonRpcId::Null),
-            Value::Number(number) => {
-                if let Some(number) = number.as_i64() {
-                    return Ok(JsonRpcId::Number(number));
-                }
-                if let Some(number) = number.as_u64() {
-                    if let Ok(number) = i64::try_from(number) {
-                        return Ok(JsonRpcId::Number(number));
-                    }
-                }
-                Err(<D::Error as de::Error>::custom(format!(
-                    "invalid JSON-RPC id: {number}"
-                )))
-            }
-            Value::String(text) => Ok(JsonRpcId::String(text)),
-            other => Err(<D::Error as de::Error>::custom(format!(
-                "invalid JSON-RPC id: {other}"
-            ))),
-        }
-    }
-}
-
-fn default_jsonrpc_version() -> String {
-    JSONRPC_VERSION.to_string()
-}
-
-/// A JSON-RPC 2.0 request.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct JsonRpcRequest<P = Value> {
-    #[serde(default = "default_jsonrpc_version")]
-    pub jsonrpc: String,
-    pub id: JsonRpcId,
-    pub method: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<P>,
-}
-
-impl<P> JsonRpcRequest<P> {
-    pub fn new(id: JsonRpcId, method: impl Into<String>, params: P) -> Self {
-        JsonRpcRequest {
-            jsonrpc: JSONRPC_VERSION.to_string(),
-            id,
-            method: method.into(),
-            params: Some(params),
-        }
-    }
-}
-
-impl JsonRpcRequest<Value> {
-    /// The request params, or JSON null when the peer omitted them.
-    pub fn params_or_null(&self) -> &Value {
-        static NULL: Value = Value::Null;
-        self.params.as_ref().unwrap_or(&NULL)
-    }
-
-    /// The request params as an object, or an empty object when absent.
-    pub fn params_object(&self) -> Cow<'_, serde_json::Map<String, Value>> {
-        match self.params.as_ref() {
-            Some(Value::Object(map)) => Cow::Borrowed(map),
-            _ => Cow::Owned(serde_json::Map::new()),
-        }
-    }
-}
-
-/// A JSON-RPC 2.0 notification (no id, never answered).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct JsonRpcNotification<P = Value> {
-    #[serde(default = "default_jsonrpc_version")]
-    pub jsonrpc: String,
-    pub method: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<P>,
-}
-
-impl<P> JsonRpcNotification<P> {
-    pub fn new(method: impl Into<String>, params: P) -> Self {
-        JsonRpcNotification {
-            jsonrpc: JSONRPC_VERSION.to_string(),
-            method: method.into(),
-            params: Some(params),
-        }
-    }
-}
-
-/// A successful JSON-RPC 2.0 response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct JsonRpcResponse<P = Value> {
-    #[serde(default = "default_jsonrpc_version")]
-    pub jsonrpc: String,
-    pub id: JsonRpcId,
-    pub result: P,
-}
-
-impl<P> JsonRpcResponse<P> {
-    pub fn new(id: JsonRpcId, result: P) -> Self {
-        JsonRpcResponse {
-            jsonrpc: JSONRPC_VERSION.to_string(),
-            id,
-            result,
-        }
-    }
-}
-
-/// The `error` object of a failed JSON-RPC 2.0 response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RpcError {
-    pub code: i64,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
-}
-
-impl RpcError {
-    pub fn new(code: i64, message: impl Into<String>) -> Self {
-        RpcError {
-            code,
-            message: message.into(),
-            data: None,
-        }
-    }
-
-    /// The shaped method-not-found error used for unsupported agent methods.
-    pub fn method_not_found(method: &str, explanation: &str) -> Self {
-        RpcError::new(
-            JSONRPC_METHOD_NOT_FOUND,
-            format!("method not found: {method}: {explanation}"),
-        )
-    }
-}
-
-/// A failed JSON-RPC 2.0 response.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct JsonRpcErrorResponse {
-    #[serde(default = "default_jsonrpc_version")]
-    pub jsonrpc: String,
-    pub id: JsonRpcId,
-    pub error: RpcError,
-}
-
-impl JsonRpcErrorResponse {
-    pub fn new(id: JsonRpcId, error: RpcError) -> Self {
-        JsonRpcErrorResponse {
-            jsonrpc: JSONRPC_VERSION.to_string(),
-            id,
-            error,
-        }
-    }
-
-    /// Shaped method-not-found response for an unsupported agent method.
-    pub fn method_not_found(id: JsonRpcId, method: &str, explanation: &str) -> Self {
-        JsonRpcErrorResponse::new(id, RpcError::method_not_found(method, explanation))
-    }
-
-    /// Shaped invalid-params response.
-    pub fn invalid_params(id: JsonRpcId, message: impl Into<String>) -> Self {
-        JsonRpcErrorResponse::new(id, RpcError::new(JSONRPC_INVALID_PARAMS, message))
-    }
-
-    /// Shaped internal-error response.
-    pub fn internal_error(id: JsonRpcId, message: impl Into<String>) -> Self {
-        JsonRpcErrorResponse::new(id, RpcError::new(JSONRPC_INTERNAL_ERROR, message))
     }
 }
 
@@ -1188,202 +863,6 @@ mod tests {
             .unwrap();
         let error = read_server_envelope(&mut reader).await.unwrap_err();
         assert!(matches!(error, ProtocolError::InvalidFrame(_)));
-    }
-
-    #[test]
-    fn jsonrpc_id_accepts_number_string_and_null() {
-        assert_eq!(
-            serde_json::from_value::<JsonRpcId>(json!(17)).unwrap(),
-            JsonRpcId::Number(17)
-        );
-        assert_eq!(
-            serde_json::from_value::<JsonRpcId>(json!("abc")).unwrap(),
-            JsonRpcId::String("abc".to_string())
-        );
-        assert_eq!(
-            serde_json::from_value::<JsonRpcId>(Value::Null).unwrap(),
-            JsonRpcId::Null
-        );
-        assert_eq!(
-            serde_json::to_value(JsonRpcId::Number(17)).unwrap(),
-            json!(17)
-        );
-        assert_eq!(
-            serde_json::to_value(JsonRpcId::String("abc".to_string())).unwrap(),
-            json!("abc")
-        );
-        assert_eq!(serde_json::to_value(JsonRpcId::Null).unwrap(), Value::Null);
-        assert_eq!(JsonRpcId::Number(17).to_string(), "17");
-        assert_eq!(JsonRpcId::String("x".into()).to_value(), json!("x"));
-    }
-
-    #[test]
-    fn jsonrpc_id_rejects_other_shapes() {
-        assert!(serde_json::from_value::<JsonRpcId>(json!(true)).is_err());
-        assert!(serde_json::from_value::<JsonRpcId>(json!([1])).is_err());
-        assert!(serde_json::from_value::<JsonRpcId>(json!({})).is_err());
-        assert!(serde_json::from_value::<JsonRpcId>(json!(1.5)).is_err());
-    }
-
-    #[test]
-    fn jsonrpc_request_and_response_shapes() {
-        let request = JsonRpcRequest::new(
-            JsonRpcId::Number(3),
-            "session/prompt",
-            json!({ "sessionId": "s1", "prompt": [] }),
-        );
-        let encoded = serde_json::to_value(&request).unwrap();
-        assert_eq!(encoded.pointer("/jsonrpc"), Some(&json!("2.0")));
-        assert_eq!(encoded.pointer("/id"), Some(&json!(3)));
-        assert_eq!(encoded.pointer("/method"), Some(&json!("session/prompt")));
-        assert_eq!(encoded.pointer("/params/sessionId"), Some(&json!("s1")));
-        assert_eq!(
-            request.params_or_null().pointer("/sessionId"),
-            Some(&json!("s1"))
-        );
-        assert!(request.params_object().contains_key("sessionId"));
-
-        // A request without params decodes with `None`.
-        let bare =
-            decode_frame::<JsonRpcRequest<Value>>(br#"{"jsonrpc":"2.0","id":"x","method":"ping"}"#)
-                .unwrap();
-        assert_eq!(bare.method, "ping");
-        assert!(bare.params.is_none());
-        assert!(bare.params_or_null().is_null());
-        assert!(bare.params_object().is_empty());
-
-        let response =
-            JsonRpcResponse::new(JsonRpcId::Number(3), json!({ "stopReason": "end_turn" }));
-        let encoded = serde_json::to_value(&response).unwrap();
-        assert_eq!(encoded.pointer("/id"), Some(&json!(3)));
-        assert_eq!(
-            encoded.pointer("/result/stopReason"),
-            Some(&json!("end_turn"))
-        );
-    }
-
-    #[test]
-    fn jsonrpc_notification_has_no_id() {
-        let notification = JsonRpcNotification::new(
-            "session/cancel",
-            json!({ "sessionId": "s1", "_meta": { "cancelSubagents": true } }),
-        );
-        let encoded = serde_json::to_value(&notification).unwrap();
-        assert!(encoded.get("id").is_none());
-        assert_eq!(encoded.pointer("/method"), Some(&json!("session/cancel")));
-        assert_eq!(
-            encoded.pointer("/params/_meta/cancelSubagents"),
-            Some(&json!(true))
-        );
-
-        let bare = decode_frame::<JsonRpcNotification<Value>>(
-            br#"{"jsonrpc":"2.0","method":"session/cancel"}"#,
-        )
-        .unwrap();
-        assert_eq!(bare.method, "session/cancel");
-        assert!(bare.params.is_none());
-    }
-
-    #[test]
-    fn method_not_found_error_is_shaped() {
-        let response = JsonRpcErrorResponse::method_not_found(
-            JsonRpcId::String("req-9".to_string()),
-            "session/load",
-            "the Gents shim owns session creation and never replays persisted updates",
-        );
-        assert_eq!(response.error.code, JSONRPC_METHOD_NOT_FOUND);
-        assert!(response.error.message.contains("session/load"));
-        assert!(response
-            .error
-            .message
-            .contains("the Gents shim owns session creation"));
-        let encoded = serde_json::to_value(&response).unwrap();
-        assert_eq!(encoded.pointer("/jsonrpc"), Some(&json!("2.0")));
-        assert_eq!(encoded.pointer("/id"), Some(&json!("req-9")));
-        assert_eq!(encoded.pointer("/error/code"), Some(&json!(-32601)));
-        assert!(encoded.get("result").is_none());
-        assert!(encoded.pointer("/error/data").is_none());
-
-        let invalid_params =
-            JsonRpcErrorResponse::invalid_params(JsonRpcId::Number(1), "missing sessionId");
-        assert_eq!(invalid_params.error.code, JSONRPC_INVALID_PARAMS);
-        let internal = JsonRpcErrorResponse::internal_error(JsonRpcId::Number(1), "boom");
-        assert_eq!(internal.error.code, JSONRPC_INTERNAL_ERROR);
-    }
-
-    #[test]
-    fn internal_agent_methods_are_underscore_prefixed() {
-        assert_eq!(
-            internal_method_wire_name("x.ai/internal/reload_skills"),
-            "_x.ai/internal/reload_skills"
-        );
-        assert_eq!(
-            strip_internal_wire_prefix("_x.ai/internal/reload_skills"),
-            Some("x.ai/internal/reload_skills")
-        );
-        assert_eq!(strip_internal_wire_prefix("session/prompt"), None);
-        assert!(is_internal_wire_method("_x.ai/internal/auth_cleared"));
-        assert!(!is_internal_wire_method("x.ai/interject"));
-        for name in INTERNAL_AGENT_METHODS {
-            let wire = internal_method_wire_name(name);
-            assert!(is_known_internal_agent_method(&wire), "{wire}");
-        }
-        // Unknown underscore methods are still internal-shaped, but not one
-        // of the audited agent methods.
-        assert!(is_internal_wire_method("_x.ai/internal/not_a_real_method"));
-        assert!(!is_known_internal_agent_method(
-            "_x.ai/internal/not_a_real_method"
-        ));
-        // Plain ACP methods are never internal.
-        for method in [
-            "initialize",
-            "session/new",
-            "session/prompt",
-            "session/cancel",
-            "x.ai/interject",
-            "x.ai/compact_conversation",
-        ] {
-            assert!(!is_internal_wire_method(method));
-            assert!(!is_known_internal_agent_method(method));
-        }
-    }
-
-    #[tokio::test]
-    async fn acp_envelope_helpers_encode_and_pass_through() {
-        let request = JsonRpcRequest::new(
-            JsonRpcId::Number(11),
-            "session/new",
-            json!({ "cwd": "/tmp", "mcpServers": [] }),
-        );
-        let client_envelope = ClientEnvelope::acp(&request).unwrap();
-        assert_eq!(
-            client_envelope.acp_payload(),
-            Some(serde_json::to_string(&request).unwrap().as_str())
-        );
-
-        let server_envelope = ServerEnvelope::acp(&request).unwrap();
-        assert_eq!(server_envelope.acp_payload(), client_envelope.acp_payload());
-
-        let decoded: JsonRpcRequest<Value> =
-            decode_acp_payload(server_envelope.acp_payload().unwrap()).unwrap();
-        assert_eq!(decoded, request);
-
-        // Full pass-through over a real stream, both directions.
-        let (mut writer, mut reader) = tokio::io::duplex(8192);
-        write_client_envelope(&mut writer, &client_envelope)
-            .await
-            .unwrap();
-        assert_eq!(
-            read_client_envelope(&mut reader).await.unwrap(),
-            client_envelope
-        );
-        write_server_envelope(&mut writer, &server_envelope)
-            .await
-            .unwrap();
-        assert_eq!(
-            read_server_envelope(&mut reader).await.unwrap(),
-            server_envelope
-        );
     }
 
     #[tokio::test]

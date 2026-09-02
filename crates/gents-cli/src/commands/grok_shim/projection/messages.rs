@@ -65,14 +65,12 @@ use gents_protocol::transcript::decode_persisted_message;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::{effective_context_window_tokens, nonempty};
+
 /// `sessionUpdate` discriminators emitted by this leaf.
 pub(super) const AGENT_MESSAGE_CHUNK: &str = "agent_message_chunk";
 pub(super) const AGENT_THOUGHT_CHUNK: &str = "agent_thought_chunk";
 pub(super) const USER_MESSAGE_CHUNK: &str = "user_message_chunk";
-
-/// Fallback context window when the bound configuration did not supply one;
-/// matches the model catalog's `totalContextTokens` default scale.
-const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 262_144;
 
 /// One projected streaming chunk, split by kind so the projection engine
 /// only needs to stamp `_meta` and wrap it in a `session/update`
@@ -99,6 +97,7 @@ impl MessageUpdate {
 
     /// Render the Grok pager payload for this update. The chunk field name is
     /// `content` (the Grok decoder's expected name, not `contentBlock`).
+    #[cfg(test)]
     pub fn to_payload(&self) -> Value {
         let text = match self {
             MessageUpdate::AgentMessageChunk { text }
@@ -335,8 +334,6 @@ struct ResponseRow {
 struct MessageRow {
     message_key: String,
     #[serde(default)]
-    session_id: Option<String>,
-    #[serde(default)]
     request_id: Option<String>,
     #[serde(default)]
     sequence: Option<i64>,
@@ -346,8 +343,6 @@ struct MessageRow {
     content: Option<String>,
     #[serde(default)]
     reasoning: Option<String>,
-    #[serde(default)]
-    timestamp: Option<String>,
 }
 
 /// The query execution seam this leaf reads through.
@@ -460,11 +455,7 @@ async fn project_messages_with_sink<S: QuerySink>(
     let (rows, message_sequence_high_water) =
         load_incremental_message_rows(sink, message_sequence_high_water, request_id).await?;
 
-    let context_window_tokens = if context_window_tokens == 0 {
-        DEFAULT_CONTEXT_WINDOW_TOKENS
-    } else {
-        context_window_tokens
-    };
+    let context_window_tokens = effective_context_window_tokens(context_window_tokens);
 
     let mut updates = Vec::new();
     let mut update_keys = Vec::new();
@@ -679,11 +670,6 @@ fn reasoning_texts(reasoning: &gents_protocol::message::Reasoning) -> Vec<String
         .collect()
 }
 
-fn nonempty(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
-}
-
 /// Streamable chunk text: verbatim (never trimmed) but whitespace-only
 /// blocks are skipped so a blank block does not emit an empty chunk.
 fn streamable_owned(value: &str) -> Option<String> {
@@ -843,13 +829,11 @@ const RESPONSE_FIELDS: &str = "
 
 const MESSAGE_FIELDS: &str = "
     message_key
-    session_id
     request_id
     sequence
     role
     content
     reasoning
-    timestamp
 ";
 
 fn decode_response_row(response: &defra_node::QueryResponse) -> Option<ResponseRow> {
@@ -1001,11 +985,6 @@ pub(super) struct HistoryObservation {
     chain: Vec<CompositeSnapshot>,
     /// The validated tip: `(cid, height)` of the last chain entry.
     tip: Option<(String, i64)>,
-    /// Poll counters for the bounded-poll test assertions: how many
-    /// `_commits` window queries and how many raw rows this observation
-    /// has been asked for (cumulative, so tests can delta them).
-    window_queries: u64,
-    rows_read: u64,
 }
 
 impl HistoryObservation {
@@ -1013,21 +992,6 @@ impl HistoryObservation {
     /// ordered sequence of validated snapshots, not only the tip).
     pub fn retained_chain(&self) -> &[CompositeSnapshot] {
         &self.chain
-    }
-
-    /// The validated tip CID, when a chain is proven.
-    pub fn tip_cid(&self) -> Option<&str> {
-        self.tip.as_ref().map(|(cid, _)| cid.as_str())
-    }
-
-    /// Cumulative `_commits` window-query count (test observable).
-    pub fn window_queries(&self) -> u64 {
-        self.window_queries
-    }
-
-    /// Cumulative raw-row read count (test observable).
-    pub fn rows_read(&self) -> u64 {
-        self.rows_read
     }
 
     /// Whether the observation is pinned to this document (a fresh or
@@ -1066,8 +1030,8 @@ impl HistoryObservation {
 ///
 /// One poll reads exactly one fixed-height `_commits` window per observed
 /// growth step plus the snapshot rows of the newly validated composites —
-/// never the whole history (spec points 1-2). Fail-closed semantics are
-/// unchanged from the full loader (duplicate CIDs, positive reference
+/// never the whole history (spec points 1-2). Fail-closed semantics cover
+/// duplicate CIDs, positive reference
 /// heights, exact `(cid,height,fieldName)` tuple resolution, parent
 /// CID+height, one root, consecutive heights, >=1 field link, snapshot
 /// count/doc/request identity): on any failure the observation returns
@@ -1105,7 +1069,6 @@ async fn observe_history_with_sink<S: QuerySink>(
     let Some(head_values) = extract_commit_values(&response) else {
         return Ok(None);
     };
-    let head_row_count = head_values.len().try_into().unwrap_or(u64::MAX);
     let mut head_probe = HistoryObservation::default();
     let Some(head_rows) = cache_raw_rows(&mut head_probe, head_values.clone(), doc_id) else {
         return Ok(None);
@@ -1143,7 +1106,6 @@ async fn observe_history_with_sink<S: QuerySink>(
             tracing::debug!(doc_id = %doc_id, "response history head changed cached identity");
             return Ok(None);
         }
-        observation.rows_read = observation.rows_read.saturating_add(head_row_count);
         return Ok(Some(observation.chain.clone()));
     }
 
@@ -1157,7 +1119,6 @@ async fn observe_history_with_sink<S: QuerySink>(
         fresh.reset(doc_id, expected_request_id);
         fresh
     };
-    working.rows_read = working.rows_read.saturating_add(head_row_count);
     if cache_raw_rows(&mut working, head_values, doc_id).is_none() {
         return Ok(None);
     }
@@ -1178,7 +1139,6 @@ async fn observe_history_with_sink<S: QuerySink>(
                 ) {{ {COMMIT_FIELDS} }}
             }}"#
         );
-        working.window_queries = working.window_queries.saturating_add(1);
         let response = sink.execute(&window_query).await;
         ensure_no_errors(
             &response,
@@ -1195,9 +1155,6 @@ async fn observe_history_with_sink<S: QuerySink>(
                 .and_then(Value::as_i64)
                 .is_some_and(|height| height <= pinned.1)
         });
-        working.rows_read = working
-            .rows_read
-            .saturating_add(values.len().try_into().unwrap_or(u64::MAX));
         let Some(rows) = cache_raw_rows(&mut working, values, doc_id) else {
             return Ok(None);
         };
@@ -1384,9 +1341,6 @@ async fn hydrate_direct_references<S: QuerySink>(
         let Some(values) = extract_commit_values(&response) else {
             return Ok(false);
         };
-        observation.rows_read = observation
-            .rows_read
-            .saturating_add(values.len().try_into().unwrap_or(u64::MAX));
         let Some(rows) = cache_raw_rows(observation, values, doc_id) else {
             return Ok(false);
         };
@@ -1554,56 +1508,6 @@ fn extract_commit_values(response: &defra_node::QueryResponse) -> Option<Vec<Val
         .cloned()
 }
 
-/// Every decoded raw `_commits` row of the document: the composite (`_C`)
-/// rows plus the field rows, kept together because every composite's
-/// head/link reference tuples must resolve against the *full* raw row set,
-/// not just the composites (a composite links at field blocks).
-#[derive(Debug, Default)]
-struct DecodedCommits {
-    /// Composite commits, ordered by `(height, cid)`.
-    composites: Vec<CompositeCommitRow>,
-    /// Every decoded raw row (composites and field commits), keyed by CID
-    /// for exact reference-tuple resolution. A CID that appears twice with
-    /// non-identical rows is rejected before this map is built; a
-    /// byte-identical repeat collapses to one entry.
-    by_cid: std::collections::BTreeMap<String, CompositeCommitRow>,
-}
-
-impl DecodedCommits {
-    /// Resolve one reference tuple exactly: the referenced CID must exist
-    /// among the decoded raw rows, and its row must carry the exact height
-    /// and field name the tuple claims. DefraDB renders every reference
-    /// with the triple `(cid, height, fieldName)` of the block it points
-    /// at, so a mismatch in any component means the reference does not
-    /// resolve and the history is unprovable.
-    fn resolves(&self, head: &CompositeCommitHead) -> bool {
-        match self.by_cid.get(&head.cid) {
-            Some(row) => {
-                row.height == head.height.unwrap_or_default() && row.field_name == head.field_name
-            }
-            None => false,
-        }
-    }
-}
-
-/// Decode one `_commits` window's raw rows fail-closed, validating every
-/// reference against the window's own rows *plus* the observer's cached
-/// older raw identities (a composite's field links point backward at field
-/// blocks of much older heights, so a window cannot resolve its references
-/// alone), and return only the composite (`_C`) rows, Rust-side sorted by
-/// `(height, cid)`.
-///
-/// The duplicate-CID rule is *global across windows and polls*: a CID the
-/// observer already validated must return byte-identically again (the same
-/// commit re-read as boundary evidence), never a conflicting row; and any
-/// repeat within the window must be byte-identical as well. A conflicting
-/// duplicate, an unresolved/malformed reference, a mismatched reference
-/// tuple, or an undecodable row fails the whole observation closed
-/// (`None`) — the observer's previously validated state stands.
-///
-/// No GraphQL `fieldName` filter is used: DefraDB evaluates that filter in
-/// memory and a malformed filter degrades to no filter; the composite
-/// selection is done Rust-side after every row was validated.
 /// Validate an exact linear `_C` composite chain *suffix* fail-closed and
 /// return it ordered by height.
 ///
@@ -1769,281 +1673,6 @@ fn validate_window_chain(
     Some(commits.to_vec())
 }
 
-/// Decode every raw `_commits` row, validate every head/link reference it
-/// carries (before any filtering), and keep the composite (`_C`) commits
-/// apart from the full row set — never a GraphQL `fieldName` filter:
-/// DefraDB evaluates that filter in memory and degrades malformed filters
-/// to no filter. Returns `None` when any row fails to decode, any CID
-/// repeats non-identically (a repeated CID is tolerated only when both raw
-/// rows are byte-identical), any reference is unresolved/malformed, or no
-/// composite commits remain: a visible response row with zero valid
-/// composites is unavailable, and the live pass must never plan against a
-/// chronology it cannot prove.
-fn decode_composite_commits(commit_values: Vec<Value>, doc_id: &str) -> Option<DecodedCommits> {
-    let mut decoded = DecodedCommits::default();
-    let mut raw_identities: std::collections::BTreeMap<String, String> =
-        std::collections::BTreeMap::new();
-    for value in commit_values {
-        // The raw row's exact identity for the duplicate rule: canonical
-        // serialization of the raw JSON value (object keys are sorted, so
-        // the comparison is key-order-insensitive while every field and
-        // nested reference must still agree exactly).
-        let raw_identity = serde_json::to_string(&value).ok()?;
-        let mut row = match serde_json::from_value::<CompositeCommitRow>(value) {
-            Ok(row) => row,
-            Err(error) => {
-                tracing::debug!(
-                    %error,
-                    doc_id = %doc_id,
-                    "grok shim response history carried an undecodable commit row"
-                );
-                return None;
-            }
-        };
-        row.raw_value =
-            serde_json::from_str(&raw_identity).expect("re-parse of a serialized value");
-        let row = row;
-        if row.cid.trim().is_empty() {
-            tracing::debug!(
-                doc_id = %doc_id,
-                "grok shim response history carried a commit row without a CID"
-            );
-            return None;
-        }
-        // Global duplicate rule: any repeated CID anywhere in the raw rows
-        // is a conflict unless both raw rows are byte-identical (the same
-        // commit returned twice). This rejects in particular the adjacent
-        // reorder A@1(root), B@2(parent=A), A@3(parent=B) — the CID of A
-        // repeats with a different raw row (a different height and parent),
-        // so the history is unprovable. The check runs before any `_C`
-        // filtering so a duplicated field commit cannot be laundered into
-        // an apparently-clean composite chain.
-        if let Some(previous) = raw_identities.get(&row.cid) {
-            if *previous != raw_identity {
-                tracing::debug!(
-                    doc_id = %doc_id,
-                    cid = %row.cid,
-                    "response history carries a repeated CID with differing raw rows"
-                );
-                return None;
-            }
-            // A byte-identical repeat is benign: the same commit returned
-            // twice; collapse it into the one decoded copy.
-            continue;
-        }
-        raw_identities.insert(row.cid.clone(), raw_identity);
-        // Every reference must be resolvable and exactly resolve against
-        // the decoded rows: strictly positive height (DefraDB numbers
-        // blocks from 1; a missing or non-positive height is an unloaded
-        // block), and an exact (cid, height, fieldName) tuple match. This
-        // runs before the `_C` filtering so a malformed non-composite row
-        // cannot be laundered into an apparently-clean chain; exact
-        // resolution runs after all rows are decoded (below), once the
-        // whole row set is known.
-        for head in row.heads.iter().chain(row.links.iter()) {
-            if !head.is_resolvable() {
-                tracing::debug!(
-                    doc_id = %doc_id,
-                    cid = %row.cid,
-                    reference = %head.cid,
-                    "response history commit carries an unresolved or malformed reference"
-                );
-                return None;
-            }
-        }
-        decoded.by_cid.insert(row.cid.clone(), row);
-    }
-    // Exact reference resolution: every head/link tuple of every decoded
-    // row must match a decoded raw row's (cid, height, fieldName) exactly.
-    for row in decoded.by_cid.values() {
-        for head in row.heads.iter().chain(row.links.iter()) {
-            if !decoded.resolves(head) {
-                tracing::debug!(
-                    doc_id = %doc_id,
-                    cid = %row.cid,
-                    reference = %head.cid,
-                    height = ?head.height,
-                    field_name = %head.field_name,
-                    "response history commit reference does not resolve exactly"
-                );
-                return None;
-            }
-        }
-    }
-    let mut composites: Vec<CompositeCommitRow> = decoded
-        .by_cid
-        .values()
-        .filter(|row| row.field_name == "_C")
-        .cloned()
-        .collect();
-    composites.sort_by(|left, right| (left.height, &left.cid).cmp(&(right.height, &right.cid)));
-    if composites.is_empty() {
-        tracing::debug!(
-            doc_id = %doc_id,
-            "grok shim response history carries no composite commits"
-        );
-        return None;
-    }
-    decoded.composites = composites;
-    Some(decoded)
-}
-
-/// Validate an exact linear `_C` composite chain and return it ordered by
-/// height. Every check is fail-closed (`None`): the projection can only
-/// plan against a chronology it can prove end to end.
-///
-/// - **Globally unique CIDs.** The decoder already rejects any repeated
-///   CID whose raw rows are not byte-identical, so the chain here carries
-///   distinct CIDs by construction.
-/// - **Exactly one root.** Precisely one composite commit may carry no
-///   `_C` parent; zero or several roots are ambiguity.
-/// - **No sibling, no merge.** No two commits may share a parent (a
-///   replaced branch), and no commit may carry two `_C` parents (a merge).
-/// - **Positive, consecutive heights.** Ordered, the chain's heights are
-///   exactly 1, 2, 3, … — DefraDB numbers a linear composite chain that
-///   way, so a gap or a reused height is unprovable.
-/// - **Linear parentage.** Each non-root commit's single `_C` parent is
-///   the immediately preceding commit — by CID *and* by height: the
-///   parent tuple's height must equal the preceding commit's own height
-///   exactly, not merely name its CID.
-/// - **Resolvable field links.** Every composite carries at least one
-///   field link (a composite with nothing to compose is malformed).
-fn validate_composite_chain(
-    commits: Vec<CompositeCommitRow>,
-    doc_id: &str,
-) -> Option<Vec<CompositeCommitRow>> {
-    if commits.is_empty() {
-        return None;
-    }
-
-    let known_cids: std::collections::BTreeSet<&str> =
-        commits.iter().map(|commit| commit.cid.as_str()).collect();
-    // Exactly one root: count commits with no `_C` parent.
-    let roots = commits
-        .iter()
-        .filter(|commit| composite_parents(commit).is_empty())
-        .count();
-    if roots != 1 {
-        tracing::debug!(
-            doc_id = %doc_id,
-            roots = roots,
-            "response composite chain does not have exactly one root"
-        );
-        return None;
-    }
-    // No sibling and no merge: track each parent's children across the
-    // whole chain, before ordering. A parent with two children is a
-    // replaced branch; a commit with two `_C` parents is a merge; a parent
-    // outside the returned rows is unresolvable.
-    let mut children_of_parent: std::collections::BTreeMap<&str, usize> =
-        std::collections::BTreeMap::new();
-    for commit in &commits {
-        let parents = composite_parents(commit);
-        if parents.len() > 1 {
-            tracing::debug!(
-                doc_id = %doc_id,
-                cid = %commit.cid,
-                parents = parents.len(),
-                "response composite commit carries multiple composite parents (merge)"
-            );
-            return None;
-        }
-        if let Some(parent) = parents.first() {
-            if !known_cids.contains(parent.cid.as_str()) {
-                tracing::debug!(
-                    doc_id = %doc_id,
-                    cid = %commit.cid,
-                    parent = %parent.cid,
-                    "response composite commit references an unavailable parent"
-                );
-                return None;
-            }
-            let children = children_of_parent.entry(parent.cid.as_str()).or_default();
-            *children += 1;
-            if *children > 1 {
-                tracing::debug!(
-                    doc_id = %doc_id,
-                    parent = %parent.cid,
-                    "response composite chain carries sibling branches"
-                );
-                return None;
-            }
-        }
-    }
-    for (index, commit) in commits.iter().enumerate() {
-        // Positive and consecutive heights: 1, 2, 3, … in order.
-        if commit.height != (index as i64) + 1 {
-            tracing::debug!(
-                doc_id = %doc_id,
-                cid = %commit.cid,
-                height = commit.height,
-                expected = index as i64 + 1,
-                "response composite chain has a non-consecutive or non-positive height"
-            );
-            return None;
-        }
-        let parents = composite_parents(commit);
-        if index == 0 {
-            // The first commit in a proven chain is the root: it must carry
-            // no composite parent, and no other commit may share that
-            // absence (checked above via the root count).
-            if !parents.is_empty() {
-                tracing::debug!(
-                    doc_id = %doc_id,
-                    cid = %commit.cid,
-                    "response composite chain root carries a composite parent"
-                );
-                return None;
-            }
-        } else {
-            let [parent] = parents[..] else {
-                tracing::debug!(
-                    doc_id = %doc_id,
-                    cid = %commit.cid,
-                    parents = parents.len(),
-                    "response composite commit does not have exactly one composite parent"
-                );
-                return None;
-            };
-            let preceding = &commits[index - 1];
-            // The parent must be the immediately preceding commit by CID
-            // *and* the parent tuple's height must equal the preceding
-            // commit's own height exactly.
-            if parent.cid != preceding.cid {
-                tracing::debug!(
-                    doc_id = %doc_id,
-                    cid = %commit.cid,
-                    "response composite chain is not linear (parent is not the preceding commit)"
-                );
-                return None;
-            }
-            if parent.height != Some(preceding.height) {
-                tracing::debug!(
-                    doc_id = %doc_id,
-                    cid = %commit.cid,
-                    parent = %parent.cid,
-                    parent_height = ?parent.height,
-                    expected_height = preceding.height,
-                    "response composite parent height does not equal the preceding commit height"
-                );
-                return None;
-            }
-        }
-        // Required field links: a composite ties field blocks together; one
-        // with nothing to compose is malformed, and every link was already
-        // proven resolvable and exactly resolved at decode time.
-        if commit.links.is_empty() {
-            tracing::debug!(
-                doc_id = %doc_id,
-                cid = %commit.cid,
-                "response composite commit carries no field links"
-            );
-            return None;
-        }
-    }
-    Some(commits)
-}
-
 /// The `_C`-parent heads of one composite commit. A composite's `_C` heads
 /// are its parents in the composite chain; heads pointing at other field
 /// names are not parents (all references were already proven resolvable at
@@ -2076,13 +1705,11 @@ mod tests {
     fn message_row(role: &str, sequence: i64, content: &str) -> MessageRow {
         MessageRow {
             message_key: format!("sess:{sequence}"),
-            session_id: Some("sess".to_string()),
             request_id: Some("req-1".to_string()),
             sequence: Some(sequence),
             role: Some(role.to_string()),
             content: Some(content.to_string()),
             reasoning: None,
-            timestamp: None,
         }
     }
 
@@ -2629,10 +2256,7 @@ mod tests {
         assert_ne!(key_one, key_two);
     }
     // -----------------------------------------------------------------
-    // Composite history loader (Phase 4a): every case below exercises the
-    // actual validation helpers end to end — extract → decode → chain
-    // validation → snapshot pairing — and every malformed input must fail
-    // closed (`None`), never an empty/skipped history.
+    // Composite-history fixtures shared by the live HistoryObservation tests.
     // -----------------------------------------------------------------
 
     /// A query response with `data` set, shaped like an embedded-node reply.
@@ -2659,729 +2283,6 @@ mod tests {
 
     fn head_value(cid: &str, height: i64, field_name: &str) -> serde_json::Value {
         json!({ "cid": cid, "height": height, "fieldName": field_name })
-    }
-
-    /// A well-formed three-commit linear `_C` chain (heights 1–3), the
-    /// shape DefraDB renders for a created-then-updated-twice response.
-    /// Every head/link reference tuple resolves exactly against a row
-    /// present in the raw result — the shape real `_commits` replies keep.
-    fn valid_chain_values() -> Vec<serde_json::Value> {
-        vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 1, "content")]),
-            ),
-            commit_value(
-                "bafy-c2",
-                2,
-                "_C",
-                json!([head_value("bafy-c1", 1, "_C")]),
-                json!([head_value("bafy-f2", 2, "content")]),
-            ),
-            commit_value(
-                "bafy-c3",
-                3,
-                "_C",
-                json!([head_value("bafy-c2", 2, "_C")]),
-                json!([head_value("bafy-f3", 3, "content")]),
-            ),
-            // The field-block rows the composites link at: present in the
-            // raw rows (as real `_commits` replies include them), each
-            // carrying the exact (cid, height, fieldName) its reference
-            // tuples claim.
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-            commit_value("bafy-f2", 2, "content", json!([]), json!([])),
-            commit_value("bafy-f3", 3, "content", json!([]), json!([])),
-        ]
-    }
-
-    /// Decode + validate the raw chain rows into the ordered composite
-    /// chain (the pure prefix of `load_composite_history`).
-    fn validated_chain(values: Vec<serde_json::Value>) -> Option<Vec<CompositeCommitRow>> {
-        decode_composite_commits(values, "bae-doc")
-            .and_then(|decoded| validate_composite_chain(decoded.composites, "bae-doc"))
-    }
-
-    /// Snapshot row values for a chain, paired in chain order.
-    fn snapshot_values(cids: &[&str], doc_id: &str, request_id: &str) -> Vec<serde_json::Value> {
-        cids.iter()
-            .map(|cid| {
-                json!({
-                    "_docID": doc_id,
-                    "request_id": request_id,
-                    "cid": cid,
-                    "status": "streaming",
-                    "content": "abc",
-                })
-            })
-            .collect()
-    }
-
-    #[test]
-    fn history_requires_the_commits_array() {
-        // Missing `data` entirely.
-        let response = defra_node::QueryResponse {
-            data: None,
-            errors: Vec::new(),
-        };
-        assert!(extract_commit_values(&response).is_none());
-        // `data` without a `_commits` key.
-        let response = query_response(json!({ "AgentResponse": [] }));
-        assert!(extract_commit_values(&response).is_none());
-        // `_commits` present but not an array.
-        let response = query_response(json!({ "_commits": null }));
-        assert!(extract_commit_values(&response).is_none());
-        // A present, empty array is an array — the visible-empty case
-        // below decides what it means.
-        let response = query_response(json!({ "_commits": [] }));
-        assert_eq!(extract_commit_values(&response), Some(Vec::new()));
-    }
-
-    #[test]
-    fn history_rejects_a_malformed_commit_row() {
-        // A row whose `height` is not an integer cannot decode: never
-        // log-and-skip.
-        let mut values = valid_chain_values();
-        values.push(json!({
-            "cid": "bafy-bad",
-            "height": "not-a-number",
-            "fieldName": "_C",
-            "heads": [],
-            "links": [],
-        }));
-        assert!(
-            decode_composite_commits(values, "bae-doc").is_none(),
-            "a malformed commit row must fail the whole history closed"
-        );
-        // A row without a CID is equally unreadable.
-        let mut values = valid_chain_values();
-        values.push(commit_value("  ", 4, "_C", json!([]), json!([])));
-        assert!(decode_composite_commits(values, "bae-doc").is_none());
-    }
-
-    #[test]
-    fn visible_response_with_zero_composites_is_unavailable() {
-        // The row is visible (a `_commits` array came back), but it carries
-        // only field commits: the history is unavailable, never empty.
-        let values = vec![
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-            commit_value("bafy-f2", 2, "content", json!([]), json!([])),
-        ];
-        assert!(
-            decode_composite_commits(values, "bae-doc").is_none(),
-            "zero valid composites must be unavailable, not Some(vec![])"
-        );
-        // And an entirely empty commit list is unavailable too.
-        assert!(decode_composite_commits(Vec::new(), "bae-doc").is_none());
-    }
-
-    #[test]
-    fn history_rejects_an_unresolvable_reference_in_any_row() {
-        // An unresolved head (DefraDB renders an unloaded block without a
-        // height) in a *non-composite* row must fail the history: heads are
-        // validated before filtering.
-        let mut values = valid_chain_values();
-        values.push(commit_value(
-            "bafy-f9",
-            9,
-            "content",
-            json!([{ "cid": "bafy-gone", "height": null, "fieldName": "content" }]),
-            json!([]),
-        ));
-        assert!(
-            decode_composite_commits(values, "bae-doc").is_none(),
-            "an unresolved head in any row must fail closed before filtering"
-        );
-        // An unresolved field link on a composite commit.
-        let mut values = valid_chain_values();
-        values.push(commit_value(
-            "bafy-c4",
-            4,
-            "_C",
-            json!([head_value("bafy-c3", 3, "_C")]),
-            json!([{ "cid": "bafy-gone", "fieldName": "content" }]),
-        ));
-        assert!(decode_composite_commits(values, "bae-doc").is_none());
-    }
-
-    #[test]
-    fn history_rejects_a_chain_whose_earliest_parent_is_unresolvable() {
-        // The earliest commit claims a composite parent that is not in the
-        // returned rows: the reference tuple is well-formed (a positive
-        // height and a nonempty field name) but resolves against no
-        // decoded row, so nothing can be proven.
-        let values = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([head_value("bafy-unknown", 1, "_C")]),
-                json!([head_value("bafy-f1", 1, "content")]),
-            ),
-            commit_value(
-                "bafy-c2",
-                2,
-                "_C",
-                json!([head_value("bafy-c1", 1, "_C")]),
-                json!([head_value("bafy-f2", 2, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-            commit_value("bafy-f2", 2, "content", json!([]), json!([])),
-        ];
-        assert!(
-            validated_chain(values).is_none(),
-            "a reference tuple that resolves against no row must fail closed"
-        );
-    }
-
-    #[test]
-    fn history_rejects_a_missing_or_malformed_field_link() {
-        // A composite with no field links has nothing to compose.
-        let values = vec![commit_value("bafy-c1", 1, "_C", json!([]), json!([]))];
-        assert!(
-            validated_chain(values).is_none(),
-            "a composite without field links is malformed"
-        );
-        // A link with an empty field name is malformed (rejected at decode
-        // time, before the chain is even formed).
-        let values = vec![commit_value(
-            "bafy-c1",
-            1,
-            "_C",
-            json!([]),
-            json!([{ "cid": "bafy-f1", "height": 1, "fieldName": "  " }]),
-        )];
-        assert!(decode_composite_commits(values, "bae-doc").is_none());
-    }
-
-    #[test]
-    fn history_rejects_conflicting_duplicate_cids() {
-        // The same CID twice with different content is a conflict.
-        let mut values = valid_chain_values();
-        values.push(commit_value(
-            "bafy-c2",
-            2,
-            "_C",
-            json!([head_value("bafy-c1", 1, "_C")]),
-            // Different links than the first bafy-c2 row.
-            json!([head_value("bafy-f9", 9, "content")]),
-        ));
-        assert!(
-            validated_chain(values).is_none(),
-            "two different rows claiming one CID are a conflict"
-        );
-        // A byte-identical repeat is benign: the same commit returned twice.
-        let mut values = valid_chain_values();
-        let repeat = values[1].clone();
-        values.push(repeat);
-        assert!(
-            validated_chain(values).is_some(),
-            "a byte-identical duplicate commit collapses to one"
-        );
-    }
-
-    #[test]
-    fn history_rejects_a_nonadjacent_duplicate_cid() {
-        // The adjacent-reorder laundering shape the review called out:
-        // A@1 (root), B@2 (parent A), A@3 (parent B). The CID of A
-        // repeats non-adjacently with a different raw row (a different
-        // height and parent), so the global decode-time duplicate rule —
-        // not any adjacent-only dedupe — must reject it before the chain
-        // is even formed.
-        let values = vec![
-            commit_value(
-                "bafy-a",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-fa", 1, "content")]),
-            ),
-            commit_value(
-                "bafy-b",
-                2,
-                "_C",
-                json!([head_value("bafy-a", 1, "_C")]),
-                json!([head_value("bafy-fb", 2, "content")]),
-            ),
-            commit_value(
-                "bafy-a",
-                3,
-                "_C",
-                json!([head_value("bafy-b", 2, "_C")]),
-                json!([head_value("bafy-fa", 1, "content")]),
-            ),
-            commit_value("bafy-fa", 1, "content", json!([]), json!([])),
-            commit_value("bafy-fb", 2, "content", json!([]), json!([])),
-        ];
-        assert!(
-            decode_composite_commits(values, "bae-doc").is_none(),
-            "a nonadjacent repeated CID with differing raw rows must fail closed"
-        );
-        // The same nonadjacent repeat with a byte-identical row (the same
-        // commit returned twice) is still benign — the rule targets
-        // conflicting duplicates, not repeats.
-        let mut values = valid_chain_values();
-        let repeat = values[0].clone();
-        values.insert(2, repeat);
-        assert!(
-            validated_chain(values).is_some(),
-            "a byte-identical nonadjacent repeat still collapses to one"
-        );
-    }
-
-    #[test]
-    fn history_rejects_a_wrong_parent_height() {
-        // Exercise the chain validator directly. Going through the decoder
-        // would reject the forged tuple earlier because no raw row can both
-        // be the height-1 parent and resolve the claimed height-2 reference,
-        // leaving this validator's own parent-height fence untested.
-        let field_link = |cid: &str, height| CompositeCommitHead {
-            cid: cid.to_owned(),
-            height: Some(height),
-            field_name: "content".to_owned(),
-        };
-        let values = vec![
-            CompositeCommitRow {
-                cid: "bafy-c1".to_owned(),
-                height: 1,
-                field_name: "_C".to_owned(),
-                heads: Vec::new(),
-                links: vec![field_link("bafy-f1", 1)],
-                raw_value: Value::Null,
-            },
-            CompositeCommitRow {
-                cid: "bafy-c2".to_owned(),
-                height: 2,
-                field_name: "_C".to_owned(),
-                heads: vec![CompositeCommitHead {
-                    cid: "bafy-c1".to_owned(),
-                    // The CID is the immediately preceding commit, but the
-                    // tuple lies about that commit's height.
-                    height: Some(2),
-                    field_name: "_C".to_owned(),
-                }],
-                links: vec![field_link("bafy-f2", 2)],
-                raw_value: Value::Null,
-            },
-        ];
-        assert!(
-            validate_composite_chain(values, "bae-doc").is_none(),
-            "a parent whose tuple height does not match the preceding commit must fail closed"
-        );
-    }
-
-    #[test]
-    fn history_window_rejects_a_suffix_parented_to_an_older_branch() {
-        let suffix = vec![CompositeCommitRow {
-            cid: "bafy-c3-fork".to_owned(),
-            height: 3,
-            field_name: "_C".to_owned(),
-            heads: vec![CompositeCommitHead {
-                cid: "bafy-c1".to_owned(),
-                height: Some(1),
-                field_name: "_C".to_owned(),
-            }],
-            links: vec![CompositeCommitHead {
-                cid: "bafy-f3".to_owned(),
-                height: Some(3),
-                field_name: "content".to_owned(),
-            }],
-            raw_value: Value::Null,
-        }];
-        let base = ("bafy-c2".to_owned(), 2);
-        assert!(
-            validate_window_chain(&suffix, "bae-doc", Some(&base)).is_none(),
-            "a height-contiguous suffix must still parent the exact cached tip"
-        );
-    }
-
-    #[test]
-    fn history_rejects_zero_and_negative_reference_heights() {
-        // DefraDB numbers blocks from 1: a zero or negative reference
-        // height is an unloaded or forged block, not a resolvable one,
-        // even when the CID and field name are present in the rows.
-        let zero = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 0, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-        ];
-        assert!(
-            decode_composite_commits(zero, "bae-doc").is_none(),
-            "a zero-height reference must fail closed at decode time"
-        );
-        let negative = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", -3, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-        ];
-        assert!(
-            decode_composite_commits(negative, "bae-doc").is_none(),
-            "a negative-height reference must fail closed at decode time"
-        );
-    }
-
-    #[test]
-    fn history_rejects_an_unresolved_reference() {
-        // A well-formed tuple (positive height, nonempty field name)
-        // whose CID appears in no decoded row.
-        let unresolved = vec![commit_value(
-            "bafy-c1",
-            1,
-            "_C",
-            json!([]),
-            json!([head_value("bafy-gone", 1, "content")]),
-        )];
-        assert!(
-            decode_composite_commits(unresolved, "bae-doc").is_none(),
-            "a reference whose CID resolves against no row must fail closed"
-        );
-    }
-
-    #[test]
-    fn history_rejects_a_mismatched_reference_tuple() {
-        // The referenced CID exists, but a component of the tuple does
-        // not match the row it points at. DefraDB renders every
-        // reference with the exact triple of the block it points at, so
-        // any component mismatch is a forged or corrupted reference.
-        // Wrong height: the field row's height is 1, the tuple claims 2.
-        let wrong_height = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 2, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-        ];
-        assert!(
-            decode_composite_commits(wrong_height, "bae-doc").is_none(),
-            "a reference height that does not match the row it points at must fail closed"
-        );
-        // Wrong field name: the row's field is `content`, the tuple
-        // claims `reasoning`.
-        let wrong_field = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 1, "reasoning")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-        ];
-        assert!(
-            decode_composite_commits(wrong_field, "bae-doc").is_none(),
-            "a reference field name that does not match the row it points at must fail closed"
-        );
-    }
-
-    #[test]
-    fn history_rejects_a_height_gap() {
-        // Heights must be exactly 1, 2, 3, …: a gap is unprovable. The
-        // field rows the links point at are present, so the rejection
-        // comes from the chain's shape, not from unresolved references.
-        let values = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 1, "content")]),
-            ),
-            commit_value(
-                "bafy-c3",
-                3,
-                "_C",
-                json!([head_value("bafy-c1", 1, "_C")]),
-                json!([head_value("bafy-f3", 3, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-            commit_value("bafy-f3", 3, "content", json!([]), json!([])),
-        ];
-        assert!(
-            validated_chain(values).is_none(),
-            "a height gap must fail the chain closed"
-        );
-        // A non-positive composite height is equally unprovable: its
-        // field link still resolves against a present field row, so the
-        // rejection comes from the consecutive-height rule, never from a
-        // missing reference.
-        let values = vec![
-            commit_value(
-                "bafy-c0",
-                0,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 1, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-        ];
-        assert!(validated_chain(values).is_none());
-    }
-
-    #[test]
-    fn history_rejects_sibling_branches() {
-        // Two commits claiming the same parent form a replaced branch:
-        // ambiguity the projection cannot resolve.
-        let values = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 1, "content")]),
-            ),
-            commit_value(
-                "bafy-c2a",
-                2,
-                "_C",
-                json!([head_value("bafy-c1", 1, "_C")]),
-                json!([head_value("bafy-f2a", 2, "content")]),
-            ),
-            commit_value(
-                "bafy-c2b",
-                3,
-                "_C",
-                json!([head_value("bafy-c1", 1, "_C")]),
-                json!([head_value("bafy-f2b", 3, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-            commit_value("bafy-f2a", 2, "content", json!([]), json!([])),
-            commit_value("bafy-f2b", 3, "content", json!([]), json!([])),
-        ];
-        assert!(
-            validated_chain(values).is_none(),
-            "sibling branches must fail the chain closed"
-        );
-    }
-
-    #[test]
-    fn history_rejects_a_merge_commit() {
-        // A commit with two composite parents is a merge: not a linear chain.
-        let values = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 1, "content")]),
-            ),
-            commit_value(
-                "bafy-c2",
-                2,
-                "_C",
-                json!([head_value("bafy-c1", 1, "_C")]),
-                json!([head_value("bafy-f2", 2, "content")]),
-            ),
-            commit_value(
-                "bafy-c3",
-                3,
-                "_C",
-                json!([
-                    head_value("bafy-c1", 1, "_C"),
-                    head_value("bafy-c2", 2, "_C"),
-                ]),
-                json!([head_value("bafy-f3", 3, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-            commit_value("bafy-f2", 2, "content", json!([]), json!([])),
-            commit_value("bafy-f3", 3, "content", json!([]), json!([])),
-        ];
-        assert!(
-            validated_chain(values).is_none(),
-            "a merge commit must fail the chain closed"
-        );
-    }
-
-    #[test]
-    fn history_rejects_a_nonlinear_parent_ordering() {
-        // Heights are consecutive but the parent is not the preceding
-        // commit: the chain skips.
-        let values = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 1, "content")]),
-            ),
-            commit_value(
-                "bafy-c2",
-                2,
-                "_C",
-                json!([head_value("bafy-c1", 1, "_C")]),
-                json!([head_value("bafy-f2", 2, "content")]),
-            ),
-            commit_value(
-                "bafy-c3",
-                3,
-                "_C",
-                // Points at the root, skipping bafy-c2.
-                json!([head_value("bafy-c1", 1, "_C")]),
-                json!([head_value("bafy-f3", 3, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-            commit_value("bafy-f2", 2, "content", json!([]), json!([])),
-            commit_value("bafy-f3", 3, "content", json!([]), json!([])),
-        ];
-        assert!(
-            validated_chain(values).is_none(),
-            "a parent that is not the preceding commit must fail closed"
-        );
-    }
-
-    #[test]
-    fn history_rejects_multiple_roots() {
-        // Two parentless composites: no unique root.
-        let values = vec![
-            commit_value(
-                "bafy-c1",
-                1,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f1", 1, "content")]),
-            ),
-            commit_value(
-                "bafy-c2",
-                2,
-                "_C",
-                json!([]),
-                json!([head_value("bafy-f2", 2, "content")]),
-            ),
-            commit_value("bafy-f1", 1, "content", json!([]), json!([])),
-            commit_value("bafy-f2", 2, "content", json!([]), json!([])),
-        ];
-        assert!(
-            validated_chain(values).is_none(),
-            "two roots are ambiguity, not a chain"
-        );
-    }
-
-    #[test]
-    fn history_accepts_a_valid_ordered_chain() {
-        let commits = validated_chain(valid_chain_values())
-            .expect("a well-formed linear chain must validate");
-        assert_eq!(
-            commits.iter().map(|c| c.cid.as_str()).collect::<Vec<_>>(),
-            vec!["bafy-c1", "bafy-c2", "bafy-c3"],
-            "the chain must be ordered by height"
-        );
-        assert_eq!(
-            commits.iter().map(|c| c.height).collect::<Vec<_>>(),
-            vec![1, 2, 3]
-        );
-
-        // Pairing: the snapshots must arrive in chain order with the exact
-        // count, the expected document, and the expected request.
-        let snapshots = assemble_snapshots(
-            &commits,
-            snapshot_values(&["bafy-c1", "bafy-c2", "bafy-c3"], "bae-doc", "req-1"),
-            "bae-doc",
-            "req-1",
-        )
-        .expect("a valid chain with matching snapshots must assemble");
-        assert_eq!(snapshots.len(), 3);
-        assert_eq!(snapshots[0].cid, "bafy-c1");
-        assert_eq!(snapshots[0].height, 1);
-        assert_eq!(snapshots[2].cid, "bafy-c3");
-        assert_eq!(snapshots[2].row().request_id, "req-1");
-        assert_eq!(snapshots[2].row().doc_id.as_deref(), Some("bae-doc"));
-    }
-
-    #[test]
-    fn history_rejects_a_count_or_order_mismatch() {
-        let commits = validated_chain(valid_chain_values()).expect("valid chain");
-        // Too few snapshots.
-        assert!(
-            assemble_snapshots(
-                &commits,
-                snapshot_values(&["bafy-c1", "bafy-c2"], "bae-doc", "req-1"),
-                "bae-doc",
-                "req-1",
-            )
-            .is_none(),
-            "a short snapshot list cannot pair with the chain"
-        );
-        // Too many.
-        assert!(assemble_snapshots(
-            &commits,
-            snapshot_values(
-                &["bafy-c1", "bafy-c2", "bafy-c3", "bafy-c4"],
-                "bae-doc",
-                "req-1",
-            ),
-            "bae-doc",
-            "req-1",
-        )
-        .is_none());
-        // Zero snapshots for a nonempty chain (the runner returned nothing).
-        assert!(assemble_snapshots(&commits, Vec::new(), "bae-doc", "req-1").is_none());
-        // A snapshot that does not decode as a response row.
-        let undecodable = vec![
-            json!({ "_docID": "bae-doc", "request_id": "req-1" }),
-            json!({ "_docID": "bae-doc", "request_id": "req-1" }),
-            json!({ "_docID": "bae-doc", "request_id": 7 }),
-        ];
-        assert!(assemble_snapshots(&commits, undecodable, "bae-doc", "req-1").is_none());
-    }
-
-    #[test]
-    fn history_rejects_a_wrong_document_id() {
-        let commits = validated_chain(valid_chain_values()).expect("valid chain");
-        assert!(
-            assemble_snapshots(
-                &commits,
-                snapshot_values(&["bafy-c1", "bafy-c2", "bafy-c3"], "bae-OTHER-doc", "req-1",),
-                "bae-doc",
-                "req-1",
-            )
-            .is_none(),
-            "a snapshot reconstructing a foreign document must fail closed"
-        );
-        // A snapshot with no document id at all is equally unprovable.
-        let missing = vec![
-            json!({ "_docID": "bae-doc", "request_id": "req-1" }),
-            json!({ "_docID": "bae-doc", "request_id": "req-1" }),
-            json!({ "request_id": "req-1" }),
-        ];
-        assert!(assemble_snapshots(&commits, missing, "bae-doc", "req-1").is_none());
-    }
-
-    #[test]
-    fn history_rejects_a_wrong_request_id() {
-        let commits = validated_chain(valid_chain_values()).expect("valid chain");
-        assert!(
-            assemble_snapshots(
-                &commits,
-                snapshot_values(&["bafy-c1", "bafy-c2", "bafy-c3"], "bae-doc", "req-OTHER",),
-                "bae-doc",
-                "req-1",
-            )
-            .is_none(),
-            "a snapshot reconstructing a different request must fail closed"
-        );
-    }
-
-    #[test]
-    fn history_queries_escape_the_document_id_and_cids() {
-        // The `_commits` query escapes the doc id.
-        let escaped = escape_graphql_string("doc\"1\\x");
-        let query = format!(r#"query {{ _commits(docID: "{escaped}") {{ cid }} }}"#);
-        assert!(!query.contains("\"doc\"1\\x\""));
     }
 
     // -----------------------------------------------------------------
@@ -3649,6 +2550,116 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn observer_rejects_malformed_rows_and_foreign_snapshots() {
+        let malformed = ScriptedSink {
+            steps: std::sync::Mutex::new(
+                vec![ScriptedStep::Reply(query_response(json!({
+                    "_commits": [{
+                        "cid": "bafy-bad",
+                        "height": "not-an-integer",
+                        "fieldName": "_C",
+                        "heads": [],
+                        "links": [],
+                    }]
+                })))]
+                .into_iter()
+                .collect(),
+            ),
+            queries: std::sync::Mutex::new(Vec::new()),
+        };
+        let mut observation = HistoryObservation::default();
+        assert!(
+            observe_history_with_sink(&malformed, &mut observation, "bae-doc", "req-1")
+                .await
+                .expect("malformed observation query")
+                .is_none(),
+            "the production observer must fail closed on any undecodable commit"
+        );
+        assert!(observation.tip.is_none());
+
+        let root = commit_value(
+            "bafy-c1",
+            1,
+            "_C",
+            json!([]),
+            json!([head_value("bafy-f1", 1, "content")]),
+        );
+        let first_child = commit_value(
+            "bafy-c2",
+            2,
+            "_C",
+            json!([head_value("bafy-c1", 1, "_C")]),
+            json!([head_value("bafy-f2", 2, "content")]),
+        );
+        let sibling = commit_value(
+            "bafy-c3",
+            3,
+            "_C",
+            json!([head_value("bafy-c1", 1, "_C")]),
+            json!([head_value("bafy-f3", 3, "content")]),
+        );
+        let field1 = commit_value("bafy-f1", 1, "content", json!([]), json!([]));
+        let field2 = commit_value("bafy-f2", 2, "content", json!([]), json!([]));
+        let field3 = commit_value("bafy-f3", 3, "content", json!([]), json!([]));
+        let branched = ScriptedSink {
+            steps: std::sync::Mutex::new(
+                vec![
+                    ScriptedStep::Reply(query_response(json!({
+                        "_commits": [sibling.clone(), field3.clone()]
+                    }))),
+                    ScriptedStep::Reply(query_response(json!({
+                        "_commits": [root, first_child, sibling, field1, field2, field3]
+                    }))),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            queries: std::sync::Mutex::new(Vec::new()),
+        };
+        assert!(
+            observe_history_with_sink(&branched, &mut observation, "bae-doc", "req-1")
+                .await
+                .expect("branched observation query")
+                .is_none(),
+            "the live observer must reject sibling branches"
+        );
+        assert!(observation.tip.is_none());
+
+        let root_rows = linear_history_values(1, 1);
+        let foreign_snapshot = ScriptedSink {
+            steps: std::sync::Mutex::new(
+                vec![
+                    ScriptedStep::Reply(query_response(json!({
+                        "_commits": root_rows.clone()
+                    }))),
+                    ScriptedStep::Reply(query_response(json!({
+                        "_commits": root_rows
+                    }))),
+                    ScriptedStep::Reply(query_response(json!({
+                        "AgentResponse": [{
+                            "_docID": "bae-doc",
+                            "request_id": "req-OTHER",
+                            "content": "foreign",
+                            "status": "streaming",
+                        }]
+                    }))),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            queries: std::sync::Mutex::new(Vec::new()),
+        };
+        assert!(
+            observe_history_with_sink(&foreign_snapshot, &mut observation, "bae-doc", "req-1")
+                .await
+                .expect("foreign snapshot observation query")
+                .is_none(),
+            "snapshot/request pairing must be checked on the live observer path"
+        );
+        assert!(observation.tip.is_none());
+    }
+
     /// The `AgentMessage` rows are read *after* the history tip is
     /// loaded and fixed: the gated row read cannot begin until the
     /// discovery, head, window, and snapshot reads have all been served, and a
@@ -3869,14 +2880,11 @@ mod tests {
         assert_eq!(history.len(), 70);
         assert_eq!(history.first().map(|row| row.height), Some(1));
         assert_eq!(history.last().map(|row| row.height), Some(70));
-        assert_eq!(observation.window_queries(), 2);
-
         let unchanged = observe_history_with_sink(&sink, &mut observation, "bae-doc", "req-1")
             .await
             .expect("unchanged observation query")
             .expect("unchanged history stays proven");
         assert_eq!(unchanged, history);
-        assert_eq!(observation.window_queries(), 2);
         let queries = sink.queries.lock().expect("queries lock");
         assert_eq!(queries.len(), 6);
         assert!(queries
@@ -4013,7 +3021,10 @@ mod tests {
             .expect("recovery query")
             .expect("recovery proof");
         assert_eq!(recovered.len(), 2);
-        assert_eq!(observation.tip_cid(), Some("bafy-c2"));
+        assert_eq!(
+            observation.tip.as_ref().map(|(cid, _)| cid.as_str()),
+            Some("bafy-c2")
+        );
     }
 
     /// End-to-end observer test against a real embedded node: seed a
@@ -4107,8 +3118,6 @@ mod tests {
             assert_eq!(snapshot.row().request_id, "hist-1");
         }
 
-        let windows = observation.window_queries();
-        let rows = observation.rows_read();
         let unchanged = observe_history_with_sink(
             &NodeSink { node: &node },
             &mut observation,
@@ -4119,8 +3128,6 @@ mod tests {
         .expect("unchanged query must not error")
         .expect("unchanged history remains proven");
         assert_eq!(unchanged, history);
-        assert_eq!(observation.window_queries(), windows);
-        assert!(observation.rows_read() > rows);
 
         // A request-id mismatch makes the same document unprovable.
         assert!(

@@ -4,7 +4,7 @@ Instructions: {{ doc.instructions }}
 
 Baseline: {{ doc.baseline }}
 
-First call each of `read_review_evidence_0` through `read_review_evidence_17` exactly once, preferably together in one model turn. Each read returns sixteen fields. Concatenate all `evidence_chunk_0` through `evidence_chunk_287` values in numeric order; empty tail chunks are valid. Every field is deliberately smaller than the datastore's 2,000-byte per-string display ceiling, and every sixteen-field result is below the total tool-result ceiling. If any result reports truncation, stop and record that the scan is incomplete rather than reviewing partial evidence. Do not repeat a successful evidence read.
+First call each of `read_review_evidence_0` through `read_review_evidence_17` exactly once, preferably together in one model turn. Each read returns sixteen fields. Concatenate all `evidence_chunk_0` through `evidence_chunk_287` values in numeric order; empty tail chunks are valid. Every field is deliberately smaller than the datastore's 2,000-byte per-string display ceiling, and every sixteen-field result is below the total tool-result ceiling. If any result reports truncation or any chunk contains `HOST EVIDENCE TRUNCATED`, stop and record that the scan is incomplete rather than reviewing partial evidence. Do not repeat a successful evidence read.
 
 Then assess the assigned invariants without repository inspection calls; file, shell, and language-server tools are deliberately absent. Treat quoted patch text as candidate-generation evidence, not proof beyond what it contains. Finishing with zero candidates is correct.
 

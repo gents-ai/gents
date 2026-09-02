@@ -23,7 +23,12 @@ context, tool_call, subprocess, subagent, and interrupt.
 Write one `PortSurface` per packet with `write_port_surface`. Copy every field
 faithfully and only replace the historical surface-id run prefix with
 `{{ event.correlation }}`. Put the actual shared row count in `expected_total`.
-Preserve quoted evidence and the complete wire packet because later Gents-only
+The native write schema caps each string argument at 2000 bytes. When a source
+`grok_wire` exceeds 1900 bytes, split at the last sentence boundary at or
+before byte 1900 and put the verbatim remainder in `grok_wire_continuation`;
+if no sentence boundary exists, use a safe UTF-8 boundary. Require both stored
+parts to be at most 2000 bytes. Otherwise omit the continuation. Never truncate
+either part. Preserve quoted evidence and the complete wire packet because later Gents-only
 workspaces cannot open grok-build. Respect the configured min/max count and do
 not add access-control work or permission UI. Do not supply run_id,
 repository_id, or base_sha; the typed write fills them.

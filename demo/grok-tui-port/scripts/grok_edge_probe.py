@@ -193,6 +193,11 @@ def initialize(
     result = initialized["result"]
     require(result["agentCapabilities"]["loadSession"] is False, "loadSession must be false")
     require(result["authMethods"][0]["id"] == "gents.runtime", "auth method drift")
+    require(
+        isinstance(result["authMethods"][0].get("name"), str)
+        and result["authMethods"][0]["name"],
+        "auth method must advertise a non-empty name",
+    )
 
     authenticated, _ = client.request("authenticate", {"methodId": "gents.runtime"})
     require(authenticated.get("result", {}).get("_meta", {}).get("provider") == "gents", "auth failed")
@@ -250,21 +255,51 @@ def probe_handshake(
         },
     )
     require("error" not in switched, f"session/set_model failed: {switched}")
+    model_update = next(
+        (message for message in notifications if message.get("method") == "x.ai/models/update"),
+        None,
+    )
     require(
-        any(message.get("method") == "x.ai/models/update" for message in notifications),
+        model_update is not None,
         "session/set_model did not emit x.ai/models/update",
+    )
+    model_catalog = model_update.get("params", {})
+    require("models" not in model_catalog, "models/update params must be flat")
+    require(
+        isinstance(model_catalog.get("availableModels"), list),
+        "models/update lacks flat availableModels",
+    )
+    require(
+        model_catalog.get("currentModelId") == client.model,
+        "models/update currentModelId mismatch",
+    )
+    observed_model = next(
+        (
+            model
+            for model in model_catalog["availableModels"]
+            if isinstance(model, dict)
+            and model.get("modelId") == model_catalog["currentModelId"]
+        ),
+        None,
+    )
+    require(observed_model is not None, "models/update current model is absent from catalog")
+    observed_context_window = observed_model.get("meta", {}).get("totalContextTokens")
+    require(
+        observed_context_window == context_window,
+        "models/update current model context window mismatch",
     )
 
     mode, notifications = client.request(
         "session/set_mode", {"sessionId": session_id, "modeId": "yolo"}
     )
     require("error" not in mode, f"session/set_mode failed: {mode}")
+    mode_update = next(
+        (message.get("params", {}).get("update", {}) for message in notifications
+         if message.get("params", {}).get("update", {}).get("sessionUpdate") == "current_mode_update"),
+        None,
+    )
     require(
-        any(
-            message.get("params", {}).get("update", {}).get("sessionUpdate")
-            == "current_mode_update"
-            for message in notifications
-        ),
+        mode_update is not None and mode_update.get("currentModeId") == "yolo",
         "session/set_mode did not emit current_mode_update",
     )
     # The handshake's session/update events participate in the standard
@@ -327,17 +362,15 @@ def probe_handshake(
         f"terminal/wait_for_exit must carry the pager's exact message, got: {wait_for_exit}",
     )
     return {
-        "model": client.model,
-        "context_window": context_window,
+        "model": model_catalog["currentModelId"],
+        "context_window": observed_context_window,
         "unsupported": unsupported,
-        "subagent_get": {"snapshot": None},
-        "subagent_list_running": {"subagents": []},
-        "subagent_cancel": {
-            "subagentId": "missing",
-            "cancelled": False,
-            "outcome": {"kind": "not_found"},
-        },
-        "wait_for_exit": "exact_pager_message",
+        "models_update": model_catalog,
+        "current_mode_update": mode_update,
+        "subagent_get": subagent["result"],
+        "subagent_list_running": running["result"],
+        "subagent_cancel": cancel["result"],
+        "wait_for_exit": wait_for_exit["error"]["message"],
     }
 
 
@@ -574,6 +607,15 @@ def validate_turn(
     require(kinds[0] == "user_message_chunk", "user echo was not the first turn update")
     for message in updates:
         update = message["params"]["update"]
+        if update["sessionUpdate"] == "available_commands_update":
+            require(
+                isinstance(update.get("availableCommands"), list),
+                "available_commands_update lacks availableCommands",
+            )
+            require(
+                isinstance(update.get("_meta", {}).get("tools"), list),
+                "available_commands_update lacks _meta.tools",
+            )
         if update["sessionUpdate"] in (
             "user_message_chunk",
             "agent_message_chunk",
@@ -601,12 +643,28 @@ def validate_turn(
         update = message["params"]["update"]
         tool_call_id = update.get("toolCallId")
         if update["sessionUpdate"] == "tool_call" and tool_call_id:
+            require("meta" not in update, "tool_call leaked obsolete meta key")
+            if "_meta" in update:
+                require(isinstance(update["_meta"], dict), "tool_call _meta is not an object")
+                require(
+                    "x-ai/tool" not in update["_meta"] and "xai/tool" not in update["_meta"],
+                    "tool_call _meta used a noncanonical tool metadata key",
+                )
+                if "x.ai/tool" in update["_meta"]:
+                    require(
+                        isinstance(update["_meta"]["x.ai/tool"], dict),
+                        "tool_call _meta x.ai/tool value is not an object",
+                    )
             tool_calls_by_id[tool_call_id] = dict(update)
         elif update["sessionUpdate"] == "tool_call_update" and tool_call_id:
             require(tool_call_id in tool_calls_by_id, "tool_call_update preceded tool_call")
-            fields = update.get("fields") or {}
-            require(isinstance(fields, dict), "tool_call_update fields are not an object")
-            tool_calls_by_id[tool_call_id].update(fields)
+            require("fields" not in update, "tool_call_update used obsolete fields wrapper")
+            changed = {
+                key: value
+                for key, value in update.items()
+                if key not in ("sessionUpdate", "toolCallId")
+            }
+            tool_calls_by_id[tool_call_id].update(changed)
     return {
         "updates": len(updates),
         "kinds": kinds,
@@ -1710,7 +1768,11 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
     lifecycle_spawned = mutate(spawned_good, parent_session_id=envelope_parent)
     lifecycle_progress = mutate(progress_good, parent_session_id=envelope_parent)
     lifecycle_batch = [
-        {"jsonrpc": JSONRPC_VERSION, "method": "x.ai/models/update", "params": {"models": {}}},
+        {
+            "jsonrpc": JSONRPC_VERSION,
+            "method": "x.ai/models/update",
+            "params": {"availableModels": [], "currentModelId": "fixture-model"},
+        },
         {
             "jsonrpc": JSONRPC_VERSION,
             "method": STANDARD_UPDATE_METHOD,
@@ -1723,7 +1785,7 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
                     "kind": "read",
                     "status": "in_progress",
                     "rawInput": {},
-                    "meta": {"subagentBackground": False},
+                    "_meta": {"subagentBackground": False},
                 },
                 "_meta": {},
             },
@@ -2239,7 +2301,7 @@ def probe_subagent(
     The turn asks the parent to spawn the `port-live-worker` subagent target
     in the foreground. From the actual wire envelopes the probe asserts:
     the early standard `task`-titled tool_call with
-    `meta.subagentBackground: false`; the exact live extension-rail
+    `_meta.subagentBackground: false`; the exact live extension-rail
     `x.ai/session_notification` spawned/progress/finished lifecycle
     (snake_case variant fields under the camelCase `sessionId/update/_meta`
     envelope); child-session identity; the exact serde schemas of all three
@@ -2288,7 +2350,7 @@ def probe_subagent(
 
     lifecycle = extract_subagent_lifecycle(notifications, session_id)
 
-    # 1. The early standard-rail task tool_call with meta.subagentBackground:false.
+    # 1. The early standard-rail task tool_call with _meta.subagentBackground:false.
     task_call = lifecycle["task_tool_call"]
     require(
         task_call is not None,
@@ -2302,14 +2364,15 @@ def probe_subagent(
         isinstance(task_call_id, str) and task_call_id,
         f"task tool_call lacks a non-empty toolCallId; got: {task_call}",
     )
-    task_meta = task_call.get("meta")
+    require("meta" not in task_call, f"task tool_call leaked obsolete meta key: {task_call}")
+    task_meta = task_call.get("_meta")
     require(
         isinstance(task_meta, dict),
-        f"task tool_call lacks a meta object carrying subagentBackground; got: {task_meta!r}",
+        f"task tool_call lacks an _meta object carrying subagentBackground; got: {task_meta!r}",
     )
     require(
         task_meta.get("subagentBackground") is False,
-        f"foreground task tool_call meta.subagentBackground must be false; got: {task_meta!r}",
+        f"foreground task tool_call _meta.subagentBackground must be false; got: {task_meta!r}",
     )
     result["task_tool_call_id"] = task_call_id
 
@@ -2398,7 +2461,7 @@ def probe_subagent(
     require_live_success_dto(finished_update)
 
     # 5. The task terminal update with the same tool call id: a
-    #    `tool_call_update` on the standard rail whose fields carry the
+    #    flattened `tool_call_update` on the standard rail carrying the
     #    terminal status for the task call id observed above.
     terminal_task_updates = [
         message
@@ -2413,7 +2476,7 @@ def probe_subagent(
         f"observed updates: {result['kinds']}",
     )
     for message in terminal_task_updates:
-        status = message.get("params", {}).get("update", {}).get("fields", {}).get("status")
+        status = message.get("params", {}).get("update", {}).get("status")
         require(
             status in ("completed", "failed"),
             f"task tool_call_update must carry a terminal status; got {status!r}",
@@ -2583,7 +2646,7 @@ def query_documents(endpoint: str, session_id: str) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--socket", required=True, help="Grok leader Unix socket")
+    parser.add_argument("--socket", help="Grok leader Unix socket (not needed for --edge offline)")
     parser.add_argument("--graphql", help="Optional Gents GraphQL endpoint for document assertions")
     parser.add_argument("--cwd", default=str(Path.cwd()), help="session/new cwd")
     parser.add_argument("--timeout", type=float, default=600.0, help="socket timeout seconds")
@@ -2600,11 +2663,19 @@ def main() -> int:
     )
     parser.add_argument(
         "--edge",
-        choices=("handshake", "prompt", "tool", "subprocess", "subagent", "cancel", "all"),
+        choices=("offline", "handshake", "prompt", "tool", "subprocess", "subagent", "cancel", "all"),
         default="all",
     )
     parser.add_argument("--prompt", default="Reply with exactly: gents glm edge probe ok")
     args = parser.parse_args()
+
+    if args.edge == "offline":
+        print(json.dumps({
+            "edge": "offline",
+            "validator_self_test": self_test_subagent_lifecycle_validators(),
+        }, indent=2, sort_keys=True))
+        return 0
+    require(args.socket, "--socket is required unless --edge offline is selected")
 
     started = time.monotonic()
     client = LeaderClient(args.socket, args.timeout, args.model)

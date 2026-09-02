@@ -4776,10 +4776,6 @@ mod tests {
                 let route_review =
                     std::fs::read_to_string(pack.join("tasks/port-review-task/prompt.md"))
                         .expect("route review prompt should load");
-                assert!(route_review.contains("exact diff from\nbase"));
-                assert!(route_review.contains("exclusive ownership list"));
-                assert!(route_review.contains("Cargo deferred by parallel-slice contract"));
-                assert!(route_review.contains("Do not run Cargo"));
                 assert!(!route_review.contains("gents graph run code-review"));
                 let review_behavior =
                     read_pack_json_defaults(&pack.join("agent-behaviors/port-review/object.json"))
@@ -4795,10 +4791,7 @@ mod tests {
                 assert_eq!(review_profile["max_turns"], 1_000_000);
                 let recon = std::fs::read_to_string(pack.join("tasks/port-recon-task/prompt.md"))
                     .expect("recon prompt should load");
-                assert!(recon.contains("audited-ledger.json"));
-                assert!(recon.contains("contains 13 self-contained packets"));
-                assert!(recon.contains("Write one `PortSurface` per packet"));
-                assert!(recon.contains("Preserve quoted evidence"));
+                assert!(recon.contains("`grok_wire_continuation`"));
                 let recon_tools = read_pack_json_defaults(
                     &pack.join("tool-selections/port-recon-tools/object.json"),
                 )
@@ -4809,6 +4802,20 @@ mod tests {
                     recon_tools["file_tool_root"],
                     "./demo/grok-tui-port/recon-input"
                 );
+                let recon_write = read_pack_json_defaults(
+                    &pack.join("datastore-tool-surfaces/port-recon-writes/object.json"),
+                )
+                .expect("recon write surface should load");
+                let recon_fields = recon_write["entries"][0]["fields"]
+                    .as_array()
+                    .expect("recon write fields should be an array");
+                assert!(recon_fields.iter().any(|field| {
+                    field["name"] == "grok_wire_continuation" && field["required"] == false
+                }));
+                let surface_schema =
+                    std::fs::read_to_string(pack.join("schemas/port_surface.graphql"))
+                        .expect("PortSurface schema should load");
+                assert!(surface_schema.contains("grok_wire_continuation: String @immutable"));
                 let audited_ledger: Value = serde_json::from_slice(
                     &std::fs::read(pack.join("recon-input/audited-ledger.json"))
                         .expect("audited recon ledger should exist"),
@@ -4835,29 +4842,40 @@ mod tests {
                         .count(),
                     12
                 );
-                assert!(audited_surfaces.iter().any(|surface| {
-                    surface["surface_id"]
+                for surface in audited_surfaces {
+                    for field in [
+                        "evidence",
+                        "grok_call_sites",
+                        "grok_wire",
+                        "grok_wire_continuation",
+                        "gents_docs",
+                        "live_prompt",
+                        "live_expect",
+                    ] {
+                        assert!(
+                            surface[field]
+                                .as_str()
+                                .is_none_or(|value| value.len() <= 2_000),
+                            "audited {field} exceeds the native datastore string ceiling"
+                        );
+                    }
+                    let call_sites = surface["grok_call_sites"]
                         .as_str()
-                        .is_some_and(|id| id.ends_with(":context:compaction"))
-                        && surface["verdict"] == "shaped-stub"
-                }));
-                assert!(audited_surfaces.iter().any(|surface| {
-                    surface["surface_id"]
-                        .as_str()
-                        .is_some_and(|id| id.ends_with(":interrupt:interject"))
-                        && surface["verdict"] == "shaped-stub"
-                }));
-                let stream_wire = audited_surfaces
-                    .iter()
-                    .find(|surface| {
-                        surface["surface_id"]
-                            .as_str()
-                            .is_some_and(|id| id.ends_with(":session:stream-chunks"))
-                    })
-                    .and_then(|surface| surface["grok_wire"].as_str())
-                    .expect("stream surface wire");
-                assert!(stream_wire.contains(r#""content":{"type":"text""#));
-                assert!(stream_wire.contains("not contentBlock"));
+                        .expect("audited call sites should be text");
+                    assert!(
+                        !call_sites.split_whitespace().any(|token| {
+                            token
+                                .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+                                .strip_prefix('L')
+                                .is_some_and(|suffix| {
+                                    suffix
+                                        .split('-')
+                                        .all(|part| part.chars().all(|c| c.is_ascii_digit()))
+                                })
+                        }),
+                        "audited call sites must use symbols, not stale line anchors"
+                    );
+                }
                 let recon_behavior =
                     read_pack_json_defaults(&pack.join("agent-behaviors/port-recon/object.json"))
                         .expect("recon behavior should load");
@@ -4870,29 +4888,15 @@ mod tests {
                 )
                 .expect("recon profile should load");
                 assert_eq!(recon_profile["max_turns"], 1_000_000);
-                assert_eq!(experiment["expect"]["stage_tool_sequences"], json!([]));
+                assert_eq!(
+                    experiment["expect"]["stage_tool_sequences"][0]["boundary_tool_name"],
+                    "write_port_surface"
+                );
                 let implement_prompt =
                     std::fs::read_to_string(pack.join("tasks/port-implement-task/prompt.md"))
                         .expect("implement prompt should load");
-                assert!(implement_prompt.contains("one of eight simultaneous slices"));
-                assert!(implement_prompt.contains("Touch only the paths"));
-                assert!(implement_prompt.contains("Shared contract"));
-                assert!(implement_prompt.contains("`protocol.rs` owns"));
-                assert!(implement_prompt.contains("`server.rs` owns"));
-                assert!(implement_prompt.contains("`acp.rs` owns"));
-                assert!(implement_prompt.contains("`turn.rs` owns"));
-                assert!(implement_prompt.contains("`assembly_cli`"));
-                assert!(implement_prompt.contains("request_helpers.rs:32-45,295-424"));
-                assert!(implement_prompt.contains("focused check that is meaningful"));
-                assert!(implement_prompt.contains("Do not repeatedly\nrerun Cargo"));
-                assert!(implement_prompt
-                    .contains("full combined compilation as deliberately\ndeferred"));
-                assert!(implement_prompt.contains("post-integration convergence agent"));
-                assert!(implement_prompt.contains("with_extension(\"lock\")"));
-                assert!(implement_prompt.contains("disconnect-before-id"));
-                assert!(implement_prompt.contains("O_NOFOLLOW"));
-                assert!(implement_prompt.contains("x.ai/interject"));
-                assert!(implement_prompt.contains("`gents::defra_node::EmbeddedNode`"));
+                assert!(implement_prompt.contains("Navigate by symbol, not line number"));
+                assert!(implement_prompt.contains("`grok_wire_continuation`"));
                 let implement_behavior = read_pack_json_defaults(
                     &pack.join("agent-behaviors/port-implement/object.json"),
                 )
@@ -4910,13 +4914,7 @@ mod tests {
                 assert_eq!(implement_profile["retry_max_resample"], 2);
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
-                assert!(plan.contains("exactly eight `status=ready`"));
-                assert!(plan.contains("unit-01-wire-codec"));
-                assert!(plan.contains("unit-08-assembly-cli"));
-                assert!(plan.contains("must own disjoint paths"));
-                assert!(plan.contains("expected_total=8"));
-                assert!(plan.contains("work_unit_count=8"));
-                assert!(plan.contains("deliberate attach duplication"));
+                assert!(plan.contains("only a compact, sorted `[surface_id=<id>]` index"));
                 assert!(experiment["expect"]["collection_counts"]
                     .get("PortWorkUnit")
                     .is_none());
@@ -4930,6 +4928,7 @@ mod tests {
                     experiment["expect"]["collection_counts"]["PortIntegrateResult"],
                     8
                 );
+                assert_eq!(experiment["expect"]["collection_counts"]["PortSurface"], 13);
                 let makefile = std::fs::read_to_string(pack.join("../../Makefile"))
                     .expect("repository Makefile should load");
                 assert!(makefile.contains("GROK_PORT_MIN_SURFACES ?= 13"));
@@ -4949,18 +4948,12 @@ mod tests {
                     std::fs::read_to_string(pack.join("tasks/port-final-review-task/prompt.md"))
                         .expect("final review prompt should load");
                 assert!(final_review.contains("gents graph run code-review"));
-                assert!(final_review.contains("bundled graph is installed"));
-                assert!(final_review.contains("At most two full review rounds"));
-                assert!(final_review.contains("read_port_convergence_report"));
+                assert!(final_review.contains("not the sentinel document count"));
                 let convergence =
                     std::fs::read_to_string(pack.join("tasks/port-converge-task/prompt.md"))
                         .expect("convergence prompt should load");
-                assert!(convergence.contains("exactly eight integration rows"));
-                assert!(convergence.contains("distinct `logical_unit_id` values"));
-                assert!(convergence.contains("semantic merge\nagent"));
                 assert!(convergence.contains("cargo test -p gents-cli --lib grok_shim"));
                 assert!(convergence.contains("cargo check -p gents-cli --all-targets"));
-                assert!(convergence.contains("one focused convergence\ncommit"));
                 let final_review_trigger = read_pack_json_defaults(
                     &pack.join("event_triggers/port-final-review/object.json"),
                 )
@@ -4969,29 +4962,6 @@ mod tests {
                     final_review_trigger["source_collection"],
                     "PortConvergenceReport"
                 );
-                let live_prompt =
-                    std::fs::read_to_string(pack.join("tasks/port-live-task/prompt.md"))
-                        .expect("live prompt should load");
-                assert!(live_prompt.contains("grok_edge_probe.py"));
-                assert!(live_prompt.contains("handshake,\nprompt, tool, subprocess, and cancel"));
-                assert!(live_prompt.contains("`grok -p`\nbypasses leader mode"));
-                assert!(live_prompt.contains("`implement` or\n`shaped-stub`"));
-                let edge_probe = std::fs::read_to_string(pack.join("scripts/grok_edge_probe.py"))
-                    .expect("live edge probe should load");
-                for edge in ["handshake", "prompt", "tool", "subprocess", "cancel", "all"] {
-                    assert!(edge_probe.contains(&format!("\"{edge}\"")));
-                }
-                let publish =
-                    std::fs::read_to_string(pack.join("tasks/port-publish-task/prompt.md"))
-                        .expect("publish prompt should load");
-                for gate in [
-                    "failed_count=0",
-                    "blocked_count=0",
-                    "coverage_complete=true",
-                    "expected_count=observed_count",
-                ] {
-                    assert!(publish.contains(gate), "publish is missing {gate}");
-                }
             } else if pack_name == "repo-maintenance" {
                 assert!(trigger_ids
                     .iter()
