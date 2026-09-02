@@ -4971,11 +4971,7 @@ mod tests {
                 assert_eq!(implement_profile["max_turns"], 1_000_000);
                 assert_eq!(implement_profile["max_output_tokens"], 65536);
                 assert_eq!(implement_profile["retry_max_resample"], 2);
-                for selection in [
-                    "port-implement-tools",
-                    "port-converge-tools",
-                    "port-final-review-tools",
-                ] {
+                for selection in ["port-implement-tools", "port-converge-tools"] {
                     let tools = read_pack_json_defaults(
                         &pack
                             .join("tool-selections")
@@ -5000,6 +4996,21 @@ mod tests {
                         "{selection} must not request the unenforceable unrestricted+disabled pair"
                     );
                 }
+                let final_review_tools = read_pack_json_defaults(
+                    &pack.join("tool-selections/port-final-review-tools/object.json"),
+                )
+                .expect("port-final-review-tools should load");
+                assert_eq!(final_review_tools["enable_bash"], true);
+                assert_eq!(final_review_tools["bash_mode"], "Unrestricted");
+                assert_eq!(final_review_tools["file_tools_mode"], "ReadWrite");
+                assert_eq!(
+                    final_review_tools["command_execution_policy"],
+                    "workspace_write"
+                );
+                assert_eq!(
+                    final_review_tools["command_network_mode"], "enabled",
+                    "final review must reach the local orchestrator GraphQL endpoint"
+                );
                 for selection in ["port-live-tools", "port-publish-tools"] {
                     let tools = read_pack_json_defaults(
                         &pack

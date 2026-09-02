@@ -8,7 +8,7 @@
   "enable_bash": true,
   "bash_mode": "Unrestricted",
   "command_execution_policy": "workspace_write",
-  "command_network_mode": "disabled",
+  "command_network_mode": "enabled",
   "cli_tool_names": [],
   "enable_meta_tools": false,
   "allowed_mcp_service_ids": [],
