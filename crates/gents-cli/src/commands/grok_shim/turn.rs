@@ -66,9 +66,8 @@ use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use serde_json::{json, Value};
 use tokio::sync::{oneshot, Mutex};
 
-use super::projection::ProjectionEngine;
-use super::projection::RequestCursor;
-use super::projection::{AsyncSendLine, SessionUpdateChannel};
+use super::projection::{AsyncCommit, AsyncSendLine, CursorAdvance, ProjectionEngine};
+use super::projection::{RequestCursor, SessionUpdateChannel};
 use super::server::AcpOutbound;
 
 /// JSON-RPC method names on the Grok pager wire.
@@ -304,6 +303,19 @@ pub(super) struct PromptSenderLine<'a>(pub(super) &'a PromptSender);
 impl AsyncSendLine for PromptSenderLine<'_> {
     async fn send_line(&self, line: String) -> Result<()> {
         self.0.send_line(line).await
+    }
+}
+
+/// Commit one projection cursor advance inside the common session send
+/// critical section, immediately after the corresponding line is enqueued.
+struct ProjectionCursorCommit<'a> {
+    cursor: &'a tokio::sync::Mutex<RequestCursor>,
+    advance: CursorAdvance,
+}
+
+impl AsyncCommit for ProjectionCursorCommit<'_> {
+    async fn commit(&self) {
+        self.cursor.lock().await.record(self.advance.clone());
     }
 }
 
@@ -895,7 +907,7 @@ impl TurnManager {
         projections: &ProjectionEngine,
         mut response_rx: oneshot::Receiver<Result<Value>>,
     ) -> Result<StopReason> {
-        let mut cursor = RequestCursor::new();
+        let cursor = tokio::sync::Mutex::new(RequestCursor::new());
         // Request-local token-observation high-water: one per pending
         // request, so sequential requests accumulate per-request deltas into
         // the session total without double-counting and a retry-replaced
@@ -942,7 +954,7 @@ impl TurnManager {
                     sender,
                     projections,
                     &mut token_high_water,
-                    &mut cursor,
+                    &cursor,
                 )
                 .await
             {
@@ -1002,17 +1014,24 @@ impl TurnManager {
         sender: &PromptSender,
         projections: &ProjectionEngine,
         token_high_water: &mut u64,
-        cursor: &mut RequestCursor,
+        cursor: &tokio::sync::Mutex<RequestCursor>,
     ) -> Result<()> {
-        let events = projections
-            .project_request_updates(session_id, request_id, token_high_water, cursor)
-            .await?;
-        for event in events {
+        let batch = {
+            let mut cursor = cursor.lock().await;
+            projections
+                .project_request_updates(session_id, request_id, token_high_water, &mut cursor)
+                .await?
+        };
+        for event in batch.events {
             let session_for_lock = session_id.to_string();
             let session_id = session_id.to_string();
             let prompt_id = prompt_id.to_string();
+            let method = event.method;
             let payload = event.payload;
-            let advance = event.advance;
+            let commit = ProjectionCursorCommit {
+                cursor,
+                advance: event.advance,
+            };
             let notification = move |event_id: &str, total_tokens: u64| {
                 let meta = super::projection::stamp_update_meta(
                     event_id,
@@ -1020,7 +1039,8 @@ impl TurnManager {
                     Some(&prompt_id),
                     None,
                 );
-                Ok(super::projection::session_update_notification(
+                Ok(super::projection::session_notification_for_method(
+                    method,
                     &session_id,
                     payload,
                     meta,
@@ -1028,9 +1048,22 @@ impl TurnManager {
             };
             projections
                 .session_updates()
-                .send(&session_for_lock, notification, PromptSenderLine(sender))
+                .send_with_commit(
+                    &session_for_lock,
+                    notification,
+                    PromptSenderLine(sender),
+                    commit,
+                )
                 .await?;
-            cursor.record(advance);
+        }
+        // No-wire observations (tail resets/no-op commits) form the suffix
+        // of the same delivery prefix. They become durable cursor state only
+        // after every byte-carrying event above was enqueued successfully.
+        if !batch.trailing_advances.is_empty() {
+            let mut cursor = cursor.lock().await;
+            for advance in batch.trailing_advances {
+                cursor.record(advance);
+            }
         }
         Ok(())
     }
@@ -2274,7 +2307,15 @@ mod tests {
             "expected the full stream, got {updates:?}"
         );
         for update in &updates {
-            assert_eq!(update["method"], "session/update");
+            let kind = update["params"]["update"]["sessionUpdate"]
+                .as_str()
+                .expect("sessionUpdate kind");
+            let expected_method = if kind.starts_with("subagent_") {
+                "x.ai/session_notification"
+            } else {
+                "session/update"
+            };
+            assert_eq!(update["method"], expected_method);
             assert_eq!(update["params"]["sessionId"], "session-1");
             assert_eq!(update["params"]["_meta"]["promptId"], "prompt-1");
             assert!(
