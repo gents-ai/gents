@@ -697,7 +697,7 @@ pub(crate) async fn serve_with_control(
             mcp_pool: McpPool::new(),
             local_hostname: Some(local_hostname),
             tool_ceiling,
-            backend_health: Some(backend_health),
+            backend_health: Some(backend_health.clone()),
             process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
             runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                 runnable_tx,
@@ -916,6 +916,30 @@ pub(crate) async fn serve_with_control(
         });
 
     if applied_pack.is_some() {
+        // The recurring backend prober ticks immediately at runtime startup,
+        // before --apply-root introduces any new backend documents, and then
+        // waits for its normal interval. Probe the post-apply set here so a
+        // reachable backend can promote unknown -> healthy inside the same
+        // readiness fence instead of making fresh pack startup wait a full
+        // recurring interval (or time out first).
+        let probe_options = gents::BackendProberOptions::default();
+        let probe_client = reqwest::Client::builder()
+            .timeout(probe_options.probe_timeout)
+            .build()
+            .context("building post-apply backend probe client")?;
+        let probe_outcome = gents::run_backend_probe_cycle(
+            node.as_ref(),
+            &probe_client,
+            &backend_health,
+            &probe_options,
+        )
+        .await;
+        tracing::debug!(
+            promoted_backends = probe_outcome.promotable.len(),
+            routing_flips = probe_outcome.flipped.len(),
+            "completed post-apply backend readiness probe"
+        );
+
         let expected_fingerprint = match runtime_configuration_probe
             .document_runtime_configuration_fingerprint()
             .await

@@ -4,7 +4,7 @@
   "display_name": "Recon: read audited ledger, write PortSurface",
   "enable_file_tools": true,
   "file_tools_mode": "ReadOnly",
-  "file_tool_root": "${GENTS_GROK_PORT_GENTS_ROOT:-.}/demo/grok-tui-port/recon-input",
+  "file_tool_root": "${GENTS_GROK_PORT_GROK_ROOT:-./demo/grok-tui-port/recon-input}",
   "enable_bash": false,
   "bash_mode": "Disabled",
   "command_execution_policy": "read_only",
