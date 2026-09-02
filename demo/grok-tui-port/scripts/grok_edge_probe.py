@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-DEFAULT_MODEL = "GLM-5.3-NVFP4"
+DEFAULT_MODEL = "GLM-5.3-Flash-NVFP4"
 DEFAULT_CONTEXT_WINDOW = 262_144
 MAX_FRAME = 64 * 1024 * 1024
 
@@ -1564,7 +1564,7 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
             capability_mode="read-only",
             persona="p",
             role="researcher",
-            model="GLM-5.3-NVFP4",
+            model="GLM-5.3-Flash-NVFP4",
             resumed_from="sa-0",
             workflow_run_id="wf-1",
         ),

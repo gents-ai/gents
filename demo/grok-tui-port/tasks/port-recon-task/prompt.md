@@ -34,3 +34,7 @@ truncate either part. Preserve quoted evidence and the complete wire packet beca
 workspaces cannot open grok-build. Respect the configured min/max count and do
 not add access-control work or permission UI. Do not supply run_id,
 repository_id, or base_sha; the typed write fills them.
+
+After every required surface write succeeds, call `update_goal` with
+`status="complete"`. Never complete the goal before the full durable surface
+set exists; if this turn cannot finish it, leave the goal active for continuation.

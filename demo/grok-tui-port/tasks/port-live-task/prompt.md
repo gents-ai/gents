@@ -20,7 +20,7 @@ Build the integrated CLI, initialize the run-owned live home against the
 declared model endpoint, and launch the integrated Grok leader/shim on the
 run-owned GraphQL port and socket, explicitly binding Grok turns to the
 `port-live` behavior. Verify that this bound behavior's effective model and
-context window are `live_model` and 262144 before accepting the catalog
+context window are `live_model` and 524288 before accepting the catalog
 advertisement. Discover the exact launch flags from the integrated `--help`
 and implementation; do not invent a protocol substitute.
 Wait for both HTTP readiness and socket readiness, track the exact child PID,
@@ -64,3 +64,7 @@ Call `write_port_live_result` once per non-ignore surface (or one sentinel
 `expected_total` from the reviewed ledger; do not supply or reinterpret it.
 `status` is `passed` only when both `grok_wire_observed` and
 `gents_docs_observed` satisfy `live_expect`. Do not supply `run_id`.
+
+After every required live-result row (or the single permitted blocked sentinel)
+is durably written, call `update_goal` with `status="complete"`. Never complete
+the goal while required surface coverage remains unrecorded.

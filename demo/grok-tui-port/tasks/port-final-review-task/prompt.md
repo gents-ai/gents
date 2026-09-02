@@ -45,3 +45,7 @@ clean tracked worktree, and record exact HEAD. Never push, open a PR, or merge.
 Call `write_port_final_review_report` exactly once. Use `status=green` only
 when the durable review and both gates pass; otherwise block with honest round,
 finding, and test evidence. Do not supply run_id.
+
+After the terminal final-review report is durably written, call `update_goal`
+with `status="complete"`. Green and blocked reports both complete this stage;
+never complete the goal before the review and foundation gates reach that recorded outcome.

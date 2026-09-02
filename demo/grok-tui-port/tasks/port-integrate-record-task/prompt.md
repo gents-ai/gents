@@ -11,3 +11,6 @@ logical ids, attempts, and expected totals to agree. Then call
 `status=applied`, the copied expected total, and a concise summary. The runtime
 fills run, attempt-specific work unit, workspace, head, and seal fields. Do not
 supply those runtime-filled fields.
+
+After the integration result is durably written, call `update_goal` with
+`status="complete"`. Never complete the goal before the receipt-backed record exists.

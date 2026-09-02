@@ -60,9 +60,9 @@ GROK_PORT_GROK_ROOT ?= $(CURDIR)/demo/grok-tui-port/recon-input
 GROK_PORT_PROMPT ?= Map the Grok TUI wire from grok-build and implement a Gents-only thin client. Do not add DefraDB access control or Grok permission UI. Prove model name, context window, tool-call semantics, subprocesses, subagents, and interrupts with live GLM turns.
 GROK_PORT_BASE_SHA ?= HEAD
 GROK_PORT_PR_BASE ?= main
-GROK_PORT_BRANCH ?= agent/grok-tui-port-pack8
+GROK_PORT_BRANCH ?= agent/grok-tui-port-pack9
 GROK_PORT_ENDPOINT_1 ?= http://127.0.0.1:8000/v1
-GROK_PORT_MODEL ?= GLM-5.3-NVFP4
+GROK_PORT_MODEL ?= GLM-5.3-Flash-NVFP4
 GROK_PORT_MIN_SURFACES ?= 13
 GROK_PORT_MAX_SURFACES ?= 13
 GROK_PORT_MAX_CONCURRENT_1 ?= 16
@@ -70,7 +70,7 @@ GROK_PORT_PORT ?= 19195
 GROK_PORT_LIVE_PORT ?= 19196
 GROK_PORT_JOB_ID ?=
 GROK_PORT_KEEP_HOME ?=
-GROK_PORT_CONTEXT_WINDOW ?= 262144
+GROK_PORT_CONTEXT_WINDOW ?= 524288
 GROK_PORT_MAX_OUTPUT_TOKENS ?= 65536
 GROK_PORT_MAX_TURNS ?= 1000000
 GROK_PORT_TEMPERATURE ?= 1.0
@@ -177,7 +177,7 @@ help:
 	@echo "  make grok-port             Map grok-build and implement a Gents-only Grok TUI shim"
 	@echo "    GROK_PORT_PROMPT='...'   Override the port focus"
 	@echo "    GROK_PORT_ENDPOINT_1=URL Set the OpenAI-compatible inference endpoint"
-	@echo "    GROK_PORT_MODEL=MODEL    Set the model (default GLM-5.3-NVFP4)"
+	@echo "    GROK_PORT_MODEL=MODEL    Set the model (default GLM-5.3-Flash-NVFP4)"
 	@echo "    GROK_PORT_KEEP_HOME=1    Keep the generated runtime home"
 	@echo
 	@echo "Worktrees:"
@@ -289,7 +289,8 @@ grok-port:
 	grok_port_base_sha="$$(git -C "$(abspath $(GROK_PORT_GENTS_ROOT))" rev-parse --verify "$(GROK_PORT_BASE_SHA)^{commit}")" || exit 2; \
 	grok_port_models="$$(curl --fail --silent --show-error --max-time 10 "$(GROK_PORT_ENDPOINT_1)/models")" || { echo "GLM preflight failed: $(GROK_PORT_ENDPOINT_1)/models" >&2; exit 2; }; \
 	case "$$grok_port_models" in *'"id":"$(GROK_PORT_MODEL)"'*) ;; *) echo "GLM preflight did not advertise $(GROK_PORT_MODEL): $(GROK_PORT_ENDPOINT_1)" >&2; exit 2;; esac; \
-	case "$$grok_port_models" in *'"max_model_len":$(GROK_PORT_CONTEXT_WINDOW)'*) ;; *) echo "GLM preflight did not advertise context $(GROK_PORT_CONTEXT_WINDOW): $(GROK_PORT_ENDPOINT_1)" >&2; exit 2;; esac; \
+	grok_port_max_context="$$(printf '%s' "$$grok_port_models" | python3 -c 'import json,sys; model=sys.argv[1]; rows=json.load(sys.stdin).get("data", []); print(max((int(row.get("max_model_len", 0)) for row in rows if row.get("id") == model), default=0))' "$(GROK_PORT_MODEL)")" || exit 2; \
+	test "$$grok_port_max_context" -ge "$(GROK_PORT_CONTEXT_WINDOW)" || { echo "GLM preflight context $$grok_port_max_context is smaller than required $(GROK_PORT_CONTEXT_WINDOW): $(GROK_PORT_ENDPOINT_1)" >&2; exit 2; }; \
 	GENTS_GROK_PORT_CEILING="$(abspath $(GROK_PORT_CEILING))" \
 	GENTS_GROK_PORT_GENTS_ROOT="$(abspath $(GROK_PORT_GENTS_ROOT))" \
 	GENTS_GROK_PORT_GROK_ROOT="$(abspath $(GROK_PORT_GROK_ROOT))" \

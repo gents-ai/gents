@@ -3,7 +3,7 @@
   "description": "Map the Grok TUI wire, fan out eight path-disjoint GLM writers, retry rejected seals in fresh workspaces, record host-confirmed serial integration, semantically converge, full-review, live-prove, then open a PR",
   "init": {
     "inference_url": "${GENTS_GROK_PORT_ENDPOINT_1:-http://127.0.0.1:8000/v1}",
-    "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}",
+    "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
     "tool_package": "write",
     "tool_root": "${GENTS_GROK_PORT_CEILING:-.}",
     "tool_root_env_var": "GENTS_GROK_PORT_CEILING",
@@ -22,7 +22,7 @@
       "ceiling": "${GENTS_GROK_PORT_CEILING:-.}",
       "surface_min": "${GENTS_GROK_PORT_MIN_SURFACES:-13}",
       "surface_max": "${GENTS_GROK_PORT_MAX_SURFACES:-13}",
-      "live_model": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}",
+      "live_model": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
       "live_endpoint": "${GENTS_GROK_PORT_ENDPOINT_1:-http://127.0.0.1:8000/v1}",
       "orchestrator_home": "${GENTS_GROK_PORT_ORCHESTRATOR_HOME:-.gents/grok-port-home}",
       "orchestrator_graphql": "${GENTS_GROK_PORT_ORCHESTRATOR_GRAPHQL:-http://127.0.0.1:19195/api/v0/graphql}",
@@ -252,12 +252,12 @@
     "code-review": {
       "backend_id": "grok-port-backend-ws1",
       "profile_id": "grok-port-code-review-profile",
-      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}",
+      "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}",
       "role_overrides": {
         "reviewer": {
           "backend_id": "grok-port-backend-ws1",
           "profile_id": "grok-port-code-review-scan-profile",
-          "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}"
+          "model_name": "${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}"
         }
       }
     }

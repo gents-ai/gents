@@ -15,3 +15,7 @@ Call `write_port_live_report` once with counts, `expected_count` from the
 final review, actual `observed_count`, `coverage_complete=true` only for exact
 unique coverage, and `final_review_head` from the report. Any coverage defect
 must increment `failed_count`. Do not supply `run_id`.
+
+After the live-review report is durably written, call `update_goal` with
+`status="complete"`. Passing and blocked coverage reports both complete this
+stage; never complete the goal before the terminal report exists.

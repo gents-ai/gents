@@ -23,3 +23,7 @@ Call `write_port_recon_audit` exactly once. Use `status=accepted` only if all
 checks pass; otherwise `status=rejected` and enumerate missing/invalid content
 in `missing_areas` and `summary`. Do not supply `run_id`, `repository_id`, or
 `base_sha`; the runtime copies repository/base authority from the closed group.
+
+After the required audit write succeeds, call `update_goal` with
+`status="complete"`. An accepted or rejected durable audit completes this
+stage; never complete the goal before that terminal record exists.

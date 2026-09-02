@@ -8,6 +8,6 @@
   "api_key_env_var": null,
   "max_concurrent": ${GENTS_GROK_PORT_MAX_CONCURRENT_1:-16},
   "max_queue_depth": 100,
-  "models": ["${GENTS_GROK_PORT_MODEL:-GLM-5.3-NVFP4}"],
+  "models": ["${GENTS_GROK_PORT_MODEL:-GLM-5.3-Flash-NVFP4}"],
   "enabled": true
 }

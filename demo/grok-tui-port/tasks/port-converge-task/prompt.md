@@ -56,3 +56,7 @@ Call `write_port_convergence_report` exactly once. `status=green` requires all
 eight applied units, a committed clean head, and all three gates passing.
 Otherwise write `status=blocked` with the actual tests and diagnostics. Do not
 supply run_id.
+
+After the terminal convergence report is durably written, call `update_goal`
+with `status="complete"`. Green and blocked reports both complete this stage;
+never complete the goal before the required gates and report have reached a terminal outcome.

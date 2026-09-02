@@ -82,3 +82,7 @@ Call `write_port_work_unit` exactly eight times for those units. Then call
 surface count, and `expected_total=8`. The summary must state that eight
 parallel sealed slices converge serially on one trunk before the full review.
 Do not supply `run_id` to any write.
+
+After all eight work units and the plan are durably written, call `update_goal`
+with `status="complete"`. Never complete the goal while any required unit or
+the plan is missing; leave it active so continuation can resume.

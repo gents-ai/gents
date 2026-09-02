@@ -1,7 +1,7 @@
 {
   "profile_id": "grok-port-profile",
   "display_name": "Grok TUI port profile",
-  "context_window": ${GENTS_GROK_PORT_CONTEXT_WINDOW:-262144},
+  "context_window": ${GENTS_GROK_PORT_CONTEXT_WINDOW:-524288},
   "max_output_tokens": ${GENTS_GROK_PORT_MAX_OUTPUT_TOKENS:-65536},
   "max_turns": ${GENTS_GROK_PORT_MAX_TURNS:-1000000},
   "temperature": ${GENTS_GROK_PORT_TEMPERATURE:-1.0},
