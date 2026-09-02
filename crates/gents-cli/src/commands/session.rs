@@ -143,7 +143,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum SessionForkCut {
     AtUserTurn(u32),
     AtLastHumanUserTurn,
@@ -156,9 +156,9 @@ fn resolve_session_fork_cut(args: &SessionForkArgs) -> Result<SessionForkCut> {
              pick one cut. --at-last-human-user-turn retries the last human prompt \
              and does not resume the tool loop."
         ),
-        (None, false) => anyhow::bail!(
-            "session fork requires --at-user-turn N or --at-last-human-user-turn"
-        ),
+        (None, false) => {
+            anyhow::bail!("session fork requires --at-user-turn N or --at-last-human-user-turn")
+        }
         (Some(at_user_turn), false) => Ok(SessionForkCut::AtUserTurn(at_user_turn)),
         (None, true) => Ok(SessionForkCut::AtLastHumanUserTurn),
     }
@@ -351,6 +351,57 @@ fn print_fork_outcome(
         "copied_compaction_entries": outcome.copied_compaction_entries,
     }))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_session_fork_cut, SessionForkCut};
+    use crate::cli::args::SessionForkArgs;
+
+    fn fork_args(at_user_turn: Option<u32>, at_last_human_user_turn: bool) -> SessionForkArgs {
+        SessionForkArgs {
+            home: None,
+            graphql: None,
+            agent_did: None,
+            from: "sess-1".to_string(),
+            at_user_turn,
+            at_last_human_user_turn,
+            behavior: None,
+        }
+    }
+
+    #[test]
+    fn session_fork_cut_accepts_at_last_human_user_turn() {
+        match resolve_session_fork_cut(&fork_args(None, true)).expect("cut") {
+            SessionForkCut::AtLastHumanUserTurn => {}
+            SessionForkCut::AtUserTurn(_) => panic!("expected last-human cut"),
+        }
+    }
+
+    #[test]
+    fn session_fork_cut_accepts_at_user_turn() {
+        match resolve_session_fork_cut(&fork_args(Some(3), false)).expect("cut") {
+            SessionForkCut::AtUserTurn(3) => {}
+            other => panic!("expected at-user-turn 3, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_fork_cut_rejects_missing_and_mutex() {
+        let missing = resolve_session_fork_cut(&fork_args(None, false)).unwrap_err();
+        assert!(
+            missing
+                .to_string()
+                .contains("--at-user-turn N or --at-last-human-user-turn"),
+            "{missing}"
+        );
+        let mutex = resolve_session_fork_cut(&fork_args(Some(1), true)).unwrap_err();
+        assert!(
+            mutex.to_string().contains("mutually exclusive")
+                && mutex.to_string().contains("does not resume the tool loop"),
+            "{mutex}"
+        );
+    }
 }
 
 fn map_fork_error(error: ForkError) -> anyhow::Error {
