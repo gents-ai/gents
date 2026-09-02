@@ -14,7 +14,7 @@ use tokio::sync::Notify;
 use super::route_manager::cleanup_saved_peer_p2p;
 use super::supervisor::{
     p2p_health_materially_changed, probe_p2p_health, repair_saved_peer,
-    request_index_for_ready_peers, saved_peer_needs_repair,
+    request_client_recovery_for_ready_peers, saved_peer_needs_repair,
 };
 use super::*;
 use crate::client::{PeerDirectory, PeerRecord};
@@ -452,7 +452,7 @@ async fn expired_enrollment_is_persistently_demoted_before_submit_can_write() {
 }
 
 #[tokio::test]
-async fn index_sync_request_targets_exactly_the_client_index() {
+async fn recovery_sync_targets_the_session_index_and_runtime_readiness() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -466,15 +466,20 @@ async fn index_sync_request_targets_exactly_the_client_index() {
     recording.set_connected_peers(vec!["peer-alpha".to_string()]);
     let p2p: Arc<dyn P2POps> = recording.clone();
 
-    let requested = super::bootstrap::request_index_sync(core.node(), &p2p)
+    let requested = super::bootstrap::request_client_recovery_sync(core.node(), &p2p)
         .await
         .expect("request index sync");
     assert_eq!(
         requested,
-        ["AgentConversation", "AgentSession", "MailboxItem"]
+        [
+            "AgentConversation",
+            "AgentSession",
+            "MailboxItem",
+            "AgentBehaviorReadiness"
+        ]
     );
 
-    let mut expected = crate::client::schema::index_collection_names()
+    let mut expected = crate::client::schema::client_recovery_collection_names()
         .into_iter()
         .map(|name| {
             core.node()
@@ -525,22 +530,24 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
     .await;
     let mut saved = BTreeSet::from(["saved-alpha".to_string()]);
     let mut requested_for = BTreeMap::new();
-    let index_collection_count = crate::client::schema::index_collection_names().len();
+    let recovery_collection_count = crate::client::schema::client_recovery_collection_names().len();
 
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
-        index_collection_count
+        recovery_collection_count
     );
     assert_eq!(
         requested_for.keys().cloned().collect::<BTreeSet<_>>(),
         saved
     );
 
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
-        index_collection_count
+        recovery_collection_count
     );
 
     let mut beta_record = PeerRecord::new("Beta", "peer-beta", "did:key:beta");
@@ -563,10 +570,11 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
         }
     ));
     saved.insert("saved-beta".to_string());
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
-        index_collection_count * 2
+        recovery_collection_count * 2
     );
     assert_eq!(
         requested_for.keys().cloned().collect::<BTreeSet<_>>(),
@@ -574,15 +582,17 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
     );
 
     requested_for.remove("saved-alpha");
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
-        index_collection_count * 3
+        recovery_collection_count * 3
     );
 
     requested_for.remove("saved-alpha");
     recording.set_connected_peers(Vec::new());
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert!(sync_state
         .snapshot()
         .peers

@@ -300,34 +300,34 @@ impl PeerDirectory {
             );
         }
         let now = Utc::now().to_rfc3339();
-        let mut record = candidate
+        let existing = candidate
             .peers
             .iter()
             .find(|record| {
                 record.source.as_deref() == Some("enrollment")
                     && (record.peer_id == peer_id || record.agent_did == agent_did)
             })
-            .cloned()
-            .unwrap_or(PeerRecord {
-                peer_id: peer_id.to_string(),
-                label: label.to_string(),
-                addr: addr.to_string(),
-                agent_did: agent_did.to_string(),
-                default_behavior_id: None,
-                source: Some("enrollment".to_string()),
-                pairing_network_id: Some(network_id.to_string()),
-                pairing_template: Some("client".to_string()),
-                enrollment_request_id: Some(request_id.to_string()),
-                enrollment_request_digest: Some(request_digest.to_string()),
-                enrollment_admin_did: Some(admin_did.to_string()),
-                enrollment_authorization_sequence: Some(authorization_sequence),
-                enrollment_authorization_expires_at: Some(authorization_expires_at.to_string()),
-                pairing_ready: false,
-                graphql: None,
-                local_agent_home: None,
-                created_at: now.clone(),
-                updated_at: now,
-            });
+            .cloned();
+        let mut record = existing.clone().unwrap_or(PeerRecord {
+            peer_id: peer_id.to_string(),
+            label: label.to_string(),
+            addr: addr.to_string(),
+            agent_did: agent_did.to_string(),
+            default_behavior_id: None,
+            source: Some("enrollment".to_string()),
+            pairing_network_id: Some(network_id.to_string()),
+            pairing_template: Some("client".to_string()),
+            enrollment_request_id: Some(request_id.to_string()),
+            enrollment_request_digest: Some(request_digest.to_string()),
+            enrollment_admin_did: Some(admin_did.to_string()),
+            enrollment_authorization_sequence: Some(authorization_sequence),
+            enrollment_authorization_expires_at: Some(authorization_expires_at.to_string()),
+            pairing_ready: false,
+            graphql: None,
+            local_agent_home: None,
+            created_at: now.clone(),
+            updated_at: now,
+        });
         if record.peer_id != peer_id
             || record.addr != addr
             || record.agent_did != agent_did
@@ -357,6 +357,14 @@ impl PeerDirectory {
         record.enrollment_authorization_sequence = Some(authorization_sequence);
         record.enrollment_authorization_expires_at = Some(authorization_expires_at.to_string());
         record.graphql = None;
+
+        // Status polling observes the same signed authorization on every
+        // supervisor tick. Preserve the durable generation (including its
+        // timestamp) when that observation is unchanged; rewriting it makes
+        // downstream route and sync fences look new every two seconds.
+        if existing.as_ref() == Some(&record) {
+            return Ok(record);
+        }
 
         let record = candidate.apply_upsert(record);
         self.commit(candidate).await?;
@@ -876,6 +884,47 @@ mod tests {
 
         assert_eq!(refreshed.label, "Mandrake");
         assert_eq!(load_peer_records(&path).await.unwrap()[0].label, "Mandrake");
+    }
+
+    #[tokio::test]
+    async fn unchanged_enrollment_refresh_preserves_the_durable_generation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let enrolled = directory
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Enrolled Agent",
+                "iroh://ticket",
+                "did:key:agent",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                7,
+                "2099-09-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+
+        let refreshed = directory
+            .upsert_enrollment_peer(
+                "server-peer",
+                "Ignored fallback label",
+                "iroh://ticket",
+                "did:key:agent",
+                "network-a",
+                "request-a",
+                "digest-a",
+                "did:key:admin",
+                7,
+                "2099-09-29T00:00:00Z",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(refreshed, enrolled);
+        assert_eq!(load_peer_records(&path).await.unwrap(), vec![enrolled]);
     }
 
     #[tokio::test]

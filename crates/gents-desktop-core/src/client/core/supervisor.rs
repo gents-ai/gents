@@ -15,7 +15,8 @@ use tokio::time::{Instant, MissedTickBehavior};
 use super::super::peer_directory::PeerRecord;
 use super::super::principal_identity::PrincipalIdentity;
 use super::bootstrap::{
-    connect_peer_with_retry, force_connect_peer_with_retry, is_connected_peer, request_index_sync,
+    connect_peer_with_retry, force_connect_peer_with_retry, is_connected_peer,
+    request_client_recovery_sync,
 };
 use super::p2p_ops::{
     p2p_connected_peers, p2p_get_replicators, p2p_listen_addresses, p2p_local_peer_id,
@@ -61,7 +62,7 @@ pub(super) fn spawn_p2p_supervisor_task(
         let mut health = sync_state.snapshot().transport;
         let mut ticker = tokio::time::interval(P2P_SUPERVISOR_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut index_requests = BTreeMap::new();
+        let mut recovery_requests = BTreeMap::new();
         let mut route_reconciled_at = BTreeMap::new();
         let mut removal_retries = BTreeMap::new();
 
@@ -119,7 +120,7 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &route_manager,
                 install_replicators_on_bootstrap,
                 manual_repair,
-                &mut index_requests,
+                &mut recovery_requests,
                 &mut route_reconciled_at,
                 &enrollment_authority,
             )
@@ -222,7 +223,7 @@ async fn run_saved_peer_repair_cycle(
     route_manager: &Arc<ClientRouteManager>,
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
-    index_requests: &mut BTreeMap<String, PeerRecord>,
+    recovery_requests: &mut BTreeMap<String, PeerRecord>,
     route_reconciled_at: &mut BTreeMap<String, (RouteReconcileFence, Instant)>,
     enrollment_authority: &BTreeMap<String, super::enrollment::EnrollmentAuthorizationGeneration>,
 ) {
@@ -231,7 +232,7 @@ async fn run_saved_peer_repair_cycle(
         .iter()
         .map(|record| record.peer_id.clone())
         .collect::<BTreeSet<_>>();
-    index_requests
+    recovery_requests
         .retain(|peer_id, expected| expected.peer_id == *peer_id && records.contains(expected));
     route_reconciled_at.retain(|peer_id, (expected, _)| {
         expected.record.peer_id == *peer_id
@@ -244,7 +245,7 @@ async fn run_saved_peer_repair_cycle(
             saved_record,
             enrollment_authority,
         ) {
-            index_requests.remove(&saved_record.peer_id);
+            recovery_requests.remove(&saved_record.peer_id);
             route_reconciled_at.remove(&saved_record.peer_id);
             continue;
         }
@@ -285,7 +286,7 @@ async fn run_saved_peer_repair_cycle(
             .iter()
             .any(|candidate| candidate.peer_id == record.peer_id);
         if needs_repair {
-            index_requests.remove(&record.peer_id);
+            recovery_requests.remove(&record.peer_id);
             let updated = repair_saved_peer(
                 p2p,
                 &record,
@@ -346,11 +347,18 @@ async fn run_saved_peer_repair_cycle(
     }
 
     if install_replicators_on_bootstrap {
-        request_index_for_ready_peers(node, p2p, sync_state, &saved_peer_ids, index_requests).await;
+        request_client_recovery_for_ready_peers(
+            node,
+            p2p,
+            sync_state,
+            &saved_peer_ids,
+            recovery_requests,
+        )
+        .await;
     }
 }
 
-pub(super) async fn request_index_for_ready_peers(
+pub(super) async fn request_client_recovery_for_ready_peers(
     node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
     sync_state: &ClientSyncStateOwner,
@@ -379,7 +387,7 @@ pub(super) async fn request_index_for_ready_peers(
         return;
     }
 
-    match request_index_sync(node.as_ref(), p2p).await {
+    match request_client_recovery_sync(node.as_ref(), p2p).await {
         Ok(collections) => {
             let current = sync_state.records();
             requested_for.extend(
@@ -391,16 +399,16 @@ pub(super) async fn request_index_for_ready_peers(
             tracing::info!(
                 target: "gents_desktop_core::peer_maintenance",
                 requested_collections = ?collections,
-                "session index sync request dispatched; merges continue asynchronously"
+                "client recovery sync request dispatched; merges continue asynchronously"
             );
         }
         Err(error) => {
-            let message = format!("session index sync request failed: {error}");
+            let message = format!("client recovery sync request failed: {error}");
             sync_state.set_last_error_for_records(&pending, message);
             tracing::warn!(
                 target: "gents_desktop_core::peer_maintenance",
                 error = %error,
-                "session index sync request failed; supervisor will retry after repair"
+                "client recovery sync request failed; supervisor will retry after repair"
             );
         }
     }
