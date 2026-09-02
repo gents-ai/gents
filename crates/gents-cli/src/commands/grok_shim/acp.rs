@@ -1345,7 +1345,7 @@ mod tests {
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
                 .await
                 .expect("embedded node"),
@@ -1424,16 +1424,43 @@ mod tests {
     /// Build a service whose `create_agent_request` seam points at a live
     /// mock GraphQL endpoint forwarding to the embedded node.
     async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> AcpService {
+        let identity_dir = tempfile::tempdir().expect("identity tempdir");
+        let identity =
+            gents::KeyIdentity::load_or_create(identity_dir.path().join("agent.key"), None)
+                .expect("test signing identity");
+        let agent_did = gents::AgentIdentity::did(&identity).to_string();
+        let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
         let config = AcpServiceConfig {
             node,
-            agent_did: Arc::from("did:test:grok-shim"),
+            agent_did: Arc::from(agent_did.as_str()),
             agent_name: Arc::from("grok-shim-test"),
-            behavior_id: Arc::from("did:test:grok-shim:default"),
+            behavior_id: Arc::from(behavior_id.as_str()),
             current_model: bound_model(),
         };
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
             .expect("runtime schemas");
+        let response = config
+            .node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentPrincipal(input: {{
+                        agent_did: "{agent_did}"
+                        display_name: "Grok shim test"
+                        default_behavior_id: "{behavior_id}"
+                        enabled: true
+                    }}) {{ _docID }}
+                    create_AgentBehavior(input: {{
+                        behavior_id: "{behavior_id}"
+                        agent_did: "{agent_did}"
+                        display_name: "Grok shim test"
+                        enabled: true
+                    }}) {{ _docID }}
+                }}"#,
+            ))
+            .await;
+        gents::graphql::ensure_no_errors(&response, "seed admitted test behavior")
+            .expect("seed admitted test behavior");
         let turns = Arc::new(TurnManager::new(
             config.node.clone(),
             super::super::turn::TurnManagerConfig {

@@ -295,10 +295,14 @@ mod tests {
         AcpDelegateFactoryInputs,
     ) {
         let tempdir = tempfile::tempdir().expect("tempdir");
+        let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
+            .expect("test signing identity");
+        let agent_did = gents::AgentIdentity::did(&identity).to_string();
+        let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
                 .await
                 .expect("embedded node"),
@@ -306,13 +310,33 @@ mod tests {
         gents::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentPrincipal(input: {{
+                        agent_did: "{agent_did}"
+                        display_name: "Grok shim factory test"
+                        default_behavior_id: "{behavior_id}"
+                        enabled: true
+                    }}) {{ _docID }}
+                    create_AgentBehavior(input: {{
+                        behavior_id: "{behavior_id}"
+                        agent_did: "{agent_did}"
+                        display_name: "Grok shim factory test"
+                        enabled: true
+                    }}) {{ _docID }}
+                }}"#,
+            ))
+            .await;
+        gents::graphql::ensure_no_errors(&response, "seed admitted factory behavior")
+            .expect("seed admitted factory behavior");
         let graphql = spawn_mock_graphql(node.clone()).await;
         let inputs = AcpDelegateFactoryInputs {
             node: node.clone(),
             graphql,
-            agent_did: "did:test:agent".to_string(),
+            agent_did,
             agent_name: "grok-shim".to_string(),
-            behavior_id: "did:test:agent:default".to_string(),
+            behavior_id,
             bound: crate::commands::grok_shim::projection::BoundModelContext::new(
                 "GLM-5.3-NVFP4".to_string(),
                 "GLM 5.3 NVFP4".to_string(),
@@ -810,7 +834,7 @@ mod tests {
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
                 .await
                 .expect("embedded node"),
