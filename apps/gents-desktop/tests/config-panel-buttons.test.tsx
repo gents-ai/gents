@@ -256,6 +256,52 @@ describe("config panel action buttons", () => {
     );
   });
 
+  it("hydrates and saves nullable goal capability overrides", async () => {
+    const onSaveToolSelectionConfig = vi.fn<
+      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
+    >(() => Promise.resolve());
+
+    render(
+      <ToolSelectionConfigEditor
+        agentDid="did:key:z6MkAgent"
+        savedStatus={null}
+        saving={false}
+        toolCeiling="Readwrite"
+        toolRoot="/tmp/work"
+        toolSelection={{
+          ...toolSelection,
+          enableGoalTools: true,
+          enableGoalCreation: false,
+        }}
+        toolServiceRegistries={[toolService]}
+        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("tool-enable-goal-tools")).toHaveValue("enabled");
+    expect(screen.getByTestId("tool-enable-goal-creation")).toHaveValue("disabled");
+    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("tool-enable-goal-tools"), {
+      target: { value: "inherit" },
+    });
+    expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("tool-enable-goal-creation"), {
+      target: { value: "enabled" },
+    });
+    fireEvent.click(screen.getByTestId("tool-selection-save"));
+
+    await waitFor(() =>
+      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enableGoalTools: null,
+          enableGoalCreation: true,
+        }),
+      ),
+    );
+  });
+
   it("edits defra_query_collections and keeps write_tools / policy version read-only", async () => {
     const onSaveToolSelectionConfig = vi.fn<
       [(request: ToolSelectionSaveRequest) => Promise<unknown>]

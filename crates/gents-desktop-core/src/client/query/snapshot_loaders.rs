@@ -149,7 +149,7 @@ pub async fn load_tasks(node: &EmbeddedNode) -> Result<Vec<TaskRow>> {
     load_rows(
         node,
         "Task",
-        "query { Task { task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at } }",
+        "query { Task { task_id name description behavior_id prompt_template goal_objective_template goal_token_budget enabled output_schema_ref created_at updated_at } }",
     )
     .await
 }
@@ -185,7 +185,7 @@ pub async fn load_tool_selections(node: &EmbeddedNode) -> Result<Vec<ToolSelecti
     load_rows(
         node,
         "ToolSelection",
-        "query { ToolSelection { selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids delegate_to backgroundable_tool_names enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds tool_policy_version write_tools datastore_tool_surface_ids eth_tool_ids subagent_default_await_mode enable_self_config self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config } }",
+        "query { ToolSelection { selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools enable_goal_tools enable_goal_creation allowed_mcp_service_ids delegate_to backgroundable_tool_names enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds tool_policy_version write_tools datastore_tool_surface_ids eth_tool_ids subagent_default_await_mode enable_self_config self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config } }",
     )
     .await
 }

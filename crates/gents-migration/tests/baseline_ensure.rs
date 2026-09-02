@@ -349,7 +349,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
 }
 
 #[tokio::test]
-async fn tool_selection_lsp_migrations_preserve_existing_document() {
+async fn tool_selection_migrations_preserve_existing_document() {
     let node = fresh_node().await;
     let baseline = gents_migration::DEFAULT_BASELINE
         .iter()
@@ -381,6 +381,7 @@ async fn tool_selection_lsp_migrations_preserve_existing_document() {
         .execute(
             r#"{ ToolSelection(filter: {selection_id: {_eq: "existing-selection"}}) {
                 selection_id display_name enable_lsp lsp_config
+                enable_goal_tools enable_goal_creation
             } }"#,
         )
         .await;
@@ -400,7 +401,132 @@ async fn tool_selection_lsp_migrations_preserve_existing_document() {
     assert_eq!(rows[0]["display_name"], "Existing");
     assert!(rows[0]["enable_lsp"].is_null());
     assert!(rows[0]["lsp_config"].is_null());
+    assert!(rows[0]["enable_goal_tools"].is_null());
+    assert!(rows[0]["enable_goal_creation"].is_null());
 
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn task_goal_declaration_migration_preserves_existing_document() {
+    let node = fresh_node().await;
+    let baseline = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == gents_protocol::schemas::TASK_NAME)
+        .expect("Task baseline");
+    node.add_schema(baseline.sdl)
+        .await
+        .expect("register frozen Task baseline");
+
+    let response = node
+        .execute(
+            r#"mutation { create_Task(input: {
+                task_id: "existing-task"
+                name: "Existing"
+                behavior_id: "default"
+                prompt_template: "Do work"
+            }) { task_id name } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "seed Task: {:?}", response.errors);
+
+    ensure_migrations(node.as_ref())
+        .await
+        .expect("apply Task migration");
+    let response = node
+        .execute(
+            r#"{ Task(filter: {task_id: {_eq: "existing-task"}}) {
+                task_id name goal_objective_template goal_token_budget
+            } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "query Task: {:?}", response.errors);
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("Task"))
+        .and_then(serde_json::Value::as_array)
+        .expect("Task rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["task_id"], "existing-task");
+    assert_eq!(rows[0]["name"], "Existing");
+    assert!(rows[0]["goal_objective_template"].is_null());
+    assert!(rows[0]["goal_token_budget"].is_null());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn goal_creation_key_migration_preserves_rows_and_claim_enforces_uniqueness() {
+    let node = fresh_node().await;
+    let baseline = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == gents_protocol::schemas::GOAL_NAME)
+        .expect("Goal baseline");
+    node.add_schema(baseline.sdl)
+        .await
+        .expect("register frozen Goal baseline");
+    let response = node
+        .execute(
+            r#"mutation { create_Goal(input: {
+                goal_id: "existing-goal"
+                session_id: "existing-session"
+                agent_did: "did:key:existing"
+            }) { goal_id } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "seed Goal: {:?}", response.errors);
+
+    ensure_migrations(node.as_ref())
+        .await
+        .expect("apply Goal migration");
+    let response = node
+        .execute(
+            r#"{ Goal(filter: {goal_id: {_eq: "existing-goal"}}) {
+                goal_id creation_key
+            } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "query Goal: {:?}", response.errors);
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("Goal"))
+        .and_then(serde_json::Value::as_array)
+        .expect("Goal rows");
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0]["creation_key"].is_null());
+
+    let first = node
+        .execute(
+            r#"mutation { create_GoalCreationClaim(input: {
+                creation_key: "goal-create:key"
+                goal_id: "keyed-1"
+                session_id: "session-1"
+                agent_did: "did:key:existing"
+                objective: "objective"
+                token_budget: 100
+                created_at: "2026-09-02T00:00:00Z"
+            }) { creation_key goal_id } }"#,
+        )
+        .await;
+    assert!(!first.has_errors(), "first Goal claim: {:?}", first.errors);
+    let duplicate = node
+        .execute(
+            r#"mutation { create_GoalCreationClaim(input: {
+                creation_key: "goal-create:key"
+                goal_id: "keyed-2"
+                session_id: "session-1"
+                agent_did: "did:key:existing"
+                objective: "different"
+                token_budget: 200
+                created_at: "2026-09-02T00:00:01Z"
+            }) { creation_key goal_id } }"#,
+        )
+        .await;
+    assert!(
+        duplicate.has_errors(),
+        "duplicate creation_key must violate the unique index"
+    );
     node.shutdown().await;
 }
 

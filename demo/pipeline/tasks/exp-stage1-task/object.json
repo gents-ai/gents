@@ -4,6 +4,8 @@
   "description": null,
   "behavior_id": "exp-stage1",
   "prompt_template": "./prompt.md",
+  "goal_objective_template": "Complete pipeline stage 1 for job {{ doc.job_id }} and persist its finding.",
+  "goal_token_budget": 50000,
   "enabled": true,
   "output_schema_ref": null
 }

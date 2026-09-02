@@ -86,6 +86,9 @@ pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
     }
     for task in &mut manifest.tasks {
         normalize_optional_string(&mut task.description);
+        if let Some(goal_objective_template) = &mut task.goal_objective_template {
+            normalize_optional_string(goal_objective_template);
+        }
         normalize_optional_string(&mut task.output_schema_ref);
     }
     for trigger in &mut manifest.event_triggers {

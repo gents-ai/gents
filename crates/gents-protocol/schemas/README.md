@@ -93,7 +93,7 @@ These documents record user requests, assistant output, and conversation history
 
 | Collection | Key fields | References | Written by | Read by |
 |------------|------------|------------|------------|---------|
-| `Task` | `task_id`, `name`, `behavior_id`, `prompt_template`, `enabled`, `output_schema_ref` | `behavior_id -> AgentBehavior.behavior_id` | desired-state apply | trigger engine |
+| `Task` | `task_id`, `name`, `behavior_id`, `prompt_template`, optional `goal_objective_template` / `goal_token_budget`, `enabled`, `output_schema_ref` | `behavior_id -> AgentBehavior.behavior_id` | desired-state apply | trigger engine |
 | `Schedule` | `schedule_id`, `task_id`, `interval_secs`, `enabled`, `concurrency`, `next_run_at`, `last_attempt_at`, `last_status`, `fire_count` | `task_id -> Task.task_id` | desired-state apply, trigger engine status updates | trigger engine |
 | `EventTrigger` | `trigger_id`, `task_id`, `source_collection`, `event_kind`, `filter`, `enabled`, `concurrency`, `last_attempt_at`, `last_fired_source_doc_id`, `last_status`, `fire_count` | `task_id -> Task.task_id` | desired-state apply, trigger engine status updates | event source / trigger engine |
 | `EventTriggerGroupState` | `group_key`, `trigger_id`, `correlation`, `trigger_config_key`, `first_seen_at` | internal durable timeout clock; successful resolution remains an `AgentRequest` lineage query | event source | event source |

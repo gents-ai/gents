@@ -29,6 +29,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use gents::{BackendProviderKind, Collection};
 
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 pub(crate) const DEFAULT_TOOL_SERVICE_MCP_PATH: &str = "/mcp";
 pub(crate) const TOOL_SERVICE_ADDRESS_FIELDS: &[&str] = &["hostname", "tailscale_ip", "lan_ip"];
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,6 +82,20 @@ pub(crate) struct DesiredTask {
     pub(crate) description: Option<String>,
     pub(crate) behavior_id: String,
     pub(crate) prompt_template: String,
+    /// Outer `None` omits the field (preserve live state); inner `None` writes null.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) goal_objective_template: Option<Option<String>>,
+    /// Outer `None` omits the field (preserve live state); inner `None` writes null.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) goal_token_budget: Option<Option<i64>>,
     pub(crate) enabled: bool,
     pub(crate) output_schema_ref: Option<String>,
 }
@@ -198,6 +220,20 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) cli_tool_names: Vec<String>,
     pub(crate) enable_meta_tools: bool,
+    /// Outer `None` preserves live state; inner `None` restores meta-tool inheritance.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) enable_goal_tools: Option<Option<bool>>,
+    /// Outer `None` preserves live state; inner `None` restores the disabled default.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) enable_goal_creation: Option<Option<bool>>,
     #[serde(default)]
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[serde(default)]

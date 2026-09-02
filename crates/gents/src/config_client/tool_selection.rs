@@ -152,6 +152,53 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn write_tool_selection_round_trips_nullable_goal_capabilities() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = EmbeddedNode::builder()
+            .data_path(tempdir.path().join("data"))
+            .with_storage_backend(StorageBackend::Regolith)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
+
+        let explicit = ToolSelectionDocument {
+            selection_id: "test-goal-capabilities".to_string(),
+            agent_did: "did:test:goal-capabilities".to_string(),
+            enable_meta_tools: Some(false),
+            enable_goal_tools: Some(true),
+            enable_goal_creation: Some(false),
+            ..Default::default()
+        };
+        write_tool_selection_document(&access, &explicit).await?;
+
+        let node = match &access {
+            ConfigAccess::Local(node) => node,
+            ConfigAccess::Graphql(_) => unreachable!(),
+        };
+        let loaded = crate::document_config::load_tool_selection(node, "test-goal-capabilities")
+            .await?
+            .expect("stored selection");
+        assert_eq!(loaded.enable_meta_tools, Some(false));
+        assert_eq!(loaded.enable_goal_tools, Some(true));
+        assert_eq!(loaded.enable_goal_creation, Some(false));
+
+        let preserve = ToolSelectionDocument {
+            selection_id: explicit.selection_id.clone(),
+            agent_did: explicit.agent_did.clone(),
+            display_name: Some("updated".to_string()),
+            ..Default::default()
+        };
+        write_tool_selection_document(&access, &preserve).await?;
+        let loaded = crate::document_config::load_tool_selection(node, "test-goal-capabilities")
+            .await?
+            .expect("updated selection");
+        assert_eq!(loaded.enable_goal_tools, Some(true));
+        assert_eq!(loaded.enable_goal_creation, Some(false));
+        Ok(())
+    }
+
     /// Regression for the `config tools set` clobbering bug: an update that
     /// leaves the subagent enablement fields `None` (as the imperative command
     /// does — it exposes no flags for them) MUST NOT overwrite an existing
@@ -389,6 +436,8 @@ fn tool_selection_fields(selection: &ToolSelectionDocument, include_id: bool) ->
                 .as_ref()
                 .and_then(|values| string_list_field("cli_tool_names", values)),
             optional_bool_field("enable_meta_tools", selection.enable_meta_tools),
+            optional_bool_field("enable_goal_tools", selection.enable_goal_tools),
+            optional_bool_field("enable_goal_creation", selection.enable_goal_creation),
             selection
                 .allowed_mcp_service_ids
                 .as_ref()

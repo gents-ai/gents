@@ -936,6 +936,21 @@ pub(crate) struct ChatArgs {
     pub(crate) session_id: Option<String>,
     #[arg(long, help = "Override the behavior for this one-off turn or session")]
     pub(crate) behavior_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "OBJECTIVE",
+        requires = "session_id",
+        help = "Atomically create this durable session goal before the first request; omit on later turns"
+    )]
+    pub(crate) goal_objective: Option<String>,
+    #[arg(
+        long,
+        value_name = "TOKENS",
+        requires = "goal_objective",
+        value_parser = clap::value_parser!(i64).range(1..),
+        help = "Optional positive token budget for --goal-objective"
+    )]
+    pub(crate) goal_token_budget: Option<i64>,
     #[arg(long = "message-file", help = "Read the user message from a file")]
     pub(crate) message_file: Option<PathBuf>,
     #[arg(long = "output", alias = "output-format", value_enum, default_value_t = OutputFormat::Text)]
@@ -2069,6 +2084,22 @@ pub(crate) struct ToolSelectionUpsertArgs {
         help = "Enable or disable meta MCP tools. Omit to preserve existing setting"
     )]
     pub(crate) enable_meta_tools: Option<bool>,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable or disable goal get/update tools independently of generic meta tools. Omit to preserve legacy inheritance"
+    )]
+    pub(crate) enable_goal_tools: Option<bool>,
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable or disable model-facing goal creation. Omit to preserve the disabled default"
+    )]
+    pub(crate) enable_goal_creation: Option<bool>,
     #[arg(long = "allowed-mcp-service-id")]
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[arg(long, default_value_t = false)]
@@ -2251,6 +2282,12 @@ pub(crate) struct ConfigTaskRunArgs {
     /// Example: `--args '{"name": "Amy"}'`.
     #[arg(long, default_value = "{}")]
     pub(crate) args: String,
+
+    /// Stable invocation key for a durable-goal Task run. Required when the
+    /// Task declares goal_objective_template; the output session_id is derived
+    /// deterministically from this key and the Task identity.
+    #[arg(long)]
+    pub(crate) session_id: Option<String>,
 
     /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
     #[arg(long)]

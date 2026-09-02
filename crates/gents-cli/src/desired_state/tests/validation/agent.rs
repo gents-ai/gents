@@ -248,6 +248,8 @@ fn template_manifest(
                     description: None,
                     behavior_id: "default".to_string(),
                     prompt_template: prompt.to_string(),
+                    goal_objective_template: None,
+                    goal_token_budget: None,
                     enabled: true,
                     output_schema_ref: None,
                 }]

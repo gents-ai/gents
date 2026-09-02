@@ -151,3 +151,47 @@ sanitization; the new model composes their output with durable ownership.
   consumption, request concurrency, and security catalog classification.
 - The full `cargo test -p gents` and
   `cargo check --workspace --all-targets` gates must pass before merge.
+
+## Durable goals are the terminal condition
+
+Provider-context reduction remains a request-local crash cut. It cannot make a
+new physical request after the current request terminates. Long-running work
+that must survive ordinary terminal assistant turns uses a `Goal` document as
+controller state instead.
+
+Goal tools have an explicit capability independent of generic MCP
+discovery/describe/call tools. An unset `enable_goal_tools` retains the legacy
+behavior (it follows `enable_meta_tools`); setting it explicitly permits a
+least-privilege surface such as goal get/update with generic meta tools off.
+Model creation has a second, opt-in `enable_goal_creation` gate and is effective
+only when both gates survive the behavior, operator-ceiling, and runtime meet.
+The model never supplies a DID or session ID: the persistence hook binds create,
+get, and update to the authenticated request principal and current session.
+
+`gents chat --session-id <stable-id> --goal-objective <text>
+[--goal-token-budget <positive-int>]`
+atomically commits the new goal and first pending request. The request does not
+become visible to watchers without its goal. Exact retries use deterministic
+goal/submission keys scoped by the required stable session ID; rerun the same
+command with that ID after an ambiguous transport failure. A changed immutable
+objective, budget, prompt, or behavior is a conflict, and rollback never deletes
+a possibly committed goal. `--goal-objective` is only for the initial atomic
+submission or its exact replay; omit it when sending later turns in that goal
+session.
+
+Feature-implementation graphs compose with this interface at the existing Task
+boundary. A Task may set `goal_objective_template` and an optional positive
+`goal_token_budget`. The trigger engine renders that objective from the same
+template scope as the request and atomically commits the creation claim, Goal,
+and first request under a deterministic per-fire session/retry identity. A
+retry of the same durable event or schedule fire therefore converges on the
+same pair; a watcher can never observe the request without its Goal.
+
+The stage's ordinary `ToolSelection` enables `get_goal`/`update_goal` while
+leaving generic meta tools and model-facing `create_goal` disabled. The runtime
+provisions the declared Goal, so granting creation would be redundant. The
+stage request's DID/session owns the Goal and the existing `GoalSource` plus
+goal-continuation queue supplies the durable terminal condition. Graph edges
+remain document triggers; the graph DSL does not acquire or duplicate Goal or
+steering lifecycle authority. `demo/pipeline` is the checked-in composition
+example.

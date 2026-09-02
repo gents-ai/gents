@@ -452,6 +452,8 @@ fn resolve_tasks(
             name: task.name.clone(),
             behavior_id: behavior_id.to_string(),
             prompt_template: task.prompt_template.clone().unwrap_or_default(),
+            goal_objective_template: task.goal_objective_template.clone(),
+            goal_token_budget: task.goal_token_budget,
             output_schema_ref: task.output_schema_ref.clone(),
         };
         active_tasks.insert(task_id.clone(), resolved_task);
@@ -538,6 +540,8 @@ fn resolve_schedules(
             name: task.name.clone(),
             behavior_id: task.behavior_id.clone().unwrap_or_default(),
             prompt_template: task.prompt_template.clone().unwrap_or_default(),
+            goal_objective_template: task.goal_objective_template.clone(),
+            goal_token_budget: task.goal_token_budget,
             output_schema_ref: task.output_schema_ref.clone(),
         };
         let resolved_schedule = ResolvedSchedule {
@@ -803,6 +807,8 @@ fn resolve_event_triggers(
             name: task.name.clone(),
             behavior_id: task.behavior_id.clone().unwrap_or_default(),
             prompt_template: task.prompt_template.clone().unwrap_or_default(),
+            goal_objective_template: task.goal_objective_template.clone(),
+            goal_token_budget: task.goal_token_budget,
             output_schema_ref: task.output_schema_ref.clone(),
         };
         let resolved_trigger = ResolvedEventTrigger {

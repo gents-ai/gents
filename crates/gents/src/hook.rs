@@ -442,6 +442,8 @@ pub struct DefraSessionHook {
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: BackgroundLiveOutputState,
     operator_tool_root: Option<PathBuf>,
+    goal_tools_enabled: bool,
+    goal_creation_enabled: bool,
 }
 
 enum PolicyDecision {
@@ -486,6 +488,8 @@ impl DefraSessionHook {
             background_executions,
             background_live_outputs,
             operator_tool_root: None,
+            goal_tools_enabled: false,
+            goal_creation_enabled: false,
         }
     }
 
@@ -528,6 +532,8 @@ impl DefraSessionHook {
             background_executions,
             background_live_outputs,
             operator_tool_root: None,
+            goal_tools_enabled: false,
+            goal_creation_enabled: false,
         })
     }
 
@@ -547,6 +553,19 @@ impl DefraSessionHook {
 
     pub fn with_operator_tool_root(mut self, root: Option<PathBuf>) -> Self {
         self.operator_tool_root = root;
+        self
+    }
+
+    /// Install the already-intersected goal authority for this request hook.
+    /// Defaults are deny-all so a forgotten wiring site cannot turn the
+    /// pre-dispatch persistence hook into an authority bypass.
+    pub fn with_goal_tool_authority(
+        mut self,
+        goal_tools_enabled: bool,
+        goal_creation_enabled: bool,
+    ) -> Self {
+        self.goal_tools_enabled = goal_tools_enabled;
+        self.goal_creation_enabled = goal_tools_enabled && goal_creation_enabled;
         self
     }
 

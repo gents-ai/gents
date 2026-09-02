@@ -396,6 +396,8 @@ pub async fn save_tool_selection_config(
             command_network_mode: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: Some(false),
+            enable_goal_tools: None,
+            enable_goal_creation: None,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             delegate_to: Vec::new(),
@@ -440,6 +442,15 @@ pub async fn save_tool_selection_config(
         .filter(|value| !value.is_empty())
         .collect();
     row.enable_meta_tools = request.enable_meta_tools.or(row.enable_meta_tools);
+    // These fields are explicit tri-state controls in the desktop contract:
+    // an omitted field preserves old clients' behavior, while null clears the
+    // override and restores inheritance/default behavior.
+    if let Some(enable_goal_tools) = request.enable_goal_tools {
+        row.enable_goal_tools = enable_goal_tools;
+    }
+    if let Some(enable_goal_creation) = request.enable_goal_creation {
+        row.enable_goal_creation = enable_goal_creation;
+    }
     row.allowed_mcp_service_ids = request
         .allowed_mcp_service_ids
         .into_iter()

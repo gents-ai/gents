@@ -2,4 +2,4 @@
 import type { TaskRecentRunsView } from "./TaskRecentRunsView.js";
 import type { TaskRunSummaryView } from "./TaskRunSummaryView.js";
 
-export type TaskView = { taskId: string, name: string | null, description: string | null, behaviorId: string | null, promptTemplate: string | null, enabled: boolean | null, outputSchemaRef: string | null, recentRuns: TaskRecentRunsView, runHistory: Array<TaskRunSummaryView>, };
+export type TaskView = { taskId: string, name: string | null, description: string | null, behaviorId: string | null, promptTemplate: string | null, goalObjectiveTemplate: string | null, goalTokenBudget: number | null, enabled: boolean | null, outputSchemaRef: string | null, recentRuns: TaskRecentRunsView, runHistory: Array<TaskRunSummaryView>, };

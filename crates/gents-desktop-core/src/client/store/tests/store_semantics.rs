@@ -78,6 +78,8 @@ fn task_row(task_id: &str, behavior_id: &str) -> TaskRow {
         description: None,
         behavior_id: Some(behavior_id.to_string()),
         prompt_template: None,
+        goal_objective_template: None,
+        goal_token_budget: None,
         enabled: Some(true),
         output_schema_ref: None,
         created_at: None,

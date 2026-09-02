@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::cli::args::ChatArgs;
 use crate::cli::output_format::OutputFormat;
-use crate::request_helpers::ensure_local_request_signer;
+use crate::request_helpers::{create_goal_backed_agent_request, ensure_local_request_signer};
 use crate::{
     create_agent_request, print_json, require_non_empty, resolve_home_dir,
     wait_for_terminal_response, write_json_output_file, RequestSubmitOptions, SubmittedRequest,
@@ -42,6 +42,13 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     ensure_local_request_signer(args.home.as_deref(), &agent_did)?;
+    let goal = args
+        .goal_objective
+        .as_deref()
+        .map(|objective| GoalBackedSubmission {
+            objective,
+            token_budget: args.goal_token_budget,
+        });
 
     if let Some(message) = resolve_chat_message(&args.message, args.message_file.as_deref())? {
         match args
@@ -49,12 +56,13 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
             .ensure_supported("chat", &[OutputFormat::Text, OutputFormat::Json])?
         {
             OutputFormat::Text => {
-                let (_submitted, response) = submit_chat_turn(
+                let (_submitted, response) = submit_chat_turn_with_goal(
                     &graphql,
                     &agent_did,
                     &session_id,
                     args.behavior_id.as_deref(),
                     &message,
+                    goal,
                     args.timeout_secs,
                     args.poll_secs,
                 )
@@ -70,6 +78,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
                     &session_id,
                     args.behavior_id.as_deref(),
                     &message,
+                    goal,
                     args.timeout_secs,
                     args.poll_secs,
                 )
@@ -95,6 +104,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     }
 
     let stdin = io::stdin();
+    let mut pending_goal = goal;
     let mut lines = stdin.lock().lines();
     let mut stdout = io::stdout();
     loop {
@@ -112,12 +122,13 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
             break;
         }
 
-        submit_chat_turn(
+        submit_chat_turn_with_goal(
             &graphql,
             &agent_did,
             &session_id,
             args.behavior_id.as_deref(),
             trimmed,
+            pending_goal.take(),
             args.timeout_secs,
             args.poll_secs,
         )
@@ -136,16 +147,61 @@ pub(crate) async fn submit_chat_turn(
     timeout_secs: u64,
     poll_secs: u64,
 ) -> Result<(SubmittedRequest, Value)> {
-    let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
-    let submitted = create_agent_request(
+    submit_chat_turn_with_goal(
         graphql,
         agent_did,
-        content,
-        Some(session_id),
+        session_id,
         behavior_id,
-        RequestSubmitOptions::default(),
+        content,
+        None,
+        timeout_secs,
+        poll_secs,
     )
-    .await?;
+    .await
+}
+
+#[derive(Clone, Copy)]
+struct GoalBackedSubmission<'a> {
+    objective: &'a str,
+    token_budget: Option<i64>,
+}
+
+async fn submit_chat_turn_with_goal(
+    graphql: &str,
+    agent_did: &str,
+    session_id: &str,
+    behavior_id: Option<&str>,
+    content: &str,
+    goal: Option<GoalBackedSubmission<'_>>,
+    timeout_secs: u64,
+    poll_secs: u64,
+) -> Result<(SubmittedRequest, Value)> {
+    let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
+    let submitted = match goal {
+        Some(goal) => {
+            create_goal_backed_agent_request(
+                graphql,
+                agent_did,
+                content,
+                session_id,
+                behavior_id,
+                goal.objective,
+                goal.token_budget,
+            )
+            .await?
+        }
+        None => {
+            create_agent_request(
+                graphql,
+                agent_did,
+                content,
+                Some(session_id),
+                behavior_id,
+                RequestSubmitOptions::default(),
+            )
+            .await?
+        }
+    };
     let response = stream_turn_progress(
         graphql,
         &submitted,
@@ -163,18 +219,35 @@ async fn submit_chat_turn_json(
     session_id: &str,
     behavior_id: Option<&str>,
     content: &str,
+    goal: Option<GoalBackedSubmission<'_>>,
     timeout_secs: u64,
     poll_secs: u64,
 ) -> Result<Value> {
-    let submitted = create_agent_request(
-        graphql,
-        agent_did,
-        content,
-        Some(session_id),
-        behavior_id,
-        RequestSubmitOptions::default(),
-    )
-    .await?;
+    let submitted = match goal {
+        Some(goal) => {
+            create_goal_backed_agent_request(
+                graphql,
+                agent_did,
+                content,
+                session_id,
+                behavior_id,
+                goal.objective,
+                goal.token_budget,
+            )
+            .await?
+        }
+        None => {
+            create_agent_request(
+                graphql,
+                agent_did,
+                content,
+                Some(session_id),
+                behavior_id,
+                RequestSubmitOptions::default(),
+            )
+            .await?
+        }
+    };
     let response =
         wait_for_terminal_response(graphql, &submitted.request_id, timeout_secs, poll_secs)
             .await

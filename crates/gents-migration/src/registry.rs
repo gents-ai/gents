@@ -269,6 +269,8 @@ const INFERENCE_PROFILE_ADD_SEED_PATCH: &str = r#"[
 // may grow fields; those belong in DEFAULT_STEPS so existing stores keep a
 // known lineage instead of silently changing roots.
 const TOOL_SELECTION_BASELINE_SDL: &str = include_str!("baseline/tool_selection.graphql");
+const GOAL_BASELINE_SDL: &str = include_str!("baseline/goal.graphql");
+const TASK_BASELINE_SDL: &str = include_str!("baseline/task.graphql");
 const INFERENCE_CALL_BASELINE_SDL: &str = include_str!("baseline/inference_call.graphql");
 
 const INFERENCE_CALL_ADD_CONTEXT_ACCOUNTING_PATCH: &str = r#"[
@@ -289,6 +291,23 @@ const TOOL_SELECTION_ADD_REQUIRED_MCP_SERVICES_PATCH: &str = r#"[
 
 const TOOL_SELECTION_ADD_ETH_TOOL_IDS_PATCH: &str = r#"[
   {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"eth_tool_ids","Kind":"[String]"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
+const TOOL_SELECTION_ADD_GOAL_CAPABILITIES_PATCH: &str = r#"[
+  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_goal_tools","Kind":"Boolean"}},
+  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_goal_creation","Kind":"Boolean"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
+const GOAL_ADD_CREATION_KEY_PATCH: &str = r#"[
+  {"op":"add","path":"/Goal/Fields/-","value":{"Name":"creation_key","Kind":"String","Immutable":true}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
+const TASK_ADD_GOAL_DECLARATION_PATCH: &str = r#"[
+  {"op":"add","path":"/Task/Fields/-","value":{"Name":"goal_objective_template","Kind":"String"}},
+  {"op":"add","path":"/Task/Fields/-","value":{"Name":"goal_token_budget","Kind":"Int"}},
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
@@ -499,8 +518,14 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_NAME,
-        gents_protocol::schemas::GOAL,
+        GOAL_BASELINE_SDL,
         "bafyreig5hlyzlujmegnnlww6tjt6krquzuq2ltgh2pjqwwzxzjbognuguu"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::GOAL_CREATION_CLAIM_NAME,
+        gents_protocol::schemas::GOAL_CREATION_CLAIM,
+        // Fresh collection root authored from the live immutable claim SDL.
+        "bafyreicgpz3pvsz3k7ijl2znkewhjbhhqpd5g3ykmwp7wg3bpd3nvrr67q"
     ),
     baseline_entry!(
         gents_protocol::schemas::MAILBOX_ITEM_NAME,
@@ -544,7 +569,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::TASK_NAME,
-        gents_protocol::schemas::TASK,
+        TASK_BASELINE_SDL,
         "bafyreih2yansmfmsye5xktsx2rbf7tri4zvtifselok46pdmm4qmde7blu"
     ),
     baseline_entry!(
@@ -725,6 +750,47 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
             "lsp_config",
             "required_mcp_service_ids",
             "eth_tool_ids",
+        ]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "tool-selection-add-goal-capabilities",
+        collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
+        patch: TOOL_SELECTION_ADD_GOAL_CAPABILITIES_PATCH,
+        lens: None,
+        // Authored by applying this inactive patch after the eth-tool step.
+        expected_version: Some("bafyreigunxcipqewwn6ma3eh5vqjrehnsh3jjbwnam27ehydop75ta5hqy"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&[
+            "enable_lsp",
+            "lsp_config",
+            "required_mcp_service_ids",
+            "eth_tool_ids",
+            "enable_goal_tools",
+            "enable_goal_creation",
+        ]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "goal-add-creation-key",
+        collection: gents_protocol::schemas::GOAL_NAME,
+        patch: GOAL_ADD_CREATION_KEY_PATCH,
+        lens: None,
+        // Authored by adding immutable creation_key to the frozen Goal root.
+        expected_version: Some("bafyreie4kcz64yk24nk35sbbnfczrkegwjrapfaakwe4xtl33lneium3my"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&["creation_key"]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "task-add-goal-declaration",
+        collection: gents_protocol::schemas::TASK_NAME,
+        patch: TASK_ADD_GOAL_DECLARATION_PATCH,
+        lens: None,
+        // Authored by adding the optional durable-goal declaration fields to
+        // the frozen Task root.
+        expected_version: Some("bafyreiainbeubl2bupbo5xg7ry57f35ta4jnb2otsmzddyge3la4lsrxle"),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&[
+            "goal_objective_template",
+            "goal_token_budget",
         ]),
     },
     MigrationStep::PatchVersioned {

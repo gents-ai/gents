@@ -74,6 +74,14 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "enable_meta_tools",
             row.enable_meta_tools,
         )),
+        Some(graphql_optional_bool_field(
+            "enable_goal_tools",
+            row.enable_goal_tools,
+        )),
+        Some(graphql_optional_bool_field(
+            "enable_goal_creation",
+            row.enable_goal_creation,
+        )),
         Some(graphql_string_list_field(
             "allowed_mcp_service_ids",
             &row.allowed_mcp_service_ids,
@@ -214,6 +222,14 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
         Some(graphql_optional_bool_field(
             "enable_meta_tools",
             row.enable_meta_tools,
+        )),
+        Some(graphql_optional_bool_field(
+            "enable_goal_tools",
+            row.enable_goal_tools,
+        )),
+        Some(graphql_optional_bool_field(
+            "enable_goal_creation",
+            row.enable_goal_creation,
         )),
         Some(graphql_string_list_field(
             "allowed_mcp_service_ids",

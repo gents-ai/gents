@@ -2077,6 +2077,8 @@ function createDeployment(): DeploymentView {
         description: "Inspect host health and summarize findings.",
         behaviorId: DEFAULT_BEHAVIOR_ID,
         promptTemplate: "Inspect this host and report health.",
+        goalObjectiveTemplate: null,
+        goalTokenBudget: null,
         enabled: true,
         outputSchemaRef: null,
         recentRuns: {

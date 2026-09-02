@@ -42,7 +42,7 @@ impl DefraSessionHook {
         internal_call_id: &str,
         args: &str,
     ) -> ToolCallHookAction {
-        if tool_name == crate::goal::GET_GOAL_TOOL_NAME {
+        if self.goal_tools_enabled && tool_name == crate::goal::GET_GOAL_TOOL_NAME {
             let result = self
                 .persist_get_goal_tool_call(tool_call_id, internal_call_id, args)
                 .instrument(tracing::info_span!(
@@ -59,7 +59,7 @@ impl DefraSessionHook {
                 Err(error) => self.on_tool_persistence_error("persist get_goal tool call", &error),
             };
         }
-        if tool_name == crate::goal::UPDATE_GOAL_TOOL_NAME {
+        if self.goal_tools_enabled && tool_name == crate::goal::UPDATE_GOAL_TOOL_NAME {
             let result = self
                 .persist_update_goal_tool_call(tool_call_id, internal_call_id, args)
                 .instrument(tracing::info_span!(
@@ -75,6 +75,25 @@ impl DefraSessionHook {
                 }
                 Err(error) => {
                     self.on_tool_persistence_error("persist update_goal tool call", &error)
+                }
+            };
+        }
+        if self.goal_creation_enabled && tool_name == crate::goal::CREATE_GOAL_TOOL_NAME {
+            let result = self
+                .persist_create_goal_tool_call(tool_call_id, internal_call_id, args)
+                .instrument(tracing::info_span!(
+                    "tool.call",
+                    tool_name = %tool_name,
+                    tool_call_id = %internal_call_id,
+                ))
+                .await;
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(error) => {
+                    self.on_tool_persistence_error("persist create_goal tool call", &error)
                 }
             };
         }

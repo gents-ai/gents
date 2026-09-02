@@ -376,7 +376,12 @@ where
     )
     .await
     {
-        Ok(hook) => hook.with_background_tool_registry(background_tool_registry),
+        Ok(hook) => hook
+            .with_background_tool_registry(background_tool_registry)
+            .with_goal_tool_authority(
+                behavior.tools.goal_tools_requested(),
+                behavior.tools.goal_creation_requested(),
+            ),
         Err(error) => {
             return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
         }

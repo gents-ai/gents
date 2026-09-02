@@ -1,6 +1,117 @@
 use super::*;
 
 #[tokio::test]
+async fn explicit_null_clears_task_goals_and_tool_goal_capabilities() -> Result<()> {
+    use std::path::PathBuf;
+
+    use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
+    use crate::config_import::{apply_desired_state_changes, diff_has_pending_apply};
+    use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
+
+    let tempdir = tempfile::tempdir()?;
+    let node = EmbeddedNode::builder()
+        .data_path(tempdir.path().join("data"))
+        .with_storage_backend(StorageBackend::Regolith)
+        .build()
+        .await?;
+    ensure_runtime_schemas(&node).await?;
+    let access = ConfigAccess::Local(std::sync::Arc::new(node));
+
+    access
+        .execute(
+            r#"mutation {
+                create_AgentPrincipal(input: {
+                    agent_did: "did:test:test",
+                    default_behavior_id: "default",
+                    enabled: true
+                }) { _docID }
+            }"#,
+        )
+        .await?;
+
+    let mut initial = super::super::manifest_with_default_behavior();
+    let mut task = super::super::sample_task("durable-task");
+    task.goal_objective_template = Some(Some("Finish durable work".to_string()));
+    task.goal_token_budget = Some(Some(10_000));
+    initial.tasks.push(task);
+    let mut selection = super::super::sample_tool_selection("goal-tools");
+    selection.enable_goal_tools = Some(Some(true));
+    selection.enable_goal_creation = Some(Some(true));
+    initial.tool_selections.push(selection);
+
+    let root = PathBuf::from(".");
+    let initial_bundle = export_bundle_from_manifest(&initial, "local")?;
+    let live_bundle = build_desired_state_live_bundle(&access, &initial).await?;
+    let (live_principal, live_manifest) = live_manifest_from_bundle(&initial, &live_bundle)?;
+    let planned = diff_manifests(
+        &root,
+        "local",
+        &initial,
+        live_principal.as_ref(),
+        &live_manifest,
+        false,
+    );
+    let txn = access.begin_apply_txn().await?;
+    apply_desired_state_changes(&txn, &initial_bundle, &planned).await?;
+    txn.commit().await?;
+
+    let mut cleared = initial;
+    cleared.tasks[0].goal_objective_template = Some(None);
+    cleared.tasks[0].goal_token_budget = Some(None);
+    cleared.tool_selections[0].enable_goal_tools = Some(None);
+    cleared.tool_selections[0].enable_goal_creation = Some(None);
+    let clear_bundle = export_bundle_from_manifest(&cleared, "local")?;
+    let live_bundle = build_desired_state_live_bundle(&access, &cleared).await?;
+    let (live_principal, live_manifest) = live_manifest_from_bundle(&cleared, &live_bundle)?;
+    let planned = diff_manifests(
+        &root,
+        "local",
+        &cleared,
+        live_principal.as_ref(),
+        &live_manifest,
+        false,
+    );
+    assert_eq!(planned.collections.tasks.update, vec!["durable-task"]);
+    assert_eq!(
+        planned.collections.tool_selections.update,
+        vec!["goal-tools"]
+    );
+
+    let txn = access.begin_apply_txn().await?;
+    apply_desired_state_changes(&txn, &clear_bundle, &planned).await?;
+    txn.commit().await?;
+
+    let remaining_bundle = build_desired_state_live_bundle(&access, &cleared).await?;
+    let (remaining_principal, remaining_manifest) =
+        live_manifest_from_bundle(&cleared, &remaining_bundle)?;
+    let remaining = diff_manifests(
+        &root,
+        "local",
+        &cleared,
+        remaining_principal.as_ref(),
+        &remaining_manifest,
+        false,
+    );
+    assert!(
+        !diff_has_pending_apply(&remaining.counts),
+        "explicit clears must settle after apply: {:?}",
+        remaining.counts
+    );
+    assert_eq!(remaining_manifest.tasks[0].goal_objective_template, None);
+    assert_eq!(remaining_manifest.tasks[0].goal_token_budget, None);
+    assert_eq!(
+        remaining_manifest.tool_selections[0].enable_goal_tools,
+        None
+    );
+    assert_eq!(
+        remaining_manifest.tool_selections[0].enable_goal_creation,
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
     use std::path::PathBuf;
 
@@ -60,6 +171,8 @@ async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
                 command_network_mode: None,
                 cli_tool_names: Vec::new(),
                 enable_meta_tools: false,
+                enable_goal_tools: None,
+                enable_goal_creation: None,
                 allowed_mcp_service_ids: Vec::new(),
                 required_mcp_service_ids: Vec::new(),
                 delegate_to: Vec::new(),

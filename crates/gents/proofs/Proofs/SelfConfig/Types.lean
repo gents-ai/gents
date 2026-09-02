@@ -75,6 +75,7 @@ def allFields : Target → List FieldKey
       , "bash_mode", "command_execution_policy", "command_allowed_argv_prefixes"
       , "command_forbidden_argv_prefixes", "read_only_command_allowlist"
       , "command_network_mode", "cli_tool_names", "enable_meta_tools"
+      , "enable_goal_tools", "enable_goal_creation"
       , "allowed_mcp_service_ids", "required_mcp_service_ids", "delegate_to", "backgroundable_tool_names"
       , "approval_required_tools", "subagent_targets", "subagent_spawn_enabled"
       , "orchestration_enabled"
@@ -103,6 +104,7 @@ def allFields : Target → List FieldKey
       , "updated_at" ]
   | .task =>
       [ "task_id", "name", "description", "behavior_id", "prompt_template"
+      , "goal_objective_template", "goal_token_budget"
       , "enabled", "output_schema_ref", "created_at", "updated_at" ]
   | .schedule =>
       [ "schedule_id", "task_id", "interval_secs", "cron", "timezone"
@@ -127,7 +129,8 @@ def writableFields : Target → List FieldKey
       , "enable_bash", "bash_mode", "command_execution_policy"
       , "command_allowed_argv_prefixes", "command_forbidden_argv_prefixes"
       , "read_only_command_allowlist", "command_network_mode", "cli_tool_names"
-      , "enable_meta_tools", "allowed_mcp_service_ids", "required_mcp_service_ids"
+      , "enable_meta_tools", "enable_goal_tools", "enable_goal_creation"
+      , "allowed_mcp_service_ids", "required_mcp_service_ids"
       , "backgroundable_tool_names", "approval_required_tools", "subagent_targets"
       , "subagent_spawn_enabled"
       , "subagent_steering_enabled", "subagent_background_enabled"
@@ -150,7 +153,8 @@ def writableFields : Target → List FieldKey
       [ "display_name", "description", "hostname", "tailscale_ip", "lan_ip"
       , "mcp_port", "mcp_path", "send_agent_did", "status" ]
   | .task =>
-      [ "name", "description", "prompt_template", "enabled"
+      [ "name", "description", "prompt_template", "goal_objective_template"
+      , "goal_token_budget", "enabled"
       , "output_schema_ref" ]
   | .schedule =>
       [ "task_id", "interval_secs", "cron", "timezone", "missed_run_policy"

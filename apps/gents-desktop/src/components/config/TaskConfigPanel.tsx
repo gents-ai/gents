@@ -12,7 +12,12 @@ import type {
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { isDirty } from "./configDirty";
 import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
-import { ignoreHandledActionError, optionalString } from "./formUtils";
+import {
+  ignoreHandledActionError,
+  isOptionalInt,
+  optionalString,
+  parseOptionalInt,
+} from "./formUtils";
 
 export type TaskConfigPanelProps = {
   deployment: DeploymentView;
@@ -138,6 +143,8 @@ export function TaskConfigEditor({
   const [description, setDescription] = useState("");
   const [behaviorId, setBehaviorId] = useState("");
   const [promptTemplate, setPromptTemplate] = useState("");
+  const [goalObjectiveTemplate, setGoalObjectiveTemplate] = useState("");
+  const [goalTokenBudget, setGoalTokenBudget] = useState("");
   const [outputSchemaRef, setOutputSchemaRef] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [runArgs, setRunArgs] = useState("{}");
@@ -152,6 +159,8 @@ export function TaskConfigEditor({
     setDescription(b.description);
     setBehaviorId(b.behaviorId);
     setPromptTemplate(b.promptTemplate);
+    setGoalObjectiveTemplate(b.goalObjectiveTemplate);
+    setGoalTokenBudget(b.goalTokenBudget);
     setOutputSchemaRef(b.outputSchemaRef);
     setEnabled(b.enabled);
     setSaveError(null);
@@ -173,6 +182,8 @@ export function TaskConfigEditor({
         description: optionalString(description),
         behaviorId,
         promptTemplate,
+        goalObjectiveTemplate: optionalString(goalObjectiveTemplate),
+        goalTokenBudget: parseOptionalInt(goalTokenBudget),
         enabled,
         outputSchemaRef: optionalString(outputSchemaRef),
       });
@@ -205,6 +216,8 @@ export function TaskConfigEditor({
             description,
             behaviorId,
             promptTemplate,
+            goalObjectiveTemplate,
+            goalTokenBudget,
             outputSchemaRef,
             enabled,
           },
@@ -284,6 +297,35 @@ export function TaskConfigEditor({
         />
       </label>
       <label className="field">
+        <span>Durable goal objective template</span>
+        <textarea
+          className="config-textarea"
+          data-testid="task-goal-objective-template"
+          onChange={(event) => setGoalObjectiveTemplate(event.currentTarget.value)}
+          placeholder="Optional. Provision this goal before the first request becomes runnable."
+          value={goalObjectiveTemplate}
+        />
+      </label>
+      <label className="field">
+        <span>Durable goal token budget</span>
+        <input
+          data-testid="task-goal-token-budget"
+          min="1"
+          onChange={(event) => setGoalTokenBudget(event.currentTarget.value)}
+          placeholder="Optional"
+          type="number"
+          value={goalTokenBudget}
+        />
+        <FieldHint
+          show={
+            !isOptionalInt(goalTokenBudget) ||
+            (goalTokenBudget.trim() !== "" && Number(goalTokenBudget) <= 0)
+          }
+        >
+          Enter a positive whole-number budget or leave it blank.
+        </FieldHint>
+      </label>
+      <label className="field">
         <span>Output schema ref</span>
         <input
           data-testid="task-output-schema-ref"
@@ -322,7 +364,10 @@ export function TaskConfigEditor({
             !taskId.trim() ||
             !name.trim() ||
             !behaviorId.trim() ||
-            !promptTemplate.trim()
+            !promptTemplate.trim() ||
+            !isOptionalInt(goalTokenBudget) ||
+            (goalTokenBudget.trim() !== "" &&
+              (!goalObjectiveTemplate.trim() || Number(goalTokenBudget) <= 0))
           }
           type="submit"
         >
@@ -442,6 +487,8 @@ function taskFormValues(task: TaskView | null, fallbackBehaviorId: string | null
     description: task?.description ?? "",
     behaviorId: task?.behaviorId ?? fallbackBehaviorId ?? "",
     promptTemplate: task?.promptTemplate ?? "",
+    goalObjectiveTemplate: task?.goalObjectiveTemplate ?? "",
+    goalTokenBudget: task?.goalTokenBudget?.toString() ?? "",
     outputSchemaRef: task?.outputSchemaRef ?? "",
     enabled: task?.enabled ?? true,
   };

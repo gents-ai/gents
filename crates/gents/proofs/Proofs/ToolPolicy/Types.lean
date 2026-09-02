@@ -3,6 +3,18 @@ import Mathlib.Data.Finset.Lattice.Basic
 
 namespace ToolPolicy
 
+/-- Compatibility decoding happens before the authority meet. An absent goal
+    tool field retains the historic coupling to generic meta tools; an explicit
+    value is authoritative. -/
+def resolveGoalTools (meta : Bool) : Option Bool → Bool
+  | none => meta
+  | some enabled => enabled
+
+/-- Creation is new authority and is never acquired through compatibility. -/
+def resolveGoalCreate : Option Bool → Bool
+  | none => false
+  | some enabled => enabled
+
 abbrev ToolId := String
 
 inductive FileCap where
@@ -47,6 +59,8 @@ structure Surface where
   file : FileCap
   bash : BashPolicy
   meta : Bool
+  goalTools : Bool
+  goalCreate : Bool
   defraQuery : Bool
   selfConfig : Bool
   memory : Bool

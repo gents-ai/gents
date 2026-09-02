@@ -26,6 +26,30 @@ const COMMAND_NETWORK_OPTIONS = [
   { value: "enabled", label: "Enabled" },
 ] as const;
 
+type NullableBooleanMode = "inherit" | "enabled" | "disabled";
+
+const GOAL_TOOLS_OPTIONS = [
+  { value: "inherit", label: "Inherit meta tools" },
+  { value: "enabled", label: "Enabled" },
+  { value: "disabled", label: "Disabled" },
+] as const;
+
+const GOAL_CREATION_OPTIONS = [
+  { value: "inherit", label: "Default (disabled)" },
+  { value: "enabled", label: "Enabled" },
+  { value: "disabled", label: "Disabled" },
+] as const;
+
+function nullableBooleanMode(value?: boolean | null): NullableBooleanMode {
+  if (value == null) return "inherit";
+  return value ? "enabled" : "disabled";
+}
+
+function nullableBooleanValue(value: NullableBooleanMode): boolean | null {
+  if (value === "inherit") return null;
+  return value === "enabled";
+}
+
 export type ToolSelectionConfigPanelProps = {
   deployment: DeploymentView;
   selectedToolSelectionId: string | null;
@@ -168,6 +192,9 @@ export function ToolSelectionConfigEditor({
   const [commandNetworkMode, setCommandNetworkMode] = useState("");
   const [cliToolNames, setCliToolNames] = useState("");
   const [enableMetaTools, setEnableMetaTools] = useState(false);
+  const [goalToolsMode, setGoalToolsMode] = useState<NullableBooleanMode>("inherit");
+  const [goalCreationMode, setGoalCreationMode] =
+    useState<NullableBooleanMode>("inherit");
   const [allowedMcpServiceIds, setAllowedMcpServiceIds] = useState("");
   const [delegateTo, setDelegateTo] = useState("");
   const [backgroundableToolNames, setBackgroundableToolNames] = useState("");
@@ -213,6 +240,8 @@ export function ToolSelectionConfigEditor({
     setCommandNetworkMode(b.commandNetworkMode);
     setCliToolNames(b.cliToolNames);
     setEnableMetaTools(b.enableMetaTools);
+    setGoalToolsMode(b.goalToolsMode);
+    setGoalCreationMode(b.goalCreationMode);
     setAllowedMcpServiceIds(b.allowedMcpServiceIds);
     setDelegateTo(b.delegateTo);
     setBackgroundableToolNames(b.backgroundableToolNames);
@@ -267,6 +296,8 @@ export function ToolSelectionConfigEditor({
         cliToolNames: linesToArray(cliToolNames),
         defraQueryCollections: linesToArray(defraQueryCollections),
         enableMetaTools,
+        enableGoalTools: nullableBooleanValue(goalToolsMode),
+        enableGoalCreation: nullableBooleanValue(goalCreationMode),
         allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
         requiredMcpServiceIds: toolSelection?.requiredMcpServiceIds ?? [],
         delegateTo: linesToArray(delegateTo),
@@ -304,6 +335,8 @@ export function ToolSelectionConfigEditor({
             commandNetworkMode,
             cliToolNames,
             enableMetaTools,
+            goalToolsMode,
+            goalCreationMode,
             allowedMcpServiceIds,
             delegateTo,
             backgroundableToolNames,
@@ -520,6 +553,38 @@ export function ToolSelectionConfigEditor({
             type="checkbox"
           />
           <span>Meta tools</span>
+        </label>
+        <label className="field">
+          <span>Goal lifecycle tools</span>
+          <select
+            data-testid="tool-enable-goal-tools"
+            onChange={(event) =>
+              setGoalToolsMode(event.currentTarget.value as NullableBooleanMode)
+            }
+            value={goalToolsMode}
+          >
+            {GOAL_TOOLS_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Model goal creation</span>
+          <select
+            data-testid="tool-enable-goal-creation"
+            onChange={(event) =>
+              setGoalCreationMode(event.currentTarget.value as NullableBooleanMode)
+            }
+            value={goalCreationMode}
+          >
+            {GOAL_CREATION_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="field">
           <span>MCP service allowlist</span>
@@ -780,6 +845,8 @@ function toolSelectionFormValues(
     commandNetworkMode: normalizeCommandNetworkMode(toolSelection?.commandNetworkMode),
     cliToolNames: (toolSelection?.cliToolNames ?? []).join("\n"),
     enableMetaTools: toolSelection?.enableMetaTools ?? false,
+    goalToolsMode: nullableBooleanMode(toolSelection?.enableGoalTools),
+    goalCreationMode: nullableBooleanMode(toolSelection?.enableGoalCreation),
     allowedMcpServiceIds: (existingAllowedServiceIds.length > 0
       ? existingAllowedServiceIds
       : legacyServiceDelegates

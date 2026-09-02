@@ -158,11 +158,15 @@ pub(super) async fn parent_behavior_id(
     }
 
     let escaped_session_id = escape_graphql_string(&parent.session_id);
+    let escaped_agent_did = escape_graphql_string(&parent.agent_did);
     let query = format!(
         r#"{{
             AgentConversation(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                limit: 1
+                filter: {{
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    session_id: {{ _eq: "{escaped_session_id}" }}
+                }},
+                limit: 2
             ) {{
                 behavior_id
             }}
@@ -176,12 +180,18 @@ pub(super) async fn parent_behavior_id(
         );
     }
 
-    response
+    let rows = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentConversation"))
         .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
+        .cloned()
+        .unwrap_or_default();
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "parent conversation scope resolved to multiple rows"
+    );
+    rows.first()
         .and_then(|row| row.get("behavior_id"))
         .and_then(|value| value.as_str())
         .map(str::trim)

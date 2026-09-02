@@ -213,7 +213,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .await?
                 .with_background_tool_registry(self.background_tool_registry.clone())
                 .with_background_execution_registry(self.background_execution_registry.clone())
-                .with_operator_tool_root(self.operator_tool_root.clone());
+                .with_operator_tool_root(self.operator_tool_root.clone())
+                .with_goal_tool_authority(
+                    self.behavior.tools.goal_tools_requested(),
+                    self.behavior.tools.goal_creation_requested(),
+                );
                 hook.set_active_request_binding(
                     Some(request.request_id.clone()),
                     Some(request.doc_id.clone()),

@@ -239,12 +239,15 @@ Examples:
   gents fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
 const TASK_AFTER_HELP: &str = "\
 Inspect configured Task documents and create pending AgentRequests with manual trigger lineage.
+For a Task with a durable-goal declaration, --session-id is a stable invocation key;
+the emitted session_id is the deterministic Task/fire session derived from it.
 
 Examples:
   gents task list
   gents task show host-check
   gents task run host-check
   gents task run host-check --args '{\"scope\":\"host\"}' --wait
+  gents task run durable-task --session-id stable-invocation-key --wait
   gents task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
 const SHOW_AFTER_HELP: &str = "\
 Examples:
@@ -378,7 +381,7 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
 pub(crate) const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
 pub(crate) const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description summary system_prompt request_context_template backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
-pub(crate) const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name tool_policy_version enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes read_only_command_allowlist command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids required_mcp_service_ids delegate_to backgroundable_tool_names approval_required_tools enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_default_await_mode subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds write_tools datastore_tool_surface_ids eth_tool_ids enable_self_config self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config";
+pub(crate) const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name tool_policy_version enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes read_only_command_allowlist command_network_mode cli_tool_names enable_meta_tools enable_goal_tools enable_goal_creation allowed_mcp_service_ids required_mcp_service_ids delegate_to backgroundable_tool_names approval_required_tools enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_default_await_mode subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds write_tools datastore_tool_surface_ids eth_tool_ids enable_self_config self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config";
 pub(crate) const EXPORT_DATASTORE_TOOL_SURFACE_FIELDS: &str =
     "surface_id agent_did display_name enabled entries";
 pub(crate) const EXPORT_CHAIN_KEY_BINDING_FIELDS: &str =
@@ -397,7 +400,7 @@ pub(crate) const EXPORT_TOOL_SERVICE_REGISTRY_FIELDS: &str =
 pub(crate) const EXPORT_PROJECTION_ACP_BINDING_FIELDS: &str =
     "binding_id agent_did behavior_id projection_id policy_id staged_policy_id previous_policy_id resource_map_json publication_status published_at enabled created_at updated_at";
 pub(crate) const EXPORT_TASK_FIELDS: &str =
-    "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
+    "task_id name description behavior_id prompt_template goal_objective_template goal_token_budget enabled output_schema_ref created_at updated_at";
 pub(crate) const EXPORT_SCHEDULE_FIELDS: &str =
     "schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency created_at updated_at";
 pub(crate) const EXPORT_EVENT_TRIGGER_FIELDS: &str =

@@ -4,9 +4,6 @@ type Task @branchable {
     description: String
     behavior_id: String @index
     prompt_template: String
-    # Optional durable terminal condition provisioned before a task request is runnable.
-    goal_objective_template: String
-    goal_token_budget: Int
     enabled: Boolean @index
     output_schema_ref: String
     created_at: DateTime @index(direction: DESC)

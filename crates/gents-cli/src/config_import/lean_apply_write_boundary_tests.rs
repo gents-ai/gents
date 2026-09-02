@@ -964,6 +964,8 @@ fn desired_tool_selection(
         command_network_mode: None,
         cli_tool_names: Vec::new(),
         enable_meta_tools: false,
+        enable_goal_tools: None,
+        enable_goal_creation: None,
         allowed_mcp_service_ids: doc
             .refs
             .iter()
@@ -1076,6 +1078,8 @@ fn desired_task(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredTask {
         behavior_id: ref_id(doc, Collection::AgentBehavior)
             .unwrap_or_else(|| DEFAULT_BEHAVIOR_ID.to_string()),
         prompt_template: doc.content.clone(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         enabled: true,
         output_schema_ref: None,
     }

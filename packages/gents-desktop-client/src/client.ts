@@ -13,11 +13,11 @@ import type {
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.15.0";
-// Sync status consumes the database-owned gauges directly and no longer
-// accepts the duplicated pairing/route retry wire fields.
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "5.0";
+// The client consumes the 5.0 sync contract plus durable-goal capabilities,
+// Task declarations, and presence-aware goal save patches through 5.2.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "5.2";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "29bb972cc0e19f13eb99c5e899d5b5b2fdac647b452c7c954687ca12aaf41623";
+  "13bdf77c3f8a6d9c7b6710762f7cd653c9c7734eeb2c64855ad318fef65f066b";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);

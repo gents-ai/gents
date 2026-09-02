@@ -47,6 +47,23 @@ type NonterminalRequests = Arc<Mutex<HashMap<(String, TriggerKind), Vec<String>>
 type CorrelatedNonterminalRequests =
     Arc<Mutex<HashMap<(String, TriggerKind, String), Vec<String>>>>;
 
+fn remove_except<K: Clone + Eq + std::hash::Hash>(
+    requests: &mut HashMap<K, Vec<String>>,
+    key: &K,
+    excluded_request_id: Option<&str>,
+) -> Vec<String> {
+    let Some(request_ids) = requests.remove(key) else {
+        return Vec::new();
+    };
+    let (retained, removed): (Vec<_>, Vec<_>) = request_ids
+        .into_iter()
+        .partition(|request_id| Some(request_id.as_str()) == excluded_request_id);
+    if !retained.is_empty() {
+        requests.insert(key.clone(), retained);
+    }
+    removed
+}
+
 /// Build a minimal `Arc<AgentPrincipal>` for tests that need to satisfy the
 /// principal invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
 /// `debug_assert!`. Does not exercise signing.
@@ -69,6 +86,17 @@ fn stub_principal() -> Arc<crate::identity::AgentPrincipal> {
 
 const LEAN_TRIGGER_TYPES_MODEL: &str = include_str!("../../../proofs/Proofs/Triggers/Types.lean");
 const LEAN_TRIGGER_TYPES_FILE: &str = "crates/gents/proofs/Proofs/Triggers/Types.lean";
+
+#[test]
+fn durable_fire_keys_are_unambiguous_across_component_delimiters() {
+    let left = crate::trigger_engine::durable_fire_key("event-document", &["trigger:a", "doc"]);
+    let right = crate::trigger_engine::durable_fire_key("event-document", &["trigger", "a:doc"]);
+    assert_ne!(left, right);
+    assert_ne!(
+        left,
+        crate::trigger_engine::durable_fire_key("event-group", &["trigger:a", "doc"])
+    );
+}
 
 #[test]
 fn rust_trigger_kind_vocabulary_matches_lean_model() {
@@ -110,6 +138,8 @@ struct MaterializeGate {
 /// to queue.
 struct SpyMaterializer {
     materialize_calls: Arc<Mutex<Vec<MaterializeCall>>>,
+    materialize_goal_objectives: Arc<Mutex<Vec<Option<String>>>>,
+    materialized_request_ids: Arc<Mutex<HashSet<String>>>,
     materialize_source_doc_ids: Arc<Mutex<Vec<Option<String>>>>,
     next_request_id: AtomicUsize,
     nonterminal_for: NonterminalRequests,
@@ -131,6 +161,8 @@ impl SpyMaterializer {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             materialize_calls: Arc::new(Mutex::new(Vec::new())),
+            materialize_goal_objectives: Arc::new(Mutex::new(Vec::new())),
+            materialized_request_ids: Arc::new(Mutex::new(HashSet::new())),
             materialize_source_doc_ids: Arc::new(Mutex::new(Vec::new())),
             next_request_id: AtomicUsize::new(0),
             nonterminal_for: Arc::new(Mutex::new(HashMap::new())),
@@ -149,6 +181,10 @@ impl SpyMaterializer {
 
     fn calls(&self) -> Vec<MaterializeCall> {
         self.materialize_calls.lock().unwrap().clone()
+    }
+
+    fn goal_objectives(&self) -> Vec<Option<String>> {
+        self.materialize_goal_objectives.lock().unwrap().clone()
     }
 
     fn source_doc_ids(&self) -> Vec<Option<String>> {
@@ -269,7 +305,7 @@ impl SpyMaterializer {
 impl MaterializerHandle for SpyMaterializer {
     fn materialize(
         &self,
-        _task: &ResolvedTask,
+        task: &ResolvedTask,
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
         _trigger_doc_id: Option<&str>,
@@ -277,6 +313,8 @@ impl MaterializerHandle for SpyMaterializer {
         correlation: Option<&str>,
         _trigger_context: Option<&str>,
         rendered_prompt: &str,
+        rendered_goal_objective: Option<&str>,
+        durable_fire_key: &str,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
         let entry = (
             trigger_id.map(str::to_owned),
@@ -284,6 +322,9 @@ impl MaterializerHandle for SpyMaterializer {
             rendered_prompt.to_owned(),
         );
         let calls = self.materialize_calls.clone();
+        let materialized_request_ids = self.materialized_request_ids.clone();
+        let goal_objectives = self.materialize_goal_objectives.clone();
+        let rendered_goal_objective = rendered_goal_objective.map(str::to_owned);
         let source_doc_ids = self.materialize_source_doc_ids.clone();
         let source_doc_id = source_doc_id.map(str::to_owned);
         let nonterminal_for = self.nonterminal_for.clone();
@@ -295,7 +336,17 @@ impl MaterializerHandle for SpyMaterializer {
         let track_materialized_nonterminal =
             self.track_materialized_nonterminal.load(Ordering::SeqCst);
         let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
-        let request_id = format!("req-{id}");
+        let request_id = rendered_goal_objective
+            .as_ref()
+            .map(|_| {
+                crate::goal::task_goal_fire_identity(
+                    "did:test:spy-materializer",
+                    &task.task_id,
+                    durable_fire_key,
+                )
+                .request_id
+            })
+            .unwrap_or_else(|| format!("req-{id}"));
         let delay = *self.materialize_delay.lock().unwrap();
         let gate = self.materialize_gate.lock().unwrap().clone();
         let marker_did = self.persist_group_markers_for_did.lock().unwrap().clone();
@@ -311,6 +362,14 @@ impl MaterializerHandle for SpyMaterializer {
                 tokio::time::sleep(d).await;
             }
             calls.lock().unwrap().push(entry);
+            materialized_request_ids
+                .lock()
+                .unwrap()
+                .insert(request_id.clone());
+            goal_objectives
+                .lock()
+                .unwrap()
+                .push(rendered_goal_objective);
             source_doc_ids.lock().unwrap().push(source_doc_id);
             if let (Some(agent_did), Some(trigger_id), Some(correlation)) =
                 (marker_did, marker_trigger_id, marker_correlation)
@@ -349,6 +408,7 @@ impl MaterializerHandle for SpyMaterializer {
         trigger_id: &str,
         trigger_kind: TriggerKind,
         correlation: Option<&str>,
+        excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
         let set = self.nonterminal_for.clone();
         let correlated_set = self.correlated_nonterminal_for.clone();
@@ -357,6 +417,7 @@ impl MaterializerHandle for SpyMaterializer {
         let key = (trigger_id.to_owned(), trigger_kind);
         let correlated_key = correlation
             .map(|correlation| (trigger_id.to_owned(), trigger_kind, correlation.to_owned()));
+        let excluded_request_id = excluded_request_id.map(str::to_owned);
         Box::pin(async move {
             gate_dids.lock().unwrap().push(agent_did);
             Ok(match correlated_key {
@@ -364,12 +425,16 @@ impl MaterializerHandle for SpyMaterializer {
                     .lock()
                     .unwrap()
                     .get(&key)
-                    .is_some_and(|request_ids| !request_ids.is_empty()),
-                None => set
-                    .lock()
-                    .unwrap()
-                    .get(&key)
-                    .is_some_and(|request_ids| !request_ids.is_empty()),
+                    .is_some_and(|request_ids| {
+                        request_ids
+                            .iter()
+                            .any(|request_id| Some(request_id) != excluded_request_id.as_ref())
+                    }),
+                None => set.lock().unwrap().get(&key).is_some_and(|request_ids| {
+                    request_ids
+                        .iter()
+                        .any(|request_id| Some(request_id) != excluded_request_id.as_ref())
+                }),
             })
         })
     }
@@ -380,6 +445,7 @@ impl MaterializerHandle for SpyMaterializer {
         trigger_id: &str,
         trigger_kind: TriggerKind,
         correlation: Option<&str>,
+        excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
         let nonterm = self.nonterminal_for.clone();
         let correlated_nonterm = self.correlated_nonterminal_for.clone();
@@ -390,22 +456,48 @@ impl MaterializerHandle for SpyMaterializer {
         let key = (trigger_id.to_owned(), trigger_kind);
         let correlated_key = correlation
             .map(|correlation| (trigger_id.to_owned(), trigger_kind, correlation.to_owned()));
+        let excluded_request_id = excluded_request_id.map(str::to_owned);
         Box::pin(async move {
             supersede_dids.lock().unwrap().push(agent_did);
             supersede_calls.lock().unwrap().push(key.clone());
             // Mirror a real terminal transition: the tuple is no longer
             // in-flight after supersede.
             let removed = match correlated_key {
-                Some(key) => correlated_nonterm
-                    .lock()
-                    .unwrap()
-                    .remove(&key)
-                    .unwrap_or_default(),
-                None => nonterm.lock().unwrap().remove(&key).unwrap_or_default(),
+                Some(key) => remove_except(
+                    &mut correlated_nonterm.lock().unwrap(),
+                    &key,
+                    excluded_request_id.as_deref(),
+                ),
+                None => remove_except(
+                    &mut nonterm.lock().unwrap(),
+                    &key,
+                    excluded_request_id.as_deref(),
+                ),
             };
             let count = removed.len();
             superseded_request_ids.lock().unwrap().extend(removed);
             Ok(count)
+        })
+    }
+
+    fn recover_goal_task_fire(
+        &self,
+        task: &ResolvedTask,
+        durable_fire_key: &str,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Option<String>>> + Send + '_>> {
+        let request_ids = self.materialized_request_ids.clone();
+        let request_id = crate::goal::task_goal_fire_identity(
+            "did:test:spy-materializer",
+            &task.task_id,
+            durable_fire_key,
+        )
+        .request_id;
+        Box::pin(async move {
+            Ok(request_ids
+                .lock()
+                .unwrap()
+                .contains(&request_id)
+                .then_some(request_id))
         })
     }
 
@@ -453,6 +545,8 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: prompt_template.to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     }
 }

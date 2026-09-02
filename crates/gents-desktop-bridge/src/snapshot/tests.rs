@@ -60,6 +60,8 @@ fn task_view(task_id: &str, name: &str) -> TaskView {
         description: None,
         behavior_id: None,
         prompt_template: None,
+        goal_objective_template: None,
+        goal_token_budget: None,
         enabled: Some(true),
         output_schema_ref: None,
         recent_runs: TaskRecentRunsView {

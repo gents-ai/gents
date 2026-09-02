@@ -198,6 +198,8 @@ fn configuration_fingerprint_reflects_schedule_set() {
         name: None,
         behavior_id: "general".to_string(),
         prompt_template: "do the thing".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
         output_schema_ref: None,
     };
     let with_schedule = base.clone().with_schedules(

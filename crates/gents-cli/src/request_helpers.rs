@@ -324,12 +324,39 @@ pub(crate) async fn create_agent_request(
     behavior_id: Option<&str>,
     options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
+    let (submitted, create) = prepare_agent_request(
+        graphql,
+        agent_did,
+        content,
+        session_id,
+        behavior_id,
+        options,
+        None,
+    )
+    .await?;
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+    post_graphql(graphql, &mutation).await?;
+    Ok(submitted)
+}
+
+async fn prepare_agent_request(
+    graphql: &str,
+    agent_did: &str,
+    content: &str,
+    session_id: Option<&str>,
+    behavior_id: Option<&str>,
+    options: RequestSubmitOptions,
+    stable_request_id: Option<String>,
+) -> Result<(
+    SubmittedRequest,
+    gents_protocol::request_admission::AgentRequestCreate,
+)> {
     if options.seed.is_some_and(|seed| seed < 0) {
         anyhow::bail!("seed must be non-negative");
     }
     let (request_content, request_metadata) =
         content_and_metadata_with_prompt_selected_skill_ids(options.metadata.as_deref(), content);
-    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_id = stable_request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let behavior_id = resolve_request_behavior_id(graphql, agent_did, behavior_id).await?;
     let session_id = session_id
         .map(ToOwned::to_owned)
@@ -376,10 +403,7 @@ pub(crate) async fn create_agent_request(
     create.retry_parent_request_doc_id = options.retry_parent_request_doc_id.clone();
     create.retry_root_request = Some(retry_root_value);
     gents::sign_agent_request_create_as_registered_target(&mut create).await?;
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    post_graphql(graphql, &mutation).await?;
-
-    Ok(SubmittedRequest {
+    let submitted = SubmittedRequest {
         request_id,
         session_id,
         agent_did: agent_did.to_string(),
@@ -392,7 +416,69 @@ pub(crate) async fn create_agent_request(
         max_total_tokens: options.max_total_tokens,
         metadata: request_metadata,
         created_at: Some(created_at),
-    })
+    };
+    Ok((submitted, create))
+}
+
+/// Atomically establish a session goal and publish its first runnable request.
+/// Exact retries use the same immutable submission key and converge to the
+/// already-committed pair; conflicting retries fail without mutating either
+/// document.
+pub(crate) async fn create_goal_backed_agent_request(
+    graphql: &str,
+    agent_did: &str,
+    content: &str,
+    session_id: &str,
+    behavior_id: Option<&str>,
+    objective: &str,
+    token_budget: Option<i64>,
+) -> Result<SubmittedRequest> {
+    use sha2::{Digest, Sha256};
+
+    let objective = require_non_empty("goal-objective", objective)?.trim();
+    anyhow::ensure!(
+        token_budget.is_none_or(|budget| budget > 0),
+        "goal-token-budget must be positive"
+    );
+    let digest = Sha256::digest(
+        format!("{agent_did}\0{session_id}\0{objective}\0{token_budget:?}\0{content}").as_bytes(),
+    );
+    let request_id = format!(
+        "goal-submit-{}",
+        digest[..16]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let retry_key = format!(
+        "goal-submit:{}",
+        gents::goal::deterministic_goal_creation_key(agent_did, session_id)
+    );
+    let (submitted, mut create) = prepare_agent_request(
+        graphql,
+        agent_did,
+        content,
+        Some(session_id),
+        behavior_id,
+        RequestSubmitOptions::default(),
+        Some(request_id.clone()),
+    )
+    .await?;
+    create.retry_key = Some(retry_key.clone());
+    // retry_key is part of the signed immutable request semantics.
+    gents::sign_agent_request_create_as_registered_target(&mut create).await?;
+
+    let access = gents::ConfigAccess::Graphql(graphql.to_string());
+    gents::goal::submit_goal_backed_request(
+        &access,
+        agent_did,
+        session_id,
+        objective,
+        token_budget,
+        &create,
+    )
+    .await?;
+    Ok(submitted)
 }
 
 async fn resolve_request_behavior_id(

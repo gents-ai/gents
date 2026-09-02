@@ -103,6 +103,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         command_network_mode: None,
         cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
         enable_meta_tools: Some(true),
+        enable_goal_tools: None,
+        enable_goal_creation: None,
         allowed_mcp_service_ids: Vec::new(),
         required_mcp_service_ids: Vec::new(),
         delegate_to: Vec::new(),
@@ -160,6 +162,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         description: Some("Check the daily queue.".to_string()),
         behavior_id: Some("amy-default".to_string()),
         prompt_template: Some("Check the daily queue.".to_string()),
+        goal_objective_template: None,
+        goal_token_budget: None,
         enabled: Some(true),
         output_schema_ref: None,
         created_at: None,
@@ -273,6 +277,93 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         .expect("behavior should survive skill deletion");
     assert!(behavior.skill_refs.is_empty());
     assert!(behavior.skill_excludes.is_empty());
+
+    core.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn desktop_task_run_atomically_provisions_declared_goal() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    let agent_did = core.principal().did().to_string();
+
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentPrincipal(input: {{
+                    agent_did: "{agent_did}"
+                    display_name: "Local"
+                    default_behavior_id: "durable"
+                    enabled: true
+                }}) {{ agent_did }}
+                create_AgentBehavior(input: {{
+                    behavior_id: "durable"
+                    agent_did: "{agent_did}"
+                    enabled: true
+                }}) {{ behavior_id }}
+            }}"#,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed behavior: {:?}",
+        response.errors
+    );
+
+    let task = TaskRow {
+        task_id: "durable-task".to_string(),
+        name: Some("Durable task".to_string()),
+        description: None,
+        behavior_id: Some("durable".to_string()),
+        prompt_template: Some("Handle {{ args.item }}".to_string()),
+        goal_objective_template: Some("Finish {{ args.item }}".to_string()),
+        goal_token_budget: Some(10_000),
+        enabled: Some(true),
+        output_schema_ref: None,
+        created_at: None,
+        updated_at: None,
+    };
+    core.save_task(&task).await?;
+    let request_doc_id = core
+        .fire_task_now(&task, serde_json::json!({"item": "release"}))
+        .await?;
+
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}) {{
+                    session_id retry_key content lifecycle_state
+                }}
+                Goal(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+                    session_id objective status token_budget
+                }}
+            }}"#,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query atomic task run: {:?}",
+        response.errors
+    );
+    let data = response.data.as_ref().expect("query data");
+    let requests = data["AgentRequest"].as_array().expect("request rows");
+    let goals = data["Goal"].as_array().expect("goal rows");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(goals.len(), 1);
+    assert_eq!(requests[0]["content"], "Handle release");
+    assert_eq!(requests[0]["lifecycle_state"], "pending");
+    assert!(requests[0]["retry_key"].as_str().is_some());
+    assert_eq!(goals[0]["session_id"], requests[0]["session_id"]);
+    assert_eq!(goals[0]["objective"], "Finish release");
+    assert_eq!(goals[0]["status"], "active");
+    assert_eq!(goals[0]["token_budget"], 10_000);
 
     core.shutdown().await?;
     Ok(())

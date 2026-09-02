@@ -39,6 +39,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Enrollment", Module("conformance/enrollment.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
+        ("GoalAutomation", Module("conformance/goals.rs")),
         ("Goals", Module("conformance/goals.rs")),
         (
             "GraphPipeline",

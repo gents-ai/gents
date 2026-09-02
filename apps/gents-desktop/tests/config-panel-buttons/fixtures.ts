@@ -39,6 +39,8 @@ export const toolSelection: ToolSelectionView = {
   bashMode: "ReadOnly",
   cliToolNames: ["grep"],
   enableMetaTools: true,
+  enableGoalTools: null,
+  enableGoalCreation: null,
   allowedMcpServiceIds: ["mcp-local"],
   delegateTo: [],
   enableDefraQuery: true,
@@ -65,6 +67,8 @@ export const task: TaskView = {
   description: "Runs task A",
   behaviorId: "default",
   promptTemplate: "Run task A",
+  goalObjectiveTemplate: null,
+  goalTokenBudget: null,
   enabled: true,
   outputSchemaRef: null,
   recentRuns: {

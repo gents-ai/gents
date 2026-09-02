@@ -44,7 +44,7 @@ pub use context_budget::{
 pub use denial::CommandPolicyDenial;
 pub(crate) use denial::DenialReason;
 pub(crate) use goal::build_goal_tools;
-pub(crate) use goal::{GetGoalArgs, UpdateGoalArgs};
+pub(crate) use goal::{CreateGoalArgs, GetGoalArgs, UpdateGoalArgs};
 pub use lsp::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, result_looks_failed,
     result_path_matches, LspAction, LspMutationSource,

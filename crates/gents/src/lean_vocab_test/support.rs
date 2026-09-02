@@ -45,6 +45,17 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) goal_transition_cases: Vec<LeanGoalTransitionCase>,
     #[serde(default)]
+    pub(crate) goal_create_cases: Vec<LeanGoalCreateCase>,
+    #[serde(default)]
+    pub(crate) task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
+    #[serde(default)]
+    pub(crate) task_goal_recovery_cases: Vec<LeanTaskGoalRecoveryCase>,
+    #[serde(default)]
+    pub(crate) goal_submission_cases: Vec<LeanGoalSubmissionCase>,
+    #[serde(default)]
+    pub(crate) goal_continuation_materialization_cases:
+        Vec<LeanGoalContinuationMaterializationCase>,
+    #[serde(default)]
     pub(crate) session_hydration_decision_cases: Vec<LeanSessionHydrationDecisionCase>,
     #[serde(default)]
     pub(crate) session_hydration_progress_cases: Vec<LeanSessionHydrationProgressCase>,
@@ -71,6 +82,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     #[serde(default)]
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
+    #[serde(default)]
+    pub(crate) goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
     #[serde(default)]
     pub(crate) lsp_action_cases: Vec<LeanLspActionCase>,
     #[serde(default)]
@@ -437,6 +450,84 @@ pub(crate) struct LeanGoalTransitionCase {
     pub(crate) expected_blocked_audits: i64,
     pub(crate) expected_wrapup_requested: bool,
     pub(crate) expected_wrapup_completed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanGoalCreateCase {
+    pub(crate) name: String,
+    pub(crate) caller: String,
+    pub(crate) current_session: String,
+    pub(crate) requested_owner: String,
+    pub(crate) requested_session: String,
+    pub(crate) objective: String,
+    pub(crate) objective_nonempty: bool,
+    pub(crate) token_budget: Option<i128>,
+    pub(crate) goal_tools: bool,
+    pub(crate) goal_create: bool,
+    pub(crate) existing: bool,
+    pub(crate) existing_matches: bool,
+    pub(crate) expected: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanTaskGoalPublicationCase {
+    pub(crate) name: String,
+    pub(crate) agent_did: String,
+    pub(crate) task_id: String,
+    pub(crate) fire_key: String,
+    pub(crate) goal_objective: Option<String>,
+    pub(crate) goal_token_budget: Option<i128>,
+    pub(crate) declaration_valid: bool,
+    pub(crate) expected_mode: String,
+    pub(crate) expected_published: bool,
+    pub(crate) expected_runnable_request: bool,
+    pub(crate) expected_durable_goal: bool,
+    pub(crate) expected_session_id: Option<String>,
+    pub(crate) expected_request_id: Option<String>,
+    pub(crate) expected_retry_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanTaskGoalRecoveryCase {
+    pub(crate) name: String,
+    pub(crate) agent_did: String,
+    pub(crate) behavior_id: String,
+    pub(crate) task_id: String,
+    pub(crate) fire_key: String,
+    pub(crate) request_present: bool,
+    pub(crate) request_binding_matches: bool,
+    pub(crate) observed_agent_did: Option<String>,
+    pub(crate) observed_behavior_id: Option<String>,
+    pub(crate) observed_session_id: Option<String>,
+    pub(crate) observed_request_id: Option<String>,
+    pub(crate) observed_retry_key: Option<String>,
+    pub(crate) durable_goal_present: bool,
+    pub(crate) creation_claim_present: bool,
+    pub(crate) expected_disposition: String,
+    pub(crate) expected_recovered_request_id: Option<String>,
+    pub(crate) expected_checkpointable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanGoalSubmissionCase {
+    pub(crate) name: String,
+    pub(crate) durable_goal: bool,
+    pub(crate) runnable_request: bool,
+    pub(crate) staged_goal: bool,
+    pub(crate) staged_request: bool,
+    pub(crate) action: String,
+    pub(crate) expected_durable_goal: bool,
+    pub(crate) expected_runnable_request: bool,
+    pub(crate) expected_staged_goal: bool,
+    pub(crate) expected_staged_request: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanGoalContinuationMaterializationCase {
+    pub(crate) name: String,
+    pub(crate) phase: String,
+    pub(crate) action: String,
+    pub(crate) expected_phase: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -807,6 +898,11 @@ pub(crate) fn lean_apply_reconcile_case(name: &str) -> &'static LeanApplyReconci
 
 pub(crate) fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {
     &lean_contract_snapshot().tool_policy_cases
+}
+
+pub(crate) fn lean_goal_capability_resolution_cases() -> &'static [LeanGoalCapabilityResolutionCase]
+{
+    &lean_contract_snapshot().goal_capability_resolution_cases
 }
 
 pub(crate) fn lean_lsp_action_cases() -> &'static [LeanLspActionCase] {
@@ -1348,6 +1444,27 @@ pub(crate) fn lean_goal_decision_cases() -> &'static [LeanGoalDecisionCase] {
 
 pub(crate) fn lean_goal_transition_cases() -> &'static [LeanGoalTransitionCase] {
     &lean_contract_snapshot().goal_transition_cases
+}
+
+pub(crate) fn lean_goal_create_cases() -> &'static [LeanGoalCreateCase] {
+    &lean_contract_snapshot().goal_create_cases
+}
+
+pub(crate) fn lean_task_goal_publication_cases() -> &'static [LeanTaskGoalPublicationCase] {
+    &lean_contract_snapshot().task_goal_publication_cases
+}
+
+pub(crate) fn lean_task_goal_recovery_cases() -> &'static [LeanTaskGoalRecoveryCase] {
+    &lean_contract_snapshot().task_goal_recovery_cases
+}
+
+pub(crate) fn lean_goal_submission_cases() -> &'static [LeanGoalSubmissionCase] {
+    &lean_contract_snapshot().goal_submission_cases
+}
+
+pub(crate) fn lean_goal_continuation_materialization_cases(
+) -> &'static [LeanGoalContinuationMaterializationCase] {
+    &lean_contract_snapshot().goal_continuation_materialization_cases
 }
 
 pub(crate) fn lean_session_hydration_decision_cases() -> &'static [LeanSessionHydrationDecisionCase]

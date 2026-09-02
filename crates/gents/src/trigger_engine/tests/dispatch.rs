@@ -20,6 +20,7 @@ async fn dispatch_skips_when_schedule_not_in_active_schedules() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -54,6 +55,7 @@ async fn dispatch_reports_pre_materialized_request_without_materializer_call() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-pre-materialized-fire".to_string(),
         pre_materialized_request_id: Some("child-pre-materialized".to_string()),
         on_result: Box::new(|_| {}),
     };
@@ -92,6 +94,7 @@ async fn dispatch_renders_and_materializes_when_schedule_active() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -108,6 +111,211 @@ async fn dispatch_renders_and_materializes_when_schedule_active() {
     assert_eq!(trigger_id.as_deref(), Some("sched-1"));
     assert_eq!(*kind, TriggerKind::Schedule);
     assert_eq!(rendered, "fired at 2026-04-21T00:00:00Z");
+}
+
+#[tokio::test]
+async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
+    let mut task = resolved_task("work on {{ event.item }} for {{ args.owner }}");
+    task.goal_objective_template =
+        Some("deliver {{ event.item }} for {{ args.owner }} from {{ node.node_did }}".to_string());
+    task.goal_token_budget = Some(4_096);
+    let schedule = resolved_schedule("sched-goal", task.clone());
+    let snapshot = snapshot_with_schedules(HashMap::from([("sched-goal".to_string(), schedule)]));
+    let expected_did = snapshot.local_did.clone();
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let result = engine
+        .dispatch(FireIntent {
+            trigger_id: Some("sched-goal".to_string()),
+            trigger_kind: TriggerKind::Schedule,
+            task,
+            concurrency: ConcurrencyMode::Serial,
+            event_vars: serde_json::json!({"item": "release"}),
+            doc_vars: None,
+            correlation: None,
+            group_vars: None,
+            trigger_context: None,
+            args_vars: Some(serde_json::json!({"owner": "runtime"})),
+            durable_fire_key: "dispatch-goal-fire".to_string(),
+            pre_materialized_request_id: None,
+            on_result: Box::new(|_| {}),
+        })
+        .await;
+
+    assert!(matches!(result, FireResult::Fired { .. }), "{result:?}");
+    assert_eq!(materializer.calls()[0].2, "work on release for runtime");
+    assert_eq!(
+        materializer.goal_objectives(),
+        vec![Some(format!(
+            "deliver release for runtime from {expected_did}"
+        ))]
+    );
+}
+
+#[tokio::test]
+async fn dispatch_rejects_goal_budget_without_an_objective() {
+    let mut task = resolved_task("ordinary prompt");
+    task.goal_token_budget = Some(10);
+    let schedule = resolved_schedule("sched-invalid-goal", task.clone());
+    let snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-invalid-goal".to_string(),
+        schedule,
+    )]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+
+    let result = engine
+        .dispatch(FireIntent {
+            trigger_id: Some("sched-invalid-goal".to_string()),
+            trigger_kind: TriggerKind::Schedule,
+            task,
+            concurrency: ConcurrencyMode::Serial,
+            event_vars: serde_json::json!({}),
+            doc_vars: None,
+            correlation: None,
+            group_vars: None,
+            trigger_context: None,
+            args_vars: None,
+            durable_fire_key: "dispatch-invalid-goal-fire".to_string(),
+            pre_materialized_request_id: None,
+            on_result: Box::new(|_| {}),
+        })
+        .await;
+
+    match result {
+        FireResult::Errored { error } => {
+            assert!(error.contains("requires a goal objective"), "{error}")
+        }
+        other => panic!("expected invalid goal configuration error, got {other:?}"),
+    }
+    assert!(materializer.calls().is_empty());
+}
+
+#[tokio::test]
+async fn latest_only_goal_fire_retry_does_not_supersede_its_own_request() {
+    let mut task = resolved_task("durable work at {{ event.fired_at }}");
+    task.goal_objective_template =
+        Some("finish durable work from {{ event.fired_at }}".to_string());
+    let schedule = resolved_schedule_with_concurrency(
+        "sched-goal-retry",
+        task.clone(),
+        ConcurrencyMode::LatestOnly,
+    );
+    let snapshot =
+        snapshot_with_schedules(HashMap::from([("sched-goal-retry".to_string(), schedule)]));
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    materializer.track_materialized_nonterminal();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+    let intent = |fired_at: &str| FireIntent {
+        trigger_id: Some("sched-goal-retry".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task: task.clone(),
+        concurrency: ConcurrencyMode::LatestOnly,
+        event_vars: serde_json::json!({"fired_at": fired_at}),
+        doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
+        args_vars: None,
+        durable_fire_key: "schedule:sched-goal-retry:2026-09-02T12:00:00Z".to_string(),
+        pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    };
+
+    let first = engine.dispatch(intent("2026-09-02T12:00:01Z")).await;
+    let retry = engine.dispatch(intent("2026-09-02T12:05:47Z")).await;
+    let FireResult::Fired {
+        request_id: first_id,
+    } = first
+    else {
+        panic!("expected first fire, got {first:?}")
+    };
+    let FireResult::Fired {
+        request_id: retry_id,
+    } = retry
+    else {
+        panic!("expected idempotent retry, got {retry:?}")
+    };
+    assert_eq!(first_id, retry_id);
+    assert!(
+        materializer.superseded_request_ids().is_empty(),
+        "the exact durable request must be excluded from LatestOnly supersede"
+    );
+    assert_eq!(
+        materializer.calls().len(),
+        1,
+        "a reconstructed fire must recover before rendering or concurrency side effects"
+    );
+}
+
+#[tokio::test]
+async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
+    let mut goal_task = resolved_task("durable work at {{ event.fired_at }}");
+    goal_task.goal_objective_template = Some("finish durable work".to_string());
+    goal_task.goal_token_budget = Some(4_096);
+    let ordinary_task = ResolvedTask {
+        goal_objective_template: None,
+        goal_token_budget: None,
+        ..goal_task.clone()
+    };
+    let first_snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-goal-reconfigured".to_string(),
+        resolved_schedule("sched-goal-reconfigured", goal_task.clone()),
+    )]));
+    let retry_snapshot = snapshot_with_schedules(HashMap::from([(
+        "sched-goal-reconfigured".to_string(),
+        resolved_schedule("sched-goal-reconfigured", ordinary_task.clone()),
+    )]));
+    let (_first_tx, first_rx) = watch::channel(first_snapshot);
+    let (_retry_tx, retry_rx) = watch::channel(retry_snapshot);
+    let materializer = SpyMaterializer::new();
+    let first_engine = TriggerEngine::new(first_rx, materializer.clone());
+    let retry_engine = TriggerEngine::new(retry_rx, materializer.clone());
+    let durable_fire_key = "schedule-goal-reconfigured-2026-09-02T12:00:00Z";
+    let intent = |task: ResolvedTask, fired_at: &str| FireIntent {
+        trigger_id: Some("sched-goal-reconfigured".to_string()),
+        trigger_kind: TriggerKind::Schedule,
+        task,
+        concurrency: ConcurrencyMode::Serial,
+        event_vars: serde_json::json!({"fired_at": fired_at}),
+        doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
+        args_vars: None,
+        durable_fire_key: durable_fire_key.to_string(),
+        pre_materialized_request_id: None,
+        on_result: Box::new(|_| {}),
+    };
+
+    let first = first_engine
+        .dispatch(intent(goal_task, "2026-09-02T12:00:01Z"))
+        .await;
+    let retry = retry_engine
+        .dispatch(intent(ordinary_task, "2026-09-02T12:05:47Z"))
+        .await;
+    let FireResult::Fired {
+        request_id: first_id,
+    } = first
+    else {
+        panic!("expected first fire, got {first:?}")
+    };
+    let FireResult::Fired {
+        request_id: retry_id,
+    } = retry
+    else {
+        panic!("expected idempotent retry, got {retry:?}")
+    };
+    assert_eq!(first_id, retry_id);
+    assert_eq!(
+        materializer.calls().len(),
+        1,
+        "removing the declaration must not create an ordinary second request"
+    );
 }
 
 #[tokio::test]
@@ -132,6 +340,7 @@ async fn dispatch_parallel_materializes_every_intent() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -146,6 +355,7 @@ async fn dispatch_parallel_materializes_every_intent() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -217,6 +427,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
         })),
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -267,6 +478,7 @@ async fn dispatch_serial_materializes_when_no_inflight() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -307,6 +519,7 @@ async fn dispatch_serial_skips_when_inflight_exists() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -369,6 +582,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -430,6 +644,7 @@ async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
         })),
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -466,6 +681,7 @@ async fn dispatch_latest_only_supersedes_prior_and_fires_new() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -516,6 +732,7 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -619,6 +836,7 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(move |r| {
             *capture.lock().unwrap() = Some(r);
@@ -681,6 +899,7 @@ async fn dispatch_latest_only_serializes_parallel_fires() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -755,6 +974,7 @@ async fn dispatch_scopes_concurrency_by_the_behaviors_agent_did() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -775,6 +995,7 @@ async fn dispatch_scopes_concurrency_by_the_behaviors_agent_did() {
         group_vars: None,
         trigger_context: None,
         args_vars: None,
+        durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };

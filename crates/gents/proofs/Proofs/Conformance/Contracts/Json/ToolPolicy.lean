@@ -18,6 +18,8 @@ def surfaceViewJson (v : SurfaceView) : String :=
   "{"
     ++ "\"file_rank\":" ++ toString v.fileRank ++ ","
     ++ "\"meta\":" ++ boolJson v.meta ++ ","
+    ++ "\"goal_tools\":" ++ boolJson v.goalTools ++ ","
+    ++ "\"goal_create\":" ++ boolJson v.goalCreate ++ ","
     ++ "\"defra_query\":" ++ boolJson v.defraQuery ++ ","
     ++ "\"self_config\":" ++ boolJson v.selfConfig ++ ","
     ++ "\"memory\":" ++ boolJson v.memory ++ ","
@@ -82,5 +84,38 @@ def toolPolicyCaseJson (c : Case) : String :=
 
 def toolPolicyCasesJson : String :=
   jsonArray (ToolPolicy.ContractCases.cases.map toolPolicyCaseJson)
+
+structure GoalCapabilityResolutionCase where
+  name : String
+  meta : Bool
+  explicitGoalTools : Option Bool
+  explicitGoalCreate : Option Bool
+
+def goalCapabilityResolutionCases : List GoalCapabilityResolutionCase :=
+  [ ⟨"legacy_meta_on_inherits_goal_tools", true, none, none⟩
+  , ⟨"legacy_meta_off_omits_goal_tools", false, none, none⟩
+  , ⟨"explicit_goal_on_meta_off", false, some true, none⟩
+  , ⟨"explicit_goal_off_meta_on", true, some false, none⟩
+  , ⟨"creation_unset_stays_off", true, some true, none⟩
+  , ⟨"creation_explicit_on", false, some true, some true⟩ ]
+
+def optionalBoolJson : Option Bool → String
+  | none => "null"
+  | some value => boolJson value
+
+def goalCapabilityResolutionCaseJson (c : GoalCapabilityResolutionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString c.name ++ ","
+    ++ "\"meta\":" ++ boolJson c.meta ++ ","
+    ++ "\"explicit_goal_tools\":" ++ optionalBoolJson c.explicitGoalTools ++ ","
+    ++ "\"explicit_goal_create\":" ++ optionalBoolJson c.explicitGoalCreate ++ ","
+    ++ "\"expected_goal_tools\":"
+      ++ boolJson (ToolPolicy.resolveGoalTools c.meta c.explicitGoalTools) ++ ","
+    ++ "\"expected_goal_create\":"
+      ++ boolJson (ToolPolicy.resolveGoalCreate c.explicitGoalCreate)
+  ++ "}"
+
+def goalCapabilityResolutionCasesJson : String :=
+  jsonArray (goalCapabilityResolutionCases.map goalCapabilityResolutionCaseJson)
 
 end Conformance.Contracts

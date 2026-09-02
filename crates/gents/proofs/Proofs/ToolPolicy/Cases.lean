@@ -13,6 +13,8 @@ structure WriteGrantView where
 structure SurfaceView where
   fileRank : Nat
   meta : Bool
+  goalTools : Bool
+  goalCreate : Bool
   defraQuery : Bool
   selfConfig : Bool
   memory : Bool
@@ -217,6 +219,8 @@ def surface (file : FileCap) (bash : BashPolicy)
   { file := file
   , bash := bash
   , meta := meta
+  , goalTools := meta
+  , goalCreate := meta
   , defraQuery := defraQuery
   , selfConfig := defraQuery
   , memory := meta
@@ -242,6 +246,8 @@ def surface (file : FileCap) (bash : BashPolicy)
 def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : SurfaceView :=
   { fileRank := s.file.rank
   , meta := s.meta
+  , goalTools := s.goalTools
+  , goalCreate := s.goalCreate
   , defraQuery := s.defraQuery
   , selfConfig := s.selfConfig
   , memory := s.memory
@@ -456,6 +462,18 @@ def ceilingEthB : Surface :=
 def runtimeEthAll : Surface :=
   { wideOpen with ethQueryMethods := .all, ethCallTools := .all }
 
+def behaviorGoalOnly : Surface :=
+  { secureMinimal with goalTools := true, goalCreate := false }
+
+def behaviorGoalCreate : Surface :=
+  { secureMinimal with goalTools := true, goalCreate := true }
+
+def ceilingDeniesGoalCreate : Surface :=
+  { wideOpen with goalCreate := false }
+
+def behaviorMetaWithoutGoals : Surface :=
+  { wideOpen with goalTools := false, goalCreate := false }
+
 def mkCase (name : String) (b c : Surface) (r : Avail)
     (mcpProbe : String) (writeProbe : String × String) : Case :=
   { name := name
@@ -491,6 +509,14 @@ def cases : List Case :=
       behaviorQueryA writeAllNoQuery wideOpen "svc-a" probeWrite
   , mkCase "eth_query_methods_intersect"
       behaviorEthA ceilingEthB runtimeEthAll "svc-a" probeWrite
+  , mkCase "goal_tools_independent_from_meta"
+      behaviorGoalOnly wideOpen wideOpen "svc-a" probeWrite
+  , mkCase "goal_create_granted_when_all_layers_allow"
+      behaviorGoalCreate wideOpen wideOpen "svc-a" probeWrite
+  , mkCase "goal_create_clamped_by_ceiling"
+      behaviorGoalCreate ceilingDeniesGoalCreate wideOpen "svc-a" probeWrite
+  , mkCase "meta_does_not_force_explicitly_disabled_goals"
+      behaviorMetaWithoutGoals wideOpen wideOpen "svc-a" probeWrite
   ]
 
 end ToolPolicy.ContractCases

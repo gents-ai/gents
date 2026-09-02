@@ -19,6 +19,7 @@ fn session_snapshot_projects_durable_goal_state() {
     let store = ClientStore::from_rows(ClientStoreRows {
         goals: vec![GoalRow {
             goal_id: "goal-1".to_string(),
+            creation_key: None,
             session_id: "session-goal".to_string(),
             agent_did: "did:test:amy".to_string(),
             objective: Some("Ship the durable controller".to_string()),

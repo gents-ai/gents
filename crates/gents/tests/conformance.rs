@@ -400,6 +400,11 @@ fn generated_tool_policy_cases_match_lean_composition() {
 }
 
 #[test]
+fn generated_goal_capability_resolution_matches_rust_decoder() {
+    tool_policy::generated_goal_capability_resolution_matches_rust_decoder();
+}
+
+#[test]
 fn generated_lsp_action_cases_match_rust_authorization() {
     lsp::generated_lsp_action_cases_match_rust_authorization();
 }

@@ -100,6 +100,25 @@ theorem background_completion_continuation_is_admissible
   simp [admissible, edgePairsCoherent, pairCoherent, parentShapeCoherent,
     depthCoherent, backgroundCompletionContinuation]
 
+def goalContinuation (subagentDepth : Nat) : RawLineage :=
+  { hasParentRequestId := true
+  , hasParentRequestDocId := true
+  , hasParentToolCallId := false
+  , hasParentToolCallDocId := false
+  , subagentDepth
+  , requestOnlyControl := true
+  , controlAllowedAtDepthZero := true
+  }
+
+/-- A durable-goal continuation preserves subagent depth and carries both the
+    logical and physical parent request edge. It is controller work, not a new
+    subagent generation. Session and behavior preservation are runtime request-
+    construction obligations outside `RawLineage`. -/
+theorem goal_continuation_is_admissible (depth : Nat) :
+    admissible (goalContinuation depth) = true := by
+  simp [admissible, edgePairsCoherent, pairCoherent, parentShapeCoherent,
+    depthCoherent, goalContinuation]
+
 namespace SteeringPersistence
 
 inductive Stage where

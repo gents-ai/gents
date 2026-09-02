@@ -1,5 +1,9 @@
 use super::*;
-use crate::lean_vocab_test::{lean_goal_decision_cases, lean_goal_transition_cases};
+use crate::lean_vocab_test::{
+    lean_goal_capability_resolution_cases, lean_goal_continuation_materialization_cases,
+    lean_goal_create_cases, lean_goal_decision_cases, lean_goal_submission_cases,
+    lean_goal_transition_cases, lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
+};
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
     for domain in [
@@ -551,6 +555,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ToolPolicyCases".to_string(),
         ));
     }
+    if !lean_goal_capability_resolution_cases().is_empty() {
+        emitted.insert((
+            "goal_capability_resolution_cases".to_string(),
+            "GoalCapabilityResolutionCases".to_string(),
+        ));
+    }
     if !snapshot.lsp_action_cases.is_empty() {
         emitted.insert(("lsp_action_cases".to_string(), "LspActionCases".to_string()));
     }
@@ -1048,6 +1058,36 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalTransitionCases".to_string(),
         ));
     }
+    if !lean_goal_create_cases().is_empty() {
+        emitted.insert((
+            "goal_create_cases".to_string(),
+            "GoalCreateCases".to_string(),
+        ));
+    }
+    if !lean_task_goal_publication_cases().is_empty() {
+        emitted.insert((
+            "task_goal_publication_cases".to_string(),
+            "TaskGoalPublicationCases".to_string(),
+        ));
+    }
+    if !lean_task_goal_recovery_cases().is_empty() {
+        emitted.insert((
+            "task_goal_recovery_cases".to_string(),
+            "TaskGoalRecoveryCases".to_string(),
+        ));
+    }
+    if !lean_goal_submission_cases().is_empty() {
+        emitted.insert((
+            "goal_submission_cases".to_string(),
+            "GoalSubmissionCases".to_string(),
+        ));
+    }
+    if !lean_goal_continuation_materialization_cases().is_empty() {
+        emitted.insert((
+            "goal_continuation_materialization_cases".to_string(),
+            "GoalContinuationMaterializationCases".to_string(),
+        ));
+    }
     if !snapshot.workspace_cases.is_empty() {
         emitted.insert(("workspace_cases".to_string(), "WorkspaceCases".to_string()));
     }
@@ -1178,6 +1218,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "descendant_graph_cases",
         "goal_decision_cases",
         "goal_transition_cases",
+        "goal_create_cases",
+        "goal_capability_resolution_cases",
+        "task_goal_publication_cases",
+        "task_goal_recovery_cases",
+        "goal_submission_cases",
+        "goal_continuation_materialization_cases",
         "graph_pipeline_validation_cases",
         "graph_pipeline_revision_gate_cases",
         "graph_pipeline_run_terminal_cases",

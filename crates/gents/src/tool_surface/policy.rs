@@ -198,6 +198,8 @@ pub struct ToolPolicySurface {
     pub file: FileToolMode,
     pub bash: ToolPolicyBash,
     pub meta: bool,
+    pub goal_tools: bool,
+    pub goal_create: bool,
     pub defra_query: bool,
     pub self_config: bool,
     pub memory: bool,
@@ -227,6 +229,8 @@ impl ToolPolicySurface {
             file: FileToolMode::Off,
             bash: ToolPolicyBash::off(),
             meta: false,
+            goal_tools: false,
+            goal_create: false,
             defra_query: false,
             self_config: false,
             memory: false,
@@ -268,6 +272,8 @@ impl ToolPolicySurface {
                 deny_git_metadata_writes: false,
             },
             meta: true,
+            goal_tools: true,
+            goal_create: true,
             defra_query: true,
             self_config: true,
             memory: true,
@@ -297,6 +303,8 @@ impl ToolPolicySurface {
             file: FileToolMode::ReadWrite,
             bash: ToolPolicyBash::unrestricted(),
             meta: true,
+            goal_tools: true,
+            goal_create: true,
             defra_query: true,
             self_config: true,
             memory: true,
@@ -417,6 +425,8 @@ impl ToolPolicySurface {
                     .unwrap_or(false),
             },
             meta: selection.enable_meta_tools,
+            goal_tools: selection.enable_goal_tools,
+            goal_create: selection.enable_goal_creation,
             defra_query: selection.enable_defra_query,
             self_config: selection.enable_self_config,
             memory: selection.enable_memory,
@@ -453,6 +463,8 @@ impl ToolPolicySurface {
             file: meet_file_mode(self.file, other.file),
             bash: self.bash.meet(&other.bash),
             meta: self.meta && other.meta,
+            goal_tools: self.goal_tools && other.goal_tools,
+            goal_create: self.goal_create && other.goal_create,
             defra_query: self.defra_query && other.defra_query,
             self_config: self.self_config && other.self_config,
             memory: self.memory && other.memory,
@@ -507,6 +519,18 @@ impl ToolPolicySurface {
 
     pub fn include_meta_tools(&self) -> bool {
         self.meta && !self.mcp_services.is_deny_all()
+    }
+
+    /// Read/update authority is independent from the generic MCP meta-tool
+    /// bundle. This is the base capability for every goal operation.
+    pub fn include_goal_tools(&self) -> bool {
+        self.goal_tools
+    }
+
+    /// Creation is deliberately a second gate. A surface cannot grant create
+    /// while withholding session-owned get/update authority.
+    pub fn include_goal_creation(&self) -> bool {
+        self.goal_tools && self.goal_create
     }
 
     pub fn include_defra_query(&self) -> bool {

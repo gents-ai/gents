@@ -395,7 +395,7 @@ pub(crate) fn validate_write_tool_declarations(
 
 /// True when `name` is already claimed by the built-in tool surface: the native
 /// file/shell tools, the meta tools, the subagent/process control tools, or the
-/// built-in singletons (`defra_query`, `context_budget`, `sessions`, `memory`).
+/// built-in singletons (including the durable goal tools).
 ///
 /// A `write_tools` declaration whose `tool_name` collides with one of these
 /// would be appended to the runtime tool vector under a name an existing
@@ -440,6 +440,9 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         DEFRA_QUERY_TOOL_NAME,
         CONTEXT_BUDGET_TOOL_NAME,
         SESSION_HISTORY_TOOL_NAME,
+        crate::goal::CREATE_GOAL_TOOL_NAME,
+        crate::goal::GET_GOAL_TOOL_NAME,
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
         "memory",
     ];
 
@@ -583,6 +586,11 @@ pub struct ToolSelectionDocument {
     )]
     pub cli_tool_names: Option<Vec<String>>,
     pub enable_meta_tools: Option<bool>,
+    /// Independent goal get/update capability. Unset inherits
+    /// `enable_meta_tools` when decoded, preserving legacy documents.
+    pub enable_goal_tools: Option<bool>,
+    /// Additional opt-in for model-facing goal creation. Unset is disabled.
+    pub enable_goal_creation: Option<bool>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
@@ -880,6 +888,8 @@ pub(crate) async fn load_tool_selection_record(
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
+                enable_goal_tools
+                enable_goal_creation
                 allowed_mcp_service_ids
                 required_mcp_service_ids
                 backgroundable_tool_names
@@ -948,6 +958,8 @@ pub(crate) async fn load_tool_selection_by_doc_id(
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
+                enable_goal_tools
+                enable_goal_creation
                 allowed_mcp_service_ids
                 required_mcp_service_ids
                 backgroundable_tool_names
@@ -1016,6 +1028,8 @@ pub(crate) async fn list_tool_selection_records(
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
+                enable_goal_tools
+                enable_goal_creation
                 allowed_mcp_service_ids
                 required_mcp_service_ids
                 backgroundable_tool_names
@@ -1078,6 +1092,8 @@ pub(crate) async fn list_all_tool_selection_records(
                 command_network_mode
                 cli_tool_names
                 enable_meta_tools
+                enable_goal_tools
+                enable_goal_creation
                 allowed_mcp_service_ids
                 required_mcp_service_ids
                 backgroundable_tool_names
@@ -1171,6 +1187,14 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "enable_meta_tools",
             selection.enable_meta_tools,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_goal_tools",
+            selection.enable_goal_tools,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_goal_creation",
+            selection.enable_goal_creation,
         ),
         graphql_fields::graphql_string_list_field(
             "allowed_mcp_service_ids",
@@ -1319,6 +1343,14 @@ pub async fn upsert_tool_selection(
         graphql_fields::graphql_optional_bool_field(
             "enable_meta_tools",
             selection.enable_meta_tools,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_goal_tools",
+            selection.enable_goal_tools,
+        ),
+        graphql_fields::graphql_optional_bool_field(
+            "enable_goal_creation",
+            selection.enable_goal_creation,
         ),
         graphql_fields::graphql_string_list_field(
             "allowed_mcp_service_ids",

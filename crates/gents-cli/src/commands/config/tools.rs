@@ -45,6 +45,8 @@ pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<
         "command_network_mode": plan.command_network_mode,
         "cli_tool_names": plan.selection.cli_tool_names,
         "enable_meta_tools": plan.selection.enable_meta_tools,
+        "enable_goal_tools": plan.selection.enable_goal_tools,
+        "enable_goal_creation": plan.selection.enable_goal_creation,
         "allowed_mcp_service_ids": plan.selection.allowed_mcp_service_ids,
         "backgroundable_tool_names": plan.selection.backgroundable_tool_names,
         "enable_memory": args.enable_memory,
@@ -171,6 +173,8 @@ fn tool_selection_command_plan(args: &ToolSelectionUpsertArgs) -> Result<ToolSel
         command_network_mode: command_network_mode.clone(),
         cli_tool_names,
         enable_meta_tools: args.enable_meta_tools,
+        enable_goal_tools: args.enable_goal_tools,
+        enable_goal_creation: args.enable_goal_creation,
         allowed_mcp_service_ids,
         required_mcp_service_ids: None,
         backgroundable_tool_names,
@@ -430,6 +434,8 @@ mod tests {
             cli_tool_names: Vec::new(),
             clear_cli_tool_names: false,
             enable_meta_tools: None,
+            enable_goal_tools: None,
+            enable_goal_creation: None,
             allowed_mcp_service_ids: Vec::new(),
             clear_allowed_mcp_service_ids: false,
             backgroundable_tool_names: Vec::new(),
@@ -496,6 +502,8 @@ mod tests {
         assert_eq!(plan.selection.command_network_mode, None);
         assert_eq!(plan.selection.cli_tool_names, None);
         assert_eq!(plan.selection.enable_meta_tools, None);
+        assert_eq!(plan.selection.enable_goal_tools, None);
+        assert_eq!(plan.selection.enable_goal_creation, None);
         assert_eq!(plan.selection.allowed_mcp_service_ids, None);
         assert_eq!(plan.selection.backgroundable_tool_names, None);
         assert_eq!(plan.selection.defra_query_collections, None);
@@ -523,6 +531,8 @@ mod tests {
         args.command_allowed_argv_prefixes = vec!["git status".to_string()];
         args.cli_tool_names = vec!["rg".to_string()];
         args.enable_meta_tools = Some(false);
+        args.enable_goal_tools = Some(true);
+        args.enable_goal_creation = Some(false);
         args.allowed_mcp_service_ids = vec!["observability".to_string()];
         args.backgroundable_tool_names = vec!["bash".to_string()];
         args.defra_query_collections = vec!["AgentRequest".to_string()];
@@ -544,6 +554,8 @@ mod tests {
         );
         assert_eq!(plan.selection.cli_tool_names, Some(vec!["rg".to_string()]));
         assert_eq!(plan.selection.enable_meta_tools, Some(false));
+        assert_eq!(plan.selection.enable_goal_tools, Some(true));
+        assert_eq!(plan.selection.enable_goal_creation, Some(false));
         assert_eq!(
             plan.selection.allowed_mcp_service_ids,
             Some(vec!["observability".to_string()])

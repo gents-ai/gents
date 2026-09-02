@@ -1536,6 +1536,10 @@ impl EventSource {
             group_vars: Some(group_vars),
             trigger_context,
             args_vars: None,
+            durable_fire_key: crate::trigger_engine::durable_fire_key(
+                "event-group",
+                &[&trigger.trigger_id, correlation],
+            ),
             pre_materialized_request_id: None,
             on_result: Box::new(move |result| {
                 if matches!(
@@ -2094,6 +2098,10 @@ impl EventSource {
                 group_vars: None,
                 trigger_context,
                 args_vars: None,
+                durable_fire_key: crate::trigger_engine::durable_fire_key(
+                    "event-document",
+                    &[&trigger.trigger_id, &source_doc_id],
+                ),
                 pre_materialized_request_id: None,
                 on_result: Box::new(move |result| {
                     EventSource::spawn_runtime_field_write(

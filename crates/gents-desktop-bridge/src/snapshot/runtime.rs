@@ -198,6 +198,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     command_network_mode: normalize_optional(row.command_network_mode.as_deref()),
                     cli_tool_names: row.cli_tool_names.clone(),
                     enable_meta_tools: row.enable_meta_tools,
+                    enable_goal_tools: row.enable_goal_tools,
+                    enable_goal_creation: row.enable_goal_creation,
                     allowed_mcp_service_ids: row.allowed_mcp_service_ids.clone(),
                     required_mcp_service_ids: row.required_mcp_service_ids.clone(),
                     delegate_to: row.delegate_to.clone(),
@@ -374,6 +376,10 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     description: normalize_optional(row.description.as_deref()),
                     behavior_id: normalize_optional(row.behavior_id.as_deref()),
                     prompt_template: normalize_optional(row.prompt_template.as_deref()),
+                    goal_objective_template: normalize_optional(
+                        row.goal_objective_template.as_deref(),
+                    ),
+                    goal_token_budget: row.goal_token_budget,
                     enabled: row.enabled,
                     output_schema_ref: normalize_optional(row.output_schema_ref.as_deref()),
                     recent_runs: recent_runs_for_task_views(
@@ -948,6 +954,8 @@ mod behavior_environment_tests {
             command_network_mode: Some("Disabled".to_string()),
             cli_tool_names: vec![],
             enable_meta_tools: None,
+            enable_goal_tools: None,
+            enable_goal_creation: None,
             allowed_mcp_service_ids: vec![],
             required_mcp_service_ids: vec![],
             delegate_to: vec![],

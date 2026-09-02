@@ -11,6 +11,8 @@ pub(crate) struct LeanToolPolicyWriteGrant {
 pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) file_rank: u8,
     pub(crate) meta: bool,
+    pub(crate) goal_tools: bool,
+    pub(crate) goal_create: bool,
     pub(crate) defra_query: bool,
     pub(crate) self_config: bool,
     pub(crate) memory: bool,
@@ -77,6 +79,16 @@ pub(crate) struct LeanToolPolicyCase {
     pub(crate) ceiling: LeanToolPolicySurfaceView,
     pub(crate) runtime: LeanToolPolicySurfaceView,
     pub(crate) expected: LeanToolPolicySurfaceView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanGoalCapabilityResolutionCase {
+    pub(crate) name: String,
+    pub(crate) meta: bool,
+    pub(crate) explicit_goal_tools: Option<bool>,
+    pub(crate) explicit_goal_create: Option<bool>,
+    pub(crate) expected_goal_tools: bool,
+    pub(crate) expected_goal_create: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
