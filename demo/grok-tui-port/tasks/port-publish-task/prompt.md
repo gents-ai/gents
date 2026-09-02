@@ -36,3 +36,7 @@ Otherwise:
 Call `write_port_pull_request` once. Status is `green` only when the
 reviewed/live-tested head is the PR head and every required check succeeded.
 Do not supply `run_id`.
+
+After the pull-request receipt is durably written, call `update_goal` with
+`status="complete"`. Green and needs-attention receipts both complete this
+publication stage. Never merge, and never complete the goal before the receipt exists.

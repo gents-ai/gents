@@ -142,3 +142,7 @@ logical-unit id, surface ids, attempt, and expected_total. `changed_paths` must 
 paths actually changed. In `tests_run`, list static/unit tests written and say
 whether focused compiler checks ran; always note that the combined convergence
 gate follows integration. Do not supply run_id or workspace_id.
+
+After the implementation receipt is durably written, call `update_goal` with
+`status="complete"`. Never complete the goal before the owned code and focused
+tests are finished and that receipt succeeds; otherwise leave it active for continuation.

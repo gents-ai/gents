@@ -28,3 +28,6 @@ exactly once to create the new attempt:
 Do not write a closure or integration result. The normal create-workspace,
 writer, seal, and independent-review edges process the new attempt. Do not
 supply `run_id` or `caused_by_correlation`.
+
+After the replacement work unit is durably written, call `update_goal` with
+`status="complete"`. Never complete the goal before that new attempt exists.

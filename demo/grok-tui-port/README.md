@@ -10,6 +10,14 @@ full **code-review** graph, proves that exact reviewed head with live GLM turns,
 and opens one GitHub PR. Small sealed slices use one direct reviewer; the final
 combined edge starts the full multi-stage embedded graph.
 
+Every model-driven Task also provisions a controller-owned durable goal. Its
+tool surface exposes only `get_goal` and `update_goal`—never model-side goal
+creation—and the stage prompt completes that goal only after its required
+output documents exist. If a provider turn ends early, `GoalSource` resumes the
+same stage instead of allowing an apparently successful request to strand the
+graph edge. Budgets are stage-specific: implementation, convergence, and final
+review receive the largest continuation envelopes.
+
 This pack does not add DefraDB access-control policy and does not implement
 Grok permission UI. Threat model is reachability of the Gents server / leader
 socket. Workers never `make worktree` or `git commit`; the host creates,
@@ -70,7 +78,7 @@ make grok-port
 The checked-in audited ledger is the recon source; a grok-build checkout is
 not required. `GROK_PORT_CEILING` defaults to this repository. Pin the
 workspace base with `GROK_PORT_BASE_SHA`. The PR head is `GROK_PORT_BRANCH`
-(default `agent/grok-tui-port-pack8`).
+(default `agent/grok-tui-port-pack9`).
 
 The portable default inference endpoint is
 `http://127.0.0.1:8000/v1`, with one shared 16-request concurrency cap
@@ -78,7 +86,8 @@ across coordinators, the eight concurrent implementers, the eight concurrent
 sealed reviewers, convergence, and the final review graph.
 
 `make grok-port` verifies its `/models` endpoint advertises
-`GLM-5.3-NVFP4` at context length 262144 before it seeds any documents.
+`GLM-5.3-Flash-NVFP4` with at least 524288 context tokens before it seeds any
+documents.
 
 Useful controls:
 
@@ -87,11 +96,17 @@ export GENTS_GROK_PORT_MIN_SURFACES=13
 export GENTS_GROK_PORT_MAX_SURFACES=13
 export GENTS_GROK_PORT_BASE_SHA=$(git rev-parse HEAD)
 export GENTS_GROK_PORT_PR_BASE=main
-export GENTS_GROK_PORT_BRANCH=agent/grok-tui-port-pack8
+export GENTS_GROK_PORT_BRANCH=agent/grok-tui-port-pack9
 export GENTS_GROK_PORT_PROMPT='Prioritize subagents, interrupts, and model name.'
 ```
 
 Every run lands under `demo/grok-tui-port/runs/<job-id>/`.
+
+A healthy run therefore has one durable Goal per fired Task invocation. The
+goal is a completion controller, not a replacement for edge evidence: green,
+blocked, rejected, retry, and needs-attention outputs still follow each stage's
+existing schema and trigger rules, and the goal closes only after that terminal
+output is persisted.
 
 ## Live edge probes
 
@@ -161,6 +176,6 @@ The integrated server must use `--grok-shim-behavior-id port-live`; the shim
 derives its advertised model and context window from that bound behavior.
 Pass `--model "$GENTS_GROK_PORT_MODEL"` for a non-default pack model; the probe
 also reads that environment variable directly when the flag is omitted. The
-same applies to the context window: the probe's standalone default is 262144,
+same applies to the context window: the probe's standalone default is 524288,
 and `--context-window` (or `GENTS_GROK_PORT_CONTEXT_WINDOW`, read directly
 when the flag is omitted) overrides it for a non-default pack profile.

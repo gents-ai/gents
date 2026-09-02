@@ -4686,6 +4686,55 @@ mod tests {
                 assert!(trigger_ids.iter().any(|id| id == "port-converge"));
                 assert!(trigger_ids.iter().any(|id| id == "port-publish"));
                 assert!(trigger_ids.iter().any(|id| id == "port-review"));
+                for (stage, budget) in [
+                    ("recon", 1_000_000),
+                    ("recon-audit", 500_000),
+                    ("plan", 300_000),
+                    ("plan-skip", 100_000),
+                    ("implement", 2_000_000),
+                    ("review", 750_000),
+                    ("retry", 200_000),
+                    ("integrate", 200_000),
+                    ("integrate-record", 200_000),
+                    ("converge", 2_000_000),
+                    ("final-review", 2_000_000),
+                    ("live", 500_000),
+                    ("live-review", 500_000),
+                    ("publish", 300_000),
+                ] {
+                    let task = read_pack_json_defaults(
+                        &pack
+                            .join("tasks")
+                            .join(format!("port-{stage}-task"))
+                            .join("object.json"),
+                    )
+                    .unwrap_or_else(|error| panic!("port-{stage} task should load: {error:#}"));
+                    assert_eq!(task["goal_token_budget"], budget);
+                    assert!(task["goal_objective_template"]
+                        .as_str()
+                        .is_some_and(|objective| objective.contains("{{ event.correlation }}")));
+
+                    let tools = read_pack_json_defaults(
+                        &pack
+                            .join("tool-selections")
+                            .join(format!("port-{stage}-tools"))
+                            .join("object.json"),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("port-{stage} tool selection should load: {error:#}")
+                    });
+                    assert_eq!(tools["enable_goal_tools"], true);
+                    assert_eq!(tools["enable_goal_creation"], false);
+
+                    let prompt = std::fs::read_to_string(
+                        pack.join("tasks")
+                            .join(format!("port-{stage}-task"))
+                            .join("prompt.md"),
+                    )
+                    .unwrap_or_else(|error| panic!("port-{stage} prompt should load: {error:#}"));
+                    assert!(prompt.contains("`update_goal`"));
+                    assert!(prompt.contains("`status=\"complete\"`"));
+                }
                 assert!(!pack.join("event_triggers/port-revise").exists());
                 assert!(!pack.join("tasks/port-revise-task").exists());
                 assert_eq!(experiment["bundled_graph_packages"], json!(["code-review"]));

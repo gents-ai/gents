@@ -59,3 +59,7 @@ Accept only with zero material slice findings. Otherwise use review verdict
 closure creates a new writable attempt while this seal remains immutable.
 Copy implementation_id, logical_unit_id, attempt, and expected_total.
 Do not supply run_id, work_unit_id, or workspace_id.
+
+After both review and closure writes succeed, call `update_goal` with
+`status="complete"`. Accepted and blocked/retry outcomes both complete this
+review stage; never complete the goal before both terminal records exist.
